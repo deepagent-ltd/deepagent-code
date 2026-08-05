@@ -15,6 +15,9 @@ import eventSourcedSessionInputMigration from "@deepagent-code/core/database/mig
 import contextEpochAgentMigration from "@deepagent-code/core/database/migration/20260605042240_add_context_epoch_agent"
 import eventDropDistinctMigration from "@deepagent-code/core/database/migration/20260712040000_deepagent_event_drop_distinct"
 import timeSuspendedMigration from "@deepagent-code/core/database/migration/20260803000000_time_suspended"
+import taskRunDeliveryMigration from "@deepagent-code/core/database/migration/20260724134000_task_run_delivery"
+import subagentControlPlaneMigration from "@deepagent-code/core/database/migration/20260803000001_subagent_control_plane_l1"
+import taskAdmissionRepairMigration from "@deepagent-code/core/database/migration/20260805000000_repair_task_admission"
 import { ProjectV2 } from "@deepagent-code/core/project"
 import { ProjectTable } from "@deepagent-code/core/project/sql"
 import { AbsolutePath } from "@deepagent-code/core/schema"
@@ -133,6 +136,125 @@ describe("DatabaseMigration", () => {
             sql`SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'session_time_suspended_idx'`,
           ),
         ).toEqual({ name: "session_time_suspended_idx" })
+  test("preserves historical task admission and outbox rows across the L1 rebuild", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(sql`PRAGMA foreign_keys = ON`)
+        yield* db.run(sql`CREATE TABLE session (id TEXT PRIMARY KEY)`)
+        yield* db.run(sql`INSERT INTO session (id) VALUES ('ses_parent')`)
+        yield* DatabaseMigration.applyOnly(db, [taskRunDeliveryMigration])
+        yield* db.run(sql`
+          INSERT INTO task_run (
+            run_id, root_run_id, request_hash, parent_session_id, parent_message_id,
+            tool_call_id, child_session_id, generation, delivery_mode, phase, state,
+            attempts, time_created, time_updated
+          ) VALUES (
+            'run_historical', 'run_historical', 'request', 'ses_parent', 'msg_parent',
+            'call_historical', 'ses_child', 1, 'background', 'research', 'researching',
+            2, 100, 200
+          )
+        `)
+        yield* db.run(sql`
+          INSERT INTO task_admission (
+            admission_key, request_hash, run_id, parent_session_id, parent_message_id,
+            tool_call_id, delivery_mode, time_created
+          ) VALUES (
+            'admission_historical', 'request', 'run_historical', 'ses_parent', 'msg_parent',
+            'call_historical', 'background', 100
+          )
+        `)
+        yield* db.run(sql`
+          INSERT INTO task_notification_outbox (
+            id, run_id, message_id, parent_session_id, directory, payload, status,
+            attempts, available_at, time_created, time_updated
+          ) VALUES (
+            'outbox_historical', 'run_historical', 'msg_outbox', 'ses_parent', '/repo', '{}',
+            'delivering', 1, 150, 100, 200
+          )
+        `)
+
+        yield* DatabaseMigration.applyOnly(db, [subagentControlPlaneMigration])
+
+        expect(
+          yield* db.get(
+            sql`SELECT state, phase, control_state, input_state, workspace_preflight_state, start_attempts FROM task_run WHERE run_id = 'run_historical'`,
+          ),
+        ).toEqual({
+          state: "running",
+          phase: "research",
+          control_state: "open",
+          input_state: "legacy",
+          workspace_preflight_state: "legacy",
+          start_attempts: 2,
+        })
+        expect(
+          yield* db.get(
+            sql`SELECT admission_key, origin_kind, origin_key FROM task_admission WHERE run_id = 'run_historical'`,
+          ),
+        ).toEqual({
+          admission_key: "admission_historical",
+          origin_kind: "task_tool",
+          origin_key: "admission_historical",
+        })
+        expect(
+          yield* db.get(
+            sql`SELECT status, event_kind, time_admitted FROM task_notification_outbox WHERE run_id = 'run_historical'`,
+          ),
+        ).toEqual({ status: "processing", event_kind: "terminal", time_admitted: null })
+        const activeIndex = yield* db.get<{ sql: string }>(
+          sql`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'task_run_child_active_idx'`,
+        )
+        expect(activeIndex?.sql).toContain(
+          "WHERE state IN ('admitted', 'provisioning', 'running', 'researching', 'finalizing')",
+        )
+        expect(activeIndex?.sql).not.toContain("'queued'")
+      }),
+    )
+  })
+
+  test("repairs the canonical admission on databases already affected by the L1 cascade", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(sql`CREATE TABLE session (id TEXT PRIMARY KEY)`)
+        yield* db.run(sql`INSERT INTO session (id) VALUES ('ses_parent')`)
+        yield* DatabaseMigration.applyOnly(db, [taskRunDeliveryMigration])
+        yield* db.run(sql`
+          INSERT INTO task_run (
+            run_id, root_run_id, request_hash, parent_session_id, parent_message_id,
+            tool_call_id, child_session_id, generation, delivery_mode, phase, state,
+            attempts, time_created, time_updated
+          ) VALUES (
+            'run_repair', 'run_repair', 'request_repair', 'ses_parent', 'msg_repair',
+            'call_repair', 'ses_child_repair', 1, 'foreground', 'research', 'completed',
+            1, 100, 200
+          )
+        `)
+        yield* db.run(sql`
+          INSERT INTO task_admission (
+            admission_key, request_hash, run_id, parent_session_id, parent_message_id,
+            tool_call_id, delivery_mode, time_created
+          ) VALUES (
+            'admission_repair', 'request_repair', 'run_repair', 'ses_parent', 'msg_repair',
+            'call_repair', 'foreground', 100
+          )
+        `)
+        yield* DatabaseMigration.applyOnly(db, [subagentControlPlaneMigration])
+        yield* db.run(sql`DELETE FROM task_admission WHERE run_id = 'run_repair'`)
+
+        yield* DatabaseMigration.applyOnly(db, [taskAdmissionRepairMigration])
+
+        expect(
+          yield* db.get(
+            sql`SELECT admission_key, request_hash, tool_call_id, origin_key FROM task_admission WHERE run_id = 'run_repair'`,
+          ),
+        ).toEqual({
+          admission_key: "admission_repair",
+          request_hash: "request_repair",
+          tool_call_id: "call_repair",
+          origin_key: "admission_repair",
+        })
       }),
     )
   })

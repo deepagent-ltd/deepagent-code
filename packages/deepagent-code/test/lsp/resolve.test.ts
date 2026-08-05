@@ -142,6 +142,29 @@ describe("L2 resolveSymbol", () => {
       }),
     }),
   )
+
+  it.instance(
+    "warms bounded candidate files and retries with document symbols when the workspace index is cold",
+    () =>
+      LSP.Service.use((lsp) =>
+        Effect.gen(function* () {
+          const dir = (yield* TestInstance).directory
+          const file = yield* write(dir, "cold.repro")
+          const result = yield* LSPResolve.resolveSymbol({ lsp, symbol: "foo", fallbackFiles: [file] })
+          expect(result.type).toBe("resolved")
+          if (result.type === "resolved") expect(result.candidate.file).toBe(file)
+        }),
+      ),
+    fakeServerConfig({
+      FAKE_LSP_CONFIG: JSON.stringify({
+        capabilities: { textDocumentSync: { change: 2 }, workspaceSymbolProvider: true },
+        responses: {
+          "workspace/symbol": [],
+          "textDocument/documentSymbol": [{ name: "foo", kind: 14, range: range(0), selectionRange: range(0) }],
+        },
+      }),
+    }),
+  )
 })
 
 function range(line: number) {

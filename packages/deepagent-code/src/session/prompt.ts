@@ -76,6 +76,7 @@ import {
   Latch,
   Layer,
   Option,
+  Ref,
   Schedule,
   Schema,
   Scope,
@@ -83,7 +84,7 @@ import {
 } from "effect"
 import * as EffectLogger from "@deepagent-code/core/effect/logger"
 import { InstanceState } from "@/effect/instance-state"
-import { projectRecoveredSubagentRun, TaskTool, type TaskPromptOps } from "@/tool/task"
+import { projectDurableSettledRun, projectRecoveredSubagentRun, TaskTool, type TaskPromptOps } from "@/tool/task"
 import { SessionRunState } from "./run-state"
 import { SessionSteer } from "./steer"
 import { writeGovernanceAudit } from "./goal-governance-audit"
@@ -110,7 +111,7 @@ import {
 import { Reference } from "@/reference/reference"
 import * as DateTime from "effect/DateTime"
 import { eq } from "drizzle-orm"
-import { SessionTable } from "@deepagent-code/core/session/sql"
+import { SessionTable, TaskRunTable } from "@deepagent-code/core/session/sql"
 import { referencePromptMetadata, referenceTextPart } from "./prompt/reference"
 import { SessionReminders } from "./reminders"
 import { SessionTools } from "./tools"
@@ -118,10 +119,24 @@ import { LLMEvent } from "@deepagent-code/llm"
 import { ConversationLogWriter } from "./conversation-log-writer"
 import { collectVolatileFacts, refreshWorldState } from "./context-ledger"
 import { ToolSemanticFingerprint } from "@/tool/semantic-fingerprint"
-import { deliverTaskNotifications, recoverExpiredTaskRuns } from "@/tool/task-run"
+import { deliverTaskNotifications, recoverExpiredTaskRuns, classifyOnStartup, orderedShutdown } from "@/tool/task-run"
+// L10: durable control plane daemons
+import { TaskDispatcher } from "@/session/task-dispatcher"
+import { LegacySubagentExecutor } from "@/session/task-executor"
+import { TaskDelivery } from "@/session/task-delivery"
+import { submitAutomaticWorktree } from "@/session/task-pr-submission"
+import { Git } from "@/git"
+import { PRQueue } from "@/agent/pr-queue"
 import { registerDisposer, registerInitializer } from "@/effect/instance-registry"
 import { EventRouteRef, InstanceRef } from "@/effect/instance-ref"
 import { InstanceStore } from "@/project/instance-store"
+import {
+  acquireDurableExecutorLease,
+  releaseDurableExecutorLease,
+  releaseDurableExecutorReservation,
+  reserveDurableExecutor,
+  type DurableExecutorLease,
+} from "./durable-executor-lock"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -198,7 +213,6 @@ function noninteractiveTaskActivity(metadata: unknown) {
     interactive: false as const,
     startedAt: positive(activity.started_at),
     maxSteps: positive(activity.budget.max_steps),
-    maxTokens: positive(activity.budget.max_tokens),
     maxWallMs: positive(activity.budget.max_wall_ms),
     maxNoProgress: positive(activity.budget.max_no_progress),
   }
@@ -259,6 +273,10 @@ const promptInputToPrompt = (parts: PromptInput["parts"]): Effect.Effect<Prompt,
 export interface Interface {
   readonly cancel: (sessionID: SessionID) => Effect.Effect<void>
   readonly prompt: (input: PromptInput) => Effect.Effect<SessionV1.WithParts, Image.Error>
+  readonly prepareTaskInput: (
+    input: PromptInput,
+    timeCreated: number,
+  ) => Effect.Effect<SessionV1.WithParts, Image.Error>
   // V4.1 §S1.1: buffer a mid-turn user message into the durable steer queue for absorption at the next
   // model-request boundary of the live turn loop. This is the admit() API; S1.2 wires the busy-session
   // ingress that decides WHEN to route a message here vs. the normal prompt() path. Idempotent on `id`.
@@ -339,6 +357,8 @@ export const layer = Layer.effect(
     const references = yield* Reference.Service
     const events = yield* EventV2Bridge.Service
     const flags = yield* RuntimeFlags.Service
+    const git = Option.getOrUndefined(yield* Effect.serviceOption(Git.Service))
+    const queue = Option.getOrUndefined(yield* Effect.serviceOption(PRQueue.Service))
     const federation = Option.getOrUndefined(yield* Effect.serviceOption(SessionFederatedContext.Service))
     const federationRollout = ContextFederationRollout.resolve(
       {
@@ -374,6 +394,7 @@ export const layer = Layer.effect(
       return {
         cancel: (sessionID: SessionID) => cancel(sessionID),
         resolvePromptParts: (template: string) => resolvePromptParts(template),
+        prepareTaskInput: (input: PromptInput, timeCreated: number) => prepareTaskInput(input, timeCreated),
         prompt: (input: PromptInput) => prompt(input).pipe(Effect.catch(Effect.die)),
       } satisfies TaskPromptOps
     })
@@ -1274,14 +1295,20 @@ export const layer = Layer.effect(
       })
     })
 
-    const createUserMessage = Effect.fn("SessionPrompt.createUserMessage")(function* (input: PromptInput) {
+    const createUserMessage = Effect.fn("SessionPrompt.createUserMessage")(function* (
+      input: PromptInput,
+      options?: { readonly persist?: boolean; readonly timeCreated?: number },
+    ) {
+      const persist = options?.persist !== false
       const agentName = input.agent
       const ag = agentName ? yield* agents.get(agentName) : yield* agents.defaultInfo()
       if (!ag) {
         const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
         const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
         const error = new NamedError.Unknown({ message: `Agent not found: "${agentName}".${hint}` })
-        yield* events.publish(Session.Event.Error, { sessionID: input.sessionID, error: error.toObject() })
+        if (persist) {
+          yield* events.publish(Session.Event.Error, { sessionID: input.sessionID, error: error.toObject() })
+        }
         throw error
       }
 
@@ -1305,7 +1332,7 @@ export const layer = Layer.effect(
         id: input.messageID ?? MessageID.ascending(),
         role: "user",
         sessionID: input.sessionID,
-        time: { created: Date.now() },
+        time: { created: options?.timeCreated ?? Date.now() },
         tools: input.tools,
         agent: ag.name,
         model: {
@@ -1326,7 +1353,7 @@ export const layer = Layer.effect(
         metadata: input.metadata,
       }
 
-      if (current?.agent !== info.agent) {
+      if (persist && current?.agent !== info.agent) {
         yield* events.publish(SessionEvent.AgentSwitched, {
           sessionID: input.sessionID,
           messageID: SessionMessage.ID.create(),
@@ -1335,9 +1362,10 @@ export const layer = Layer.effect(
         })
       }
       if (
-        current?.model?.providerID !== info.model.providerID ||
-        current.model.id !== info.model.modelID ||
-        (current.model.variant === "default" ? undefined : current.model.variant) !== info.model.variant
+        persist &&
+        (current?.model?.providerID !== info.model.providerID ||
+          current.model.id !== info.model.modelID ||
+          (current.model.variant === "default" ? undefined : current.model.variant) !== info.model.variant)
       ) {
         yield* events.publish(SessionEvent.ModelSwitched, {
           sessionID: input.sessionID,
@@ -1351,7 +1379,7 @@ export const layer = Layer.effect(
         })
       }
 
-      yield* Effect.addFinalizer(() => instruction.clear(info.id))
+      if (persist) yield* Effect.addFinalizer(() => instruction.clear(info.id))
 
       type Draft<T> = T extends SessionV1.Part ? Omit<T, "id"> & { id?: string } : never
       const assign = (part: Draft<SessionV1.Part>): SessionV1.Part => ({
@@ -1524,10 +1552,12 @@ export const layer = Layer.effect(
                   const error = Cause.squash(exit.cause)
                   log.error("failed to read file", { error })
                   const message = error instanceof Error ? error.message : String(error)
-                  yield* events.publish(Session.Event.Error, {
-                    sessionID: input.sessionID,
-                    error: new NamedError.Unknown({ message }).toObject(),
-                  })
+                  if (persist) {
+                    yield* events.publish(Session.Event.Error, {
+                      sessionID: input.sessionID,
+                      error: new NamedError.Unknown({ message }).toObject(),
+                    })
+                  }
                   pieces.push({
                     messageID: info.id,
                     sessionID: input.sessionID,
@@ -1546,10 +1576,12 @@ export const layer = Layer.effect(
                   const error = Cause.squash(exit.cause)
                   log.error("failed to read directory", { error })
                   const message = error instanceof Error ? error.message : String(error)
-                  yield* events.publish(Session.Event.Error, {
-                    sessionID: input.sessionID,
-                    error: new NamedError.Unknown({ message }).toObject(),
-                  })
+                  if (persist) {
+                    yield* events.publish(Session.Event.Error, {
+                      sessionID: input.sessionID,
+                      error: new NamedError.Unknown({ message }).toObject(),
+                    })
+                  }
                   return [
                     {
                       messageID: info.id,
@@ -1691,6 +1723,8 @@ export const layer = Layer.effect(
         })
       })
 
+      if (!persist) return { info, parts }
+
       yield* sessions.updateMessage(info)
       for (const part of parts) yield* sessions.updatePart(part)
       const nextPrompt = parts.reduce(
@@ -1788,6 +1822,13 @@ export const layer = Layer.effect(
 
       return { info, parts }
     }, Effect.scoped)
+
+    const prepareTaskInput = Effect.fn("SessionPrompt.prepareTaskInput")(function* (
+      input: PromptInput,
+      timeCreated: number,
+    ) {
+      return yield* createUserMessage(input, { persist: false, timeCreated })
+    })
 
     const prompt: (input: PromptInput) => Effect.Effect<SessionV1.WithParts, Image.Error> = Effect.fn(
       "SessionPrompt.prompt",
@@ -2350,7 +2391,7 @@ export const layer = Layer.effect(
         const taskActivity = noninteractiveTaskActivity(initialUser?.metadata) || undefined
         const failTaskBudget = Effect.fn("SessionPrompt.failTaskBudget")(function* (
           assistant: SessionV1.Assistant,
-          budget: "steps" | "tokens" | "wall_time",
+          budget: "steps" | "wall_time",
           limit: number,
           used: number,
         ) {
@@ -2400,22 +2441,7 @@ export const layer = Layer.effect(
           const lastAssistantMsg = msgs.findLast(
             (msg) => msg.info.role === "assistant" && msg.info.id === lastAssistant?.id,
           )
-          const tokenUsage = taskActivity
-            ? msgs
-                .filter(
-                  (item): item is SessionV1.WithParts & { info: SessionV1.Assistant } =>
-                    item.info.role === "assistant" && (!initialUser || item.info.id > initialUser.id),
-                )
-                .reduce(
-                  (sum, item) => sum + item.info.tokens.input + item.info.tokens.output + item.info.tokens.reasoning,
-                  0,
-                )
-            : 0
           const elapsed = taskActivity?.startedAt ? Math.max(0, Date.now() - taskActivity.startedAt) : 0
-          if (lastAssistant && taskActivity?.maxTokens && tokenUsage >= taskActivity.maxTokens) {
-            yield* failTaskBudget(lastAssistant, "tokens", taskActivity.maxTokens, tokenUsage)
-            break
-          }
           if (lastAssistant && taskActivity?.maxWallMs && elapsed >= taskActivity.maxWallMs) {
             yield* failTaskBudget(lastAssistant, "wall_time", taskActivity.maxWallMs, elapsed)
             break
@@ -2745,9 +2771,7 @@ export const layer = Layer.effect(
               sys.skills(agent),
               sys.environment(model),
               instruction.system().pipe(Effect.orDie),
-            ]).pipe(
-              Effect.map(([skills, env, instructions]) => [...env, ...instructions, ...(skills ? [skills] : [])]),
-            )
+            ]).pipe(Effect.map(([skills, env, instructions]) => [...env, ...instructions, ...(skills ? [skills] : [])]))
             activeContext =
               federation && sessionFederationRollout.enabled.contextFederationShadow && !finalizerMode
                 ? yield* federation
@@ -3222,6 +3246,9 @@ export const layer = Layer.effect(
     const startNotificationWorker = registerInitializer((ctx) =>
       Effect.runPromise(
         Effect.gen(function* () {
+          // In durable mode, TaskDelivery.startDeliveryLoop is the authority for delivery.
+          // Running the legacy notification worker alongside creates a dual lifecycle writer (design §4.1).
+          if (flags.subagentControlPlane === "durable") return
           if (notificationWorkers.has(ctx.directory)) return
           const owner = `task-notification:${process.pid}:${randomUUID()}`
           const pump = recoverExpiredTaskRuns({ directory: ctx.directory }).pipe(
@@ -3274,18 +3301,236 @@ export const layer = Layer.effect(
       notificationWorkers.delete(directory)
       return Effect.runPromise(Fiber.interrupt(worker).pipe(Effect.asVoid))
     })
+
+    // Durable dispatcher and delivery share the topology-lock lifetime. Delivery receives the local
+    // runLoop closure, so TaskDelivery stays independent of SessionPrompt.Service and cannot form a
+    // circular layer dependency.
+    const durableWorkers = new Map<string, ReadonlyArray<Fiber.Fiber<void, never>>>()
+    const durableLeases = new Map<string, DurableExecutorLease>()
+    const unregisterDurableInitializer = registerInitializer((ctx) => {
+      // Reserve synchronously: multiple Service instances are registered globally and may otherwise
+      // race through asynchronous startup in the same process.
+      if (flags.subagentControlPlane !== "durable") return Promise.resolve()
+      if (durableWorkers.has(ctx.directory)) return Promise.resolve()
+      if (!reserveDurableExecutor(ctx.directory)) return Promise.resolve()
+
+      return Effect.runPromise(
+        Effect.gen(function* () {
+          // A-2 (P0-4): only start daemon in "durable" mode — shadow mode must NOT run daemon
+          const lease = yield* Effect.sync(() =>
+            acquireDurableExecutorLease({
+              directory: ctx.directory,
+              mode: flags.subagentControlPlane,
+            }),
+          )
+          if (!lease) {
+            yield* Effect.logWarning(
+              "durable-cp: failed to acquire executor lock, another process owns it — fail-closed",
+              {
+                directory: ctx.directory,
+                ourPid: process.pid,
+              },
+            )
+            return // A-2: fail-closed
+          }
+          durableLeases.set(ctx.directory, lease)
+
+          const ownerToken = `durable-cp:${process.pid}:${randomUUID()}`
+
+          // Classify lost runs on startup (safe requeue or recovery_required)
+          yield* classifyOnStartup({ directory: ctx.directory }).pipe(
+            Effect.provideService(Database.Service, database),
+            Effect.catchCause((cause) =>
+              Effect.sync(() =>
+                log.error("durable-cp: classifyOnStartup failed", {
+                  directory: ctx.directory,
+                  cause: Cause.pretty(cause),
+                }),
+              ),
+            ),
+          )
+
+          // Dispatcher daemon: claims queued runs and drives them through LegacySubagentExecutor.
+          // The loopFn is injected via closure (loop + InstanceRef provided via ctx), avoiding the
+          // circular SessionPrompt.Service dependency while preserving full CAS state management,
+          // lease renewal, interrupt check, and background outbox creation.
+          const dispatchFiber = yield* TaskDispatcher.startDispatchLoop({
+            ownerToken,
+            directory: ctx.directory,
+            intervalMs: 500,
+            onClaimed: (claim) =>
+              LegacySubagentExecutor.runFromClaim({
+                claim,
+                ownerToken,
+                loopFn: (sessionID) => loop({ sessionID }).pipe(Effect.provideService(InstanceRef, ctx)),
+                ...(git && queue
+                  ? {
+                      submitWorktree: (info) =>
+                        Effect.gen(function* () {
+                          const row = yield* database.db
+                            .select({
+                              parentMessageID: TaskRunTable.parent_message_id,
+                              toolCallID: TaskRunTable.tool_call_id,
+                              executionSpec: TaskRunTable.execution_spec,
+                            })
+                            .from(TaskRunTable)
+                            .where(eq(TaskRunTable.run_id, claim.runID))
+                            .get()
+                            .pipe(Effect.orDie)
+                          if (!row) return yield* Effect.die(`Task run ${claim.runID} disappeared before PR submission`)
+                          const prompt =
+                            typeof row.executionSpec?.prompt === "object" &&
+                            row.executionSpec.prompt !== null &&
+                            "text" in row.executionSpec.prompt &&
+                            typeof row.executionSpec.prompt.text === "string"
+                              ? row.executionSpec.prompt.text
+                              : ""
+                          const description =
+                            typeof row.executionSpec?.description === "string"
+                              ? row.executionSpec.description
+                              : `task ${claim.childSessionID}`
+                          return yield* submitAutomaticWorktree({
+                            git,
+                            queue,
+                            info,
+                            parentDirectory: ctx.directory,
+                            parentSessionID: claim.parentSessionID,
+                            workerSessionID: SessionID.make(claim.childSessionID),
+                            reviewerSessionID: SessionID.make(`ses_pr_reviewer_${row.parentMessageID}`),
+                            batchID: MessageID.make(row.parentMessageID),
+                            prID: `pr:${claim.parentSessionID}:${row.toolCallID}`,
+                            description,
+                            prompt,
+                          })
+                        }),
+                    }
+                  : {}),
+              }).pipe(
+                // P1-11: project durable terminal state into session metadata so
+                // task-status polling terminates without the legacy in-process path.
+                Effect.ensuring(
+                  projectDurableSettledRun(sessions, SessionID.make(claim.childSessionID as string)).pipe(
+                    Effect.provideService(Database.Service, database),
+                    Effect.ignore,
+                  ),
+                ),
+                Effect.provideService(Database.Service, database),
+                Effect.ignore,
+              ),
+          }).pipe(
+            Effect.provideService(Database.Service, database),
+            Effect.catchCause((cause) =>
+              Effect.logError("durable-cp: dispatch loop crashed", { cause: Cause.pretty(cause) }),
+            ),
+            Effect.asVoid,
+            Effect.forkIn(scope),
+          )
+
+          const deliveryOwner = `${ownerToken}:delivery`
+          const deliveryFiber = yield* TaskDelivery.startDeliveryLoop({
+            ownerToken: deliveryOwner,
+            directory: ctx.directory,
+            intervalMs: 500,
+            deliver: (item) =>
+              Effect.gen(function* () {
+                const delivered = yield* Ref.make(false)
+                yield* state
+                  .startShell(
+                    item.parentSessionID,
+                    lastAssistant(item.parentSessionID),
+                    TaskDelivery.deliverOne({
+                      item,
+                      ownerToken: deliveryOwner,
+                      driveParentLoop: () =>
+                        runLoop(item.parentSessionID).pipe(Effect.provideService(InstanceRef, ctx)),
+                    }).pipe(
+                      Effect.provideService(Database.Service, database),
+                      Effect.tap((result) => Ref.set(delivered, result)),
+                      Effect.flatMap(() => lastAssistant(item.parentSessionID)),
+                    ),
+                  )
+                  .pipe(
+                    Effect.catchTag("SessionBusyError", () =>
+                      TaskDelivery.releaseOutboxClaim({
+                        item,
+                        ownerToken: deliveryOwner,
+                      }).pipe(Effect.asVoid),
+                    ),
+                  )
+                return yield* Ref.get(delivered)
+              }),
+          }).pipe(
+            Effect.provideService(Database.Service, database),
+            Effect.catchCause((cause) =>
+              Effect.logError("durable-cp: delivery loop crashed", { cause: Cause.pretty(cause) }),
+            ),
+            Effect.asVoid,
+            Effect.forkIn(scope),
+          )
+
+          durableWorkers.set(ctx.directory, [dispatchFiber, deliveryFiber])
+          log.info("durable-cp: dispatcher and delivery started", {
+            directory: ctx.directory,
+            mode: flags.subagentControlPlane,
+          })
+        }).pipe(
+          Effect.provideService(Database.Service, database),
+          Effect.provideService(Scope.Scope, scope),
+          Effect.provideService(InstanceRef, ctx),
+        ),
+      )
+        .catch((error) => {
+          const lease = durableLeases.get(ctx.directory)
+          durableLeases.delete(ctx.directory)
+          if (lease) releaseDurableExecutorLease(lease)
+          throw error
+        })
+        .finally(() => {
+          if (!durableWorkers.has(ctx.directory) && !durableLeases.has(ctx.directory)) {
+            releaseDurableExecutorReservation(ctx.directory)
+          }
+        })
+    })
+    const disposeDurableWorkers = (directory: string) => {
+      const fibers = durableWorkers.get(directory)
+      const lease = durableLeases.get(directory)
+      // Another registered Service may own the process reservation. A non-owner must not release it.
+      if (!fibers && !lease) return Promise.resolve()
+      durableWorkers.delete(directory)
+      durableLeases.delete(directory)
+      return Effect.runPromise(
+        orderedShutdown({ directory }).pipe(
+          Effect.provideService(Database.Service, database),
+          Effect.catchCause(() => Effect.void),
+          Effect.flatMap(() => Effect.forEach(fibers ?? [], Fiber.interrupt, { discard: true })),
+          Effect.ensuring(
+            Effect.sync(() => {
+              if (lease) releaseDurableExecutorLease(lease)
+              else releaseDurableExecutorReservation(directory)
+            }),
+          ),
+          Effect.asVoid,
+        ),
+      )
+    }
+    const unregisterDurableDisposer = registerDisposer(disposeDurableWorkers)
     yield* Effect.addFinalizer(() =>
       Effect.gen(function* () {
         startNotificationWorker()
         stopNotificationWorker()
         yield* Effect.forEach(notificationWorkers.values(), Fiber.interrupt, { discard: true })
         notificationWorkers.clear()
+        unregisterDurableInitializer()
+        unregisterDurableDisposer()
+        const directories = new Set([...durableWorkers.keys(), ...durableLeases.keys()])
+        yield* Effect.promise(() => Promise.all([...directories].map(disposeDurableWorkers)))
       }),
     )
 
     return Service.of({
       cancel,
       prompt,
+      prepareTaskInput,
       steer,
       promptOrSteer,
       loop,
@@ -3333,6 +3578,8 @@ export const defaultLayer = Layer.suspend(() =>
         EventV2Bridge.defaultLayer,
         Question.defaultLayer,
         SessionSteer.defaultLayer,
+        Git.defaultLayer,
+        PRQueue.layer.pipe(Layer.orDie),
       ),
     ),
   ),

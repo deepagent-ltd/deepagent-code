@@ -1,9 +1,10 @@
-import { afterEach, describe, expect } from "bun:test"
+import { describe, expect } from "bun:test"
 import { Effect, Layer } from "effect"
 import path from "path"
 import { Agent } from "../../src/agent/agent"
 import { CrossSpawnSpawner } from "@deepagent-code/core/cross-spawn-spawner"
 import { FSUtil } from "@deepagent-code/core/fs-util"
+import { Search } from "@deepagent-code/core/filesystem/search"
 import { Config } from "@/config/config"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
@@ -12,16 +13,12 @@ import { Tool } from "@/tool/tool"
 import { Truncate } from "@/tool/truncate"
 import { CodeIntelTool } from "../../src/tool/code_intel"
 import { MessageID, SessionID } from "../../src/session/schema"
-import { disposeAllInstances, TestInstance } from "../fixture/fixture"
+import { TestInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 
 // L2/L3 (S1-v3.4): the code_intel tool end-to-end over the fake LSP server — symbol-name
 // navigation, position fallback, overview aggregation, relation depth + cycle detection,
 // disambiguation, and graceful no-server fallback.
-
-afterEach(async () => {
-  await disposeAllInstances()
-})
 
 const fakeServerPath = path.join(__dirname, "../fixture/lsp/fake-lsp-server.js")
 
@@ -35,6 +32,7 @@ const it = testEffect(
   Layer.mergeAll(
     Agent.defaultLayer,
     FSUtil.defaultLayer,
+    Search.defaultLayer,
     CrossSpawnSpawner.defaultLayer,
     Truncate.defaultLayer,
     realLsp,
@@ -85,6 +83,37 @@ const fakeConfig = (env: Record<string, string>) => ({
 })
 
 describe("L2/L3 code_intel tool", () => {
+  it.instance(
+    "uses bounded text matches to warm a cold workspace symbol index",
+    () =>
+      Effect.gen(function* () {
+        const dir = (yield* TestInstance).directory
+        yield* writeFile(dir, "cold.repro")
+        const result = yield* run({ symbol: "foo", intent: "overview" })
+        expect(result.output).toContain("overview: foo")
+        expect(result.output).not.toContain("Bounded text fallback")
+      }),
+    cfg({
+      "workspace/symbol": [],
+      "textDocument/documentSymbol": [{ name: "foo", kind: 12, range: range(0), selectionRange: range(0) }],
+    }),
+  )
+
+  it.instance(
+    "returns honest bounded text candidates when semantic resolution stays unavailable",
+    () =>
+      Effect.gen(function* () {
+        const dir = (yield* TestInstance).directory
+        yield* writeFile(dir, "fallback.repro")
+        const result = yield* run({ symbol: "foo", intent: "overview" })
+        expect(result.output).toContain("No symbol named 'foo' was found by the LSP index")
+        expect(result.output).toContain("Bounded text fallback found")
+        expect(result.output).toContain("grep/read")
+        expect(result.output).toContain("fallback.repro:1")
+      }),
+    cfg({ "workspace/symbol": [], "textDocument/documentSymbol": [] }),
+  )
+
   // (a) symbol-name definition with no coordinates.
   it.instance(
     "definition by symbol name renders file:line",
@@ -102,20 +131,6 @@ describe("L2/L3 code_intel tool", () => {
       "textDocument/documentSymbol": [{ name: "foo", kind: 12, range: range(0), selectionRange: range(0) }],
       "textDocument/definition": [{ uri: "file:///a.repro", range: range(0) }],
     }),
-  )
-
-  // no-server fallback hint (unknown extension).
-  it.instance(
-    "returns a grep fallback hint when the file type has no LSP server",
-    () =>
-      Effect.gen(function* () {
-        const dir = (yield* TestInstance).directory
-        const file = path.join(dir, "nolsp.unknownext")
-        yield* Effect.promise(() => Bun.write(file, "x\n"))
-        const result = yield* run({ position: { file, line: 1, character: 1 }, intent: "definition" })
-        expect(result.output).toContain("grep")
-      }),
-    cfg({}),
   )
 
   // (b) overview aggregates.
@@ -184,5 +199,19 @@ describe("L2/L3 code_intel tool", () => {
       },
       { diagnosticProvider: { workspaceDiagnostics: true } },
     ),
+  )
+
+  // Keep this last because it intentionally starts no language server.
+  it.instance(
+    "returns a grep fallback hint when the file type has no LSP server",
+    () =>
+      Effect.gen(function* () {
+        const dir = (yield* TestInstance).directory
+        const file = path.join(dir, "nolsp.unknownext")
+        yield* Effect.promise(() => Bun.write(file, "x\n"))
+        const result = yield* run({ position: { file, line: 1, character: 1 }, intent: "definition" })
+        expect(result.output).toContain("grep")
+      }),
+    cfg({}),
   )
 })

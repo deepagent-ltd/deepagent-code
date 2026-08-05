@@ -637,6 +637,44 @@ const boot = Effect.fn("test.boot")(function* (input?: { title?: string }) {
   return { prompt, run, sessions, chat }
 })
 
+noLLMServer.instance("prepareTaskInput materializes a stable envelope without persisting V1 rows", () =>
+  Effect.gen(function* () {
+    const { prompt, sessions, chat } = yield* boot()
+    const events = yield* EventV2Bridge.Service
+    const emitted: string[] = []
+    const off = yield* events.listen((event) =>
+      Effect.sync(() => {
+        if ((event.data as { sessionID?: SessionID }).sessionID !== chat.id) return
+        emitted.push(event.type)
+      }),
+    )
+    yield* Effect.addFinalizer(() => off)
+    const messageID = MessageID.ascending()
+    const prepared = yield* prompt.prepareTaskInput(
+      {
+        sessionID: chat.id,
+        messageID,
+        model: ref,
+        agent: "build",
+        metadata: { deepagent: { task_admission: { run_id: "run_prepare_test" } } },
+        parts: [
+          { type: "text", text: "inspect the durable boundary" },
+          { type: "text", text: "plugin-ready second part" },
+        ],
+      },
+      123_456,
+    )
+
+    expect(prepared.info.role).toBe("user")
+    expect(prepared.info.id).toBe(messageID)
+    expect(prepared.info.time.created).toBe(123_456)
+    expect(prepared.parts).toHaveLength(2)
+    expect(prepared.parts.every((part) => part.messageID === messageID)).toBe(true)
+    expect(yield* sessions.messages({ sessionID: chat.id })).toEqual([])
+    expect(emitted).toEqual([])
+  }),
+)
+
 // Loop semantics
 
 noLLMServer.instance(
@@ -1224,7 +1262,7 @@ it.instance("agent step limit removes tools from the final provider turn", () =>
   }),
 )
 
-it.instance("non-interactive task token budget fails even when the provider stops naturally", () =>
+it.instance("legacy non-interactive token metadata does not hard-stop a provider turn", () =>
   Effect.gen(function* () {
     const { llm } = yield* useServerConfig(providerCfg)
     const prompt = yield* SessionPrompt.Service
@@ -1249,7 +1287,7 @@ it.instance("non-interactive task token budget fails even when the provider stop
 
     const result = yield* prompt.loop({ sessionID: session.id })
     expect(result.info.role).toBe("assistant")
-    if (result.info.role === "assistant") expect(result.info.error?.name).toBe("TaskBudgetExceededError")
+    if (result.info.role === "assistant") expect(result.info.error).toBeUndefined()
     expect(yield* llm.calls).toBe(1)
   }),
 )
@@ -1272,7 +1310,7 @@ it.instance("non-interactive task step budget prevents another provider turn", (
           task_activity: {
             interactive: false,
             started_at: Date.now(),
-            budget: { max_steps: 1, max_tokens: 10_000, max_wall_ms: 60_000, max_no_progress: 2 },
+            budget: { max_steps: 1, max_wall_ms: 60_000, max_no_progress: 2 },
           },
         },
       },

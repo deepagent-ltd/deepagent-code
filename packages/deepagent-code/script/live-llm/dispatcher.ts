@@ -171,6 +171,10 @@ const modelCommands = new Map<string, DispatcherCommand>([
     "live:legacy-session:stale-validation",
     command("packages/deepagent-code", "bun", "run", "test:llm-live:stale-validation"),
   ],
+  [
+    "live:legacy-session:continuation-repetition",
+    command("packages/deepagent-code", "bun", "run", "test:llm-live:continuation-repetition"),
+  ],
   ["live:legacy-session:degeneration", command("packages/deepagent-code", "bun", "run", "test:llm-live:degeneration")],
   [
     "ext:legacy-session:subagent-finalizer-isolation",
@@ -242,6 +246,10 @@ const modelCommands = new Map<string, DispatcherCommand>([
   [
     "ext:legacy-session:intelligence-draft-confirmation",
     command("packages/deepagent-code", "bun", "run", "test:llm-ext:intelligence-draft"),
+  ],
+  [
+    "live:legacy-session:subagent-control-plane",
+    command("packages/deepagent-code", "bun", "run", "test:llm-live:subagent-control-plane"),
   ],
 ])
 

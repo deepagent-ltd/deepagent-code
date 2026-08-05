@@ -234,6 +234,67 @@ describe("DeepAgent request prep", () => {
     }
   })
 
+  test("assembled request telemetry distinguishes full round context from a tool continuation", async () => {
+    AgentGateway.configure({ enabled: true, agentMode: "high" })
+    const events: GlobalEvent[] = []
+    const listener = (event: GlobalEvent) => {
+      if (event.payload?.type === "session.request.assembled-fingerprint") events.push(structuredClone(event))
+    }
+    GlobalBus.on("event", listener)
+    try {
+      const sessionID = `ses_request_context_kind_${crypto.randomUUID()}`
+      const metadata = { deepagent: { round_control: { action: "continue" } } }
+      await prepare("deepseek", "deepseek-chat", sessionID, {
+        assembledRequestFingerprint: true,
+        metadata,
+        messages: [
+          { role: "user", content: "inspect several source files" },
+          { role: "assistant", content: "starting" },
+        ],
+      })
+      await prepare("deepseek", "deepseek-chat", sessionID, {
+        assembledRequestFingerprint: true,
+        metadata,
+        messages: [
+          { role: "user", content: "inspect several source files" },
+          bashCall("inspect-1", "sed -n '1,20p' src/a.ts"),
+          bashResult("inspect-1", "source evidence\nexit code: 0"),
+        ],
+      })
+
+      expect(events.map((event) => event.payload.properties.volatileContextKind)).toEqual(["round", "continuation"])
+    } finally {
+      GlobalBus.off("event", listener)
+      AgentGateway.configure({ enabled: false, agentMode: "high" })
+    }
+  })
+
+  test("uses compact continuation context for a first-round tool result", async () => {
+    AgentGateway.configure({ enabled: true, agentMode: "high" })
+    const events: GlobalEvent[] = []
+    const listener = (event: GlobalEvent) => {
+      if (event.payload?.type === "session.request.assembled-fingerprint") events.push(structuredClone(event))
+    }
+    GlobalBus.on("event", listener)
+    try {
+      const prepared = await prepare("deepseek", "deepseek-chat", `ses_first_round_tool_${crypto.randomUUID()}`, {
+        assembledRequestFingerprint: true,
+        messages: [
+          { role: "user", content: "read one source file" },
+          bashCall("inspect-1", "sed -n '1,20p' src/a.ts"),
+          bashResult("inspect-1", "source evidence\nexit code: 0"),
+        ],
+      })
+
+      expect(events.map((event) => event.payload.properties.volatileContextKind)).toEqual(["continuation"])
+      expect(roundContext(prepared)).toContain("# Tool continuation")
+      expect(roundContext(prepared)).not.toContain("read one source file")
+    } finally {
+      GlobalBus.off("event", listener)
+      AgentGateway.configure({ enabled: false, agentMode: "high" })
+    }
+  })
+
   test("keeps marked internal tools while applying agent permission denies", async () => {
     AgentGateway.configure({ enabled: false, agentMode: "general" })
     const structuredOutput = {} as any
@@ -697,11 +758,40 @@ describe("extractValidationResults (S41-2)", () => {
     )
     expect(results).toHaveLength(0)
   })
+
+  test("a new real user admission excludes validation evidence from the previous activity", () => {
+    const results = LLMRequestPrep.extractCurrentActivityValidationResults(
+      [
+        { role: "user", content: "repair the old failure" },
+        bashCall("old-validation", "bun run test"),
+        bashResult("old-validation", "old failure\nexit code: 1"),
+        { role: "assistant", content: "The old activity is complete." },
+        { role: "user", content: "New unrelated task: inspect a source file." },
+        { role: "assistant", content: "I will inspect it." },
+      ],
+      validationCommands,
+    )
+    expect(results).toEqual([])
+  })
+
+  test("a synthetic user-role reminder does not open a new validation activity", () => {
+    const results = LLMRequestPrep.extractCurrentActivityValidationResults(
+      [
+        { role: "user", content: "run the declared validation" },
+        bashCall("current-validation", "bun run test"),
+        bashResult("current-validation", "all pass\nexit code: 0"),
+        { role: "user", content: "<system-reminder>continue from the tool result</system-reminder>" },
+      ],
+      validationCommands,
+    )
+    expect(results).toHaveLength(1)
+    expect(results[0]).toMatchObject({ command: "bun run test", passed: true, exit_code: 0 })
+  })
 })
 
-// STALE-REHARVEST GUARD: extractValidationResults re-scans the WHOLE transcript every turn, so a single
+// STALE-REHARVEST GUARD: extractValidationResults re-scans the current activity every turn, so a single
 // early test run (e.g. "✓ cancel with queued callers [3882.11ms]") is re-extracted verbatim on every
-// later turn as long as it stays in history. validationFingerprint lets the caller tell a genuine NEW
+// later provider step. validationFingerprint lets the caller tell a genuine NEW
 // run apart from a stale re-harvest, so the same result is not re-recorded as a fresh candidate N times
 // (the "26轮逐字不变" duplication).
 describe("validationFingerprint (stale-reharvest guard)", () => {
