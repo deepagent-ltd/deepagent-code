@@ -117,7 +117,7 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
     // this tagged tail as trusted control and requires the model to apply it silently. `renderPlanStatus`
     // returns null in lightweight mode / no plan. A first-round, non-orchestrated task gets no update.
     const isToolContinuation = input.messages.at(-1)?.role === "tool"
-    volatileContextKind = runtimeSystemRequired ? (isToolContinuation ? "continuation" : "round") : "none"
+    volatileContextKind = isToolContinuation ? "continuation" : runtimeSystemRequired ? "round" : "none"
     const roundCtx =
       volatileContextKind === "continuation"
         ? AgentGateway.volatileContinuationContext()

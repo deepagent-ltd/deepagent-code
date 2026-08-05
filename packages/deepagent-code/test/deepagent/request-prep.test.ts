@@ -269,6 +269,32 @@ describe("DeepAgent request prep", () => {
     }
   })
 
+  test("uses compact continuation context for a first-round tool result", async () => {
+    AgentGateway.configure({ enabled: true, agentMode: "high" })
+    const events: GlobalEvent[] = []
+    const listener = (event: GlobalEvent) => {
+      if (event.payload?.type === "session.request.assembled-fingerprint") events.push(structuredClone(event))
+    }
+    GlobalBus.on("event", listener)
+    try {
+      const prepared = await prepare("deepseek", "deepseek-chat", `ses_first_round_tool_${crypto.randomUUID()}`, {
+        assembledRequestFingerprint: true,
+        messages: [
+          { role: "user", content: "read one source file" },
+          bashCall("inspect-1", "sed -n '1,20p' src/a.ts"),
+          bashResult("inspect-1", "source evidence\nexit code: 0"),
+        ],
+      })
+
+      expect(events.map((event) => event.payload.properties.volatileContextKind)).toEqual(["continuation"])
+      expect(roundContext(prepared)).toContain("# Tool continuation")
+      expect(roundContext(prepared)).not.toContain("read one source file")
+    } finally {
+      GlobalBus.off("event", listener)
+      AgentGateway.configure({ enabled: false, agentMode: "high" })
+    }
+  })
+
   test("keeps marked internal tools while applying agent permission denies", async () => {
     AgentGateway.configure({ enabled: false, agentMode: "general" })
     const structuredOutput = {} as any

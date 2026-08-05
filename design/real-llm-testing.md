@@ -127,6 +127,14 @@ ${EDITOR:-vi} script/live-llm.config.local.json
 | `evalRuns`            | EVAL 重复次数，范围为 1–20。次数越高，费用和耗时越高。               |
 | `installDependencies` | 聚合测试是否先运行依赖安装步骤。命令行 `--skip-install` 可以覆盖它。 |
 
+旧版配置如果仍包含 `"apiKey": "..."`，必须迁移，不能同时保留两个字段：
+
+1. 将原始 key 移入第 2 节所述的仓库外单行文件，并执行 `chmod 600`；
+2. 删除 JSON 中的 `apiKey`；
+3. 在同一位置写入 `"apiKeyFile": "~/.deepagent/code/tmp/live-llm-deepseek.key"`。
+
+聚合 runner 会在任何 Provider 请求发生前拒绝旧字段，且错误信息不会回显旧 key。package 和 Desktop 的单 suite 入口同样只接受 `DEEPAGENT_CODE_LIVE_LLM_API_KEY_FILE`。
+
 ## 4. 启动聚合测试
 
 所有聚合命令都从仓库根目录运行。
