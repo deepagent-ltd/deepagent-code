@@ -136,6 +136,10 @@ describe("DatabaseMigration", () => {
             sql`SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'session_time_suspended_idx'`,
           ),
         ).toEqual({ name: "session_time_suspended_idx" })
+      }),
+    )
+  })
+
   test("preserves historical task admission and outbox rows across the L1 rebuild", async () => {
     await run(
       Effect.gen(function* () {
