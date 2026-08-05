@@ -80,7 +80,11 @@ export async function runV2LiveCases(input: {
     const events = EventV2.defaultLayer
     const store = SessionStore.defaultLayer
     const locations = LocationServiceMap.layer
-    const execution = sessionExecutionLocal.layer.pipe(Layer.provide(store), Layer.provide(locations))
+    const execution = sessionExecutionLocal.layer.pipe(
+      Layer.provide(store),
+      Layer.provide(events),
+      Layer.provide(locations),
+    )
     const sessions = SessionV2.layer.pipe(
       Layer.provide(events),
       Layer.provide(database),

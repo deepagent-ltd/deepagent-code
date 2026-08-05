@@ -14,6 +14,7 @@ import sessionMessageProjectionOrderMigration from "@deepagent-code/core/databas
 import eventSourcedSessionInputMigration from "@deepagent-code/core/database/migration/20260604172448_event_sourced_session_input"
 import contextEpochAgentMigration from "@deepagent-code/core/database/migration/20260605042240_add_context_epoch_agent"
 import eventDropDistinctMigration from "@deepagent-code/core/database/migration/20260712040000_deepagent_event_drop_distinct"
+import timeSuspendedMigration from "@deepagent-code/core/database/migration/20260803000000_time_suspended"
 import { ProjectV2 } from "@deepagent-code/core/project"
 import { ProjectTable } from "@deepagent-code/core/project/sql"
 import { AbsolutePath } from "@deepagent-code/core/schema"
@@ -89,6 +90,14 @@ describe("DatabaseMigration", () => {
           { name: "task_run_child_generation_idx" },
         ])
         expect(yield* db.get(sql`SELECT count(*) as count FROM migration`)).toEqual({ count: migrations.length })
+        expect(yield* db.get(sql`SELECT name FROM pragma_table_info('session') WHERE name = 'time_suspended'`)).toEqual(
+          { name: "time_suspended" },
+        )
+        expect(
+          yield* db.get(
+            sql`SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'session_time_suspended_idx'`,
+          ),
+        ).toEqual({ name: "session_time_suspended_idx" })
         expect(
           yield* db.all(
             sql`SELECT name FROM sqlite_master WHERE type = 'index' AND name IN ('event_aggregate_seq_idx', 'event_aggregate_type_seq_idx', 'session_input_session_pending_seq_idx', 'session_input_session_pending_delivery_seq_idx', 'session_input_session_admitted_seq_idx', 'session_input_session_promoted_seq_idx', 'session_message_session_idx', 'session_message_session_type_idx', 'session_message_session_seq_idx', 'session_message_session_type_seq_idx', 'session_message_session_time_created_id_idx') ORDER BY name`,
@@ -103,6 +112,27 @@ describe("DatabaseMigration", () => {
           { name: "session_message_session_time_created_id_idx" },
           { name: "session_message_session_type_seq_idx" },
         ])
+      }),
+    )
+  })
+
+  test("adds nullable Session suspension without inferring historical recovery", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(sql`CREATE TABLE session (id text PRIMARY KEY)`)
+        yield* db.run(sql`INSERT INTO session (id) VALUES ('historical')`)
+
+        yield* DatabaseMigration.applyOnly(db, [timeSuspendedMigration])
+
+        expect(yield* db.get(sql`SELECT time_suspended FROM session WHERE id = 'historical'`)).toEqual({
+          time_suspended: null,
+        })
+        expect(
+          yield* db.get(
+            sql`SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'session_time_suspended_idx'`,
+          ),
+        ).toEqual({ name: "session_time_suspended_idx" })
       }),
     )
   })

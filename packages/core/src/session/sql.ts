@@ -1,4 +1,5 @@
 import { sqliteTable, text, integer, index, primaryKey, real, uniqueIndex } from "drizzle-orm/sqlite-core"
+import { sql } from "drizzle-orm"
 import * as DatabasePath from "../database/path"
 import { ProjectTable } from "../project/sql"
 import type { SessionMessage } from "./message"
@@ -13,7 +14,6 @@ import { WorkspaceV2 } from "../workspace"
 import { Timestamps } from "../database/schema.sql"
 import type { SystemContext } from "../system-context/index"
 import { AgentV2 } from "../agent"
-import { sql } from "drizzle-orm"
 
 type SessionMessageData = Omit<(typeof SessionMessage.Message)["Encoded"], "type" | "id">
 type V1MessageData = Omit<SessionV1.Info, "id" | "sessionID">
@@ -57,6 +57,7 @@ export const SessionTable = sqliteTable(
     ...Timestamps,
     time_compacting: integer(),
     time_archived: integer(),
+    time_suspended: integer(),
     // Snapshot of the session's first user message (truncated, single-lined). Lets an archived-sessions
     // list render a content preview per row without loading the full conversation. Set once, never
     // overwritten. Mirrors Codex's `threads.preview`.
@@ -66,6 +67,9 @@ export const SessionTable = sqliteTable(
     index("session_project_idx").on(table.project_id),
     index("session_workspace_idx").on(table.workspace_id),
     index("session_parent_idx").on(table.parent_id),
+    index("session_time_suspended_idx")
+      .on(table.time_suspended)
+      .where(sql`${table.time_suspended} is not null`),
   ],
 )
 

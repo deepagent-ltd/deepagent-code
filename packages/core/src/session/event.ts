@@ -130,6 +130,42 @@ export const InterruptRequested = EventV2.define({
 })
 export type InterruptRequested = typeof InterruptRequested.Type
 
+export namespace Execution {
+  export const Started = EventV2.define({
+    type: "session.execution.started",
+    ...options,
+    schema: Base,
+  })
+  export type Started = typeof Started.Type
+
+  export const Succeeded = EventV2.define({
+    type: "session.execution.succeeded",
+    ...options,
+    schema: Base,
+  })
+  export type Succeeded = typeof Succeeded.Type
+
+  export const Failed = EventV2.define({
+    type: "session.execution.failed",
+    ...options,
+    schema: {
+      ...Base,
+      error: UnknownError,
+    },
+  })
+  export type Failed = typeof Failed.Type
+
+  export const Interrupted = EventV2.define({
+    type: "session.execution.interrupted",
+    ...options,
+    schema: {
+      ...Base,
+      reason: Schema.Literals(["user", "shutdown", "superseded"]),
+    },
+  })
+  export type Interrupted = typeof Interrupted.Type
+}
+
 export const ContextUpdated = EventV2.define({
   type: "session.next.context.updated",
   ...options,
@@ -481,6 +517,10 @@ const DurableDefinitions = [
   PromptLifecycle.Admitted,
   PromptLifecycle.Promoted,
   InterruptRequested,
+  Execution.Started,
+  Execution.Succeeded,
+  Execution.Failed,
+  Execution.Interrupted,
   ContextUpdated,
   Synthetic,
   Shell.Started,
