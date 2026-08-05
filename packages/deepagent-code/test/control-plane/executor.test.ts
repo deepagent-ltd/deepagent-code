@@ -431,4 +431,239 @@ describe("DET-EXEC-01 executor lifecycle", () => {
       expect(row?.error?.message).toContain("injected provider failure")
     }),
   )
+
+  it.live("renews the lease and records a durable PR receipt before completing an automatic writer", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const runID = "run_executor_pr_success"
+      const childSessionID = SessionID.make("ses_exec_pr_success")
+      yield* insertProvisioningRun(runID, childSessionID)
+      const { db } = yield* Database.Service
+      yield* db
+        .update(TaskRunTable)
+        .set({
+          workspace_mode: "worktree",
+          workspace_owner: "run",
+          workspace_operation_key: childSessionID,
+          worktree_state: "ready",
+          worktree_directory: "/exec_worktree",
+          worktree_branch: "deepagent-code/task-exec-pr",
+        })
+        .where(eq(TaskRunTable.run_id, runID))
+        .run()
+        .pipe(Effect.orDie)
+      let submissions = 0
+
+      yield* runExecutor({
+        run: { runID, version: 0, claimGeneration: CLAIM_GEN } as any,
+        ownerToken: OWNER,
+        claimGeneration: CLAIM_GEN,
+        childSessionID,
+        parentSessionID: PARENT_SID,
+        deliveryMode: "foreground",
+        directory: DIRECTORY,
+        agentType: "general",
+        automaticWorktree: {
+          name: "task-exec-pr",
+          directory: "/exec_worktree",
+          branch: "deepagent-code/task-exec-pr",
+        },
+        submitWorktree: () =>
+          Effect.gen(function* () {
+            submissions++
+            yield* Effect.sleep("180 millis")
+            return { id: "pr:executor:success", workerCommit: "commit-success" }
+          }),
+        leaseMs: 90,
+        loopFn: () => Effect.succeed(assistantMessage("msg_executor_pr_success", "implemented")),
+      })
+
+      const row = yield* db
+        .select({
+          state: TaskRunTable.state,
+          prID: TaskRunTable.pr_id,
+          operationKey: TaskRunTable.pr_operation_key,
+          worktreeState: TaskRunTable.worktree_state,
+        })
+        .from(TaskRunTable)
+        .where(eq(TaskRunTable.run_id, runID))
+        .get()
+        .pipe(Effect.orDie)
+      const events = yield* db
+        .select({ type: TaskRunEventTable.type })
+        .from(TaskRunEventTable)
+        .where(eq(TaskRunEventTable.run_id, runID))
+        .all()
+        .pipe(Effect.orDie)
+
+      expect(submissions).toBe(1)
+      expect(row).toEqual({
+        state: "completed",
+        prID: "pr:executor:success",
+        operationKey: childSessionID,
+        worktreeState: "submitted",
+      })
+      expect(events.map((event) => event.type)).toEqual([
+        "execution_started",
+        "pr_submission_started",
+        "pr_submitted",
+        "run_settled",
+      ])
+    }),
+  )
+
+  it.live("requires recovery when PR submission fails after its durable marker", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const runID = "run_executor_pr_unknown"
+      const childSessionID = SessionID.make("ses_exec_pr_unknown")
+      yield* insertProvisioningRun(runID, childSessionID)
+      const { db } = yield* Database.Service
+      yield* db
+        .update(TaskRunTable)
+        .set({
+          workspace_mode: "worktree",
+          workspace_owner: "run",
+          workspace_operation_key: childSessionID,
+          worktree_state: "ready",
+          worktree_directory: "/exec_worktree_unknown",
+          worktree_branch: "deepagent-code/task-exec-pr-unknown",
+        })
+        .where(eq(TaskRunTable.run_id, runID))
+        .run()
+        .pipe(Effect.orDie)
+
+      yield* runExecutor({
+        run: { runID, version: 0, claimGeneration: CLAIM_GEN } as any,
+        ownerToken: OWNER,
+        claimGeneration: CLAIM_GEN,
+        childSessionID,
+        parentSessionID: PARENT_SID,
+        deliveryMode: "foreground",
+        directory: DIRECTORY,
+        agentType: "general",
+        automaticWorktree: {
+          name: "task-exec-pr-unknown",
+          directory: "/exec_worktree_unknown",
+          branch: "deepagent-code/task-exec-pr-unknown",
+        },
+        submitWorktree: () => Effect.fail(new Error("injected ambiguous PR failure")),
+        leaseMs: 300,
+        loopFn: () => Effect.succeed(assistantMessage("msg_executor_pr_unknown", "implemented")),
+      })
+
+      const row = yield* db
+        .select({
+          state: TaskRunTable.state,
+          reason: TaskRunTable.reason,
+          owner: TaskRunTable.execution_owner,
+          lease: TaskRunTable.lease_expires_at,
+        })
+        .from(TaskRunTable)
+        .where(eq(TaskRunTable.run_id, runID))
+        .get()
+        .pipe(Effect.orDie)
+      const events = yield* db
+        .select({ type: TaskRunEventTable.type })
+        .from(TaskRunEventTable)
+        .where(eq(TaskRunEventTable.run_id, runID))
+        .all()
+        .pipe(Effect.orDie)
+
+      expect(row).toEqual({
+        state: "recovery_required",
+        reason: "worktree_submission_outcome_unknown",
+        owner: null,
+        lease: null,
+      })
+      expect(events.map((event) => event.type)).toEqual([
+        "execution_started",
+        "pr_submission_started",
+        "pr_submission_recovery_required",
+      ])
+    }),
+  )
+
+  it.live("requires recovery when the PR adapter returns but the durable receipt CAS is lost", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const runID = "run_executor_pr_receipt_lost"
+      const childSessionID = SessionID.make("ses_exec_pr_receipt_lost")
+      yield* insertProvisioningRun(runID, childSessionID)
+      const { db } = yield* Database.Service
+      yield* db
+        .update(TaskRunTable)
+        .set({
+          workspace_mode: "worktree",
+          workspace_owner: "run",
+          workspace_operation_key: childSessionID,
+          worktree_state: "ready",
+          worktree_directory: "/exec_worktree_receipt_lost",
+          worktree_branch: "deepagent-code/task-exec-pr-receipt-lost",
+        })
+        .where(eq(TaskRunTable.run_id, runID))
+        .run()
+        .pipe(Effect.orDie)
+
+      yield* runExecutor({
+        run: { runID, version: 0, claimGeneration: CLAIM_GEN } as any,
+        ownerToken: OWNER,
+        claimGeneration: CLAIM_GEN,
+        childSessionID,
+        parentSessionID: PARENT_SID,
+        deliveryMode: "foreground",
+        directory: DIRECTORY,
+        agentType: "general",
+        automaticWorktree: {
+          name: "task-exec-pr-receipt-lost",
+          directory: "/exec_worktree_receipt_lost",
+          branch: "deepagent-code/task-exec-pr-receipt-lost",
+        },
+        submitWorktree: () =>
+          Effect.gen(function* () {
+            yield* db
+              .update(TaskRunTable)
+              .set({ lease_expires_at: Date.now() - 1 })
+              .where(eq(TaskRunTable.run_id, runID))
+              .run()
+              .pipe(Effect.orDie)
+            return { id: "pr:executor:receipt-lost", workerCommit: "commit-receipt-lost" }
+          }),
+        leaseMs: 30_000,
+        loopFn: () => Effect.succeed(assistantMessage("msg_executor_pr_receipt_lost", "implemented")),
+      })
+
+      const row = yield* db
+        .select({
+          state: TaskRunTable.state,
+          reason: TaskRunTable.reason,
+          prID: TaskRunTable.pr_id,
+          owner: TaskRunTable.execution_owner,
+          lease: TaskRunTable.lease_expires_at,
+        })
+        .from(TaskRunTable)
+        .where(eq(TaskRunTable.run_id, runID))
+        .get()
+        .pipe(Effect.orDie)
+      const events = yield* db
+        .select({ type: TaskRunEventTable.type })
+        .from(TaskRunEventTable)
+        .where(eq(TaskRunEventTable.run_id, runID))
+        .all()
+        .pipe(Effect.orDie)
+
+      expect(row).toEqual({
+        state: "recovery_required",
+        reason: "worktree_submission_outcome_unknown",
+        prID: null,
+        owner: null,
+        lease: null,
+      })
+      expect(events.map((event) => event.type)).toEqual([
+        "execution_started",
+        "pr_submission_started",
+        "pr_submission_recovery_required",
+      ])
+    }),
+  )
 })

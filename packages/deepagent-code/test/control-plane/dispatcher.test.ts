@@ -209,7 +209,7 @@ describe("DET-QUEUE-01: classifyOnStartup skips non-expired leases", () => {
     }),
   )
 
-  it.effect("admitted run with expired lease is re-enqueued as queued", () =>
+  it.effect("admitted legacy run with expired lease requires explicit recovery", () =>
     Effect.gen(function* () {
       yield* setup
       yield* insertAdmittedRun("run_classify_002", "ses_child_classify_002")
@@ -224,8 +224,14 @@ describe("DET-QUEUE-01: classifyOnStartup skips non-expired leases", () => {
         .pipe(Effect.orDie)
 
       const stats = yield* classifyOnStartup({ directory: DIRECTORY })
-      // admitted + input_state=legacy + expired lease → requeued
-      expect(stats.requeued).toBeGreaterThanOrEqual(1)
+      expect(stats.classified).toBeGreaterThanOrEqual(1)
+      const row = yield* db
+        .select({ state: TaskRunTable.state, reason: TaskRunTable.reason })
+        .from(TaskRunTable)
+        .where(eq(TaskRunTable.run_id, "run_classify_002"))
+        .get()
+        .pipe(Effect.orDie)
+      expect(row).toEqual({ state: "recovery_required", reason: "legacy_input_unverified" })
     }),
   )
 })

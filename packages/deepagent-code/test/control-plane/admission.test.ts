@@ -29,7 +29,7 @@ import {
 } from "@deepagent-code/core/session/sql"
 import { CrossSpawnSpawner } from "@deepagent-code/core/cross-spawn-spawner"
 import { SessionID, MessageID } from "../../src/session/schema"
-import { admitTaskRun, transitionToAdmitting } from "../../src/tool/task-run"
+import { AdmissionConflict, admitTaskRun, transitionToAdmitting } from "../../src/tool/task-run"
 import { prepare, projectExact, InputProjectionConflictError } from "../../src/session/task-input"
 import { testEffect } from "../lib/effect"
 
@@ -139,6 +139,39 @@ describe("DET-ADM-01: admitTaskRun", () => {
         Effect.catchTag("TaskRun.AdmissionConflict", () => Effect.succeed("conflict" as const)),
       )
       expect(result).toBe("conflict")
+    }),
+  )
+
+  it.effect("same-child continuation is blocked until recovery_required is explicitly resolved", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const first = yield* admitTaskRun({
+        parentSessionID: PARENT_SID,
+        parentMessageID: MessageID.ascending("msg_adm_recovery_1") as any,
+        toolCallID: "tc_adm_recovery_1",
+        request: { description: "ambiguous task" },
+        deliveryMode: "foreground",
+      })
+      const { db } = yield* Database.Service
+      yield* db
+        .update(TaskRunTable)
+        .set({ state: "recovery_required" })
+        .where(eq(TaskRunTable.run_id, first.run.runID))
+        .run()
+        .pipe(Effect.orDie)
+
+      const conflict = yield* Effect.flip(
+        admitTaskRun({
+          parentSessionID: PARENT_SID,
+          parentMessageID: MessageID.ascending("msg_adm_recovery_2") as any,
+          toolCallID: "tc_adm_recovery_2",
+          childSessionID: first.run.childSessionID,
+          request: { description: "must not continue yet" },
+          deliveryMode: "foreground",
+        }),
+      )
+      expect(conflict).toBeInstanceOf(AdmissionConflict)
+      expect(conflict.reason).toBe("recovery_resolution_required")
     }),
   )
 })

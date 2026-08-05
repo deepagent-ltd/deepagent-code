@@ -102,12 +102,12 @@ export class ResetFailedError extends Schema.TaggedErrorClass<ResetFailedError>(
 // L3c (subagent-control-plane-design.zh-CN.md §3.2.2)
 // Exact-match worktree creation: no random-suffix fallback, crash-recoverable.
 export type WorktreeExactInput = {
-  readonly operationKey: string      // used for receipt tracking by caller (e.g. child_session_id)
-  readonly name: string              // desired worktree subdirectory name (slug)
-  readonly worktreeBranch: string    // editing branch (MUST differ from session target branch)
-  readonly directory: string         // absolute path for the worktree
-  readonly baseCommit: string        // git commit SHA to check out from
-  readonly startCommand?: string     // optional additional start script (usually omitted)
+  readonly operationKey: string // used for receipt tracking by caller (e.g. child_session_id)
+  readonly name: string // desired worktree subdirectory name (slug)
+  readonly worktreeBranch: string // editing branch (MUST differ from session target branch)
+  readonly directory: string // absolute path for the worktree
+  readonly baseCommit: string // git commit SHA to check out from
+  readonly startCommand?: string // optional additional start script (usually omitted)
 }
 
 export class WorktreeExactConflictError extends Schema.TaggedErrorClass<WorktreeExactConflictError>()(
@@ -235,7 +235,9 @@ export interface Interface {
   // Exact-match worktree creation with no random-suffix fallback.
   // If the target directory already exists as a registered git worktree with a matching
   // branch and HEAD == baseCommit, it is adopted.  Any mismatch returns WorktreeExactConflictError.
-  readonly ensureExact: (input: WorktreeExactInput) => Effect.Effect<Info, WorktreeExactConflictError | NotGitError | CreateFailedError>
+  readonly ensureExact: (
+    input: WorktreeExactInput,
+  ) => Effect.Effect<Info, WorktreeExactConflictError | NotGitError | CreateFailedError>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/Worktree") {}
@@ -970,10 +972,7 @@ export const layer: Layer.Layer<
 
         if (branchExistsResult.code === 0) {
           // Branch exists but not at the expected path — conflict
-          const refHashResult = yield* git(
-            ["rev-parse", `refs/heads/${input.worktreeBranch}`],
-            { cwd: ctx.worktree },
-          )
+          const refHashResult = yield* git(["rev-parse", `refs/heads/${input.worktreeBranch}`], { cwd: ctx.worktree })
           const refHash = refHashResult.text.trim()
           if (refHash !== input.baseCommit) {
             return yield* new WorktreeExactConflictError({
@@ -982,10 +981,9 @@ export const layer: Layer.Layer<
             })
           }
           // Branch exists at the right commit but directory isn't registered — create worktree checkout
-          const addResult = yield* git(
-            ["worktree", "add", input.directory, input.worktreeBranch],
-            { cwd: ctx.worktree },
-          )
+          const addResult = yield* git(["worktree", "add", input.directory, input.worktreeBranch], {
+            cwd: ctx.worktree,
+          })
           if (addResult.code !== 0) {
             return yield* new CreateFailedError({
               message: addResult.stderr || addResult.text || "Failed to create git worktree (branch exists)",
@@ -1007,13 +1005,12 @@ export const layer: Layer.Layer<
 
         const info: Info = { name: input.name, branch: input.worktreeBranch, directory: targetDir }
 
-        // 4. Bootstrap Instance (checkout without running project start scripts by default)
-        yield* boot(info, input.startCommand).pipe(
-          Effect.catchCause((cause) =>
-            Effect.sync(() => log.error("worktree bootstrap failed after ensureExact", { cause })),
-          ),
-          Effect.forkIn(scope),
-        )
+        // 4. A ready receipt is only valid after checkout and Instance bootstrap complete.
+        if (!(yield* boot(info, input.startCommand))) {
+          return yield* new CreateFailedError({
+            message: `Worktree bootstrap failed; preserved for recovery at ${info.directory}`,
+          })
+        }
 
         return info
       }),

@@ -9,7 +9,7 @@
  * not the incremental writes.
  *
  * This module provides:
- *   prepare(run)         — build the V1 message+parts envelope in memory; no side effects
+ *   prepare(run, input)  — normalize the already prepared V1 envelope in memory; no writes
  *   projectExact(...)    — write the envelope atomically in one IMMEDIATE transaction,
  *                          CAS task_run.input_state from "admitting" → "ready"
  *
@@ -24,7 +24,10 @@ import { Database } from "@deepagent-code/core/database/database"
 import { MessageTable, PartTable, TaskRunTable, TaskRunEventTable } from "@deepagent-code/core/session/sql"
 import { Hash } from "@deepagent-code/core/util/hash"
 import { and, eq, inArray } from "drizzle-orm"
-import { MessageID, PartID } from "@/session/schema"
+import { SessionV1 } from "@deepagent-code/core/v1/session"
+import { ModelV2 } from "@deepagent-code/core/model"
+import { ProviderV2 } from "@deepagent-code/core/provider"
+import { MessageID, PartID, SessionID } from "@/session/schema"
 import { Identifier } from "@/id/id"
 import type { Run } from "@/tool/task-run"
 
@@ -35,28 +38,17 @@ import type { Run } from "@/tool/task-run"
 export type PreparedPart = {
   readonly partID: PartID
   readonly messageID: MessageID
-  readonly sessionID: string
+  readonly sessionID: SessionID
   readonly type: string
   readonly data: unknown
   readonly timeCreated: number
 }
 
-export type PreparedMessageData = {
-  readonly role: "user"
-  readonly time: { readonly created: number }
-  readonly agent: string
-  readonly model: {
-    readonly providerID: string
-    readonly modelID: string
-    readonly variant?: string
-  }
-  readonly tools?: Record<string, boolean>
-  readonly metadata: Record<string, unknown>
-}
+export type PreparedMessageData = Omit<SessionV1.User, "id" | "sessionID">
 
 export type PreparedTaskInput = {
   readonly messageID: MessageID
-  readonly sessionID: string
+  readonly sessionID: SessionID
   readonly prompt: string
   readonly parts: ReadonlyArray<PreparedPart>
   readonly materializedHash: string
@@ -77,20 +69,70 @@ export class InputProjectionConflictError extends Data.TaggedError("LegacyTaskIn
 // ---------------------------------------------------------------------------
 
 /**
- * Build a PreparedTaskInput from a run's frozen execution spec.
- * This is a pure in-memory operation — no V1 rows are written, no provider is contacted,
- * no plugin hooks are executed.
+ * Build a PreparedTaskInput from a run's frozen execution spec and the envelope prepared by
+ * SessionPrompt. This function performs no V1 writes and contacts no provider; reference, file,
+ * image, and plugin preparation has already run in SessionPrompt.prepareTaskInput().
+ * The fallback envelope is retained for historical rows and embedders without that API.
  *
  * B-1 (P0-2): messageData is constructed once here and used in BOTH the hash and the INSERT
  * in projectExact, eliminating the hash/content mismatch. The hash now covers only what
  * actually gets written to the DB (no extra time/agent/model fields).
  */
-export function prepare(run: Run) {
+export function prepare(run: Run, envelope?: SessionV1.WithParts) {
   return Effect.sync(() => {
     const now = run.timeCreated
     const messageID = run.childMessageID ?? MessageID.ascending()
-    const sessionID = run.childSessionID as string
+    const sessionID = run.childSessionID
     const promptText = run.executionSpec?.prompt?.text ?? ""
+    if (envelope) {
+      if (
+        envelope.info.role !== "user" ||
+        envelope.info.id !== messageID ||
+        envelope.info.sessionID !== sessionID ||
+        envelope.parts.some((part) => part.messageID !== messageID || part.sessionID !== sessionID)
+      ) {
+        throw new Error(`Prepared task input does not match the frozen child identity for run ${run.runID}`)
+      }
+
+      const messageData = { ...envelope.info } as Partial<SessionV1.User>
+      delete messageData.id
+      delete messageData.sessionID
+      const parts = envelope.parts.map((part) => {
+        const data = { ...part } as Partial<SessionV1.Part>
+        delete data.id
+        delete data.messageID
+        delete data.sessionID
+        return {
+          partID: part.id,
+          messageID,
+          sessionID,
+          type: part.type,
+          data,
+          timeCreated: now,
+        } satisfies PreparedPart
+      })
+      const prepared = {
+        messageID,
+        sessionID,
+        prompt: envelope.parts
+          .filter((part): part is SessionV1.TextPart => part.type === "text" && part.synthetic !== true)
+          .map((part) => part.text)
+          .join("\n"),
+        parts,
+        materializedHash: materializedHash({
+          messageID,
+          sessionID,
+          timeCreated: now,
+          messageData,
+          parts,
+        }),
+        partCount: parts.length,
+        timeCreated: now,
+        messageData: messageData as PreparedMessageData,
+      } satisfies PreparedTaskInput
+      return prepared
+    }
+
     const agent = typeof run.executionSpec?.agent === "string" ? run.executionSpec.agent : "build"
     const modelCandidate = run.executionSpec?.model
     const model =
@@ -123,8 +165,8 @@ export function prepare(run: Run) {
       time: { created: now },
       agent,
       model: {
-        providerID: model.providerID,
-        modelID: model.modelID,
+        providerID: ProviderV2.ID.make(model.providerID),
+        modelID: ModelV2.ID.make(model.modelID),
         ...(typeof model.variant === "string" ? { variant: model.variant } : {}),
       },
       ...(run.executionSpec?.tools ? { tools: run.executionSpec.tools } : {}),
@@ -291,7 +333,7 @@ export function projectExact(input: {
                 session_id: input.prepared.sessionID as any,
                 time_created: now,
                 time_updated: now,
-                data: input.prepared.messageData as any,
+                data: input.prepared.messageData,
               })
               .onConflictDoNothing()
               .run()
@@ -306,10 +348,10 @@ export function projectExact(input: {
                   .values({
                     id: part.partID,
                     message_id: part.messageID,
-                    session_id: part.sessionID as any,
+                    session_id: part.sessionID,
                     time_created: part.timeCreated,
                     time_updated: part.timeCreated,
-                    data: part.data as any,
+                    data: part.data as typeof PartTable.$inferInsert.data,
                   })
                   .onConflictDoNothing()
                   .run()
@@ -385,6 +427,72 @@ export function projectExact(input: {
           reason: error.reason,
         }).pipe(Effect.andThen(Effect.fail(error))),
       ),
+    )
+  })
+}
+
+/** Verify a persisted ready receipt without rebuilding or replaying prompt preparation hooks. */
+export function verifyPersisted(runID: string) {
+  return Effect.gen(function* () {
+    const { db } = yield* Database.Service
+    const run = yield* db
+      .select({
+        messageID: TaskRunTable.child_message_id,
+        hash: TaskRunTable.child_input_materialized_hash,
+        partCount: TaskRunTable.child_input_part_count,
+        inputState: TaskRunTable.input_state,
+      })
+      .from(TaskRunTable)
+      .where(eq(TaskRunTable.run_id, runID))
+      .get()
+      .pipe(Effect.orDie)
+    if (
+      !run ||
+      run.inputState !== "ready" ||
+      !run.messageID ||
+      !run.hash ||
+      run.partCount === null ||
+      run.partCount < 1
+    ) {
+      return false
+    }
+    const message = yield* db
+      .select()
+      .from(MessageTable)
+      .where(eq(MessageTable.id, run.messageID))
+      .get()
+      .pipe(Effect.orDie)
+    if (!message) return false
+    const parts = yield* db
+      .select()
+      .from(PartTable)
+      .where(eq(PartTable.message_id, run.messageID))
+      .all()
+      .pipe(Effect.orDie)
+    if (
+      parts.length !== run.partCount ||
+      parts.some((part) => part.message_id !== run.messageID || part.session_id !== message.session_id)
+    ) {
+      return false
+    }
+    return (
+      materializedHash({
+        messageID: message.id,
+        sessionID: message.session_id,
+        timeCreated: message.time_created,
+        messageData: message.data,
+        parts: parts
+          .map((part) => ({
+            partID: part.id,
+            messageID: part.message_id,
+            sessionID: part.session_id,
+            type:
+              typeof part.data === "object" && part.data && "type" in part.data ? String(part.data.type) : "unknown",
+            data: part.data,
+            timeCreated: part.time_created,
+          }))
+          .toSorted((a, b) => a.partID.localeCompare(b.partID)),
+      }) === run.hash
     )
   })
 }

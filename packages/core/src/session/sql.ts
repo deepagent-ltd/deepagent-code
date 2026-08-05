@@ -326,7 +326,10 @@ export const TaskRunTable = sqliteTable(
     workspace_branch_started_at: integer(),
     worktree_directory: text(),
     worktree_branch: text(),
-    worktree_state: text().$type<"none" | "admitting" | "ready" | "conflict">().notNull().default("none"),
+    worktree_state: text()
+      .$type<"none" | "admitting" | "ready" | "conflict" | "retained" | "submitted" | "removed">()
+      .notNull()
+      .default("none"),
     worktree_started_at: integer(),
     pr_operation_key: text(),
     pr_started_at: integer(),

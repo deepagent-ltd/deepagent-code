@@ -13,6 +13,8 @@
  *   6. CAS version guard — settleRun 用 claim_generation fence，迟到 owner 无法覆盖
  *   7. recovery_required gap — startExecution commit 后进程崩溃，classifyOnStartup 在
  *      下次启动时识别 execution_started_at IS NOT NULL → recovery_required（§11.2 已实现）
+ *   8. PR receipt fence — automatic worktree 在 terminal settlement 前持久化 submission receipt；
+ *      marker 后任何 adapter/CAS 不确定结果都进入 recovery_required，不重放 provider
  */
 
 import { Cause, Data, Duration, Effect, Schedule } from "effect"
@@ -30,6 +32,8 @@ import type { ClaimResult } from "@/session/task-dispatcher"
 import type { Run } from "@/tool/task-run"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { Hash } from "@deepagent-code/core/util/hash"
+import type { SubmittedPR } from "@/session/task-pr-submission"
+import type { Worktree } from "@/worktree"
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -239,6 +243,233 @@ export function markLeaseLostRecovery(input: {
   })
 }
 
+export function startPRSubmission(input: {
+  readonly runID: string
+  readonly ownerToken: string
+  readonly claimGeneration: number
+  readonly operationKey: string
+  readonly now?: number
+}) {
+  return Effect.gen(function* () {
+    const { db } = yield* Database.Service
+    const now = input.now ?? Date.now()
+    return yield* db.transaction(
+      (tx) =>
+        Effect.gen(function* () {
+          const current = yield* tx
+            .select({ version: TaskRunTable.version })
+            .from(TaskRunTable)
+            .where(
+              and(
+                eq(TaskRunTable.run_id, input.runID),
+                eq(TaskRunTable.state, "running"),
+                eq(TaskRunTable.execution_owner, input.ownerToken),
+                eq(TaskRunTable.claim_generation, input.claimGeneration),
+                eq(TaskRunTable.workspace_owner, "run"),
+                eq(TaskRunTable.worktree_state, "ready"),
+                gt(TaskRunTable.lease_expires_at, now),
+                isNull(TaskRunTable.pr_started_at),
+              ),
+            )
+            .get()
+            .pipe(Effect.orDie)
+          if (!current) return false
+          const updated = yield* tx
+            .update(TaskRunTable)
+            .set({
+              state: "finalizing",
+              phase: "finalize",
+              pr_operation_key: input.operationKey,
+              pr_started_at: now,
+              version: current.version + 1,
+              time_updated: now,
+            })
+            .where(
+              and(
+                eq(TaskRunTable.run_id, input.runID),
+                eq(TaskRunTable.version, current.version),
+                eq(TaskRunTable.state, "running"),
+                eq(TaskRunTable.execution_owner, input.ownerToken),
+                eq(TaskRunTable.claim_generation, input.claimGeneration),
+                gt(TaskRunTable.lease_expires_at, now),
+                isNull(TaskRunTable.pr_started_at),
+              ),
+            )
+            .returning({ version: TaskRunTable.version })
+            .get()
+            .pipe(Effect.orDie)
+          if (!updated) return false
+          yield* tx
+            .insert(TaskRunEventTable)
+            .values({
+              event_id: Identifier.ascending("event"),
+              run_id: input.runID,
+              version: updated.version,
+              type: "pr_submission_started",
+              from_state: "running",
+              to_state: "finalizing",
+              reason: input.operationKey,
+              time_created: now,
+            })
+            .run()
+            .pipe(Effect.orDie)
+          return true
+        }),
+      { behavior: "immediate" },
+    )
+  })
+}
+
+export function recordPRSubmission(input: {
+  readonly runID: string
+  readonly ownerToken: string
+  readonly claimGeneration: number
+  readonly operationKey: string
+  readonly submission: SubmittedPR | undefined
+  readonly now?: number
+}) {
+  return Effect.gen(function* () {
+    const { db } = yield* Database.Service
+    const now = input.now ?? Date.now()
+    return yield* db.transaction(
+      (tx) =>
+        Effect.gen(function* () {
+          const current = yield* tx
+            .select({ version: TaskRunTable.version })
+            .from(TaskRunTable)
+            .where(
+              and(
+                eq(TaskRunTable.run_id, input.runID),
+                eq(TaskRunTable.state, "finalizing"),
+                eq(TaskRunTable.execution_owner, input.ownerToken),
+                eq(TaskRunTable.claim_generation, input.claimGeneration),
+                eq(TaskRunTable.pr_operation_key, input.operationKey),
+                gt(TaskRunTable.lease_expires_at, now),
+              ),
+            )
+            .get()
+            .pipe(Effect.orDie)
+          if (!current) return false
+          const updated = yield* tx
+            .update(TaskRunTable)
+            .set({
+              pr_id: input.submission?.id ?? null,
+              worktree_state: input.submission ? "submitted" : "retained",
+              version: current.version + 1,
+              time_updated: now,
+            })
+            .where(
+              and(
+                eq(TaskRunTable.run_id, input.runID),
+                eq(TaskRunTable.version, current.version),
+                eq(TaskRunTable.state, "finalizing"),
+                eq(TaskRunTable.execution_owner, input.ownerToken),
+                eq(TaskRunTable.claim_generation, input.claimGeneration),
+                eq(TaskRunTable.pr_operation_key, input.operationKey),
+                gt(TaskRunTable.lease_expires_at, now),
+              ),
+            )
+            .returning({ version: TaskRunTable.version })
+            .get()
+            .pipe(Effect.orDie)
+          if (!updated) return false
+          yield* tx
+            .insert(TaskRunEventTable)
+            .values({
+              event_id: Identifier.ascending("event"),
+              run_id: input.runID,
+              version: updated.version,
+              type: input.submission ? "pr_submitted" : "worktree_retained",
+              from_state: "finalizing",
+              to_state: "finalizing",
+              reason: input.submission ? `${input.submission.id}:${input.submission.workerCommit}` : "no_changes",
+              time_created: now,
+            })
+            .run()
+            .pipe(Effect.orDie)
+          return true
+        }),
+      { behavior: "immediate" },
+    )
+  })
+}
+
+export function markPRSubmissionRecovery(input: {
+  readonly runID: string
+  readonly ownerToken: string
+  readonly claimGeneration: number
+  readonly operationKey: string
+  readonly message: string
+  readonly now?: number
+}) {
+  return Effect.gen(function* () {
+    const { db } = yield* Database.Service
+    const now = input.now ?? Date.now()
+    return yield* db.transaction(
+      (tx) =>
+        Effect.gen(function* () {
+          const current = yield* tx
+            .select({ version: TaskRunTable.version })
+            .from(TaskRunTable)
+            .where(
+              and(
+                eq(TaskRunTable.run_id, input.runID),
+                eq(TaskRunTable.state, "finalizing"),
+                eq(TaskRunTable.execution_owner, input.ownerToken),
+                eq(TaskRunTable.claim_generation, input.claimGeneration),
+                eq(TaskRunTable.pr_operation_key, input.operationKey),
+              ),
+            )
+            .get()
+            .pipe(Effect.orDie)
+          if (!current) return false
+          const updated = yield* tx
+            .update(TaskRunTable)
+            .set({
+              state: "recovery_required",
+              reason: "worktree_submission_outcome_unknown",
+              error: { code: "worktree_submission_outcome_unknown", message: input.message },
+              execution_owner: null,
+              lease_expires_at: null,
+              version: current.version + 1,
+              time_updated: now,
+            })
+            .where(
+              and(
+                eq(TaskRunTable.run_id, input.runID),
+                eq(TaskRunTable.version, current.version),
+                eq(TaskRunTable.state, "finalizing"),
+                eq(TaskRunTable.execution_owner, input.ownerToken),
+                eq(TaskRunTable.claim_generation, input.claimGeneration),
+                eq(TaskRunTable.pr_operation_key, input.operationKey),
+              ),
+            )
+            .returning({ version: TaskRunTable.version })
+            .get()
+            .pipe(Effect.orDie)
+          if (!updated) return false
+          yield* tx
+            .insert(TaskRunEventTable)
+            .values({
+              event_id: Identifier.ascending("event"),
+              run_id: input.runID,
+              version: updated.version,
+              type: "pr_submission_recovery_required",
+              from_state: "finalizing",
+              to_state: "recovery_required",
+              reason: "worktree_submission_outcome_unknown",
+              data: { message: input.message },
+              time_created: now,
+            })
+            .run()
+            .pipe(Effect.orDie)
+          return true
+        }),
+      { behavior: "immediate" },
+    )
+  })
+}
+
 // ---------------------------------------------------------------------------
 // checkInterrupt — read interrupt intent from DB
 // ---------------------------------------------------------------------------
@@ -436,6 +667,8 @@ export type RunInput = {
   readonly deliveryMode: "foreground" | "background"
   readonly directory: string
   readonly agentType: string
+  readonly automaticWorktree?: Worktree.Info
+  readonly submitWorktree?: (info: Worktree.Info) => Effect.Effect<SubmittedPR | undefined, unknown, never>
   readonly leaseMs?: number
   /** Injected execution function. All services must be pre-provided by the caller. */
   readonly loopFn: (sessionID: SessionID) => Effect.Effect<SessionV1.WithParts, unknown, never>
@@ -449,8 +682,9 @@ export type RunInput = {
  *   2. Start background lease-renewal fiber
  *   3. Call loopFn — this is the opaque legacy activity boundary
  *   4. Check interrupt intent
- *   5. Settle run with concurrent-priority rules
- *   6. Create background outbox row if delivery_mode=background
+ *   5. For automatic writers, persist a PR marker, submit, and persist the receipt
+ *   6. Settle run with concurrent-priority rules
+ *   7. Create background outbox row if delivery_mode=background
  */
 export function run(input: RunInput): Effect.Effect<void, never, Database.Service> {
   return Effect.gen(function* () {
@@ -546,6 +780,92 @@ export function run(input: RunInput): Effect.Effect<void, never, Database.Servic
     // ── 3. Check interrupt intent ─────────────────────────────────────────────
     const interruptStatus = yield* checkInterrupt(input.run.runID, input.ownerToken)
 
+    if (outcome.result.ok && !interruptStatus.closed && input.automaticWorktree) {
+      const operationKey = input.childSessionID.toString()
+      const started = yield* startPRSubmission({
+        runID: input.run.runID,
+        ownerToken: input.ownerToken,
+        claimGeneration: input.claimGeneration,
+        operationKey,
+      })
+      if (!started) {
+        yield* markLeaseLostRecovery({
+          runID: input.run.runID,
+          ownerToken: input.ownerToken,
+          claimGeneration: input.claimGeneration,
+          reason: "PR submission marker fence lost before the external side effect",
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logError("executor: failed to persist PR marker fence loss", {
+              runID: input.run.runID,
+              cause: Cause.pretty(cause),
+            }).pipe(Effect.as(false)),
+          ),
+        )
+        return
+      }
+      const submitted = yield* Effect.raceFirst(
+        (input.submitWorktree
+          ? input.submitWorktree(input.automaticWorktree)
+          : Effect.fail(new Error("Durable PR submission service is unavailable"))
+        ).pipe(
+          Effect.map((value) => ({ _tag: "submitted" as const, value })),
+          Effect.catchCause((cause) => Effect.succeed({ _tag: "failed" as const, cause })),
+        ),
+        heartbeat,
+      ).pipe(Effect.catchCause((cause) => Effect.succeed({ _tag: "lease_lost" as const, cause })))
+      if (submitted._tag !== "submitted") {
+        const recovered = yield* markPRSubmissionRecovery({
+          runID: input.run.runID,
+          ownerToken: input.ownerToken,
+          claimGeneration: input.claimGeneration,
+          operationKey,
+          message: Cause.pretty(submitted.cause),
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logError("executor: failed to persist ambiguous PR submission outcome", {
+              runID: input.run.runID,
+              cause: Cause.pretty(cause),
+            }).pipe(Effect.as(false)),
+          ),
+        )
+        if (!recovered) {
+          yield* Effect.logWarning("executor: PR recovery CAS lost", { runID: input.run.runID, operationKey })
+        }
+        return
+      }
+      const recorded = yield* recordPRSubmission({
+        runID: input.run.runID,
+        ownerToken: input.ownerToken,
+        claimGeneration: input.claimGeneration,
+        operationKey,
+        submission: submitted.value,
+      })
+      if (!recorded) {
+        const recovered = yield* markPRSubmissionRecovery({
+          runID: input.run.runID,
+          ownerToken: input.ownerToken,
+          claimGeneration: input.claimGeneration,
+          operationKey,
+          message: "PR adapter returned, but the durable submission receipt CAS was lost",
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logError("executor: failed to persist lost PR receipt outcome", {
+              runID: input.run.runID,
+              cause: Cause.pretty(cause),
+            }).pipe(Effect.as(false)),
+          ),
+        )
+        if (!recovered) {
+          yield* Effect.logWarning("executor: lost PR receipt recovery CAS", {
+            runID: input.run.runID,
+            operationKey,
+          })
+        }
+        return
+      }
+    }
+
     const settleState = interruptStatus.closed
       ? ("closed" as const)
       : interruptStatus.interrupted && !outcome.result.ok
@@ -613,6 +933,7 @@ export function runFromClaim(input: {
   readonly ownerToken: string
   readonly leaseMs?: number
   readonly loopFn: (sessionID: SessionID) => Effect.Effect<SessionV1.WithParts, unknown, never>
+  readonly submitWorktree?: (info: Worktree.Info) => Effect.Effect<SubmittedPR | undefined, unknown, never>
 }): Effect.Effect<void, never, Database.Service> {
   return Effect.gen(function* () {
     const { db } = yield* Database.Service
@@ -704,6 +1025,19 @@ export function runFromClaim(input: {
       deliveryMode: row.delivery_mode,
       directory: parentRow.directory,
       agentType: row.origin_kind === "goal_role" ? (row.goal_role ?? "worker") : "task",
+      ...(row.workspace_owner === "run" &&
+      row.worktree_state === "ready" &&
+      row.worktree_directory &&
+      row.worktree_branch
+        ? {
+            automaticWorktree: {
+              name: row.worktree_branch.slice(row.worktree_branch.lastIndexOf("/") + 1),
+              directory: row.worktree_directory,
+              branch: row.worktree_branch,
+            },
+            submitWorktree: input.submitWorktree,
+          }
+        : {}),
       leaseMs: input.leaseMs,
       loopFn: input.loopFn,
     })

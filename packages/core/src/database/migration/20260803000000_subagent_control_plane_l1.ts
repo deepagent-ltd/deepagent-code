@@ -29,6 +29,17 @@ export default {
   id: "20260803000000_subagent_control_plane_l1",
   up(tx) {
     return Effect.gen(function* () {
+      // SQLite ignores PRAGMA foreign_keys changes made after a transaction begins. Keep a
+      // transaction-local copy before dropping task_run so ON DELETE CASCADE cannot erase the
+      // historical admission rows that must be rebuilt against the replacement table.
+      yield* tx.run(`
+        CREATE TEMP TABLE task_admission_l1_backup AS
+        SELECT
+          admission_key, request_hash, run_id, parent_session_id,
+          parent_message_id, tool_call_id, delivery_mode, time_created
+        FROM task_admission
+      `)
+
       // ── Disable FK enforcement during rebuild (re-enabled at end) ─────────
       yield* tx.run(`PRAGMA foreign_keys = OFF`)
 
@@ -353,7 +364,7 @@ export default {
           admission_key, request_hash, run_id, parent_session_id,
           parent_message_id, tool_call_id, delivery_mode, time_created,
           'task_tool', admission_key
-        FROM task_admission
+        FROM task_admission_l1_backup
       `)
       yield* tx.run(`DROP INDEX IF EXISTS task_admission_run_idx`)
       yield* tx.run(`DROP TABLE task_admission`)
@@ -361,6 +372,7 @@ export default {
       yield* tx.run(`
         CREATE INDEX task_admission_run_idx ON task_admission (run_id)
       `)
+      yield* tx.run(`DROP TABLE task_admission_l1_backup`)
 
       // ── Step 11: Re-enable FK enforcement ────────────────────────────────
       yield* tx.run(`PRAGMA foreign_keys = ON`)

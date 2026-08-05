@@ -10,6 +10,8 @@ import { ReadTool } from "./read"
 import { TaskTool } from "./task"
 import { TaskStatusTool } from "./task_status"
 import { TaskReadTool } from "./task_read"
+import { TaskCloseTool } from "./task_close"
+import { TaskRecoveryTool } from "./task_recovery"
 import { PRFinalizeTool } from "./pr_finalize"
 import { DismissValidationTool } from "./dismiss_validation"
 import { Database } from "@deepagent-code/core/database/database"
@@ -147,6 +149,8 @@ const layerWithFacades: Layer.Layer<
     const task = yield* TaskTool
     const taskstatus = yield* TaskStatusTool
     const taskread = yield* TaskReadTool
+    const taskclose = yield* TaskCloseTool
+    const taskrecovery = yield* TaskRecoveryTool
     const prfinalize = yield* PRFinalizeTool
     const dismissvalidation = yield* DismissValidationTool
     const read = yield* ReadTool
@@ -293,6 +297,8 @@ const layerWithFacades: Layer.Layer<
           task: Tool.init(task),
           task_status: Tool.init(taskstatus),
           task_read: Tool.init(taskread),
+          task_close: Tool.init(taskclose),
+          task_recovery: Tool.init(taskrecovery),
           pr_finalize: Tool.init(prfinalize),
           dismiss_validation: Tool.init(dismissvalidation),
           fetch: Tool.init(webfetch),
@@ -325,6 +331,8 @@ const layerWithFacades: Layer.Layer<
             tool.task,
             tool.task_status,
             tool.task_read,
+            tool.task_close,
+            tool.task_recovery,
             tool.pr_finalize,
             tool.dismiss_validation,
             tool.fetch,

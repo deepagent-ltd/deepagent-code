@@ -54,7 +54,7 @@ describe("durable executor topology lock", () => {
     const lease = acquireDurableExecutorLease({ directory: workspace, mode: "durable", stateRoot: state })
     expect(lease).toBeDefined()
     expect(fs.existsSync(path.join(workspace, ".deepagent-executor.lock"))).toBe(false)
-    expect(fs.readFileSync(lease!.lockPath, "utf-8")).toBe(lease!.content)
+    expect(JSON.parse(fs.readFileSync(lease!.metadataPath, "utf-8")).token).toBe(lease!.token)
 
     releaseDurableExecutorLease(lease!)
     expect(fs.existsSync(lease!.lockPath)).toBe(false)
@@ -62,14 +62,78 @@ describe("durable executor topology lock", () => {
     releaseDurableExecutorReservation(workspace)
   })
 
-  test("does not unlink a successor token during cleanup", () => {
+  test("quarantines a stale dead-owner lease without deleting a successor", () => {
     const root = temporaryRoot()
     const workspace = path.join(root, "workspace")
     expect(reserveDurableExecutor(workspace)).toBe(true)
-    const lease = acquireDurableExecutorLease({ directory: workspace, mode: "durable", stateRoot: root })!
-    fs.writeFileSync(lease.lockPath, "successor-token\n")
+    const first = acquireDurableExecutorLease({
+      directory: workspace,
+      mode: "durable",
+      stateRoot: root,
+      staleMs: 20,
+      heartbeatMs: 1_000,
+    })!
+    clearInterval(first.heartbeat)
+    const old = new Date(Date.now() - 1_000)
+    fs.utimesSync(first.heartbeatPath, old, old)
+    fs.writeFileSync(
+      first.metadataPath,
+      JSON.stringify({ token: first.token, pid: 2_147_483_647, createdAt: Date.now() - 1_000, mode: "durable" }),
+    )
+    releaseDurableExecutorReservation(workspace)
 
-    releaseDurableExecutorLease(lease)
-    expect(fs.readFileSync(lease.lockPath, "utf-8")).toBe("successor-token\n")
+    expect(reserveDurableExecutor(workspace)).toBe(true)
+    const successor = acquireDurableExecutorLease({
+      directory: workspace,
+      mode: "durable",
+      stateRoot: root,
+      staleMs: 20,
+    })!
+    expect(successor.token).not.toBe(first.token)
+
+    releaseDurableExecutorLease(first)
+    expect(JSON.parse(fs.readFileSync(successor.metadataPath, "utf-8")).token).toBe(successor.token)
+    releaseDurableExecutorLease(successor)
+  })
+
+  test("allows only one live owner across real processes", async () => {
+    const root = temporaryRoot()
+    const workspace = path.join(root, "workspace")
+    const worker = path.join(import.meta.dir, "../fixture/durable-executor-lock-worker.ts")
+    const firstResult = path.join(root, "first.json")
+    const secondResult = path.join(root, "second.json")
+    const thirdResult = path.join(root, "third.json")
+    fs.mkdirSync(workspace)
+
+    const first = Bun.spawn([process.execPath, worker, root, workspace, firstResult, "500", "20", "1000"], {
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    await waitForFile(firstResult)
+    expect(JSON.parse(fs.readFileSync(firstResult, "utf-8")).acquired).toBe(true)
+    await Bun.sleep(50)
+
+    const second = Bun.spawn([process.execPath, worker, root, workspace, secondResult, "0", "20", "1000"], {
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    expect(await second.exited).toBe(0)
+    expect(JSON.parse(fs.readFileSync(secondResult, "utf-8")).acquired).toBe(false)
+    expect(await first.exited).toBe(0)
+
+    const third = Bun.spawn([process.execPath, worker, root, workspace, thirdResult, "0", "20", "1000"], {
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    expect(await third.exited).toBe(0)
+    expect(JSON.parse(fs.readFileSync(thirdResult, "utf-8")).acquired).toBe(true)
   })
 })
+
+async function waitForFile(file: string) {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    if (fs.existsSync(file)) return
+    await Bun.sleep(10)
+  }
+  throw new Error(`timed out waiting for ${file}`)
+}

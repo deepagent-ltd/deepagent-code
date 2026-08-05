@@ -111,7 +111,7 @@ import {
 import { Reference } from "@/reference/reference"
 import * as DateTime from "effect/DateTime"
 import { eq } from "drizzle-orm"
-import { SessionTable } from "@deepagent-code/core/session/sql"
+import { SessionTable, TaskRunTable } from "@deepagent-code/core/session/sql"
 import { referencePromptMetadata, referenceTextPart } from "./prompt/reference"
 import { SessionReminders } from "./reminders"
 import { SessionTools } from "./tools"
@@ -124,6 +124,9 @@ import { deliverTaskNotifications, recoverExpiredTaskRuns, classifyOnStartup, or
 import { TaskDispatcher } from "@/session/task-dispatcher"
 import { LegacySubagentExecutor } from "@/session/task-executor"
 import { TaskDelivery } from "@/session/task-delivery"
+import { submitAutomaticWorktree } from "@/session/task-pr-submission"
+import { Git } from "@/git"
+import { PRQueue } from "@/agent/pr-queue"
 import { registerDisposer, registerInitializer } from "@/effect/instance-registry"
 import { EventRouteRef, InstanceRef } from "@/effect/instance-ref"
 import { InstanceStore } from "@/project/instance-store"
@@ -270,6 +273,10 @@ const promptInputToPrompt = (parts: PromptInput["parts"]): Effect.Effect<Prompt,
 export interface Interface {
   readonly cancel: (sessionID: SessionID) => Effect.Effect<void>
   readonly prompt: (input: PromptInput) => Effect.Effect<SessionV1.WithParts, Image.Error>
+  readonly prepareTaskInput: (
+    input: PromptInput,
+    timeCreated: number,
+  ) => Effect.Effect<SessionV1.WithParts, Image.Error>
   // V4.1 §S1.1: buffer a mid-turn user message into the durable steer queue for absorption at the next
   // model-request boundary of the live turn loop. This is the admit() API; S1.2 wires the busy-session
   // ingress that decides WHEN to route a message here vs. the normal prompt() path. Idempotent on `id`.
@@ -350,6 +357,8 @@ export const layer = Layer.effect(
     const references = yield* Reference.Service
     const events = yield* EventV2Bridge.Service
     const flags = yield* RuntimeFlags.Service
+    const git = Option.getOrUndefined(yield* Effect.serviceOption(Git.Service))
+    const queue = Option.getOrUndefined(yield* Effect.serviceOption(PRQueue.Service))
     const federation = Option.getOrUndefined(yield* Effect.serviceOption(SessionFederatedContext.Service))
     const federationRollout = ContextFederationRollout.resolve(
       {
@@ -385,6 +394,7 @@ export const layer = Layer.effect(
       return {
         cancel: (sessionID: SessionID) => cancel(sessionID),
         resolvePromptParts: (template: string) => resolvePromptParts(template),
+        prepareTaskInput: (input: PromptInput, timeCreated: number) => prepareTaskInput(input, timeCreated),
         prompt: (input: PromptInput) => prompt(input).pipe(Effect.catch(Effect.die)),
       } satisfies TaskPromptOps
     })
@@ -1285,14 +1295,20 @@ export const layer = Layer.effect(
       })
     })
 
-    const createUserMessage = Effect.fn("SessionPrompt.createUserMessage")(function* (input: PromptInput) {
+    const createUserMessage = Effect.fn("SessionPrompt.createUserMessage")(function* (
+      input: PromptInput,
+      options?: { readonly persist?: boolean; readonly timeCreated?: number },
+    ) {
+      const persist = options?.persist !== false
       const agentName = input.agent
       const ag = agentName ? yield* agents.get(agentName) : yield* agents.defaultInfo()
       if (!ag) {
         const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
         const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
         const error = new NamedError.Unknown({ message: `Agent not found: "${agentName}".${hint}` })
-        yield* events.publish(Session.Event.Error, { sessionID: input.sessionID, error: error.toObject() })
+        if (persist) {
+          yield* events.publish(Session.Event.Error, { sessionID: input.sessionID, error: error.toObject() })
+        }
         throw error
       }
 
@@ -1316,7 +1332,7 @@ export const layer = Layer.effect(
         id: input.messageID ?? MessageID.ascending(),
         role: "user",
         sessionID: input.sessionID,
-        time: { created: Date.now() },
+        time: { created: options?.timeCreated ?? Date.now() },
         tools: input.tools,
         agent: ag.name,
         model: {
@@ -1337,7 +1353,7 @@ export const layer = Layer.effect(
         metadata: input.metadata,
       }
 
-      if (current?.agent !== info.agent) {
+      if (persist && current?.agent !== info.agent) {
         yield* events.publish(SessionEvent.AgentSwitched, {
           sessionID: input.sessionID,
           messageID: SessionMessage.ID.create(),
@@ -1346,9 +1362,10 @@ export const layer = Layer.effect(
         })
       }
       if (
-        current?.model?.providerID !== info.model.providerID ||
-        current.model.id !== info.model.modelID ||
-        (current.model.variant === "default" ? undefined : current.model.variant) !== info.model.variant
+        persist &&
+        (current?.model?.providerID !== info.model.providerID ||
+          current.model.id !== info.model.modelID ||
+          (current.model.variant === "default" ? undefined : current.model.variant) !== info.model.variant)
       ) {
         yield* events.publish(SessionEvent.ModelSwitched, {
           sessionID: input.sessionID,
@@ -1362,7 +1379,7 @@ export const layer = Layer.effect(
         })
       }
 
-      yield* Effect.addFinalizer(() => instruction.clear(info.id))
+      if (persist) yield* Effect.addFinalizer(() => instruction.clear(info.id))
 
       type Draft<T> = T extends SessionV1.Part ? Omit<T, "id"> & { id?: string } : never
       const assign = (part: Draft<SessionV1.Part>): SessionV1.Part => ({
@@ -1535,10 +1552,12 @@ export const layer = Layer.effect(
                   const error = Cause.squash(exit.cause)
                   log.error("failed to read file", { error })
                   const message = error instanceof Error ? error.message : String(error)
-                  yield* events.publish(Session.Event.Error, {
-                    sessionID: input.sessionID,
-                    error: new NamedError.Unknown({ message }).toObject(),
-                  })
+                  if (persist) {
+                    yield* events.publish(Session.Event.Error, {
+                      sessionID: input.sessionID,
+                      error: new NamedError.Unknown({ message }).toObject(),
+                    })
+                  }
                   pieces.push({
                     messageID: info.id,
                     sessionID: input.sessionID,
@@ -1557,10 +1576,12 @@ export const layer = Layer.effect(
                   const error = Cause.squash(exit.cause)
                   log.error("failed to read directory", { error })
                   const message = error instanceof Error ? error.message : String(error)
-                  yield* events.publish(Session.Event.Error, {
-                    sessionID: input.sessionID,
-                    error: new NamedError.Unknown({ message }).toObject(),
-                  })
+                  if (persist) {
+                    yield* events.publish(Session.Event.Error, {
+                      sessionID: input.sessionID,
+                      error: new NamedError.Unknown({ message }).toObject(),
+                    })
+                  }
                   return [
                     {
                       messageID: info.id,
@@ -1702,6 +1723,8 @@ export const layer = Layer.effect(
         })
       })
 
+      if (!persist) return { info, parts }
+
       yield* sessions.updateMessage(info)
       for (const part of parts) yield* sessions.updatePart(part)
       const nextPrompt = parts.reduce(
@@ -1799,6 +1822,13 @@ export const layer = Layer.effect(
 
       return { info, parts }
     }, Effect.scoped)
+
+    const prepareTaskInput = Effect.fn("SessionPrompt.prepareTaskInput")(function* (
+      input: PromptInput,
+      timeCreated: number,
+    ) {
+      return yield* createUserMessage(input, { persist: false, timeCreated })
+    })
 
     const prompt: (input: PromptInput) => Effect.Effect<SessionV1.WithParts, Image.Error> = Effect.fn(
       "SessionPrompt.prompt",
@@ -3333,6 +3363,48 @@ export const layer = Layer.effect(
                 claim,
                 ownerToken,
                 loopFn: (sessionID) => loop({ sessionID }).pipe(Effect.provideService(InstanceRef, ctx)),
+                ...(git && queue
+                  ? {
+                      submitWorktree: (info) =>
+                        Effect.gen(function* () {
+                          const row = yield* database.db
+                            .select({
+                              parentMessageID: TaskRunTable.parent_message_id,
+                              toolCallID: TaskRunTable.tool_call_id,
+                              executionSpec: TaskRunTable.execution_spec,
+                            })
+                            .from(TaskRunTable)
+                            .where(eq(TaskRunTable.run_id, claim.runID))
+                            .get()
+                            .pipe(Effect.orDie)
+                          if (!row) return yield* Effect.die(`Task run ${claim.runID} disappeared before PR submission`)
+                          const prompt =
+                            typeof row.executionSpec?.prompt === "object" &&
+                            row.executionSpec.prompt !== null &&
+                            "text" in row.executionSpec.prompt &&
+                            typeof row.executionSpec.prompt.text === "string"
+                              ? row.executionSpec.prompt.text
+                              : ""
+                          const description =
+                            typeof row.executionSpec?.description === "string"
+                              ? row.executionSpec.description
+                              : `task ${claim.childSessionID}`
+                          return yield* submitAutomaticWorktree({
+                            git,
+                            queue,
+                            info,
+                            parentDirectory: ctx.directory,
+                            parentSessionID: claim.parentSessionID,
+                            workerSessionID: SessionID.make(claim.childSessionID),
+                            reviewerSessionID: SessionID.make(`ses_pr_reviewer_${row.parentMessageID}`),
+                            batchID: MessageID.make(row.parentMessageID),
+                            prID: `pr:${claim.parentSessionID}:${row.toolCallID}`,
+                            description,
+                            prompt,
+                          })
+                        }),
+                    }
+                  : {}),
               }).pipe(
                 // P1-11: project durable terminal state into session metadata so
                 // task-status polling terminates without the legacy in-process path.
@@ -3458,6 +3530,7 @@ export const layer = Layer.effect(
     return Service.of({
       cancel,
       prompt,
+      prepareTaskInput,
       steer,
       promptOrSteer,
       loop,
@@ -3505,6 +3578,8 @@ export const defaultLayer = Layer.suspend(() =>
         EventV2Bridge.defaultLayer,
         Question.defaultLayer,
         SessionSteer.defaultLayer,
+        Git.defaultLayer,
+        PRQueue.layer.pipe(Layer.orDie),
       ),
     ),
   ),

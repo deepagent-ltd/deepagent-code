@@ -12,6 +12,7 @@ import { Identifier } from "@/id/id"
 import { MessageID, SessionID } from "@/session/schema"
 import { Hash } from "@deepagent-code/core/util/hash"
 import type { PermissionV1 } from "@deepagent-code/core/v1/permission"
+import { verifyPersisted } from "@/session/task-input"
 
 export type State =
   | "admitted"
@@ -124,7 +125,7 @@ export type OutboxItem = {
 
 export class AdmissionConflict extends Data.TaggedError("TaskRun.AdmissionConflict")<{
   readonly admissionKey: string
-  readonly reason: "request" | "delivery" | "child" | "join" | "ancestor_closed"
+  readonly reason: "request" | "delivery" | "child" | "join" | "ancestor_closed" | "recovery_resolution_required"
 }> {}
 
 class ConcurrentAdmission extends Data.TaggedError("TaskRun.ConcurrentAdmission")<{
@@ -141,7 +142,7 @@ const terminalStates: ReadonlyArray<State> = [
   "error", // legacy vocabulary — kept for backward-compat queries against pre-L1 rows
 ]
 // C-5 (P1-7): recovery_required is NOT terminal — it is a quiescent nonterminal state that
-// can only be resolved by explicit user/host action (continue/accept/cancel).
+// can only be resolved by explicit user/host action (failed/closed).
 // Foreground polls must not treat it as a settled result.
 const quiescentStates: ReadonlyArray<State> = ["recovery_required"]
 // activeStates: states where a run may be executing or waiting to execute
@@ -227,6 +228,13 @@ export function admitTaskRun(input: {
   deliveryMode: DeliveryMode
   mutationCapability?: MutationCapability
   toolCapabilityHash?: string
+  inputState?: "pending" | "legacy"
+  workspaceMode?: WorkspaceMode
+  workspaceOwner?: WorkspaceOwner
+  workspaceVisibility?: "live" | "base_commit"
+  parentDirtyPolicy?: "allow_live" | "exclude" | "reject"
+  workspacePreflightState?: "legacy" | "pending"
+  sessionMode?: "new" | "resume"
   now?: number
   // L3d: frozen execution specification written once at admit time; consumed by prepare()
   executionSpec?: unknown
@@ -279,6 +287,26 @@ export function admitTaskRun(input: {
             : undefined
           if (input.joinRunID && !joined)
             return yield* Effect.fail(new AdmissionConflict({ admissionKey: key, reason: "join" }))
+
+          const unresolvedRecovery =
+            !joined && input.childSessionID
+              ? yield* tx
+                  .select({ run_id: TaskRunTable.run_id })
+                  .from(TaskRunTable)
+                  .where(
+                    and(
+                      eq(TaskRunTable.child_session_id, input.childSessionID),
+                      eq(TaskRunTable.state, "recovery_required"),
+                    ),
+                  )
+                  .get()
+                  .pipe(Effect.orDie)
+              : undefined
+          if (unresolvedRecovery) {
+            return yield* Effect.fail(
+              new AdmissionConflict({ admissionKey: key, reason: "recovery_resolution_required" }),
+            )
+          }
 
           const conflictingActive =
             !joined && input.childSessionID
@@ -365,6 +393,14 @@ export function admitTaskRun(input: {
                       delivery_mode: input.deliveryMode,
                       mutation_capability: input.mutationCapability ?? "write",
                       tool_capability_hash: input.toolCapabilityHash ?? "legacy-unknown",
+                      input_state: input.inputState ?? "legacy",
+                      workspace_mode: input.workspaceMode ?? "shared",
+                      workspace_owner: input.workspaceOwner ?? "parent",
+                      workspace_visibility: input.workspaceVisibility ?? "live",
+                      parent_dirty_policy: input.parentDirtyPolicy ?? "allow_live",
+                      workspace_operation_key: childSessionID,
+                      workspace_preflight_state: input.workspacePreflightState ?? "legacy",
+                      session_mode: input.sessionMode ?? "new",
                       phase: "admission",
                       state: "admitted",
                       // L3d: freeze the execution spec at admit time so prepare() can read it
@@ -525,6 +561,7 @@ export function transitionToAdmitting(input: { runID: string; version: number; n
                 eq(TaskRunTable.run_id, input.runID),
                 eq(TaskRunTable.version, input.version),
                 eq(TaskRunTable.state, "admitted"),
+                inArray(TaskRunTable.input_state, ["pending", "legacy"]),
               ),
             )
             .returning()
@@ -1482,6 +1519,8 @@ export function resolveRecovery(input: {
                 control_state: "closed",
                 close_requested_at: now,
                 close_reason: input.reason,
+                execution_owner: null,
+                lease_expires_at: null,
                 version: current.version + 1,
                 time_updated: now,
                 time_settled: now,
@@ -1517,6 +1556,21 @@ export function resolveRecovery(input: {
             const closeReason = `parent_resolved:${input.reason}`
             const visited = new Set<string>([updated.run_id])
             const bfsQueue = [updated.run_id]
+            const laterGenerations = yield* tx
+              .select({ run_id: TaskRunTable.run_id })
+              .from(TaskRunTable)
+              .where(
+                and(
+                  eq(TaskRunTable.child_session_id, current.child_session_id),
+                  gt(TaskRunTable.generation, current.generation),
+                ),
+              )
+              .all()
+              .pipe(Effect.orDie)
+            for (const later of laterGenerations) {
+              visited.add(later.run_id)
+              bfsQueue.push(later.run_id)
+            }
             while (bfsQueue.length > 0) {
               const batch = bfsQueue.splice(0)
               const children = yield* tx
@@ -1545,12 +1599,19 @@ export function resolveRecovery(input: {
                 .where(inArray(TaskRunTable.run_id, descendantIDs))
                 .all()
                 .pipe(Effect.orDie)
-              const immediateTerminal: State[] = ["admitted", "queued", "recovery_required"]
-              const activeDesc: State[] = ["provisioning", "running", "researching", "finalizing"]
+              const closable: State[] = [
+                "admitted",
+                "queued",
+                "provisioning",
+                "running",
+                "researching",
+                "finalizing",
+                "recovery_required",
+              ]
               for (const desc of descendants) {
                 if (desc.control_state === "closed") continue
                 const oldState = desc.state as State
-                if (immediateTerminal.includes(oldState)) {
+                if (closable.includes(oldState)) {
                   const upd = yield* tx
                     .update(TaskRunTable)
                     .set({
@@ -1559,6 +1620,8 @@ export function resolveRecovery(input: {
                       control_state: "closed",
                       close_requested_at: now,
                       close_reason: closeReason,
+                      execution_owner: null,
+                      lease_expires_at: null,
                       version: desc.version + 1,
                       time_updated: now,
                       time_settled: now,
@@ -1577,41 +1640,6 @@ export function resolveRecovery(input: {
                         type: "run_closed",
                         from_state: oldState,
                         to_state: "closed",
-                        reason: closeReason,
-                        time_created: now,
-                      })
-                      .run()
-                      .pipe(Effect.orDie)
-                } else if (activeDesc.includes(oldState)) {
-                  const upd = yield* tx
-                    .update(TaskRunTable)
-                    .set({
-                      control_state: "close_requested",
-                      close_requested_at: now,
-                      close_reason: closeReason,
-                      version: desc.version + 1,
-                      time_updated: now,
-                    })
-                    .where(
-                      and(
-                        eq(TaskRunTable.run_id, desc.run_id),
-                        eq(TaskRunTable.version, desc.version),
-                        ne(TaskRunTable.control_state, "closed"),
-                      ),
-                    )
-                    .returning({ run_id: TaskRunTable.run_id, version: TaskRunTable.version })
-                    .get()
-                    .pipe(Effect.orDie)
-                  if (upd)
-                    yield* tx
-                      .insert(TaskRunEventTable)
-                      .values({
-                        event_id: Identifier.ascending("event"),
-                        run_id: desc.run_id,
-                        version: upd.version,
-                        type: "close_requested",
-                        from_state: oldState,
-                        to_state: oldState,
                         reason: closeReason,
                         time_created: now,
                       })
@@ -1743,7 +1771,8 @@ export function requestInterrupt(input: { runID: string; reason: string; now?: n
  * Classify runs for a directory on process startup.
  * Called before new admissions are accepted (design §11.1).
  * - provisioning + input_state=admitting → recovery_required(input_admission_outcome_unknown)
- * - provisioning + input_state=ready/pending + no execution_started_at → re-enqueue to queued
+ * - admitted/provisioning + input_state=ready + no execution_started_at → re-enqueue to queued
+ * - input_state=pending/admitting → recovery_required (input was never materialized or outcome is unknown)
  * - running/finalizing or execution_started_at set → recovery_required(execution_owner_lost)
  */
 export function classifyOnStartup(input: { directory: string; now?: number }) {
@@ -1771,18 +1800,17 @@ export function classifyOnStartup(input: { directory: string; now?: number }) {
     let requeued = 0
 
     for (const { run } of candidates) {
-      // B-6 (P1-3): admitted + ready/legacy/pending → safe to re-enqueue
-      // "pending" represents admission that created the run row but process died before
-      // input projection started — no provider activity occurred, safe to re-enqueue.
-      const canEnqueue =
-        run.state === "admitted" &&
-        (run.input_state === "ready" || run.input_state === "legacy" || run.input_state === "pending")
+      const readyVerified =
+        run.input_state === "ready"
+          ? yield* verifyPersisted(run.run_id).pipe(Effect.provideService(Database.Service, { db }))
+          : false
+      // Only a fully materialized envelope may enter the dispatcher. Legacy rows are historical
+      // read-only records; pending/admitting inputs require a provisioner or explicit resolution.
+      const canEnqueue = run.state === "admitted" && readyVerified
 
       // provisioning/queued without execution started: safe to re-enqueue
       const canRequeue =
-        (run.state === "provisioning" || run.state === "queued") &&
-        (run.input_state === "ready" || run.input_state === "pending" || run.input_state === "legacy") &&
-        !run.execution_started_at
+        (run.state === "provisioning" || run.state === "queued") && readyVerified && !run.execution_started_at
 
       if (canEnqueue) {
         // B-6 (P1-4): UPDATE + event in same IMMEDIATE transaction — crash-safe
@@ -1863,7 +1891,18 @@ export function classifyOnStartup(input: { directory: string; now?: number }) {
         )
         if (updated) requeued++
       } else {
-        const reason = run.input_state === "admitting" ? "input_admission_outcome_unknown" : "execution_owner_lost"
+        const reason =
+          run.execution_started_at || ["running", "researching", "finalizing"].includes(run.state)
+            ? "execution_owner_lost"
+            : run.input_state === "admitting"
+              ? "input_admission_outcome_unknown"
+              : run.input_state === "pending"
+                ? "input_not_materialized"
+                : run.input_state === "legacy"
+                  ? "legacy_input_unverified"
+                  : run.input_state === "ready" && !readyVerified
+                    ? "input_materialization_mismatch"
+                    : "execution_owner_lost"
         // B-6 (P1-4): same IMMEDIATE transaction for recovery_required
         const updated = yield* db.transaction(
           (tx) =>
@@ -1872,6 +1911,12 @@ export function classifyOnStartup(input: { directory: string; now?: number }) {
                 .update(TaskRunTable)
                 .set({
                   state: "recovery_required",
+                  input_state: run.input_state === "ready" && !readyVerified ? "conflict" : run.input_state,
+                  reason,
+                  error: {
+                    code: reason,
+                    message: `Startup recovery requires explicit resolution: ${reason}`,
+                  },
                   execution_owner: null,
                   lease_expires_at: null,
                   version: (run.version ?? 0) + 1,

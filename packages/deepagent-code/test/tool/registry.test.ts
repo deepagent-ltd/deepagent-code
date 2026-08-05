@@ -188,12 +188,14 @@ describe("tool.registry", () => {
     }),
   )
 
-  it.instance("exposes task_status (v4.0.4 block1 1c: read-only subagent status view)", () =>
+  it.instance("exposes task status, close, and explicit recovery controls", () =>
     Effect.gen(function* () {
       const registry = yield* ToolRegistry.Service
       const ids = yield* registry.ids()
 
       expect(ids).toContain("task_status")
+      expect(ids).toContain("task_close")
+      expect(ids).toContain("task_recovery")
     }),
   )
 

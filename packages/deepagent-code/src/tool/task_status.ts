@@ -3,7 +3,7 @@ import { BackgroundJob } from "@/background/job"
 import { Session } from "@/session/session"
 import { Database } from "@deepagent-code/core/database/database"
 import { TaskRunTable } from "@deepagent-code/core/session/sql"
-import { and, eq, max } from "drizzle-orm"
+import { desc, eq } from "drizzle-orm"
 import { Effect, Schema } from "effect"
 import type { SessionID } from "@/session/schema"
 
@@ -49,7 +49,7 @@ export const TaskStatusTool = Tool.define(
   Effect.gen(function* () {
     const background = yield* BackgroundJob.Service
     const sessions = yield* Session.Service
-    const { db } = yield* Database.Service  // L10: hoist for durable run overlay
+    const { db } = yield* Database.Service // L10: hoist for durable run overlay
 
     const run = Effect.fn("TaskStatusTool.execute")(function* (
       _params: Schema.Schema.Type<typeof Parameters>,
@@ -58,28 +58,33 @@ export const TaskStatusTool = Tool.define(
       const now = Date.now()
 
       // Layer 1: durable child sessions from DB.
-      const children = yield* sessions.children(ctx.sessionID as SessionID).pipe(
-        Effect.catchCause(() => Effect.succeed([] as Session.Info[])),
-      )
+      const children = yield* sessions
+        .children(ctx.sessionID as SessionID)
+        .pipe(Effect.catchCause(() => Effect.succeed([] as Session.Info[])))
 
       // L10: Layer 1b — durable task_run rows keyed by child_session_id
       const durableRuns = yield* db
         .select({
+          run_id: TaskRunTable.run_id,
           child_session_id: TaskRunTable.child_session_id,
           state: TaskRunTable.state,
+          reason: TaskRunTable.reason,
           control_state: TaskRunTable.control_state,
           mutation_capability: TaskRunTable.mutation_capability,
           workspace_mode: TaskRunTable.workspace_mode,
           input_state: TaskRunTable.input_state,
           worktree_directory: TaskRunTable.worktree_directory,
-          generation: max(TaskRunTable.generation),
+          generation: TaskRunTable.generation,
         })
         .from(TaskRunTable)
         .where(eq(TaskRunTable.parent_session_id, ctx.sessionID))
-        .groupBy(TaskRunTable.child_session_id)
+        .orderBy(desc(TaskRunTable.generation))
         .all()
         .pipe(Effect.orDie)
-      const runByChild = new Map(durableRuns.map((r) => [r.child_session_id, r]))
+      const runByChild = new Map<string, (typeof durableRuns)[number]>()
+      durableRuns.forEach((taskRun) => {
+        if (!runByChild.has(taskRun.child_session_id)) runByChild.set(taskRun.child_session_id, taskRun)
+      })
 
       // Layer 2: live BackgroundJob overlay (process-local, advisory).
       const liveJobs = yield* background.list().pipe(
@@ -105,16 +110,18 @@ export const TaskStatusTool = Tool.define(
         // Fall back to legacy session metadata for runs created before L1 migration.
         const taskRun = runByChild.get(child.id)
         const durableState = taskRun
-          ? taskRun.state  // authoritative durable state
+          ? taskRun.state // authoritative durable state
           : subagent
-            ? (subagent["state"] as string | undefined) ??
+            ? ((subagent["state"] as string | undefined) ??
               // compat: old rows used `finished: true` without state field
-              (subagent["finished"] === true ? "completed" : "unknown")
+              (subagent["finished"] === true ? "completed" : "unknown"))
             : "unknown"
 
         // Live process overlay: if the run is actively running in this process, prefer that.
         const state =
-          liveJob && liveJob.status === "running" && !["completed","failed","cancelled","interrupted","closed"].includes(durableState)
+          liveJob &&
+          liveJob.status === "running" &&
+          !["completed", "failed", "cancelled", "interrupted", "closed"].includes(durableState)
             ? "running"
             : durableState
 
@@ -135,7 +142,9 @@ export const TaskStatusTool = Tool.define(
         // §4.6 recovery hint for interrupted tasks.
         const recoverHint =
           state === "interrupted" || state === "recovery_required"
-            ? ` [partial work preserved — call task_read({ task_id: "${child.id}" }) to recover]`
+            ? state === "recovery_required"
+              ? ` [resolution required — inspect with task_read, then call task_recovery({ task_id: "${child.id}", resolution: "failed" | "closed", reason: "..." }); continuing requires a new task call with the same task_id]`
+              : ` [partial work preserved — call task_read({ task_id: "${child.id}" }) to recover]`
             : state === "failed" || state === "error"
               ? ` [call task_read({ task_id: "${child.id}" }) to inspect partial work]`
               : ""
