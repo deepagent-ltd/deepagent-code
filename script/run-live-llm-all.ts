@@ -203,6 +203,12 @@ export const suites: Suite[] = [
     realLLM: true,
   },
   {
+    id: "live:continuation-repetition",
+    package: "deepagent-code",
+    command: ["bun", "run", "test:llm-live:continuation-repetition"],
+    realLLM: true,
+  },
+  {
     id: "live:degeneration",
     package: "deepagent-code",
     command: ["bun", "run", "test:llm-live:degeneration"],

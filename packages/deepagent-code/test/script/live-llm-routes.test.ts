@@ -150,6 +150,7 @@ describe("live LLM route manifest", () => {
           "live:adapter:structured-output",
           "live:cli-subprocess:cli-headless",
           "live:legacy-session:bash-repair",
+          "live:legacy-session:continuation-repetition",
           "live:legacy-session:degeneration",
           "live:legacy-session:file-mutations",
           "live:legacy-session:file-read-search",
@@ -157,6 +158,7 @@ describe("live LLM route manifest", () => {
           "live:legacy-session:stale-validation",
           "live:legacy-session:steer-boundary",
           "live:legacy-session:structured-output",
+          "live:legacy-session:subagent-control-plane",
           "live:legacy-session:subagent-foreground",
           "live:session-v2:bash-repair",
           "live:session-v2:file-mutations",
@@ -243,6 +245,26 @@ describe("live LLM route manifest", () => {
         commandForModelRun(selected.runs.find((run) => modelRunKey(run) === "ext:legacy-session:subagent-resume")!),
       ).toBeDefined()
     })
+  })
+
+  test("routes continuation context changes to the real repetition regression", () => {
+    for (const path of [
+      "packages/core/src/agent-gateway.ts",
+      "packages/core/src/deepagent/prompt-policy.ts",
+      "packages/core/src/deepagent/session-state.ts",
+      "packages/deepagent-code/src/session/llm/request.ts",
+      "packages/deepagent-code/src/session/reminders.ts",
+      "packages/deepagent-code/script/live-llm/continuation-repetition.ts",
+    ]) {
+      const run = selectRoutes([path]).runs.find(
+        (item) => modelRunKey(item) === "live:legacy-session:continuation-repetition",
+      )
+      expect(run).toBeDefined()
+      expect(commandForModelRun(run!)).toEqual({
+        cwd: "packages/deepagent-code",
+        args: ["bun", "run", "test:llm-live:continuation-repetition"],
+      })
+    }
   })
 
   test("keeps bounded takeover reachable from its harness and supervision seams", () => {

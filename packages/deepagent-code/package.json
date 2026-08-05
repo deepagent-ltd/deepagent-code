@@ -25,6 +25,7 @@
     "test:llm-live:subagent-foreground": "bun run script/live-llm/subagents.ts",
     "test:llm-live:shell-exit-contract": "bun run script/live-llm/shell-exit-contract.ts",
     "test:llm-live:stale-validation": "bun run script/live-llm/stale-validation.ts",
+    "test:llm-live:continuation-repetition": "bun run script/live-llm/continuation-repetition.ts",
     "test:llm-live:degeneration": "bun run script/live-llm/degeneration.ts",
     "test:llm-ext:finalizer-isolation": "bun run script/live-llm/finalizer-isolation.ts",
     "test:llm-live:steer-boundary": "bun run script/live-llm/steer-boundary.ts",

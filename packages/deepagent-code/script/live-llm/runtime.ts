@@ -874,6 +874,11 @@ export async function runLegacyLiveCases(input: {
                 .join(""),
             })),
             assistantTurns: currentAssistants.length,
+            assistantTexts: currentAssistants.map((message) =>
+              message.parts
+                .flatMap((part) => (part.type === "text" && !part.synthetic && !part.ignored ? [part.text] : []))
+                .join(""),
+            ),
             summaryTexts: currentAssistants
               .filter((message) => message.info.summary === true)
               .map((message) =>

@@ -347,6 +347,8 @@ describe("plan snapshot render", () => {
     expect(out).toContain("[!] deploy")
     expect(out).toContain("[ ] docs")
     expect(out).toContain("Active step: test")
+    expect(out).toContain("goal:")
+    expect(renderPlanSnapshot(plan, "continuation")).not.toContain("goal:")
   })
 })
 
