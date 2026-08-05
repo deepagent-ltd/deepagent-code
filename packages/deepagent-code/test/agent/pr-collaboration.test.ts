@@ -5,7 +5,7 @@ import { Effect, Layer } from "effect"
 import { Git } from "@/git"
 import { Worktree } from "@/worktree"
 import { PRQueue } from "@/agent/pr-queue"
-import { coordinator } from "@/agent/pr-collaboration"
+import { coordinator, ensureSessionBranch } from "@/agent/pr-collaboration"
 import { ReviewVerdictContract } from "@/collaboration/review-contract"
 import { testEffect } from "../lib/effect"
 import { TestInstance } from "../fixture/fixture"
@@ -61,6 +61,23 @@ describe("PR collaboration coordinator", () => {
       expect(yield* Effect.tryPromise(() => fs.readFile(path.join(directory, "user-change.txt"), "utf8"))).toBe(
         "preserve me\n",
       )
+    }),
+    { git: true },
+  )
+
+  testPR.instance(
+    "Fix-C: ensureSessionBranch caps dirty-path list at 10 entries and appends overflow count",
+    Effect.gen(function* () {
+      const directory = (yield* TestInstance).directory
+      const git = yield* Git.Service
+      // Create 15 untracked files so the MAX_SHOWN=10 overflow branch fires (overflow = 5)
+      for (let i = 0; i < 15; i++) {
+        yield* Effect.tryPromise(() => fs.writeFile(path.join(directory, `fixc-dirty-${i}.txt`), "x\n"))
+      }
+      const err = yield* Effect.flip(ensureSessionBranch({ git, directory, sessionID: "ses-fix-c" }))
+      expect(err.message).toContain("… and 5 more")
+      // The full path dump must not reappear — message stays well under 500 chars
+      expect(err.message.length).toBeLessThan(500)
     }),
     { git: true },
   )
