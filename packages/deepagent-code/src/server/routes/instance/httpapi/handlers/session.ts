@@ -12,6 +12,7 @@ import { SessionCompaction } from "@/session/compaction"
 import { MessageV2 } from "@/session/message-v2"
 import { SessionPrompt } from "@/session/prompt"
 import { SessionPromptIntent } from "@/session/prompt-intent"
+import { SessionMutationEpoch } from "@/session/mutation-epoch"
 import { SessionRevert } from "@/session/revert"
 import { SessionRunState } from "@/session/run-state"
 import { SessionStatus } from "@/session/status"
@@ -331,7 +332,23 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
           ...ctx.payload,
           sessionID: ctx.params.sessionID,
         })
-        .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
+        .pipe(
+          Effect.mapError((error) =>
+            error instanceof SessionMutationEpoch.Stale
+              ? new ConflictError({
+                  message: "prompt intent was superseded by a session revert",
+                  resource: `session:${error.sessionID}`,
+                })
+              : error instanceof SessionPromptIntent.Conflict
+                ? new ConflictError({ message: error.reason, resource: `session_intent:${error.intentID}` })
+                : error instanceof SessionPromptIntent.InProgress
+                  ? new ConflictError({
+                      message: "prompt intent admission is already in progress",
+                      resource: `session_intent:${error.intentID}`,
+                    })
+                  : new HttpApiError.BadRequest({}),
+          ),
+        )
       const body =
         result.kind === "turn"
           ? JSON.stringify(result.message)
@@ -355,8 +372,13 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
           source: input.ctx.payload.intent_source ?? "intelligence",
         }).pipe(
           Effect.provideService(Database.Service, database),
-          Effect.mapError(
-            (error) => new ConflictError({ message: error.reason, resource: `session_intent:${error.intentID}` }),
+          Effect.mapError((error) =>
+            error instanceof SessionMutationEpoch.Stale
+              ? new ConflictError({
+                  message: "prompt intent was superseded by a session revert",
+                  resource: `session:${error.sessionID}`,
+                })
+              : new ConflictError({ message: error.reason, resource: `session_intent:${error.intentID}` }),
           ),
         )
       }
@@ -457,20 +479,23 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       yield* requireSession(ctx.params.sessionID)
       // Return only after the input has crossed its durable admission boundary. Model execution stays
       // asynchronous, but callers may safely serialize destructive actions after this acknowledgement.
-      yield* promptSvc
-        .promptAsync({ ...ctx.payload, sessionID: ctx.params.sessionID })
-        .pipe(
-          Effect.mapError((error) =>
-            error instanceof SessionPromptIntent.Conflict
-              ? new ConflictError({ message: error.reason, resource: `session_intent:${error.intentID}` })
-              : error instanceof SessionPromptIntent.InProgress
+      yield* promptSvc.promptAsync({ ...ctx.payload, sessionID: ctx.params.sessionID }).pipe(
+        Effect.mapError((error) =>
+          error instanceof SessionPromptIntent.Conflict
+            ? new ConflictError({ message: error.reason, resource: `session_intent:${error.intentID}` })
+            : error instanceof SessionPromptIntent.InProgress
+              ? new ConflictError({
+                  message: "prompt intent admission is already in progress",
+                  resource: `session_intent:${error.intentID}`,
+                })
+              : error instanceof SessionMutationEpoch.Stale
                 ? new ConflictError({
-                    message: "prompt intent admission is already in progress",
-                    resource: `session_intent:${error.intentID}`,
+                    message: "prompt intent was superseded by a session revert",
+                    resource: `session:${error.sessionID}`,
                   })
                 : new HttpApiError.BadRequest({}),
-          ),
-        )
+        ),
+      )
       return HttpApiSchema.NoContent.make()
     })
 

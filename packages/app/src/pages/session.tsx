@@ -53,6 +53,7 @@ import {
   sendFollowupDraft,
 } from "@/components/prompt-input/submit"
 import { createSessionComposerState, SessionComposerRegion } from "@/pages/session/composer"
+import { createFollowupSubmissionRegistry } from "@/pages/session/followup-submission"
 import {
   createForkAction,
   createOpenReviewFile,
@@ -1445,6 +1446,8 @@ export default function Page() {
     return followup.edit[id]
   })
 
+  const followupSubmissions = createFollowupSubmissionRegistry()
+
   const followupMutation = useMutation(() => ({
     mutationFn: async (input: { sessionID: string; id: string }) => {
       const item = (followup.items[input.sessionID] ?? []).find((entry) => entry.id === input.id)
@@ -1452,7 +1455,8 @@ export default function Page() {
 
       setFollowup("failed", input.sessionID, undefined)
 
-      const ok = await sendFollowupDraft({
+      const controller = new AbortController()
+      const promise = sendFollowupDraft({
         client: sdk.client,
         sync,
         serverSync,
@@ -1461,11 +1465,18 @@ export default function Page() {
         intentSource: "followup",
         optimisticBusy: item.sessionDirectory === sdk.directory,
         confirmPromptDraft,
-      }).catch((err) => {
-        setFollowup("failed", input.sessionID, input.id)
-        fail(err)
-        return false
+        promptPrepareSignal: controller.signal,
       })
+      followupSubmissions.register({ ...input, controller, promise })
+      const ok = await promise
+        .catch((err) => {
+          setFollowup("failed", input.sessionID, input.id)
+          fail(err)
+          return false
+        })
+        .finally(() => {
+          followupSubmissions.clear(input.sessionID, input.id)
+        })
       if (!ok) return
 
       setFollowup("items", input.sessionID, (items) => (items ?? []).filter((entry) => entry.id !== input.id))
@@ -1509,6 +1520,7 @@ export default function Page() {
   }
 
   const queueFollowup = (draft: FollowupDraft) => {
+    if (reverting()) return
     setFollowup("items", draft.sessionID, (items) => [
       ...(items ?? []),
       { id: Identifier.ascending("message"), ...draft },
@@ -1520,6 +1532,7 @@ export default function Page() {
   const followupDock = createMemo(() => queuedFollowups().map((item) => ({ id: item.id, text: followupText(item) })))
 
   const sendFollowup = (sessionID: string, id: string) => {
+    if (reverting()) return Promise.resolve()
     if (sync.session.get(sessionID)?.parentID) return Promise.resolve()
     const item = (followup.items[sessionID] ?? []).find((entry) => entry.id === id)
     if (!item) return Promise.resolve()
@@ -1531,7 +1544,7 @@ export default function Page() {
   const editFollowup = (id: string) => {
     const sessionID = params.id
     if (!sessionID) return
-    if (followupBusy(sessionID)) return
+    if (reverting() || followupBusy(sessionID)) return
 
     const item = queuedFollowups().find((entry) => entry.id === id)
     if (!item) return
@@ -1548,7 +1561,7 @@ export default function Page() {
   const deleteFollowup = (id: string) => {
     const sessionID = params.id
     if (!sessionID) return
-    if (followupBusy(sessionID)) return
+    if (reverting() || followupBusy(sessionID)) return
 
     setFollowup("items", sessionID, (items) => (items ?? []).filter((entry) => entry.id !== id))
     setFollowup("failed", sessionID, (value) => (value === id ? undefined : value))
@@ -1563,10 +1576,15 @@ export default function Page() {
   const halt = (sessionID: string) =>
     busy(sessionID) ? sdk.client.session.abort({ sessionID }).catch(() => {}) : Promise.resolve()
 
+  const cancelFollowup = async (sessionID: string) => {
+    await followupSubmissions.cancel(sessionID)
+  }
+
   const revertMutation = useMutation(() => ({
     mutationFn: async (input: { sessionID: string; messageID: string }) => {
       const value = draft(input.messageID)
-      await (promptInputControl?.cancelPending() ?? Promise.resolve())
+      await cancelFollowup(input.sessionID)
+        .then(() => promptInputControl?.cancelPending() ?? Promise.resolve())
         .then(() => halt(input.sessionID))
         .then(() => sdk.client.session.revert(input))
         .then((result) => {
@@ -1595,7 +1613,8 @@ export default function Page() {
               messageID: next.id,
             })
 
-      await (promptInputControl?.cancelPending() ?? Promise.resolve())
+      await cancelFollowup(sessionID)
+        .then(() => promptInputControl?.cancelPending() ?? Promise.resolve())
         .then(() => halt(sessionID))
         .then(request)
         .then((result) => {
@@ -1748,6 +1767,7 @@ export default function Page() {
               queue: queueEnabled,
               items: followupDock(),
               sending: sendingFollowup(),
+              disabled: reverting(),
               edit: editingFollowup(),
               onQueue: queueFollowup,
               onAbort: () => {

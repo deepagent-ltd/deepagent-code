@@ -863,6 +863,9 @@ describe("HttpApi SDK", () => {
         const asyncPrompt = yield* capture(() =>
           sdk.session.promptAsync({
             sessionID,
+            intentID: "intent_http_async_admission",
+            intentSource: "composer",
+            intentVariant: "original",
             agent: "build",
             noReply: true,
             parts: [{ type: "text", text: "async hello" }],

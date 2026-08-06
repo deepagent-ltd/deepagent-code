@@ -1,4 +1,13 @@
-import { sqliteTable, text, integer, index, primaryKey, real, uniqueIndex, type AnySQLiteColumn } from "drizzle-orm/sqlite-core"
+import {
+  sqliteTable,
+  text,
+  integer,
+  index,
+  primaryKey,
+  real,
+  uniqueIndex,
+  type AnySQLiteColumn,
+} from "drizzle-orm/sqlite-core"
 import { sql } from "drizzle-orm"
 import * as DatabasePath from "../database/path"
 import { ProjectTable } from "../project/sql"
@@ -46,6 +55,7 @@ export const SessionTable = sqliteTable(
     tokens_reasoning: integer().notNull().default(0),
     tokens_cache_read: integer().notNull().default(0),
     tokens_cache_write: integer().notNull().default(0),
+    mutation_epoch: integer().notNull().default(0),
     revert: text({ mode: "json" }).$type<{ messageID: MessageID; partID?: PartID; snapshot?: string; diff?: string }>(),
     permission: text({ mode: "json" }).$type<PermissionV1.Ruleset>(),
     agent: text(),
@@ -182,10 +192,9 @@ export const SessionInputTable = sqliteTable(
 // loop (SessionPrompt.runLoop), where it is persisted as an ordinary tail user message. This is a
 // PLAIN durable buffer (direct row writes, NOT event-sourced) — deliberately distinct from
 // SessionInputTable, which is projected only by the dormant experimentalEventSystem V2 runner and
-// feeds a different (V2) history store. Consume-once is enforced by `consumed_seq`: `drainSteer`
-// atomically stamps every pending row it returns in one transaction, so a second drain (or a
-// concurrent one) sees no pending rows. `seq` is a per-session monotonic admission order (autoincrement
-// PK) so a drain returns steers in the exact order the user sent them.
+// feeds a different (V2) history store. Chat materialization writes the V1 message and consume stamp in
+// one transaction. `mutation_epoch` and `superseded_at` fence every pending row against revert/rewrite.
+// `seq` is a per-session monotonic admission order so a drain preserves exact send order.
 export const SessionSteerTable = sqliteTable(
   "session_steer",
   {
@@ -201,7 +210,9 @@ export const SessionSteerTable = sqliteTable(
     correlation_id: text(),
     prompt: text({ mode: "json" }).notNull().$type<Prompt>(),
     delivery: text().$type<SessionInput.Delivery>().notNull(),
+    mutation_epoch: integer().notNull().default(0),
     consumed_seq: integer(),
+    superseded_at: integer(),
     time_created: integer()
       .notNull()
       .$default(() => Date.now()),
@@ -221,9 +232,7 @@ export const SessionIntentTable = sqliteTable(
       .notNull()
       .references(() => SessionTable.id, { onDelete: "cascade" }),
     source: text().$type<"composer" | "intelligence" | "followup" | "rewrite">().notNull(),
-    state: text()
-      .$type<"preparing" | "admitting" | "admitted" | "canceled" | "superseded" | "failed">()
-      .notNull(),
+    state: text().$type<"preparing" | "admitting" | "admitted" | "canceled" | "superseded" | "failed">().notNull(),
     selected_variant: text().$type<"original" | "rewritten">(),
     selected_payload_hash: text(),
     delivery: text().$type<"turn" | SessionInput.Delivery>(),
@@ -231,6 +240,7 @@ export const SessionIntentTable = sqliteTable(
     correlation_id: text(),
     owner_token: text(),
     lease_expires_at: integer(),
+    mutation_epoch: integer().notNull().default(0),
     version: integer().notNull().default(0),
     time_created: integer().notNull(),
     time_selected: integer(),
@@ -272,9 +282,7 @@ export const TaskRunTable = sqliteTable(
     child_session_id: text().$type<SessionSchema.ID>().notNull(),
     generation: integer().notNull(),
     delivery_mode: text().$type<"foreground" | "background">().notNull(),
-    phase: text()
-      .$type<"admission" | "research" | "finalize" | "settled" | "queue" | "provision">()
-      .notNull(),
+    phase: text().$type<"admission" | "research" | "finalize" | "settled" | "queue" | "provision">().notNull(),
     state: text()
       .$type<
         | "admitted"
@@ -388,7 +396,13 @@ export const TaskRunTable = sqliteTable(
       .where(sql`${table.state} IN ('admitted', 'provisioning', 'running', 'researching', 'finalizing')`),
     index("task_run_parent_state_idx").on(table.parent_session_id, table.state, table.time_updated),
     index("task_run_root_idx").on(table.root_run_id),
-    index("task_run_queue_idx").on(table.state, table.available_at, table.priority, table.time_created, table.generation),
+    index("task_run_queue_idx").on(
+      table.state,
+      table.available_at,
+      table.priority,
+      table.time_created,
+      table.generation,
+    ),
     index("task_run_goal_idx").on(table.goal_id, table.goal_tick_seq, table.goal_role, table.goal_ordinal),
   ],
 )

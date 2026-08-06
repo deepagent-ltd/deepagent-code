@@ -274,12 +274,12 @@ const promptInputToPrompt = (parts: PromptInput["parts"]): Effect.Effect<Prompt,
 
 export interface Interface {
   readonly cancel: (sessionID: SessionID) => Effect.Effect<void>
-  readonly prompt: (input: PromptInput) => Effect.Effect<SessionV1.WithParts, Image.Error>
+  readonly prompt: (input: PromptInput) => Effect.Effect<SessionV1.WithParts, Image.Error | SessionPromptIntent.Error>
   readonly promptAsync: (input: PromptInput) => Effect.Effect<void, Image.Error | SessionPromptIntent.Error>
   readonly prepareTaskInput: (
     input: PromptInput,
     timeCreated: number,
-  ) => Effect.Effect<SessionV1.WithParts, Image.Error>
+  ) => Effect.Effect<SessionV1.WithParts, Image.Error | SessionPromptIntent.Error>
   // V4.1 §S1.1: buffer a mid-turn user message into the durable steer queue for absorption at the next
   // model-request boundary of the live turn loop. This is the admit() API; S1.2 wires the busy-session
   // ingress that decides WHEN to route a message here vs. the normal prompt() path. Idempotent on `id`.
@@ -288,7 +288,7 @@ export interface Interface {
     prompt: Prompt
     delivery?: SessionSteer.Delivery
     messageID?: SessionMessage.ID
-  }) => Effect.Effect<SessionSteer.Admitted>
+  }) => Effect.Effect<SessionSteer.Admitted, SessionPromptIntent.Error>
   // V4.1 §S1.2: the busy-session ingress decision. If the session is IDLE (no live turn) → run a normal
   // turn (prompt). If it is BUSY (mid-turn) and steering is enabled → buffer the message as a steer so
   // the running turn absorbs it at its next boundary (delivery="goal_steer" when a non-terminal goal is
@@ -296,10 +296,12 @@ export interface Interface {
   // runLoop). Returns a discriminated ack so the caller knows whether a turn ran or the message was
   // accepted as steering. With steering disabled it falls back to prompt() (which enforces the runner's
   // own busy semantics), preserving pre-steering behavior exactly.
-  readonly promptOrSteer: (input: PromptInput) => Effect.Effect<PromptOrSteerResult, Image.Error>
+  readonly promptOrSteer: (
+    input: PromptInput,
+  ) => Effect.Effect<PromptOrSteerResult, Image.Error | SessionPromptIntent.Error>
   readonly loop: (input: LoopInput, onRunning?: Effect.Effect<void>) => Effect.Effect<SessionV1.WithParts>
   readonly shell: (input: ShellInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError>
-  readonly command: (input: CommandInput) => Effect.Effect<SessionV1.WithParts, Image.Error>
+  readonly command: (input: CommandInput) => Effect.Effect<SessionV1.WithParts, Image.Error | SessionPromptIntent.Error>
   readonly resolvePromptParts: (template: string) => Effect.Effect<PromptInput["parts"]>
   readonly refineIntelligenceDraft: (input: {
     sessionID: SessionID
@@ -326,11 +328,26 @@ export interface Interface {
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/SessionPrompt") {}
 
 type PromptLifecycle = {
+  readonly intent?: SessionPromptIntent.Receipt & {
+    readonly state: "admitting"
+    readonly ownerToken: string
+    readonly messageID: MessageID
+  }
   readonly ready: (input: {
     readonly messageID: MessageID
     readonly delivery: SessionPromptIntent.Delivery
   }) => Effect.Effect<void>
 }
+
+type ExecutePrompt = (
+  input: PromptInput,
+  lifecycle?: PromptLifecycle,
+) => Effect.Effect<SessionV1.WithParts, Image.Error | SessionPromptIntent.Error>
+
+type ExecutePromptOrSteer = (
+  input: PromptInput,
+  lifecycle?: PromptLifecycle,
+) => Effect.Effect<PromptOrSteerResult, Image.Error | SessionPromptIntent.Error>
 
 export const layer = Layer.effect(
   Service,
@@ -1307,7 +1324,11 @@ export const layer = Layer.effect(
 
     const createUserMessage = Effect.fn("SessionPrompt.createUserMessage")(function* (
       input: PromptInput,
-      options?: { readonly persist?: boolean; readonly timeCreated?: number },
+      options?: {
+        readonly persist?: boolean
+        readonly timeCreated?: number
+        readonly intent?: PromptLifecycle["intent"]
+      },
     ) {
       const persist = options?.persist !== false
       const agentName = input.agent
@@ -1361,32 +1382,6 @@ export const layer = Layer.effect(
         // retryCount. `format` is validated on the way in (PromptInput), so this decode never fails.
         format: input.format === undefined ? undefined : decodeFormatSync(input.format),
         metadata: input.metadata,
-      }
-
-      if (persist && current?.agent !== info.agent) {
-        yield* events.publish(SessionEvent.AgentSwitched, {
-          sessionID: input.sessionID,
-          messageID: SessionMessage.ID.create(),
-          timestamp: DateTime.makeUnsafe(info.time.created),
-          agent: info.agent,
-        })
-      }
-      if (
-        persist &&
-        (current?.model?.providerID !== info.model.providerID ||
-          current.model.id !== info.model.modelID ||
-          (current.model.variant === "default" ? undefined : current.model.variant) !== info.model.variant)
-      ) {
-        yield* events.publish(SessionEvent.ModelSwitched, {
-          sessionID: input.sessionID,
-          messageID: SessionMessage.ID.create(),
-          timestamp: DateTime.makeUnsafe(info.time.created),
-          model: {
-            id: ModelV2.ID.make(info.model.modelID),
-            providerID: ProviderV2.ID.make(info.model.providerID),
-            variant: ModelV2.VariantID.make(info.model.variant ?? "default"),
-          },
-        })
       }
 
       if (persist) yield* Effect.addFinalizer(() => instruction.clear(info.id))
@@ -1735,6 +1730,35 @@ export const layer = Layer.effect(
 
       if (!persist) return { info, parts }
 
+      if (options?.intent) {
+        yield* SessionPromptIntent.materializeTurn({ receipt: options.intent, message: { info, parts } }).pipe(
+          Effect.provideService(Database.Service, database),
+        )
+      }
+      if (current?.agent !== info.agent) {
+        yield* events.publish(SessionEvent.AgentSwitched, {
+          sessionID: input.sessionID,
+          messageID: SessionMessage.ID.create(),
+          timestamp: DateTime.makeUnsafe(info.time.created),
+          agent: info.agent,
+        })
+      }
+      if (
+        current?.model?.providerID !== info.model.providerID ||
+        current.model.id !== info.model.modelID ||
+        (current.model.variant === "default" ? undefined : current.model.variant) !== info.model.variant
+      ) {
+        yield* events.publish(SessionEvent.ModelSwitched, {
+          sessionID: input.sessionID,
+          messageID: SessionMessage.ID.create(),
+          timestamp: DateTime.makeUnsafe(info.time.created),
+          model: {
+            id: ModelV2.ID.make(info.model.modelID),
+            providerID: ProviderV2.ID.make(info.model.providerID),
+            variant: ModelV2.VariantID.make(info.model.variant ?? "default"),
+          },
+        })
+      }
       yield* sessions.updateMessage(info)
       for (const part of parts) yield* sessions.updatePart(part)
       const nextPrompt = parts.reduce(
@@ -1840,10 +1864,7 @@ export const layer = Layer.effect(
       return yield* createUserMessage(input, { persist: false, timeCreated })
     })
 
-    const prompt: (
-      input: PromptInput,
-      lifecycle?: PromptLifecycle,
-    ) => Effect.Effect<SessionV1.WithParts, Image.Error> = Effect.fn("SessionPrompt.prompt")(function* (
+    const prompt: ExecutePrompt = Effect.fn("SessionPrompt.prompt")(function* (
       input: PromptInput,
       lifecycle?: PromptLifecycle,
     ) {
@@ -1890,19 +1911,24 @@ export const layer = Layer.effect(
       if (FSUtil.resolve(session.directory) !== FSUtil.resolve(current.directory)) {
         return yield* instances.provide({ directory: session.directory }, prompt(input, lifecycle))
       }
-      yield* revert.cleanup(session)
+      const mutationEpoch =
+        lifecycle?.intent?.mutationEpoch ?? (yield* sessions.mutationEpoch(session.id).pipe(Effect.orDie))
+      yield* revert.cleanup(session, mutationEpoch)
       const pipeline = yield* buildPromptPipelineSubmission(input)
-      const message = yield* createUserMessage({
-        ...input,
-        parts: pipeline.parts,
-        metadata: {
-          ...(input.metadata ?? {}),
-          deepagent: {
-            ...(isRecord(input.metadata?.deepagent) ? input.metadata.deepagent : {}),
-            prompt_pipeline: pipeline.metadata,
+      const message = yield* createUserMessage(
+        {
+          ...input,
+          parts: pipeline.parts,
+          metadata: {
+            ...(input.metadata ?? {}),
+            deepagent: {
+              ...(isRecord(input.metadata?.deepagent) ? input.metadata.deepagent : {}),
+              prompt_pipeline: pipeline.metadata,
+            },
           },
         },
-      })
+        lifecycle?.intent ? { intent: lifecycle.intent } : undefined,
+      )
       yield* sessions.touch(input.sessionID)
 
       const permissions: PermissionV1.Rule[] = []
@@ -2145,15 +2171,9 @@ export const layer = Layer.effect(
     // untouched — cache-safe (see request.ts applyCaching slice(-2)). Returns the count drained so the
     // caller can decide whether the freshly-read history now includes new tail user messages.
     //
-    // EXACTLY-ONCE, PERSIST-FIRST (no loss + no duplicate). We (1) read the pending steers non-
-    // consumingly, (2) materialize each as a history message, THEN (3) mark them consumed. If the process
-    // crashes between (2) and (3) the row stays pending, so the next drain re-materializes it — a no-op
-    // because BOTH the message id AND its text part id are DERIVED FROM THE STEER ID (stable across
-    // replays), and the V1 projector upserts on those ids (MessageUpdated/PartUpdated →
-    // onConflictDoUpdate on the id). So re-persisting hits the same row (idempotent), never a duplicate
-    // turn. The steer id is an ascending SessionMessage.ID minted at admit time, so tail-sorting (Check 3)
-    // is preserved. This replaces the earlier stamp-then-persist ordering, whose crash window between the
-    // consume stamp and the message write could lose a steer permanently.
+    // EXACTLY-ONCE: each message, all of its stable-ID parts, and the consume stamp commit in one IMMEDIATE
+    // transaction. `materialize` re-checks the Session mutation epoch under that same lock; a concurrent
+    // revert either follows the completed append or supersedes the steer before it can write anything.
     const steerPartID = (messageID: MessageID, suffix?: string) =>
       PartID.make("prt_" + messageID.slice("msg_".length) + (suffix ?? ""))
     const drainSteers = Effect.fn("SessionPrompt.drainSteers")(function* (sessionID: SessionID) {
@@ -2190,11 +2210,9 @@ export const layer = Layer.effect(
             ...(variant ? { variant } : {}),
           },
         }
-        // PERSIST-FIRST: materialize the history message and all durable parts before stamping consumed.
-        // Part IDs are derived from the steer id so post-crash replays are idempotent upserts.
-        yield* sessions.updateMessage(info)
+        const parts: SessionV1.Part[] = []
         if (admitted.prompt.text.length > 0)
-          yield* sessions.updatePart({
+          parts.push({
             id: steerPartID(info.id),
             messageID: info.id,
             sessionID,
@@ -2202,7 +2220,7 @@ export const layer = Layer.effect(
             text: admitted.prompt.text,
           })
         for (const [i, file] of (admitted.prompt.files ?? []).entries())
-          yield* sessions.updatePart({
+          parts.push({
             id: steerPartID(info.id, `_f${i}`),
             messageID: info.id,
             sessionID,
@@ -2212,13 +2230,19 @@ export const layer = Layer.effect(
             filename: file.name ?? file.uri,
           })
         for (const [i, agent] of (admitted.prompt.agents ?? []).entries())
-          yield* sessions.updatePart({
+          parts.push({
             id: steerPartID(info.id, `_a${i}`),
             messageID: info.id,
             sessionID,
             type: "agent",
             name: agent.name,
           })
+        const materialized = yield* steerBuffer
+          .materialize({ admitted, info, parts })
+          .pipe(Effect.catchTag("SessionMutationEpoch.Stale", () => Effect.succeed(false)))
+        if (!materialized) continue
+        yield* sessions.updateMessage(info)
+        for (const part of parts) yield* sessions.updatePart(part)
         if (federationRollout.enabled.contextFederationShadow && !(yield* SessionInput.find(db, admitted.id))) {
           yield* events.publish(SessionEvent.Prompted, {
             sessionID,
@@ -2231,9 +2255,6 @@ export const layer = Layer.effect(
         persisted.push(admitted.id)
         yield* elog.info("steer absorbed at boundary", { sessionID, messageID: info.id, seq: admitted.seq })
       }
-      // Only AFTER every steer is durably in history do we mark them consumed. A crash before this leaves
-      // them pending → re-materialized (idempotently) on the next drain. No loss, no double-apply.
-      yield* steerBuffer.markConsumed(sessionID, persisted)
       return persisted
     })
 
@@ -3010,12 +3031,13 @@ export const layer = Layer.effect(
     // V4.1 §S1.1: admit a mid-turn user message into the durable steer buffer.
     // The canonical durable ID is always server-minted by admit(); the caller's messageID is used
     // only as an optional correlationID for idempotent retries.
-    const steer: (input: {
+    const steer = Effect.fn("SessionPrompt.steer")(function* (input: {
       sessionID: SessionID
       prompt: Prompt
       delivery?: SessionSteer.Delivery
       messageID?: SessionMessage.ID
-    }) => Effect.Effect<SessionSteer.Admitted> = Effect.fn("SessionPrompt.steer")(function* (input) {
+      intent?: PromptLifecycle["intent"]
+    }) {
       if (!flags.v4Steering)
         return yield* Effect.die(new NamedError.Unknown({ message: "Steering is disabled (v4Steering=false)" }))
       const delivery = input.delivery ?? "steer"
@@ -3025,6 +3047,7 @@ export const layer = Layer.effect(
           prompt: input.prompt,
           delivery,
           correlationID: input.messageID,
+          intent: input.intent,
         })
         .pipe(
           Effect.catchTag("SessionSteer.CorrelationConflict", () =>
@@ -3056,10 +3079,7 @@ export const layer = Layer.effect(
     //      that drains on step 0. ensureRunning makes this a no-op await if a turn is (still) running, so
     //      there is no double-turn; if idle, it runs one drain turn. Forked so the ingress returns promptly.
     //   4. else idle, no goal → prompt() runs a normal turn.
-    const promptOrSteer: (
-      input: PromptInput,
-      lifecycle?: PromptLifecycle,
-    ) => Effect.Effect<PromptOrSteerResult, Image.Error> = Effect.fn("SessionPrompt.promptOrSteer")(function* (
+    const promptOrSteer: ExecutePromptOrSteer = Effect.fn("SessionPrompt.promptOrSteer")(function* (
       input: PromptInput,
       lifecycle?: PromptLifecycle,
     ) {
@@ -3079,6 +3099,7 @@ export const layer = Layer.effect(
           prompt: steerPrompt,
           delivery: "goal_steer",
           messageID: input.messageID as unknown as SessionMessage.ID | undefined,
+          intent: lifecycle?.intent,
         })
         if (lifecycle) yield* lifecycle.ready({ messageID: MessageID.make(admitted.id), delivery: "goal_steer" })
         // V4.1 governance audit — this is the REAL user goal-steer path (the ingress every busy-goal
@@ -3103,6 +3124,7 @@ export const layer = Layer.effect(
         prompt: steerPrompt,
         delivery: "steer",
         messageID: input.messageID as unknown as SessionMessage.ID | undefined,
+        intent: lifecycle?.intent,
       })
       if (lifecycle) yield* lifecycle.ready({ messageID: MessageID.make(admitted.id), delivery: "steer" })
       // Race guard (see header): a pure-drain turn absorbs a steer stranded by the isBusy→admit window.
@@ -3110,85 +3132,85 @@ export const layer = Layer.effect(
       return { kind: "steer" as const, delivery: "steer" as const, admitted }
     })
 
-    const promptAsync: (
-      input: PromptInput,
-    ) => Effect.Effect<void, Image.Error | SessionPromptIntent.Error> = Effect.fn("SessionPrompt.promptAsync")(
-      function* (input: PromptInput) {
-        const messageID = input.messageID ?? MessageID.ascending()
-        const claim = input.intentID
-          ? yield* SessionPromptIntent.claim({
-              intentID: input.intentID,
-              sessionID: input.sessionID,
-              source: input.intentSource ?? "composer",
-              variant:
-                input.intentVariant ?? (promptPipelineRequest(input.metadata).confirmedDraftID ? "rewritten" : "original"),
-              payloadHash: promptIntentPayloadHash(input),
-              messageID,
-            }).pipe(Effect.provideService(Database.Service, database))
-          : undefined
-        if (claim?.kind === "admitted") return
-        const claimed = claim?.receipt
-        const admittedInput = claimed
-          ? {
-              ...input,
-              messageID: claimed.messageID,
-              parts: stableIntentParts(input.parts, claimed.intentID),
-            }
-          : { ...input, messageID }
-        const admission = yield* Deferred.make<void, Image.Error | SessionPromptIntent.Error>()
-        if (claimed) {
-          yield* Effect.suspend(() =>
-            SessionPromptIntent.renew({
-              intentID: claimed.intentID,
-              ownerToken: claimed.ownerToken,
-            }).pipe(
-              Effect.provideService(Database.Service, database),
-              Effect.delay(Duration.seconds(10)),
-              Effect.flatMap((renewed) => (renewed ? Effect.void : Effect.interrupt)),
-            ),
-          ).pipe(Effect.forever, Effect.forkIn(scope))
-        }
-        yield* promptOrSteer(admittedInput, {
-          ready: (receipt) =>
-            (claimed
-              ? SessionPromptIntent.complete({
-                  intentID: claimed.intentID,
-                  ownerToken: claimed.ownerToken,
-                  messageID: receipt.messageID,
-                  delivery: receipt.delivery,
-                }).pipe(Effect.provideService(Database.Service, database), Effect.asVoid)
-              : Effect.void
-            ).pipe(
-              Effect.matchCauseEffect({
-                onFailure: (cause) => Deferred.failCause(admission, cause),
-                onSuccess: () => Deferred.succeed(admission, undefined),
-              }),
-              Effect.asVoid,
-            ),
-        }).pipe(
-          Effect.catchCause((cause) =>
-            Effect.gen(function* () {
-              if (claimed) {
-                yield* SessionPromptIntent.fail({
-                  intentID: claimed.intentID,
-                  ownerToken: claimed.ownerToken,
-                }).pipe(Effect.provideService(Database.Service, database))
-              }
-              yield* Effect.logError("prompt_async failed").pipe(
-                Effect.annotateLogs({ sessionID: input.sessionID, cause }),
-              )
-              yield* events.publish(Session.Event.Error, {
-                sessionID: input.sessionID,
-                error: new NamedError.Unknown({ message: Cause.pretty(cause) }).toObject(),
-              })
-              yield* Deferred.failCause(admission, cause)
-            }),
+    const promptAsync: (input: PromptInput) => Effect.Effect<void, Image.Error | SessionPromptIntent.Error> = Effect.fn(
+      "SessionPrompt.promptAsync",
+    )(function* (input: PromptInput) {
+      const messageID = input.messageID ?? MessageID.ascending()
+      const claim = input.intentID
+        ? yield* SessionPromptIntent.claim({
+            intentID: input.intentID,
+            sessionID: input.sessionID,
+            source: input.intentSource ?? "composer",
+            variant:
+              input.intentVariant ??
+              (promptPipelineRequest(input.metadata).confirmedDraftID ? "rewritten" : "original"),
+            payloadHash: promptIntentPayloadHash(input),
+            messageID,
+          }).pipe(Effect.provideService(Database.Service, database))
+        : undefined
+      if (claim?.kind === "admitted") return
+      const claimed = claim?.receipt
+      const admittedInput = claimed
+        ? {
+            ...input,
+            messageID: claimed.messageID,
+            parts: stableIntentParts(input.parts, claimed.intentID),
+          }
+        : { ...input, messageID }
+      const admission = yield* Deferred.make<void, Image.Error | SessionPromptIntent.Error>()
+      if (claimed) {
+        yield* Effect.suspend(() =>
+          SessionPromptIntent.renew({
+            intentID: claimed.intentID,
+            ownerToken: claimed.ownerToken,
+          }).pipe(
+            Effect.provideService(Database.Service, database),
+            Effect.delay(Duration.seconds(10)),
+            Effect.flatMap((renewed) => (renewed ? Effect.void : Effect.interrupt)),
           ),
-          Effect.forkIn(scope, { startImmediately: true }),
-        )
-        yield* Deferred.await(admission)
-      },
-    )
+        ).pipe(Effect.forever, Effect.forkIn(scope))
+      }
+      yield* promptOrSteer(admittedInput, {
+        intent: claimed,
+        ready: (receipt) =>
+          (claimed
+            ? SessionPromptIntent.complete({
+                intentID: claimed.intentID,
+                ownerToken: claimed.ownerToken,
+                messageID: receipt.messageID,
+                delivery: receipt.delivery,
+              }).pipe(Effect.provideService(Database.Service, database), Effect.asVoid)
+            : Effect.void
+          ).pipe(
+            Effect.matchCauseEffect({
+              onFailure: (cause) => Deferred.failCause(admission, cause),
+              onSuccess: () => Deferred.succeed(admission, undefined),
+            }),
+            Effect.asVoid,
+          ),
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.gen(function* () {
+            if (claimed) {
+              yield* SessionPromptIntent.fail({
+                intentID: claimed.intentID,
+                ownerToken: claimed.ownerToken,
+              }).pipe(Effect.provideService(Database.Service, database))
+            }
+            yield* Effect.logError("prompt_async failed").pipe(
+              Effect.annotateLogs({ sessionID: input.sessionID, cause }),
+            )
+            yield* events.publish(Session.Event.Error, {
+              sessionID: input.sessionID,
+              error: new NamedError.Unknown({ message: Cause.pretty(cause) }).toObject(),
+            })
+            yield* Deferred.failCause(admission, cause)
+          }),
+        ),
+        Effect.forkIn(scope, { startImmediately: true }),
+      )
+      yield* Deferred.await(admission)
+    })
 
     const loop: (input: LoopInput, onRunning?: Effect.Effect<void>) => Effect.Effect<SessionV1.WithParts> = Effect.fn(
       "SessionPrompt.loop",
@@ -3874,9 +3896,7 @@ const promptIntentPayloadHash = (input: PromptInput) =>
       system: input.system,
       metadata: input.metadata,
       variant: input.variant,
-      parts: input.parts.map((part) =>
-        Object.fromEntries(Object.entries(part).filter(([key]) => key !== "id")),
-      ),
+      parts: input.parts.map((part) => Object.fromEntries(Object.entries(part).filter(([key]) => key !== "id"))),
     }),
   )
 

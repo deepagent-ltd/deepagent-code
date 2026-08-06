@@ -37,6 +37,7 @@ export function SessionComposerRegion(props: {
     queue: () => boolean
     items: { id: string; text: string }[]
     sending?: string
+    disabled?: boolean
     edit?: { id: string; prompt: FollowupDraft["prompt"]; context: FollowupDraft["context"] }
     onQueue: (draft: FollowupDraft) => void
     onAbort: () => void
@@ -280,6 +281,7 @@ export function SessionComposerRegion(props: {
                 <SessionFollowupDock
                   items={props.followup!.items}
                   sending={props.followup!.sending}
+                  disabled={props.followup!.disabled}
                   onSend={props.followup!.onSend}
                   onEdit={props.followup!.onEdit}
                   onDelete={props.followup!.onDelete}
