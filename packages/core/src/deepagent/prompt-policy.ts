@@ -215,6 +215,21 @@ export const buildVolatileRoundContext = (ctx: PromptContext): string => {
   return ["<deepagent-round-context>", body, "</deepagent-round-context>"].join("\n")
 }
 
+// Tool continuations already have the current user request, assistant decision, tool call, and tool
+// result in adjacent durable history. Repeating the full activation/task/previous-results block after
+// every tool result makes that control block look like a fresh user request and can induce semantic
+// restatement loops. Keep only an explicit, constant-size continuation directive in the volatile tail;
+// live plan state is appended separately by the request layer.
+export const buildVolatileContinuationContext = (): string =>
+  [
+    "<deepagent-round-context>",
+    "# Tool continuation",
+    "",
+    "Continue directly from the immediately preceding tool result.",
+    "Apply runtime and plan control state silently. Do not restate or re-summarize the user request, the current phase, or conclusions already established unless the tool result materially changes them.",
+    "</deepagent-round-context>",
+  ].join("\n")
+
 const identitySection = (mode: AgentMode): string => {
   // P2-1: ultra must not fall through to the High label. Each strength has its own label.
   // NOTE (prompt-cache): mode is session-stable, but the round number is NOT — it now lives in

@@ -6,6 +6,8 @@ import { loadLiveLLMConfig, writeLiveArtifact } from "../../../llm/script/live-l
 import { directoryExists, liveSubprocessEnvironment, liveWorkspaceConfig } from "../../script/live-llm/runtime"
 import { tmpdir } from "../fixture/fixture"
 import {
+  defaultModelsSnapshotFile,
+  loadRealLLMSuiteInventory,
   parseEvaluationSummary,
   runnerEnvironment,
   selectSuites,
@@ -26,7 +28,7 @@ const config = {
 }
 
 describe("all real LLM test runner", () => {
-  test("selects every real suite by default and builds Desktop only once", () => {
+  test("selects every real suite by default and builds Desktop only once", async () => {
     const selected = selectSuites({
       headless: false,
       skipEval: false,
@@ -34,7 +36,7 @@ describe("all real LLM test runner", () => {
       installDependencies: true,
     })
 
-    expect(selected.filter((suite) => suite.realLLM)).toHaveLength(48)
+    expect(selected.filter((suite) => suite.realLLM)).toHaveLength((await loadRealLLMSuiteInventory()).length)
     expect(selected.filter((suite) => suite.id === "setup:desktop-build")).toHaveLength(1)
     expect(new Set(selected.map((suite) => suite.id)).size).toBe(selected.length)
     expect(
@@ -72,7 +74,10 @@ describe("all real LLM test runner", () => {
 
   test("rejects placeholders and non-official endpoints before spawning tests", () => {
     expect(() => validateRunnerConfig({ ...config, apiKeyFile: "" })).toThrow("apiKeyFile")
-    expect(() => validateRunnerConfig({ ...config, apiKey: "must-not-live-in-json" })).toThrow("apiKey is not accepted")
+    const legacyKey = `legacy-${crypto.randomUUID()}`
+    expect(() => validateRunnerConfig({ ...config, apiKey: legacyKey })).toThrow(
+      /^Legacy live LLM JSON field apiKey is not accepted; move the key to a chmod 600 one-line file and set apiKeyFile \(recommended: ~\/\.deepagent\/code\/tmp\/live-llm-deepseek\.key\)$/,
+    )
     expect(() => validateRunnerConfig({ ...config, baseURL: "https://example.com" })).toThrow(
       "official https://api.deepseek.com",
     )
@@ -113,6 +118,13 @@ describe("all real LLM test runner", () => {
       DEEPAGENT_CODE_LIVE_LLM_MODEL: config.model,
       DEEPAGENT_CODE_LIVE_LLM_TIMEOUT_MS: String(config.requestTimeoutMs),
       DEEPAGENT_CODE_LIVE_LLM_EVAL_RUNS: String(config.evalRuns),
+    })
+  })
+
+  test("pins the repository models snapshot when the host does not provide one", () => {
+    expect(runnerEnvironment(config, { PATH: "/usr/bin:/bin" })).toEqual({
+      PATH: "/usr/bin:/bin",
+      MODELS_DEV_API_JSON: defaultModelsSnapshotFile,
     })
   })
 

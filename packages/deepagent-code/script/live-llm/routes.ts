@@ -29,6 +29,7 @@ export const modelSuites = [
   "desktop-subagents",
   "shell-exit-contract",
   "stale-validation",
+  "continuation-repetition",
   "degeneration",
   "subagent-finalizer-isolation",
   "steer-boundary",
@@ -44,6 +45,8 @@ export const modelSuites = [
   "expert-panel",
   "goal-grader-cli-entry",
   "intelligence-draft-confirmation",
+  "prompt-intent-fencing",
+  "subagent-control-plane",
 ] as const
 
 export type ExecutionStack = (typeof executionStacks)[number]
@@ -63,6 +66,7 @@ export type DeterministicCheck =
   | "llm-adapter"
   | "mcp"
   | "permission"
+  | "prompt-intent"
   | "session-continuation"
   | "session-v2"
   | "tool-bash-sandbox"
@@ -97,6 +101,7 @@ const interruptedSubagent = modelRun("ext", "legacy-session", "subagent-interrup
 const backgroundSubagent = modelRun("ext", "legacy-session", "subagent-background")
 const shellExitContract = modelRun("live", "legacy-session", "shell-exit-contract")
 const staleValidation = modelRun("live", "legacy-session", "stale-validation")
+const continuationRepetition = modelRun("live", "legacy-session", "continuation-repetition")
 const degeneration = modelRun("live", "legacy-session", "degeneration")
 const finalizerIsolation = modelRun("ext", "legacy-session", "subagent-finalizer-isolation")
 const steerBoundary = modelRun("live", "legacy-session", "steer-boundary")
@@ -112,6 +117,8 @@ const compactionRetention = modelRun("ext", "legacy-session", "compaction-retent
 const expertPanel = modelRun("ext", "legacy-session", "expert-panel")
 const goalGraderCliEntry = modelRun("ext", "cli-subprocess", "goal-grader-cli-entry")
 const intelligenceDraft = modelRun("ext", "legacy-session", "intelligence-draft-confirmation")
+const promptIntentFencing = modelRun("ext", "legacy-session", "prompt-intent-fencing")
+const subagentControlPlane = modelRun("live", "legacy-session", "subagent-control-plane")
 const allHarnessRuns = [
   adapterProvider,
   cliHeadless,
@@ -127,6 +134,7 @@ const allHarnessRuns = [
   v2BashRepair,
   shellExitContract,
   staleValidation,
+  continuationRepetition,
   degeneration,
   finalizerIsolation,
   steerBoundary,
@@ -146,6 +154,8 @@ const allHarnessRuns = [
   expertPanel,
   goalGraderCliEntry,
   intelligenceDraft,
+  promptIntentFencing,
+  subagentControlPlane,
 ]
 
 export const routeManifest = [
@@ -252,6 +262,12 @@ export const routeManifest = [
     paths: ["packages/deepagent-code/script/live-llm/stale-validation.ts"],
     checks: ["session-continuation", "tool-bash-sandbox"],
     runs: [staleValidation],
+  },
+  {
+    id: "live-llm-continuation-repetition-harness",
+    paths: ["packages/deepagent-code/script/live-llm/continuation-repetition.ts"],
+    checks: ["session-continuation"],
+    runs: [continuationRepetition],
   },
   {
     id: "live-llm-degeneration-harness",
@@ -538,11 +554,25 @@ export const routeManifest = [
       legacyFileMutations,
       legacyBashRepair,
       legacySubagent,
+      continuationRepetition,
       worktreeRouting,
       multiAgentParallelWorktrees,
       subagentIntensity,
       expertPanel,
     ],
+  },
+  {
+    id: "deepagent-continuation-context",
+    paths: [
+      "packages/core/src/agent-gateway.ts",
+      "packages/core/src/deepagent/plan-controller.ts",
+      "packages/core/src/deepagent/prompt-policy.ts",
+      "packages/core/src/deepagent/session-state.ts",
+      "packages/deepagent-code/src/session/llm/request.ts",
+      "packages/deepagent-code/src/session/reminders.ts",
+    ],
+    checks: ["live-llm-routes", "session-continuation"],
+    runs: [continuationRepetition],
   },
   {
     id: "legacy-session-prompt",
@@ -687,6 +717,37 @@ export const routeManifest = [
       backgroundSubagent,
       expertPanel,
       goalGraderCliEntry,
+    ],
+  },
+  {
+    // L0–L10 durable control plane session layer
+    // Covers all new TaskDispatcher / TaskExecutor / TaskDelivery / provisioner / fork / input / capability files
+    id: "durable-control-plane-session",
+    paths: [
+      "packages/deepagent-code/src/session/task-dispatcher.ts",
+      "packages/deepagent-code/src/session/task-executor.ts",
+      "packages/deepagent-code/src/session/task-delivery.ts",
+      "packages/deepagent-code/src/session/task-fork.ts",
+      "packages/deepagent-code/src/session/task-input.ts",
+      "packages/deepagent-code/src/session/tool-capability.ts",
+      "packages/deepagent-code/src/session/branch-provisioner.ts",
+      "packages/deepagent-code/src/session/durable-executor-lock.ts",
+      "packages/deepagent-code/src/session/goal-receipt-store.ts",
+      "packages/deepagent-code/src/session/goal-workspace-adapter.ts",
+      "packages/deepagent-code/src/session/task-pr-submission.ts",
+      "packages/deepagent-code/src/session/task-worktree.ts",
+      "packages/deepagent-code/src/session/workspace-preflight.ts",
+      "packages/deepagent-code/src/tool/git_read.ts",
+    ],
+    checks: ["permission", "worktree-routing"],
+    runs: [
+      legacySubagent,
+      worktreeRouting,
+      multiAgentParallelWorktrees,
+      subagentResume,
+      interruptedSubagent,
+      backgroundSubagent,
+      subagentControlPlane,
     ],
   },
   {
@@ -897,6 +958,26 @@ export const routeManifest = [
     checks: ["llm-adapter"],
     runs: [intelligenceDraft],
   },
+  {
+    id: "prompt-intent-fencing-suite",
+    paths: [
+      "packages/app/src/components/prompt-input/**",
+      "packages/app/src/pages/session.tsx",
+      "packages/app/src/pages/session/followup-submission.ts",
+      "packages/core/src/database/migration/20260806051000_session_prompt_intent.ts",
+      "packages/core/src/database/migration/20260806060000_session_mutation_epoch.ts",
+      "packages/core/src/session/sql.ts",
+      "packages/deepagent-code/script/live-llm/prompt-intent-fencing.ts",
+      "packages/deepagent-code/src/server/routes/instance/httpapi/handlers/session.ts",
+      "packages/deepagent-code/src/session/mutation-epoch.ts",
+      "packages/deepagent-code/src/session/prompt-intent.ts",
+      "packages/deepagent-code/src/session/prompt.ts",
+      "packages/deepagent-code/src/session/revert.ts",
+      "packages/deepagent-code/src/session/session.ts",
+    ],
+    checks: ["prompt-intent"],
+    runs: [promptIntentFencing],
+  },
 ] satisfies Route[]
 
 export const owningPaths = [
@@ -904,6 +985,8 @@ export const owningPaths = [
   "packages/core/src/session/**",
   "packages/core/src/session.ts",
   "packages/core/src/agent-gateway.ts",
+  "packages/core/src/deepagent/prompt-policy.ts",
+  "packages/core/src/deepagent/session-state.ts",
   "packages/core/src/tool/**",
   "packages/core/src/deepagent/goal-*.ts",
   "packages/core/src/deepagent/plan-controller.ts",

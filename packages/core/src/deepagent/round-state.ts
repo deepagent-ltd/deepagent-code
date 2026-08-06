@@ -1,12 +1,21 @@
 import type { ActivationStage, AgentMode, RoundDecision, RunPhase } from "./mode"
 
+export type ValidationFailureKind =
+  | "command_exit"
+  | "shell_bootstrap_failed"
+  | "unsupported_platform"
+  | "unsupported_dialect"
+  | "timeout"
+  | "signal"
+  | "output_unavailable"
+
 export type ValidationResult = {
   readonly command: string
   readonly passed: boolean
-  // T1 (S1-v3.4): the raw process exit code, carried through for failure triage.
-  // 127 = command not found, 126 = not executable, 124 = timeout, 137 = OOM/SIGKILL, etc.
-  // These are the green/red dividing signals classifyFailure() needs; `passed` is still
-  // exactly `exit_code === 0`, so existing assertions are unaffected.
+  // `kind` is authoritative. `exit_code` is the process code for command_exit and a diagnostic
+  // compatibility value for runner failures; classifiers must never infer transport failures from
+  // an exit code alone because user commands are allowed to return 124/126/127.
+  readonly kind: ValidationFailureKind
   readonly exit_code: number
   readonly output: string
   readonly duration_ms: number
@@ -92,7 +101,10 @@ const stageForDecision = (decision: RoundDecision, current: ActivationStage): Ac
 // on exit_code (not output text) for the same reason validationFingerprint is — output carries volatile
 // noise (durations/timestamps) that must not make identical evidence look distinct.
 const candidateEvidenceKey = (c: CandidateRef): string =>
-  `${c.round}|${c.status}|${[...c.validations].map((v) => `${v.command}=${v.exit_code}`).sort().join(",")}`
+  `${c.round}|${c.status}|${[...c.validations]
+    .map((v) => `${v.command}=${v.kind}:${v.exit_code}`)
+    .sort()
+    .join(",")}`
 
 export const addCandidate = (state: RoundState, candidate: CandidateRef): RoundState => {
   // STALE-REHARVEST DEDUPE (single append site; covers BOTH the request-prep path and the micro-round

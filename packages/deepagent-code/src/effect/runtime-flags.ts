@@ -54,13 +54,31 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   // by default. NOTE: this is local, non-durable (process restart loses live jobs); cross-restart
   // recovery + remote/cloud agents are deferred to V3.4 (S1 §10). Disable with =false.
   experimentalBackgroundSubagents: stableOn("DEEPAGENT_CODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS"),
-  // Attempt wall limit. A provider/tool that never returns cannot leave the parent blocked forever:
-  // expiry cancels the old fiber and starts a bounded takeover from the same fork point. Missing,
-  // malformed, zero, and negative values all fail closed to the production default.
+  // Attempt wall limit. Expiry interrupts the same child and preserves partial work for explicit
+  // recovery. It never starts a replacement child or replays provider/tool work automatically.
   subagentTimeoutMs: positiveIntegerWithDefault("DEEPAGENT_CODE_SUBAGENT_TIMEOUT_MS", DEFAULT_SUBAGENT_TIMEOUT_MS),
-  // v4.0.4 块1: 单个子 Agent 任务被 takeover(超时/崩溃后重生)的最大次数。达上限仍失败则上报主 Agent。
-  // 默认 undefined ⇒ 代码内回退到 2。防无限接管。
-  subagentTakeoverLimit: positiveInteger("DEEPAGENT_CODE_SUBAGENT_TAKEOVER_LIMIT"),
+  // Subagent control plane rollout gate (L0 design, subagent-control-plane-design.zh-CN.md §13.3).
+  //
+  //  "legacy"  — keep the current SessionPrompt execution path without automatic takeover.
+  //  "shadow"  — RESERVED for future use. Legacy lifecycle authority remains; durable coordinator
+  //              records non-authoritative comparison artifacts only. Currently routes identically
+  //              to "legacy". DO NOT use in production until §4 cutover protocol is implemented.
+  //  "durable" — all lifecycle owned by the durable TaskCoordinator (L4+); takeover permanently
+  //              removed; SessionPrompt driven through LegacySubagentExecutor.
+  //              REQUIRES: L1 migration applied, L3 provisioner wired, start/settle fences complete.
+  //
+  // Unknown values fail closed to "legacy". Once set to "durable" it MUST NOT be rolled back to
+  // re-enable takeover (design §13.4). Mode is per-SQLite/Location — mixing modes across processes
+  // sharing the same database is prohibited (design §4.4).
+  subagentControlPlane: Config.string("DEEPAGENT_CODE_SUBAGENT_CONTROL_PLANE").pipe(
+    Config.withDefault("legacy"),
+    Config.map((value): "legacy" | "shadow" | "durable" => {
+      if (value === "legacy" || value === "shadow" || value === "durable") return value
+      throw new Error(
+        `Invalid DEEPAGENT_CODE_SUBAGENT_CONTROL_PLANE="${value}". Must be one of: legacy, shadow, durable. Refusing to start with unknown mode.`
+      )
+    }),
+  ),
   // Parent injection is bounded by default. The complete result remains durable in the child Session
   // and the truncated envelope carries the task_read recovery pointer.
   subagentOutputMaxChars: positiveIntegerWithDefault(
@@ -68,7 +86,6 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
     DEFAULT_SUBAGENT_OUTPUT_MAX_CHARS,
   ),
   subagentResearchStepLimit: positiveInteger("DEEPAGENT_CODE_SUBAGENT_RESEARCH_STEP_LIMIT"),
-  subagentResearchTokenLimit: positiveInteger("DEEPAGENT_CODE_SUBAGENT_RESEARCH_TOKEN_LIMIT"),
   subagentResearchWallMs: positiveInteger("DEEPAGENT_CODE_SUBAGENT_RESEARCH_WALL_MS"),
   subagentNoProgressLimit: positiveInteger("DEEPAGENT_CODE_SUBAGENT_NO_PROGRESS_LIMIT"),
   subagentPermissionTimeoutMs: positiveInteger("DEEPAGENT_CODE_SUBAGENT_PERMISSION_TIMEOUT_MS"),

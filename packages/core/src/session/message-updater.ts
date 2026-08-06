@@ -100,6 +100,10 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
 
   return Effect.gen(function* () {
     yield* SessionEvent.All.match(event, {
+      "session.execution.started": () => Effect.void,
+      "session.execution.succeeded": () => Effect.void,
+      "session.execution.failed": () => Effect.void,
+      "session.execution.interrupted": () => Effect.void,
       "session.next.agent.switched": (event) => {
         return adapter.appendMessage(
           new SessionMessage.AgentSwitched({

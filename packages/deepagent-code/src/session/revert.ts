@@ -9,8 +9,10 @@ import { MessageV2 } from "./message-v2"
 import { SessionID, MessageID, PartID } from "./schema"
 import { SessionRunState } from "./run-state"
 import { SessionSummary } from "./summary"
+import { KeyedMutex } from "@deepagent-code/core/effect/keyed-mutex"
 
 const log = Log.create({ service: "session.revert" })
+const mutationLocks = KeyedMutex.makeUnsafe<SessionID>()
 
 export const RevertInput = Schema.Struct({
   sessionID: SessionID,
@@ -22,7 +24,7 @@ export type RevertInput = Schema.Schema.Type<typeof RevertInput>
 export interface Interface {
   readonly revert: (input: RevertInput) => Effect.Effect<Session.Info, Session.BusyError>
   readonly unrevert: (input: { sessionID: SessionID }) => Effect.Effect<Session.Info, Session.BusyError>
-  readonly cleanup: (session: Session.Info) => Effect.Effect<void>
+  readonly cleanup: (session: Session.Info, mutationEpoch?: number) => Effect.Effect<void>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/SessionRevert") {}
@@ -37,7 +39,7 @@ export const layer = Layer.effect(
     const summary = yield* SessionSummary.Service
     const state = yield* SessionRunState.Service
 
-    const revert = Effect.fn("SessionRevert.revert")(function* (input: RevertInput) {
+    const revertUnlocked = Effect.fn("SessionRevert.revertUnlocked")(function* (input: RevertInput) {
       yield* state.assertNotBusy(input.sessionID)
       const all = yield* sessions.messages({ sessionID: input.sessionID }).pipe(Effect.orDie)
       let lastUser: SessionV1.User | undefined
@@ -77,7 +79,7 @@ export const layer = Layer.effect(
       const diffs = yield* summary.computeDiff({ messages: range })
       yield* storage.write(["session_diff", input.sessionID], diffs).pipe(Effect.ignore)
       yield* events.publish(Session.Event.Diff, { sessionID: input.sessionID, diff: diffs })
-      yield* sessions.setRevert({
+      yield* sessions.commitRevert({
         sessionID: input.sessionID,
         revert: rev,
         summary: {
@@ -89,18 +91,28 @@ export const layer = Layer.effect(
       return yield* sessions.get(input.sessionID).pipe(Effect.orDie)
     })
 
-    const unrevert = Effect.fn("SessionRevert.unrevert")(function* (input: { sessionID: SessionID }) {
+    const unrevertUnlocked = Effect.fn("SessionRevert.unrevertUnlocked")(function* (input: { sessionID: SessionID }) {
       log.info("unreverting", input)
       yield* state.assertNotBusy(input.sessionID)
       const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
       if (!session.revert) return session
       if (session.revert.snapshot) yield* snap.restore(session.revert.snapshot)
-      yield* sessions.clearRevert(input.sessionID)
+      yield* sessions.commitUnrevert(input.sessionID)
       return yield* sessions.get(input.sessionID).pipe(Effect.orDie)
     })
 
-    const cleanup = Effect.fn("SessionRevert.cleanup")(function* (session: Session.Info) {
+    const cleanupUnlocked = Effect.fn("SessionRevert.cleanupUnlocked")(function* (
+      session: Session.Info,
+      mutationEpoch?: number,
+    ) {
       if (!session.revert) return
+      if (
+        mutationEpoch !== undefined &&
+        (yield* sessions.mutationEpoch(session.id).pipe(Effect.orDie)) !== mutationEpoch
+      )
+        return
+      const current = yield* sessions.get(session.id).pipe(Effect.orDie)
+      if (JSON.stringify(current.revert) !== JSON.stringify(session.revert)) return
       const sessionID = session.id
       const msgs = yield* sessions.messages({ sessionID }).pipe(Effect.orDie)
       const messageID = session.revert.messageID
@@ -134,6 +146,11 @@ export const layer = Layer.effect(
       }
       yield* sessions.clearRevert(sessionID)
     })
+
+    const revert: Interface["revert"] = (input) => mutationLocks.withLock(input.sessionID)(revertUnlocked(input))
+    const unrevert: Interface["unrevert"] = (input) => mutationLocks.withLock(input.sessionID)(unrevertUnlocked(input))
+    const cleanup: Interface["cleanup"] = (session, mutationEpoch) =>
+      mutationLocks.withLock(session.id)(cleanupUnlocked(session, mutationEpoch))
 
     return Service.of({ revert, unrevert, cleanup })
   }),

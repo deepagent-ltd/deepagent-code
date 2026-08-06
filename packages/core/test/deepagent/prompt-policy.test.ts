@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test"
-import { buildSystemPrompt, buildVolatileRoundContext, type PromptContext } from "../../src/deepagent/prompt-policy"
+import {
+  buildSystemPrompt,
+  buildVolatileContinuationContext,
+  buildVolatileRoundContext,
+  type PromptContext,
+} from "../../src/deepagent/prompt-policy"
 import type { ActivationDecision } from "../../src/deepagent/activation-policy"
 import type { RoundState } from "../../src/deepagent/round-state"
 
@@ -203,5 +208,16 @@ describe("buildVolatileRoundContext", () => {
     expect(vol).not.toContain("orchestration verdict")
     expect(vol).not.toContain("本体直接完成")
     expect(vol).not.toContain("level=0")
+  })
+
+  test("tool continuation omits task, activation, results, and budget restatements", () => {
+    const vol = buildVolatileContinuationContext()
+    expect(vol).toContain("<deepagent-round-context>")
+    expect(vol).toContain("Continue directly from the immediately preceding tool result")
+    expect(vol).toContain("Do not restate or re-summarize")
+    expect(vol).not.toContain("# Task Context")
+    expect(vol).not.toContain("# Activation")
+    expect(vol).not.toContain("# Previous Round Results")
+    expect(vol).not.toContain("Token budget remaining")
   })
 })

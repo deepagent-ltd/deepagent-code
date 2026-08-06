@@ -42,6 +42,7 @@ import { RuntimeBase } from "@/runtime/base"
 import { Worktree } from "@/worktree"
 import { CodeIntelFacade } from "@/code-intelligence/facade"
 import { ContextQueryFacade } from "@/context-federation/context-query-facade"
+import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
 
 const node = CrossSpawnSpawner.defaultLayer
 const configLayer = TestConfig.layer({
@@ -75,6 +76,7 @@ const registryLayer = (opts: RegistryLayerOptions = {}) =>
           BackgroundJob.defaultLayer,
           Provider.defaultLayer,
           Git.defaultLayer,
+          EffectFlock.defaultLayer,
           RepositoryCache.defaultLayer,
           Reference.defaultLayer,
           LSP.defaultLayer,
@@ -188,12 +190,14 @@ describe("tool.registry", () => {
     }),
   )
 
-  it.instance("exposes task_status (v4.0.4 block1 1c: read-only subagent status view)", () =>
+  it.instance("exposes task status, close, and explicit recovery controls", () =>
     Effect.gen(function* () {
       const registry = yield* ToolRegistry.Service
       const ids = yield* registry.ids()
 
       expect(ids).toContain("task_status")
+      expect(ids).toContain("task_close")
+      expect(ids).toContain("task_recovery")
     }),
   )
 

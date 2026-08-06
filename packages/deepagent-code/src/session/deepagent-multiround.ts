@@ -1,5 +1,6 @@
 import { Effect } from "effect"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
+import type { ValidationCommandInput } from "@deepagent-code/core/deepagent/validation"
 import type { ValidationResult } from "../deepagent/validation-exec"
 import type { GitGroundTruth } from "../deepagent/git-groundtruth"
 
@@ -44,7 +45,7 @@ const StopHook = new AgentGateway.DeepAgentHooks.HookPolicy().on("stop", AgentGa
 // rounds with the same signature failed in the same way (no progress on the validation axis).
 const validationSignature = (results: readonly ValidationResult[]): string =>
   results
-    .map((r) => `${r.command}=${r.passed ? "1" : "0"}`)
+    .map((r) => `${r.command}=${r.kind}:${r.exit_code}`)
     .sort()
     .join(",")
 
@@ -60,11 +61,11 @@ export type MultiRoundOps<T> = {
   readonly autonomous?: boolean
   readonly maxRounds: number | null
   readonly first: T
-  readonly validationCommands: readonly string[]
+  readonly validationCommands: readonly ValidationCommandInput[]
   // Re-establish the orchestrator session (the gateway prunes it on turn completion, so the
   // driver must ensure it exists before running rounds — F3 fix).
   readonly ensureSession: () => void
-  readonly runValidation: (commands: readonly string[]) => Effect.Effect<ValidationResult[]>
+  readonly runValidation: (commands: readonly ValidationCommandInput[]) => Effect.Effect<ValidationResult[]>
   readonly track: () => Effect.Effect<string | undefined>
   readonly restore: (checkpoint: string) => Effect.Effect<void>
   // T3 (S1-v3.4): the revise turn carries the triage action so the user message it injects can be
@@ -121,7 +122,10 @@ export const maybeRunRounds = <T>(ops: MultiRoundOps<T>): Effect.Effect<T> =>
     if (!ops.enabled || ops.agentMode === "general") return ops.first
 
     ops.ensureSession() // F3: recreate the session pruned by the gateway on turn completion
-    Orchestrator.setValidationCommands(ops.sessionID, [...ops.validationCommands])
+    Orchestrator.setValidationCommands(
+      ops.sessionID,
+      ops.validationCommands.map(AgentGateway.DeepAgentValidation.validationCommandDisplay),
+    )
     let best = yield* ops.track()
     let result = ops.first
     let lastResults: ValidationResult[] = []
@@ -147,10 +151,10 @@ export const maybeRunRounds = <T>(ops: MultiRoundOps<T>): Effect.Effect<T> =>
     let prevDiffFp: string | undefined
 
     for (let round = 1; ops.maxRounds === null || round <= ops.maxRounds; round++) {
-      const { should, commands } = Orchestrator.shouldRunValidation(ops.sessionID)
+      const { should } = Orchestrator.shouldRunValidation(ops.sessionID)
       if (!should) break // no validation configured -> accept the current candidate
 
-      const results = yield* ops.runValidation(commands)
+      const results = yield* ops.runValidation(ops.validationCommands)
       lastResults = results
       const decision = Orchestrator.processValidationResults(ops.sessionID, results)
       const passed = Validation.allPassed(results) && decision.action === "complete"

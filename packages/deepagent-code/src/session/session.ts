@@ -27,7 +27,7 @@ import { inArray } from "drizzle-orm"
 import { lt } from "drizzle-orm"
 import { or } from "drizzle-orm"
 import type { SQL } from "drizzle-orm"
-import { PartTable, SessionTable } from "@deepagent-code/core/session/sql"
+import { PartTable, SessionIntentTable, SessionSteerTable, SessionTable } from "@deepagent-code/core/session/sql"
 import { ProjectTable } from "@deepagent-code/core/project/sql"
 import { Log } from "@deepagent-code/core/util/log"
 import { MessageV2 } from "./message-v2"
@@ -507,6 +507,7 @@ export interface Interface {
   }) => Effect.Effect<Info, NotFound>
   readonly touch: (sessionID: SessionID) => Effect.Effect<void>
   readonly get: (id: SessionID) => Effect.Effect<Info, NotFound>
+  readonly mutationEpoch: (sessionID: SessionID) => Effect.Effect<number, NotFound>
   readonly setTitle: (input: { sessionID: SessionID; title: string }) => Effect.Effect<void>
   readonly setPreview: (input: { sessionID: SessionID; preview: string }) => Effect.Effect<void>
   readonly setArchived: (input: { sessionID: SessionID; time?: number | null }) => Effect.Effect<void>
@@ -517,6 +518,12 @@ export interface Interface {
     revert: Info["revert"]
     summary: Info["summary"]
   }) => Effect.Effect<void>
+  readonly commitRevert: (input: {
+    sessionID: SessionID
+    revert: Info["revert"]
+    summary: Info["summary"]
+  }) => Effect.Effect<void>
+  readonly commitUnrevert: (sessionID: SessionID) => Effect.Effect<void>
   readonly clearRevert: (sessionID: SessionID) => Effect.Effect<void>
   readonly setSummary: (input: { sessionID: SessionID; summary: Info["summary"] }) => Effect.Effect<void>
   readonly setShare: (input: { sessionID: SessionID; share: Info["share"] }) => Effect.Effect<void>
@@ -625,6 +632,17 @@ export const layer: Layer.Layer<
       const row = yield* db.select().from(SessionTable).where(eq(SessionTable.id, id)).get().pipe(Effect.orDie)
       if (!row) return yield* Effect.fail(new NotFoundError({ message: `Session not found: ${id}` }))
       return fromRow(row)
+    })
+
+    const mutationEpoch = Effect.fn("Session.mutationEpoch")(function* (sessionID: SessionID) {
+      const row = yield* db
+        .select({ mutationEpoch: SessionTable.mutation_epoch })
+        .from(SessionTable)
+        .where(eq(SessionTable.id, sessionID))
+        .get()
+        .pipe(Effect.orDie)
+      if (!row) return yield* Effect.fail(new NotFoundError({ message: `Session not found: ${sessionID}` }))
+      return row.mutationEpoch
     })
 
     const list = Effect.fn("Session.list")(function* (input?: ListInput) {
@@ -1006,6 +1024,97 @@ export const layer: Layer.Layer<
       }).pipe(Effect.orDie)
     })
 
+    const mutateRevert = Effect.fn("Session.mutateRevert")(function* (input: {
+      sessionID: SessionID
+      revert: Info["revert"] | null
+      summary?: Info["summary"]
+    }) {
+      const now = Date.now()
+      const updated = yield* db
+        .transaction(
+          (tx) =>
+            Effect.gen(function* () {
+              const current = yield* tx
+                .select({ mutationEpoch: SessionTable.mutation_epoch })
+                .from(SessionTable)
+                .where(eq(SessionTable.id, input.sessionID))
+                .get()
+                .pipe(Effect.orDie)
+              if (!current) return yield* Effect.die(`Session not found: ${input.sessionID}`)
+              const mutationEpoch = current.mutationEpoch + 1
+              const row = yield* tx
+                .update(SessionTable)
+                .set({
+                  mutation_epoch: mutationEpoch,
+                  revert: input.revert,
+                  ...(input.summary
+                    ? {
+                        summary_additions: input.summary.additions,
+                        summary_deletions: input.summary.deletions,
+                        summary_files: input.summary.files,
+                        summary_diffs: input.summary.diffs,
+                      }
+                    : {}),
+                  time_updated: now,
+                })
+                .where(
+                  and(eq(SessionTable.id, input.sessionID), eq(SessionTable.mutation_epoch, current.mutationEpoch)),
+                )
+                .returning()
+                .get()
+                .pipe(Effect.orDie)
+              if (!row) return yield* Effect.die("Session mutation epoch changed inside an IMMEDIATE transaction")
+              yield* tx
+                .update(SessionIntentTable)
+                .set({
+                  state: "superseded",
+                  owner_token: null,
+                  lease_expires_at: null,
+                  time_updated: now,
+                  version: sql`${SessionIntentTable.version} + 1`,
+                })
+                .where(
+                  and(
+                    eq(SessionIntentTable.session_id, input.sessionID),
+                    inArray(SessionIntentTable.state, ["preparing", "admitting", "failed"]),
+                    sql`${SessionIntentTable.mutation_epoch} < ${mutationEpoch}`,
+                  ),
+                )
+                .run()
+                .pipe(Effect.orDie)
+              yield* tx
+                .update(SessionSteerTable)
+                .set({ superseded_at: now })
+                .where(
+                  and(
+                    eq(SessionSteerTable.session_id, input.sessionID),
+                    isNull(SessionSteerTable.consumed_seq),
+                    isNull(SessionSteerTable.superseded_at),
+                    sql`${SessionSteerTable.mutation_epoch} < ${mutationEpoch}`,
+                  ),
+                )
+                .run()
+                .pipe(Effect.orDie)
+              return row
+            }),
+          { behavior: "immediate" },
+        )
+        .pipe(Effect.catchTag("SqlError", Effect.die))
+      yield* events.publish(SessionV1.Event.Updated, { sessionID: input.sessionID, info: fromRow(updated) })
+    })
+
+    const commitRevert = Effect.fn("Session.commitRevert")(function* (input: {
+      sessionID: SessionID
+      revert: Info["revert"]
+      summary: Info["summary"]
+    }) {
+      yield* mutateRevert(input)
+    })
+
+    const commitUnrevert = Effect.fn("Session.commitUnrevert")(function* (sessionID: SessionID) {
+      yield* mutateRevert({ sessionID, revert: null })
+    })
+
     const clearRevert = Effect.fn("Session.clearRevert")(function* (sessionID: SessionID) {
       yield* patch(sessionID, { time: { updated: Date.now() }, revert: null }).pipe(Effect.orDie)
     })
@@ -1119,12 +1228,15 @@ export const layer: Layer.Layer<
       fork,
       touch,
       get,
+      mutationEpoch,
       setTitle,
       setPreview,
       setArchived,
       setMetadata,
       setPermission,
       setRevert,
+      commitRevert,
+      commitUnrevert,
       clearRevert,
       setSummary,
       setShare,

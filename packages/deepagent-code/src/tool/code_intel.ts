@@ -8,6 +8,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { pathToFileURL } from "url"
 import { assertExternalDirectoryEffect } from "./external-directory"
 import { FSUtil } from "@deepagent-code/core/fs-util"
+import { Search } from "@deepagent-code/core/filesystem/search"
 
 // L2/L3 (S1-v3.4): the symbol-driven AI IDE entry point. Agents address code by
 // symbol name + intent; coordinates are resolved internally (LSPResolve) and hidden.
@@ -69,12 +70,16 @@ type Params = Schema.Schema.Type<typeof Parameters>
 // Bounded constants (L3 budget per docs/38).
 const MAX_DEPTH = 3
 const DEFAULT_LIMIT = 50
+const SYMBOL_FALLBACK_FILE_LIMIT = 20
+const SYMBOL_FALLBACK_MATCH_LIMIT = 20
 
 type RunCtx = {
   lsp: LSP.Interface
   fs: FSUtil.Interface
+  search: Search.Interface
   instance: { directory: string; worktree: string }
   args: Params
+  abort?: AbortSignal
 }
 
 const rel = (instance: { worktree: string }, file: string) => {
@@ -89,8 +94,38 @@ const fileURL = (file: string) => pathToFileURL(file).href
 
 // A resolved 0-based coordinate the LSP primitives consume.
 type Loc = { file: string; line: number; character: number }
+type TextCandidate = { file: string; line: number; text: string }
 
 const ok = (title: string, output: string, result: unknown) => ({ title, output, metadata: { result } })
+
+const escapeRegex = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+
+const findTextCandidates = Effect.fn("CodeIntel.findTextCandidates")(function* (rc: RunCtx, symbol: string) {
+  const result = yield* rc.search
+    .search({
+      cwd: rc.instance.directory,
+      pattern: escapeRegex(symbol),
+      limit: SYMBOL_FALLBACK_MATCH_LIMIT,
+      file: ["."],
+      signal: rc.abort,
+    })
+    .pipe(Effect.catch(() => Effect.succeed(undefined)))
+  if (!result) return [] as TextCandidate[]
+
+  const seen = new Set<string>()
+  const candidates: TextCandidate[] = []
+  for (const item of result.items) {
+    const file = FSUtil.resolve(
+      path.isAbsolute(item.path.text) ? item.path.text : path.join(rc.instance.directory, item.path.text),
+    )
+    const key = `${file}:${item.line_number}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    candidates.push({ file, line: item.line_number, text: item.lines.text.trim().slice(0, 240) })
+    if (candidates.length >= SYMBOL_FALLBACK_MATCH_LIMIT) break
+  }
+  return candidates
+})
 
 // Resolve params → coordinate. position is 1-based (editor coords) → convert to 0-based.
 // Returns either a coordinate, a disambiguation result, a not-found, or no-server signal.
@@ -120,9 +155,20 @@ const resolveLoc = Effect.fn("CodeIntel.resolveLoc")(function* (rc: RunCtx) {
     if (!has) return { kind: "no_server" as const, file }
   }
 
-  const resolved = yield* LSPResolve.resolveSymbol({ lsp, symbol: args.symbol, file, kind: args.kind })
+  const textCandidates = file ? [] : yield* findTextCandidates(rc, args.symbol)
+  const fallbackFiles = Array.from(new Set(textCandidates.map((candidate) => candidate.file))).slice(
+    0,
+    SYMBOL_FALLBACK_FILE_LIMIT,
+  )
+  const resolved = yield* LSPResolve.resolveSymbol({
+    lsp,
+    symbol: args.symbol,
+    file,
+    kind: args.kind,
+    fallbackFiles,
+  })
   if (resolved.type === "not_found") {
-    return { kind: "not_found" as const, symbol: args.symbol }
+    return { kind: "not_found" as const, symbol: args.symbol, textCandidates }
   }
   if (resolved.type === "ambiguous") {
     return { kind: "ambiguous" as const, candidates: resolved.candidates }
@@ -161,6 +207,29 @@ const renderLocations = (rc: RunCtx, locations: any[], limit: number) =>
 const NO_SERVER_HINT =
   "No LSP server is available for this file type. Use grep/read for text search instead — code_intel is for code symbols in languages with a configured language server."
 
+const renderNotFound = (rc: RunCtx, symbol: string, candidates: TextCandidate[]) => {
+  const heading = `No symbol named '${symbol}' was found by the LSP index.`
+  if (!candidates.length) {
+    return ok(
+      "code_intel: not found",
+      `${heading} Use grep/read for a bounded text search or provide \`file\` to retry document-symbol resolution.`,
+      { not_found: true, degraded: true, text_candidates: [] },
+    )
+  }
+  const rows = candidates.map(
+    (candidate) => `  ${rel(rc.instance, candidate.file)}:${candidate.line} | ${candidate.text}`,
+  )
+  return ok(
+    "code_intel: degraded text candidates",
+    [
+      heading,
+      `Bounded text fallback found ${candidates.length} candidate location(s); these are not semantic symbol results. Use grep/read or re-issue code_intel with \`file\` to verify:`,
+      ...rows,
+    ].join("\n"),
+    { not_found: true, degraded: true, text_candidates: candidates },
+  )
+}
+
 // Render a disambiguation list for an ambiguous symbol.
 const renderAmbiguous = (rc: RunCtx, candidates: LSPResolve.Candidate[]) => {
   const lines = candidates.map(
@@ -185,8 +254,7 @@ const runIntent = Effect.fn("CodeIntel.runIntent")(function* (rc: RunCtx) {
   const resolved = yield* resolveLoc(rc)
   if (resolved.kind === "error") return ok("code_intel", resolved.message, { error: resolved.message })
   if (resolved.kind === "no_server") return ok("code_intel: no LSP server", NO_SERVER_HINT, { no_server: true })
-  if (resolved.kind === "not_found")
-    return ok("code_intel: not found", `No symbol named '${resolved.symbol}' was found.`, { not_found: true })
+  if (resolved.kind === "not_found") return renderNotFound(rc, resolved.symbol, resolved.textCandidates)
   if (resolved.kind === "ambiguous") return renderAmbiguous(rc, resolved.candidates)
 
   const loc = resolved.loc
@@ -529,6 +597,7 @@ export const CodeIntelTool = Tool.define(
   Effect.gen(function* () {
     const lsp = yield* LSP.Service
     const fs = yield* FSUtil.Service
+    const search = yield* Search.Service
     return {
       description: DESCRIPTION,
       parameters: Parameters,
@@ -550,7 +619,7 @@ export const CodeIntelTool = Tool.define(
             metadata: { intent: args.intent, symbol: args.symbol, file: explicitFile },
           })
 
-          return yield* runIntent({ lsp, fs, instance, args })
+          return yield* runIntent({ lsp, fs, search, instance, args, abort: ctx.abort })
         }).pipe(Effect.orDie),
     }
   }),
