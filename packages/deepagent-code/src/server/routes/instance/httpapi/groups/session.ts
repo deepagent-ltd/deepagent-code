@@ -20,7 +20,7 @@ import {
   WorkspaceRoutingQuery,
   WorkspaceRoutingQueryFields,
 } from "../middleware/workspace-routing"
-import { ApiNotFoundError, InvalidRequestError, PermissionNotFoundError, SessionBusyError } from "../errors"
+import { ApiNotFoundError, ConflictError, InvalidRequestError, PermissionNotFoundError, SessionBusyError } from "../errors"
 import { described } from "./metadata"
 import { QueryBoolean } from "./query"
 import { ProviderV2 } from "@deepagent-code/core/provider"
@@ -77,6 +77,8 @@ export const PromptPreparePayload = Schema.Struct({
   // normalizes internally. Do NOT drop "wish" from this union.
   mode: Schema.Literals(["wish", "intelligence"]),
   output_language: Schema.optional(Schema.Literals(["chinese", "english"])),
+  intent_id: Schema.optional(Schema.String),
+  intent_source: Schema.optional(Schema.Literals(["composer", "intelligence", "followup", "rewrite"])),
   parts: SessionPrompt.PromptInput.fields.parts,
 })
 export const PromptPrepareResult = Schema.Struct({
@@ -88,6 +90,7 @@ export const PromptPrepareResult = Schema.Struct({
   route: Schema.Union([Schema.Literal("code"), Schema.Literal("general")]),
   goal: Schema.String,
   preview: Schema.String,
+  intent_id: Schema.optional(Schema.String),
 })
 // A3 macro-round: the latest persisted next-round suggestion for human approval. `null` body when
 // no suggestion exists yet.
@@ -495,7 +498,7 @@ export const SessionApi = HttpApi.make("session")
           query: WorkspaceRoutingQuery,
           payload: PromptPreparePayload,
           success: described(PromptPrepareResult, "Prepared prompt draft"),
-          error: [HttpApiError.BadRequest, InvalidRequestError, ApiNotFoundError],
+          error: [HttpApiError.BadRequest, ConflictError, InvalidRequestError, ApiNotFoundError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "session.prompt_prepare",
@@ -508,7 +511,7 @@ export const SessionApi = HttpApi.make("session")
           query: WorkspaceRoutingQuery,
           payload: PromptPreparePayload,
           success: Schema.String,
-          error: [HttpApiError.BadRequest, InvalidRequestError, ApiNotFoundError],
+          error: [HttpApiError.BadRequest, ConflictError, InvalidRequestError, ApiNotFoundError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "session.prompt_prepare_stream",
@@ -535,7 +538,7 @@ export const SessionApi = HttpApi.make("session")
           query: WorkspaceRoutingQuery,
           payload: PromptPayload,
           success: described(HttpApiSchema.NoContent, "Prompt accepted"),
-          error: [HttpApiError.BadRequest, ApiNotFoundError],
+          error: [HttpApiError.BadRequest, ConflictError, ApiNotFoundError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "session.prompt_async",

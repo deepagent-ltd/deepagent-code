@@ -88,6 +88,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { projectDurableSettledRun, projectRecoveredSubagentRun, TaskTool, type TaskPromptOps } from "@/tool/task"
 import { SessionRunState } from "./run-state"
 import { SessionSteer } from "./steer"
+import { SessionPromptIntent } from "./prompt-intent"
 import { writeGovernanceAudit } from "./goal-governance-audit"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { archiveSessionOnCompletion } from "@/wiki/session-archive"
@@ -274,7 +275,7 @@ const promptInputToPrompt = (parts: PromptInput["parts"]): Effect.Effect<Prompt,
 export interface Interface {
   readonly cancel: (sessionID: SessionID) => Effect.Effect<void>
   readonly prompt: (input: PromptInput) => Effect.Effect<SessionV1.WithParts, Image.Error>
-  readonly promptAsync: (input: PromptInput) => Effect.Effect<void, Image.Error>
+  readonly promptAsync: (input: PromptInput) => Effect.Effect<void, Image.Error | SessionPromptIntent.Error>
   readonly prepareTaskInput: (
     input: PromptInput,
     timeCreated: number,
@@ -325,7 +326,10 @@ export interface Interface {
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/SessionPrompt") {}
 
 type PromptLifecycle = {
-  readonly ready: Effect.Effect<void>
+  readonly ready: (input: {
+    readonly messageID: MessageID
+    readonly delivery: SessionPromptIntent.Delivery
+  }) => Effect.Effect<void>
 }
 
 export const layer = Layer.effect(
@@ -1859,7 +1863,7 @@ export const layer = Layer.effect(
             return yield* Effect.die(
               new Error(`Task notification message ID ${input.messageID} conflicts with persisted content`),
             )
-          if (lifecycle) yield* lifecycle.ready
+          if (lifecycle) yield* lifecycle.ready({ messageID: existing.info.id, delivery: "turn" })
           return existing
         }
       }
@@ -1911,10 +1915,13 @@ export const layer = Layer.effect(
       }
 
       if (input.noReply === true) {
-        if (lifecycle) yield* lifecycle.ready
+        if (lifecycle) yield* lifecycle.ready({ messageID: message.info.id, delivery: "turn" })
         return message
       }
-      const first = yield* loop({ sessionID: input.sessionID }, lifecycle?.ready)
+      const first = yield* loop(
+        { sessionID: input.sessionID },
+        lifecycle?.ready({ messageID: message.info.id, delivery: "turn" }),
+      )
       if (isStructuredFinalizer(input.metadata)) return first
       // V3 Plan A: mode-driven multi-round autonomous loop for high/max/ultra. It remains
       // fail-closed (any error -> the single-turn result). Real validation (A3),
@@ -3073,7 +3080,7 @@ export const layer = Layer.effect(
           delivery: "goal_steer",
           messageID: input.messageID as unknown as SessionMessage.ID | undefined,
         })
-        if (lifecycle) yield* lifecycle.ready
+        if (lifecycle) yield* lifecycle.ready({ messageID: MessageID.make(admitted.id), delivery: "goal_steer" })
         // V4.1 governance audit — this is the REAL user goal-steer path (the ingress every busy-goal
         // steer flows through). Record the human intervention into the goal's Document Graph alongside
         // the per-tick worklog trail. Length only (not free-text) to keep the body bounded + PII-light;
@@ -3097,20 +3104,76 @@ export const layer = Layer.effect(
         delivery: "steer",
         messageID: input.messageID as unknown as SessionMessage.ID | undefined,
       })
-      if (lifecycle) yield* lifecycle.ready
+      if (lifecycle) yield* lifecycle.ready({ messageID: MessageID.make(admitted.id), delivery: "steer" })
       // Race guard (see header): a pure-drain turn absorbs a steer stranded by the isBusy→admit window.
       yield* loop({ sessionID: input.sessionID, drainFirst: true }).pipe(Effect.ignore, Effect.forkIn(scope))
       return { kind: "steer" as const, delivery: "steer" as const, admitted }
     })
 
-    const promptAsync: (input: PromptInput) => Effect.Effect<void, Image.Error> = Effect.fn("SessionPrompt.promptAsync")(
+    const promptAsync: (
+      input: PromptInput,
+    ) => Effect.Effect<void, Image.Error | SessionPromptIntent.Error> = Effect.fn("SessionPrompt.promptAsync")(
       function* (input: PromptInput) {
-        const admission = yield* Deferred.make<void, Image.Error>()
-        yield* promptOrSteer(input, {
-          ready: Deferred.succeed(admission, undefined).pipe(Effect.asVoid),
+        const messageID = input.messageID ?? MessageID.ascending()
+        const claim = input.intentID
+          ? yield* SessionPromptIntent.claim({
+              intentID: input.intentID,
+              sessionID: input.sessionID,
+              source: input.intentSource ?? "composer",
+              variant:
+                input.intentVariant ?? (promptPipelineRequest(input.metadata).confirmedDraftID ? "rewritten" : "original"),
+              payloadHash: promptIntentPayloadHash(input),
+              messageID,
+            }).pipe(Effect.provideService(Database.Service, database))
+          : undefined
+        if (claim?.kind === "admitted") return
+        const claimed = claim?.receipt
+        const admittedInput = claimed
+          ? {
+              ...input,
+              messageID: claimed.messageID,
+              parts: stableIntentParts(input.parts, claimed.intentID),
+            }
+          : { ...input, messageID }
+        const admission = yield* Deferred.make<void, Image.Error | SessionPromptIntent.Error>()
+        if (claimed) {
+          yield* Effect.suspend(() =>
+            SessionPromptIntent.renew({
+              intentID: claimed.intentID,
+              ownerToken: claimed.ownerToken,
+            }).pipe(
+              Effect.provideService(Database.Service, database),
+              Effect.delay(Duration.seconds(10)),
+              Effect.flatMap((renewed) => (renewed ? Effect.void : Effect.interrupt)),
+            ),
+          ).pipe(Effect.forever, Effect.forkIn(scope))
+        }
+        yield* promptOrSteer(admittedInput, {
+          ready: (receipt) =>
+            (claimed
+              ? SessionPromptIntent.complete({
+                  intentID: claimed.intentID,
+                  ownerToken: claimed.ownerToken,
+                  messageID: receipt.messageID,
+                  delivery: receipt.delivery,
+                }).pipe(Effect.provideService(Database.Service, database), Effect.asVoid)
+              : Effect.void
+            ).pipe(
+              Effect.matchCauseEffect({
+                onFailure: (cause) => Deferred.failCause(admission, cause),
+                onSuccess: () => Deferred.succeed(admission, undefined),
+              }),
+              Effect.asVoid,
+            ),
         }).pipe(
           Effect.catchCause((cause) =>
             Effect.gen(function* () {
+              if (claimed) {
+                yield* SessionPromptIntent.fail({
+                  intentID: claimed.intentID,
+                  ownerToken: claimed.ownerToken,
+                }).pipe(Effect.provideService(Database.Service, database))
+              }
               yield* Effect.logError("prompt_async failed").pipe(
                 Effect.annotateLogs({ sessionID: input.sessionID, cause }),
               )
@@ -3638,6 +3701,9 @@ const ModelRef = Schema.Struct({
 export const PromptInput = Schema.Struct({
   sessionID: SessionID,
   messageID: Schema.optional(MessageID),
+  intentID: Schema.optional(Schema.String),
+  intentSource: Schema.optional(Schema.Literals(["composer", "intelligence", "followup", "rewrite"])),
+  intentVariant: Schema.optional(Schema.Literals(["original", "rewritten"])),
   model: Schema.optional(ModelRef),
   agent: Schema.optional(Schema.String),
   noReply: Schema.optional(Schema.Boolean),
@@ -3789,6 +3855,30 @@ const projectIDForDirectory = (directory: string): string =>
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value)
+
+const stableIntentParts = (parts: PromptInput["parts"], intentID: string): PromptInput["parts"] =>
+  parts.map((part, index) => ({
+    ...part,
+    id: PartID.ascending(`prt_intent_${Hash.sha256(`${intentID}:${index}`).slice(0, 24)}`),
+  }))
+
+const promptIntentPayloadHash = (input: PromptInput) =>
+  Hash.sha256(
+    stableJson({
+      sessionID: input.sessionID,
+      model: input.model,
+      agent: input.agent,
+      noReply: input.noReply,
+      tools: input.tools,
+      format: input.format,
+      system: input.system,
+      metadata: input.metadata,
+      variant: input.variant,
+      parts: input.parts.map((part) =>
+        Object.fromEntries(Object.entries(part).filter(([key]) => key !== "id")),
+      ),
+    }),
+  )
 
 function providerRequestHash(input: LLM.StreamInput) {
   return Hash.sha256(

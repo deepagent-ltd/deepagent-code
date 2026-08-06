@@ -1457,6 +1457,8 @@ export default function Page() {
         sync,
         serverSync,
         draft: item,
+        intentID: item.id,
+        intentSource: "followup",
         optimisticBusy: item.sessionDirectory === sdk.directory,
         confirmPromptDraft,
       }).catch((err) => {

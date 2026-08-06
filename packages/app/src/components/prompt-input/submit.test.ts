@@ -27,7 +27,15 @@ const preparedDrafts: Array<{
   outputLanguage?: string
   text?: string
 }> = []
-const sentPromptAsync: Array<{ directory: string; metadata?: unknown; text?: string }> = []
+const preparedIntents: Array<{ intentID?: string; source?: string }> = []
+const sentPromptAsync: Array<{
+  directory: string
+  metadata?: unknown
+  text?: string
+  intentID?: string
+  intentSource?: string
+  intentVariant?: string
+}> = []
 const promptPrepareEvents: string[] = []
 const promptPrepareProgress: string[] = []
 
@@ -61,11 +69,20 @@ const clientFor = (directory: string) => {
         return { data: undefined }
       },
       prompt: async () => ({ data: undefined }),
-      promptAsync: async (payload?: { metadata?: unknown; parts?: Array<{ type: string; text?: string }> }) => {
+      promptAsync: async (payload?: {
+        metadata?: unknown
+        parts?: Array<{ type: string; text?: string }>
+        intentID?: string
+        intentSource?: string
+        intentVariant?: string
+      }) => {
         const sent = {
           directory,
           metadata: payload?.metadata,
           text: payload?.parts?.find((part) => part.type === "text")?.text,
+          intentID: payload?.intentID,
+          intentSource: payload?.intentSource,
+          intentVariant: payload?.intentVariant,
         }
         sentPromptAsync.push(sent)
         if (sent.text === "prompt waits after admission") {
@@ -82,7 +99,13 @@ const clientFor = (directory: string) => {
       request: async (payload: {
         url?: string
         path?: { sessionID?: string }
-        body?: { mode?: string; output_language?: string; parts?: Array<{ type: string; text?: string }> }
+        body?: {
+          mode?: string
+          output_language?: string
+          intent_id?: string
+          intent_source?: string
+          parts?: Array<{ type: string; text?: string }>
+        }
         signal?: AbortSignal
       }) => {
         const text = payload.body?.parts?.find((part) => part.type === "text")?.text
@@ -93,6 +116,7 @@ const clientFor = (directory: string) => {
           outputLanguage: payload.body?.output_language,
           text,
         })
+        preparedIntents.push({ intentID: payload.body?.intent_id, source: payload.body?.intent_source })
         if (text === "prepare fails") {
           throw new Error("POST /session/ses_1/prompt_prepare returned 400", {
             cause: {
@@ -122,6 +146,7 @@ const clientFor = (directory: string) => {
           route: text === "hello" ? "general" : "code",
           goal: "Prepared goal",
           preview: "# Prepared prompt",
+          intent_id: payload.body?.intent_id,
         }
         return {
           data: new ReadableStream<Uint8Array>({
@@ -318,6 +343,7 @@ beforeEach(() => {
   sentShell.length = 0
   syncedDirectories.length = 0
   preparedDrafts.length = 0
+  preparedIntents.length = 0
   sentPromptAsync.length = 0
   promptPrepareEvents.length = 0
   promptPrepareProgress.length = 0
@@ -496,6 +522,10 @@ describe("prompt submit worktree selection", () => {
       { directory: "/repo/main", sessionID: "session-1", mode: "intelligence", outputLanguage: "english", text: "ls" },
     ])
     expect(sentPromptAsync[0]?.text).toBe("Edited prepared goal")
+    expect(preparedIntents[0]?.intentID).toBe(sentPromptAsync[0]?.intentID)
+    expect(preparedIntents[0]?.source).toBe("intelligence")
+    expect(sentPromptAsync[0]?.intentSource).toBe("intelligence")
+    expect(sentPromptAsync[0]?.intentVariant).toBe("rewritten")
     expect(sentPromptAsync[0]?.metadata).toEqual({
       deepagent: {
         prompt_pipeline: {
@@ -586,6 +616,8 @@ describe("prompt submit worktree selection", () => {
       },
     ])
     expect(sentPromptAsync[0]?.text).toBe("hello")
+    expect(preparedIntents[0]?.intentID).toBe(sentPromptAsync[0]?.intentID)
+    expect(sentPromptAsync[0]?.intentVariant).toBe("original")
     expect(sentPromptAsync[0]?.metadata).toEqual({
       deepagent: {
         agent_mode_override: "general",

@@ -212,6 +212,37 @@ export const SessionSteerTable = sqliteTable(
   ],
 )
 
+export const SessionIntentTable = sqliteTable(
+  "session_intent",
+  {
+    intent_id: text().primaryKey(),
+    session_id: text()
+      .$type<SessionSchema.ID>()
+      .notNull()
+      .references(() => SessionTable.id, { onDelete: "cascade" }),
+    source: text().$type<"composer" | "intelligence" | "followup" | "rewrite">().notNull(),
+    state: text()
+      .$type<"preparing" | "admitting" | "admitted" | "canceled" | "superseded" | "failed">()
+      .notNull(),
+    selected_variant: text().$type<"original" | "rewritten">(),
+    selected_payload_hash: text(),
+    delivery: text().$type<"turn" | SessionInput.Delivery>(),
+    admitted_message_id: text(),
+    correlation_id: text(),
+    owner_token: text(),
+    lease_expires_at: integer(),
+    version: integer().notNull().default(0),
+    time_created: integer().notNull(),
+    time_selected: integer(),
+    time_admitted: integer(),
+    time_updated: integer().notNull(),
+  },
+  (table) => [
+    uniqueIndex("session_intent_session_intent_idx").on(table.session_id, table.intent_id),
+    index("session_intent_session_state_idx").on(table.session_id, table.state, table.time_created),
+  ],
+)
+
 export const SessionContextEpochTable = sqliteTable("session_context_epoch", {
   session_id: text()
     .$type<SessionSchema.ID>()

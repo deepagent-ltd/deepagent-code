@@ -57,6 +57,7 @@ export type DeepAgentPromptPrepareResult = {
   route: "code" | "general"
   goal: string
   preview: string
+  intent_id?: string
 }
 
 export type DeepAgentPromptConfirmResult = { editedGoal: string }
@@ -94,6 +95,8 @@ type FollowupSendInput = {
   sync: ReturnType<typeof useSync>
   draft: FollowupDraft
   messageID?: string
+  intentID?: string
+  intentSource?: "composer" | "intelligence" | "followup" | "rewrite"
   optimisticBusy?: boolean
   before?: () => Promise<boolean> | boolean
   onBeforeSubmit?: () => void
@@ -121,6 +124,8 @@ async function prepareDeepAgentPromptDraft(input: {
   mode: DeepAgentPromptModeForConfirmation
   outputLanguage: DeepAgentPromptOutputLanguage
   parts: SessionPromptAsyncInput["parts"]
+  intentID: string
+  intentSource: "composer" | "intelligence" | "followup" | "rewrite"
   signal?: AbortSignal
   onProgress?: (preview: string) => void
 }) {
@@ -132,6 +137,8 @@ async function prepareDeepAgentPromptDraft(input: {
     body: {
       mode: input.mode,
       output_language: input.outputLanguage,
+      intent_id: input.intentID,
+      intent_source: input.intentSource,
       parts: input.parts,
     },
     headers: {
@@ -253,6 +260,7 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
   }
 
   const messageID = input.messageID ?? Identifier.ascending("message")
+  const intentID = input.intentID ?? Identifier.ascending("message")
   const buildParts = (promptText: string) =>
     buildRequestParts({
       prompt: input.draft.prompt,
@@ -287,9 +295,14 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
         mode,
         outputLanguage: input.promptOutputLanguage ?? "english",
         parts: preparedParts.requestParts,
+        intentID,
+        intentSource: input.intentSource ?? "intelligence",
         signal: input.promptPrepareSignal,
         onProgress: input.onPromptPrepareProgress,
       })
+      if (prepared.intent_id && prepared.intent_id !== intentID) {
+        throw new Error("Prompt draft prepare returned a different intent")
+      }
     } catch (err) {
       setIdle()
       input.onPromptPrepareEnd?.()
@@ -370,6 +383,9 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
       agent: input.draft.agent,
       model: input.draft.model,
       messageID,
+      intentID,
+      intentSource: input.intentSource ?? (mode ? "intelligence" : "composer"),
+      intentVariant: confirmedDraft ? "rewritten" : "original",
       parts: submittedParts.requestParts,
       variant: input.draft.variant,
       metadata,
@@ -763,6 +779,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
 
     const commentItems = context.filter((item) => item.type === "file" && !!item.comment?.trim())
     const messageID = Identifier.ascending("message")
+    const intentID = Identifier.ascending("message")
     const preparesPromptDraft = promptPipelineMode(draft.metadata) === "intelligence"
     const controller = new AbortController()
 
@@ -851,6 +868,8 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       serverSync,
       draft,
       messageID,
+      intentID,
+      intentSource: preparesPromptDraft ? "intelligence" : "composer",
       optimisticBusy: sessionDirectory === projectDirectory,
       before: waitForWorktree,
       onBeforeSubmit: () => {
