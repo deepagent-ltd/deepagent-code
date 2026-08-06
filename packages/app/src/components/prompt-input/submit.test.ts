@@ -38,6 +38,7 @@ let variant: string | undefined
 // normalizer maps to "intelligence"); either way submit sends "intelligence" on the wire.
 let promptMode: "direct" | "intelligence" | "wish" = "direct"
 let appLocale = "en"
+let releaseDelayedPrompt: (() => void) | undefined
 
 const promptValue: Prompt = [{ type: "text", content: "ls", start: 0, end: 2 }]
 const flushAsyncSubmit = () => new Promise((resolve) => setTimeout(resolve, 0))
@@ -61,11 +62,17 @@ const clientFor = (directory: string) => {
       },
       prompt: async () => ({ data: undefined }),
       promptAsync: async (payload?: { metadata?: unknown; parts?: Array<{ type: string; text?: string }> }) => {
-        sentPromptAsync.push({
+        const sent = {
           directory,
           metadata: payload?.metadata,
           text: payload?.parts?.find((part) => part.type === "text")?.text,
-        })
+        }
+        sentPromptAsync.push(sent)
+        if (sent.text === "prompt waits after admission") {
+          await new Promise<void>((resolve) => {
+            releaseDelayedPrompt = resolve
+          })
+        }
         return { data: undefined }
       },
       command: async () => ({ data: undefined }),
@@ -319,6 +326,8 @@ beforeEach(() => {
   variant = undefined
   promptMode = "direct"
   appLocale = "en"
+  releaseDelayedPrompt?.()
+  releaseDelayedPrompt = undefined
   for (const key of Object.keys(storedSessions)) delete storedSessions[key]
 })
 
@@ -535,6 +544,7 @@ describe("prompt submit worktree selection", () => {
     params = { id: "session-1" }
     promptMode = "intelligence"
     const confirms: string[] = []
+    const discards: string[] = []
     promptValue[0] = { type: "text", content: "hello", start: 0, end: 5 }
 
     const submit = createPromptSubmit({
@@ -555,6 +565,7 @@ describe("prompt submit worktree selection", () => {
         confirms.push("called")
         return { editedGoal: "should not submit" }
       },
+      onPromptPrepareDiscard: () => discards.push("discard"),
       onSubmit: () => undefined,
     })
 
@@ -564,6 +575,7 @@ describe("prompt submit worktree selection", () => {
     await flushAsyncSubmit()
 
     expect(confirms).toEqual([])
+    expect(discards).toEqual(["discard"])
     expect(preparedDrafts).toEqual([
       {
         directory: "/repo/main",
@@ -656,6 +668,88 @@ describe("prompt submit worktree selection", () => {
 
     expect(promptPrepareEvents).toEqual(["start", "end"])
     expect(sentPromptAsync).toEqual([])
+    promptValue[0] = { type: "text", content: "ls", start: 0, end: 2 }
+  })
+
+  test("supersedes an in-flight intelligence preparation without admitting or restoring it", async () => {
+    params = { id: "session-1" }
+    promptMode = "intelligence"
+    promptValue[0] = { type: "text", content: "prepare waits", start: 0, end: 13 }
+    const discards: string[] = []
+
+    const submit = createPromptSubmit({
+      info: () => ({ id: "session-1" }),
+      imageAttachments: () => [],
+      commentCount: () => 0,
+      autoAccept: () => false,
+      mode: () => "normal",
+      working: () => false,
+      editor: () => undefined,
+      queueScroll: () => undefined,
+      promptLength: (value) => value.reduce((sum, part) => sum + ("content" in part ? part.content.length : 0), 0),
+      addToHistory: () => undefined,
+      resetHistoryNavigation: () => undefined,
+      setMode: () => undefined,
+      setPopover: () => undefined,
+      onPromptPrepareDiscard: () => discards.push("discard"),
+      onSubmit: () => undefined,
+    })
+
+    await submit.handleSubmit({ preventDefault: () => undefined } as unknown as Event)
+    await flushAsyncSubmit()
+    await submit.cancelPending()
+    await flushAsyncSubmit()
+
+    expect(discards).toEqual(["discard"])
+    expect(sentPromptAsync).toEqual([])
+    promptValue[0] = { type: "text", content: "ls", start: 0, end: 2 }
+  })
+
+  test("joins an admission already in flight and rejects a duplicate local submit", async () => {
+    params = { id: "session-1" }
+    promptValue[0] = {
+      type: "text",
+      content: "prompt waits after admission",
+      start: 0,
+      end: 28,
+    }
+
+    const submit = createPromptSubmit({
+      info: () => ({ id: "session-1" }),
+      imageAttachments: () => [],
+      commentCount: () => 0,
+      autoAccept: () => false,
+      mode: () => "normal",
+      working: () => false,
+      editor: () => undefined,
+      queueScroll: () => undefined,
+      promptLength: (value) => value.reduce((sum, part) => sum + ("content" in part ? part.content.length : 0), 0),
+      addToHistory: () => undefined,
+      resetHistoryNavigation: () => undefined,
+      setMode: () => undefined,
+      setPopover: () => undefined,
+      onSubmit: () => undefined,
+    })
+
+    const event = { preventDefault: () => undefined } as unknown as Event
+    await submit.handleSubmit(event)
+    await flushAsyncSubmit()
+    expect(sentPromptAsync).toHaveLength(1)
+
+    await submit.handleSubmit(event)
+    expect(sentPromptAsync).toHaveLength(1)
+
+    let canceled = false
+    const cancel = submit.cancelPending().then(() => {
+      canceled = true
+    })
+    await flushAsyncSubmit()
+    expect(canceled).toBe(false)
+
+    releaseDelayedPrompt?.()
+    await cancel
+    expect(canceled).toBe(true)
+    expect(sentPromptAsync).toHaveLength(1)
     promptValue[0] = { type: "text", content: "ls", start: 0, end: 2 }
   })
 })

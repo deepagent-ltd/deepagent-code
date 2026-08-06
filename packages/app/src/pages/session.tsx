@@ -45,6 +45,7 @@ import { useSettings } from "@/context/settings"
 import { useSync } from "@/context/sync"
 import { useTerminalHosts } from "@/context/terminal"
 import { DialogDeepAgentPromptConfirm } from "@/components/dialog-deepagent-prompt-confirm"
+import type { PromptInputControl } from "@/components/prompt-input"
 import {
   type DeepAgentPromptPrepareResult,
   type FollowupDraft,
@@ -654,6 +655,7 @@ export default function Page() {
   }
 
   let inputRef!: HTMLDivElement
+  let promptInputControl: PromptInputControl | undefined
   let promptDock: HTMLDivElement | undefined
   let dockHeight = 0
   let scroller: HTMLDivElement | undefined
@@ -1561,25 +1563,18 @@ export default function Page() {
 
   const revertMutation = useMutation(() => ({
     mutationFn: async (input: { sessionID: string; messageID: string }) => {
-      const prev = prompt.current().slice()
-      const last = info()?.revert
       const value = draft(input.messageID)
-      batch(() => {
-        roll(input.sessionID, { messageID: input.messageID })
-        prompt.set(value)
-      })
-      await halt(input.sessionID)
+      await (promptInputControl?.cancelPending() ?? Promise.resolve())
+        .then(() => halt(input.sessionID))
         .then(() => sdk.client.session.revert(input))
         .then((result) => {
-          if (result.data) merge(result.data)
-        })
-        .catch((err) => {
           batch(() => {
-            roll(input.sessionID, last)
-            prompt.set(prev)
+            roll(input.sessionID, { messageID: input.messageID })
+            prompt.set(value)
+            if (result.data) merge(result.data)
           })
-          fail(err)
         })
+        .catch(fail)
     },
   }))
 
@@ -1589,38 +1584,27 @@ export default function Page() {
       if (!sessionID) return
 
       const next = userMessages().find((item) => item.id > id)
-      const prev = prompt.current().slice()
-      const last = info()?.revert
 
-      batch(() => {
-        roll(sessionID, next ? { messageID: next.id } : undefined)
-        if (next) {
-          prompt.set(draft(next.id))
-          return
-        }
-        prompt.reset()
-      })
-
-      const task = !next
-        ? halt(sessionID).then(() => sdk.client.session.unrevert({ sessionID }))
-        : halt(sessionID).then(() =>
-            sdk.client.session.revert({
+      const request = () =>
+        !next
+          ? sdk.client.session.unrevert({ sessionID })
+          : sdk.client.session.revert({
               sessionID,
               messageID: next.id,
-            }),
-          )
+            })
 
-      await task
+      await (promptInputControl?.cancelPending() ?? Promise.resolve())
+        .then(() => halt(sessionID))
+        .then(request)
         .then((result) => {
-          if (result.data) merge(result.data)
-        })
-        .catch((err) => {
           batch(() => {
-            roll(sessionID, last)
-            prompt.set(prev)
+            roll(sessionID, next ? { messageID: next.id } : undefined)
+            if (next) prompt.set(draft(next.id))
+            else prompt.reset()
+            if (result.data) merge(result.data)
           })
-          fail(err)
         })
+        .catch(fail)
     },
   }))
 
@@ -1752,6 +1736,10 @@ export default function Page() {
         resumeScroll()
       }}
       onResponseSubmit={resumeScroll}
+      inputDisabled={reverting()}
+      inputControlRef={(control) => {
+        promptInputControl = control
+      }}
       followup={
         params.id && !isChildSession()
           ? {

@@ -100,6 +100,7 @@ type FollowupSendInput = {
   onPromptPrepareStart?: () => void
   onPromptPrepareProgress?: (preview: string) => void
   onPromptPrepareEnd?: () => void
+  onPromptPrepareDiscard?: () => void
   promptPrepareSignal?: AbortSignal
   promptOutputLanguage?: DeepAgentPromptOutputLanguage
   confirmPromptDraft?: (draft: DeepAgentPromptPrepareResult) => Promise<DeepAgentPromptConfirmResult | false>
@@ -212,8 +213,9 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
   }
 
   const wait = async () => {
+    if (input.promptPrepareSignal?.aborted) return false
     const ok = await input.before?.()
-    if (ok === false) return false
+    if (ok === false || input.promptPrepareSignal?.aborted) return false
     return true
   }
 
@@ -296,6 +298,7 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
     }
     input.onPromptPrepareEnd?.()
     if (prepared.route === "general") {
+      input.onPromptPrepareDiscard?.()
       metadata = {
         deepagent: {
           agent_mode_override: "general",
@@ -306,7 +309,7 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
       }
     } else {
       const confirmed = await input.confirmPromptDraft?.(prepared)
-      if (!confirmed) {
+      if (!confirmed || input.promptPrepareSignal?.aborted) {
         setIdle()
         return false
       }
@@ -354,6 +357,7 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
     if (!waited && !(await wait())) {
       return false
     }
+    if (input.promptPrepareSignal?.aborted) return false
     input.onBeforeSubmit?.()
 
     batch(() => {
@@ -404,6 +408,7 @@ type PromptSubmitInput = {
   onPromptPrepareStart?: () => void
   onPromptPrepareProgress?: (preview: string) => void
   onPromptPrepareEnd?: () => void
+  onPromptPrepareDiscard?: () => void
   confirmPromptDraft?: (draft: DeepAgentPromptPrepareResult) => Promise<DeepAgentPromptConfirmResult | false>
 }
 
@@ -430,7 +435,17 @@ export function createPromptSubmit(input: PromptSubmitInput) {
   const language = useLanguage()
   const params = useParams()
   const pendingKey = (sessionID: string) => ScopedKey.from(sdk.scope, sessionID)
-  let activePreparation: { sessionID: string; controller: AbortController } | undefined
+  let submissionSequence = 0
+  let activeSubmission:
+    | {
+        id: number
+        sessionID: string
+        controller: AbortController
+        preparing: boolean
+        admissionStarted: boolean
+        promise: Promise<void>
+      }
+    | undefined
 
   const errorMessage = (err: unknown) => {
     if (err && typeof err === "object" && "data" in err) {
@@ -441,8 +456,20 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     return language.t("common.requestFailed")
   }
 
+  const cancelPending = async (options?: { preserveDraft?: boolean }) => {
+    const submission = activeSubmission
+    if (!submission) return
+    submission.controller.abort()
+    if (submission.preparing) {
+      if (options?.preserveDraft) input.onPromptPrepareEnd?.()
+      else input.onPromptPrepareDiscard?.()
+    }
+    await submission.promise
+    return submission
+  }
+
   const abort = async () => {
-    const sessionID = activePreparation?.sessionID ?? params.id
+    const sessionID = activeSubmission?.sessionID ?? params.id
     if (!sessionID) return Promise.resolve()
 
     // D3: any stop resets the scenario to `direct` and pauses scenario automation for this
@@ -452,10 +479,12 @@ export function createPromptSubmit(input: PromptSubmitInput) {
 
     input.onAbort?.()
 
-    if (activePreparation) {
-      activePreparation.controller.abort()
-      activePreparation = undefined
-      return Promise.resolve()
+    const submission = await cancelPending({ preserveDraft: true })
+    if (submission) {
+      if (submission.admissionStarted) {
+        await sdk.client.session.abort({ sessionID }).catch(() => {})
+      }
+      return
     }
 
     const key = pendingKey(sessionID)
@@ -515,6 +544,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
 
   const handleSubmit = async (event: Event) => {
     event.preventDefault()
+    if (activeSubmission) return
 
     const currentPrompt = prompt.current()
     const text = currentPrompt.map((part) => ("content" in part ? part.content : "")).join("")
@@ -734,7 +764,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     const commentItems = context.filter((item) => item.type === "file" && !!item.comment?.trim())
     const messageID = Identifier.ascending("message")
     const preparesPromptDraft = promptPipelineMode(draft.metadata) === "intelligence"
-    const preparationAbort = preparesPromptDraft ? new AbortController() : undefined
+    const controller = new AbortController()
 
     const removeOptimisticMessage = () => {
       sync.session.optimistic.remove({
@@ -757,7 +787,6 @@ export function createPromptSubmit(input: PromptSubmitInput) {
         sync.set("session_status", session.id, { type: "busy" })
       }
 
-      const controller = preparationAbort ?? new AbortController()
       const cleanup = () => {
         if (sessionDirectory === projectDirectory) {
           sync.set("session_status", session.id, { type: "idle" })
@@ -806,13 +835,17 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       return true
     }
 
-    if (preparationAbort) activePreparation = { sessionID: session.id, controller: preparationAbort }
-    const clearActivePreparation = () => {
-      if (activePreparation?.controller !== preparationAbort) return
-      activePreparation = undefined
+    const operation = {
+      id: ++submissionSequence,
+      sessionID: session.id,
+      controller,
+      preparing: preparesPromptDraft,
+      admissionStarted: false,
+      promise: Promise.resolve(),
     }
-
-    void sendFollowupDraft({
+    const ownsOperation = () => activeSubmission?.id === operation.id && !controller.signal.aborted
+    activeSubmission = operation
+    operation.promise = sendFollowupDraft({
       client,
       sync,
       serverSync,
@@ -820,17 +853,31 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       messageID,
       optimisticBusy: sessionDirectory === projectDirectory,
       before: waitForWorktree,
-      onBeforeSubmit: input.onSubmit,
-      onPromptPrepareStart: input.onPromptPrepareStart,
-      onPromptPrepareProgress: input.onPromptPrepareProgress,
-      onPromptPrepareEnd: input.onPromptPrepareEnd,
-      promptPrepareSignal: preparationAbort?.signal,
+      onBeforeSubmit: () => {
+        operation.admissionStarted = true
+        input.onSubmit?.()
+      },
+      onPromptPrepareStart: () => {
+        if (ownsOperation()) input.onPromptPrepareStart?.()
+      },
+      onPromptPrepareProgress: (preview) => {
+        if (ownsOperation()) input.onPromptPrepareProgress?.(preview)
+      },
+      onPromptPrepareEnd: () => {
+        if (ownsOperation()) input.onPromptPrepareEnd?.()
+      },
+      onPromptPrepareDiscard: () => {
+        if (ownsOperation()) input.onPromptPrepareDiscard?.()
+      },
+      promptPrepareSignal: controller.signal,
       promptOutputLanguage: promptOutputLanguage(language.locale()),
       confirmPromptDraft: input.confirmPromptDraft,
     })
       .then((sent) => {
-        clearActivePreparation()
+        if (activeSubmission?.id !== operation.id) return
+        activeSubmission = undefined
         pending.delete(pendingKey(session.id))
+        if (controller.signal.aborted) return
         if (sent) {
           if (preparesPromptDraft) {
             clearContext()
@@ -846,8 +893,10 @@ export function createPromptSubmit(input: PromptSubmitInput) {
         restoreInput()
       })
       .catch((err) => {
-        clearActivePreparation()
+        if (activeSubmission?.id !== operation.id) return
+        activeSubmission = undefined
         pending.delete(pendingKey(session.id))
+        if (controller.signal.aborted) return
         if (sessionDirectory === projectDirectory) {
           sync.set("session_status", session.id, { type: "idle" })
         }
@@ -859,10 +908,12 @@ export function createPromptSubmit(input: PromptSubmitInput) {
         if (!preparesPromptDraft) restoreCommentItems(commentItems)
         restoreInput()
       })
+    void operation.promise
   }
 
   return {
     abort,
+    cancelPending,
     handleSubmit,
   }
 }

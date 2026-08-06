@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { runValidationCommands } from "../../src/deepagent/validation-exec"
+import { runValidationCommands, validationInvocation } from "../../src/deepagent/validation-exec"
 
 // V3.2 P2-5 regression guard: a validation command that never exits must NOT hang the runner.
 // The timeout sentinel must kill the process and resolve to a failed ValidationResult within
@@ -18,5 +18,32 @@ describe("V3.2 validation-exec timeout", () => {
   test("a fast successful command still passes", async () => {
     const results = await runValidationCommands(["true"], process.cwd(), 5000)
     expect(results[0]!.passed).toBe(true)
+  })
+
+  test("uses native PowerShell and cmd invocation contracts", () => {
+    expect(validationInvocation("bun run typecheck", "C:\\repo path", "pwsh")).toEqual([
+      "pwsh",
+      "-NoProfile",
+      "-Command",
+      "bun run typecheck",
+    ])
+    expect(validationInvocation("bun run typecheck", "C:\\repo path", "cmd")).toEqual([
+      "cmd",
+      "/c",
+      "bun run typecheck",
+    ])
+  })
+
+  test("classifies a missing validation shell as one bootstrap failure", async () => {
+    const shell = `missing-validation-shell-${Date.now()}`
+    const results = await runValidationCommands(["bun run typecheck"], process.cwd(), 5000, { shell })
+
+    expect(results).toHaveLength(1)
+    expect(results[0]).toMatchObject({
+      passed: false,
+      exit_code: 127,
+      command: "bun run typecheck",
+    })
+    expect(results[0]!.output).toContain(`validation shell bootstrap failed (${shell})`)
   })
 })

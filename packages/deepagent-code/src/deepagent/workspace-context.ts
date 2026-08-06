@@ -82,7 +82,8 @@ async function exists(filePath: string): Promise<boolean> {
 function inferCommands(info: WorkspaceInfo): string[] {
   // P2-7 / P1-3: single source of validation-command inference lives in core's validation.ts
   // (includes test/build/python + the AGENTS.md extractor). This bun-based workspace passes the
-  // "bun run" runner so emitted commands are runnable via `sh -c` in validation-exec.
+  // "bun run" runner so emitted commands use the workspace package manager. The validation
+  // executor runs them through the host's accepted shell (PowerShell/cmd on Windows, POSIX elsewhere).
   return AgentGateway.DeepAgentValidation.inferValidationCommands({
     cwd: "",
     packageJson: info.packageJson ?? undefined,

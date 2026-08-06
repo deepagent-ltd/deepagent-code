@@ -1,6 +1,7 @@
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { buffer } from "node:stream/consumers"
 import { Process } from "@/util/process"
+import { Shell } from "@/shell/shell"
 
 // V3 A3: real validation executor. Runs the workspace validation commands (typecheck / lint /
 // test, inferred by workspace-context) and maps each to the universal ValidationResult the
@@ -8,16 +9,22 @@ import { Process } from "@/util/process"
 
 export type ValidationResult = ReturnType<typeof AgentGateway.DeepAgentValidation.parseValidationOutput>
 
+export function validationInvocation(command: string, cwd: string, shell = Shell.acceptable()) {
+  return [shell, ...Shell.args(shell, command, cwd)]
+}
+
 export const runValidationCommands = async (
   commands: readonly string[],
   cwd: string,
   timeoutMs = 120_000,
+  options?: { shell?: string },
 ): Promise<ValidationResult[]> => {
   const results: ValidationResult[] = []
   for (const command of commands) {
     const started = Date.now()
+    const invocation = validationInvocation(command, cwd, options?.shell)
     try {
-      const proc = Process.spawn(["sh", "-c", command], {
+      const proc = Process.spawn(invocation, {
         cwd,
         stdout: "pipe",
         stderr: "pipe",
@@ -61,9 +68,13 @@ export const runValidationCommands = async (
         AgentGateway.DeepAgentValidation.parseValidationOutput(command, outcome.exitCode, output, Date.now() - started),
       )
     } catch (err) {
-      // a command that cannot even launch counts as a failed validation (non-zero "exit")
       results.push(
-        AgentGateway.DeepAgentValidation.parseValidationOutput(command, 127, String(err), Date.now() - started),
+        AgentGateway.DeepAgentValidation.parseValidationOutput(
+          command,
+          127,
+          `validation shell bootstrap failed (${invocation[0]}): ${String(err)}`,
+          Date.now() - started,
+        ),
       )
     }
   }

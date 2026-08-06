@@ -69,6 +69,7 @@ import {
   Cause,
   Context,
   Data,
+  Deferred,
   Duration,
   Effect,
   Exit,
@@ -273,6 +274,7 @@ const promptInputToPrompt = (parts: PromptInput["parts"]): Effect.Effect<Prompt,
 export interface Interface {
   readonly cancel: (sessionID: SessionID) => Effect.Effect<void>
   readonly prompt: (input: PromptInput) => Effect.Effect<SessionV1.WithParts, Image.Error>
+  readonly promptAsync: (input: PromptInput) => Effect.Effect<void, Image.Error>
   readonly prepareTaskInput: (
     input: PromptInput,
     timeCreated: number,
@@ -294,7 +296,7 @@ export interface Interface {
   // accepted as steering. With steering disabled it falls back to prompt() (which enforces the runner's
   // own busy semantics), preserving pre-steering behavior exactly.
   readonly promptOrSteer: (input: PromptInput) => Effect.Effect<PromptOrSteerResult, Image.Error>
-  readonly loop: (input: LoopInput) => Effect.Effect<SessionV1.WithParts>
+  readonly loop: (input: LoopInput, onRunning?: Effect.Effect<void>) => Effect.Effect<SessionV1.WithParts>
   readonly shell: (input: ShellInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError>
   readonly command: (input: CommandInput) => Effect.Effect<SessionV1.WithParts, Image.Error>
   readonly resolvePromptParts: (template: string) => Effect.Effect<PromptInput["parts"]>
@@ -321,6 +323,10 @@ export interface Interface {
 }
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/SessionPrompt") {}
+
+type PromptLifecycle = {
+  readonly ready: Effect.Effect<void>
+}
 
 export const layer = Layer.effect(
   Service,
@@ -1830,9 +1836,13 @@ export const layer = Layer.effect(
       return yield* createUserMessage(input, { persist: false, timeCreated })
     })
 
-    const prompt: (input: PromptInput) => Effect.Effect<SessionV1.WithParts, Image.Error> = Effect.fn(
-      "SessionPrompt.prompt",
-    )(function* (input: PromptInput) {
+    const prompt: (
+      input: PromptInput,
+      lifecycle?: PromptLifecycle,
+    ) => Effect.Effect<SessionV1.WithParts, Image.Error> = Effect.fn("SessionPrompt.prompt")(function* (
+      input: PromptInput,
+      lifecycle?: PromptLifecycle,
+    ) {
       const notification = taskNotification(input.metadata)
       if (notification && input.messageID) {
         const existing = yield* MessageV2.get({ sessionID: input.sessionID, messageID: input.messageID }).pipe(
@@ -1849,6 +1859,7 @@ export const layer = Layer.effect(
             return yield* Effect.die(
               new Error(`Task notification message ID ${input.messageID} conflicts with persisted content`),
             )
+          if (lifecycle) yield* lifecycle.ready
           return existing
         }
       }
@@ -1865,7 +1876,7 @@ export const layer = Layer.effect(
           FSUtil.resolve(current.directory) === FSUtil.resolve(root.directory)
             ? current
             : yield* instances.load({ directory: root.directory })
-        return yield* prompt(input).pipe(
+        return yield* prompt(input, lifecycle).pipe(
           Effect.provideService(EventRouteRef, {
             ...rootContext,
             ...(root.workspaceID ? { workspaceID: root.workspaceID } : {}),
@@ -1873,7 +1884,7 @@ export const layer = Layer.effect(
         )
       }
       if (FSUtil.resolve(session.directory) !== FSUtil.resolve(current.directory)) {
-        return yield* instances.provide({ directory: session.directory }, prompt(input))
+        return yield* instances.provide({ directory: session.directory }, prompt(input, lifecycle))
       }
       yield* revert.cleanup(session)
       const pipeline = yield* buildPromptPipelineSubmission(input)
@@ -1899,8 +1910,11 @@ export const layer = Layer.effect(
         yield* sessions.setPermission({ sessionID: session.id, permission: permissions })
       }
 
-      if (input.noReply === true) return message
-      const first = yield* loop({ sessionID: input.sessionID })
+      if (input.noReply === true) {
+        if (lifecycle) yield* lifecycle.ready
+        return message
+      }
+      const first = yield* loop({ sessionID: input.sessionID }, lifecycle?.ready)
       if (isStructuredFinalizer(input.metadata)) return first
       // V3 Plan A: mode-driven multi-round autonomous loop for high/max/ultra. It remains
       // fail-closed (any error -> the single-turn result). Real validation (A3),
@@ -3035,11 +3049,15 @@ export const layer = Layer.effect(
     //      that drains on step 0. ensureRunning makes this a no-op await if a turn is (still) running, so
     //      there is no double-turn; if idle, it runs one drain turn. Forked so the ingress returns promptly.
     //   4. else idle, no goal → prompt() runs a normal turn.
-    const promptOrSteer: (input: PromptInput) => Effect.Effect<PromptOrSteerResult, Image.Error> = Effect.fn(
-      "SessionPrompt.promptOrSteer",
-    )(function* (input: PromptInput) {
+    const promptOrSteer: (
+      input: PromptInput,
+      lifecycle?: PromptLifecycle,
+    ) => Effect.Effect<PromptOrSteerResult, Image.Error> = Effect.fn("SessionPrompt.promptOrSteer")(function* (
+      input: PromptInput,
+      lifecycle?: PromptLifecycle,
+    ) {
       if (!flags.v4Steering) {
-        const message = yield* prompt(input)
+        const message = yield* prompt(input, lifecycle)
         return { kind: "turn" as const, message }
       }
       // (2) Active-goal check FIRST — independent of the parent runner's busy flag.
@@ -3055,6 +3073,7 @@ export const layer = Layer.effect(
           delivery: "goal_steer",
           messageID: input.messageID as unknown as SessionMessage.ID | undefined,
         })
+        if (lifecycle) yield* lifecycle.ready
         // V4.1 governance audit — this is the REAL user goal-steer path (the ingress every busy-goal
         // steer flows through). Record the human intervention into the goal's Document Graph alongside
         // the per-tick worklog trail. Length only (not free-text) to keep the body bounded + PII-light;
@@ -3066,7 +3085,7 @@ export const layer = Layer.effect(
       const busy = yield* state.isBusy(input.sessionID)
       if (!busy) {
         // (4) idle, no goal → normal turn.
-        const message = yield* prompt(input)
+        const message = yield* prompt(input, lifecycle)
         return { kind: "turn" as const, message }
       }
       const steerPrompt = yield* promptInputToPrompt(input.parts).pipe(
@@ -3078,14 +3097,39 @@ export const layer = Layer.effect(
         delivery: "steer",
         messageID: input.messageID as unknown as SessionMessage.ID | undefined,
       })
+      if (lifecycle) yield* lifecycle.ready
       // Race guard (see header): a pure-drain turn absorbs a steer stranded by the isBusy→admit window.
       yield* loop({ sessionID: input.sessionID, drainFirst: true }).pipe(Effect.ignore, Effect.forkIn(scope))
       return { kind: "steer" as const, delivery: "steer" as const, admitted }
     })
 
-    const loop: (input: LoopInput) => Effect.Effect<SessionV1.WithParts> = Effect.fn("SessionPrompt.loop")(function* (
-      input: LoopInput,
-    ) {
+    const promptAsync: (input: PromptInput) => Effect.Effect<void, Image.Error> = Effect.fn("SessionPrompt.promptAsync")(
+      function* (input: PromptInput) {
+        const admission = yield* Deferred.make<void, Image.Error>()
+        yield* promptOrSteer(input, {
+          ready: Deferred.succeed(admission, undefined).pipe(Effect.asVoid),
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.gen(function* () {
+              yield* Effect.logError("prompt_async failed").pipe(
+                Effect.annotateLogs({ sessionID: input.sessionID, cause }),
+              )
+              yield* events.publish(Session.Event.Error, {
+                sessionID: input.sessionID,
+                error: new NamedError.Unknown({ message: Cause.pretty(cause) }).toObject(),
+              })
+              yield* Deferred.failCause(admission, cause)
+            }),
+          ),
+          Effect.forkIn(scope, { startImmediately: true }),
+        )
+        yield* Deferred.await(admission)
+      },
+    )
+
+    const loop: (input: LoopInput, onRunning?: Effect.Effect<void>) => Effect.Effect<SessionV1.WithParts> = Effect.fn(
+      "SessionPrompt.loop",
+    )(function* (input: LoopInput, onRunning?: Effect.Effect<void>) {
       const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
       const current = yield* InstanceState.context
       const route = yield* EventRouteRef
@@ -3099,7 +3143,7 @@ export const layer = Layer.effect(
           FSUtil.resolve(current.directory) === FSUtil.resolve(root.directory)
             ? current
             : yield* instances.load({ directory: root.directory })
-        return yield* loop(input).pipe(
+        return yield* loop(input, onRunning).pipe(
           Effect.provideService(EventRouteRef, {
             ...rootContext,
             ...(root.workspaceID ? { workspaceID: root.workspaceID } : {}),
@@ -3107,7 +3151,7 @@ export const layer = Layer.effect(
         )
       }
       if (FSUtil.resolve(session.directory) !== FSUtil.resolve(current.directory)) {
-        return yield* instances.provide({ directory: session.directory }, loop(input))
+        return yield* instances.provide({ directory: session.directory }, loop(input, onRunning))
       }
       return yield* state.ensureRunning(
         input.sessionID,
@@ -3115,6 +3159,7 @@ export const layer = Layer.effect(
         runLoop(input.sessionID, input.drainFirst ?? false).pipe(
           Effect.onInterrupt(() => settleFederatedActivity(input.sessionID, "interrupted")),
         ),
+        onRunning,
       )
     })
 
@@ -3530,6 +3575,7 @@ export const layer = Layer.effect(
     return Service.of({
       cancel,
       prompt,
+      promptAsync,
       prepareTaskInput,
       steer,
       promptOrSteer,

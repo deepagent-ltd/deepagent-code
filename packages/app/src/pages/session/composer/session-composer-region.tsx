@@ -4,7 +4,7 @@ import { useNavigate } from "@solidjs/router"
 import { useSpring } from "@deepagent-code/ui/motion-spring"
 import { Icon } from "@deepagent-code/ui/icon"
 import { useLayout } from "@/context/layout"
-import { PromptInput } from "@/components/prompt-input"
+import { PromptInput, type PromptInputControl } from "@/components/prompt-input"
 import { useLanguage } from "@/context/language"
 import { usePrompt } from "@/context/prompt"
 import { useSync } from "@/context/sync"
@@ -31,6 +31,8 @@ export function SessionComposerRegion(props: {
   onNewSessionWorktreeReset: () => void
   onSubmit: () => void
   onResponseSubmit: () => void
+  inputDisabled?: boolean
+  inputControlRef?: (control: PromptInputControl | undefined) => void
   followup?: {
     queue: () => boolean
     items: { id: string; text: string }[]
@@ -298,6 +300,8 @@ export function SessionComposerRegion(props: {
                       onQueue={props.followup?.onQueue}
                       onAbort={props.followup?.onAbort}
                       onSubmit={props.onSubmit}
+                      disabled={props.inputDisabled}
+                      controlRef={props.inputControlRef}
                     />
                   </Show>
                 }

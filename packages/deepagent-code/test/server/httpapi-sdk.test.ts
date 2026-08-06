@@ -869,17 +869,55 @@ describe("HttpApi SDK", () => {
           }),
         )
         const messages = yield* capture(() => sdk.session.messages({ sessionID }))
+        const messageTexts = array(messages.data)
+          .flatMap((item) => array(record(item).parts))
+          .map((part) => record(part).text)
+          .filter((text): text is string => typeof text === "string")
+          .sort()
+
+        expect(asyncPrompt.status).toBe(204)
+        expect(messageTexts).toEqual(["async hello", "hello"])
 
         return {
           statuses: statuses({ session, prompt, asyncPrompt, messages }),
           promptRole: record(record(prompt.data).info).role,
           messageCount: array(messages.data).length,
-          messageTexts: array(messages.data)
-            .flatMap((item) => array(record(item).parts))
-            .map((part) => record(part).text)
-            .filter((text): text is string => typeof text === "string")
-            .sort(),
+          messageTexts,
         }
+      }),
+    ),
+  )
+
+  serverPathParity("acknowledges async prompts after admission without waiting for model completion", (serverPath) =>
+    withFakeLlm(serverPath, ({ sdk, llm }) =>
+      Effect.gen(function* () {
+        const gate = yield* Deferred.make<void>()
+        yield* Effect.addFinalizer(() => Deferred.succeed(gate, undefined).pipe(Effect.ignore))
+        yield* llm.hold("delayed response", Effect.runPromise(Deferred.await(gate)))
+        const session = yield* capture(() =>
+          sdk.session.create({
+            title: "async admission",
+            permission: [{ permission: "*", pattern: "*", action: "allow" }],
+          }),
+        )
+        const sessionID = String(record(session.data).id)
+
+        const prompt = yield* capture(() =>
+          sdk.session.promptAsync({
+            sessionID,
+            agent: "build",
+            model: { providerID: "test", modelID: "test-model" },
+            parts: [{ type: "text", text: "persist before acknowledging" }],
+          }),
+        ).pipe(Effect.timeout("2 seconds"))
+        const messages = yield* capture(() => sdk.session.messages({ sessionID }))
+        yield* llm.wait(1).pipe(Effect.timeout("2 seconds"))
+        const abort = yield* capture(() => sdk.session.abort({ sessionID }))
+        yield* Deferred.succeed(gate, undefined).pipe(Effect.ignore)
+
+        expect(prompt.status).toBe(204)
+        expect(abort.status).toBe(200)
+        expect(JSON.stringify(messages.data)).toContain("persist before acknowledging")
       }),
     ),
   )

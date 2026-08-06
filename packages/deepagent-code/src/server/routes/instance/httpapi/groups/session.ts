@@ -541,7 +541,7 @@ export const SessionApi = HttpApi.make("session")
             identifier: "session.prompt_async",
             summary: "Send async message",
             description:
-              "Create and send a new message to a session asynchronously, starting the session if needed and returning immediately.",
+              "Durably admit a new message or steer, start session execution if needed, and return without waiting for model completion.",
           }),
         ),
         HttpApiEndpoint.post("command", SessionPaths.command, {

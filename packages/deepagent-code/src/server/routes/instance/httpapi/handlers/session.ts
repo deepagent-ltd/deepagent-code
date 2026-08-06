@@ -436,25 +436,11 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       payload: typeof PromptPayload.Type
     }) {
       yield* requireSession(ctx.params.sessionID)
-      // V4.1 §S1.2: mirror the synchronous `prompt` handler — route through promptOrSteer so a message
-      // sent while the session is mid-turn is admitted as a steer (absorbed at the next model-request
-      // boundary) instead of queuing as a new turn that starts only after the current one finishes.
-      // The turn result / steer ack is ignored here (we return 204 regardless); errors are published
-      // as session error events just like the old prompt() path.
-      yield* promptSvc.promptOrSteer({ ...ctx.payload, sessionID: ctx.params.sessionID }).pipe(
-        Effect.catchCause((cause) =>
-          Effect.gen(function* () {
-            yield* Effect.logError("prompt_async failed").pipe(
-              Effect.annotateLogs({ sessionID: ctx.params.sessionID, cause }),
-            )
-            yield* events.publish(Session.Event.Error, {
-              sessionID: ctx.params.sessionID,
-              error: new NamedError.Unknown({ message: Cause.pretty(cause) }).toObject(),
-            })
-          }),
-        ),
-        Effect.forkIn(scope, { startImmediately: true }),
-      )
+      // Return only after the input has crossed its durable admission boundary. Model execution stays
+      // asynchronous, but callers may safely serialize destructive actions after this acknowledgement.
+      yield* promptSvc
+        .promptAsync({ ...ctx.payload, sessionID: ctx.params.sessionID })
+        .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
       return HttpApiSchema.NoContent.make()
     })
 
