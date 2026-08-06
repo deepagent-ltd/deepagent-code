@@ -33,6 +33,7 @@ import { CrossSpawnSpawner } from "@deepagent-code/core/cross-spawn-spawner"
 import { TestConfig } from "../fixture/config"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { PromptEpoch } from "@/session/prompt-epoch"
+import { CompactionRunTable, CompactionSummaryAttemptTable } from "@/session/compaction-sql"
 import { LLMEvent, Usage } from "@deepagent-code/llm"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { ModelV2 } from "@deepagent-code/core/model"
@@ -210,6 +211,7 @@ function fake(
     updateToolCall: Effect.fn("TestSessionProcessor.updateToolCall")(() => Effect.succeed(undefined)),
     completeToolCall: Effect.fn("TestSessionProcessor.completeToolCall")(() => Effect.void),
     process: Effect.fn("TestSessionProcessor.process")(() => Effect.succeed(result)),
+    processSummary: Effect.fn("TestSessionProcessor.processSummary")(() => Effect.succeed(result)),
   } satisfies SessionProcessorModule.SessionProcessor.Handle
 }
 
@@ -298,6 +300,7 @@ function compactionProcessLayer(options?: CompactionProcessOptions) {
     Layer.provide(options?.config ?? Config.defaultLayer),
     Layer.provide(RuntimeFlags.layer({ experimentalEventSystem: true })),
     Layer.provide(EventV2Bridge.defaultLayer),
+    Layer.provide(Database.defaultLayer),
     Layer.provide(PromptEpoch.defaultLayer),
   )
 }
@@ -603,6 +606,50 @@ describe("session.compaction.create", () => {
           auto: true,
           overflow: true,
         })
+      }),
+    ),
+  )
+
+  it.live(
+    "fails an incomplete requested run before admitting a replacement marker",
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const compact = yield* SessionCompaction.Service
+        const ssn = yield* SessionNs.Service
+        const { db } = yield* Database.Service
+        const info = yield* ssn.create({})
+        yield* db
+          .insert(CompactionRunTable)
+          .values({
+            run_id: "incomplete-run",
+            session_id: info.id,
+            from_prompt_epoch: 0,
+            trigger: "manual",
+            marker_message_id: MessageID.ascending(),
+            marker_part_id: PartID.ascending(),
+            state: "requested",
+            created_at: Date.now(),
+          })
+          .run()
+          .pipe(Effect.orDie)
+
+        yield* compact.create({
+          sessionID: info.id,
+          agent: "build",
+          model: ref,
+          auto: false,
+        })
+
+        const runs = yield* db.select().from(CompactionRunTable).all().pipe(Effect.orDie)
+        expect(runs).toHaveLength(2)
+        expect(runs.find((run) => run.run_id === "incomplete-run")).toMatchObject({
+          state: "failed",
+          terminal_failure_kind: "marker_write_incomplete",
+        })
+        expect(runs.find((run) => run.run_id !== "incomplete-run")?.state).toBe("requested")
+        const messages = yield* ssn.messages({ sessionID: info.id })
+        expect(messages).toHaveLength(1)
+        expect(messages[0]?.parts[0]?.type).toBe("compaction")
       }),
     ),
   )
@@ -1213,7 +1260,7 @@ describe("session.compaction.process", () => {
   )
 
   itCompaction.instance(
-    "stops quickly when aborted during retry backoff",
+    "does not enter in-memory retry backoff after a durable summary attempt fails",
     () => {
       const stub = llm()
       stub.push(
@@ -1238,39 +1285,18 @@ describe("session.compaction.process", () => {
 
       return Effect.gen(function* () {
         const ssn = yield* SessionNs.Service
-        const events = yield* EventV2Bridge.Service
-        const ready = yield* Deferred.make<void>()
         const session = yield* ssn.create({})
         const msg = yield* createUserMessage(session.id, "hello")
         const msgs = yield* ssn.messages({ sessionID: session.id })
-        const off = yield* events.listen((evt) => {
-          if (evt.type !== SessionStatus.Event.Status.type) return Effect.void
-          const data = evt.data as typeof SessionStatus.Event.Status.data.Type
-          if (data.sessionID !== session.id || data.status.type !== "retry") return Effect.void
-          Deferred.doneUnsafe(ready, Effect.void)
-          return Effect.void
-        })
-        yield* Effect.addFinalizer(() => off)
-
-        const fiber = yield* SessionCompaction.use
-          .process({
-            parentID: msg.id,
-            messages: msgs,
-            sessionID: session.id,
-            auto: false,
-          })
-          .pipe(Effect.forkChild)
-
-        yield* Deferred.await(ready).pipe(Effect.timeout("1 second"))
         const start = Date.now()
-        yield* Fiber.interrupt(fiber)
-        const exit = yield* Fiber.await(fiber).pipe(Effect.timeout("250 millis"))
-
-        expect(Exit.isFailure(exit)).toBe(true)
-        if (Exit.isFailure(exit)) {
-          expect(Cause.hasInterrupts(exit.cause)).toBe(true)
-          expect(Date.now() - start).toBeLessThan(250)
-        }
+        const result = yield* SessionCompaction.use.process({
+          parentID: msg.id,
+          messages: msgs,
+          sessionID: session.id,
+          auto: false,
+        })
+        expect(result).toBe("stop")
+        expect(Date.now() - start).toBeLessThan(250)
       }).pipe(withCompaction({ llm: stub.layer }))
     },
     { git: true },
@@ -1349,36 +1375,57 @@ describe("session.compaction.process", () => {
   )
 
   itCompaction.instance(
-    "does not allow tool calls while generating the summary",
+    "tool event during summary stops with a SummaryProtocolViolation error (BUG-006 RC-3)",
     () => {
       const stub = llm()
+      // First response: tool call → violation; second: text (fallback within budget).
       stub.push(
         Stream.make(
           LLMEvent.toolCall({ id: "call-1", name: "_noop", input: {} }),
-          LLMEvent.stepFinish({
-            index: 0,
-            reason: "tool-calls",
-            usage: basicUsage(),
-          }),
-          LLMEvent.finish({
-            reason: "tool-calls",
-            usage: basicUsage(),
-          }),
+          LLMEvent.stepFinish({ index: 0, reason: "tool-calls", usage: basicUsage() }),
+          LLMEvent.finish({ reason: "tool-calls", usage: basicUsage() }),
         ),
       )
+      stub.push(reply("recovered summary text"))
       return Effect.gen(function* () {
         const ssn = yield* SessionNs.Service
         const session = yield* ssn.create({})
         const msg = yield* createUserMessage(session.id, "hello")
         const msgs = yield* ssn.messages({ sessionID: session.id })
-        yield* SessionCompaction.use.process({ parentID: msg.id, messages: msgs, sessionID: session.id, auto: false })
+        const result = yield* SessionCompaction.use.process({
+          parentID: msg.id,
+          messages: msgs,
+          sessionID: session.id,
+          auto: false,
+        })
 
-        const summary = (yield* ssn.messages({ sessionID: session.id })).find(
-          (item) => item.info.role === "assistant" && item.info.summary,
-        )
-
-        expect(summary?.info.role).toBe("assistant")
-        expect(summary?.parts.some((part) => part.type === "tool")).toBe(false)
+        // BUG-006 RC-3: the processor raises a typed violation and the controller records
+        // that physical attempt before using the remaining durable dispatch budget.
+        const allMessages = yield* ssn.messages({ sessionID: session.id })
+        const summaries = allMessages.filter((item) => item.info.role === "assistant" && item.info.summary)
+        // At least one summary assistant message must have been created (the first attempt).
+        expect(summaries.length).toBeGreaterThanOrEqual(1)
+        // No tool parts must be persisted on any summary message (tool execution hard gate).
+        for (const s of summaries) {
+          expect(s.parts.some((p) => p.type === "tool")).toBe(false)
+        }
+        expect(result).toBe("continue")
+        const { db } = yield* Database.Service
+        const attempts = yield* db.select().from(CompactionSummaryAttemptTable).all().pipe(Effect.orDie)
+        expect(attempts.map((attempt) => [attempt.ordinal, attempt.state, attempt.failure_kind])).toEqual([
+          [1, "failed", "summary_protocol_tool_event"],
+          [2, "settled", null],
+        ])
+        const runs = yield* db.select().from(CompactionRunTable).all().pipe(Effect.orDie)
+        expect(runs).toHaveLength(1)
+        expect(runs[0]?.state).toBe("committed")
+        const epochs = yield* PromptEpoch.Service
+        const epoch = yield* epochs.getActive(session.id)
+        expect(epoch?.epoch).toBe(1)
+        const history = yield* MessageV2.promptHistoryEffect(session.id)
+        expect(history[0]?.info.role).toBe("user")
+        expect(history[0]?.parts.some((part) => part.type === "compaction")).toBe(true)
+        expect(history[1]?.info.role).toBe("assistant")
       }).pipe(withCompaction({ llm: stub.layer }))
     },
     { git: true },
