@@ -60,5 +60,10 @@ export const migrations = (
     import("./migration/20260726073000_context_links"),
     import("./migration/20260726080000_location_change_journal"),
     import("./migration/20260731000000_agent_execution"),
+    import("./migration/20260803000000_time_suspended"),
+    import("./migration/20260803000001_subagent_control_plane_l1"),
+    import("./migration/20260805000000_repair_task_admission"),
+    import("./migration/20260806051000_session_prompt_intent"),
+    import("./migration/20260806060000_session_mutation_epoch"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

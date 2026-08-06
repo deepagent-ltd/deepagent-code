@@ -11,6 +11,7 @@ describe("addCandidate stale-reharvest dedupe", () => {
   const vr = (command: string, exit_code: number, output = "x"): ValidationResult => ({
     command,
     passed: exit_code === 0,
+    kind: "command_exit",
     exit_code,
     output,
     duration_ms: 0,

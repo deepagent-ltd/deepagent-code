@@ -172,6 +172,29 @@ describe("V3.9 §D — Grader per-criterion evaluation (§D.3)", () => {
     expect(res.result.gaps[0]).toMatch(/tests_pass/)
   })
 
+  test("tests_pass preserves a typed validation runner failure in the grader gap", async () => {
+    const ports: GraderPorts = {
+      ...passingPorts(),
+      runTests: () =>
+        Effect.succeed({
+          pass: false,
+          results: [
+            {
+              command: "bun run test",
+              passed: false,
+              kind: "unsupported_platform",
+              exit_code: -1,
+              output: "run in WSL2",
+              duration_ms: 1,
+            },
+          ],
+        }),
+    }
+    const res = await Effect.runPromise(evaluateForController([criteria.tests_pass], ports, donePlan()))
+    expect(res.result.met).toBe(false)
+    expect(res.result.gaps[0]).toContain("unsupported_platform")
+  })
+
   test("no_diagnostics: any diagnostic is a gap when unbounded; within bound is met", async () => {
     const withDiag: GraderPorts = { ...passingPorts(), diagnostics: () => Effect.succeed({ maxSeverity: "warning" }) }
     const strict = await Effect.runPromise(evaluateForController([{ kind: "no_diagnostics" }], withDiag, donePlan()))

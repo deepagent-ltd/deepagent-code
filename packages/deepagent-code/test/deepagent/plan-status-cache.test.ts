@@ -211,6 +211,53 @@ describe("plan-status prompt-cache fix", () => {
     expect(prepared.messages.at(-1)).toBe(runtimeMessages[0])
     AgentGateway.configure({ enabled: false, agentMode: "high" })
   })
+
+  test("tool continuations keep only compact control state after the cached history prefix", async () => {
+    AgentGateway.configure({ enabled: true, agentMode: "high" })
+    const sessionID = `ses_planstatus_continuation_${crypto.randomUUID()}`
+    seedPlan(sessionID, 1, 3, 2)
+    const full = await prepare(
+      sessionID,
+      [
+        { role: "user", content: "inspect the source and establish the answer" },
+        { role: "assistant", content: "I will inspect it." },
+      ],
+      continueRound,
+    )
+    const history = [
+      { role: "user", content: "inspect the source and establish the answer" },
+      {
+        role: "assistant",
+        content: [{ type: "tool-call", toolCallId: "t1", toolName: "read", input: { filePath: "src/a.ts" } }],
+      },
+      {
+        role: "tool",
+        content: [
+          {
+            type: "tool-result",
+            toolCallId: "t1",
+            toolName: "read",
+            output: { type: "text", value: "source evidence" },
+          },
+        ],
+      },
+    ] as any[]
+    const continuation = await prepare(sessionID, history, continueRound)
+
+    expect(runtimeContext(full)).toContain("# Task Context")
+    expect(runtimeContext(full)).toContain("# Activation")
+    expect(runtimeContext(continuation)).toContain("# Tool continuation")
+    expect(runtimeContext(continuation)).toContain("<plan-status>")
+    expect(runtimeContext(continuation)).toContain("Current plan (1/3 done)")
+    expect(runtimeContext(continuation)).not.toContain("# Task Context")
+    expect(runtimeContext(continuation)).not.toContain("# Activation")
+    expect(runtimeContext(continuation)).not.toContain("goal: ship the feature")
+    expect(stableMessages(continuation)).toEqual([expect.objectContaining({ role: "system" }), ...history])
+    expect((continuation.messages.at(-1)?.content as string).length).toBeLessThan(
+      (full.messages.at(-1)?.content as string).length,
+    )
+    AgentGateway.configure({ enabled: false, agentMode: "high" })
+  })
 })
 
 // V4.1 §S3.1 — the goal plan HOT-EDIT (§S2) cache contract. A user revising a running goal's plan

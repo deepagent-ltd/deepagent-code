@@ -365,14 +365,17 @@ export const formatStepChange = (c: StepStatusChange): string =>
   c.from === null ? `${c.title}: →${c.to}` : `${c.title}: ${c.from}→${c.to}`
 
 // Compact, constant-size plan snapshot re-injected into context each turn (high+ only) so the model
-// can SEE its own checklist and report against it. One line per step; goal + progress header. We
-// deliberately omit acceptance/assumptions/evidence to keep this small (it is re-injected every
-// turn, so it must not grow with history).
-export const renderPlanSnapshot = (plan: PlanDoc): string => {
+// can SEE its own checklist and report against it. One line per step; the full form includes goal +
+// progress, while tool continuations omit the already-adjacent goal. We deliberately omit
+// acceptance/assumptions/evidence so it cannot grow with history.
+export const renderPlanSnapshot = (plan: PlanDoc, detail: "full" | "continuation" = "full"): string => {
   const { done, total } = planProgress(plan)
   const active = plan.steps.find((s) => s.step_id === plan.active_step_id) ?? null
   const lines = plan.steps.map((s) => `[${STATUS_MARK[s.status]}] ${s.title}`)
-  const header = `Current plan (${done}/${total} done) — goal: ${plan.goal}`
+  const header =
+    detail === "continuation"
+      ? `Current plan (${done}/${total} done)`
+      : `Current plan (${done}/${total} done) — goal: ${plan.goal}`
   const activeLine = active ? `Active step: ${active.title}` : "No step is marked active."
   return `${header}\n${lines.join("\n")}\n${activeLine}`
 }
@@ -460,5 +463,3 @@ export const attachEvidenceToNewlyDone = (
   })
   return changed ? { ...next, steps } : next
 }
-
-

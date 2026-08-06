@@ -10,6 +10,7 @@ const DESCRIPTION = [
   "an environment-specific flake, or a failure you have already handled and do not need to be reminded of.",
   "The dismissal is permanent for this session but auto-evicted if the same command re-runs with a",
   "DIFFERENT exit code (i.e. a real regression always surfaces again).",
+  "Runner failures (unsupported platform, missing shell, unsupported dialect, timeout, signal, or unavailable output) cannot be dismissed.",
   "You must supply the exact command and exit_code that appear in the current validation results —",
   "the tool validates both fields against the live lastValidationResults before storing the dismissal.",
   "Security-sensitive commands (auth, credentials, permissions, …) cannot be dismissed.",
@@ -101,6 +102,12 @@ export const DismissValidationTool = Tool.define<typeof Parameters, Metadata, ne
           const exitCodes = matches.map((r) => r.exit_code).join(", ")
           reject(
             `Command "${command}" failed but with exit code(s) [${exitCodes}], not ${exit_code}. Supply the correct exit code.`,
+          )
+        }
+
+        if (target.kind !== "command_exit") {
+          reject(
+            `Validation runner failure "${target.kind}" cannot be dismissed. Fix the environment or choose a supported command dialect.`,
           )
         }
 
