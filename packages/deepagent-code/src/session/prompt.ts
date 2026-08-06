@@ -2836,7 +2836,13 @@ export const layer = Layer.effect(
                       model,
                       ...(activeContext ? { current: activeContext.selection } : {}),
                     })
-                    .pipe(Effect.orDie)
+                    .pipe(
+                      // BUG-008 §6.4 policy: shadow owner availability/timeout → degrade gracefully,
+                      // continue with legacy context.  Never orDie here — a federation resolve failure
+                      // must not kill the session turn.  Security-boundary errors (scope/auth/fencing)
+                      // are already handled inside federation.resolve with fail-closed semantics.
+                      Effect.catchAll(() => Effect.succeed(undefined)),
+                    )
                 : undefined
             if (activeContext) activeFederatedContexts.set(sessionID, activeContext)
             pendingContextInputIds = []
@@ -2883,7 +2889,12 @@ export const layer = Layer.effect(
                       providerId: model.providerID,
                       observedLocationMutationEpoch: activeContext.observedLocationMutationEpoch,
                     })
-                    .pipe(Effect.orDie)
+                    .pipe(
+                      // BUG-008 §6.4 policy: Provider attempt durable prepare failure → do not send
+                      // a request that requires the attempt constraint.  Leave providerAttempt undefined
+                      // so the turn proceeds without a durable attempt record (degraded, not crashed).
+                      Effect.catchAll(() => Effect.succeed(undefined)),
+                    )
                 : undefined
             const result = yield* handle.process(streamInput, providerAttempt)
 
