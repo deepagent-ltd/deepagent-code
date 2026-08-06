@@ -10,6 +10,7 @@ import type {
 } from "@deepagent-code/core/deepagent/goal-loop"
 import { budgetNotice } from "@deepagent-code/core/deepagent/goal-loop"
 import type { PlanDoc } from "@deepagent-code/core/deepagent/plan-controller"
+import type { ValidationResult } from "@deepagent-code/core/deepagent/round-state"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { ModelV2 } from "@deepagent-code/core/model"
 import { ProviderV2 } from "@deepagent-code/core/provider"
@@ -209,7 +210,9 @@ export type WorldStateProvider = () => Effect.Effect<string>
 
 export type GraderPortsDeps = {
   /** Reuses the workspace validation runner (same as the multi-round loop). */
-  readonly runValidation: (commands: readonly string[]) => Effect.Effect<{ readonly pass: boolean }>
+  readonly runValidation: (
+    commands: readonly string[],
+  ) => Effect.Effect<{ readonly pass: boolean; readonly results?: readonly ValidationResult[] }>
   /**
    * Live LSP diagnostics reduced to the single highest severity label, or null when genuinely clean.
    * `checked: false` signals the diagnostics could NOT be computed (see the port doc in goal-loop.ts) —
@@ -778,7 +781,7 @@ export const makeGoalLoopWiring = (
     const ports = buildGraderPorts({
       runValidation: (commands) =>
         Effect.promise(() => runValidationCommands(commands, input.cwd)).pipe(
-          Effect.map((results) => ({ pass: AgentGateway.DeepAgentValidation.allPassed(results) })),
+          Effect.map((results) => ({ pass: AgentGateway.DeepAgentValidation.allPassed(results), results })),
         ),
       diagnostics: () =>
         input

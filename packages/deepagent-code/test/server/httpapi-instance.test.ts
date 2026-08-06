@@ -92,7 +92,7 @@ describe("instance HttpApi", () => {
           // goal-tick chain is the live driver; daemon audit GO). This test builds RuntimeFlags from empty
           // env, so the capability endpoint reports the production defaults.
           v4EventDrivenIm: false,
-          v4AgentPushEnabled: false,
+          v4AgentPushEnabled: true,
           v4MultiAgentRuntime: true,
           v4ThreadEnabled: false,
           v4FileUploadEnabled: false,

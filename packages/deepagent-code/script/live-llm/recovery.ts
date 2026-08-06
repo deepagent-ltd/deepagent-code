@@ -56,6 +56,11 @@ const artifact = await runLegacyLiveCases({
   primaryPrompt:
     "This suite verifies recovery from real tool errors. Follow every requested attempt in order, inspect actual error results, and never skip an intentionally failing first attempt.",
 })
+await writeLiveArtifact(
+  { artifactDirectory: path.resolve(import.meta.dir, "../../.artifacts/live-llm") },
+  `${artifact.suite}-observed`,
+  { ...artifact, status: "observed" },
+)
 
 const stale = requireCase("stale-edit")
 if (

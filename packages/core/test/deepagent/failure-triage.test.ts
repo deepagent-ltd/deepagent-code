@@ -5,12 +5,12 @@ import type { ValidationResult } from "../../src/deepagent/round-state"
 // T2 (S1-v3.4): classifyFailure — fixability × progress, priority RED > YELLOW > GREEN.
 
 const vr = (over: Partial<ValidationResult> = {}): ValidationResult => ({
-  command: "tsc",
-  passed: false,
-  exit_code: 1,
-  output: "",
-  duration_ms: 1,
-  ...over,
+  command: over.command ?? "tsc",
+  passed: over.passed ?? false,
+  kind: over.kind ?? "command_exit",
+  exit_code: over.exit_code ?? 1,
+  output: over.output ?? "",
+  duration_ms: over.duration_ms ?? 1,
 })
 
 const base = {
@@ -25,16 +25,25 @@ const base = {
 
 describe("failure-triage.classifyFailure", () => {
   describe("🔴 not_auto_fixable (environment)", () => {
-    it("exit 127 (command not found) → red", () => {
-      const r = FailureTriage.classifyFailure({ ...base, failed: [vr({ exit_code: 127 })] })
+    it("typed shell bootstrap failure → red", () => {
+      const r = FailureTriage.classifyFailure({
+        ...base,
+        failed: [vr({ kind: "shell_bootstrap_failed", exit_code: -1 })],
+      })
       expect(r.tier).toBe("not_auto_fixable")
-      expect(r.reason).toMatch(/exit 127/)
+      expect(r.reason).toMatch(/shell_bootstrap_failed/)
     })
-    for (const code of [126, 124, 137, 139, 134]) {
-      it(`exit ${code} → red`, () => {
-        expect(FailureTriage.classifyFailure({ ...base, failed: [vr({ exit_code: code })] }).tier).toBe(
-          "not_auto_fixable",
-        )
+    it("a command that deliberately exits 127 is not red because of the number alone", () => {
+      const r = FailureTriage.classifyFailure({
+        ...base,
+        failed: [vr({ kind: "command_exit", exit_code: 127, output: "application-specific status" })],
+      })
+      expect(r.tier).not.toBe("not_auto_fixable")
+      expect(r.reason).not.toMatch(/exit 127/)
+    })
+    for (const kind of ["unsupported_platform", "unsupported_dialect", "timeout", "signal"] as const) {
+      it(`${kind} → red`, () => {
+        expect(FailureTriage.classifyFailure({ ...base, failed: [vr({ kind })] }).tier).toBe("not_auto_fixable")
       })
     }
     for (const sig of [
@@ -150,13 +159,14 @@ describe("failure-triage.classifyFailure", () => {
   })
 
   describe("priority", () => {
-    it("red beats yellow: env exit code wins even when stagnant", () => {
+    it("a command exit 127 does not beat yellow merely because it is 127", () => {
       const r = FailureTriage.classifyFailure({
         ...base,
         stagnant: true,
         failed: [vr({ exit_code: 127, output: "error TS2322: Type X is not assignable" })],
       })
-      expect(r.tier).toBe("not_auto_fixable")
+      expect(r.tier).toBe("needs_narrowing")
+      expect(r.substate).toBe("stall")
     })
     it("yellow beats green: stall on a fixable category is not green", () => {
       const r = FailureTriage.classifyFailure({

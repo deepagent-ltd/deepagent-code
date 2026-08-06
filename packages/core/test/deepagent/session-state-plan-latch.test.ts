@@ -22,7 +22,7 @@ describe("session-state plan latch", () => {
     SessionState.getOrCreate("latch-s2", "high")
     SessionState.recordValidation(
       "latch-s2",
-      [{ command: "tsc", passed: false, exit_code: 1, output: "err", duration_ms: 1 }],
+      [{ command: "tsc", passed: false, kind: "command_exit", exit_code: 1, output: "err", duration_ms: 1 }],
       "err",
     )
     const latch = SessionState.planLatch("latch-s2")
@@ -34,7 +34,7 @@ describe("session-state plan latch", () => {
     SessionState.getOrCreate("latch-s3", "high")
     SessionState.recordValidation(
       "latch-s3",
-      [{ command: "tsc", passed: true, exit_code: 0, output: "ok", duration_ms: 1 }],
+      [{ command: "tsc", passed: true, kind: "command_exit", exit_code: 0, output: "ok", duration_ms: 1 }],
       "ok",
     )
     expect(SessionState.planLatch("latch-s3")?.latch).toBe("fresh")
@@ -155,8 +155,8 @@ describe("session-state progress-nudge counter", () => {
     SessionState.recordValidation(
       "nudge-s5",
       [
-        { command: "tsc", passed: true, exit_code: 0, output: "ok", duration_ms: 1 },
-        { command: "test", passed: false, exit_code: 1, output: "err", duration_ms: 1 },
+        { command: "tsc", passed: true, kind: "command_exit", exit_code: 0, output: "ok", duration_ms: 1 },
+        { command: "test", passed: false, kind: "command_exit", exit_code: 1, output: "err", duration_ms: 1 },
       ],
       "mixed",
     )
@@ -173,14 +173,14 @@ describe("session-state progress-nudge counter", () => {
     // a failing run does NOT set the semantic flag (it marks the latch stale instead)
     SessionState.recordValidation(
       "nudge-s6",
-      [{ command: "tsc", passed: false, exit_code: 1, output: "err", duration_ms: 1 }],
+      [{ command: "tsc", passed: false, kind: "command_exit", exit_code: 1, output: "err", duration_ms: 1 }],
       "err",
     )
     expect(SessionState.validationPassedSinceReport("nudge-s6")).toBe(false)
     // an all-passing run sets it
     SessionState.recordValidation(
       "nudge-s6",
-      [{ command: "tsc", passed: true, exit_code: 0, output: "ok", duration_ms: 1 }],
+      [{ command: "tsc", passed: true, kind: "command_exit", exit_code: 0, output: "ok", duration_ms: 1 }],
       "ok",
     )
     expect(SessionState.validationPassedSinceReport("nudge-s6")).toBe(true)
@@ -194,7 +194,7 @@ describe("session-state progress-nudge counter", () => {
     SessionState.setPlan("nudge-s7", plan([{ id: "s1", status: "active" }], "s1"))
     SessionState.recordValidation(
       "nudge-s7",
-      [{ command: "tsc", passed: true, exit_code: 0, output: "ok", duration_ms: 1 }],
+      [{ command: "tsc", passed: true, kind: "command_exit", exit_code: 0, output: "ok", duration_ms: 1 }],
       "ok",
     )
     SessionState.setPlan("nudge-s7", plan([{ id: "s1", status: "active" }], "s1")) // no status change
