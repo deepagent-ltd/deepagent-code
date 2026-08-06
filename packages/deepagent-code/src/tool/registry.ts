@@ -75,6 +75,7 @@ import { ProviderV2 } from "@deepagent-code/core/provider"
 import { ModelV2 } from "@deepagent-code/core/model"
 import { Git } from "@/git"
 import { PRQueue } from "@/agent/pr-queue"
+import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
 
 const log = Log.create({ service: "tool.registry" })
 
@@ -136,6 +137,7 @@ const layerWithFacades: Layer.Layer<
   | RuntimeBase.Service
   | CodeIntelFacade.Service
   | ContextQueryFacade.Service
+  | EffectFlock.Service
 > = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -144,6 +146,7 @@ const layerWithFacades: Layer.Layer<
     const agents = yield* Agent.Service
     const truncate = yield* Truncate.Service
     const flags = yield* RuntimeFlags.Service
+    yield* EffectFlock.Service
 
     const invalid = yield* InvalidTool
     const task = yield* TaskTool
@@ -509,6 +512,7 @@ export const defaultLayer = Layer.suspend(() =>
         Database.defaultLayer,
         RuntimeFlags.defaultLayer,
         Git.defaultLayer,
+        EffectFlock.defaultLayer,
         PRQueue.layer.pipe(Layer.orDie),
       ),
     ),

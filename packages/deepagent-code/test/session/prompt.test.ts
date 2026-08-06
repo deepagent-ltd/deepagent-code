@@ -71,6 +71,7 @@ import { ModelV2 } from "@deepagent-code/core/model"
 import { TestContextFacades } from "../fixture/context-facades"
 import { SessionFederatedContext } from "../../src/context-federation/session-context-runtime"
 import { ContextFederationObservability } from "../../src/context-federation/observability"
+import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
 
 void Log.init({ print: false })
 
@@ -269,6 +270,7 @@ function makePrompt(input?: PromptLayerOptions) {
     Layer.provide(CrossSpawnSpawner.defaultLayer),
     Layer.provide(RepositoryCache.defaultLayer),
     Layer.provide(Git.defaultLayer),
+    Layer.provide(EffectFlock.defaultLayer),
     Layer.provide(Reference.defaultLayer),
     Layer.provide(Search.defaultLayer),
     Layer.provide(Format.defaultLayer),

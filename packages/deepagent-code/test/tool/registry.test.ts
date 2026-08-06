@@ -42,6 +42,7 @@ import { RuntimeBase } from "@/runtime/base"
 import { Worktree } from "@/worktree"
 import { CodeIntelFacade } from "@/code-intelligence/facade"
 import { ContextQueryFacade } from "@/context-federation/context-query-facade"
+import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
 
 const node = CrossSpawnSpawner.defaultLayer
 const configLayer = TestConfig.layer({
@@ -75,6 +76,7 @@ const registryLayer = (opts: RegistryLayerOptions = {}) =>
           BackgroundJob.defaultLayer,
           Provider.defaultLayer,
           Git.defaultLayer,
+          EffectFlock.defaultLayer,
           RepositoryCache.defaultLayer,
           Reference.defaultLayer,
           LSP.defaultLayer,

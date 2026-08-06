@@ -178,6 +178,7 @@ export async function runLegacyLiveCases(input: {
     const { ModelV2 } = await import("@deepagent-code/core/model")
     const { ProviderV2 } = await import("@deepagent-code/core/provider")
     const { CrossSpawnSpawner } = await import("@deepagent-code/core/cross-spawn-spawner")
+    const { EffectFlock } = await import("@deepagent-code/core/util/effect-flock")
     const { Context, Deferred, Effect, Fiber, Layer, Schedule } = await import("effect")
     const { AgentExecution } = await import("@deepagent-code/core/deepagent/agent-execution")
     const { ApprovalQueue } = await import("@deepagent-code/core/deepagent/approval-queue")
@@ -1096,6 +1097,7 @@ export async function runLegacyLiveCases(input: {
             EventV2Bridge.defaultLayer,
             Worktree.appLayer,
             Git.defaultLayer,
+            EffectFlock.defaultLayer,
             PRQueue.layer.pipe(Layer.orDie),
             CrossSpawnSpawner.defaultLayer,
             Database.defaultLayer,

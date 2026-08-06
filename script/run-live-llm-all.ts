@@ -32,6 +32,10 @@ export type Suite = {
 const repository = path.resolve(import.meta.dir, "..")
 const defaultConfigFile = path.join(import.meta.dir, "live-llm.config.local.json")
 const reportFile = path.join(repository, "packages/llm/.artifacts/live-llm/all-tests.json")
+export const defaultModelsSnapshotFile = path.join(
+  repository,
+  "packages/deepagent-code/test/tool/fixtures/models-api.json",
+)
 
 export const suites: Suite[] = [
   {
@@ -436,13 +440,13 @@ export function runnerEnvironment(
         "WAYLAND_DISPLAY",
         "XAUTHORITY",
         "DBUS_SESSION_BUS_ADDRESS",
-        "MODELS_DEV_API_JSON",
         "SystemRoot",
         "WINDIR",
         "ComSpec",
         "PATHEXT",
       ].flatMap((key) => (hostEnvironment[key] === undefined ? [] : ([[key, hostEnvironment[key]]] as const))),
     ),
+    MODELS_DEV_API_JSON: hostEnvironment.MODELS_DEV_API_JSON ?? defaultModelsSnapshotFile,
     ...(includeCredential
       ? {
           DEEPAGENT_CODE_LIVE_LLM_API_KEY_FILE: config.apiKeyFile,

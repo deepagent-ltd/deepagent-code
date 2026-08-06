@@ -40,7 +40,7 @@ const artifact01 = await runLegacyLiveCases({
 await writeLiveArtifact(
   { artifactDirectory: path.resolve(import.meta.dir, "../../.artifacts/live-llm") },
   `${artifact01.suite}-observed`,
-  artifact01,
+  { ...artifact01, status: "observed" },
 )
 
 // ─── Oracle: REAL-CP-01 ───────────────────────────────────────────────────────
@@ -160,7 +160,7 @@ const artifact02 = await runLegacyLiveCases({
 await writeLiveArtifact(
   { artifactDirectory: path.resolve(import.meta.dir, "../../.artifacts/live-llm") },
   `${artifact02.suite}-observed`,
-  artifact02,
+  { ...artifact02, status: "observed" },
 )
 
 // ─── Oracle: REAL-CP-02 ───────────────────────────────────────────────────────

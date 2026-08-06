@@ -61,6 +61,7 @@ import { mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { TestContextFacades } from "../fixture/context-facades"
+import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
 
 void Log.init({ print: false })
 
@@ -208,6 +209,7 @@ function makePrompt(steering: boolean) {
     Layer.provide(FetchHttpClient.layer),
     Layer.provide(CrossSpawnSpawner.defaultLayer),
     Layer.provide(RepositoryCache.defaultLayer),
+    Layer.provide(EffectFlock.defaultLayer),
     Layer.provide(Reference.defaultLayer),
     Layer.provide(Search.defaultLayer),
     Layer.provide(Format.defaultLayer),

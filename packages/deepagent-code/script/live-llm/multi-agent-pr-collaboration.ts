@@ -24,9 +24,9 @@ const prompt = [
   "Both calls must use subagent_type worker, background false, omit isolation entirely, and use the exact raw output_schema below.",
   `Use this exact output_schema for both calls: ${JSON.stringify(outputSchema)}.`,
   "LEFT description: implement left PR fixture.",
-  "LEFT prompt: Read only fixtures/left.txt exactly once. Then use write exactly once to write those exact bytes to output/left.txt. Do not use bash or edit. Return result set to the exact bytes written.",
+  "LEFT prompt: Read only fixtures/left.txt exactly once. Then use write exactly once to write those exact bytes to output/left.txt. Do not use bash or edit. Return result set to the exact bytes written, including the trailing newline, without Markdown or backticks.",
   "RIGHT description: implement right PR fixture.",
-  "RIGHT prompt: Read only fixtures/right.txt exactly once. Then use write exactly once to write those exact bytes to output/right.txt. Do not use bash or edit. Return result set to the exact bytes written.",
+  "RIGHT prompt: Read only fixtures/right.txt exactly once. Then use write exactly once to write those exact bytes to output/right.txt. Do not use bash or edit. Return result set to the exact bytes written, including the trailing newline, without Markdown or backticks.",
   "After both task results return, your NEXT assistant response must contain exactly one pr_finalize tool call and no text. Omit pr_ids so the complete batch is finalized.",
   "Do not call read, write, edit, bash, task_status, or task_read in the parent.",
   "After pr_finalize returns, report that the two PRs and stage review completed.",
@@ -82,7 +82,7 @@ const artifact = await runLegacyLiveCases({
 await writeLiveArtifact(
   { artifactDirectory: path.resolve(import.meta.dir, "../../.artifacts/live-llm") },
   `${artifact.suite}-observed`,
-  artifact,
+  { ...artifact, status: "observed" },
 )
 
 if ([leftMarker, rightMarker, verifierSuccess].some((marker) => prompt.includes(marker))) {

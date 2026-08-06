@@ -6,6 +6,7 @@ import { loadLiveLLMConfig, writeLiveArtifact } from "../../../llm/script/live-l
 import { directoryExists, liveSubprocessEnvironment, liveWorkspaceConfig } from "../../script/live-llm/runtime"
 import { tmpdir } from "../fixture/fixture"
 import {
+  defaultModelsSnapshotFile,
   loadRealLLMSuiteInventory,
   parseEvaluationSummary,
   runnerEnvironment,
@@ -117,6 +118,13 @@ describe("all real LLM test runner", () => {
       DEEPAGENT_CODE_LIVE_LLM_MODEL: config.model,
       DEEPAGENT_CODE_LIVE_LLM_TIMEOUT_MS: String(config.requestTimeoutMs),
       DEEPAGENT_CODE_LIVE_LLM_EVAL_RUNS: String(config.evalRuns),
+    })
+  })
+
+  test("pins the repository models snapshot when the host does not provide one", () => {
+    expect(runnerEnvironment(config, { PATH: "/usr/bin:/bin" })).toEqual({
+      PATH: "/usr/bin:/bin",
+      MODELS_DEV_API_JSON: defaultModelsSnapshotFile,
     })
   })
 

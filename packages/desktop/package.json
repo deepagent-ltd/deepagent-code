@@ -14,7 +14,7 @@
     "predev": "bun ./scripts/predev.ts",
     "dev": "electron-vite dev",
     "prebuild": "bun ./scripts/prebuild.ts",
-    "build": "electron-vite build && bun ./scripts/audit-server-bundle.ts",
+    "build": "bun ./scripts/build.ts",
     "preview": "electron-vite preview",
     "test": "bun test ./src",
     "test:ci": "mkdir -p .artifacts/unit && bun test ./src --reporter=junit --reporter-outfile=.artifacts/unit/junit.xml",
