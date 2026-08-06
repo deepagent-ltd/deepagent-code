@@ -2660,8 +2660,11 @@ export const layer = Layer.effect(
                 continue
               }
               if (action === "hard") {
-                // Bump the generation + reset flags BEFORE compaction so a mid-compaction crash still
-                // recovers into the fresh window (the durable write is the世代 marker).
+                // BUG-005: the old "Bump generation BEFORE compaction" pattern is now DEPRECATED.
+                // windowEpoch is bumped here only to reset the soft-landing reminder/fallback flags
+                // for the next generation (so the next window can warn + flush again).  It is NOT a
+                // history boundary marker — PromptEpoch is the sole history authority and is only
+                // activated by compaction.process() on confirmed successful summary (CompactionCommitted).
                 yield* writeSoftLandingState(sessionID, nextState)
                 yield* compaction.create({ sessionID, agent: lastUser.agent, model: lastUser.model, auto: true })
                 continue

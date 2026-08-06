@@ -32,6 +32,7 @@ import { testEffect } from "../lib/effect"
 import { CrossSpawnSpawner } from "@deepagent-code/core/cross-spawn-spawner"
 import { TestConfig } from "../fixture/config"
 import { RuntimeFlags } from "@/effect/runtime-flags"
+import { PromptEpoch } from "@/session/prompt-epoch"
 import { LLMEvent, Usage } from "@deepagent-code/llm"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { ModelV2 } from "@deepagent-code/core/model"
@@ -238,6 +239,7 @@ const deps = Layer.mergeAll(
   RuntimeFlags.layer({ experimentalEventSystem: true }),
   Database.defaultLayer,
   EventV2Bridge.defaultLayer,
+  PromptEpoch.defaultLayer,
 )
 
 const env = Layer.mergeAll(
@@ -245,6 +247,7 @@ const env = Layer.mergeAll(
   Database.defaultLayer,
   EventV2Bridge.defaultLayer,
   CrossSpawnSpawner.defaultLayer,
+  PromptEpoch.defaultLayer,
   SessionCompaction.layer.pipe(Layer.provide(SessionNs.defaultLayer), Layer.provideMerge(deps)),
 )
 
@@ -255,6 +258,7 @@ const compactionEnv = Layer.mergeAll(
   Database.defaultLayer,
   EventV2Bridge.defaultLayer,
   CrossSpawnSpawner.defaultLayer,
+  PromptEpoch.defaultLayer,
 )
 const itCompaction = testEffect(compactionEnv)
 
@@ -294,6 +298,7 @@ function compactionProcessLayer(options?: CompactionProcessOptions) {
     Layer.provide(options?.config ?? Config.defaultLayer),
     Layer.provide(RuntimeFlags.layer({ experimentalEventSystem: true })),
     Layer.provide(EventV2Bridge.defaultLayer),
+    Layer.provide(PromptEpoch.defaultLayer),
   )
 }
 
