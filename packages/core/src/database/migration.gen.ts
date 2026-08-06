@@ -66,5 +66,6 @@ export const migrations = (
     import("./migration/20260806051000_session_prompt_intent"),
     import("./migration/20260806060000_session_mutation_epoch"),
     import("./migration/20260806070000_compaction_lifecycle"),
+    import("./migration/20260806080000_session_tool_request_receipt"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

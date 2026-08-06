@@ -71,8 +71,11 @@ import { ModelV2 } from "@deepagent-code/core/model"
 import { TestContextFacades } from "../fixture/context-facades"
 import { SessionFederatedContext } from "../../src/context-federation/session-context-runtime"
 import { ContextFederationObservability } from "../../src/context-federation/observability"
+import { ContextFederationReadiness } from "../../src/context-federation/readiness"
+import { ContextFederationRollout } from "@deepagent-code/core/context-federation/rollout"
 import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
 import { PromptEpoch } from "@/session/prompt-epoch"
+import { SessionToolRequestReceiptTable } from "@/session/tool-request-receipt.sql"
 
 void Log.init({ print: false })
 
@@ -320,6 +323,14 @@ function makePrompt(input?: PromptLayerOptions) {
     Layer.provideMerge(trunc),
     Layer.provide(Instruction.defaultLayer),
     Layer.provide(SystemPrompt.defaultLayer),
+    Layer.provide(
+      Layer.succeed(
+        ContextFederationReadiness.Service,
+        ContextFederationReadiness.Service.of({
+          snapshot: () => Effect.succeed(ContextFederationRollout.READINESS_READY_STUB),
+        }),
+      ),
+    ),
     Layer.provide(runtimeFlags),
     Layer.provideMerge(deps),
     Layer.provide(summary),
@@ -327,10 +338,7 @@ function makePrompt(input?: PromptLayerOptions) {
   if (!input?.federation) return promptLayer
   return promptLayer.pipe(
     Layer.provideMerge(
-      Layer.succeed(
-        SessionFederatedContext.Service,
-        SessionFederatedContext.Service.of(input.federation),
-      ),
+      Layer.succeed(SessionFederatedContext.Service, SessionFederatedContext.Service.of(input.federation)),
     ),
   )
 }
@@ -354,11 +362,13 @@ const noLLMServer = testEffect(makeHttpNoLLMServer())
 const raceNoLLMServer = testEffect(makeHttpNoLLMServer({ processor: "blocking" }))
 const federationTrace: string[] = []
 const federationAdapter = {
-    recover: () => Effect.sync(() => {
+  recover: () =>
+    Effect.sync(() => {
       federationTrace.push("recover")
       return 0
     }),
-    resolve: (input) => Effect.sync(() => {
+  resolve: (input) =>
+    Effect.sync(() => {
       federationTrace.push(`resolve:${input.agent.name}:${input.inputIds.join(",")}`)
       return {
         selection: {
@@ -406,7 +416,8 @@ const federationAdapter = {
         observedLocationMutationEpoch: 1,
       }
     }),
-    prepareProviderTurn: () => Effect.sync(() => {
+  prepareProviderTurn: () =>
+    Effect.sync(() => {
       federationTrace.push("prepare")
       return {
         attemptId: "attempt_prompt_adapter",
@@ -419,31 +430,50 @@ const federationAdapter = {
         settled: Effect.sync(() => {
           federationTrace.push("attempt:settled")
         }),
-        failed: () => Effect.sync(() => {
-          federationTrace.push("attempt:failed")
-        }),
+        failed: () =>
+          Effect.sync(() => {
+            federationTrace.push("attempt:failed")
+          }),
       }
     }),
-    settleActivity: (_selection, state) => Effect.sync(() => {
+  settleActivity: (_selection, state) =>
+    Effect.sync(() => {
       federationTrace.push(`activity:${state}`)
     }),
-    replayIndeterminate: () => Effect.die("not used"),
-  } satisfies SessionFederatedContext.Interface
-const federated = testEffect(makeHttp({
-  flags: {
-    contextFederationShadow: true,
-    locationIndexesV2Shadow: true,
-    contextProjectionV2: true,
-  },
-  federation: federationAdapter,
-}))
-const shadowFederated = testEffect(makeHttp({
-  flags: {
-    contextFederationShadow: true,
-    locationIndexesV2Shadow: true,
-  },
-  federation: federationAdapter,
-}))
+  replayIndeterminate: () => Effect.die("not used"),
+} satisfies SessionFederatedContext.Interface
+const federated = testEffect(
+  makeHttp({
+    flags: {
+      contextFederationShadow: true,
+      locationIndexesV2Shadow: true,
+      contextProjectionV2: true,
+    },
+    federation: federationAdapter,
+  }),
+)
+const prepareFailureFederated = testEffect(
+  makeHttp({
+    flags: {
+      contextFederationShadow: true,
+      locationIndexesV2Shadow: true,
+      contextProjectionV2: true,
+    },
+    federation: {
+      ...federationAdapter,
+      prepareProviderTurn: () => Effect.fail(new SessionFederatedContext.RuntimeError({ reason: "prepare_failed" })),
+    },
+  }),
+)
+const shadowFederated = testEffect(
+  makeHttp({
+    flags: {
+      contextFederationShadow: true,
+      locationIndexesV2Shadow: true,
+    },
+    federation: federationAdapter,
+  }),
+)
 const unix = process.platform !== "win32" ? it.instance : it.instance.skip
 const unixNoLLMServer = process.platform !== "win32" ? noLLMServer.instance : noLLMServer.instance.skip
 
@@ -491,6 +521,26 @@ function providerCfg(url: string) {
         options: {
           ...cfg.provider.test.options,
           baseURL: url,
+        },
+      },
+    },
+  }
+}
+
+function providerCfgWithContext(url: string, context: number) {
+  const base = providerCfg(url)
+  return {
+    ...base,
+    provider: {
+      ...base.provider,
+      test: {
+        ...base.provider.test,
+        models: {
+          ...base.provider.test.models,
+          "test-model": {
+            ...base.provider.test.models["test-model"],
+            limit: { context, output: 10_000 },
+          },
         },
       },
     },
@@ -751,74 +801,121 @@ it.instance("loop calls LLM and returns assistant message", () =>
   }),
 )
 
-worldStateCompaction.instance("injects World State only after an automatic compaction is durable", () =>
-  Effect.gen(function* () {
-    const { dir, llm } = yield* useServerConfig(providerCfg)
+it.instance("rejects an oversized unknown-limit request before provider dispatch", () => {
+  const previous = process.env["DEEPAGENT_CODE_UNKNOWN_CONTEXT_GUARD"]
+  process.env["DEEPAGENT_CODE_UNKNOWN_CONTEXT_GUARD"] = "1000"
+  return Effect.gen(function* () {
+    const { llm } = yield* useServerConfig((url) => ({
+      ...providerCfgWithContext(url, 0),
+      compaction: { auto: false },
+    }))
     const prompt = yield* SessionPrompt.Service
     const sessions = yield* Session.Service
-    const chat = yield* sessions.create({ title: "World State compaction ordering" })
-    const marker = `world-state-${crypto.randomUUID()}.txt`
-    const seeded = yield* seed(chat.id, { finish: "stop" })
-    seeded.assistant.tokens.input = 95_000
-    seeded.assistant.tokens.total = 95_000
-    yield* sessions.updateMessage(seeded.assistant)
-    yield* writeText(path.join(dir, marker), "marker contents are not part of the conversation")
-    yield* user(chat.id, "Continue after automatic compaction.")
-    yield* llm.text("## Progress\n- prior context compacted")
-    yield* llm.text("continued")
+    const chat = yield* sessions.create({ title: "Unknown context guard" })
+    yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "x".repeat(5_000) }],
+    })
 
     const result = yield* prompt.loop({ sessionID: chat.id })
-    const messages = yield* sessions.messages({ sessionID: chat.id })
-    const compaction = messages.find((message) => message.parts.some((part) => part.type === "compaction"))
-    const summary = messages.find(
-      (message) => message.info.role === "assistant" && message.info.summary === true,
-    )
-    const worldState = messages.find((message) =>
-      message.parts.some(
-        (part) => part.type === "text" && part.synthetic === true && part.text.includes("<world-state>"),
-      ),
-    )
-    const inputs = yield* llm.inputs
-
+    expect(yield* llm.calls).toBe(0)
     expect(result.info.role).toBe("assistant")
-    expect(compaction?.parts.find((part) => part.type === "compaction")?.auto).toBe(true)
-    expect(summary?.info.role === "assistant" ? summary.info.parentID : undefined).toBe(compaction?.info.id)
-    expect(worldState?.info.id && summary?.info.id ? worldState.info.id > summary.info.id : false).toBe(true)
-    expect(JSON.stringify(inputs[0]?.messages)).not.toContain(marker)
-    expect(JSON.stringify(inputs[1]?.messages)).toContain(marker)
-  }),
+    if (result.info.role === "assistant") {
+      expect(result.info.error?.name).toBe("ContextOverflowError")
+      expect(result.info.finish).toBe("error")
+    }
+    const { db } = yield* Database.Service
+    const receipt = yield* db
+      .select()
+      .from(SessionToolRequestReceiptTable)
+      .where(eq(SessionToolRequestReceiptTable.session_id, chat.id))
+      .get()
+      .pipe(Effect.orDie)
+    expect(receipt?.request_state).toBe("rejected")
+    expect(receipt?.request_error_code).toBe("context_limit_unknown")
+    expect(receipt?.context_limit_provenance).toBe("host_guard")
+  }).pipe(
+    Effect.ensuring(
+      Effect.sync(() => {
+        if (previous === undefined) delete process.env["DEEPAGENT_CODE_UNKNOWN_CONTEXT_GUARD"]
+        else process.env["DEEPAGENT_CODE_UNKNOWN_CONTEXT_GUARD"] = previous
+      }),
+    ),
+  )
+})
+
+worldStateCompaction.instance(
+  "injects World State only after an automatic compaction is durable",
+  () =>
+    Effect.gen(function* () {
+      const { dir, llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({ title: "World State compaction ordering" })
+      const marker = `world-state-${crypto.randomUUID()}.txt`
+      const seeded = yield* seed(chat.id, { finish: "stop" })
+      seeded.assistant.tokens.input = 95_000
+      seeded.assistant.tokens.total = 95_000
+      yield* sessions.updateMessage(seeded.assistant)
+      yield* writeText(path.join(dir, marker), "marker contents are not part of the conversation")
+      yield* user(chat.id, "Continue after automatic compaction.")
+      yield* llm.text("## Progress\n- prior context compacted")
+      yield* llm.text("continued")
+
+      const result = yield* prompt.loop({ sessionID: chat.id })
+      const messages = yield* sessions.messages({ sessionID: chat.id })
+      const compaction = messages.find((message) => message.parts.some((part) => part.type === "compaction"))
+      const summary = messages.find((message) => message.info.role === "assistant" && message.info.summary === true)
+      const worldState = messages.find((message) =>
+        message.parts.some(
+          (part) => part.type === "text" && part.synthetic === true && part.text.includes("<world-state>"),
+        ),
+      )
+      const inputs = yield* llm.inputs
+
+      expect(result.info.role).toBe("assistant")
+      expect(compaction?.parts.find((part) => part.type === "compaction")?.auto).toBe(true)
+      expect(summary?.info.role === "assistant" ? summary.info.parentID : undefined).toBe(compaction?.info.id)
+      expect(worldState?.info.id && summary?.info.id ? worldState.info.id > summary.info.id : false).toBe(true)
+      expect(JSON.stringify(inputs[0]?.messages)).not.toContain(marker)
+      expect(JSON.stringify(inputs[1]?.messages)).toContain(marker)
+    }),
   { git: true },
   30_000,
 )
 
-worldStateCompactionDisabled.instance("does not recover World State when reinjection is disabled", () =>
-  Effect.gen(function* () {
-    const { dir, llm } = yield* useServerConfig(providerCfg)
-    const prompt = yield* SessionPrompt.Service
-    const sessions = yield* Session.Service
-    const chat = yield* sessions.create({ title: "World State compaction mutation control" })
-    const marker = `world-state-disabled-${crypto.randomUUID()}.txt`
-    const seeded = yield* seed(chat.id, { finish: "stop" })
-    seeded.assistant.tokens.input = 95_000
-    seeded.assistant.tokens.total = 95_000
-    yield* sessions.updateMessage(seeded.assistant)
-    yield* writeText(path.join(dir, marker), "marker contents are not part of the conversation")
-    yield* user(chat.id, "Continue after automatic compaction.")
-    yield* llm.text("## Progress\n- prior context compacted")
-    yield* llm.text("continued")
+worldStateCompactionDisabled.instance(
+  "does not recover World State when reinjection is disabled",
+  () =>
+    Effect.gen(function* () {
+      const { dir, llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({ title: "World State compaction mutation control" })
+      const marker = `world-state-disabled-${crypto.randomUUID()}.txt`
+      const seeded = yield* seed(chat.id, { finish: "stop" })
+      seeded.assistant.tokens.input = 95_000
+      seeded.assistant.tokens.total = 95_000
+      yield* sessions.updateMessage(seeded.assistant)
+      yield* writeText(path.join(dir, marker), "marker contents are not part of the conversation")
+      yield* user(chat.id, "Continue after automatic compaction.")
+      yield* llm.text("## Progress\n- prior context compacted")
+      yield* llm.text("continued")
 
-    yield* prompt.loop({ sessionID: chat.id })
-    const messages = yield* sessions.messages({ sessionID: chat.id })
-    const inputs = yield* llm.inputs
+      yield* prompt.loop({ sessionID: chat.id })
+      const messages = yield* sessions.messages({ sessionID: chat.id })
+      const inputs = yield* llm.inputs
 
-    expect(messages.some((message) => message.parts.some((part) => part.type === "compaction"))).toBe(true)
-    expect(
-      messages.some((message) =>
-        message.parts.some((part) => part.type === "text" && part.synthetic && part.text.includes("<world-state>")),
-      ),
-    ).toBe(false)
-    expect(JSON.stringify(inputs)).not.toContain(marker)
-  }),
+      expect(messages.some((message) => message.parts.some((part) => part.type === "compaction"))).toBe(true)
+      expect(
+        messages.some((message) =>
+          message.parts.some((part) => part.type === "text" && part.synthetic && part.text.includes("<world-state>")),
+        ),
+      ).toBe(false)
+      expect(JSON.stringify(inputs)).not.toContain(marker)
+    }),
   { git: true },
   30_000,
 )
@@ -912,10 +1009,7 @@ shadowFederated.instance("runs selection shadow without model projection or a Pr
 
     expect(JSON.stringify(inputs[0]?.messages)).not.toContain("project-context-json-v1")
     expect(ContextFederationObservability.snapshot().shadow.comparisons).toBe(1)
-    expect(federationTrace).toEqual([
-      `resolve:auto:${user.info.id}`,
-      "activity:settled",
-    ])
+    expect(federationTrace).toEqual([`resolve:auto:${user.info.id}`, "activity:settled"])
   }),
 )
 
@@ -939,7 +1033,7 @@ federated.instance("production prompt adapter fails the attempt and interrupts t
     const running = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
     yield* llm.wait(1)
     yield* pollWithTimeout(
-      Effect.sync(() => federationTrace.includes("streaming") ? true : undefined),
+      Effect.sync(() => (federationTrace.includes("streaming") ? true : undefined)),
       "timed out waiting for the federated attempt to enter streaming",
     )
     yield* prompt.cancel(chat.id)
@@ -951,6 +1045,33 @@ federated.instance("production prompt adapter fails the attempt and interrupts t
     expect(federationTrace).toContain("activity:interrupted")
     expect(federationTrace).not.toContain("attempt:settled")
     expect(federationTrace).not.toContain("activity:settled")
+  }),
+)
+
+prepareFailureFederated.instance("does not send projection when durable provider prepare fails", () =>
+  Effect.gen(function* () {
+    federationTrace.length = 0
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({ title: "Federated prepare failure" })
+
+    yield* llm.text("done")
+    yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      model: ref,
+      noReply: true,
+      parts: [{ type: "text", text: "prepare failure" }],
+    })
+    yield* prompt.loop({ sessionID: chat.id })
+    const inputs = yield* llm.inputs
+    const calls = yield* llm.calls
+
+    expect(calls).toBe(1)
+    expect(JSON.stringify(inputs[0]?.messages)).not.toContain("project-context-json-v1")
+    expect(federationTrace.some((entry) => entry.startsWith("resolve:auto:"))).toBe(true)
+    expect(federationTrace).not.toContain("prepare")
   }),
 )
 
@@ -1093,6 +1214,30 @@ it.instance("loop continues when finish is tool-calls", () =>
       expect(result.parts.some((part) => part.type === "text" && part.text === "second")).toBe(true)
       expect(result.info.finish).toBe("stop")
     }
+    const { db } = yield* Database.Service
+    const receipts = (yield* db
+      .select()
+      .from(SessionToolRequestReceiptTable)
+      .where(eq(SessionToolRequestReceiptTable.session_id, session.id))
+      .all()
+      .pipe(Effect.orDie)).toSorted((a, b) => a.request_ordinal - b.request_ordinal)
+    expect(receipts.map((receipt) => [receipt.request_ordinal, receipt.request_state])).toEqual([
+      [1, "dispatched"],
+      [2, "dispatched"],
+    ])
+    expect(receipts[0]?.registry_tool_ids.length).toBeGreaterThan(0)
+    expect(receipts[0]?.final_offered_tool_ids.every((toolID) => receipts[0]?.registry_tool_ids.includes(toolID))).toBe(
+      true,
+    )
+    expect(receipts[0]?.permission_filtered_tool_ids).toEqual(receipts[0]?.final_offered_tool_ids)
+    expect(receipts[0]?.final_offered_tool_ids).not.toContain("first")
+    expect(receipts[0]?.tool_definition_hash).toHaveLength(64)
+    expect(receipts[0]?.estimated_input_tokens).toBeGreaterThan(0)
+    expect(receipts[0]?.physical_input_budget).toBeGreaterThan(receipts[0]?.estimated_input_tokens ?? 0)
+    expect(receipts[0]?.reserved_output_tokens).toBeGreaterThan(0)
+    expect(receipts[0]?.context_limit_provenance).toBe("model_limit")
+    expect(receipts[0]?.call_ids).toHaveLength(1)
+    expect(receipts[1]?.call_ids).toEqual([])
   }),
 )
 
@@ -2760,8 +2905,7 @@ it.instance("runs a prompt in the persisted session directory", () =>
     const { directory: parentDirectory } = yield* TestInstance
     const targetDirectory = yield* tmpdirScoped({ git: true })
     const aliasRoot = yield* tmpdirScoped()
-    const persistedDirectory =
-      process.platform === "win32" ? targetDirectory : path.join(aliasRoot, "workspace-alias")
+    const persistedDirectory = process.platform === "win32" ? targetDirectory : path.join(aliasRoot, "workspace-alias")
     if (persistedDirectory !== targetDirectory) {
       yield* Effect.promise(() => symlink(targetDirectory, persistedDirectory, "dir"))
     }
