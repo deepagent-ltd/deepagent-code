@@ -1,4 +1,5 @@
 import { Effect, Schema } from "effect"
+import type { ValidationResult } from "./round-state"
 import { randomUUID } from "node:crypto"
 import type { DocumentStore } from "./document-store"
 import {
@@ -153,7 +154,9 @@ export class InvalidGoalError extends Schema.TaggedErrorClass<InvalidGoalError>(
  */
 export type GraderPorts = {
   /** Run the given validation commands; `pass` iff ALL succeeded. */
-  readonly runTests: (commands: readonly string[]) => Effect.Effect<{ readonly pass: boolean }>
+  readonly runTests: (
+    commands: readonly string[],
+  ) => Effect.Effect<{ readonly pass: boolean; readonly results?: readonly ValidationResult[] }>
   /**
    * Highest diagnostic severity currently present, or null when there are none. `checked` MUST be false
    * when the port could not actually compute diagnostics (LSP crashed/timed out, no client covered the
@@ -197,7 +200,10 @@ const evaluateOne = (
   Effect.gen(function* () {
     switch (criterion.kind) {
       case "tests_pass": {
-        const { pass } = yield* ports.runTests(criterion.commands)
+        const { pass, results } = yield* ports.runTests(criterion.commands)
+        const runnerFailure = results?.find((result) => result.kind !== "command_exit")
+        if (runnerFailure)
+          return `tests_pass: validation runner failed (${runnerFailure.kind}) for [${runnerFailure.command}]`
         return pass ? null : `tests_pass: one or more of [${criterion.commands.join(", ")}] failed`
       }
       case "no_diagnostics": {

@@ -10,6 +10,8 @@ import { ReadTool } from "./read"
 import { TaskTool } from "./task"
 import { TaskStatusTool } from "./task_status"
 import { TaskReadTool } from "./task_read"
+import { TaskCloseTool } from "./task_close"
+import { TaskRecoveryTool } from "./task_recovery"
 import { PRFinalizeTool } from "./pr_finalize"
 import { DismissValidationTool } from "./dismiss_validation"
 import { Database } from "@deepagent-code/core/database/database"
@@ -46,6 +48,7 @@ import { InstanceBootstrap } from "@/project/bootstrap-service"
 import * as Truncate from "./truncate"
 import { ApplyPatchTool } from "./apply_patch"
 import { ApplyPatchChunkTool } from "./apply_patch_chunk"
+import { GitReadTool } from "./git_read"
 import { Glob } from "@deepagent-code/core/util/glob"
 import path from "path"
 import { pathToFileURL } from "url"
@@ -72,6 +75,7 @@ import { ProviderV2 } from "@deepagent-code/core/provider"
 import { ModelV2 } from "@deepagent-code/core/model"
 import { Git } from "@/git"
 import { PRQueue } from "@/agent/pr-queue"
+import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
 
 const log = Log.create({ service: "tool.registry" })
 
@@ -133,6 +137,7 @@ const layerWithFacades: Layer.Layer<
   | RuntimeBase.Service
   | CodeIntelFacade.Service
   | ContextQueryFacade.Service
+  | EffectFlock.Service
 > = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -141,11 +146,14 @@ const layerWithFacades: Layer.Layer<
     const agents = yield* Agent.Service
     const truncate = yield* Truncate.Service
     const flags = yield* RuntimeFlags.Service
+    yield* EffectFlock.Service
 
     const invalid = yield* InvalidTool
     const task = yield* TaskTool
     const taskstatus = yield* TaskStatusTool
     const taskread = yield* TaskReadTool
+    const taskclose = yield* TaskCloseTool
+    const taskrecovery = yield* TaskRecoveryTool
     const prfinalize = yield* PRFinalizeTool
     const dismissvalidation = yield* DismissValidationTool
     const read = yield* ReadTool
@@ -162,6 +170,7 @@ const layerWithFacades: Layer.Layer<
     const greptool = yield* GrepTool
     const patchtool = yield* ApplyPatchTool
     const patchchunk = yield* ApplyPatchChunkTool
+    const gitreadtool = yield* GitReadTool
     const skilltool = yield* SkillTool
     const rollout = ContextFederationRollout.resolve(
       {
@@ -291,6 +300,8 @@ const layerWithFacades: Layer.Layer<
           task: Tool.init(task),
           task_status: Tool.init(taskstatus),
           task_read: Tool.init(taskread),
+          task_close: Tool.init(taskclose),
+          task_recovery: Tool.init(taskrecovery),
           pr_finalize: Tool.init(prfinalize),
           dismiss_validation: Tool.init(dismissvalidation),
           fetch: Tool.init(webfetch),
@@ -306,6 +317,7 @@ const layerWithFacades: Layer.Layer<
           plan: Tool.init(plan),
           planwrite: Tool.init(planwrite),
           query_log: Tool.init(querylog),
+          git_read: Tool.init(gitreadtool),
         })
 
         return {
@@ -322,6 +334,8 @@ const layerWithFacades: Layer.Layer<
             tool.task,
             tool.task_status,
             tool.task_read,
+            tool.task_close,
+            tool.task_recovery,
             tool.pr_finalize,
             tool.dismiss_validation,
             tool.fetch,
@@ -329,6 +343,7 @@ const layerWithFacades: Layer.Layer<
             tool.skill,
             tool.patch,
             tool.patch_chunk,
+            tool.git_read,
             tool.planwrite,
             ...(flags.experimentalLspTool ? [tool.lsp] : []),
             ...(flags.codeIntelTool ? [tool.code_intel] : []),
@@ -497,6 +512,7 @@ export const defaultLayer = Layer.suspend(() =>
         Database.defaultLayer,
         RuntimeFlags.defaultLayer,
         Git.defaultLayer,
+        EffectFlock.defaultLayer,
         PRQueue.layer.pipe(Layer.orDie),
       ),
     ),

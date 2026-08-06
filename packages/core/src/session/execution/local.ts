@@ -1,5 +1,9 @@
-import { Effect, Layer } from "effect"
+export * as SessionExecutionLocal from "./local"
+
+import { Cause, DateTime, Effect, Layer } from "effect"
+import { EventV2 } from "../../event"
 import { LocationServiceMap } from "../../location-layer"
+import { SessionEvent } from "../event"
 import { SessionRunCoordinator } from "../run-coordinator"
 import { SessionRunner } from "../runner"
 import { SessionSchema } from "../schema"
@@ -13,7 +17,38 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const store = yield* SessionStore.Service
     const locations = yield* LocationServiceMap
-    const coordinator = yield* SessionRunCoordinator.make<SessionSchema.ID, void, SessionRunner.RunError>({
+    const events = yield* EventV2.Service
+    const reportLifecycle = (sessionID: SessionSchema.ID, effect: Effect.Effect<void>) =>
+      effect.pipe(
+        Effect.tapCause((cause) =>
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.void
+            : Effect.logError("Failed to publish Session execution lifecycle", cause).pipe(
+                Effect.annotateLogs("sessionID", sessionID),
+              ),
+        ),
+        Effect.ignore,
+      )
+    const clearSuspensionOnCommit = (sessionID: SessionSchema.ID) => ({
+      commit: () => store.consumeSuspended(sessionID).pipe(Effect.asVoid),
+    })
+    const coordinator = yield* SessionRunCoordinator.make<
+      SessionSchema.ID,
+      void,
+      SessionRunner.RunError,
+      SessionExecution.InterruptReason
+    >({
+      started: (sessionID) =>
+        reportLifecycle(
+          sessionID,
+          Effect.gen(function* () {
+            yield* events.publish(
+              SessionEvent.Execution.Started,
+              { sessionID, timestamp: yield* DateTime.now },
+              clearSuspensionOnCommit(sessionID),
+            )
+          }),
+        ),
       drain: Effect.fnUntraced(function* (sessionID: SessionSchema.ID, mode) {
         const session = yield* store.get(sessionID)
         if (!session) return yield* Effect.die(`Session not found: ${sessionID}`)
@@ -22,14 +57,47 @@ export const layer = Layer.effect(
         )
       }),
       onFailure: (sessionID, cause) => logFailure("Failed to drain Session", sessionID, cause),
+      settled: (sessionID, exit, reason) =>
+        reportLifecycle(
+          sessionID,
+          Effect.gen(function* () {
+            const outcome = SessionExecution.terminal(exit, reason)
+            const timestamp = yield* DateTime.now
+            if (outcome.type === "succeeded") {
+              yield* events.publish(
+                SessionEvent.Execution.Succeeded,
+                { sessionID, timestamp },
+                clearSuspensionOnCommit(sessionID),
+              )
+              return
+            }
+            if (outcome.type === "interrupted") {
+              yield* events.publish(SessionEvent.Execution.Interrupted, {
+                sessionID,
+                timestamp,
+                reason: outcome.reason,
+              })
+              return
+            }
+            yield* events.publish(
+              SessionEvent.Execution.Failed,
+              { sessionID, timestamp, error: outcome.error },
+              clearSuspensionOnCommit(sessionID),
+            )
+          }),
+        ),
     })
 
     return SessionExecution.Service.of({
-      interrupt: coordinator.interrupt,
+      active: coordinator.active,
+      interrupt: (sessionID, seq) => coordinator.interrupt(sessionID, seq, "user"),
       resume: coordinator.run,
       wake: coordinator.wake,
+      awaitIdle: coordinator.awaitIdle,
     })
   }),
 )
 
-export const defaultLayer = layer.pipe(Layer.provide(SessionStore.defaultLayer))
+export const defaultLayer = layer.pipe(Layer.provide(SessionStore.defaultLayer), Layer.provide(EventV2.defaultLayer))
+
+export const liveLayer = Layer.suspend(() => defaultLayer.pipe(Layer.provide(LocationServiceMap.layer)))

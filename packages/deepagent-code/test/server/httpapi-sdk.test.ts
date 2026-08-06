@@ -463,10 +463,15 @@ describe("HttpApi SDK", () => {
     { serverPath: "raw", git: false, setup: writeStandardFiles },
     ({ sdk, directory }) =>
       Effect.gen(function* () {
-        const runsDir = yield* tmpdirScoped({ git: false })
-        const previous = process.env.DEEPAGENT_RUNS_DIR
+        // gatewayConfig always reads Global.Path.agent.runs = path.join(dataPath(), "runs").
+        // Since DEEPAGENT_CODE_TEST_HOME is set by the test preload, setting DEEPAGENT_CODE_HOME
+        // redirects dataPath() to our temp dir, so the server reads our review fixture.
+        const fakeHome = yield* tmpdirScoped({ git: false })
+        const runsDir = path.join(fakeHome, "runs")
+        mkdirSync(runsDir, { recursive: true })
+        const previousHome = process.env.DEEPAGENT_CODE_HOME
         try {
-          process.env.DEEPAGENT_RUNS_DIR = runsDir
+          process.env.DEEPAGENT_CODE_HOME = fakeHome
           writeReviewRun(runsDir)
 
           const reviews = yield* call(() => sdk.deepagent.reviews({ directory }))
@@ -485,8 +490,8 @@ describe("HttpApi SDK", () => {
             ],
           })
         } finally {
-          if (previous === undefined) delete process.env.DEEPAGENT_RUNS_DIR
-          else process.env.DEEPAGENT_RUNS_DIR = previous
+          if (previousHome === undefined) delete process.env.DEEPAGENT_CODE_HOME
+          else process.env.DEEPAGENT_CODE_HOME = previousHome
         }
       }),
   )
@@ -858,23 +863,64 @@ describe("HttpApi SDK", () => {
         const asyncPrompt = yield* capture(() =>
           sdk.session.promptAsync({
             sessionID,
+            intentID: "intent_http_async_admission",
+            intentSource: "composer",
+            intentVariant: "original",
             agent: "build",
             noReply: true,
             parts: [{ type: "text", text: "async hello" }],
           }),
         )
         const messages = yield* capture(() => sdk.session.messages({ sessionID }))
+        const messageTexts = array(messages.data)
+          .flatMap((item) => array(record(item).parts))
+          .map((part) => record(part).text)
+          .filter((text): text is string => typeof text === "string")
+          .sort()
+
+        expect(asyncPrompt.status).toBe(204)
+        expect(messageTexts).toEqual(["async hello", "hello"])
 
         return {
           statuses: statuses({ session, prompt, asyncPrompt, messages }),
           promptRole: record(record(prompt.data).info).role,
           messageCount: array(messages.data).length,
-          messageTexts: array(messages.data)
-            .flatMap((item) => array(record(item).parts))
-            .map((part) => record(part).text)
-            .filter((text): text is string => typeof text === "string")
-            .sort(),
+          messageTexts,
         }
+      }),
+    ),
+  )
+
+  serverPathParity("acknowledges async prompts after admission without waiting for model completion", (serverPath) =>
+    withFakeLlm(serverPath, ({ sdk, llm }) =>
+      Effect.gen(function* () {
+        const gate = yield* Deferred.make<void>()
+        yield* Effect.addFinalizer(() => Deferred.succeed(gate, undefined).pipe(Effect.ignore))
+        yield* llm.hold("delayed response", Effect.runPromise(Deferred.await(gate)))
+        const session = yield* capture(() =>
+          sdk.session.create({
+            title: "async admission",
+            permission: [{ permission: "*", pattern: "*", action: "allow" }],
+          }),
+        )
+        const sessionID = String(record(session.data).id)
+
+        const prompt = yield* capture(() =>
+          sdk.session.promptAsync({
+            sessionID,
+            agent: "build",
+            model: { providerID: "test", modelID: "test-model" },
+            parts: [{ type: "text", text: "persist before acknowledging" }],
+          }),
+        ).pipe(Effect.timeout("2 seconds"))
+        const messages = yield* capture(() => sdk.session.messages({ sessionID }))
+        yield* llm.wait(1).pipe(Effect.timeout("2 seconds"))
+        const abort = yield* capture(() => sdk.session.abort({ sessionID }))
+        yield* Deferred.succeed(gate, undefined).pipe(Effect.ignore)
+
+        expect(prompt.status).toBe(204)
+        expect(abort.status).toBe(200)
+        expect(JSON.stringify(messages.data)).toContain("persist before acknowledging")
       }),
     ),
   )

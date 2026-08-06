@@ -87,6 +87,10 @@ import { pathKey } from "@/utils/path-key"
 import { base64Encode } from "@deepagent-code/core/util/encode"
 import { displayName } from "@/pages/layout/helpers"
 
+export type PromptInputControl = {
+  cancelPending: () => Promise<void>
+}
+
 interface PromptInputProps {
   class?: string
   variant?: "dock" | "new-session"
@@ -99,6 +103,8 @@ interface PromptInputProps {
   onQueue?: (draft: FollowupDraft) => void
   onAbort?: () => void
   onSubmit?: () => void
+  disabled?: boolean
+  controlRef?: (control: PromptInputControl | undefined) => void
 }
 
 const EXAMPLES = [
@@ -220,7 +226,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
 
   const makeTextPrompt = (text: string): Prompt => [{ type: "text", content: text, start: 0, end: text.length }]
 
-  const finishDraftReview = (result: { editedGoal: string } | false) => {
+  const finishDraftReview = (result: { editedGoal: string } | false, restore = true) => {
     const current = draftReview()
     if (!current) return
     setDraftReview(undefined)
@@ -228,6 +234,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     draftReviewResolve = undefined
     resolve?.(result)
     if (result !== false) return
+    if (!restore) return
 
     prompt.set(current.originalPrompt, current.originalCursor)
     requestAnimationFrame(() => {
@@ -279,6 +286,13 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   const dismissDraftPreview = () => {
     setDraftPreview("")
     if (!draftReview() && !draftPreparing()) draftPreparePrompt = undefined
+  }
+
+  const discardDraftPrepare = () => {
+    if (draftReview()) finishDraftReview(false, false)
+    setDraftPreparing(false)
+    setDraftPreview("")
+    draftPreparePrompt = undefined
   }
 
   // Copy the preserved partial draft into the editor so the user can edit and resubmit it. A canceled
@@ -1295,7 +1309,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       })
     })
 
-  const { abort, handleSubmit } = createPromptSubmit({
+  const { abort, cancelPending, handleSubmit } = createPromptSubmit({
     info,
     imageAttachments,
     commentCount,
@@ -1320,10 +1334,24 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     onPromptPrepareStart: startDraftPrepare,
     onPromptPrepareProgress: updateDraftPrepare,
     onPromptPrepareEnd: stopDraftPrepare,
+    onPromptPrepareDiscard: discardDraftPrepare,
     confirmPromptDraft,
   })
 
+  const submitControl = {
+    cancelPending: async () => {
+      discardDraftPrepare()
+      await cancelPending()
+    },
+  }
+  props.controlRef?.(submitControl)
+  onCleanup(() => props.controlRef?.(undefined))
+
   const handlePromptSubmit = (event: Event) => {
+    if (props.disabled) {
+      event.preventDefault()
+      return
+    }
     // Read-only finished subagent: swallow the submit so no new turn is started.
     if (subagentFinished()) {
       event.preventDefault()
@@ -1349,6 +1377,11 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   }
 
   const handleKeyDown = (event: KeyboardEvent) => {
+    if (props.disabled) {
+      event.preventDefault()
+      event.stopPropagation()
+      return
+    }
     if (draftPreparing()) {
       if (event.key === "Escape" || (event.ctrlKey && event.code === "KeyG")) void abort()
       event.preventDefault()
@@ -1808,7 +1841,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
         <div
           class="relative"
           onMouseDown={(e) => {
-            if (draftPreparing()) return
+            if (draftPreparing() || props.disabled) return
             const target = e.target
             if (!(target instanceof HTMLElement)) return
             if (
@@ -1835,8 +1868,8 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
               role="textbox"
               aria-multiline="true"
               aria-label={placeholder()}
-              aria-disabled={draftPreparing()}
-              contenteditable={draftPreparing() ? "false" : "true"}
+              aria-disabled={draftPreparing() || props.disabled}
+              contenteditable={draftPreparing() || props.disabled ? "false" : "true"}
               autocapitalize={store.mode === "normal" ? "sentences" : "off"}
               autocorrect={store.mode === "normal" ? "on" : "off"}
               spellcheck={store.mode === "normal"}
@@ -1857,7 +1890,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                 "font-mono!": store.mode === "shell",
                 // Editor keeps the raw user input during preparation (the streamed draft shows in the
                 // panel below), so it reads normally — locked to edits, not greyed as a placeholder.
-                "cursor-wait": draftPreparing(),
+                "cursor-wait": draftPreparing() || props.disabled,
               }}
               style={{ "padding-bottom": space }}
             />
@@ -1900,7 +1933,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                 <IconButton
                   data-action="prompt-submit"
                   type="submit"
-                  disabled={subagentFinished() || (!draftPreparing() && !working() && blank())}
+                  disabled={props.disabled || subagentFinished() || (!draftPreparing() && !working() && blank())}
                   tabIndex={store.mode === "normal" ? undefined : -1}
                   icon={stopping() ? "stop" : store.mode === "shell" ? "arrow-undo-down" : "arrow-up"}
                   variant="primary"

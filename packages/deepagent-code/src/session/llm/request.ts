@@ -101,6 +101,7 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
   // in one ephemeral tail message after durable history. A changing system message would precede the
   // entire history on Anthropic-compatible APIs and invalidate that provider-cache prefix.
   let volatileRoundContext = ""
+  let volatileContextKind: "none" | "round" | "continuation" = "none"
   let validationCommands: readonly string[] = []
 
   if (isDeepAgentActive) {
@@ -115,8 +116,18 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
     // Fold round context and plan status into one runtime update. The stable system prompt identifies
     // this tagged tail as trusted control and requires the model to apply it silently. `renderPlanStatus`
     // returns null in lightweight mode / no plan. A first-round, non-orchestrated task gets no update.
-    const roundCtx = runtimeSystemRequired ? AgentGateway.volatileRoundContext(promptContext.context) : ""
-    const planStatus = runtimeSystemRequired ? SessionReminders.renderPlanStatus(input.sessionID) : null
+    const isToolContinuation = input.messages.at(-1)?.role === "tool"
+    volatileContextKind = isToolContinuation ? "continuation" : runtimeSystemRequired ? "round" : "none"
+    const roundCtx =
+      volatileContextKind === "continuation"
+        ? AgentGateway.volatileContinuationContext()
+        : volatileContextKind === "round"
+          ? AgentGateway.volatileRoundContext(promptContext.context)
+          : ""
+    const planStatus =
+      volatileContextKind === "none"
+        ? null
+        : SessionReminders.renderPlanStatus(input.sessionID, isToolContinuation ? "continuation" : "full")
     volatileRoundContext = [roundCtx, planStatus].filter((x) => x && x.length > 0).join("\n\n")
     logPrompt(input.sessionID, promptContext.context.round, system[0]).catch(() => {})
   } else {
@@ -308,7 +319,8 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
       ...headers,
     },
   } satisfies Prepared
-  if (input.flags.assembledRequestFingerprint) emitAssembledRequestFingerprint(input, prepared, validationCommands)
+  if (input.flags.assembledRequestFingerprint)
+    emitAssembledRequestFingerprint(input, prepared, validationCommands, volatileContextKind)
   return prepared
 })
 
@@ -338,6 +350,7 @@ function emitAssembledRequestFingerprint(
   input: PrepareInput,
   prepared: Prepared,
   validationCommands: readonly string[],
+  volatileContextKind: "none" | "round" | "continuation",
 ): void {
   const validationFingerprints = validationFingerprintMultiplicities(input.messages, validationCommands)
   const validationCount = validationFingerprints.reduce((total, item) => total + item.count, 0)
@@ -351,6 +364,7 @@ function emitAssembledRequestFingerprint(
         providerID: input.model.providerID,
         modelID: input.model.id,
         agentMode: deepAgentAgentModeOverride(input.user.metadata) ?? AgentGateway.snapshot().agentMode,
+        volatileContextKind,
         validationFingerprints,
         counts: {
           system: prepared.system.length,
@@ -564,7 +578,7 @@ const buildDeepAgentPromptContext = Effect.fn("LLMRequestPrep.buildDeepAgentProm
   const validationCommands = workspaceInfo.validationCommands
 
   const userRequest = extractLatestUserContent(input.messages)
-  const previousValidationResults = extractValidationResults(input.messages, validationCommands)
+  const previousValidationResults = extractCurrentActivityValidationResults(input.messages, validationCommands)
 
   const tools: AgentGateway.ToolContext = { availableTools: toolRefs, mcpServers, totalToolCount: toolRefs.length }
 
@@ -580,8 +594,12 @@ const buildDeepAgentPromptContext = Effect.fn("LLMRequestPrep.buildDeepAgentProm
     ...(input.orchestrationCaps ? { orchestrationCaps: input.orchestrationCaps } : {}),
   }
 
-  const sessionExistedBefore = AgentGateway.DeepAgentSessionState.get(input.sessionID) !== undefined
   AgentGateway.DeepAgentOrchestrator.initSession(orchestratorInput)
+
+  const admissionObservation =
+    deepAgentRoundControl(input.user.metadata) !== "continue" && !isLastUserMessageSynthetic(input.messages)
+      ? AgentGateway.DeepAgentSessionState.observeUserAdmission(input.sessionID, input.user.id)
+      : "same"
 
   if (validationCommands.length > 0) {
     AgentGateway.DeepAgentOrchestrator.setValidationCommands(input.sessionID, validationCommands)
@@ -606,9 +624,9 @@ const buildDeepAgentPromptContext = Effect.fn("LLMRequestPrep.buildDeepAgentProm
         (r) => r.passed || !currentFps.has(`${r.command} ${r.exit_code}`),
       )
     }
-    // STALE-REHARVEST GUARD: extractValidationResults re-scans the WHOLE transcript every turn, so a
-    // test result from an earlier round (with its frozen `[Nms]` duration) is re-extracted verbatim on
-    // every subsequent turn as long as it stays in history. Without this guard, each turn re-ran
+    // STALE-REHARVEST GUARD: extractValidationResults re-scans the current activity every turn, so a
+    // test result from an earlier provider step is re-extracted verbatim on every subsequent step.
+    // Without this guard, each step re-ran
     // recordValidation + processValidationResults, and processValidationResults → recordCandidate →
     // addCandidate APPENDS a new candidate unconditionally (no dedupe). After N turns the candidate list
     // held N copies of the SAME stale ValidationResult, so collectValidationFailureText (and any other
@@ -639,16 +657,7 @@ const buildDeepAgentPromptContext = Effect.fn("LLMRequestPrep.buildDeepAgentProm
   //      post-compaction <world-state> re-injection — see SYNTHETIC_USER_PREFIXES).
   // observeUserAdmission records the baseline on the first real observation ("initial"), is a no-op
   // when the same message reappears ("same"), and marks stale only for a genuinely new ID ("new").
-  if (
-    sessionExistedBefore &&
-    deepAgentRoundControl(input.user.metadata) !== "continue" &&
-    !isLastUserMessageSynthetic(input.messages)
-  ) {
-    const obs = AgentGateway.DeepAgentSessionState.observeUserAdmission(input.sessionID, input.user.id)
-    if (obs === "new") {
-      AgentGateway.DeepAgentSessionState.markPlanStale(input.sessionID, "user_appended")
-    }
-  }
+  if (admissionObservation === "new") AgentGateway.DeepAgentSessionState.markPlanStale(input.sessionID, "user_appended")
 
   const runtimeInstructions = [...input.system, ...(input.user.system ? [input.user.system] : [])]
     .map((item) => item.trim())
@@ -677,12 +686,9 @@ function extractLatestUserContent(messages: ModelMessage[]): string | null {
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i]
     if (msg.role !== "user") continue
-    if (typeof msg.content === "string") return msg.content
-    if (Array.isArray(msg.content)) {
-      const textParts = msg.content.filter((p): p is { type: "text"; text: string } => p.type === "text")
-      if (textParts.length > 0) return textParts.map((p) => p.text).join("\n")
-    }
-    return null
+    const text = userMessageText(msg)
+    if (isSyntheticUserText(text)) continue
+    return text || null
   }
   return null
 }
@@ -705,19 +711,37 @@ function isLastUserMessageSynthetic(messages: ModelMessage[]): boolean {
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i]
     if (msg.role !== "user") continue
-    const text =
-      typeof msg.content === "string"
-        ? msg.content
-        : Array.isArray(msg.content)
-          ? msg.content
-              .filter((p): p is { type: "text"; text: string } => p.type === "text")
-              .map((p) => p.text)
-              .join("")
-          : ""
-    const trimmed = text.trimStart()
-    return SYNTHETIC_USER_PREFIXES.some((prefix) => trimmed.startsWith(prefix))
+    return isSyntheticUserText(userMessageText(msg))
   }
   return false
+}
+
+function currentActivityMessages(messages: ModelMessage[]): ModelMessage[] {
+  const start = messages.findLastIndex(
+    (message) => message.role === "user" && !isSyntheticUserText(userMessageText(message)),
+  )
+  return start < 0 ? messages : messages.slice(start)
+}
+
+export function extractCurrentActivityValidationResults(
+  messages: ModelMessage[],
+  validationCommands: readonly string[] = [],
+): AgentGateway.ValidationResult[] {
+  return extractValidationResults(currentActivityMessages(messages), validationCommands)
+}
+
+function userMessageText(message: ModelMessage): string {
+  if (typeof message.content === "string") return message.content
+  if (!Array.isArray(message.content)) return ""
+  return message.content
+    .filter((part): part is { type: "text"; text: string } => part.type === "text")
+    .map((part) => part.text)
+    .join("\n")
+}
+
+function isSyntheticUserText(text: string): boolean {
+  const trimmed = text.trimStart()
+  return SYNTHETIC_USER_PREFIXES.some((prefix) => trimmed.startsWith(prefix))
 }
 
 const isValidAgentMode = (value: unknown): value is AgentGateway.AgentMode =>
@@ -764,7 +788,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 // fingerprint while noisy re-runs of the same outcome do not.
 export function validationFingerprint(results: readonly AgentGateway.ValidationResult[]): string {
   return results
-    .map((r) => `${r.command} ${r.exit_code}`)
+    .map((r) => `${r.command} ${r.kind}:${r.exit_code}`)
     .sort()
     .join("\n")
 }
@@ -852,6 +876,7 @@ function extractValidationHistory(
         history.push({
           command: candidate,
           passed,
+          kind: terminated ? "signal" : "command_exit",
           exit_code,
           output: output.slice(0, 2000),
           duration_ms: 0,

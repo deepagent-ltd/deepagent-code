@@ -1,4 +1,5 @@
 import { PermissionV1 } from "@deepagent-code/core/v1/permission"
+import { Database } from "@deepagent-code/core/database/database"
 import { Agent } from "@/agent/agent"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { EventV2Bridge } from "@/event-v2-bridge"
@@ -10,6 +11,8 @@ import { Session } from "@/session/session"
 import { SessionCompaction } from "@/session/compaction"
 import { MessageV2 } from "@/session/message-v2"
 import { SessionPrompt } from "@/session/prompt"
+import { SessionPromptIntent } from "@/session/prompt-intent"
+import { SessionMutationEpoch } from "@/session/mutation-epoch"
 import { SessionRevert } from "@/session/revert"
 import { SessionRunState } from "@/session/run-state"
 import { SessionStatus } from "@/session/status"
@@ -39,7 +42,7 @@ import {
   SummarizePayload,
   UpdatePayload,
 } from "../groups/session"
-import { PermissionNotFoundError } from "../errors"
+import { ConflictError, PermissionNotFoundError } from "../errors"
 import * as SessionError from "./session-errors"
 
 const tryParseJson = (text: string) =>
@@ -68,6 +71,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const session = yield* Session.Service
     const shareSvc = yield* SessionShare.Service
     const promptSvc = yield* SessionPrompt.Service
+    const database = yield* Database.Service
     const revertSvc = yield* SessionRevert.Service
     const compactSvc = yield* SessionCompaction.Service
     const runState = yield* SessionRunState.Service
@@ -328,7 +332,23 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
           ...ctx.payload,
           sessionID: ctx.params.sessionID,
         })
-        .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
+        .pipe(
+          Effect.mapError((error) =>
+            error instanceof SessionMutationEpoch.Stale
+              ? new ConflictError({
+                  message: "prompt intent was superseded by a session revert",
+                  resource: `session:${error.sessionID}`,
+                })
+              : error instanceof SessionPromptIntent.Conflict
+                ? new ConflictError({ message: error.reason, resource: `session_intent:${error.intentID}` })
+                : error instanceof SessionPromptIntent.InProgress
+                  ? new ConflictError({
+                      message: "prompt intent admission is already in progress",
+                      resource: `session_intent:${error.intentID}`,
+                    })
+                  : new HttpApiError.BadRequest({}),
+          ),
+        )
       const body =
         result.kind === "turn"
           ? JSON.stringify(result.message)
@@ -345,7 +365,24 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       yield* requireSession(input.ctx.params.sessionID)
       const rawInput = promptText(input.ctx.payload.parts)
       if (!rawInput.trim()) return yield* new HttpApiError.BadRequest({})
-      return yield* promptSvc
+      if (input.ctx.payload.intent_id) {
+        yield* SessionPromptIntent.prepare({
+          intentID: input.ctx.payload.intent_id,
+          sessionID: input.ctx.params.sessionID,
+          source: input.ctx.payload.intent_source ?? "intelligence",
+        }).pipe(
+          Effect.provideService(Database.Service, database),
+          Effect.mapError((error) =>
+            error instanceof SessionMutationEpoch.Stale
+              ? new ConflictError({
+                  message: "prompt intent was superseded by a session revert",
+                  resource: `session:${error.sessionID}`,
+                })
+              : new ConflictError({ message: error.reason, resource: `session_intent:${error.intentID}` }),
+          ),
+        )
+      }
+      const result = yield* promptSvc
         .refineIntelligenceDraft({
           sessionID: input.ctx.params.sessionID,
           rawInput,
@@ -380,6 +417,10 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
             ),
           ),
         )
+      return {
+        ...result,
+        ...(input.ctx.payload.intent_id ? { intent_id: input.ctx.payload.intent_id } : {}),
+      }
     })
 
     const promptPrepare = Effect.fn("SessionHttpApi.promptPrepare")(function* (ctx: {
@@ -436,24 +477,24 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       payload: typeof PromptPayload.Type
     }) {
       yield* requireSession(ctx.params.sessionID)
-      // V4.1 §S1.2: mirror the synchronous `prompt` handler — route through promptOrSteer so a message
-      // sent while the session is mid-turn is admitted as a steer (absorbed at the next model-request
-      // boundary) instead of queuing as a new turn that starts only after the current one finishes.
-      // The turn result / steer ack is ignored here (we return 204 regardless); errors are published
-      // as session error events just like the old prompt() path.
-      yield* promptSvc.promptOrSteer({ ...ctx.payload, sessionID: ctx.params.sessionID }).pipe(
-        Effect.catchCause((cause) =>
-          Effect.gen(function* () {
-            yield* Effect.logError("prompt_async failed").pipe(
-              Effect.annotateLogs({ sessionID: ctx.params.sessionID, cause }),
-            )
-            yield* events.publish(Session.Event.Error, {
-              sessionID: ctx.params.sessionID,
-              error: new NamedError.Unknown({ message: Cause.pretty(cause) }).toObject(),
-            })
-          }),
+      // Return only after the input has crossed its durable admission boundary. Model execution stays
+      // asynchronous, but callers may safely serialize destructive actions after this acknowledgement.
+      yield* promptSvc.promptAsync({ ...ctx.payload, sessionID: ctx.params.sessionID }).pipe(
+        Effect.mapError((error) =>
+          error instanceof SessionPromptIntent.Conflict
+            ? new ConflictError({ message: error.reason, resource: `session_intent:${error.intentID}` })
+            : error instanceof SessionPromptIntent.InProgress
+              ? new ConflictError({
+                  message: "prompt intent admission is already in progress",
+                  resource: `session_intent:${error.intentID}`,
+                })
+              : error instanceof SessionMutationEpoch.Stale
+                ? new ConflictError({
+                    message: "prompt intent was superseded by a session revert",
+                    resource: `session:${error.sessionID}`,
+                  })
+                : new HttpApiError.BadRequest({}),
         ),
-        Effect.forkIn(scope, { startImmediately: true }),
       )
       return HttpApiSchema.NoContent.make()
     })

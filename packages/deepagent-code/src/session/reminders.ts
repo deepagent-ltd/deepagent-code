@@ -23,14 +23,14 @@ import PLAN_MODE from "./prompt/plan-mode.txt"
 // history. Mutating that anchor busted every later cache block. This is now a PURE RENDERER: the caller
 // folds the result into the same ephemeral trailing `<deepagent-round-context>` message as the other
 // volatile round state. Returns null when there is nothing to surface.
-export const renderPlanStatus = (sessionID: string): string | null => {
+export const renderPlanStatus = (sessionID: string, detail: "full" | "continuation" = "full"): string | null => {
   const agentMode = AgentGateway.snapshot().agentMode ?? "high"
   // Lightweight modes (general/direct) never carry the plan machinery — no snapshot, no nudge.
   if (AgentGateway.DeepAgentPlanController.isLightweightMode(agentMode)) return null
   const plan = AgentGateway.DeepAgentSessionState.getPlan(sessionID)
   if (!plan) return null
 
-  const snapshot = AgentGateway.DeepAgentPlanController.renderPlanSnapshot(plan)
+  const snapshot = AgentGateway.DeepAgentPlanController.renderPlanSnapshot(plan, detail)
   const mutations = AgentGateway.DeepAgentSessionState.mutationsSinceReport(sessionID)
   const validationPassedSinceReport = AgentGateway.DeepAgentSessionState.validationPassedSinceReport(sessionID)
   // U10 hybrid trigger: semantic (a validation just passed) is primary, mode-scaled count is the

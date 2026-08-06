@@ -1,5 +1,5 @@
 import { analyzeErrors, type ErrorPattern } from "./diagnosis"
-import type { ValidationResult } from "./round-state"
+import type { ValidationFailureKind, ValidationResult } from "./round-state"
 
 /**
  * T2 (S1-v3.4): failure triage — the "fixability × progress" three-light classifier.
@@ -38,12 +38,14 @@ export type TriageResult = {
   readonly reason: string // human-readable; flows into needs_human body / fold label
 }
 
-// Exit codes that indicate the command/environment, not the code, failed.
-//  127 = command not found, 126 = not executable, 124 = timeout (GNU coreutils convention).
-const ENV_EXIT_CODES = new Set([124, 126, 127])
-// 128 + signal: 137 = SIGKILL (OOM), 139 = SIGSEGV, 134 = SIGABRT — when these come from the
-// toolchain itself they are environment crashes, not user-code assertions.
-const SIGNAL_EXIT_CODES = new Set([134, 137, 139])
+const ENV_FAILURE_KINDS = new Set<ValidationFailureKind>([
+  "shell_bootstrap_failed",
+  "unsupported_platform",
+  "unsupported_dialect",
+  "timeout",
+  "signal",
+  "output_unavailable",
+])
 
 // Output signatures of environment / dependency / network / resource problems (not fixable by editing code).
 const ENV_OUTPUT =
@@ -66,8 +68,8 @@ const dominantCategory = (patterns: ErrorPattern[]): string | null => {
   return [...patterns].sort((a, b) => b.count - a.count || a.category.localeCompare(b.category))[0]!.category
 }
 
-const hasEnvExitCode = (failed: readonly ValidationResult[]): number | undefined =>
-  failed.find((f) => ENV_EXIT_CODES.has(f.exit_code) || SIGNAL_EXIT_CODES.has(f.exit_code))?.exit_code
+const environmentFailure = (failed: readonly ValidationResult[]): ValidationResult | undefined =>
+  failed.find((result) => ENV_FAILURE_KINDS.has(result.kind))
 
 /**
  * Classify a failing round into a tier (+ yellow substate). Pure function; all signals are passed in.
@@ -80,12 +82,12 @@ export const classifyFailure = (input: TriageInput): TriageResult => {
   const combined = [...input.failed.map((f) => f.output), input.errorOutput ?? ""].join("\n")
 
   // ── 🔴 RED: not auto-fixable (any one hit → immediate exit, no budget burn) ──
-  const envExit = hasEnvExitCode(input.failed)
-  if (envExit !== undefined) {
+  const transportFailure = environmentFailure(input.failed)
+  if (transportFailure) {
     return {
       tier: "not_auto_fixable",
       category,
-      reason: `command/environment failure (exit ${envExit}) — not auto-fixable`,
+      reason: `validation runner failure (${transportFailure.kind}, exit ${transportFailure.exit_code}) — not auto-fixable`,
     }
   }
   if (ENV_OUTPUT.test(combined)) {
