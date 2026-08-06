@@ -339,6 +339,12 @@ export const suites: Suite[] = [
     realLLM: true,
   },
   {
+    id: "ext:prompt-intent-fencing",
+    package: "deepagent-code",
+    command: ["bun", "run", "test:llm-ext:prompt-intent-fencing"],
+    realLLM: true,
+  },
+  {
     id: "eval:autonomous",
     package: "deepagent-code",
     command: ["bun", "run", "test:llm-eval:autonomous"],

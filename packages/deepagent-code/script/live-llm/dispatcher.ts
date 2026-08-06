@@ -112,6 +112,25 @@ const checkCommands: Record<DeterministicCheck, DispatcherCommand[]> = {
       "test/agent/subagent-plan-permission.test.ts",
     ),
   ],
+  "prompt-intent": [
+    command(
+      "packages/deepagent-code",
+      "bun",
+      "test",
+      "test/session/prompt-intent.test.ts",
+      "test/session/revert-compact.test.ts",
+      "test/session/steer.test.ts",
+    ),
+    command(
+      "packages/app",
+      "bun",
+      "test",
+      "--preload",
+      "./happydom.ts",
+      "src/components/prompt-input/submit.test.ts",
+      "src/pages/session/followup-submission.test.ts",
+    ),
+  ],
   mcp: [
     command("packages/deepagent-code", "bun", "typecheck"),
     command("packages/deepagent-code", "bun", "test", "test/mcp", "test/deepagent/mcp-provenance.test.ts"),
@@ -246,6 +265,10 @@ const modelCommands = new Map<string, DispatcherCommand>([
   [
     "ext:legacy-session:intelligence-draft-confirmation",
     command("packages/deepagent-code", "bun", "run", "test:llm-ext:intelligence-draft"),
+  ],
+  [
+    "ext:legacy-session:prompt-intent-fencing",
+    command("packages/deepagent-code", "bun", "run", "test:llm-ext:prompt-intent-fencing"),
   ],
   [
     "live:legacy-session:subagent-control-plane",

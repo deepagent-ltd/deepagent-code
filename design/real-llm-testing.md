@@ -6,7 +6,7 @@
 
 ## 0. 权威状态与硬合同
 
-截至 2026-07-31，聚合 runner 注册 55 条命令，其中 48 条调用真实模型；headless 矩阵为 48 条命令、43 条真实模型 suite，进一步跳过 EVAL 和安装后为 46 条命令、42 条真实模型 suite。数字由 `script/run-live-llm-all.ts` 动态注册表决定，文档数字发生漂移时以注册表和 `validateSuiteManifest()` 为准。
+截至 2026-08-06，聚合 runner 注册 58 条命令，其中 51 条调用真实模型；headless 矩阵为 51 条命令、46 条真实模型 suite，进一步跳过 EVAL 和安装后为 49 条命令、45 条真实模型 suite。数字由 `script/run-live-llm-all.ts` 动态注册表决定，文档数字发生漂移时以注册表和 `validateSuiteManifest()` 为准。
 
 `qualifiedLiveRuns` 当前为空。注册、单次通过和 EXT 可达都不代表 pre-push 资格；LIVE suite 只有完成本节资格合同后才能进入该集合。
 
@@ -208,6 +208,7 @@ export DEEPAGENT_CODE_LIVE_LLM_TIMEOUT_MS="180000"
 (cd packages/deepagent-code && bun run test:llm-ext:subagent-intensity)
 (cd packages/deepagent-code && bun run test:llm-ext:subagent-resume)
 (cd packages/deepagent-code && bun run test:llm-ext:subagent-takeover)
+(cd packages/deepagent-code && bun run test:llm-ext:prompt-intent-fencing)
 (cd packages/desktop && bun run test:llm-release:ui)
 ```
 
@@ -251,7 +252,13 @@ Git 合同分入口定义：交互式写型 `task` 使用独立 worktree，并�
 
 审批后的完整闭环由直接生产状态机测试验证：Reviewer 首次返回 `request_changes` 后，使用原 `task_id` 恢复同一个 V4 child Session 和作者 worktree，重新提交到同一 PR；再次 `pr_finalize` 后绑定新 SHA 审阅、`--no-ff` merge、Senior Reviewer 和 worktree cleanup 全部完成。默认 V4 分区规则当前没有产生独立同 wave 节点，因此 V4 wave pool 的并行性使用确定性双 runner 同步屏障证明；真实模型并行性由 `multi-agent-parallel-worktrees` 和 `expert-panel` 覆盖，不能把两类证据混写。
 
-### 5.5 Expert Panel 与缓存边界
+### 5.5 智能直达、Prompt Intent 与撤回重写
+
+`prompt-intent-fencing` 在同一个真实 DeepSeek Session 中覆盖两条生产链。第一条先通过 intelligence prepare 得到 `route=general`，再以同一个 durable intent 提交原始输入；Oracle 要求 `session_intent` 为 `admitted/original/turn`、Session 中只有一条原始用户消息和一次真实 provider 执行。在 provider 仍为 busy 的窗口内，ACK 丢失后的 exact retry 不得增加用户消息，晚到的 rewritten 草稿必须以 `SessionPromptIntent.Conflict` 拒绝，不得排队或启动第二次执行。第二条对该消息执行生产 `SessionRevert`，要求 mutation epoch 精确递增一次，旧 intent retry 以 `SessionMutationEpoch.Stale` 拒绝，再以新 rewrite intent 完成一次真实 provider 执行；清理后的活动 transcript 只能保留一条 rewrite 用户消息，且不得残留旧回复、工具调用、权限请求或工作区改动。
+
+该 EXT suite 只证明真实 refinement/provider 与 durable admission/revert 接线一致，不替代竞态正确性证明。并发 claim、事务原子性、ACK crash window、跨窗口相同 intent、revert 与 materialize 的交错顺序仍由 SQLite/Effect/前端 barrier 的确定性测试承担；不得用模型最终文本或单次 live 通过声称 exactly-once 状态机已经完备。
+
+### 5.6 Expert Panel 与缓存边界
 
 `expert-panel` 必须并行创建 correctness、security、architecture 三个 Reviewer Session。每个 Reviewer 只能成功读取自己的目标文件，必须经过独立的 structured finalizer，并由确定性 arbiter 重算最终 verdict 和 dissent。Oracle 要求每个 lens 至少有一条命中预埋代码事实且置信度为 `0.95` 的 finding；额外 finding 只要仍受目标文件、类别、证据隔离和置信度范围约束，就不应被误判为产品故障。模型对未授权路径的额外 read 尝试可以存在，但必须由权限层拒绝；任何额外成功读取或其他工具调用都应失败。
 

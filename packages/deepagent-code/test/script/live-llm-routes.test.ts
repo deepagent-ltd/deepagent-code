@@ -138,6 +138,7 @@ describe("live LLM route manifest", () => {
           "ext:legacy-session:multi-agent-parallel-worktrees",
           "ext:legacy-session:multi-agent-pr-collaboration",
           "ext:legacy-session:permissions-deny",
+          "ext:legacy-session:prompt-intent-fencing",
           "ext:legacy-session:subagent-background",
           "ext:legacy-session:subagent-finalizer-isolation",
           "ext:legacy-session:subagent-intensity",
@@ -669,6 +670,29 @@ describe("pre-push dispatcher", () => {
           selected.runs.find((run) => modelRunKey(run) === "ext:v4-event-runtime:v4-multi-agent-runtime")!,
         ),
       ).toBeDefined()
+    }
+  })
+
+  test("keeps prompt intent fencing reachable from admission, revert, and renderer seams", () => {
+    for (const path of [
+      "packages/app/src/components/prompt-input/submit.ts",
+      "packages/app/src/pages/session/followup-submission.ts",
+      "packages/core/src/database/migration/20260806051000_session_prompt_intent.ts",
+      "packages/core/src/database/migration/20260806060000_session_mutation_epoch.ts",
+      "packages/deepagent-code/src/session/prompt-intent.ts",
+      "packages/deepagent-code/src/session/revert.ts",
+      "packages/deepagent-code/script/live-llm/prompt-intent-fencing.ts",
+    ]) {
+      const selected = selectRoutes([path])
+      const run = selected.runs.find(
+        (item) => modelRunKey(item) === "ext:legacy-session:prompt-intent-fencing",
+      )
+      expect(run).toBeDefined()
+      expect(selected.checks).toContain("prompt-intent")
+      expect(run && commandForModelRun(run)).toEqual({
+        cwd: "packages/deepagent-code",
+        args: ["bun", "run", "test:llm-ext:prompt-intent-fencing"],
+      })
     }
   })
 

@@ -45,6 +45,7 @@
     "test:llm-ext:compaction-retention": "bun run script/live-llm/compaction-retention.ts",
     "test:llm-ext:expert-panel": "bun run script/live-llm/expert-panel.ts",
     "test:llm-ext:intelligence-draft": "bun run script/live-llm/cli-intelligence.ts",
+    "test:llm-ext:prompt-intent-fencing": "bun run script/live-llm/prompt-intent-fencing.ts",
     "test:llm-live:subagent-control-plane": "bun run script/live-llm/subagent-control-plane.ts",
     "test:llm-eval:autonomous": "bun run script/live-llm/autonomous-eval.ts",
     "test:httpapi": "bun run script/httpapi-exercise.ts --mode coverage --fail-on-missing --fail-on-skip && bun run script/httpapi-exercise.ts --mode auth --fail-on-missing --fail-on-skip && bun run script/httpapi-exercise.ts --mode effect --fail-on-missing --fail-on-skip",

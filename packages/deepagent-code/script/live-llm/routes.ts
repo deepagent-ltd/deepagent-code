@@ -45,6 +45,7 @@ export const modelSuites = [
   "expert-panel",
   "goal-grader-cli-entry",
   "intelligence-draft-confirmation",
+  "prompt-intent-fencing",
   "subagent-control-plane",
 ] as const
 
@@ -65,6 +66,7 @@ export type DeterministicCheck =
   | "llm-adapter"
   | "mcp"
   | "permission"
+  | "prompt-intent"
   | "session-continuation"
   | "session-v2"
   | "tool-bash-sandbox"
@@ -115,6 +117,7 @@ const compactionRetention = modelRun("ext", "legacy-session", "compaction-retent
 const expertPanel = modelRun("ext", "legacy-session", "expert-panel")
 const goalGraderCliEntry = modelRun("ext", "cli-subprocess", "goal-grader-cli-entry")
 const intelligenceDraft = modelRun("ext", "legacy-session", "intelligence-draft-confirmation")
+const promptIntentFencing = modelRun("ext", "legacy-session", "prompt-intent-fencing")
 const subagentControlPlane = modelRun("live", "legacy-session", "subagent-control-plane")
 const allHarnessRuns = [
   adapterProvider,
@@ -151,6 +154,7 @@ const allHarnessRuns = [
   expertPanel,
   goalGraderCliEntry,
   intelligenceDraft,
+  promptIntentFencing,
   subagentControlPlane,
 ]
 
@@ -953,6 +957,26 @@ export const routeManifest = [
     ],
     checks: ["llm-adapter"],
     runs: [intelligenceDraft],
+  },
+  {
+    id: "prompt-intent-fencing-suite",
+    paths: [
+      "packages/app/src/components/prompt-input/**",
+      "packages/app/src/pages/session.tsx",
+      "packages/app/src/pages/session/followup-submission.ts",
+      "packages/core/src/database/migration/20260806051000_session_prompt_intent.ts",
+      "packages/core/src/database/migration/20260806060000_session_mutation_epoch.ts",
+      "packages/core/src/session/sql.ts",
+      "packages/deepagent-code/script/live-llm/prompt-intent-fencing.ts",
+      "packages/deepagent-code/src/server/routes/instance/httpapi/handlers/session.ts",
+      "packages/deepagent-code/src/session/mutation-epoch.ts",
+      "packages/deepagent-code/src/session/prompt-intent.ts",
+      "packages/deepagent-code/src/session/prompt.ts",
+      "packages/deepagent-code/src/session/revert.ts",
+      "packages/deepagent-code/src/session/session.ts",
+    ],
+    checks: ["prompt-intent"],
+    runs: [promptIntentFencing],
   },
 ] satisfies Route[]
 

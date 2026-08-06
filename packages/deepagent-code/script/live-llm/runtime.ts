@@ -97,6 +97,21 @@ export type LegacyLiveCase = {
   agent?: string
   intelligence?: {
     outputLanguage?: "english" | "chinese"
+    expectedRoute?: "code" | "general"
+  }
+  admission?: {
+    intentID: string
+    source: "composer" | "intelligence" | "followup" | "rewrite"
+    variant: "original" | "rewritten"
+    exactRetry?: boolean
+    conflictingRetry?: {
+      prompt: string
+      variant: "original" | "rewritten"
+    }
+  }
+  revertBefore?: {
+    targetCase: string
+    retryTargetIntent?: boolean
   }
 }
 
@@ -164,6 +179,9 @@ export async function runLegacyLiveCases(input: {
   if (input.verifyChildWorktrees && !input.toolSandbox?.verifierScript) {
     throw new Error("verifyChildWorktrees requires a toolSandbox verifierScript")
   }
+  if (!input.sharedSession && input.cases.some((testCase) => testCase.revertBefore)) {
+    throw new Error("revertBefore requires sharedSession so the target and rewrite use one durable Session")
+  }
   const preflight = await preflightLiveLLM(config)
   const testRoot = await mkdtemp(path.join(os.tmpdir(), `deepagent-code-${input.suite}-`))
   const isolatedHome = path.join(testRoot, "home")
@@ -180,6 +198,7 @@ export async function runLegacyLiveCases(input: {
     const { CrossSpawnSpawner } = await import("@deepagent-code/core/cross-spawn-spawner")
     const { EffectFlock } = await import("@deepagent-code/core/util/effect-flock")
     const { Context, Deferred, Effect, Fiber, Layer, Schedule } = await import("effect")
+    const { eq } = await import("drizzle-orm")
     const { AgentExecution } = await import("@deepagent-code/core/deepagent/agent-execution")
     const { ApprovalQueue } = await import("@deepagent-code/core/deepagent/approval-queue")
     const { DeepAgentEventBus } = await import("@deepagent-code/core/deepagent/deepagent-event-bus")
@@ -196,11 +215,14 @@ export async function runLegacyLiveCases(input: {
     const { Permission } = await import("../../src/permission")
     const { Question } = await import("../../src/question")
     const { SessionCompaction } = await import("../../src/session/compaction")
+    const { SessionPromptIntent } = await import("../../src/session/prompt-intent")
     const { SessionPrompt } = await import("../../src/session/prompt")
+    const { SessionRevert } = await import("../../src/session/revert")
     const { SessionRunState } = await import("../../src/session/run-state")
     const { MessageID } = await import("../../src/session/schema")
     const { SessionSteer } = await import("../../src/session/steer")
     const { Session } = await import("../../src/session/session")
+    const { SessionIntentTable } = await import("@deepagent-code/core/session/sql")
     const { EventDispatcher } = await import("../../src/session/event-dispatcher")
     const { MultiAgentRuntime } = await import("../../src/session/multi-agent-runtime")
     const { makeEventTurnRunner } = await import("../../src/session/v4-event-runtime")
@@ -226,9 +248,11 @@ export async function runLegacyLiveCases(input: {
       | undefined
     const program = Effect.gen(function* () {
       const prompts = yield* SessionPrompt.Service
+      const database = yield* Database.Service
       const runState = yield* SessionRunState.Service
       const steers = yield* SessionSteer.Service
       const compaction = yield* SessionCompaction.Service
+      const revert = yield* SessionRevert.Service
       const sessions = yield* Session.Service
       const instance = yield* TestInstance
       const parentInstance = yield* InstanceRef
@@ -538,6 +562,13 @@ export async function runLegacyLiveCases(input: {
             permission: Permission.fromConfig(input.primaryPermission ?? input.permission ?? {}),
           })
         : undefined
+      const admittedCases = new Map<
+        string,
+        Parameters<typeof prompts.promptAsync>[0] & {
+          readonly intentID: string
+          readonly messageID: ReturnType<typeof MessageID.make>
+        }
+      >()
       const observations = yield* Effect.forEach(input.cases, (testCase) =>
         Effect.gen(function* () {
           const session = sharedSession ?? (yield* sessions.create({ title: `Live ${input.suite}: ${testCase.name}` }))
@@ -546,6 +577,40 @@ export async function runLegacyLiveCases(input: {
               input.beforeCase!({ caseName: testCase.name, directory: instance.directory, sandbox }),
             )
           }
+          const revertEvidence = testCase.revertBefore
+            ? yield* Effect.gen(function* () {
+                const target = admittedCases.get(testCase.revertBefore!.targetCase)
+                if (!target || target.sessionID !== session.id) {
+                  return yield* Effect.die(
+                    new Error(`Missing same-Session revert target ${testCase.revertBefore!.targetCase}`),
+                  )
+                }
+                const epochBefore = yield* sessions.mutationEpoch(session.id).pipe(Effect.orDie)
+                yield* revert.revert({ sessionID: session.id, messageID: target.messageID })
+                const epochAfter = yield* sessions.mutationEpoch(session.id).pipe(Effect.orDie)
+                const retry = testCase.revertBefore!.retryTargetIntent
+                  ? yield* prompts
+                      .promptAsync({ ...target, messageID: MessageID.ascending() })
+                      .pipe(
+                        Effect.as({ accepted: true as const }),
+                        Effect.catch((error) =>
+                          Effect.succeed({ accepted: false as const, error: liveErrorName(error) }),
+                        ),
+                      )
+                  : undefined
+                if (retry?.accepted) {
+                  return yield* Effect.die(new Error("A pre-revert prompt intent was admitted in a newer mutation epoch"))
+                }
+                yield* revert.cleanup(yield* sessions.get(session.id).pipe(Effect.orDie), epochAfter)
+                return {
+                  targetCase: testCase.revertBefore!.targetCase,
+                  targetMessageID: target.messageID,
+                  epochBefore,
+                  epochAfter,
+                  retry,
+                }
+              })
+            : undefined
           const messagesBefore = yield* sessions.messages({ sessionID: session.id })
           const toolCountBefore = messagesBefore.reduce(
             (count, message) => count + message.parts.filter((part) => part.type === "tool").length,
@@ -569,6 +634,13 @@ export async function runLegacyLiveCases(input: {
             pendingAfterAdmission: boolean
             consumedAfterAdmission: boolean
           }> = []
+          if (testCase.admission) {
+            yield* SessionPromptIntent.prepare({
+              intentID: testCase.admission.intentID,
+              sessionID: session.id,
+              source: testCase.admission.source,
+            }).pipe(Effect.provideService(Database.Service, database))
+          }
           const intelligenceDraft = testCase.intelligence
             ? yield* prompts.refineIntelligenceDraft({
                 sessionID: session.id,
@@ -576,25 +648,131 @@ export async function runLegacyLiveCases(input: {
                 outputLanguage: testCase.intelligence.outputLanguage,
               })
             : undefined
-          if (intelligenceDraft && (intelligenceDraft.route !== "code" || !intelligenceDraft.prompt_draft_id)) {
+          const expectedIntelligenceRoute = testCase.intelligence?.expectedRoute ?? "code"
+          if (intelligenceDraft && intelligenceDraft.route !== expectedIntelligenceRoute) {
+            return yield* Effect.die(
+              new Error(
+                `Intelligence live case expected ${expectedIntelligenceRoute} but received ${intelligenceDraft.route}`,
+              ),
+            )
+          }
+          if (intelligenceDraft?.route === "code" && !intelligenceDraft.prompt_draft_id) {
             return yield* Effect.die(new Error("Intelligence live case did not produce a confirmable code draft"))
           }
-          const turn = prompts.prompt({
-            sessionID: session.id,
-            model: { providerID, modelID },
-            agent: testCase.agent ?? "live-test",
-            parts: [{ type: "text", text: testCase.prompt }],
-            metadata: intelligenceDraft
+          const metadata = intelligenceDraft
+            ? intelligenceDraft.route === "code"
               ? {
                   deepagent: {
                     prompt_pipeline: {
-                      mode: "intelligence",
+                      mode: "intelligence" as const,
                       confirmed_draft_id: intelligenceDraft.prompt_draft_id,
                     },
                   },
                 }
-              : undefined,
-          })
+              : {
+                  deepagent: {
+                    agent_mode_override: "general" as const,
+                    prompt_pipeline: { mode: "direct_override" as const },
+                  },
+                }
+            : undefined
+          const promptInput = {
+            sessionID: session.id,
+            model: { providerID, modelID },
+            agent: testCase.agent ?? "live-test",
+            parts: [{ type: "text", text: testCase.prompt }],
+            metadata,
+            ...(testCase.admission
+              ? {
+                  messageID: MessageID.ascending(),
+                  intentID: testCase.admission.intentID,
+                  intentSource: testCase.admission.source,
+                  intentVariant: testCase.admission.variant,
+                }
+              : {}),
+          } satisfies Parameters<typeof prompts.prompt>[0]
+          const admissionRetryEvidence: Array<{
+            activeBeforeRetry: boolean
+            exact?: { accepted: true; userCountBefore: number; userCountAfter: number }
+            conflict?: { accepted: boolean; error?: string }
+          }> = []
+          const turn = testCase.admission
+            ? Effect.gen(function* () {
+                yield* prompts.promptAsync(promptInput)
+                if (!promptInput.messageID) {
+                  return yield* Effect.die(new Error("Durable admission did not reserve a message ID"))
+                }
+                admittedCases.set(testCase.name, {
+                  ...promptInput,
+                  intentID: testCase.admission!.intentID,
+                  messageID: promptInput.messageID,
+                })
+                const hasRetry = testCase.admission!.exactRetry || testCase.admission!.conflictingRetry
+                const activeBeforeRetry = hasRetry
+                  ? yield* runState
+                      .isBusy(session.id)
+                      .pipe(
+                        Effect.repeat({ while: (busy) => !busy, schedule: Schedule.spaced("10 millis") }),
+                        Effect.timeout(config.timeoutMs),
+                      )
+                  : false
+                if (hasRetry && !activeBeforeRetry) {
+                  return yield* Effect.die(new Error("Admitted prompt did not enter an active turn before retry"))
+                }
+                const exact = testCase.admission!.exactRetry
+                  ? yield* Effect.gen(function* () {
+                      const before = (yield* sessions.messages({ sessionID: session.id })).filter(
+                        (message) => message.info.role === "user",
+                      ).length
+                      yield* prompts.promptAsync({ ...promptInput, messageID: MessageID.ascending() })
+                      const after = (yield* sessions.messages({ sessionID: session.id })).filter(
+                        (message) => message.info.role === "user",
+                      ).length
+                      if (after !== before) {
+                        return yield* Effect.die(new Error("An exact prompt intent retry created another user message"))
+                      }
+                      return { accepted: true as const, userCountBefore: before, userCountAfter: after }
+                    })
+                  : undefined
+                const conflict = testCase.admission!.conflictingRetry
+                  ? yield* prompts
+                      .promptAsync({
+                        ...promptInput,
+                        messageID: MessageID.ascending(),
+                        intentVariant: testCase.admission!.conflictingRetry.variant,
+                        parts: [{ type: "text", text: testCase.admission!.conflictingRetry.prompt }],
+                      })
+                      .pipe(
+                        Effect.as({ accepted: true as const }),
+                        Effect.catch((error) =>
+                          Effect.succeed({ accepted: false as const, error: liveErrorName(error) }),
+                        ),
+                      )
+                  : undefined
+                if (conflict?.accepted) {
+                  return yield* Effect.die(new Error("A conflicting prompt intent retry was admitted"))
+                }
+                admissionRetryEvidence.push({ activeBeforeRetry, exact, conflict })
+                return yield* Effect.gen(function* () {
+                  const busy = yield* runState.isBusy(session.id)
+                  const messages = yield* sessions.messages({ sessionID: session.id })
+                  const assistant = messages
+                    .filter(
+                      (message): message is SessionV1.WithParts & { info: SessionV1.Assistant } =>
+                        message.info.role === "assistant",
+                    )
+                    .slice(assistantCountBefore)
+                    .findLast((message) => message.info.time.completed !== undefined || message.info.error !== undefined)
+                  return !busy && assistant ? assistant : undefined
+                }).pipe(
+                  Effect.repeat({ while: (result) => result === undefined, schedule: Schedule.spaced("50 millis") }),
+                  Effect.timeout(config.timeoutMs),
+                  Effect.flatMap((result) =>
+                    result ? Effect.succeed(result) : Effect.die(new Error("Admitted prompt produced no terminal assistant")),
+                  ),
+                )
+              })
+            : prompts.prompt(promptInput)
           const result =
             concurrentSteers.length === 0
               ? yield* turn
@@ -855,6 +1033,14 @@ export async function runLegacyLiveCases(input: {
             ),
           )
           const info = yield* sessions.get(session.id)
+          const intent = testCase.admission
+            ? yield* database.db
+                .select()
+                .from(SessionIntentTable)
+                .where(eq(SessionIntentTable.intent_id, testCase.admission.intentID))
+                .get()
+                .pipe(Effect.orDie)
+            : undefined
           return {
             name: testCase.name,
             sessionID: session.id,
@@ -865,6 +1051,20 @@ export async function runLegacyLiveCases(input: {
             steering: steeringEvidence,
             messageCount: messages.length,
             intelligenceDraft,
+            admission: intent
+              ? {
+                  intentID: intent.intent_id,
+                  state: intent.state,
+                  source: intent.source,
+                  variant: intent.selected_variant,
+                  delivery: intent.delivery,
+                  admittedMessageID: intent.admitted_message_id,
+                  mutationEpoch: intent.mutation_epoch,
+                  version: intent.version,
+                  retry: admissionRetryEvidence[0],
+                }
+              : undefined,
+            revert: revertEvidence,
             users: currentUsers.map((message) => ({
               metadata: message.info.metadata,
               text: message.parts
@@ -1091,6 +1291,7 @@ export async function runLegacyLiveCases(input: {
             SessionRunState.defaultLayer,
             SessionSteer.defaultLayer,
             SessionCompaction.defaultLayer,
+            SessionRevert.defaultLayer,
             Session.defaultLayer,
             Permission.defaultLayer,
             Question.defaultLayer,
@@ -1179,6 +1380,13 @@ function restoreEnvironment(environment: Record<string, string | undefined>) {
     }
     process.env[key] = value
   })
+}
+
+function liveErrorName(error: unknown) {
+  if (typeof error !== "object" || error === null) return String(error)
+  if ("_tag" in error && typeof error._tag === "string") return error._tag
+  if (error instanceof Error) return error.name
+  return "UnknownError"
 }
 
 async function prepareIsolation(
