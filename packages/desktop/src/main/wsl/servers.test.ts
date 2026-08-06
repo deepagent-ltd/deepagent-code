@@ -96,6 +96,32 @@ test("derives a required Windows restart from the post-install runtime probe", (
   expect(pendingRestartAfterWslInstall({ available: true, version: "WSL version: 2.6.1", error: null })).toBe(false)
 })
 
+test("refuses to start a persisted WSL1 server", async () => {
+  persistedServers = [{ id: "wsl:Debian", distro: "Debian" }]
+  let spawns = 0
+  const controller = createWslServersController(
+    "1.16.2",
+    async () => {
+      spawns++
+      throw new Error("must not spawn")
+    },
+    {
+      ...testControllerOptions(),
+      listInstalledDistros: async () => [{ name: "Debian", version: 1, isDefault: true }],
+      resolveDeepagentCode: async () => null,
+    },
+  )
+
+  await controller.initialize()
+  await waitFor(() => controller.getState().servers[0]?.runtime.kind === "failed")
+
+  expect(spawns).toBe(0)
+  expect(controller.getState().servers[0]?.runtime).toEqual({
+    kind: "failed",
+    message: "Debian uses WSL1; DeepAgent Code requires WSL2",
+  })
+})
+
 test("ignores stale background DeepAgent Code checks after removing a WSL server", async () => {
   persistedServers = []
   releaseDeepagentCodeResolve = undefined
@@ -157,6 +183,7 @@ function testControllerOptions() {
       persistedServers = servers
     },
     readCommandVersion: async () => "1.16.2",
+    listInstalledDistros: async () => [{ name: "Debian", version: 2, isDefault: true }],
     resolveDeepagentCode: async () => {
       await new Promise<void>((resolve) => {
         releaseDeepagentCodeResolve = resolve

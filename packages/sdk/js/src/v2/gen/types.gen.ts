@@ -22,6 +22,10 @@ export type Event =
   | EventSessionNextPromptAdmitted
   | EventSessionNextPromptPromoted
   | EventSessionNextInterruptRequested
+  | EventSessionExecutionStarted
+  | EventSessionExecutionSucceeded
+  | EventSessionExecutionFailed
+  | EventSessionExecutionInterrupted
   | EventSessionNextContextUpdated
   | EventSessionNextSynthetic
   | EventSessionNextShellStarted
@@ -923,6 +927,40 @@ export type GlobalEvent = {
       }
     | {
         id: string
+        type: "session.execution.started"
+        properties: {
+          timestamp: number
+          sessionID: string
+        }
+      }
+    | {
+        id: string
+        type: "session.execution.succeeded"
+        properties: {
+          timestamp: number
+          sessionID: string
+        }
+      }
+    | {
+        id: string
+        type: "session.execution.failed"
+        properties: {
+          timestamp: number
+          sessionID: string
+          error: SessionErrorUnknown
+        }
+      }
+    | {
+        id: string
+        type: "session.execution.interrupted"
+        properties: {
+          timestamp: number
+          sessionID: string
+          reason: "user" | "shutdown" | "superseded"
+        }
+      }
+    | {
+        id: string
         type: "session.next.context.updated"
         properties: {
           timestamp: number
@@ -1766,6 +1804,10 @@ export type GlobalEvent = {
     | SyncEventSessionNextPromptAdmitted
     | SyncEventSessionNextPromptPromoted
     | SyncEventSessionNextInterruptRequested
+    | SyncEventSessionExecutionStarted
+    | SyncEventSessionExecutionSucceeded
+    | SyncEventSessionExecutionFailed
+    | SyncEventSessionExecutionInterrupted
     | SyncEventSessionNextContextUpdated
     | SyncEventSessionNextSynthetic
     | SyncEventSessionNextShellStarted
@@ -3293,6 +3335,12 @@ export type SubtaskPartInput = {
   command?: string
 }
 
+export type ConflictError = {
+  _tag: "ConflictError"
+  message: string
+  resource?: string
+}
+
 export type SessionBusyError = {
   _tag: "SessionBusyError"
   sessionID: string
@@ -3399,12 +3447,6 @@ export type SessionsResponse = {
 export type InvalidCursorError = {
   _tag: "InvalidCursorError"
   message: string
-}
-
-export type ConflictError = {
-  _tag: "ConflictError"
-  message: string
-  resource?: string
 }
 
 export type ServiceUnavailableError = {
@@ -3987,6 +4029,68 @@ export type SyncEventSessionNextInterruptRequested = {
     data: {
       timestamp: number
       sessionID: string
+    }
+  }
+}
+
+export type SyncEventSessionExecutionStarted = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.execution.started.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+    }
+  }
+}
+
+export type SyncEventSessionExecutionSucceeded = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.execution.succeeded.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+    }
+  }
+}
+
+export type SyncEventSessionExecutionFailed = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.execution.failed.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      error: SessionErrorUnknown
+    }
+  }
+}
+
+export type SyncEventSessionExecutionInterrupted = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.execution.interrupted.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      reason: "user" | "shutdown" | "superseded"
     }
   }
 }
@@ -5121,6 +5225,44 @@ export type EventSessionNextInterruptRequested = {
   properties: {
     timestamp: number
     sessionID: string
+  }
+}
+
+export type EventSessionExecutionStarted = {
+  id: string
+  type: "session.execution.started"
+  properties: {
+    timestamp: number
+    sessionID: string
+  }
+}
+
+export type EventSessionExecutionSucceeded = {
+  id: string
+  type: "session.execution.succeeded"
+  properties: {
+    timestamp: number
+    sessionID: string
+  }
+}
+
+export type EventSessionExecutionFailed = {
+  id: string
+  type: "session.execution.failed"
+  properties: {
+    timestamp: number
+    sessionID: string
+    error: SessionErrorUnknown
+  }
+}
+
+export type EventSessionExecutionInterrupted = {
+  id: string
+  type: "session.execution.interrupted"
+  properties: {
+    timestamp: number
+    sessionID: string
+    reason: "user" | "shutdown" | "superseded"
   }
 }
 
@@ -12392,6 +12534,9 @@ export type SessionMessagesResponse2 = SessionMessagesResponses[keyof SessionMes
 export type SessionPromptData = {
   body?: {
     messageID?: string
+    intentID?: string
+    intentSource?: "composer" | "intelligence" | "followup" | "rewrite"
+    intentVariant?: "original" | "rewritten"
     model?: {
       providerID: string
       modelID: string
@@ -12428,6 +12573,10 @@ export type SessionPromptErrors = {
    * NotFoundError
    */
   404: NotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
 }
 
 export type SessionPromptError = SessionPromptErrors[keyof SessionPromptErrors]
@@ -12745,6 +12894,8 @@ export type SessionPromptPrepareData = {
   body?: {
     mode: "wish" | "intelligence"
     output_language?: "chinese" | "english"
+    intent_id?: string
+    intent_source?: "composer" | "intelligence" | "followup" | "rewrite"
     parts: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
   }
   path: {
@@ -12766,6 +12917,10 @@ export type SessionPromptPrepareErrors = {
    * NotFoundError
    */
   404: NotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
 }
 
 export type SessionPromptPrepareError = SessionPromptPrepareErrors[keyof SessionPromptPrepareErrors]
@@ -12782,6 +12937,7 @@ export type SessionPromptPrepareResponses = {
     route: "code" | "general"
     goal: string
     preview: string
+    intent_id?: string
   }
 }
 
@@ -12791,6 +12947,8 @@ export type SessionPromptPrepareStreamData = {
   body?: {
     mode: "wish" | "intelligence"
     output_language?: "chinese" | "english"
+    intent_id?: string
+    intent_source?: "composer" | "intelligence" | "followup" | "rewrite"
     parts: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
   }
   path: {
@@ -12812,6 +12970,10 @@ export type SessionPromptPrepareStreamErrors = {
    * NotFoundError
    */
   404: NotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
 }
 
 export type SessionPromptPrepareStreamError = SessionPromptPrepareStreamErrors[keyof SessionPromptPrepareStreamErrors]
@@ -12866,6 +13028,9 @@ export type SessionPromptSuggestionResponse = SessionPromptSuggestionResponses[k
 export type SessionPromptAsyncData = {
   body?: {
     messageID?: string
+    intentID?: string
+    intentSource?: "composer" | "intelligence" | "followup" | "rewrite"
+    intentVariant?: "original" | "rewritten"
     model?: {
       providerID: string
       modelID: string
@@ -12902,6 +13067,10 @@ export type SessionPromptAsyncErrors = {
    * NotFoundError
    */
   404: NotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
 }
 
 export type SessionPromptAsyncError = SessionPromptAsyncErrors[keyof SessionPromptAsyncErrors]

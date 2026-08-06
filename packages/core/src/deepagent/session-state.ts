@@ -241,7 +241,7 @@ export const setPlan = (sessionId: string, plan: PlanDoc): void => {
   // U10: reset the progress-nudge state ONLY when the model actually moved a step's status (or
   // added a step). A no-op re-write leaves the counter/flag running so the nudge is not silenced by
   // an empty update ("report theater"). Compare against the CURRENT structural plan in the store.
-  const previous = PlanStore.getPlanDoc(sessionId)
+  const previous = getPlan(sessionId)
   if (planStatusesChanged(previous, plan)) {
     state.mutationsSinceReport = 0
     state.validationPassedSinceReport = false
@@ -255,7 +255,12 @@ export const setPlan = (sessionId: string, plan: PlanDoc): void => {
 
 // I33-1: read the structural plan from the single DocumentStore authority (plan-store). This is an
 // in-memory shared-index lookup + JSON.parse (F30-1 Part 2), safe on the hot path (every tool call).
-export const getPlan = (sessionId: string): PlanDoc | null => PlanStore.getPlanDoc(sessionId)
+export const getPlan = (sessionId: string): PlanDoc | null => {
+  const planId = sessions.get(sessionId)?.planLatch.plan_id
+  if (!planId) return null
+  const plan = PlanStore.getPlanDoc(sessionId)
+  return plan?.plan_id === planId ? plan : null
+}
 
 // V3.9 §C — Expert Panel per-session arming.
 // The raw per-session toggle (null = never explicitly toggled). setPanelArmed writes an explicit
@@ -421,7 +426,7 @@ export const markPlanStale = (sessionId: string, reason: StaleReason): void => {
   saveToDisk()
 }
 
-export type UserMessageObservation = "initial" | "same" | "new"
+export type UserMessageObservation = "initial" | "same" | "new" | "reopened"
 
 /**
  * Observes a user admission message and returns whether it is the first,
@@ -432,7 +437,9 @@ export type UserMessageObservation = "initial" | "same" | "new"
  * "initial": first time this session is seen; records the baseline ID, does NOT
  *   mark stale. Old state without lastAdmissionUserMessageId migrates here.
  * "same": same ID as last recorded; this is a tool continuation, skip.
- * "new": different ID; this is a genuine new user message, caller should mark stale.
+ * "new": different ID while the activity is live; caller should mark its plan stale.
+ * "reopened": different ID after completion/failure; starts a fresh activity while retaining
+ *   session-scoped preferences and the versioned plan history.
  */
 export const observeUserAdmission = (
   sessionId: string,
@@ -447,6 +454,21 @@ export const observeUserAdmission = (
   }
   if (state.lastAdmissionUserMessageId === admissionMessageId) return "same"
   state.lastAdmissionUserMessageId = admissionMessageId
+  if (state.completedAt) {
+    state.roundState = createInitialRoundState(state.mode)
+    state.lastValidationResults = []
+    state.lastValidationOutput = null
+    state.knowledgeSynthesis = null
+    state.runId = `run_${randomUUID()}`
+    state.planLatch = initialPlanLatch()
+    state.mutationsSinceReport = 0
+    state.validationPassedSinceReport = false
+    state.suppressedValidations = []
+    state.completedAt = null
+    state.lastPlanGateNudgeFingerprint = null
+    saveToDisk()
+    return "reopened"
+  }
   saveToDisk()
   return "new"
 }
@@ -593,7 +615,7 @@ function normalizeState(state: SessionRunState): SessionRunState {
     // `>= limit` false forever, silently disabling the grace release for older sessions).
     planLatch: state.planLatch
       ? { ...state.planLatch, consecutive_blocks: state.planLatch.consecutive_blocks ?? 0 }
-      : initialPlanLatch(),
+      : initialPlanLatch(PlanStore.getPlanDoc(state.sessionId)?.plan_id ?? null),
     // Backfill: sessions persisted before U10 have no counter on disk.
     mutationsSinceReport: state.mutationsSinceReport ?? 0,
     validationPassedSinceReport: state.validationPassedSinceReport ?? false,

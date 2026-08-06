@@ -84,14 +84,18 @@ export namespace LSPResolve {
     symbol: string
     file?: string
     kind?: string
+    /** Bounded text-search candidates used to warm cold LSP indexes, never as semantic results. */
+    fallbackFiles?: readonly string[]
   }) {
     const wantedKind = input.kind ? LABEL_TO_KIND[input.kind] : undefined
     const candidates: Candidate[] = []
 
-    if (input.file) {
-      // File-scoped: documentSymbol returns a tree (DocumentSymbol) or flat (Symbol) list.
-      const uri = fileToUri(input.file)
-      const symbols = yield* input.lsp.documentSymbol(uri).pipe(Effect.catch(() => Effect.succeed([])))
+    const collectDocumentCandidates = Effect.fn("LSPResolve.collectDocumentCandidates")(function* (
+      file: string,
+      warm: boolean,
+    ) {
+      if (warm) yield* input.lsp.touchFile(file).pipe(Effect.catch(() => Effect.void))
+      const symbols = yield* input.lsp.documentSymbol(fileToUri(file)).pipe(Effect.catch(() => Effect.succeed([])))
       const visit = (items: (LSP.DocumentSymbol | LSP.Symbol)[], file: string) => {
         for (const sym of items) {
           // DocumentSymbol has selectionRange; Symbol has location.range.
@@ -104,7 +108,12 @@ export namespace LSPResolve {
           if (children?.length) visit(children, file)
         }
       }
-      visit(symbols, input.file)
+      visit(symbols, file)
+    })
+
+    if (input.file) {
+      // File-scoped: documentSymbol returns a tree (DocumentSymbol) or flat (Symbol) list.
+      yield* collectDocumentCandidates(input.file, false)
     } else {
       // Global: workspaceSymbol. Widen the kind filter so resolution isn't blocked by the
       // default narrow whitelist; we apply the caller's kind filter ourselves.
@@ -116,6 +125,14 @@ export namespace LSPResolve {
         if (wantedKind !== undefined && sym.kind !== wantedKind) continue
         const file = uriToFile(sym.location.uri)
         candidates.push(toCandidate(sym.name, sym.kind, file, sym.location.range))
+      }
+
+      // workspace/symbol is frequently empty before a language server has indexed any files.
+      // Text search only seeds a bounded set of documents; documentSymbol remains the semantic oracle.
+      if (candidates.length === 0) {
+        for (const file of input.fallbackFiles?.slice(0, 20) ?? []) {
+          yield* collectDocumentCandidates(file, true)
+        }
       }
     }
 

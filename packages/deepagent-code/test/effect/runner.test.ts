@@ -35,6 +35,27 @@ describe("Runner", () => {
   )
 
   it.live(
+    "ensureRunning signals only after the run can be cancelled",
+    Effect.gen(function* () {
+      const s = yield* Scope.Scope
+      const runner = Runner.make<string>(s)
+      const ready = yield* Deferred.make<void>()
+      const fiber = yield* runner
+        .ensureRunning(
+          Effect.never.pipe(Effect.as("never")),
+          Deferred.succeed(ready, undefined).pipe(Effect.asVoid),
+        )
+        .pipe(Effect.forkChild)
+
+      yield* Deferred.await(ready).pipe(Effect.timeout("250 millis"))
+      expect(runner.state._tag).toBe("Running")
+      yield* runner.cancel
+      expect(runner.state._tag).toBe("Idle")
+      yield* Fiber.await(fiber)
+    }),
+  )
+
+  it.live(
     "concurrent callers share the same run",
     Effect.gen(function* () {
       const s = yield* Scope.Scope

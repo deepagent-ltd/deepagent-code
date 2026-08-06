@@ -68,6 +68,7 @@ import { Reference } from "../../src/reference/reference"
 import { RepositoryCache } from "../../src/reference/repository-cache"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { TestContextFacades } from "../fixture/context-facades"
+import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
 
 void Log.init({ print: false })
 
@@ -199,6 +200,7 @@ function makeHttp() {
     Layer.provide(CrossSpawnSpawner.defaultLayer),
     Layer.provide(RepositoryCache.defaultLayer),
     Layer.provide(Git.defaultLayer),
+    Layer.provide(EffectFlock.defaultLayer),
     Layer.provide(Reference.defaultLayer),
     Layer.provide(Search.defaultLayer),
     Layer.provide(Format.defaultLayer),
