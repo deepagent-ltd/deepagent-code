@@ -11,6 +11,7 @@ describe("V3.2 validation-exec timeout", () => {
     const elapsed = Date.now() - started
     expect(results).toHaveLength(1)
     expect(results[0]!.passed).toBe(false)
+    expect(results[0]!.kind).toBe("timeout")
     // resolved promptly (well before the 30s sleep), not hung
     expect(elapsed).toBeLessThan(5000)
   })
@@ -20,30 +21,78 @@ describe("V3.2 validation-exec timeout", () => {
     expect(results[0]!.passed).toBe(true)
   })
 
-  test("uses native PowerShell and cmd invocation contracts", () => {
-    expect(validationInvocation("bun run typecheck", "C:\\repo path", "pwsh")).toEqual([
-      "pwsh",
-      "-NoProfile",
-      "-Command",
-      "bun run typecheck",
-    ])
-    expect(validationInvocation("bun run typecheck", "C:\\repo path", "cmd")).toEqual([
-      "cmd",
-      "/c",
-      "bun run typecheck",
-    ])
+  test("structured argv commands do not require a shell", () => {
+    expect(
+      validationInvocation(
+        {
+          id: "test:argv",
+          source: "user",
+          transport: "argv",
+          executable: process.execPath,
+          args: ["-e", "process.exit(0)"],
+          display: "bun -e pass",
+        },
+        process.cwd(),
+      ),
+    ).toEqual({ argv: [process.execPath, "-e", "process.exit(0)"] })
   })
 
-  test("classifies a missing validation shell as one bootstrap failure", async () => {
-    const shell = `missing-validation-shell-${Date.now()}`
-    const results = await runValidationCommands(["bun run typecheck"], process.cwd(), 5000, { shell })
+  test("classifies a missing executable as one typed bootstrap failure", async () => {
+    const executable = `missing-validation-executable-${Date.now()}`
+    const results = await runValidationCommands(
+      [
+        {
+          id: "test:missing",
+          source: "user",
+          transport: "argv",
+          executable,
+          args: [],
+          display: executable,
+        },
+      ],
+      process.cwd(),
+      5000,
+    )
 
     expect(results).toHaveLength(1)
     expect(results[0]).toMatchObject({
       passed: false,
-      exit_code: 127,
-      command: "bun run typecheck",
+      kind: "shell_bootstrap_failed",
+      exit_code: -1,
+      command: executable,
     })
-    expect(results[0]!.output).toContain(`validation shell bootstrap failed (${shell})`)
+    expect(results[0]!.output).toContain(`validation process bootstrap failed (${executable})`)
+  })
+
+  test("keeps a command's deliberate exit 127 distinct from runner bootstrap failure", async () => {
+    const results = await runValidationCommands(["exit 127"], process.cwd(), 5000)
+    expect(results[0]).toMatchObject({ passed: false, kind: "command_exit", exit_code: 127 })
+  })
+
+  test("native Windows fails closed before spawning validation", async () => {
+    const results = await runValidationCommands(["exit 0"], "C:\\repo", 5000, {
+      platform: "win32",
+      release: "10.0.26100",
+      env: {},
+    })
+    expect(results[0]).toMatchObject({ passed: false, kind: "unsupported_platform", exit_code: -1 })
+    expect(results[0]!.output).toContain("running in WSL2")
+  })
+
+  test("WSL1 is rejected while WSL2 uses the normal Linux runner", async () => {
+    const wsl1 = await runValidationCommands(["exit 0"], process.cwd(), 5000, {
+      platform: "linux",
+      release: "4.4.0-19041-Microsoft",
+      env: { WSL_DISTRO_NAME: "Ubuntu" },
+    })
+    expect(wsl1[0]).toMatchObject({ passed: false, kind: "unsupported_platform" })
+    expect(wsl1[0]!.output).toContain("WSL1")
+
+    const wsl2 = await runValidationCommands(["exit 0"], process.cwd(), 5000, {
+      platform: "linux",
+      release: "6.6.87.2-microsoft-standard-WSL2",
+      env: { WSL_DISTRO_NAME: "Ubuntu" },
+    })
+    expect(wsl2[0]).toMatchObject({ passed: true, kind: "command_exit", exit_code: 0 })
   })
 })

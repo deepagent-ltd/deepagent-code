@@ -43,7 +43,7 @@ describe("U1 soft-gate loop (chokepoint contract)", () => {
     // a failing validation flips the latch from runtime truth
     SessionState.recordValidation(
       "gate-s1",
-      [{ command: "tsc", passed: false, exit_code: 1, output: "e", duration_ms: 1 }],
+      [{ command: "tsc", passed: false, kind: "command_exit", exit_code: 1, output: "e", duration_ms: 1 }],
       "e",
     )
 

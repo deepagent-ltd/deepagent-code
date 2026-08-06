@@ -2070,7 +2070,7 @@ export const layer = Layer.effect(
             // T3 (S1-v3.4): yellow-stall narrowing budget before escalating to red (default 1).
             narrowLimit: flags.microbatchNarrowLimit ?? 1,
             first: result,
-            validationCommands: ws.validationCommands,
+            validationCommands: ws.validationPlan,
             ensureSession: () => AgentGateway.DeepAgentOrchestrator.ensureSession(input.sessionID, agentMode),
             runValidation: (cmds) => Effect.promise(() => runValidationCommands(cmds, ctx.directory)),
             track: () => snapshot.track(),

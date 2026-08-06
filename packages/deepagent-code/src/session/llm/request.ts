@@ -788,7 +788,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 // fingerprint while noisy re-runs of the same outcome do not.
 export function validationFingerprint(results: readonly AgentGateway.ValidationResult[]): string {
   return results
-    .map((r) => `${r.command} ${r.exit_code}`)
+    .map((r) => `${r.command} ${r.kind}:${r.exit_code}`)
     .sort()
     .join("\n")
 }
@@ -876,6 +876,7 @@ function extractValidationHistory(
         history.push({
           command: candidate,
           passed,
+          kind: terminated ? "signal" : "command_exit",
           exit_code,
           output: output.slice(0, 2000),
           duration_ms: 0,

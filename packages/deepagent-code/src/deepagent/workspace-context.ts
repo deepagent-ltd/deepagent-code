@@ -3,9 +3,11 @@ export * as DeepAgentWorkspace from "./workspace-context"
 import { readFile, stat } from "node:fs/promises"
 import path from "node:path"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
+import type { ValidationCommand } from "@deepagent-code/core/deepagent/validation"
 
 export type WorkspaceInfo = {
   validationCommands: string[]
+  validationPlan: ValidationCommand[]
   hasTypeScript: boolean
   hasPython: boolean
   packageJson: { scripts?: Record<string, string> } | null
@@ -39,6 +41,7 @@ export async function detect(cwd: string): Promise<WorkspaceInfo> {
 async function detectImpl(cwd: string): Promise<WorkspaceInfo> {
   const info: WorkspaceInfo = {
     validationCommands: [],
+    validationPlan: [],
     hasTypeScript: false,
     hasPython: false,
     packageJson: null,
@@ -57,7 +60,8 @@ async function detectImpl(cwd: string): Promise<WorkspaceInfo> {
   info.hasTypeScript = (await exists(path.join(cwd, "tsconfig.json"))) || Boolean(info.packageJson?.scripts?.typecheck)
   info.hasPython = await exists(path.join(cwd, "requirements.txt"))
   info.agentsMdContent = await readFileSafe(path.join(cwd, "AGENTS.md"))
-  info.validationCommands = inferCommands(info)
+  info.validationPlan = inferCommands(info)
+  info.validationCommands = info.validationPlan.map((command) => command.display)
 
   return info
 }
@@ -79,12 +83,12 @@ async function exists(filePath: string): Promise<boolean> {
   }
 }
 
-function inferCommands(info: WorkspaceInfo): string[] {
+function inferCommands(info: WorkspaceInfo): ValidationCommand[] {
   // P2-7 / P1-3: single source of validation-command inference lives in core's validation.ts
   // (includes test/build/python + the AGENTS.md extractor). This bun-based workspace passes the
   // "bun run" runner so emitted commands use the workspace package manager. The validation
   // executor runs them through the host's accepted shell (PowerShell/cmd on Windows, POSIX elsewhere).
-  return AgentGateway.DeepAgentValidation.inferValidationCommands({
+  return AgentGateway.DeepAgentValidation.inferValidationPlan({
     cwd: "",
     packageJson: info.packageJson ?? undefined,
     agentsMd: info.agentsMdContent ?? undefined,

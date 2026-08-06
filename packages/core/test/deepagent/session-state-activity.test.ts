@@ -27,7 +27,16 @@ describe("DeepAgent activity lifecycle", () => {
     DeepAgentSessionState.advanceToNextRound(sessionId, "continue")
     DeepAgentSessionState.recordValidation(
       sessionId,
-      [{ command: "bun test", passed: false, exit_code: 1, output: "failed", duration_ms: 1 }],
+      [
+        {
+          command: "bun test",
+          passed: false,
+          kind: "command_exit",
+          exit_code: 1,
+          output: "failed",
+          duration_ms: 1,
+        },
+      ],
       "failed",
     )
     DeepAgentSessionState.suppressValidation(sessionId, "bun test", 1, "old activity")

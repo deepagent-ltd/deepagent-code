@@ -798,6 +798,7 @@ describe("validationFingerprint (stale-reharvest guard)", () => {
   const vr = (command: string, exit_code: number, output: string): AgentGateway.ValidationResult => ({
     command,
     passed: exit_code === 0,
+    kind: "command_exit",
     exit_code,
     output,
     duration_ms: 0,
