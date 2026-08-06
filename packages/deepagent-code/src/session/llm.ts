@@ -40,6 +40,8 @@ import { LLMNativeRuntime } from "./llm/native-runtime"
 import { LLMRequestPrep } from "./llm/request"
 import { FreeformTools } from "./llm/freeform-tools"
 import { configureGateway } from "@/deepagent/config"
+import { requestBudget, type RequestBudgetStatus } from "./overflow"
+import { Token } from "@/util/token"
 
 const log = Log.create({ service: "llm" })
 export const OUTPUT_TOKEN_MAX = ProviderTransform.OUTPUT_TOKEN_MAX
@@ -203,6 +205,18 @@ export type StreamInput = {
   federatedShadow?: Readonly<Record<"code" | "knowledge" | "memory" | "documents", number>>
   /** A durable attempt owns retry safety for this request; provider-internal retries must stay disabled. */
   durableAttempt?: boolean
+  /** Internal durable receipt hook invoked after permission filtering and adapter preparation. */
+  requestReceipt?: {
+    readonly prepared: (input: {
+      readonly permissionFilteredToolIds: readonly string[]
+      readonly finalOfferedTools: Readonly<Record<string, Tool>>
+      readonly adapterToolCapability: "supported" | "unsupported" | "unknown"
+      readonly adapterLoweringOutcome: "ok" | "schema_rejected" | "omitted_no_support"
+      readonly budget: RequestBudgetStatus
+    }) => Effect.Effect<void>
+    readonly dispatched: () => Effect.Effect<void>
+    readonly rejected: (input: { readonly budget: RequestBudgetStatus; readonly reason: string }) => Effect.Effect<void>
+  }
 }
 
 export type StreamRequest = StreamInput & {
@@ -457,6 +471,52 @@ const live: Layer.Layer<
       }
 
       const runtimeTools = prepared.tools
+      const budget = requestBudget({
+        model: input.model,
+        outputTokenMax: flags.outputTokenMax,
+        estimatedFullRequestTokens: Token.estimate(
+          JSON.stringify({
+            system: prepared.system,
+            messages: prepared.messages,
+            tools: Object.entries(runtimeTools)
+              .toSorted(([a], [b]) => a.localeCompare(b))
+              .map(([name, definition]) => ({
+                name,
+                description: definition.description,
+                inputSchema: "inputSchema" in definition ? definition.inputSchema : undefined,
+              })),
+            toolChoice: effectiveToolChoice,
+          }),
+        ),
+      })
+      if (budget.decision === "unavailable") {
+        const reason = budget.reason ?? "physical_budget_exceeded"
+        yield* input.requestReceipt?.rejected({ budget, reason }) ?? Effect.void
+        return yield* Effect.fail(
+          new SessionV1.ContextOverflowError({
+            message:
+              reason === "context_limit_unknown"
+                ? "Provider context limit is unknown; configure an endpoint/model override before continuing this long request."
+                : reason === "context_limit_invalid"
+                  ? "Provider context limit is invalid; correct the endpoint/model configuration before continuing."
+                  : "The complete provider request exceeds the physical input budget.",
+          }),
+        )
+      }
+      yield* input.requestReceipt?.prepared({
+        permissionFilteredToolIds: Object.keys(prepared.tools),
+        finalOfferedTools: runtimeTools,
+        adapterToolCapability:
+          toolChoiceProtocol(input.model) === "unknown"
+            ? "unknown"
+            : input.model.capabilities.toolcall
+              ? "supported"
+              : "unsupported",
+        adapterLoweringOutcome:
+          Object.keys(input.tools).length > 0 && Object.keys(runtimeTools).length === 0 ? "omitted_no_support" : "ok",
+        budget,
+      }) ?? Effect.void
+      yield* input.requestReceipt?.dispatched() ?? Effect.void
 
       const tracer = cfg.experimental?.openTelemetry
         ? Option.getOrUndefined(yield* Effect.serviceOption(OtelTracer.OtelTracer))
@@ -622,7 +682,7 @@ const live: Layer.Layer<
           maxOutputTokens: prepared.params.maxOutputTokens,
           abortSignal: input.abort,
           headers: prepared.headers,
-          maxRetries: input.durableAttempt ? 0 : providerMaxRetries ?? input.retries ?? 0,
+          maxRetries: input.durableAttempt ? 0 : (providerMaxRetries ?? input.retries ?? 0),
           messages: prepared.messages,
           model: wrapLanguageModel({
             model: language,

@@ -538,7 +538,10 @@ describe("session.compaction.isOverflow", () => {
   )
 
   it.live(
-    "returns false when model context limit is 0",
+    "context limit 0 (unknown) does not trigger overflow — isOverflow returns false with unavailable phase",
+    // BUG-007 RC-3/RC-4: context=0 is the runtime fallback for an *unknown* limit. The typed phase
+    // is now "unavailable/context_limit_unknown", not the same "ok" as auto=false.
+    // isOverflow() still returns false because "unavailable" ≠ "hard", but the reason differs.
     provideTmpdirInstance(() =>
       Effect.gen(function* () {
         const compact = yield* SessionCompaction.Service
