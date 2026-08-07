@@ -1,10 +1,34 @@
 import { Effect, Layer, Context, SynchronizedRef, Option } from "effect"
 import path from "node:path"
 import fs from "node:fs"
+import { randomUUID } from "node:crypto"
 import { Global } from "@deepagent-code/core/global"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { DocumentStore } from "@deepagent-code/core/deepagent/document-store"
-import { createPlanDoc, type PlanDoc, type PlanInput } from "@deepagent-code/core/deepagent/plan-controller"
+import {
+  buildPlanFromWriteInput,
+  createPlanDoc,
+  PlanConflictError,
+  PlanValidationError,
+  type PlanDoc,
+  type PlanWriteInput,
+} from "@deepagent-code/core/deepagent/plan-controller"
+import { decodePlanDoc } from "@deepagent-code/core/deepagent/plan-store"
+import {
+  PlanEditBusyError,
+  PlanEditChallengeError,
+  PlanEditMailboxConflictError,
+  PlanEditProtocolCorruptionError,
+  PlanEditRequestConflictError,
+  PlanEditTargetUnavailableError,
+  admitPlanEditCommand,
+  createPlanEditCommand,
+  issuePlanEditChallenge,
+  readPendingPlanEditCommand,
+  readPlanEditReceiptByRequest,
+  settlePlanEditCommand,
+  type PlanEditReceipt,
+} from "@deepagent-code/core/deepagent/plan-edit-protocol"
 import { parseGoalPlanFile, GOAL_PLAN_FILE, type ParsedGoalPlan } from "@deepagent-code/core/deepagent/goal-plan-file"
 import type { GoalStatus, GoalLimits, CompletionCriterion } from "@deepagent-code/core/deepagent/goal-loop"
 import { InvalidGoalError } from "@deepagent-code/core/deepagent/goal-loop"
@@ -34,7 +58,7 @@ import { writeGovernanceAudit } from "./goal-governance-audit"
 import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
 import { ApprovalQueue } from "@deepagent-code/core/deepagent/approval-queue"
 import { LMNEvents } from "@deepagent-code/core/deepagent/lmn-events"
-import { persistPendingPlanEdit, readGoalTickCursor } from "@deepagent-code/core/deepagent/goal-loop"
+import { readGoalTickCursor } from "@deepagent-code/core/deepagent/goal-loop"
 import { makeGoalStatusPublisher } from "./goal-status-publisher"
 import { GoalTickConsumer } from "./goal-tick-consumer"
 
@@ -99,14 +123,6 @@ type GoalControl = {
   ledger: { ticks: number; tokens: number; cost: number; wallclockMs: number }
   stallCount: number
   gaps: readonly string[]
-  // §S2 — a pending USER PLAN EDIT (the raw PlanInput) enqueued by editPlan, drained+applied by the
-  // driver between ticks (pendingPlanEdit port) and cleared after apply (markPlanEditConsumed). Held here
-  // on the control channel — NOT written to the durable doc from the HTTP fiber — because the running
-  // driver holds its own DocumentStore handle (in-memory map) that would not see a separate handle's
-  // write; the driver applies it via its own handle (buildPlanFromInput reconciles ids/evidence against
-  // the live doc there). null ⇒ no pending edit. A newer edit replaces an un-applied older one
-  // (last-write-wins: the user's latest revision is what takes effect).
-  pendingPlanEdit: PlanInput | null
 }
 
 export type StartGoalInput = {
@@ -143,6 +159,26 @@ export type GoalStartable = {
   readonly source: "plan" | "file" | "none"
 }
 
+export class GoalPlanEditUnavailableError extends Error {
+  readonly _tag = "GoalPlanEditUnavailableError"
+  override readonly name = "GoalPlanEditUnavailableError"
+
+  constructor(readonly reason: string) {
+    super(`Goal plan edit admission is unavailable: ${reason}`)
+  }
+}
+
+export type GoalPlanEditAdmissionError =
+  | PlanValidationError
+  | PlanConflictError
+  | PlanEditBusyError
+  | PlanEditChallengeError
+  | PlanEditMailboxConflictError
+  | PlanEditProtocolCorruptionError
+  | PlanEditRequestConflictError
+  | PlanEditTargetUnavailableError
+  | GoalPlanEditUnavailableError
+
 export interface Interface {
   readonly start: (input: StartGoalInput) => Effect.Effect<GoalSnapshot, InvalidGoalError>
   readonly pause: (sessionID: string) => Effect.Effect<boolean>
@@ -152,13 +188,18 @@ export interface Interface {
   readonly startable: (sessionID: string) => Effect.Effect<GoalStartable>
   /**
    * V4.1 §S2 — apply a USER plan edit to a RUNNING or PAUSED goal. The revised plan (a PlanInput) is
-   * enqueued on the control channel and applied by the driver BETWEEN ticks (via its own store handle,
-   * reconciled through buildPlanFromInput so step ids + evidence survive), which also RE-BASELINES the
+   * enqueued on the control channel and admitted by the driver BETWEEN ticks (via its own store handle,
+   * with exact identity checks and runtime-owned evidence), which also RE-BASELINES the
    * Controller's stall/version tracking so the revision gets a fresh runway. Returns false when no goal
    * is running for the session OR the goal reached a terminal phase (no orphan edit). Takes effect on the
    * next tick (or on resume, if paused).
    */
-  readonly editPlan: (input: { readonly sessionID: string; readonly plan: PlanInput }) => Effect.Effect<boolean>
+  readonly editPlan: (input: {
+    readonly sessionID: string
+    readonly requestID: string
+    readonly planWrite: PlanWriteInput
+    readonly qualityChallengeID?: string
+  }) => Effect.Effect<PlanEditReceipt, GoalPlanEditAdmissionError>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/GoalManager") {}
@@ -252,26 +293,20 @@ export const layer = Layer.effect(
     // Per-session control state, observed by the running driver's ports.
     const controls = yield* SynchronizedRef.make(new Map<string, GoalControl>())
 
-    // §S2 — the plan-edit driver ports over the control channel. pendingPlanEdit reads the control's
-    // staged edit (non-consuming); markPlanEditConsumed clears it AFTER the driver applied+re-baselined
-    // (consume-once). Kept on the control channel (not the durable doc) because the running driver holds
-    // its own DocumentStore handle — see the GoalControl.pendingPlanEdit doc + loop.applyPlanEdit.
-    const goalPlanEditPort = (sessionID: string): Pick<GoalDriverPorts, "pendingPlanEdit" | "markPlanEditConsumed"> => ({
-      pendingPlanEdit: () => getControl(sessionID).pipe(Effect.map((c) => c?.pendingPlanEdit ?? null)),
-      // Consume-once with an IDENTITY GUARD: clear the slot ONLY if it still holds the SAME edit object the
-      // driver just applied. Without the guard, a newer edit E2 written by an HTTP fiber between the driver's
-      // pendingPlanEdit read (E1) and this clear would be silently wiped — the driver already applied E1 and
-      // won't re-read, so E2 is lost forever while editPlan told the user ok:true. Passing `applied` (the
-      // reference the driver read) and comparing by identity keeps E2 pending → drained next iteration.
-      markPlanEditConsumed: (applied) =>
-        SynchronizedRef.update(controls, (m) => {
-          const c = m.get(sessionID)
-          if (!c || c.pendingPlanEdit == null) return m
-          // A newer edit replaced the one we applied → leave it pending (do NOT clobber the newer revision).
-          if (applied != null && c.pendingPlanEdit !== applied) return m
-          const next = new Map(m)
-          next.set(sessionID, { ...c, pendingPlanEdit: null })
-          return next
+    // §S2 — both warm and cold drivers drain and settle the SAME durable activity mailbox. Admission is
+    // complete only after the queued receipt is fsync-backed; there is no in-memory fallback and no LWW slot.
+    const goalPlanEditPort = (sessionID: string): Pick<GoalDriverPorts, "pendingPlanEdit" | "settlePlanEdit"> => ({
+      pendingPlanEdit: () =>
+        getControl(sessionID).pipe(
+          Effect.map((control) =>
+            control == null
+              ? null
+              : readPendingPlanEditCommand(DocumentStore.shared(goalStoreRoot(sessionID)), sessionID, control.goalId),
+          ),
+        ),
+      settlePlanEdit: (command, settlement) =>
+        Effect.sync(() => {
+          settlePlanEditCommand(DocumentStore.shared(goalStoreRoot(sessionID)), command, settlement)
         }),
     })
 
@@ -506,7 +541,7 @@ export const layer = Layer.effect(
           pendingSteer: steerPort.pendingSteer,
           markSteerConsumed: steerPort.markSteerConsumed,
           pendingPlanEdit: planEditPort.pendingPlanEdit,
-          markPlanEditConsumed: planEditPort.markPlanEditConsumed,
+          settlePlanEdit: planEditPort.settlePlanEdit,
         }
 
         // V4.1 §N DUAL-PATH drive. The two paths MUST be mutually exclusive — running both for one goal
@@ -563,7 +598,6 @@ export const layer = Layer.effect(
           ledger: { ticks: 0, tokens: 0, cost: 0, wallclockMs: 0 },
           stallCount: 0,
           gaps: [],
-          pendingPlanEdit: null,
         })
 
         return { goalId: handle.goalId, planDocId: handle.planDocId, phase: "running", running: true }
@@ -656,7 +690,7 @@ export const layer = Layer.effect(
           pendingSteer: steerPort.pendingSteer,
           markSteerConsumed: steerPort.markSteerConsumed,
           pendingPlanEdit: planEditPort.pendingPlanEdit,
-          markPlanEditConsumed: planEditPort.markPlanEditConsumed,
+          settlePlanEdit: planEditPort.settlePlanEdit,
         }
         const job = yield* background.start({
           type: "goal-loop",
@@ -719,59 +753,109 @@ export const layer = Layer.effect(
         return { startable: false, source: "none" as const }
       })
 
-    // §S2 — apply a USER plan edit to a running/paused goal. Like the goal-steer path, this does NOT touch the
-    // durable doc directly (the running driver holds its own DocumentStore handle that would not see an
-    // HTTP-fiber write). It ENQUEUES the revised plan onto the control channel; the driver drains it
-    // between ticks and applies it via its own handle (loop.applyPlanEdit → upsert + re-baseline). Refuses
-    // when no goal is running OR the goal reached a terminal phase (the orphan guard: no live driver to
-    // drain a terminal goal). The
-    // revised plan is normalized through buildPlanFromInput, which PRESERVES step ids + evidence across the
-    // rewrite (accumulated proof survives a re-status/reorder). Last-write-wins: a newer edit replaces an
-    // un-applied older one on the control slot.
     const editPlan: Interface["editPlan"] = (input) =>
       Effect.gen(function* () {
         const c = yield* getControl(input.sessionID)
-        if (!c || c.stopped) return false
+        if (!c || c.stopped) return yield* Effect.fail(new PlanEditTargetUnavailableError("no live goal driver"))
         const ptr = AgentGateway.DeepAgentSessionState.getActiveGoal(input.sessionID)
-        if (ptr && isTerminalGoalPhase(ptr.phase)) return false
-        // Enqueue the RAW PlanInput on the control channel. The driver applies it between ticks via
-        // loop.applyPlanEdit, which reconciles it (buildPlanFromInput, preserving ids/evidence) against
-        // the live doc using the driver's own store handle — not from this HTTP fiber (whose separate
-        // handle would not see the running driver's in-memory doc). Last-write-wins on the slot.
-        yield* SynchronizedRef.update(controls, (m) => {
-          const ctrl = m.get(input.sessionID)
-          if (!ctrl) return m
-          const next = new Map(m)
-          next.set(input.sessionID, { ...ctrl, pendingPlanEdit: input.plan })
-          return next
-        })
-        // V4.1 cross-process cold recovery — ALSO persist the pending edit to the durable doc (under the
-        // SAME store root the cold GoalTickConsumer opens). The in-memory control slot above serves the
-        // WARM in-process driver (which holds a live store handle); the durable doc serves a COLD
-        // event-driven tick that reconstructs the wiring with a fresh store handle and reads the edit via
-        // readPendingPlanEdit. Best-effort: a durable-write hiccup must not fail editPlan (the warm path
-        // still has the in-memory slot). Cleared by the driver post-apply via persistPendingPlanEdit(null).
-        try {
-          persistPendingPlanEdit(new DocumentStore(goalStoreRoot(input.sessionID)), input.sessionID, c.goalId, input.plan)
-        } catch {
-          /* durable persist is best-effort; the warm in-memory slot above is authoritative for the live driver */
+        if (!ptr || ptr.goalId !== c.goalId || ptr.planDocId !== c.planDocId || isTerminalGoalPhase(ptr.phase)) {
+          return yield* Effect.fail(new PlanEditTargetUnavailableError("active goal pointer does not match a live goal"))
         }
-        // Audit + operational log the human plan edit (enqueue-time; the driver applies it next tick).
-        writeGovernanceAudit(input.sessionID, c.goalId, "plan_edit", {
-          stepCount: input.plan.steps.length,
-          goalChars: input.plan.goal.length,
+        const store = DocumentStore.shared(goalStoreRoot(input.sessionID))
+        const command = createPlanEditCommand({
+          requestID: input.requestID,
+          sessionID: input.sessionID,
+          goalID: c.goalId,
+          planWrite: input.planWrite,
+          confirmedChallengeID: input.qualityChallengeID,
         })
-        glog.info("goal plan hot-edit enqueued", {
+        const prior = yield* planEditAdmission(() =>
+          readPlanEditReceiptByRequest(store, input.sessionID, c.goalId, input.requestID),
+        )
+        if (prior) {
+          if (prior.command.candidate_hash !== command.candidate_hash) {
+            return yield* Effect.fail(new PlanEditRequestConflictError(input.requestID))
+          }
+          return prior
+        }
+        const existing = store.get(c.planDocId)
+        if (!existing) return yield* Effect.fail(new PlanEditTargetUnavailableError("authoritative plan document not found"))
+        const previous = decodePlanDoc(existing.body)
+        if (!previous) return yield* Effect.fail(new PlanEditTargetUnavailableError("authoritative plan is malformed"))
+        const validated = yield* planEditAdmission(() =>
+            buildPlanFromWriteInput(
+              input.sessionID,
+              input.planWrite,
+              previous,
+              { plan_id: previous.plan_id, doc_id: existing.id, version: existing.version },
+            ),
+          ).pipe(
+            Effect.match({
+              onFailure: (error) => ({ ok: false as const, error }),
+              onSuccess: () => ({ ok: true as const }),
+            }),
+          )
+        if (validated.ok) {
+          return yield* planEditAdmission(() => admitPlanEditCommand(store, command))
+        }
+        if (!(validated.error instanceof PlanValidationError) || validated.error.code !== "suspicious_quality_regression") {
+          return yield* Effect.fail(validated.error)
+        }
+        const qualityError = validated.error
+        const receipt = yield* input.qualityChallengeID
+          ? planEditAdmission(() => {
+              buildPlanFromWriteInput(
+                input.sessionID,
+                input.planWrite,
+                previous,
+                { plan_id: previous.plan_id, doc_id: existing.id, version: existing.version },
+                { allowQualityRegression: true },
+              )
+              return admitPlanEditCommand(store, command)
+            })
+          : planEditAdmission(() => issuePlanEditChallenge(store, command, qualityError.challenge_id ?? randomUUID()))
+
+        writeGovernanceAudit(input.sessionID, c.goalId, "plan_edit", {
+          activityId: receipt.command.activity_id,
+          requestId: receipt.command.request_id,
+          candidateHash: receipt.command.candidate_hash,
+          state: receipt.state,
+          stepCount: input.planWrite.steps.length,
+          goalChars: input.planWrite.goal.length,
+        })
+        glog.info("goal plan hot-edit admitted", {
           sessionID: input.sessionID,
           goalId: c.goalId,
-          stepCount: input.plan.steps.length,
+          activityId: receipt.command.activity_id,
+          state: receipt.state,
+          stepCount: input.planWrite.steps.length,
         })
-        return true
+        return receipt
       })
 
     return Service.of({ start, pause, resume, stop, status, startable, editPlan })
   }),
 )
+
+const planEditAdmission = <A>(operation: () => A): Effect.Effect<A, GoalPlanEditAdmissionError> =>
+  Effect.try({
+    try: operation,
+    catch: (error) => {
+      if (
+        error instanceof PlanValidationError ||
+        error instanceof PlanConflictError ||
+        error instanceof PlanEditBusyError ||
+        error instanceof PlanEditChallengeError ||
+        error instanceof PlanEditMailboxConflictError ||
+        error instanceof PlanEditProtocolCorruptionError ||
+        error instanceof PlanEditRequestConflictError ||
+        error instanceof PlanEditTargetUnavailableError
+      ) {
+        return error
+      }
+      return new GoalPlanEditUnavailableError(error instanceof Error ? error.message : "unknown persistence failure")
+    },
+  })
 
 export const defaultLayer = Layer.suspend(() =>
   layer.pipe(

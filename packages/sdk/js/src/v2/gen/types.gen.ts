@@ -366,6 +366,16 @@ export type OutputDegenerationError = {
   }
 }
 
+export type PlanProtocolViolation = {
+  name: "PlanProtocolViolation"
+  data: {
+    message: string
+    sessionID?: string
+    attemptOrdinal: number
+    code?: string
+  }
+}
+
 export type AssistantMessage = {
   id: string
   sessionID: string
@@ -385,6 +395,7 @@ export type AssistantMessage = {
     | ContextOverflowError
     | ApiError
     | OutputDegenerationError
+    | PlanProtocolViolation
   parentID: string
   modelID: string
   providerID: string
@@ -1487,6 +1498,7 @@ export type GlobalEvent = {
             | ContextOverflowError
             | ApiError
             | OutputDegenerationError
+            | PlanProtocolViolation
         }
       }
     | {
@@ -1681,6 +1693,7 @@ export type GlobalEvent = {
           sessionID: string
           plan_id: string
           goal: string
+          plan_version: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
           active_step_id: string
           steps: Array<{
             step_id: string
@@ -1689,6 +1702,7 @@ export type GlobalEvent = {
             acceptance?: string
             assigned_agent?: string
             note?: string
+            evidence?: Array<string>
           }>
           done: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
           total: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
@@ -5780,6 +5794,7 @@ export type EventSessionError = {
       | ContextOverflowError
       | ApiError
       | OutputDegenerationError1
+      | PlanProtocolViolation
   }
 }
 
@@ -5998,6 +6013,7 @@ export type EventPlanUpdated = {
     sessionID: string
     plan_id: string
     goal: string
+    plan_version: number | "NaN" | "Infinity" | "-Infinity"
     active_step_id: string
     steps: Array<{
       step_id: string
@@ -6006,6 +6022,7 @@ export type EventPlanUpdated = {
       acceptance?: string
       assigned_agent?: string
       note?: string
+      evidence?: Array<string>
     }>
     done: number | "NaN" | "Infinity" | "-Infinity"
     total: number | "NaN" | "Infinity" | "-Infinity"
@@ -12460,6 +12477,61 @@ export type SessionTodoResponses = {
 }
 
 export type SessionTodoResponse = SessionTodoResponses[keyof SessionTodoResponses]
+
+export type SessionPlanData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/plan"
+}
+
+export type SessionPlanErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionPlanError = SessionPlanErrors[keyof SessionPlanErrors]
+
+export type SessionPlanResponses = {
+  /**
+   * Current durable session plan
+   */
+  200: {
+    plan: {
+      plan_id: string
+      session_id: string
+      goal: string
+      assumptions: Array<string>
+      steps: Array<{
+        step_id: string
+        title: string
+        status: string
+        acceptance: string
+        assigned_agent: string
+        evidence: Array<string>
+        note: string
+      }>
+      active_step_id: string
+      replan_reason?: string
+      created_at: string
+    }
+    doc_id: string
+    plan_version: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+}
+
+export type SessionPlanResponse = SessionPlanResponses[keyof SessionPlanResponses]
 
 export type SessionDiffData = {
   body?: never

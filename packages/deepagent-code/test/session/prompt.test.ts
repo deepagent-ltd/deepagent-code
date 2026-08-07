@@ -76,6 +76,7 @@ import { ContextFederationRollout } from "@deepagent-code/core/context-federatio
 import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
 import { PromptEpoch } from "@/session/prompt-epoch"
 import { SessionToolRequestReceiptTable } from "@/session/tool-request-receipt.sql"
+import { SessionToolArgumentReceiptTable } from "@/session/tool-argument-receipt.sql"
 
 void Log.init({ print: false })
 
@@ -569,6 +570,74 @@ const useServerConfig = Effect.fn("test.useServerConfig")(function* (config: (ur
   const llm = yield* TestLLMServer
   yield* writeConfig(dir, config(llm.url))
   return { dir, llm }
+})
+
+const assertPlanProtocolProviderBudget = Effect.fn("test.assertPlanProtocolProviderBudget")(function* (input: {
+  payload: Record<string, unknown>
+  firstState: "completed" | "error"
+  protocol: "invalid" | "schema"
+  errorCode: string
+  validationOutcome: "schema_invalid" | "semantic_invalid"
+}) {
+  const { llm } = yield* useServerConfig(providerCfg)
+  const prompt = yield* SessionPrompt.Service
+  const sessions = yield* Session.Service
+  const session = yield* sessions.create({
+    title: "Pinned",
+    permission: [{ permission: "*", pattern: "*", action: "allow" }],
+  })
+  yield* prompt.prompt({
+    sessionID: session.id,
+    agent: "build",
+    noReply: true,
+    parts: [{ type: "text", text: "build the benchmark suite" }],
+  })
+  yield* llm.tool("plan", input.payload)
+  yield* llm.tool("plan", input.payload)
+  yield* llm.text("third provider dispatch must not happen")
+
+  const result = yield* prompt.loop({ sessionID: session.id })
+
+  expect(yield* llm.calls).toBe(2)
+  expect(yield* llm.pending).toBe(1)
+  expect(result.info.role).toBe("assistant")
+  if (result.info.role === "assistant") {
+    expect(result.info.finish).toBe("error")
+    expect(result.info.error).toMatchObject({
+      name: "PlanProtocolViolation",
+      data: { attemptOrdinal: 2, code: input.errorCode },
+    })
+  }
+  const planParts = (yield* sessions.messages({ sessionID: session.id }).pipe(Effect.orDie)).flatMap((message) =>
+    message.parts.filter((part): part is SessionV1.ToolPart => part.type === "tool" && part.tool === "plan"),
+  )
+  expect(planParts).toHaveLength(2)
+  expect(planParts[0]?.state.status).toBe(input.firstState)
+  expect(planParts[1]?.state.status).toBe(input.firstState)
+  planParts.forEach((part, index) => {
+    const text =
+      part.state.status === "completed" ? part.state.output : part.state.status === "error" ? part.state.error : ""
+    const metadata =
+      part.state.status === "completed" || part.state.status === "error" ? part.state.metadata : undefined
+    expect(text).toContain(`[Plan attempt ${index + 1} of 2]`)
+    expect(metadata).toMatchObject({ plan_protocol: input.protocol, plan_attempt_ordinal: index + 1 })
+  })
+  const { db } = yield* Database.Service
+  const requestReceipts = (yield* db
+    .select()
+    .from(SessionToolRequestReceiptTable)
+    .where(eq(SessionToolRequestReceiptTable.session_id, session.id))
+    .all()
+    .pipe(Effect.orDie)).toSorted((a, b) => a.request_ordinal - b.request_ordinal)
+  const argumentReceipts = yield* db.select().from(SessionToolArgumentReceiptTable).all().pipe(Effect.orDie)
+  expect(
+    requestReceipts.map(
+      (receipt) =>
+        argumentReceipts.find(
+          (argument) => argument.receipt_id === receipt.receipt_id && argument.layer === "processor_decoded",
+        )?.validation_outcome,
+    ),
+  ).toEqual([input.validationOutcome, input.validationOutcome])
 })
 
 // Wait for a session's runner to enter a busy state. SessionStatus is flipped
@@ -1238,6 +1307,79 @@ it.instance("loop continues when finish is tool-calls", () =>
     expect(receipts[0]?.context_limit_provenance).toBe("model_limit")
     expect(receipts[0]?.call_ids).toHaveLength(1)
     expect(receipts[1]?.call_ids).toEqual([])
+    const argumentReceipts = (yield* db
+      .select()
+      .from(SessionToolArgumentReceiptTable)
+      .where(eq(SessionToolArgumentReceiptTable.receipt_id, receipts[0]!.receipt_id))
+      .all()
+      .pipe(Effect.orDie)).toSorted((a, b) => a.ordinal - b.ordinal)
+    const aiSdkInput = argumentReceipts.find((receipt) => receipt.layer === "ai_sdk_input")
+    const rawFrame = argumentReceipts.find((receipt) => receipt.layer === "raw_frame")
+    const adapterToolCall = argumentReceipts.find(
+      (receipt) => receipt.layer === "adapter_assembly" && receipt.event_type === "tool-call",
+    )
+    const processorDecoded = argumentReceipts.find((receipt) => receipt.layer === "processor_decoded")
+    expect(aiSdkInput).toMatchObject({
+      event_type: "tool-call",
+      call_id: receipts[0]!.call_ids[0],
+      tool_name: "first",
+      payload_keys: ["value"],
+      validation_outcome: "schema_valid",
+    })
+    expect(aiSdkInput?.payload_hash).toHaveLength(64)
+    expect(rawFrame).toMatchObject({
+      payload_hash: null,
+      payload_length: null,
+      unavailable_reason: "provider_transport_did_not_expose_raw_frame",
+      validation_outcome: "not_evaluated",
+    })
+    expect(adapterToolCall).toMatchObject({
+      call_id: receipts[0]!.call_ids[0],
+      tool_name: "first",
+      payload_keys: ["value"],
+      unavailable_reason: null,
+      validation_outcome: "schema_valid",
+    })
+    expect(processorDecoded).toMatchObject({
+      event_type: "tool-call",
+      call_id: adapterToolCall?.call_id,
+      tool_name: adapterToolCall?.tool_name,
+      payload_hash: adapterToolCall?.payload_hash,
+      payload_length: adapterToolCall?.payload_length,
+      payload_keys: adapterToolCall?.payload_keys,
+      validation_outcome: "schema_valid",
+    })
+  }),
+)
+
+it.instance("BUG-010 original schema-invalid plan payload stops before a third Provider dispatch", () =>
+  assertPlanProtocolProviderBudget({
+    payload: {
+      goal: "complete the benchmark and compress collectives to 3.3ms",
+      steps: [{ step_id: "s1", title: "ayContext", status: "active" }],
+      active_step_id: "s1",
+    },
+    firstState: "error",
+    protocol: "schema",
+    errorCode: "schema",
+    validationOutcome: "schema_invalid",
+  }),
+)
+
+it.instance("BUG-010 forward-compatible malformed plan stops before a third Provider dispatch", () =>
+  assertPlanProtocolProviderBudget({
+    payload: {
+      operation: "create",
+      expected_plan_id: null,
+      expected_version: null,
+      goal: "complete the benchmark and compress collectives to 3.3ms",
+      steps: [{ step_id: "s1", title: "", status: "active" }],
+      active_step_id: "s1",
+    },
+    firstState: "completed",
+    protocol: "invalid",
+    errorCode: "empty_title",
+    validationOutcome: "semantic_invalid",
   }),
 )
 

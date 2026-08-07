@@ -370,6 +370,8 @@ export const createDirSyncContext = (
       })
   }
 
+  const loadPlan = (sessionID: string) => serverSync.plan.sync(directory, sessionID)
+
   return {
     get data() {
       return current()[0]
@@ -434,6 +436,7 @@ export const createDirSyncContext = (
         const key = keyFor(directory, sessionID)
 
         touch(directory, setStore, sessionID)
+        const planReq = loadPlan(sessionID)
 
         const seeded = getSessionPrefetch(serverSDK.scope, directory, sessionID)
         if (seeded && store.message[sessionID] !== undefined && meta.limit[key] === undefined) {
@@ -463,7 +466,10 @@ export const createDirSyncContext = (
           const hasSession = Binary.search(store.session, sessionID, (s) => s.id).found
           const cachedMessages = store.message[sessionID]
           const cached = cachedMessages !== undefined && meta.limit[key] !== undefined
-          if (cached && hasSession && !opts?.force && cachedMessages.length > 0) return
+          if (cached && hasSession && !opts?.force && cachedMessages.length > 0) {
+            await planReq
+            return
+          }
 
           const limit = meta.limit[key] ?? initialMessagePageSize
           const sessionReq =
@@ -502,7 +508,7 @@ export const createDirSyncContext = (
                   limit,
                 })
 
-          await Promise.all([sessionReq, messagesReq])
+          await Promise.all([sessionReq, messagesReq, planReq])
         })
       },
       async diff(sessionID: string, opts?: { force?: boolean }) {

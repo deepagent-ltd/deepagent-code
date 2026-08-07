@@ -1296,7 +1296,9 @@ describe("session.compaction.process", () => {
           auto: false,
         })
         expect(result).toBe("stop")
-        expect(Date.now() - start).toBeLessThan(250)
+        // Keep this well below the provider's 10s retry hint while allowing durable
+        // attempt settlement and test-database cleanup on slower CI workers.
+        expect(Date.now() - start).toBeLessThan(2_000)
       }).pipe(withCompaction({ llm: stub.layer }))
     },
     { git: true },

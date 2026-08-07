@@ -64,6 +64,10 @@ export function delay(attempt: number, error?: SessionV1.APIError) {
 }
 
 export function retryable(error: Err, provider: string): Retryable | undefined {
+  // Plan protocol violations are activity-level terminal states. Retrying the
+  // provider stream would replay the same malformed/stale plan payload and can
+  // consume an unrelated activity's budget after the original activity settled.
+  if (SessionV1.PlanProtocolViolationError.isInstance(error)) return undefined
   // context overflow errors should not be retried
   if (SessionV1.ContextOverflowError.isInstance(error)) return undefined
   if (SessionV1.OutputDegenerationError.isInstance(error)) return undefined

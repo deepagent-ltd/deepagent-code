@@ -711,9 +711,9 @@ export default function Page() {
     },
   )
 
-  // NOTE: the per-turn todo prefetch effect was removed when task tracking unified onto the plan
-  // system. The task dock is now driven exclusively by the persistent plan (session_plan), which
-  // arrives via the plan.updated SSE stream — there is no REST todo endpoint to prime on activation.
+  // Plan state is restored by session sync from the authoritative snapshot endpoint, then advanced
+  // by advisory plan.updated events. The event stream remains live-only; snapshot fetch is what makes
+  // reload, reconnect, and a missed event recoverable.
 
   createEffect(
     on(

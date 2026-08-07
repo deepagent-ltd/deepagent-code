@@ -95,6 +95,11 @@ import { archiveSessionOnCompletion } from "@/wiki/session-archive"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Database } from "@deepagent-code/core/database/database"
 import { SessionToolRequestReceiptTable } from "./tool-request-receipt.sql"
+import {
+  SessionToolArgumentReceiptTable,
+  type ToolArgumentReceiptLayer,
+  type ToolArgumentValidationOutcome,
+} from "./tool-argument-receipt.sql"
 import { SessionEvent } from "@deepagent-code/core/session/event"
 import { SessionMessage } from "@deepagent-code/core/session/message"
 import { SessionInput } from "@deepagent-code/core/session/input"
@@ -114,7 +119,7 @@ import {
 } from "@deepagent-code/core/session/prompt"
 import { Reference } from "@/reference/reference"
 import * as DateTime from "effect/DateTime"
-import { and, eq } from "drizzle-orm"
+import { and, eq, max } from "drizzle-orm"
 import { SessionTable, TaskRunTable } from "@deepagent-code/core/session/sql"
 import { referencePromptMetadata, referenceTextPart } from "./prompt/reference"
 import { SessionReminders } from "./reminders"
@@ -2940,16 +2945,17 @@ export const layer = Layer.effect(
                 ? preparedProviderAttempt.value
                 : undefined
             const registryToolIds = yield* registry.ids()
-            const receiptID = yield* db
+            const fallbackReceiptID = Hash.sha256(`${sessionID}:provider-request:${handle.message.id}:${randomUUID()}`)
+            const receiptAdmission = yield* db
               .transaction(
                 (tx) =>
                   Effect.gen(function* () {
-                    const requestOrdinal =
-                      (yield* tx
-                        .select({ receipt_id: SessionToolRequestReceiptTable.receipt_id })
-                        .from(SessionToolRequestReceiptTable)
-                        .where(eq(SessionToolRequestReceiptTable.session_id, sessionID))
-                        .all()).length + 1
+                    const latest = yield* tx
+                      .select({ request_ordinal: max(SessionToolRequestReceiptTable.request_ordinal) })
+                      .from(SessionToolRequestReceiptTable)
+                      .where(eq(SessionToolRequestReceiptTable.session_id, sessionID))
+                      .get()
+                    const requestOrdinal = (latest?.request_ordinal ?? 0) + 1
                     const receiptID = Hash.sha256(
                       `${sessionID}:provider-request:${requestOrdinal}:${handle.message.id}`,
                     )
@@ -2974,11 +2980,75 @@ export const layer = Layer.effect(
                       request_state: "prepared",
                       created_at: Date.now(),
                     })
-                    return receiptID
+                    return { receiptID, admitted: true as const }
                   }),
                 { behavior: "immediate" },
               )
-              .pipe(Effect.orDie)
+              .pipe(
+                Effect.catchCause((cause) =>
+                  Effect.sync(() => {
+                    slog.warn("provider request receipt admission failed", {
+                      cause: Cause.pretty(cause),
+                      metric: "provider_request_receipt_degraded_total",
+                      increment: 1,
+                    })
+                    return { receiptID: fallbackReceiptID, admitted: false as const }
+                  }),
+                ),
+              )
+            const receiptID = receiptAdmission.receiptID
+            const receiptWriteState = { available: receiptAdmission.admitted }
+            const bestEffortReceiptWrite = (operation: string, write: Effect.Effect<unknown, unknown>) =>
+              Effect.suspend(() => {
+                if (!receiptWriteState.available) return Effect.void
+                return write.pipe(
+                  Effect.asVoid,
+                  Effect.catchCause((cause) =>
+                    Effect.sync(() => {
+                      receiptWriteState.available = false
+                      slog.warn("provider request receipt write failed", {
+                        operation,
+                        receiptID,
+                        cause: Cause.pretty(cause),
+                        metric: "provider_request_receipt_degraded_total",
+                        increment: 1,
+                      })
+                    }),
+                  ),
+                )
+              })
+            const writeArgumentReceipt = (input: {
+              layer: ToolArgumentReceiptLayer
+              ordinal: number
+              callID?: string
+              toolName?: string
+              eventType?: string
+              payloadHash?: string
+              payloadLength?: number
+              payloadKeys: readonly string[]
+              unavailableReason?: string
+              validationOutcome: ToolArgumentValidationOutcome
+            }) =>
+              bestEffortReceiptWrite(
+                `argument:${input.layer}`,
+                db
+                  .insert(SessionToolArgumentReceiptTable)
+                  .values({
+                    receipt_id: receiptID,
+                    layer: input.layer,
+                    ordinal: input.ordinal,
+                    call_id: input.callID,
+                    tool_name: input.toolName,
+                    event_type: input.eventType ?? "unknown",
+                    payload_hash: input.payloadHash,
+                    payload_length: input.payloadLength,
+                    payload_keys: [...input.payloadKeys],
+                    unavailable_reason: input.unavailableReason,
+                    validation_outcome: input.validationOutcome,
+                    created_at: Date.now(),
+                  })
+                  .run(),
+              )
             const result = yield* handle.process(
               {
                 ...streamInput,
@@ -2992,62 +3062,87 @@ export const layer = Layer.effect(
                         description: definition.description,
                         inputSchema: "inputSchema" in definition ? definition.inputSchema : undefined,
                       }))
-                    return db
-                      .update(SessionToolRequestReceiptTable)
-                      .set({
-                        permission_filtered_tool_ids: [...prepared.permissionFilteredToolIds],
-                        final_offered_tool_ids: finalOfferedToolIds,
-                        tool_definition_hash: Hash.sha256(stableJson(definitions)),
-                        adapter_tool_capability: prepared.adapterToolCapability,
-                        adapter_lowering_outcome: prepared.adapterLoweringOutcome,
-                        estimated_input_tokens: prepared.budget.estimatedFullRequestTokens,
-                        physical_input_budget: prepared.budget.physicalInputBudget,
-                        reserved_output_tokens: prepared.budget.reservedOutputTokens,
-                        safety_margin_tokens: prepared.budget.safetyMargin,
-                        context_limit_provenance: prepared.budget.provenance,
-                        request_state: "prepared",
-                      })
-                      .where(
-                        and(
-                          eq(SessionToolRequestReceiptTable.receipt_id, receiptID),
-                          eq(SessionToolRequestReceiptTable.request_state, "prepared"),
-                        ),
-                      )
-                      .run()
-                      .pipe(Effect.orDie)
+                    return bestEffortReceiptWrite(
+                      "prepared",
+                      db
+                        .update(SessionToolRequestReceiptTable)
+                        .set({
+                          permission_filtered_tool_ids: [...prepared.permissionFilteredToolIds],
+                          final_offered_tool_ids: finalOfferedToolIds,
+                          tool_definition_hash: Hash.sha256(stableJson(definitions)),
+                          adapter_tool_capability: prepared.adapterToolCapability,
+                          adapter_lowering_outcome: prepared.adapterLoweringOutcome,
+                          estimated_input_tokens: prepared.budget.estimatedFullRequestTokens,
+                          physical_input_budget: prepared.budget.physicalInputBudget,
+                          reserved_output_tokens: prepared.budget.reservedOutputTokens,
+                          safety_margin_tokens: prepared.budget.safetyMargin,
+                          context_limit_provenance: prepared.budget.provenance,
+                          request_state: "prepared",
+                        })
+                        .where(
+                          and(
+                            eq(SessionToolRequestReceiptTable.receipt_id, receiptID),
+                            eq(SessionToolRequestReceiptTable.request_state, "prepared"),
+                          ),
+                        )
+                        .run(),
+                    )
                   },
                   dispatched: () =>
-                    db
-                      .update(SessionToolRequestReceiptTable)
-                      .set({ request_state: "dispatched" })
-                      .where(
-                        and(
-                          eq(SessionToolRequestReceiptTable.receipt_id, receiptID),
-                          eq(SessionToolRequestReceiptTable.request_state, "prepared"),
-                        ),
-                      )
-                      .run()
-                      .pipe(Effect.orDie),
+                    bestEffortReceiptWrite(
+                      "dispatched",
+                      db
+                        .update(SessionToolRequestReceiptTable)
+                        .set({ request_state: "dispatched" })
+                        .where(
+                          and(
+                            eq(SessionToolRequestReceiptTable.receipt_id, receiptID),
+                            eq(SessionToolRequestReceiptTable.request_state, "prepared"),
+                          ),
+                        )
+                        .run(),
+                    ),
                   rejected: ({ budget, reason }) =>
-                    db
-                      .update(SessionToolRequestReceiptTable)
-                      .set({
-                        estimated_input_tokens: budget.estimatedFullRequestTokens,
-                        physical_input_budget: budget.physicalInputBudget,
-                        reserved_output_tokens: budget.reservedOutputTokens,
-                        safety_margin_tokens: budget.safetyMargin,
-                        context_limit_provenance: budget.provenance,
-                        request_state: "rejected",
-                        request_error_code: reason,
-                      })
-                      .where(
-                        and(
-                          eq(SessionToolRequestReceiptTable.receipt_id, receiptID),
-                          eq(SessionToolRequestReceiptTable.request_state, "prepared"),
-                        ),
-                      )
-                      .run()
-                      .pipe(Effect.orDie),
+                    bestEffortReceiptWrite(
+                      "rejected",
+                      db
+                        .update(SessionToolRequestReceiptTable)
+                        .set({
+                          estimated_input_tokens: budget.estimatedFullRequestTokens,
+                          physical_input_budget: budget.physicalInputBudget,
+                          reserved_output_tokens: budget.reservedOutputTokens,
+                          safety_margin_tokens: budget.safetyMargin,
+                          context_limit_provenance: budget.provenance,
+                          request_state: "rejected",
+                          request_error_code: reason,
+                        })
+                        .where(
+                          and(
+                            eq(SessionToolRequestReceiptTable.receipt_id, receiptID),
+                            eq(SessionToolRequestReceiptTable.request_state, "prepared"),
+                          ),
+                        )
+                        .run(),
+                    ),
+                  aiSdkInput: (input) => writeArgumentReceipt({ layer: "ai_sdk_input", ...input }),
+                  rawFrame: (input) => writeArgumentReceipt({ layer: "raw_frame", ...input }),
+                  adapterAssembly: (input) => writeArgumentReceipt({ layer: "adapter_assembly", ...input }),
+                  processorDecoded: (input) => writeArgumentReceipt({ layer: "processor_decoded", ...input }),
+                  processorValidation: (input) =>
+                    bestEffortReceiptWrite(
+                      "argument:processor_decoded:validation",
+                      db
+                        .update(SessionToolArgumentReceiptTable)
+                        .set({ validation_outcome: input.validationOutcome })
+                        .where(
+                          and(
+                            eq(SessionToolArgumentReceiptTable.receipt_id, receiptID),
+                            eq(SessionToolArgumentReceiptTable.layer, "processor_decoded"),
+                            eq(SessionToolArgumentReceiptTable.call_id, input.callID),
+                          ),
+                        )
+                        .run(),
+                    ),
                 },
               },
               providerAttempt,
@@ -3056,12 +3151,14 @@ export const layer = Layer.effect(
               (yield* sessions.messages({ sessionID }).pipe(Effect.orDie))
                 .find((message) => message.info.id === handle.message.id)
                 ?.parts.flatMap((part) => (part.type === "tool" ? [part.callID] : [])) ?? []
-            yield* db
-              .update(SessionToolRequestReceiptTable)
-              .set({ call_ids: observedCallIds })
-              .where(eq(SessionToolRequestReceiptTable.receipt_id, receiptID))
-              .run()
-              .pipe(Effect.orDie)
+            yield* bestEffortReceiptWrite(
+              "observed_call_ids",
+              db
+                .update(SessionToolRequestReceiptTable)
+                .set({ call_ids: observedCallIds })
+                .where(eq(SessionToolRequestReceiptTable.receipt_id, receiptID))
+                .run(),
+            )
 
             if (structured !== undefined) {
               handle.message.structured = structured

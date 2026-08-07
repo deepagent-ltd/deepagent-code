@@ -580,6 +580,7 @@ export const routeManifest = [
     paths: [
       "packages/deepagent-code/src/session/prompt.ts",
       "packages/deepagent-code/src/session/processor.ts",
+      "packages/deepagent-code/src/session/tool-argument-receipt.sql.ts",
       "packages/deepagent-code/src/session/tools.ts",
     ],
     checks: ["llm-adapter", "session-continuation", "tool-files", "tool-bash-sandbox", "worktree-routing"],
@@ -605,6 +606,7 @@ export const routeManifest = [
       "packages/deepagent-code/src/session/compaction-sql.ts",
       "packages/deepagent-code/src/session/prompt-epoch.ts",
       "packages/deepagent-code/src/session/prompt-epoch.sql.ts",
+      "packages/deepagent-code/src/session/tool-argument-receipt.sql.ts",
       "packages/deepagent-code/src/session/tool-request-receipt.sql.ts",
       "packages/deepagent-code/src/session/message-v2.ts",
       "packages/deepagent-code/src/session/context-ledger.ts",

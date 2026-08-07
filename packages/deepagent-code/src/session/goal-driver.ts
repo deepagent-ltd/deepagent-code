@@ -1,6 +1,12 @@
 import { Effect } from "effect"
 import type { DocumentStore } from "@deepagent-code/core/deepagent/document-store"
-import type { PlanDoc, PlanInput } from "@deepagent-code/core/deepagent/plan-controller"
+import { compareAndCommitPlanDocument } from "@deepagent-code/core/deepagent/plan-store"
+import type { PlanDoc } from "@deepagent-code/core/deepagent/plan-controller"
+import {
+  planEditFailure,
+  type PlanEditCommand,
+  type PlanEditSettlement,
+} from "@deepagent-code/core/deepagent/plan-edit-protocol"
 import type { SessionMessage } from "@deepagent-code/core/session/message"
 import {
   makeGoalLoop,
@@ -46,9 +52,9 @@ export type MaterializePlanInput = {
 const planScope = (sessionId: string): string => `run:${sessionId}`
 
 /**
- * Snapshot an in-memory PlanDoc into a `type:"plan"` store doc (the goal carrier). Idempotent per
- * session: `upsert` keyed on the stable `plan-<sessionId>` slug returns the same doc id and is a no-op
- * when the body is unchanged (INV-4), so re-materializing the same plan does not bump the version.
+ * Adopt the session's existing `type:"plan"` authority or create it through the same
+ * compare-and-commit seam used by the model tool. Re-materializing an existing plan never performs
+ * a last-write-wins overwrite and an unchanged body remains an INV-4 no-op.
  * Returns the plan doc id the GoalSpec references.
  */
 export const materializePlanDoc = (input: MaterializePlanInput): string => {
@@ -58,15 +64,14 @@ export const materializePlanDoc = (input: MaterializePlanInput): string => {
   // plan-store.setPlanDoc — same type/scope/idSlug AND description — so the goal write lands on the
   // tool-path doc (and vice versa). `input.store` is the shared handle at goalStoreRoot(sid), which is
   // byte-identical to plan-store's planStoreRoot(sid), so both resolve the same on-disk + in-memory doc.
-  const doc = input.store.upsert({
-    type: "plan",
-    scope: planScope(input.sessionId),
-    description: `session plan ${input.sessionId}`,
-    idSlug: `plan-${input.sessionId}`,
-    body: JSON.stringify(input.plan),
-    provenance: { source: "model", run_ref: planScope(input.sessionId) },
-  })
-  return doc.id
+  const refs = input.store.list({ type: "plan", scope: planScope(input.sessionId) })
+  if (refs.length > 0) return refs[0].id
+  return compareAndCommitPlanDocument(input.store, {
+    sessionId: input.sessionId,
+    expected: null,
+    candidate: input.plan,
+    origin: "legacy_migration",
+  }).doc_id
 }
 
 /**
@@ -186,20 +191,20 @@ export type GoalDriverPorts = {
   /**
    * V4.1 §S2 — cooperative USER PLAN EDIT. Drains a pending user plan edit (enqueued via
    * GoalManager.editPlan onto the per-session control channel) BETWEEN ticks. Returns the revised PlanDoc
-   * or null. The driver applies it via loop.applyPlanEdit (durable-doc upsert + stall re-baseline) using
+   * or null. The driver applies it via loop.applyPlanEdit (strict admission + durable CAS + stall re-baseline) using
    * ITS OWN store handle — this is why a running goal observes the edit next tick (a separate store handle
    * from the HTTP fiber would not, DocumentStore reads from its construction-time in-memory map). Applied
    * BEFORE the tick and AFTER the previous tick's mirror-back, so no edit is clobbered by child progress
    * and no child progress is lost (§S2.3). Optional; omitted / null ⇒ no plan edit this iteration.
    */
-  readonly pendingPlanEdit?: () => Effect.Effect<PlanInput | null>
+  readonly pendingPlanEdit?: () => Effect.Effect<PlanEditCommand | null>
   /**
    * V4.1 §S2 — clear the pending plan edit AFTER it was applied+re-baselined (consume-once). Receives the
    * exact edit object the driver drained + applied, so the port can clear the slot ONLY if it still holds
    * that same edit (identity guard) — a newer edit admitted between the drain and this call must survive.
    * Optional.
    */
-  readonly markPlanEditConsumed?: (applied: PlanInput) => Effect.Effect<void>
+  readonly settlePlanEdit?: (command: PlanEditCommand, settlement: PlanEditSettlement) => Effect.Effect<void>
 }
 
 /** No-op ports (fire-and-forget usage / tests that only care about the terminal outcome). */
@@ -212,7 +217,7 @@ export const noopPorts: GoalDriverPorts = {
   markSteerConsumed: () => Effect.void,
   // §S2: no user plan edit by default — the goal runs exactly as before.
   pendingPlanEdit: () => Effect.succeed(null),
-  markPlanEditConsumed: (_applied) => Effect.void,
+  settlePlanEdit: () => Effect.void,
 }
 
 export type StartGoalInput = {
@@ -298,13 +303,24 @@ export const runOneTick = (
     // §S2 — apply a pending USER PLAN EDIT BETWEEN ticks (after the PREVIOUS tick's mirror-back, before
     // THIS tick). Draining here — not mid-tick — prevents the child-bridge clobber: the prior tick's
     // mirrorChildPlan already wrote the child's progress back, so applying the user edit on top preserves
-    // both. consume-once: stamp consumed ONLY after a successful apply; a crash before markPlanEditConsumed
-    // leaves the edit pending → re-applied next iteration (idempotent re-upsert / re-baseline is a no-op).
+    // both. The durable command is ALWAYS settled to one terminal receipt. If settlement persistence
+    // fails after a successful plan CAS, the whole tick fails; redelivery recognizes the activity marker
+    // on the committed plan version and repairs the receipt without writing the plan again.
     if (ports.pendingPlanEdit) {
-      const editedPlan = yield* safePlanEdit(ports.pendingPlanEdit())
-      if (editedPlan != null) {
-        yield* safe(loop.applyPlanEdit(input.handle, editedPlan))
-        if (ports.markPlanEditConsumed) yield* safe(ports.markPlanEditConsumed(editedPlan))
+      const command = yield* ports.pendingPlanEdit()
+      if (command != null) {
+        const applied = yield* loop.applyPlanEdit(input.handle, command).pipe(
+          Effect.match({
+            onFailure: (error) => ({ ok: false as const, error }),
+            onSuccess: (result) => ({ ok: true as const, result }),
+          }),
+        )
+        const settlement: PlanEditSettlement = applied.ok
+          ? { state: "applied", result: applied.result }
+          : settlementFromFailure(planEditFailure(applied.error))
+        if (ports.settlePlanEdit) {
+          yield* settlePlanEdit(ports.settlePlanEdit(command, settlement))
+        }
       }
     }
 
@@ -364,10 +380,17 @@ const safeSteers = (
 ): Effect.Effect<ReadonlyArray<PendingGoalSteer>> =>
   effect.pipe(Effect.catchCause(() => Effect.succeed([] as ReadonlyArray<PendingGoalSteer>)))
 
-// §S2 — a pendingPlanEdit port defect must not crash the driver: degrade to "no edit this iteration"
-// (the edit stays pending on the control channel and is re-drained next iteration — no loss).
-const safePlanEdit = (effect: Effect.Effect<PlanInput | null>): Effect.Effect<PlanInput | null> =>
-  effect.pipe(Effect.catchCause(() => Effect.succeed(null as PlanInput | null)))
+const settlementFromFailure = (failure: ReturnType<typeof planEditFailure>): PlanEditSettlement => {
+  if (failure.kind === "conflict") return { state: "conflict", failure }
+  if (failure.kind === "runtime_error") return { state: "runtime_error", failure }
+  return { state: "rejected", failure }
+}
+
+const settlePlanEdit = (effect: Effect.Effect<void>, attempts = 3): Effect.Effect<void> =>
+  effect.pipe(
+    Effect.catchCause((cause) => (attempts > 1 ? settlePlanEdit(effect, attempts - 1) : Effect.failCause(cause))),
+    Effect.orDie,
+  )
 
 const safeStatus = (
   loop: ReturnType<typeof makeGoalLoop>,

@@ -104,6 +104,30 @@ export const PromptSuggestionResult = Schema.Struct({
   status: Schema.NullOr(Schema.String),
   body: Schema.NullOr(Schema.String),
 })
+const PlanSnapshotStep = Schema.Struct({
+  step_id: Schema.String,
+  title: Schema.String,
+  status: Schema.String,
+  acceptance: Schema.NullOr(Schema.String),
+  assigned_agent: Schema.NullOr(Schema.String),
+  evidence: Schema.Array(Schema.String),
+  note: Schema.NullOr(Schema.String),
+})
+const PlanSnapshot = Schema.Struct({
+  plan_id: Schema.String,
+  session_id: Schema.String,
+  goal: Schema.String,
+  assumptions: Schema.Array(Schema.String),
+  steps: Schema.Array(PlanSnapshotStep),
+  active_step_id: Schema.NullOr(Schema.String),
+  replan_reason: Schema.optional(Schema.NullOr(Schema.String)),
+  created_at: Schema.String,
+})
+export const PlanSnapshotResult = Schema.Struct({
+  plan: Schema.NullOr(PlanSnapshot),
+  doc_id: Schema.NullOr(Schema.String),
+  plan_version: Schema.NullOr(Schema.Number),
+})
 export const CommandPayload = Schema.Struct(Struct.omit(SessionPrompt.CommandInput.fields, ["sessionID"]))
 export const ShellPayload = Schema.Struct(Struct.omit(SessionPrompt.ShellInput.fields, ["sessionID"]))
 export const RevertPayload = Schema.Struct(Struct.omit(SessionRevert.RevertInput.fields, ["sessionID"]))
@@ -248,6 +272,7 @@ export const SessionPaths = {
   get: `${root}/:sessionID`,
   children: `${root}/:sessionID/children`,
   todo: `${root}/:sessionID/todo`,
+  plan: `${root}/:sessionID/plan`,
   diff: `${root}/:sessionID/diff`,
   messages: `${root}/:sessionID/message`,
   message: `${root}/:sessionID/message/:messageID`,
@@ -335,6 +360,18 @@ export const SessionApi = HttpApi.make("session")
             identifier: "session.todo",
             summary: "Get session todos",
             description: "Retrieve the todo list associated with a specific session, showing tasks and action items.",
+          }),
+        ),
+        HttpApiEndpoint.get("plan", SessionPaths.plan, {
+          params: { sessionID: SessionID },
+          query: WorkspaceRoutingQuery,
+          success: described(PlanSnapshotResult, "Current durable session plan"),
+          error: [HttpApiError.BadRequest, ApiNotFoundError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.plan",
+            summary: "Get session plan",
+            description: "Retrieve the versioned durable plan snapshot for a session.",
           }),
         ),
         HttpApiEndpoint.get("diff", SessionPaths.diff, {

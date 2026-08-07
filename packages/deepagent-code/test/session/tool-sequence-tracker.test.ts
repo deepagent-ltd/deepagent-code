@@ -15,7 +15,7 @@
  */
 
 import { describe, expect, test } from "bun:test"
-import { ToolSequenceTracker } from "@/session/processor"
+import { PlanProtocolTracker, ToolSequenceTracker } from "@/session/processor"
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -438,5 +438,45 @@ describe("sliding window (max 12 calls)", () => {
     const result = t.detect()
     expect(result).not.toBeNull()
     expect(result?.period).toBe(1)
+  })
+})
+
+describe("activity-level plan protocol budget", () => {
+  test("allows one violation and terminates on the second consecutive violation", () => {
+    const tracker = new PlanProtocolTracker()
+    tracker.start("p1", "plan")
+    expect(tracker.preview("p1", "invalid")).toEqual({ consecutive: 1, terminal: false })
+    expect(tracker.settle("p1", "invalid")).toEqual({ consecutive: 1, terminal: false })
+    tracker.start("p2", "plan")
+    expect(tracker.preview("p2", "conflict")).toEqual({ consecutive: 2, terminal: true })
+    expect(tracker.settle("p2", "conflict")).toEqual({ consecutive: 2, terminal: true })
+  })
+
+  test("a valid progress resets the consecutive budget and duplicate settlement is ignored", () => {
+    const tracker = new PlanProtocolTracker()
+    tracker.start("p1", "plan")
+    expect(tracker.settle("p1", "invalid")?.consecutive).toBe(1)
+    expect(tracker.settle("p1", "invalid")).toBeUndefined()
+    tracker.start("p2", "plan")
+    expect(tracker.settle("p2", "progress")).toEqual({ consecutive: 0, terminal: false })
+    tracker.start("p3", "plan")
+    expect(tracker.preview("p3", "schema")).toEqual({ consecutive: 1, terminal: false })
+    expect(tracker.settle("p3", "schema")).toEqual({ consecutive: 1, terminal: false })
+  })
+
+  test("non-plan calls never consume the plan budget", () => {
+    const tracker = new PlanProtocolTracker()
+    tracker.start("x1", "bash")
+    expect(tracker.settle("x1", "invalid")).toBeUndefined()
+  })
+
+  test("a schema failure can settle even when no tool-call event was emitted", () => {
+    const tracker = new PlanProtocolTracker()
+    // AI SDK may emit tool-error directly after input validation. The processor starts the
+    // call at tool-input-start/tool-error so this execute-before-failure still consumes one slot.
+    tracker.start("schema-1", "plan")
+    expect(tracker.settle("schema-1", "schema")).toEqual({ consecutive: 1, terminal: false })
+    tracker.start("schema-2", "plan")
+    expect(tracker.settle("schema-2", "schema")).toEqual({ consecutive: 2, terminal: true })
   })
 })

@@ -34,6 +34,7 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { toolFileSourceFromUri, Usage, type LLMEvent } from "@deepagent-code/llm"
 import { ToolOutput } from "@deepagent-code/core/tool-output"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
+import { InvalidToolInputError } from "ai"
 
 const DOOM_LOOP_THRESHOLD = 3
 const DOOM_LOOP_SEQUENCE_WINDOW = 12
@@ -244,6 +245,13 @@ export class PlanProtocolTracker {
     if (toolName === "plan") this.pending.add(callID)
   }
 
+  preview(callID: string, outcome: PlanProtocolOutcome): { consecutive: number; terminal: boolean } | undefined {
+    if (!this.pending.has(callID) || this.settled.has(callID)) return undefined
+    if (outcome === "success" || outcome === "progress") return { consecutive: 0, terminal: false }
+    const consecutive = this.consecutiveViolations + 1
+    return { consecutive, terminal: consecutive >= 2 }
+  }
+
   settle(callID: string, outcome: PlanProtocolOutcome): { consecutive: number; terminal: boolean } | undefined {
     if (!this.pending.has(callID) || this.settled.has(callID)) return undefined
     this.pending.delete(callID)
@@ -419,6 +427,10 @@ interface ProcessorContext extends Input {
   degenerationDetectors: Record<string, DegenerationDetector>
   v2AssistantMessageID: SessionMessage.ID | undefined
   summaryText: string
+  requestReceipt: LLM.StreamInput["requestReceipt"] | undefined
+  processorDecodedOrdinal: number
+  processorReceiptCallIDs: Set<string>
+  processorSchemaInvalidCallIDs: Set<string>
 }
 
 type StreamEvent = LLMEvent
@@ -465,6 +477,10 @@ export const layer = Layer.effect(
         degenerationDetectors: {},
         v2AssistantMessageID: undefined,
         summaryText: "",
+        requestReceipt: undefined,
+        processorDecodedOrdinal: 0,
+        processorReceiptCallIDs: new Set(),
+        processorSchemaInvalidCallIDs: new Set(),
       }
       const mirrorAssistant = flags.experimentalEventSystem && !input.assistantMessage.summary
       let aborted = false
@@ -475,6 +491,10 @@ export const layer = Layer.effect(
           providerID: input.model.providerID,
           aborted,
         })
+
+      // Provider tool-call ids are not guaranteed to be unique across turns. The durable assistant
+      // message id scopes them to one physical dispatch while preserving duplicate-event idempotency.
+      const planTrackerCallID = (toolCallID: string) => `${ctx.assistantMessage.id}\x00${toolCallID}`
 
       const settleToolCall = Effect.fn("SessionProcessor.settleToolCall")(function* (
         toolCallID: string,
@@ -491,8 +511,13 @@ export const layer = Layer.effect(
         return noProgress
       })
 
-      const settlePlanProtocol = (toolCallID: string, toolName: string, outcome: PlanProtocolOutcome, code?: string) => {
-        const result = ctx.planTracker?.settle(toolCallID, outcome)
+      const settlePlanProtocol = (
+        toolCallID: string,
+        toolName: string,
+        outcome: PlanProtocolOutcome,
+        code?: string,
+      ) => {
+        const result = ctx.planTracker?.settle(planTrackerCallID(toolCallID), outcome)
         if (!result?.terminal) return Effect.void
         return Effect.fail(
           new SessionV1.PlanProtocolViolationError({
@@ -503,6 +528,39 @@ export const layer = Layer.effect(
           }),
         )
       }
+
+      const recordProcessorInput = (
+        toolCallID: string,
+        toolName: string,
+        eventType: string,
+        validationOutcome: "schema_valid" | "schema_invalid",
+        decoded?: Record<string, unknown>,
+      ) => {
+        if (ctx.processorReceiptCallIDs.has(toolCallID)) return Effect.void
+        ctx.processorReceiptCallIDs.add(toolCallID)
+        return (
+          ctx.requestReceipt?.processorDecoded({
+            ordinal: ctx.processorDecodedOrdinal++,
+            eventType,
+            callID: toolCallID,
+            toolName,
+            validationOutcome,
+            ...(decoded
+              ? LLM.boundedReceiptPayload(decoded)
+              : {
+                  payloadHash: undefined,
+                  payloadLength: undefined,
+                  payloadKeys: [],
+                  unavailableReason: "tool_input_not_decoded",
+                }),
+          }) ?? Effect.void
+        )
+      }
+
+      const recordProcessorValidation = (
+        toolCallID: string,
+        validationOutcome: "schema_invalid" | "semantic_valid" | "semantic_invalid" | "conflict" | "no_progress",
+      ) => ctx.requestReceipt?.processorValidation({ callID: toolCallID, validationOutcome }) ?? Effect.void
 
       const ensureV2AssistantMessage = Effect.fn("SessionProcessor.ensureV2AssistantMessage")(function* () {
         if (ctx.v2AssistantMessageID) return ctx.v2AssistantMessageID
@@ -574,13 +632,56 @@ export const layer = Layer.effect(
       ) {
         const match = yield* readToolCall(toolCallID)
         if (!match || match.part.state.status !== "running") return
+        const protocol =
+          match.part.tool === "plan"
+            ? (() => {
+                const raw = isRecord(output.metadata) ? output.metadata.plan_protocol : undefined
+                const outcome: PlanProtocolOutcome =
+                  raw === "invalid" || raw === "conflict" || raw === "schema"
+                    ? raw
+                    : raw === "no_progress" || output.metadata.plan_progress === false
+                      ? "no_progress"
+                      : "success"
+                return {
+                  outcome,
+                  code:
+                    typeof output.metadata.plan_error_code === "string" ? output.metadata.plan_error_code : undefined,
+                  attempt: ctx.planTracker?.preview(planTrackerCallID(toolCallID), outcome),
+                }
+              })()
+            : undefined
+        const metadata =
+          protocol?.attempt === undefined
+            ? output.metadata
+            : { ...output.metadata, plan_attempt_ordinal: protocol.attempt.consecutive }
+        // BUG-010: Include attempt ordinal in the tool result text when plan validation/conflict fails,
+        // so the model knows which attempt this is (§7.5 contract: first error is correctable, second
+        // terminates). The ordinal is 1-indexed from the tracker (consecutive count of this outcome).
+        const outputText =
+          protocol?.attempt !== undefined && protocol.attempt.consecutive > 0
+            ? `${output.output}\n\n[Plan attempt ${protocol.attempt.consecutive} of 2]`
+            : output.output
+        if (protocol) {
+          yield* recordProcessorValidation(
+            toolCallID,
+            protocol.outcome === "invalid"
+              ? "semantic_invalid"
+              : protocol.outcome === "schema"
+                ? "schema_invalid"
+                : protocol.outcome === "conflict"
+                  ? "conflict"
+                  : protocol.outcome === "no_progress"
+                    ? "no_progress"
+                    : "semantic_valid",
+          )
+        }
         yield* session.updatePart({
           ...match.part,
           state: {
             status: "completed",
             input: match.part.state.input,
-            output: output.output,
-            metadata: output.metadata,
+            output: outputText,
+            metadata,
             title: output.title,
             time: { start: match.part.state.time.start, end: Date.now() },
             attachments: output.attachments,
@@ -597,15 +698,8 @@ export const layer = Layer.effect(
               }
             : undefined,
         )
-        if (match.part.tool === "plan") {
-          const protocol = isRecord(output.metadata) ? output.metadata.plan_protocol : undefined
-          const outcome: PlanProtocolOutcome =
-            protocol === "invalid" || protocol === "conflict" || protocol === "schema"
-              ? protocol
-              : protocol === "no_progress" || output.metadata.plan_progress === false
-                ? "no_progress"
-                : "success"
-          yield* settlePlanProtocol(toolCallID, match.part.tool, outcome, typeof output.metadata.plan_error_code === "string" ? output.metadata.plan_error_code : undefined)
+        if (protocol) {
+          yield* settlePlanProtocol(toolCallID, match.part.tool, protocol.outcome, protocol.code)
         }
         if (input.noProgressLimit && noProgress && noProgress.count >= input.noProgressLimit) {
           slog.warn("subagent.loop.detected", {
@@ -625,7 +719,11 @@ export const layer = Layer.effect(
         }
       })
 
-      const failToolCall = Effect.fn("SessionProcessor.failToolCall")(function* (toolCallID: string, error: unknown) {
+      const failToolCall = Effect.fn("SessionProcessor.failToolCall")(function* (
+        toolCallID: string,
+        error: unknown,
+        metadata?: Record<string, unknown>,
+      ) {
         const match = yield* readToolCall(toolCallID)
         if (!match || match.part.state.status !== "running") return false
         yield* session.updatePart({
@@ -634,6 +732,9 @@ export const layer = Layer.effect(
             status: "error",
             input: match.part.state.input,
             error: errorMessage(error),
+            ...(match.part.state.metadata || metadata
+              ? { metadata: { ...match.part.state.metadata, ...metadata } }
+              : {}),
             time: { start: match.part.state.time.start, end: Date.now() },
           },
         })
@@ -878,6 +979,7 @@ export const layer = Layer.effect(
                 }),
               )
             }
+            ctx.planTracker?.start(planTrackerCallID(value.id), value.name)
             yield* ensureToolCall(value)
             return
 
@@ -902,7 +1004,7 @@ export const layer = Layer.effect(
           case "tool-input-end": {
             yield* rejectSummaryToolEvent("tool-input-end", value.name)
             const toolCall = yield* ensureToolCall(value)
-            ctx.planTracker?.start(value.id, value.name)
+            ctx.planTracker?.start(planTrackerCallID(value.id), value.name)
             // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
             if (mirrorAssistant) {
               const assistantMessageID = yield* requireV2AssistantMessage(toolCall.call)
@@ -930,8 +1032,17 @@ export const layer = Layer.effect(
                 }),
               )
             }
+            ctx.planTracker?.start(planTrackerCallID(value.id), value.name)
             const toolCall = yield* ensureToolCall(value)
             const input = isRecord(value.input) ? value.input : { value: value.input }
+            if (value.inputValidation === "schema_invalid") ctx.processorSchemaInvalidCallIDs.add(value.id)
+            yield* recordProcessorInput(
+              value.id,
+              value.name,
+              "tool-call",
+              value.inputValidation ?? "schema_valid",
+              input,
+            )
             if (!toolCall.call.inputEnded) {
               // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
               if (mirrorAssistant) {
@@ -1074,13 +1185,30 @@ export const layer = Layer.effect(
 
           case "tool-result": {
             yield* rejectSummaryToolEvent("tool-result", value.name)
+            ctx.planTracker?.start(planTrackerCallID(value.id), value.name)
             const toolCall = yield* readToolCall(value.id)
-            if (!toolCall && value.result.type === "error") return
+            if (!toolCall) {
+              // A schema/transport failure or impossible success can arrive before the durable
+              // tool-call part exists.  Both belong to the activity-level plan protocol budget;
+              // otherwise a malformed plan response silently escapes the terminal rule.
+              yield* recordProcessorInput(value.id, value.name, "tool-result", "schema_invalid")
+              yield* settlePlanProtocol(
+                value.id,
+                value.name,
+                value.name === "plan" ? "schema" : "invalid",
+                "missing_tool_call",
+              )
+              return
+            }
             if (value.result.type === "error") {
-              const protocol = value.name === "plan" ? ctx.planTracker?.settle(value.id, "invalid") : undefined
+              const protocol =
+                value.name === "plan" ? ctx.planTracker?.settle(planTrackerCallID(value.id), "invalid") : undefined
+              if (protocol) yield* recordProcessorValidation(value.id, "semantic_invalid")
               // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
               if (mirrorAssistant) {
-                const assistantMessageID = yield* requireV2AssistantMessage(toolCall?.call)
+                const assistantMessageID = toolCall
+                  ? yield* requireV2AssistantMessage(toolCall.call)
+                  : yield* ensureV2AssistantMessage()
                 yield* events.publish(SessionEvent.Tool.Failed, {
                   sessionID: ctx.sessionID,
                   assistantMessageID,
@@ -1094,7 +1222,13 @@ export const layer = Layer.effect(
                   timestamp: DateTime.makeUnsafe(Date.now()),
                 })
               }
-              yield* failToolCall(value.id, value.result.value)
+              yield* failToolCall(
+                value.id,
+                protocol
+                  ? `${errorMessage(value.result.value)}\n\n[Plan attempt ${protocol.consecutive} of 2]`
+                  : value.result.value,
+                protocol ? { plan_protocol: "invalid", plan_attempt_ordinal: protocol.consecutive } : undefined,
+              )
               if (protocol?.terminal) {
                 yield* Effect.fail(
                   new SessionV1.PlanProtocolViolationError({
@@ -1131,7 +1265,9 @@ export const layer = Layer.effect(
             }
             // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
             if (mirrorAssistant) {
-              const assistantMessageID = yield* requireV2AssistantMessage(toolCall?.call)
+              const assistantMessageID = toolCall
+                ? yield* requireV2AssistantMessage(toolCall.call)
+                : yield* ensureV2AssistantMessage()
               const content = [
                 ToolOutput.text({ type: "text", text: output.output }),
                 ...(output.attachments?.map((item: SessionV1.FilePart) =>
@@ -1186,10 +1322,27 @@ export const layer = Layer.effect(
           case "tool-error": {
             yield* rejectSummaryToolEvent("tool-error", value.name)
             const toolCall = yield* readToolCall(value.id)
-            const protocol = value.name === "plan" ? ctx.planTracker?.settle(value.id, "schema") : undefined
+            // AI SDK may reduce InvalidToolInputError to a string. A schema-rejected call has no
+            // typed error by this point, so preserve the validation marker from its tool-call event.
+            const schemaInvalid =
+              InvalidToolInputError.isInstance(value.error) || ctx.processorSchemaInvalidCallIDs.has(value.id)
+            const protocolOutcome = schemaInvalid ? "schema" : "invalid"
+            ctx.planTracker?.start(planTrackerCallID(value.id), value.name)
+            yield* recordProcessorInput(
+              value.id,
+              value.name,
+              "tool-error",
+              schemaInvalid ? "schema_invalid" : "schema_valid",
+            )
+            if (schemaInvalid) yield* recordProcessorValidation(value.id, "schema_invalid")
+            const protocol =
+              value.name === "plan" ? ctx.planTracker?.settle(planTrackerCallID(value.id), protocolOutcome) : undefined
+            if (protocol && !schemaInvalid) yield* recordProcessorValidation(value.id, "semantic_invalid")
             // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
             if (mirrorAssistant) {
-              const assistantMessageID = yield* requireV2AssistantMessage(toolCall?.call)
+              const assistantMessageID = toolCall
+                ? yield* requireV2AssistantMessage(toolCall.call)
+                : yield* ensureV2AssistantMessage()
               yield* events.publish(SessionEvent.Tool.Failed, {
                 sessionID: ctx.sessionID,
                 assistantMessageID,
@@ -1205,14 +1358,20 @@ export const layer = Layer.effect(
                 timestamp: DateTime.makeUnsafe(Date.now()),
               })
             }
-            yield* failToolCall(value.id, value.error ?? new Error(value.message))
+            yield* failToolCall(
+              value.id,
+              protocol
+                ? `${value.message}\n\n[Plan attempt ${protocol.consecutive} of 2]`
+                : (value.error ?? new Error(value.message)),
+              protocol ? { plan_protocol: protocolOutcome, plan_attempt_ordinal: protocol.consecutive } : undefined,
+            )
             if (protocol?.terminal) {
               yield* Effect.fail(
                 new SessionV1.PlanProtocolViolationError({
                   message: "Plan protocol violation budget exhausted after two consecutive model plan failures.",
                   sessionID: ctx.sessionID,
                   attemptOrdinal: protocol.consecutive,
-                  code: "schema",
+                  code: protocolOutcome,
                 }),
               )
             }
@@ -1512,6 +1671,7 @@ export const layer = Layer.effect(
           }
         }
         ctx.assistantMessage.error = error
+        if (SessionV1.PlanProtocolViolationError.isInstance(error)) ctx.assistantMessage.finish = "error"
         yield* events.publish(Session.Event.Error, {
           sessionID: ctx.assistantMessage.sessionID,
           error: ctx.assistantMessage.error,
@@ -1533,6 +1693,10 @@ export const layer = Layer.effect(
         slog.info("process")
         ctx.needsCompaction = false
         ctx.shouldBreak = (yield* config.get()).experimental?.continue_loop_on_deny !== true
+        ctx.requestReceipt = streamInput.requestReceipt
+        ctx.processorDecodedOrdinal = 0
+        ctx.processorReceiptCallIDs.clear()
+        ctx.processorSchemaInvalidCallIDs.clear()
 
         return yield* Effect.gen(function* () {
           const streamed = Effect.gen(function* () {
