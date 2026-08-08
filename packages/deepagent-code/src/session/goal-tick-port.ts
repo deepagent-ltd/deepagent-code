@@ -5,10 +5,11 @@ import { DocumentStore } from "@deepagent-code/core/deepagent/document-store"
 import {
   makeGoalLoop,
   readGoalTickCursor,
-  readPendingPlanEdit,
-  persistPendingPlanEdit,
 } from "@deepagent-code/core/deepagent/goal-loop"
-import type { PlanInput } from "@deepagent-code/core/deepagent/plan-controller"
+import {
+  readPendingPlanEditCommand,
+  settlePlanEditCommand,
+} from "@deepagent-code/core/deepagent/plan-edit-protocol"
 import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
 import { ApprovalQueue } from "@deepagent-code/core/deepagent/approval-queue"
 import { WorkspaceV2 } from "@deepagent-code/core/workspace"
@@ -111,7 +112,7 @@ export const makeGoalTickPort =
   (request) =>
     Effect.gen(function* () {
       const sessionID = request.sessionID
-      const store = new DocumentStore(deps.goalStoreRoot(sessionID))
+      const store = DocumentStore.shared(deps.goalStoreRoot(sessionID))
       const recovered = recoverGoalTickRequest(request, readGoalTickCursor(store, sessionID, request.goalId))
       if (recovered === "invalid") {
         return yield* Effect.die(
@@ -224,7 +225,7 @@ export const makeGoalTickPort =
       // Ports from DURABLE sources (no in-memory control map on the cold fiber):
       //   • shouldPause / shouldStop — the session-state active-goal pointer phase (pause/stop persist it).
       //   • goal-steer — the SessionSteer buffer on the goal session id + goal_steer delivery channel.
-      //   • pendingPlanEdit — the durable pending-edit doc (persistPendingPlanEdit / readPendingPlanEdit).
+      //   • pendingPlanEdit — the durable activity mailbox shared with GoalManager admission.
       const goalPhase = () => AgentGateway.DeepAgentSessionState.getActiveGoal(sessionID)?.phase
       const ports: GoalDriverPorts = {
         onStatus: (status) => statusPublisher.publishStatus(sessionID, status),
@@ -240,10 +241,11 @@ export const makeGoalTickPort =
             .markConsumed(SessionID.make(sessionID), [...ids], GoalDriver.GOAL_STEER_DELIVERY)
             .pipe(Effect.catchCause(() => Effect.void)),
         pendingPlanEdit: () =>
-          Effect.sync(() => readPendingPlanEdit(store, sessionID, request.goalId) as PlanInput | null),
-        markPlanEditConsumed: () =>
-          // Clear the durable slot (sentinel empty body) after the driver applied+re-baselined the edit.
-          Effect.sync(() => persistPendingPlanEdit(store, sessionID, request.goalId, null)),
+          Effect.sync(() => readPendingPlanEditCommand(store, sessionID, request.goalId)),
+        settlePlanEdit: (command, settlement) =>
+          Effect.sync(() => {
+            settlePlanEditCommand(store, command, settlement)
+          }),
       }
 
       const handle = { goalId: request.goalId, planDocId: request.planDocId, sessionId: sessionID }

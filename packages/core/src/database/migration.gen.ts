@@ -65,5 +65,9 @@ export const migrations = (
     import("./migration/20260805000000_repair_task_admission"),
     import("./migration/20260806051000_session_prompt_intent"),
     import("./migration/20260806060000_session_mutation_epoch"),
+    import("./migration/20260806070000_compaction_lifecycle"),
+    import("./migration/20260806080000_session_tool_request_receipt"),
+    import("./migration/20260807090000_session_tool_argument_receipt"),
+    import("./migration/20260807123000_session_tool_argument_validation_outcome"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { OpenApi } from "effect/unstable/httpapi"
 import { PublicApi } from "../../src/server/routes/instance/httpapi/public"
+import { DeepAgentApi } from "../../src/server/routes/instance/httpapi/groups/deepagent"
 
 type Method = "get" | "post" | "put" | "delete" | "patch"
 type OpenApiSchema = {
@@ -68,6 +69,25 @@ function isBuiltInEndpointError(name: string) {
 }
 
 describe("PublicApi OpenAPI v2 errors", () => {
+  test("documents the typed plan admission error matrix", () => {
+    const spec = OpenApi.fromApi(DeepAgentApi) as OpenApiSpec
+
+    const responses = spec.paths["/deepagent/goal/edit-plan"]?.post?.responses ?? {}
+    expect(Object.keys(responses)).toEqual(expect.arrayContaining(["200", "409", "422", "503"]))
+    expect(responses["500"]).toBeUndefined()
+    expect(componentNames(spec.paths["/deepagent/goal/edit-plan"]?.post?.responses?.["409"])).toEqual([
+      "DeepAgentGoalPlanConflictError",
+      "DeepAgentGoalPlanBusyError",
+      "DeepAgentGoalPlanChallengeError",
+    ])
+    expect(componentName(responseRef(spec.paths["/deepagent/goal/edit-plan"]?.post?.responses?.["422"]) ?? "")).toBe(
+      "DeepAgentGoalPlanValidationError",
+    )
+    expect(componentName(responseRef(spec.paths["/deepagent/goal/edit-plan"]?.post?.responses?.["503"]) ?? "")).toBe(
+      "DeepAgentGoalPlanUnavailableError",
+    )
+  })
+
   test("documents nested legacy global sync events", () => {
     const spec = OpenApi.fromApi(PublicApi) as OpenApiSpec
     const schema = spec.components.schemas.SyncEventSessionCreated

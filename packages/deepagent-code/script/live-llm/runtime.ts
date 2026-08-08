@@ -164,6 +164,7 @@ export async function runLegacyLiveCases(input: {
   // durable admission evidence before awaiting that prompt to completion.
   steerDuringCases?: ReadonlyArray<{ duringCaseName: string; text: string }>
   observeAssembledRequestFingerprints?: boolean
+  inspectDurability?: boolean
   subagentIntensity?: "inherit" | "downgrade"
   environment?: Readonly<Record<string, string>>
   panel?: LegacyPanelCase
@@ -215,6 +216,8 @@ export async function runLegacyLiveCases(input: {
     const { Permission } = await import("../../src/permission")
     const { Question } = await import("../../src/question")
     const { SessionCompaction } = await import("../../src/session/compaction")
+    const { CompactionRunTable, CompactionSummaryAttemptTable } = await import("../../src/session/compaction-sql")
+    const { SessionPromptEpochTable } = await import("../../src/session/prompt-epoch.sql")
     const { SessionPromptIntent } = await import("../../src/session/prompt-intent")
     const { SessionPrompt } = await import("../../src/session/prompt")
     const { SessionRevert } = await import("../../src/session/revert")
@@ -222,6 +225,7 @@ export async function runLegacyLiveCases(input: {
     const { MessageID } = await import("../../src/session/schema")
     const { SessionSteer } = await import("../../src/session/steer")
     const { Session } = await import("../../src/session/session")
+    const { SessionToolRequestReceiptTable } = await import("../../src/session/tool-request-receipt.sql")
     const { SessionIntentTable } = await import("@deepagent-code/core/session/sql")
     const { EventDispatcher } = await import("../../src/session/event-dispatcher")
     const { MultiAgentRuntime } = await import("../../src/session/multi-agent-runtime")
@@ -1041,6 +1045,33 @@ export async function runLegacyLiveCases(input: {
                 .get()
                 .pipe(Effect.orDie)
             : undefined
+          const durability = input.inspectDurability
+            ? {
+                promptEpochs: yield* database.db
+                  .select()
+                  .from(SessionPromptEpochTable)
+                  .where(eq(SessionPromptEpochTable.session_id, session.id))
+                  .all()
+                  .pipe(Effect.orDie),
+                compactionRuns: yield* database.db
+                  .select()
+                  .from(CompactionRunTable)
+                  .where(eq(CompactionRunTable.session_id, session.id))
+                  .all()
+                  .pipe(Effect.orDie),
+                summaryAttempts: yield* database.db
+                  .select()
+                  .from(CompactionSummaryAttemptTable)
+                  .all()
+                  .pipe(Effect.orDie),
+                requestReceipts: yield* database.db
+                  .select()
+                  .from(SessionToolRequestReceiptTable)
+                  .where(eq(SessionToolRequestReceiptTable.session_id, session.id))
+                  .all()
+                  .pipe(Effect.orDie),
+              }
+            : undefined
           return {
             name: testCase.name,
             sessionID: session.id,
@@ -1051,6 +1082,7 @@ export async function runLegacyLiveCases(input: {
             steering: steeringEvidence,
             messageCount: messages.length,
             intelligenceDraft,
+            durability,
             admission: intent
               ? {
                   intentID: intent.intent_id,

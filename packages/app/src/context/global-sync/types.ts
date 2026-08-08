@@ -38,15 +38,52 @@ export type SessionPlanStep = {
   status: string // pending | active | done | cancelled | blocked
   acceptance?: string | null
   assigned_agent?: string | null
+  evidence?: string[]
   note?: string | null // U10: blocker explanation when status is "blocked"
 }
 export type SessionPlan = {
   plan_id: string
+  plan_version: number
   goal: string
+  assumptions: string[]
   active_step_id: string | null
   steps: SessionPlanStep[]
   done: number
   total: number
+}
+
+export type SessionPlanUpdateSource = "event" | "snapshot"
+export type SessionPlanCursor = Pick<SessionPlan, "plan_id" | "plan_version"> | undefined
+
+export type SessionPlanUpdateOptions = {
+  source?: SessionPlanUpdateSource
+  snapshotBaseline?: SessionPlanCursor
+}
+
+export const sessionPlanCursor = (plan: SessionPlan | undefined): SessionPlanCursor =>
+  plan ? { plan_id: plan.plan_id, plan_version: plan.plan_version } : undefined
+
+export const hasSessionPlanIdentityConflict = (
+  current: SessionPlan | undefined,
+  incoming: SessionPlan | undefined,
+): boolean => !!current && !!incoming && current.plan_id !== incoming.plan_id
+
+const sameSessionPlanCursor = (left: SessionPlanCursor, right: SessionPlanCursor): boolean =>
+  left?.plan_id === right?.plan_id && left?.plan_version === right?.plan_version
+
+/** Cursor and identity gate shared by live events and reconnect snapshots. */
+export const acceptsSessionPlanUpdate = (
+  current: SessionPlan | undefined,
+  incoming: SessionPlan | undefined,
+  options: SessionPlanUpdateOptions = {},
+): boolean => {
+  const source = options.source ?? "event"
+  const snapshotCanRecalibrate =
+    source === "snapshot" && sameSessionPlanCursor(sessionPlanCursor(current), options.snapshotBaseline)
+  if (!incoming) return snapshotCanRecalibrate || current === undefined
+  if (!current) return true
+  if (current.plan_id !== incoming.plan_id) return snapshotCanRecalibrate
+  return incoming.plan_version >= current.plan_version
 }
 
 // V3.9 §D: live Goal Loop status mirrored from the backend goal.updated event. Declared here (not in

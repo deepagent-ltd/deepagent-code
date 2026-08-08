@@ -23,14 +23,21 @@ import PLAN_MODE from "./prompt/plan-mode.txt"
 // history. Mutating that anchor busted every later cache block. This is now a PURE RENDERER: the caller
 // folds the result into the same ephemeral trailing `<deepagent-round-context>` message as the other
 // volatile round state. Returns null when there is nothing to surface.
-export const renderPlanStatus = (sessionID: string, detail: "full" | "continuation" = "full"): string | null => {
+export const renderPlanStatus = (
+  sessionID: string,
+  detail: "full" | "continuation" = "full",
+  options?: { includeLightweight?: boolean },
+): string | null => {
   const agentMode = AgentGateway.snapshot().agentMode ?? "high"
-  // Lightweight modes (general/direct) never carry the plan machinery — no snapshot, no nudge.
-  if (AgentGateway.DeepAgentPlanController.isLightweightMode(agentMode)) return null
+  // Lightweight modes omit plan machinery unless a governed caller (currently goal-worker)
+  // explicitly requests the durable snapshot and its CAS precondition.
+  if (!options?.includeLightweight && AgentGateway.DeepAgentPlanController.isLightweightMode(agentMode)) return null
   const plan = AgentGateway.DeepAgentSessionState.getPlan(sessionID)
   if (!plan) return null
 
   const snapshot = AgentGateway.DeepAgentPlanController.renderPlanSnapshot(plan, detail)
+  const ref = AgentGateway.DeepAgentPlanStore.planDocRef(sessionID)
+  const precondition = ref ? `\nPlan precondition: plan_id=${plan.plan_id} plan_version=${ref.version}` : ""
   const mutations = AgentGateway.DeepAgentSessionState.mutationsSinceReport(sessionID)
   const validationPassedSinceReport = AgentGateway.DeepAgentSessionState.validationPassedSinceReport(sessionID)
   // U10 hybrid trigger: semantic (a validation just passed) is primary, mode-scaled count is the
@@ -41,7 +48,7 @@ export const renderPlanStatus = (sessionID: string, detail: "full" | "continuati
     mode: agentMode,
   })
   const nudge = trigger ? `\n\n${AgentGateway.DeepAgentPlanController.PROGRESS_NUDGE(trigger, mutations)}` : ""
-  return `<plan-status>\n${snapshot}${nudge}\n</plan-status>`
+  return `<plan-status>\n${snapshot}${precondition}${nudge}\n</plan-status>`
 }
 
 export const apply = Effect.fn("SessionReminders.apply")(function* (input: {
