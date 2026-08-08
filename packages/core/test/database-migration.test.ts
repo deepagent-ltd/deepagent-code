@@ -4,7 +4,7 @@ import { fileURLToPath } from "url"
 import path from "path"
 import { SqliteClient } from "@effect/sql-sqlite-bun"
 import { EffectDrizzleSqlite } from "@deepagent-code/effect-drizzle-sqlite"
-import { Effect, Layer } from "effect"
+import { Effect, Exit, Layer } from "effect"
 import { eq, inArray, sql } from "drizzle-orm"
 import { DatabaseMigration } from "@deepagent-code/core/database/migration"
 import { migrations } from "@deepagent-code/core/database/migration.gen"
@@ -14,6 +14,10 @@ import sessionMessageProjectionOrderMigration from "@deepagent-code/core/databas
 import eventSourcedSessionInputMigration from "@deepagent-code/core/database/migration/20260604172448_event_sourced_session_input"
 import contextEpochAgentMigration from "@deepagent-code/core/database/migration/20260605042240_add_context_epoch_agent"
 import eventDropDistinctMigration from "@deepagent-code/core/database/migration/20260712040000_deepagent_event_drop_distinct"
+import timeSuspendedMigration from "@deepagent-code/core/database/migration/20260803000000_time_suspended"
+import taskRunDeliveryMigration from "@deepagent-code/core/database/migration/20260724134000_task_run_delivery"
+import subagentControlPlaneMigration from "@deepagent-code/core/database/migration/20260803000001_subagent_control_plane_l1"
+import taskAdmissionRepairMigration from "@deepagent-code/core/database/migration/20260805000000_repair_task_admission"
 import { ProjectV2 } from "@deepagent-code/core/project"
 import { ProjectTable } from "@deepagent-code/core/project/sql"
 import { AbsolutePath } from "@deepagent-code/core/schema"
@@ -89,6 +93,71 @@ describe("DatabaseMigration", () => {
           { name: "task_run_child_generation_idx" },
         ])
         expect(yield* db.get(sql`SELECT count(*) as count FROM migration`)).toEqual({ count: migrations.length })
+        expect(yield* db.get(sql`SELECT name FROM pragma_table_info('session') WHERE name = 'time_suspended'`)).toEqual(
+          { name: "time_suspended" },
+        )
+        expect(
+          yield* db.get(
+            sql`SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'session_time_suspended_idx'`,
+          ),
+        ).toEqual({ name: "session_time_suspended_idx" })
+        expect(
+          yield* db.get(
+            sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_tool_argument_receipt'`,
+          ),
+        ).toEqual({ name: "session_tool_argument_receipt" })
+        expect(
+          yield* db.all(
+            sql`SELECT name FROM sqlite_master WHERE type = 'index' AND name IN ('session_tool_argument_receipt_call_idx', 'session_tool_argument_receipt_created_idx') ORDER BY name`,
+          ),
+        ).toEqual([
+          { name: "session_tool_argument_receipt_call_idx" },
+          { name: "session_tool_argument_receipt_created_idx" },
+        ])
+        expect(
+          yield* db.get(
+            sql`SELECT name, dflt_value FROM pragma_table_info('session_tool_argument_receipt') WHERE name = 'validation_outcome'`,
+          ),
+        ).toEqual({ name: "validation_outcome", dflt_value: "'not_evaluated'" })
+        yield* db.run(sql`
+          INSERT INTO session_tool_request_receipt (
+            receipt_id, request_ordinal, session_id, user_message_id, provider_id, model_id,
+            registry_tool_ids, permission_filtered_tool_ids, final_offered_tool_ids, call_ids,
+            request_state, created_at
+          ) VALUES (
+            'receipt-constraint-test', 1, 'session-constraint-test', 'message-constraint-test',
+            'provider-test', 'model-test', '[]', '[]', '[]', '[]', 'dispatched', 1
+          )
+        `)
+        yield* db.run(sql`
+          INSERT INTO session_tool_argument_receipt (
+            receipt_id, layer, ordinal, event_type, payload_keys, unavailable_reason, created_at
+          ) VALUES (
+            'receipt-constraint-test', 'raw_frame', 0, 'raw', '[]', 'raw_receipt_gate_disabled', 1
+          )
+        `)
+        const emptyEvidence = yield* db
+          .run(
+            sql`
+            INSERT INTO session_tool_argument_receipt (
+              receipt_id, layer, ordinal, event_type, payload_keys, created_at
+            ) VALUES (
+              'receipt-constraint-test', 'ai_sdk_input', 0, 'tool-call', '[]', 1
+            )
+          `,
+          )
+          .pipe(Effect.exit)
+        expect(Exit.isFailure(emptyEvidence)).toBe(true)
+        const invalidOutcome = yield* db
+          .run(
+            sql`
+            UPDATE session_tool_argument_receipt
+            SET validation_outcome = 'untrusted'
+            WHERE receipt_id = 'receipt-constraint-test'
+          `,
+          )
+          .pipe(Effect.exit)
+        expect(Exit.isFailure(invalidOutcome)).toBe(true)
         expect(
           yield* db.all(
             sql`SELECT name FROM sqlite_master WHERE type = 'index' AND name IN ('event_aggregate_seq_idx', 'event_aggregate_type_seq_idx', 'session_input_session_pending_seq_idx', 'session_input_session_pending_delivery_seq_idx', 'session_input_session_admitted_seq_idx', 'session_input_session_promoted_seq_idx', 'session_message_session_idx', 'session_message_session_type_idx', 'session_message_session_seq_idx', 'session_message_session_type_seq_idx', 'session_message_session_time_created_id_idx') ORDER BY name`,
@@ -103,6 +172,150 @@ describe("DatabaseMigration", () => {
           { name: "session_message_session_time_created_id_idx" },
           { name: "session_message_session_type_seq_idx" },
         ])
+      }),
+    )
+  })
+
+  test("adds nullable Session suspension without inferring historical recovery", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(sql`CREATE TABLE session (id text PRIMARY KEY)`)
+        yield* db.run(sql`INSERT INTO session (id) VALUES ('historical')`)
+
+        yield* DatabaseMigration.applyOnly(db, [timeSuspendedMigration])
+
+        expect(yield* db.get(sql`SELECT time_suspended FROM session WHERE id = 'historical'`)).toEqual({
+          time_suspended: null,
+        })
+        expect(
+          yield* db.get(
+            sql`SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'session_time_suspended_idx'`,
+          ),
+        ).toEqual({ name: "session_time_suspended_idx" })
+      }),
+    )
+  })
+
+  test("preserves historical task admission and outbox rows across the L1 rebuild", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(sql`PRAGMA foreign_keys = ON`)
+        yield* db.run(sql`CREATE TABLE session (id TEXT PRIMARY KEY)`)
+        yield* db.run(sql`INSERT INTO session (id) VALUES ('ses_parent')`)
+        yield* DatabaseMigration.applyOnly(db, [taskRunDeliveryMigration])
+        yield* db.run(sql`
+          INSERT INTO task_run (
+            run_id, root_run_id, request_hash, parent_session_id, parent_message_id,
+            tool_call_id, child_session_id, generation, delivery_mode, phase, state,
+            attempts, time_created, time_updated
+          ) VALUES (
+            'run_historical', 'run_historical', 'request', 'ses_parent', 'msg_parent',
+            'call_historical', 'ses_child', 1, 'background', 'research', 'researching',
+            2, 100, 200
+          )
+        `)
+        yield* db.run(sql`
+          INSERT INTO task_admission (
+            admission_key, request_hash, run_id, parent_session_id, parent_message_id,
+            tool_call_id, delivery_mode, time_created
+          ) VALUES (
+            'admission_historical', 'request', 'run_historical', 'ses_parent', 'msg_parent',
+            'call_historical', 'background', 100
+          )
+        `)
+        yield* db.run(sql`
+          INSERT INTO task_notification_outbox (
+            id, run_id, message_id, parent_session_id, directory, payload, status,
+            attempts, available_at, time_created, time_updated
+          ) VALUES (
+            'outbox_historical', 'run_historical', 'msg_outbox', 'ses_parent', '/repo', '{}',
+            'delivering', 1, 150, 100, 200
+          )
+        `)
+
+        yield* DatabaseMigration.applyOnly(db, [subagentControlPlaneMigration])
+
+        expect(
+          yield* db.get(
+            sql`SELECT state, phase, control_state, input_state, workspace_preflight_state, start_attempts FROM task_run WHERE run_id = 'run_historical'`,
+          ),
+        ).toEqual({
+          state: "running",
+          phase: "research",
+          control_state: "open",
+          input_state: "legacy",
+          workspace_preflight_state: "legacy",
+          start_attempts: 2,
+        })
+        expect(
+          yield* db.get(
+            sql`SELECT admission_key, origin_kind, origin_key FROM task_admission WHERE run_id = 'run_historical'`,
+          ),
+        ).toEqual({
+          admission_key: "admission_historical",
+          origin_kind: "task_tool",
+          origin_key: "admission_historical",
+        })
+        expect(
+          yield* db.get(
+            sql`SELECT status, event_kind, time_admitted FROM task_notification_outbox WHERE run_id = 'run_historical'`,
+          ),
+        ).toEqual({ status: "processing", event_kind: "terminal", time_admitted: null })
+        const activeIndex = yield* db.get<{ sql: string }>(
+          sql`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'task_run_child_active_idx'`,
+        )
+        expect(activeIndex?.sql).toContain(
+          "WHERE state IN ('admitted', 'provisioning', 'running', 'researching', 'finalizing')",
+        )
+        expect(activeIndex?.sql).not.toContain("'queued'")
+      }),
+    )
+  })
+
+  test("repairs the canonical admission on databases already affected by the L1 cascade", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(sql`CREATE TABLE session (id TEXT PRIMARY KEY)`)
+        yield* db.run(sql`INSERT INTO session (id) VALUES ('ses_parent')`)
+        yield* DatabaseMigration.applyOnly(db, [taskRunDeliveryMigration])
+        yield* db.run(sql`
+          INSERT INTO task_run (
+            run_id, root_run_id, request_hash, parent_session_id, parent_message_id,
+            tool_call_id, child_session_id, generation, delivery_mode, phase, state,
+            attempts, time_created, time_updated
+          ) VALUES (
+            'run_repair', 'run_repair', 'request_repair', 'ses_parent', 'msg_repair',
+            'call_repair', 'ses_child_repair', 1, 'foreground', 'research', 'completed',
+            1, 100, 200
+          )
+        `)
+        yield* db.run(sql`
+          INSERT INTO task_admission (
+            admission_key, request_hash, run_id, parent_session_id, parent_message_id,
+            tool_call_id, delivery_mode, time_created
+          ) VALUES (
+            'admission_repair', 'request_repair', 'run_repair', 'ses_parent', 'msg_repair',
+            'call_repair', 'foreground', 100
+          )
+        `)
+        yield* DatabaseMigration.applyOnly(db, [subagentControlPlaneMigration])
+        yield* db.run(sql`DELETE FROM task_admission WHERE run_id = 'run_repair'`)
+
+        yield* DatabaseMigration.applyOnly(db, [taskAdmissionRepairMigration])
+
+        expect(
+          yield* db.get(
+            sql`SELECT admission_key, request_hash, tool_call_id, origin_key FROM task_admission WHERE run_id = 'run_repair'`,
+          ),
+        ).toEqual({
+          admission_key: "admission_repair",
+          request_hash: "request_repair",
+          tool_call_id: "call_repair",
+          origin_key: "admission_repair",
+        })
       }),
     )
   })

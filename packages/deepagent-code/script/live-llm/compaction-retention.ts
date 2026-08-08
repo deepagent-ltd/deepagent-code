@@ -30,6 +30,7 @@ const artifact = await runLegacyLiveCases({
     },
   ],
   sharedSession: true,
+  inspectDurability: true,
   beforeCase: async ({ caseName, directory }) => {
     if (caseName === "fill-context-window") {
       await Promise.all(
@@ -87,6 +88,30 @@ if (fill.compactionCount !== 1 || recovery.compactionCount !== 1 || recovery.new
 if (fill.summaryTexts.length !== 1 || fill.summaryTexts.some((text) => markers.some((marker) => text.includes(marker)))) {
   throw new Error("C1 marker leaked into or was missing from the automatic compaction summary boundary")
 }
+if (!fill.durability) throw new Error("C1 did not capture compaction durability evidence")
+const committedRuns = fill.durability.compactionRuns.filter((run) => run.state === "committed")
+if (committedRuns.length !== 1) {
+  throw new Error(`Expected exactly one committed compaction run, received ${committedRuns.length}`)
+}
+const committedRun = committedRuns[0]
+const summaryAttempts = fill.durability.summaryAttempts.filter(
+  (attempt) => attempt.run_id === committedRun.run_id,
+)
+if (summaryAttempts.length < 1 || summaryAttempts.length > 2) {
+  throw new Error(`Expected one or two durable summary attempts, received ${summaryAttempts.length}`)
+}
+if (summaryAttempts.filter((attempt) => attempt.state === "settled").length !== 1) {
+  throw new Error(`Expected one settled summary attempt: ${JSON.stringify(summaryAttempts)}`)
+}
+const activeEpochs = fill.durability.promptEpochs.filter((epoch) => epoch.state === "active")
+if (
+  activeEpochs.length !== 1 ||
+  activeEpochs[0].epoch <= 0 ||
+  activeEpochs[0].epoch !== committedRun.target_prompt_epoch ||
+  activeEpochs[0].checkpoint_assistant_id !== committedRun.committed_summary_message_id
+) {
+  throw new Error(`C1 PromptEpoch did not bind the committed summary: ${JSON.stringify(activeEpochs)}`)
+}
 
 const worldState = fill.users.map((user) => user.syntheticText).find((text) => text.includes("<world-state>"))
 if (!worldState || markers.some((marker) => !worldState.includes(marker))) {
@@ -103,6 +128,23 @@ if (completedTools.length !== 1 || completedTools[0]?.name !== "write") {
 }
 if (recovery.newTools.some((tool) => tool.status !== "completed")) {
   throw new Error("C1 produced a failed or non-terminal tool call")
+}
+if (!recovery.durability) throw new Error("C1 did not capture request receipt evidence")
+const completedWrite = completedTools[0]
+const writeReceipt = recovery.durability.requestReceipts.find(
+  (receipt) =>
+    receipt.assistant_message_id === completedWrite.messageID && receipt.call_ids.includes(completedWrite.id),
+)
+if (
+  !writeReceipt ||
+  writeReceipt.request_state !== "dispatched" ||
+  writeReceipt.adapter_lowering_outcome !== "ok" ||
+  !writeReceipt.registry_tool_ids.includes("write") ||
+  !writeReceipt.permission_filtered_tool_ids.includes("write") ||
+  !writeReceipt.final_offered_tool_ids.includes("write") ||
+  !writeReceipt.tool_definition_hash
+) {
+  throw new Error(`C1 write request receipt was incomplete: ${JSON.stringify(writeReceipt)}`)
 }
 const writeInput = record(completedTools[0]?.input, "write input")
 if (typeof writeInput.filePath !== "string" || path.basename(writeInput.filePath) !== "output.txt") {
@@ -126,6 +168,10 @@ const result = {
   evidence: {
     markerHashes: markers.map((marker) => Bun.hash(marker).toString(16)),
     automaticCompactions: automatic.length,
+    committedCompactionRuns: committedRuns.length,
+    summaryAttempts: summaryAttempts.length,
+    activePromptEpoch: activeEpochs[0].epoch,
+    writeReceiptID: writeReceipt.receipt_id,
     summaryExcludedMarkers: true,
     worldStateSuppliedMarkers: true,
     changedPaths: evaluation.changedPaths,

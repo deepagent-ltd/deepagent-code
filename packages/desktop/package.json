@@ -1,7 +1,7 @@
 {
   "name": "@deepagent-code/desktop",
   "private": true,
-  "version": "1.4.4",
+  "version": "1.4.5",
   "type": "module",
   "license": "AGPL-3.0-or-later",
   "homepage": "https://deepagent-code.ai",
@@ -14,7 +14,7 @@
     "predev": "bun ./scripts/predev.ts",
     "dev": "electron-vite dev",
     "prebuild": "bun ./scripts/prebuild.ts",
-    "build": "electron-vite build && bun ./scripts/audit-server-bundle.ts",
+    "build": "bun ./scripts/build.ts",
     "preview": "electron-vite preview",
     "test": "bun test ./src",
     "test:ci": "mkdir -p .artifacts/unit && bun test ./src --reporter=junit --reporter-outfile=.artifacts/unit/junit.xml",

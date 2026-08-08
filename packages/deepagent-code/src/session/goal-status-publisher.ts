@@ -3,7 +3,7 @@ export * as GoalStatusPublisher from "./goal-status-publisher"
 import { Effect } from "effect"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { DocumentStore } from "@deepagent-code/core/deepagent/document-store"
-import type { PlanDoc } from "@deepagent-code/core/deepagent/plan-controller"
+import { decodePlanDoc, planScope } from "@deepagent-code/core/deepagent/plan-store"
 import type { GoalStatus } from "@deepagent-code/core/deepagent/goal-loop"
 import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
 import { ApprovalQueue } from "@deepagent-code/core/deepagent/approval-queue"
@@ -89,26 +89,33 @@ export const makeGoalStatusPublisher = (deps: GoalStatusPublisherDeps): GoalStat
       })
       .pipe(Effect.ignore)
 
-  // Mirror the goal's plan doc INTO the parent session's live plan state + emit plan.updated, so the
-  // client's session_plan reflects the running goal's progress tick-by-tick. Best-effort.
+  // The goal and session plan share one DocumentStore authority. Publish that exact version instead
+  // of re-committing a copied body, which would manufacture versions and could race a human edit.
   const mirrorGoalPlanToSession = (sessionID: string, planDocId: string) =>
     Effect.gen(function* () {
-      const store = new DocumentStore(deps.goalStoreRoot(sessionID))
+      const store = DocumentStore.shared(deps.goalStoreRoot(sessionID))
       const doc = store.get(planDocId)
-      if (!doc) return
-      let plan: PlanDoc
-      try {
-        plan = JSON.parse(doc.body) as PlanDoc
-      } catch {
-        return
+      if (!doc || doc.type !== "plan" || doc.scope !== planScope(sessionID)) {
+        return yield* Effect.fail(new Error(`goal plan authority unavailable: ${planDocId}`))
       }
-      AgentGateway.DeepAgentSessionState.setPlan(sessionID, plan as never)
+      const plan = decodePlanDoc(doc.body)
+      if (!plan || plan.session_id !== sessionID) {
+        return yield* Effect.fail(new Error(`goal plan authority is malformed: ${planDocId}@v${doc.version}`))
+      }
+      const current = AgentGateway.DeepAgentPlanStore.getPlanDoc(sessionID)
+      const ref = AgentGateway.DeepAgentPlanStore.planDocRef(sessionID)
+      if (!current || !ref || ref.id !== doc.id || ref.version !== doc.version || current.plan_id !== plan.plan_id) {
+        return yield* Effect.fail(new Error(`goal plan authority cursor mismatch: ${planDocId}@v${doc.version}`))
+      }
+      AgentGateway.DeepAgentSessionState.bindPlan(sessionID, plan, current, false)
       const { done, total } = AgentGateway.DeepAgentPlanController.planProgress(plan)
       yield* deps.events
         .publish(PlanEvent.Updated, {
           sessionID: SessionID.make(sessionID),
           plan_id: plan.plan_id,
+          plan_version: doc.version,
           goal: plan.goal,
+          assumptions: [...plan.assumptions],
           active_step_id: plan.active_step_id,
           steps: plan.steps.map((s) => ({
             step_id: s.step_id,
@@ -117,12 +124,20 @@ export const makeGoalStatusPublisher = (deps: GoalStatusPublisherDeps): GoalStat
             acceptance: s.acceptance ?? null,
             assigned_agent: s.assigned_agent ?? null,
             note: s.note ?? null,
+            evidence: [...(s.evidence ?? [])],
           })),
           done,
           total,
         })
         .pipe(Effect.ignore)
-    }).pipe(Effect.catchCause(() => Effect.void))
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("goal plan mirror failed; authoritative state remains unchanged").pipe(
+          Effect.annotateLogs({ sessionID, planDocId, cause }),
+          Effect.asVoid,
+        ),
+      ),
+    )
 
   // §N — publish the discrete goal lifecycle event (goal.tick for a running tick, or the terminal type)
   // and, for a terminal escalation (needs_human / rolled_back), offer it to the Approval Queue.

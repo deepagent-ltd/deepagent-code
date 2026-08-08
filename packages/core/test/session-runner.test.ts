@@ -252,6 +252,8 @@ const execution = Layer.effect(
   SessionRunCoordinator.Service.pipe(
     Effect.map((coordinator) =>
       SessionExecution.Service.of({
+        active: coordinator.active,
+        awaitIdle: coordinator.awaitIdle,
         resume: coordinator.run,
         wake: coordinator.wake,
         interrupt: coordinator.interrupt,

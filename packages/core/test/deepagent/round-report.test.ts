@@ -9,8 +9,22 @@ import {
   type RunnerGroundTruth,
 } from "../../src/deepagent/round-report"
 
-const pass = (command: string) => ({ command, passed: true, exit_code: 0, output: "ok", duration_ms: 1 })
-const fail = (command: string) => ({ command, passed: false, exit_code: 1, output: "boom", duration_ms: 1 })
+const pass = (command: string) => ({
+  command,
+  passed: true,
+  kind: "command_exit" as const,
+  exit_code: 0,
+  output: "ok",
+  duration_ms: 1,
+})
+const fail = (command: string) => ({
+  command,
+  passed: false,
+  kind: "command_exit" as const,
+  exit_code: 1,
+  output: "boom",
+  duration_ms: 1,
+})
 
 const declarations = (over: Partial<ModelDeclarations> = {}): ModelDeclarations => ({
   completion_claim: "complete",

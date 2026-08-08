@@ -9,6 +9,18 @@ import { createSolidTransformPlugin } from "@opentui/solid/bun-plugin"
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const dir = path.resolve(__dirname, "..")
+const repository = path.resolve(dir, "../..")
+
+const gitOutput = (args: string[]) => {
+  const result = Bun.spawnSync(["git", ...args], { cwd: repository, stdout: "pipe", stderr: "ignore" })
+  if (result.exitCode !== 0) return
+  return result.stdout.toString().trim()
+}
+
+const sourceCommit = process.env.DEEPAGENT_CODE_COMMIT ?? gitOutput(["rev-parse", "HEAD"])
+const sourceDirty = sourceCommit
+  ? (gitOutput(["status", "--porcelain", "--untracked-files=all"])?.length ?? 0) > 0
+  : undefined
 
 process.chdir(dir)
 
@@ -196,6 +208,7 @@ for (const item of targets) {
       OTUI_TREE_SITTER_WORKER_PATH: bunfsRoot + workerRelativePath,
       DEEPAGENT_CODE_WORKER_PATH: workerPath,
       DEEPAGENT_CODE_CHANNEL: `'${Script.channel}'`,
+      ...(sourceCommit ? { DEEPAGENT_CODE_COMMIT: JSON.stringify(sourceCommit) } : {}),
       DEEPAGENT_CODE_LIBC: item.os === "linux" ? `'${item.abi ?? "glibc"}'` : "",
       ...(item.os === "linux" ? { "process.env.OPENTUI_LIBC": JSON.stringify(item.abi ?? "glibc") } : {}),
     },
@@ -215,6 +228,9 @@ for (const item of targets) {
   }
 
   await $`rm -rf ./dist/${name}/bin/tui`
+  const binarySha256 = new Bun.CryptoHasher("sha256")
+    .update(await Bun.file(`dist/${name}/bin/deepagent-code`).bytes())
+    .digest("hex")
   await Bun.file(`dist/${name}/package.json`).write(
     JSON.stringify(
       {
@@ -224,6 +240,11 @@ for (const item of targets) {
         os: [item.os],
         cpu: [item.arch],
         ...(item.abi ? { libc: [item.abi] } : {}),
+        deepagentCodeBuild: {
+          ...(sourceCommit ? { sourceCommit } : {}),
+          ...(sourceDirty !== undefined ? { sourceDirty } : {}),
+          binarySha256,
+        },
       },
       null,
       2,

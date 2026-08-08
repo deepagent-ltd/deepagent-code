@@ -61,6 +61,12 @@ import { mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { TestContextFacades } from "../fixture/context-facades"
+import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
+import { PromptEpoch } from "@/session/prompt-epoch"
+import { MessageTable, SessionIntentTable, SessionSteerTable, SessionTable } from "@deepagent-code/core/session/sql"
+import { eq } from "drizzle-orm"
+import { SessionMutationEpoch } from "../../src/session/mutation-epoch"
+import { SessionPromptIntent } from "../../src/session/prompt-intent"
 
 void Log.init({ print: false })
 
@@ -198,6 +204,7 @@ function makePrompt(steering: boolean) {
     status,
     Database.defaultLayer,
     EventV2Bridge.defaultLayer,
+    PromptEpoch.defaultLayer,
   ).pipe(Layer.provideMerge(infra))
   const question = Question.layer.pipe(Layer.provideMerge(deps))
   const todo = Todo.layer.pipe(Layer.provideMerge(deps))
@@ -208,6 +215,7 @@ function makePrompt(steering: boolean) {
     Layer.provide(FetchHttpClient.layer),
     Layer.provide(CrossSpawnSpawner.defaultLayer),
     Layer.provide(RepositoryCache.defaultLayer),
+    Layer.provide(EffectFlock.defaultLayer),
     Layer.provide(Reference.defaultLayer),
     Layer.provide(Search.defaultLayer),
     Layer.provide(Format.defaultLayer),
@@ -360,6 +368,135 @@ off.instance(
         drained.map((d) => d.id),
       )
       expect(yield* steer.hasPending(chat.id)).toBe(false)
+    }),
+  { config: cfg },
+)
+
+off.instance(
+  "revert advances the mutation epoch and supersedes old intents and pending steers atomically",
+  () =>
+    Effect.gen(function* () {
+      const steer = yield* SessionSteer.Service
+      const sessions = yield* Session.Service
+      const { db } = yield* Database.Service
+      const chat = yield* sessions.create({ title: "Revert fence" })
+      const admitted = yield* steer.admit({ sessionID: chat.id, prompt: mkPrompt("stale steer") })
+      const now = Date.now()
+      yield* db
+        .insert(SessionIntentTable)
+        .values({
+          intent_id: "intent_revert_fence",
+          session_id: chat.id,
+          source: "followup",
+          state: "preparing",
+          mutation_epoch: admitted.mutationEpoch,
+          time_created: now,
+          time_updated: now,
+        })
+        .run()
+        .pipe(Effect.orDie)
+
+      yield* sessions.commitRevert({
+        sessionID: chat.id,
+        revert: { messageID: MessageID.make("msg_revert_fence") },
+        summary: { additions: 0, deletions: 0, files: 0 },
+      })
+
+      const session = yield* db
+        .select({ mutationEpoch: SessionTable.mutation_epoch })
+        .from(SessionTable)
+        .where(eq(SessionTable.id, chat.id))
+        .get()
+        .pipe(Effect.orDie)
+      const intent = yield* db
+        .select()
+        .from(SessionIntentTable)
+        .where(eq(SessionIntentTable.intent_id, "intent_revert_fence"))
+        .get()
+        .pipe(Effect.orDie)
+      const storedSteer = yield* db
+        .select()
+        .from(SessionSteerTable)
+        .where(eq(SessionSteerTable.id, admitted.id))
+        .get()
+        .pipe(Effect.orDie)
+      expect(session?.mutationEpoch).toBe(admitted.mutationEpoch + 1)
+      expect(intent?.state).toBe("superseded")
+      expect(storedSteer?.superseded_at).not.toBeNull()
+      expect(yield* steer.pending(chat.id)).toHaveLength(0)
+      const messageID = MessageID.make(admitted.id)
+      const error = yield* steer
+        .materialize({
+          admitted,
+          info: {
+            id: messageID,
+            sessionID: chat.id,
+            role: "user",
+            time: { created: admitted.timeCreated },
+            agent: "build",
+            model: ref,
+          },
+          parts: [
+            {
+              id: steerPartID(messageID),
+              messageID,
+              sessionID: chat.id,
+              type: "text",
+              text: admitted.prompt.text,
+            },
+          ],
+        })
+        .pipe(Effect.flip)
+      expect(error).toBeInstanceOf(SessionMutationEpoch.Stale)
+      expect(
+        yield* db.select().from(MessageTable).where(eq(MessageTable.id, messageID)).get().pipe(Effect.orDie),
+      ).toBeUndefined()
+    }),
+  { config: cfg },
+)
+
+off.instance(
+  "follow-up intent and steer admission cross one atomic boundary",
+  () =>
+    Effect.gen(function* () {
+      const steer = yield* SessionSteer.Service
+      const sessions = yield* Session.Service
+      const { db } = yield* Database.Service
+      const chat = yield* sessions.create({ title: "Atomic steer intent" })
+      const messageID = MessageID.make("msg_atomic_steer_intent")
+      const claim = yield* SessionPromptIntent.claim({
+        intentID: "intent_atomic_steer",
+        sessionID: chat.id,
+        source: "followup",
+        variant: "original",
+        payloadHash: "payload-atomic-steer",
+        messageID,
+      })
+      expect(claim.kind).toBe("claimed")
+      if (claim.kind !== "claimed") return
+
+      const admitted = yield* steer.admit({
+        sessionID: chat.id,
+        prompt: mkPrompt("atomic steer"),
+        correlationID: messageID,
+        intent: claim.receipt,
+      })
+
+      const intent = yield* db
+        .select()
+        .from(SessionIntentTable)
+        .where(eq(SessionIntentTable.intent_id, claim.receipt.intentID))
+        .get()
+        .pipe(Effect.orDie)
+      expect(intent?.state).toBe("admitted")
+      expect(intent?.admitted_message_id).toBe(admitted.id)
+      expect((yield* steer.pending(chat.id)).map((item) => item.id)).toEqual([admitted.id])
+      yield* SessionPromptIntent.complete({
+        intentID: claim.receipt.intentID,
+        ownerToken: claim.receipt.ownerToken,
+        messageID: MessageID.make(admitted.id),
+        delivery: "steer",
+      })
     }),
   { config: cfg },
 )

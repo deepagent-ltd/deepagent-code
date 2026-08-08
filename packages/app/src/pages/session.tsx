@@ -45,6 +45,7 @@ import { useSettings } from "@/context/settings"
 import { useSync } from "@/context/sync"
 import { useTerminalHosts } from "@/context/terminal"
 import { DialogDeepAgentPromptConfirm } from "@/components/dialog-deepagent-prompt-confirm"
+import type { PromptInputControl } from "@/components/prompt-input"
 import {
   type DeepAgentPromptPrepareResult,
   type FollowupDraft,
@@ -52,6 +53,7 @@ import {
   sendFollowupDraft,
 } from "@/components/prompt-input/submit"
 import { createSessionComposerState, SessionComposerRegion } from "@/pages/session/composer"
+import { createFollowupSubmissionRegistry } from "@/pages/session/followup-submission"
 import {
   createForkAction,
   createOpenReviewFile,
@@ -654,6 +656,7 @@ export default function Page() {
   }
 
   let inputRef!: HTMLDivElement
+  let promptInputControl: PromptInputControl | undefined
   let promptDock: HTMLDivElement | undefined
   let dockHeight = 0
   let scroller: HTMLDivElement | undefined
@@ -708,9 +711,9 @@ export default function Page() {
     },
   )
 
-  // NOTE: the per-turn todo prefetch effect was removed when task tracking unified onto the plan
-  // system. The task dock is now driven exclusively by the persistent plan (session_plan), which
-  // arrives via the plan.updated SSE stream — there is no REST todo endpoint to prime on activation.
+  // Plan state is restored by session sync from the authoritative snapshot endpoint, then advanced
+  // by advisory plan.updated events. The event stream remains live-only; snapshot fetch is what makes
+  // reload, reconnect, and a missed event recoverable.
 
   createEffect(
     on(
@@ -1443,6 +1446,8 @@ export default function Page() {
     return followup.edit[id]
   })
 
+  const followupSubmissions = createFollowupSubmissionRegistry()
+
   const followupMutation = useMutation(() => ({
     mutationFn: async (input: { sessionID: string; id: string }) => {
       const item = (followup.items[input.sessionID] ?? []).find((entry) => entry.id === input.id)
@@ -1450,18 +1455,28 @@ export default function Page() {
 
       setFollowup("failed", input.sessionID, undefined)
 
-      const ok = await sendFollowupDraft({
+      const controller = new AbortController()
+      const promise = sendFollowupDraft({
         client: sdk.client,
         sync,
         serverSync,
         draft: item,
+        intentID: item.id,
+        intentSource: "followup",
         optimisticBusy: item.sessionDirectory === sdk.directory,
         confirmPromptDraft,
-      }).catch((err) => {
-        setFollowup("failed", input.sessionID, input.id)
-        fail(err)
-        return false
+        promptPrepareSignal: controller.signal,
       })
+      followupSubmissions.register({ ...input, controller, promise })
+      const ok = await promise
+        .catch((err) => {
+          setFollowup("failed", input.sessionID, input.id)
+          fail(err)
+          return false
+        })
+        .finally(() => {
+          followupSubmissions.clear(input.sessionID, input.id)
+        })
       if (!ok) return
 
       setFollowup("items", input.sessionID, (items) => (items ?? []).filter((entry) => entry.id !== input.id))
@@ -1505,6 +1520,7 @@ export default function Page() {
   }
 
   const queueFollowup = (draft: FollowupDraft) => {
+    if (reverting()) return
     setFollowup("items", draft.sessionID, (items) => [
       ...(items ?? []),
       { id: Identifier.ascending("message"), ...draft },
@@ -1516,6 +1532,7 @@ export default function Page() {
   const followupDock = createMemo(() => queuedFollowups().map((item) => ({ id: item.id, text: followupText(item) })))
 
   const sendFollowup = (sessionID: string, id: string) => {
+    if (reverting()) return Promise.resolve()
     if (sync.session.get(sessionID)?.parentID) return Promise.resolve()
     const item = (followup.items[sessionID] ?? []).find((entry) => entry.id === id)
     if (!item) return Promise.resolve()
@@ -1527,7 +1544,7 @@ export default function Page() {
   const editFollowup = (id: string) => {
     const sessionID = params.id
     if (!sessionID) return
-    if (followupBusy(sessionID)) return
+    if (reverting() || followupBusy(sessionID)) return
 
     const item = queuedFollowups().find((entry) => entry.id === id)
     if (!item) return
@@ -1544,7 +1561,7 @@ export default function Page() {
   const deleteFollowup = (id: string) => {
     const sessionID = params.id
     if (!sessionID) return
-    if (followupBusy(sessionID)) return
+    if (reverting() || followupBusy(sessionID)) return
 
     setFollowup("items", sessionID, (items) => (items ?? []).filter((entry) => entry.id !== id))
     setFollowup("failed", sessionID, (value) => (value === id ? undefined : value))
@@ -1559,27 +1576,25 @@ export default function Page() {
   const halt = (sessionID: string) =>
     busy(sessionID) ? sdk.client.session.abort({ sessionID }).catch(() => {}) : Promise.resolve()
 
+  const cancelFollowup = async (sessionID: string) => {
+    await followupSubmissions.cancel(sessionID)
+  }
+
   const revertMutation = useMutation(() => ({
     mutationFn: async (input: { sessionID: string; messageID: string }) => {
-      const prev = prompt.current().slice()
-      const last = info()?.revert
       const value = draft(input.messageID)
-      batch(() => {
-        roll(input.sessionID, { messageID: input.messageID })
-        prompt.set(value)
-      })
-      await halt(input.sessionID)
+      await cancelFollowup(input.sessionID)
+        .then(() => promptInputControl?.cancelPending() ?? Promise.resolve())
+        .then(() => halt(input.sessionID))
         .then(() => sdk.client.session.revert(input))
         .then((result) => {
-          if (result.data) merge(result.data)
-        })
-        .catch((err) => {
           batch(() => {
-            roll(input.sessionID, last)
-            prompt.set(prev)
+            roll(input.sessionID, { messageID: input.messageID })
+            prompt.set(value)
+            if (result.data) merge(result.data)
           })
-          fail(err)
         })
+        .catch(fail)
     },
   }))
 
@@ -1589,38 +1604,28 @@ export default function Page() {
       if (!sessionID) return
 
       const next = userMessages().find((item) => item.id > id)
-      const prev = prompt.current().slice()
-      const last = info()?.revert
 
-      batch(() => {
-        roll(sessionID, next ? { messageID: next.id } : undefined)
-        if (next) {
-          prompt.set(draft(next.id))
-          return
-        }
-        prompt.reset()
-      })
-
-      const task = !next
-        ? halt(sessionID).then(() => sdk.client.session.unrevert({ sessionID }))
-        : halt(sessionID).then(() =>
-            sdk.client.session.revert({
+      const request = () =>
+        !next
+          ? sdk.client.session.unrevert({ sessionID })
+          : sdk.client.session.revert({
               sessionID,
               messageID: next.id,
-            }),
-          )
+            })
 
-      await task
+      await cancelFollowup(sessionID)
+        .then(() => promptInputControl?.cancelPending() ?? Promise.resolve())
+        .then(() => halt(sessionID))
+        .then(request)
         .then((result) => {
-          if (result.data) merge(result.data)
-        })
-        .catch((err) => {
           batch(() => {
-            roll(sessionID, last)
-            prompt.set(prev)
+            roll(sessionID, next ? { messageID: next.id } : undefined)
+            if (next) prompt.set(draft(next.id))
+            else prompt.reset()
+            if (result.data) merge(result.data)
           })
-          fail(err)
         })
+        .catch(fail)
     },
   }))
 
@@ -1752,12 +1757,17 @@ export default function Page() {
         resumeScroll()
       }}
       onResponseSubmit={resumeScroll}
+      inputDisabled={reverting()}
+      inputControlRef={(control) => {
+        promptInputControl = control
+      }}
       followup={
         params.id && !isChildSession()
           ? {
               queue: queueEnabled,
               items: followupDock(),
               sending: sendingFollowup(),
+              disabled: reverting(),
               edit: editingFollowup(),
               onQueue: queueFollowup,
               onAbort: () => {
