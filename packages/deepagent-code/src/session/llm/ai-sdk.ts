@@ -1,11 +1,18 @@
 import { FinishReason, LLMEvent, ProviderMetadata, ToolResultValue } from "@deepagent-code/llm"
 import { Effect, Schema } from "effect"
-import { type streamText } from "ai"
+import { InvalidToolInputError, type streamText } from "ai"
 import { errorMessage } from "@/util/error"
 import { FreeformTools } from "./freeform-tools"
 
 type Result = Awaited<ReturnType<typeof streamText>>
 type AISDKEvent = Result["fullStream"] extends AsyncIterable<infer T> ? T : never
+
+export function toolCallInputValidation(event: AISDKEvent): "schema_valid" | "schema_invalid" {
+  if (event.type !== "tool-call") return "schema_valid"
+  return "invalid" in event && event.invalid === true && InvalidToolInputError.isInstance(event.error)
+    ? "schema_invalid"
+    : "schema_valid"
+}
 
 export function adapterState() {
   return {
@@ -235,6 +242,9 @@ export function toLLMEvents(
             id: event.toolCallId,
             name: event.toolName,
             input: custom ? FreeformTools.input(event.input as string) : event.input,
+            ...(toolCallInputValidation(event) === "schema_invalid"
+              ? { inputValidation: "schema_invalid" as const }
+              : {}),
             providerExecuted: "providerExecuted" in event ? event.providerExecuted : undefined,
             providerMetadata:
               custom || event.toolName === "apply_patch"

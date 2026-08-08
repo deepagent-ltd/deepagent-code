@@ -1044,6 +1044,19 @@ const scenarios: Scenario[] = [
       check(body.title === "Get me", "should preserve seeded title")
     }),
   http.protected
+    .get("/session/{sessionID}/plan", "session.plan")
+    .seeded((ctx) => ctx.session({ title: "Plan snapshot session" }))
+    .at((ctx) => ({
+      path: route("/session/{sessionID}/plan", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+    }))
+    .json(200, (body) => {
+      object(body)
+      check(body.plan === null, "a fresh session should return an explicit null plan")
+      check(body.doc_id === null, "a fresh session should return an explicit null plan document id")
+      check(body.plan_version === null, "a fresh session should return an explicit null plan version")
+    }),
+  http.protected
     .get("/session/{sessionID}", "session.get.missing")
     .at((ctx) => ({
       path: route("/session/{sessionID}", { sessionID: "ses_httpapi_missing" }),

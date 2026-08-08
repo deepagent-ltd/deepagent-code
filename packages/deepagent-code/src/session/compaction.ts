@@ -6,13 +6,18 @@ import { Provider } from "@/provider/provider"
 import { MessageV2 } from "./message-v2"
 import { Token } from "@/util/token"
 import { Log } from "@deepagent-code/core/util/log"
-import { SessionProcessor } from "./processor"
+import { SessionProcessor, SummaryProtocolViolation } from "./processor"
 import { Agent } from "@/agent/agent"
 import { Plugin } from "@/plugin"
 import { Config } from "@/config/config"
 import { NotFoundError } from "@/storage/storage"
+import { Database } from "@deepagent-code/core/database/database"
+import { MessageTable, PartTable } from "@deepagent-code/core/session/sql"
+import { PromptEpoch } from "./prompt-epoch"
+import { CompactionRunTable, CompactionSummaryAttemptTable, type SummaryAttemptState } from "./compaction-sql"
+import { eq, and, inArray } from "drizzle-orm"
 
-import { Effect, Layer, Context } from "effect"
+import { Cause, Effect, Exit, Layer, Context, Option } from "effect"
 import * as DateTime from "effect/DateTime"
 import { InstanceState } from "@/effect/instance-state"
 import { isOverflow as overflow, usable } from "./overflow"
@@ -26,6 +31,8 @@ import { ModelV2 } from "@deepagent-code/core/model"
 import { EventV2 } from "@deepagent-code/core/event"
 import { buildPrompt } from "@deepagent-code/core/session/compaction"
 import { updateLedgerFromSummary, carryOverToBridge } from "./context-ledger"
+import { Hash } from "@deepagent-code/core/util/hash"
+import { LLM } from "./llm"
 
 const log = Log.create({ service: "session.compaction" })
 
@@ -177,6 +184,284 @@ export const layer = Layer.effect(
     const provider = yield* Provider.Service
     const events = yield* EventV2Bridge.Service
     const flags = yield* RuntimeFlags.Service
+    const { db } = yield* Database.Service
+    const promptEpoch = yield* PromptEpoch.Service
+
+    const recover = Effect.fn("SessionCompaction.recover")(function* (sessionID: SessionID) {
+      const requested = yield* db
+        .select({
+          run_id: CompactionRunTable.run_id,
+          marker_message_id: CompactionRunTable.marker_message_id,
+          marker_part_id: CompactionRunTable.marker_part_id,
+        })
+        .from(CompactionRunTable)
+        .where(and(eq(CompactionRunTable.session_id, sessionID), eq(CompactionRunTable.state, "requested")))
+        .all()
+        .pipe(Effect.orDie)
+      yield* Effect.forEach(requested, (run) =>
+        Effect.gen(function* () {
+          const markerMessage = run.marker_message_id
+            ? yield* db
+                .select({ id: MessageTable.id })
+                .from(MessageTable)
+                .where(
+                  and(
+                    eq(MessageTable.id, MessageID.make(run.marker_message_id)),
+                    eq(MessageTable.session_id, sessionID),
+                  ),
+                )
+                .get()
+                .pipe(Effect.orDie)
+            : undefined
+          const markerPart =
+            markerMessage && run.marker_part_id
+              ? yield* db
+                  .select({ data: PartTable.data })
+                  .from(PartTable)
+                  .where(
+                    and(
+                      eq(PartTable.id, PartID.make(run.marker_part_id)),
+                      eq(PartTable.message_id, markerMessage.id),
+                      eq(PartTable.session_id, sessionID),
+                    ),
+                  )
+                  .get()
+                  .pipe(Effect.orDie)
+              : undefined
+          if (markerPart?.data.type === "compaction") return
+          yield* db
+            .update(CompactionRunTable)
+            .set({ state: "failed", terminal_failure_kind: "marker_write_incomplete" })
+            .where(and(eq(CompactionRunTable.run_id, run.run_id), eq(CompactionRunTable.state, "requested")))
+            .run()
+            .pipe(Effect.orDie)
+        }),
+      )
+      yield* db
+        .update(CompactionSummaryAttemptTable)
+        .set({ state: "indeterminate_after_crash", failure_kind: "process_restart", completed_at: Date.now() })
+        .where(
+          and(
+            inArray(
+              CompactionSummaryAttemptTable.run_id,
+              db
+                .select({ run_id: CompactionRunTable.run_id })
+                .from(CompactionRunTable)
+                .where(eq(CompactionRunTable.session_id, sessionID)),
+            ),
+            inArray(CompactionSummaryAttemptTable.state, ["dispatching", "streaming"] as const),
+          ),
+        )
+        .run()
+        .pipe(Effect.orDie)
+      yield* db
+        .update(CompactionRunTable)
+        .set({ state: "indeterminate", terminal_failure_kind: "process_restart" })
+        .where(and(eq(CompactionRunTable.session_id, sessionID), eq(CompactionRunTable.state, "summarizing")))
+        .run()
+        .pipe(Effect.orDie)
+    })
+
+    const ensureRun = Effect.fn("SessionCompaction.ensureRun")(function* (input: {
+      sessionID: SessionID
+      markerMessageID: MessageID
+      markerPartID?: PartID
+      fromEpoch: number
+      trigger: "turn_start" | "provider_overflow" | "manual"
+    }) {
+      const existing = yield* db
+        .select()
+        .from(CompactionRunTable)
+        .where(
+          and(
+            eq(CompactionRunTable.session_id, input.sessionID),
+            inArray(CompactionRunTable.state, ["requested", "summarizing", "indeterminate"] as const),
+          ),
+        )
+        .get()
+        .pipe(Effect.orDie)
+      if (existing) {
+        if (existing.marker_message_id !== input.markerMessageID) return undefined
+        return existing
+      }
+      const row = {
+        run_id: Hash.sha256(`compaction-run:${input.sessionID}:${input.markerMessageID}`),
+        session_id: input.sessionID,
+        from_prompt_epoch: input.fromEpoch,
+        trigger: input.trigger,
+        marker_message_id: input.markerMessageID,
+        marker_part_id: input.markerPartID,
+        state: "requested" as const,
+        created_at: Date.now(),
+      }
+      yield* db.insert(CompactionRunTable).values(row).onConflictDoNothing().run().pipe(Effect.orDie)
+      return yield* db
+        .select()
+        .from(CompactionRunTable)
+        .where(eq(CompactionRunTable.run_id, row.run_id))
+        .get()
+        .pipe(Effect.orDie)
+    })
+
+    const updateAttempt = (input: {
+      attemptID: string
+      from: SummaryAttemptState[]
+      to: SummaryAttemptState
+      error?: unknown
+    }) =>
+      db
+        .update(CompactionSummaryAttemptTable)
+        .set({
+          state: input.to,
+          ...(input.error
+            ? {
+                failure_kind:
+                  input.error instanceof SummaryProtocolViolation
+                    ? `summary_protocol_${input.error.kind}`
+                    : "provider_error",
+              }
+            : {}),
+          ...(input.to === "dispatching" ? { dispatched_at: Date.now() } : {}),
+          ...(input.to === "settled" || input.to === "failed" || input.to === "indeterminate_after_crash"
+            ? { completed_at: Date.now() }
+            : {}),
+        })
+        .where(
+          and(
+            eq(CompactionSummaryAttemptTable.summary_attempt_id, input.attemptID),
+            inArray(CompactionSummaryAttemptTable.state, input.from),
+          ),
+        )
+        .run()
+        .pipe(Effect.orDie)
+
+    const prepareAttempt = Effect.fn("SessionCompaction.prepareAttempt")(function* (input: {
+      runID: string
+      model: Provider.Model
+      requestHash: string
+      parentAttemptID?: string
+    }) {
+      return yield* db
+        .transaction(
+          (tx) =>
+            Effect.gen(function* () {
+              const run = yield* tx
+                .select()
+                .from(CompactionRunTable)
+                .where(eq(CompactionRunTable.run_id, input.runID))
+                .get()
+              if (!run || (run.state !== "requested" && run.state !== "summarizing")) return undefined
+              const count = yield* tx
+                .select({ id: CompactionSummaryAttemptTable.summary_attempt_id })
+                .from(CompactionSummaryAttemptTable)
+                .where(eq(CompactionSummaryAttemptTable.run_id, input.runID))
+                .all()
+              if (count.length >= 2) return undefined
+              const ordinal = count.length + 1
+              const attemptID = Hash.sha256(`${input.runID}:summary-attempt:${ordinal}`)
+              yield* tx
+                .insert(CompactionSummaryAttemptTable)
+                .values({
+                  summary_attempt_id: attemptID,
+                  run_id: input.runID,
+                  ordinal,
+                  parent_attempt_id: input.parentAttemptID,
+                  provider_id: input.model.providerID,
+                  model_id: input.model.id,
+                  protocol: LLM.toolChoiceProtocol(input.model),
+                  request_hash: input.requestHash,
+                  idempotency_key: Hash.sha256(`${input.runID}:summary:${ordinal}`),
+                  state: "prepared",
+                  prepared_at: Date.now(),
+                })
+                .run()
+              if (run.state === "requested") {
+                const transitioned = yield* tx
+                  .update(CompactionRunTable)
+                  .set({ state: "summarizing" })
+                  .where(and(eq(CompactionRunTable.run_id, input.runID), eq(CompactionRunTable.state, "requested")))
+                  .returning({ run_id: CompactionRunTable.run_id })
+                  .get()
+                if (!transitioned) return yield* Effect.die(new Error(`compaction run transition lost: ${input.runID}`))
+              }
+              return {
+                attemptId: attemptID,
+                dispatching: updateAttempt({ attemptID, from: ["prepared"], to: "dispatching" }),
+                streaming: updateAttempt({ attemptID, from: ["dispatching"], to: "streaming" }),
+                settled: updateAttempt({ attemptID, from: ["dispatching", "streaming"], to: "settled" }),
+                failed: (error: unknown) =>
+                  updateAttempt({
+                    attemptID,
+                    from: ["prepared", "dispatching", "streaming"],
+                    to: "failed",
+                    error,
+                  }),
+              }
+            }),
+          { behavior: "immediate" },
+        )
+        .pipe(Effect.orDie)
+    })
+
+    const failRun = (runID: string, kind: string) =>
+      db
+        .update(CompactionRunTable)
+        .set({ state: "failed", terminal_failure_kind: kind })
+        .where(
+          and(
+            eq(CompactionRunTable.run_id, runID),
+            inArray(CompactionRunTable.state, ["requested", "summarizing"] as const),
+          ),
+        )
+        .run()
+        .pipe(Effect.orDie)
+
+    const commitRun = Effect.fn("SessionCompaction.commitRun")(function* (input: {
+      runID: string
+      sessionID: SessionID
+      fromEpoch: number
+      checkpointUserID: MessageID
+      checkpointAssistantID: MessageID
+      retainedTailStartID?: MessageID
+      sourceEndMessageID?: MessageID
+      checkpointHash: string
+    }) {
+      return yield* db
+        .transaction(
+          (tx) =>
+            Effect.gen(function* () {
+              const settled = yield* tx
+                .select({ id: CompactionSummaryAttemptTable.summary_attempt_id })
+                .from(CompactionSummaryAttemptTable)
+                .where(
+                  and(
+                    eq(CompactionSummaryAttemptTable.run_id, input.runID),
+                    eq(CompactionSummaryAttemptTable.state, "settled"),
+                  ),
+                )
+                .get()
+              if (!settled) return false
+              const epoch = yield* PromptEpoch.activateInTransaction(tx, input)
+              if (!epoch) return false
+              const committed = yield* tx
+                .update(CompactionRunTable)
+                .set({
+                  state: "committed",
+                  committed_summary_message_id: input.checkpointAssistantID,
+                  checkpoint_hash: input.checkpointHash,
+                  target_prompt_epoch: epoch.epoch,
+                  committed_at: Date.now(),
+                })
+                .where(and(eq(CompactionRunTable.run_id, input.runID), eq(CompactionRunTable.state, "summarizing")))
+                .returning({ run_id: CompactionRunTable.run_id })
+                .get()
+              if (!committed) return yield* Effect.die(new Error(`compaction commit CAS lost: ${input.runID}`))
+              return true
+            }),
+          { behavior: "immediate" },
+        )
+        .pipe(Effect.orDie)
+    })
 
     const isOverflow = Effect.fn("SessionCompaction.isOverflow")(function* (input: {
       tokens: SessionV1.Assistant["tokens"]
@@ -309,7 +594,30 @@ export const layer = Layer.effect(
         throw new Error(`Compaction parent must be a user message: ${input.parentID}`)
       }
       const userMessage = parent.info
-      const compactionPart = parent.parts.find((part): part is SessionV1.CompactionPart => part.type === "compaction")
+      const existingCompactionPart = parent.parts.find(
+        (part): part is SessionV1.CompactionPart => part.type === "compaction",
+      )
+      const compactionPart =
+        existingCompactionPart ??
+        ({
+          id: PartID.ascending(),
+          messageID: parent.info.id,
+          sessionID: input.sessionID,
+          type: "compaction",
+          auto: input.auto,
+          overflow: input.overflow,
+        } satisfies SessionV1.CompactionPart)
+      if (!existingCompactionPart) yield* session.updatePart(compactionPart)
+      yield* recover(input.sessionID)
+      const activeEpoch = yield* promptEpoch.bootstrap(input.sessionID)
+      const run = yield* ensureRun({
+        sessionID: input.sessionID,
+        markerMessageID: input.parentID,
+        markerPartID: compactionPart.id,
+        fromEpoch: activeEpoch.epoch,
+        trigger: input.overflow ? "provider_overflow" : input.auto ? "turn_start" : "manual",
+      })
+      if (!run || run.state === "indeterminate") return "stop"
 
       let messages = input.messages
       let replay:
@@ -408,35 +716,81 @@ export const layer = Layer.effect(
         },
       }
       yield* session.updateMessage(msg)
-      const processor = yield* processors.create({
-        assistantMessage: msg,
-        sessionID: input.sessionID,
-        model,
-      })
-      const result = yield* processor.process({
+
+      // BUG-006 §5.1: establish the explicit summary request contract.
+      // toolChoice:"none" tells the adapter the model must produce text only.
+      const summaryStreamInput = {
         user: userMessage,
         agent,
         sessionID: input.sessionID,
         tools: {},
+        toolChoice: "none" as const,
         system: [],
         messages: [
           ...modelMessages,
           {
-            role: "user",
-            content: [{ type: "text", text: nextPrompt }],
+            role: "user" as const,
+            content: [{ type: "text" as const, text: nextPrompt }],
           },
         ],
         model,
-      })
+      }
+
+      let dispatchCount = 0
+      let previousAttemptID: string | undefined
+      let currentProcessor = yield* processors.create({ assistantMessage: msg, sessionID: input.sessionID, model })
+      let result: "continue" | "compact" | "stop" = "stop"
+
+      while (true) {
+        dispatchCount++
+        const attempt = yield* prepareAttempt({
+          runID: run.run_id,
+          model,
+          requestHash: Hash.sha256(JSON.stringify(summaryStreamInput.messages)),
+          parentAttemptID: previousAttemptID,
+        })
+        if (!attempt) {
+          yield* failRun(run.run_id, "summary_attempt_budget_exhausted")
+          return "stop"
+        }
+        const dispatchResult = yield* Effect.exit(currentProcessor.processSummary(summaryStreamInput, attempt))
+        if (Exit.isSuccess(dispatchResult)) {
+          result = dispatchResult.value
+          if (result === "stop") {
+            yield* failRun(run.run_id, "summary_provider_error")
+            return "stop"
+          }
+          previousAttemptID = attempt.attemptId
+          break
+        }
+        const failure = Option.getOrUndefined(Cause.findErrorOption(dispatchResult.cause))
+        if (!(failure instanceof SummaryProtocolViolation)) {
+          yield* failRun(run.run_id, "summary_provider_error")
+          return "stop"
+        }
+        yield* session.updateMessage({
+          ...currentProcessor.message,
+          error: MessageV2.fromError(failure, { providerID: model.providerID }),
+          finish: "error",
+        })
+        if (dispatchCount >= 2) {
+          yield* failRun(run.run_id, `summary_protocol_${failure.kind}`)
+          return "stop"
+        }
+        const retryMsg: SessionV1.Assistant = { ...msg, id: MessageID.ascending(), error: undefined, finish: undefined }
+        yield* session.updateMessage(retryMsg)
+        currentProcessor = yield* processors.create({ assistantMessage: retryMsg, sessionID: input.sessionID, model })
+      }
 
       if (result === "compact") {
-        processor.message.error = new SessionV1.ContextOverflowError({
+        currentProcessor.message.error = new SessionV1.ContextOverflowError({
           message: replay
             ? "Conversation history too large to compact - exceeds model context limit"
             : "Session too large to compact - context exceeds model limit even after stripping media",
         }).toObject()
-        processor.message.finish = "error"
-        yield* session.updateMessage(processor.message)
+        currentProcessor.message.finish = "error"
+        yield* session.updateMessage(currentProcessor.message)
+        yield* failRun(run.run_id, "summary_context_overflow")
         return "stop"
       }
 
@@ -531,11 +885,14 @@ export const layer = Layer.effect(
         }
       }
 
-      if (processor.message.error) return "stop"
+      if (currentProcessor.message.error) {
+        yield* failRun(run.run_id, "summary_provider_error")
+        return "stop"
+      }
       if (result === "continue") {
         const summary = summaryText(
           (yield* session.messages({ sessionID: input.sessionID }).pipe(Effect.orDie)).find(
-            (item) => item.info.id === msg.id,
+            (item) => item.info.id === currentProcessor.message.id,
           ) ?? {
             info: msg,
             parts: [],
@@ -552,6 +909,24 @@ export const layer = Layer.effect(
               recent,
             })
         }
+
+        if (summary) {
+          const committed = yield* commitRun({
+            runID: run.run_id,
+            sessionID: input.sessionID,
+            fromEpoch: run.from_prompt_epoch,
+            checkpointUserID: input.parentID,
+            checkpointAssistantID: currentProcessor.message.id,
+            checkpointHash: Hash.sha256(`${run.run_id}:${msg.id}:${summary.slice(0, 256)}`),
+            retainedTailStartID: selected.tail_start_id as MessageID | undefined,
+            sourceEndMessageID: selected.head.at(-1)?.info.id,
+          })
+          if (!committed) {
+            yield* failRun(run.run_id, "compaction_commit_conflict")
+            return "stop"
+          }
+        }
+
         // V3.8 App-A Stage 1 (coexist, gated, default-safe): mirror the compaction summary into the
         // structured Session Ledger. This does NOT change compaction behavior — it maintains the
         // ledger as a structured-summary candidate for the Stage 2 Curator. updateLedgerFromSummary
@@ -577,23 +952,50 @@ export const layer = Layer.effect(
       model: { providerID: ProviderV2.ID; modelID: ModelV2.ID }
       auto: boolean
       overflow?: boolean
+      trigger?: "turn_start" | "provider_overflow" | "manual"
     }) {
-      const msg = yield* session.updateMessage({
-        id: MessageID.ascending(),
-        role: "user",
-        model: input.model,
+      yield* recover(input.sessionID)
+      // BUG-005: ensure Epoch 0 exists before the first compaction so PromptEpoch is always
+      // the history authority even for sessions that were created before this migration.
+      const activeEpoch = yield* promptEpoch.bootstrap(input.sessionID)
+
+      const markerMessageID = MessageID.ascending()
+      const markerPartID = PartID.ascending()
+      const run = yield* ensureRun({
         sessionID: input.sessionID,
-        agent: input.agent,
-        time: { created: Date.now() },
+        markerMessageID,
+        markerPartID,
+        fromEpoch: activeEpoch.epoch,
+        trigger: input.trigger ?? (input.overflow ? "provider_overflow" : input.auto ? "turn_start" : "manual"),
       })
-      yield* session.updatePart({
-        id: PartID.ascending(),
-        messageID: msg.id,
-        sessionID: msg.sessionID,
-        type: "compaction",
-        auto: input.auto,
-        overflow: input.overflow,
-      })
+      if (!run || run.state === "indeterminate") return
+
+      const marker = yield* Effect.exit(
+        Effect.gen(function* () {
+          const msg = yield* session.updateMessage({
+            id: markerMessageID,
+            role: "user",
+            model: input.model,
+            sessionID: input.sessionID,
+            agent: input.agent,
+            time: { created: Date.now() },
+          })
+          yield* session.updatePart({
+            id: markerPartID,
+            messageID: msg.id,
+            sessionID: msg.sessionID,
+            type: "compaction",
+            auto: input.auto,
+            overflow: input.overflow,
+          })
+          return msg
+        }),
+      )
+      if (Exit.isFailure(marker)) {
+        yield* failRun(run.run_id, "marker_write_incomplete")
+        return yield* Effect.failCause(marker.cause)
+      }
+      const msg = marker.value
       if (flags.experimentalEventSystem) {
         yield* events.publish(SessionEvent.Compaction.Started, {
           sessionID: input.sessionID,
@@ -623,6 +1025,8 @@ export const defaultLayer = Layer.suspend(() =>
     Layer.provide(Config.defaultLayer),
     Layer.provide(RuntimeFlags.defaultLayer),
     Layer.provide(EventV2Bridge.defaultLayer),
+    Layer.provide(Database.defaultLayer),
+    Layer.provide(PromptEpoch.defaultLayer),
   ),
 )
 

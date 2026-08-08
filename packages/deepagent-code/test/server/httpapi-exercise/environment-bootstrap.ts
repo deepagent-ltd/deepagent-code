@@ -5,6 +5,7 @@ export const exerciseGlobalRoot =
   process.env.DEEPAGENT_CODE_HTTPAPI_EXERCISE_GLOBAL ??
   path.join(process.env.TMPDIR ?? "/tmp", `deepagent-code-httpapi-global-${process.pid}`)
 
+process.env.DEEPAGENT_CODE_TEST_HOME = exerciseGlobalRoot
 process.env.XDG_DATA_HOME = path.join(exerciseGlobalRoot, "data")
 process.env.XDG_CONFIG_HOME = path.join(exerciseGlobalRoot, "config")
 process.env.XDG_STATE_HOME = path.join(exerciseGlobalRoot, "state")

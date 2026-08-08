@@ -595,7 +595,11 @@ describe("V3.9 §E F3 wiring — plan bridge (worker plan edits reach the goal p
     const runTurn: SubagentTurnRunner = (input) => {
       input.prepareSession?.(childId) // the real runner calls this after creating the child session
       const p = AgentGateway.DeepAgentSessionState.getPlan(childId)!
-      AgentGateway.DeepAgentSessionState.setPlan(childId, { ...p, steps: [{ ...p.steps[0], status: "done" }] })
+      AgentGateway.DeepAgentSessionState.setPlan(childId, {
+        ...p,
+        steps: [{ ...p.steps[0], status: "done" }],
+        active_step_id: null,
+      })
       return Effect.succeed(turnFrom({ ok: true, tokensUsed: 5, sessionID: childId }))
     }
     const exec = buildStepExecutor(runTurn, bridgeFor)

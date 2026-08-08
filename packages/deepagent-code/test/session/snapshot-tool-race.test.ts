@@ -69,6 +69,7 @@ import { RepositoryCache } from "../../src/reference/repository-cache"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { TestContextFacades } from "../fixture/context-facades"
 import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
+import { PromptEpoch } from "@/session/prompt-epoch"
 
 void Log.init({ print: false })
 
@@ -190,6 +191,7 @@ function makeHttp() {
     status,
     Database.defaultLayer,
     EventV2Bridge.defaultLayer,
+    PromptEpoch.defaultLayer,
   ).pipe(Layer.provideMerge(infra))
   const question = Question.layer.pipe(Layer.provideMerge(deps))
   const todo = Todo.layer.pipe(Layer.provideMerge(deps))
