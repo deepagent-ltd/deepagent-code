@@ -653,7 +653,9 @@ describe("plan.updated reconcile (session_plan)", () => {
     properties: {
       sessionID,
       plan_id: "plan_1",
+      plan_version: 1,
       goal: "ship it",
+      assumptions: ["CI"],
       active_step_id: activeStepID,
       steps: steps.map(([step_id, status]) => ({ step_id, title: step_id.toUpperCase(), status })),
       done: steps.filter(([, status]) => status === "done").length,
@@ -693,6 +695,8 @@ describe("plan.updated reconcile (session_plan)", () => {
       // First plan.updated: step "a" is active, the rest pending.
       dispatch(setStore, store, setSessionPlan, planEvent("ses_1", [["a", "active"], ["b", "pending"], ["c", "pending"]], "a"))
       expect(planStore.sp.ses_1.steps.map((s) => s.status)).toEqual(["active", "pending", "pending"])
+      expect(planStore.sp.ses_1.plan_version).toBe(1)
+      expect(planStore.sp.ses_1.assumptions).toEqual(["CI"])
 
       // Second plan.updated: same plan_id, "a" done and "b" now active. This is the event the old
       // code effectively dropped from the panel's point of view.
@@ -719,7 +723,9 @@ describe("plan.updated reconcile (session_plan)", () => {
   test.skipIf(isServer)("keying by step_id preserves per-step identity across reorder", () => {
     const mk = (rows: Array<[string, string]>): SessionPlan => ({
       plan_id: "plan_1",
+      plan_version: 1,
       goal: "g",
+      assumptions: [],
       active_step_id: rows[0]?.[0] ?? null,
       steps: rows.map(([step_id, status]) => ({ step_id, title: step_id.toUpperCase(), status })),
       done: rows.filter(([, s]) => s === "done").length,

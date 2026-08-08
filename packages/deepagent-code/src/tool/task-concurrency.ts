@@ -1,6 +1,6 @@
 export * as TaskConcurrency from "./task-concurrency"
 
-import { Effect, Semaphore } from "effect"
+import { Effect, Option, Semaphore } from "effect"
 import { Orchestration } from "@deepagent-code/core/deepagent/orchestration"
 
 /**
@@ -51,14 +51,43 @@ const withOnePermit = <A, E, R>(
         : { semaphore: Semaphore.makeUnsafe(width), width, users: 0 }
     if (entry !== current) registry.set(key, entry)
     entry.users++
-    return entry.semaphore.withPermits(1)(effect).pipe(
-      Effect.ensuring(
-        Effect.sync(() => {
-          entry.users--
-          if (entry.users === 0 && registry.get(key) === entry) registry.delete(key)
-        }),
-      ),
-    )
+    return entry.semaphore
+      .withPermits(1)(effect)
+      .pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            entry.users--
+            if (entry.users === 0 && registry.get(key) === entry) registry.delete(key)
+          }),
+        ),
+      )
+  })
+
+/** Run immediately when a permit is available; return Option.none without queueing otherwise. */
+const withOnePermitIfAvailable = <A, E, R>(
+  registry: Map<string, Entry>,
+  key: string,
+  width: number,
+  effect: Effect.Effect<A, E, R>,
+): Effect.Effect<Option.Option<A>, E, R> =>
+  Effect.suspend(() => {
+    const current = registry.get(key)
+    const entry =
+      current && (current.width === width || current.users > 0)
+        ? current
+        : { semaphore: Semaphore.makeUnsafe(width), width, users: 0 }
+    if (entry !== current) registry.set(key, entry)
+    entry.users++
+    return entry.semaphore
+      .withPermitsIfAvailable(1)(effect)
+      .pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            entry.users--
+            if (entry.users === 0 && registry.get(key) === entry) registry.delete(key)
+          }),
+        ),
+      )
   })
 
 /**
@@ -91,6 +120,36 @@ export const withTaskSlot = <A, E, R>(input: {
         )
       : input.effect
   return withOnePermit(sessionLimiters, input.parentSessionID, maxConcurrency, inner)
+}
+
+/**
+ * Non-blocking variant used by durable dispatchers. The supplied effect starts only after every
+ * applicable permit has been acquired, and no waiter is left behind when capacity is exhausted.
+ */
+export const withTaskSlotIfAvailable = <A, E, R>(input: {
+  readonly parentSessionID: string
+  readonly subagentType: string
+  readonly agentMaxConcurrency?: number
+  readonly caps?: Orchestration.OrchestrationCaps
+  readonly effect: Effect.Effect<A, E, R>
+}): Effect.Effect<Option.Option<A>, E, R> => {
+  const { maxConcurrency } = Orchestration.resolveCaps(input.caps)
+  const agentLimit =
+    input.agentMaxConcurrency != null && Number.isFinite(input.agentMaxConcurrency) && input.agentMaxConcurrency > 0
+      ? Math.floor(input.agentMaxConcurrency)
+      : undefined
+  const inner =
+    agentLimit != null
+      ? withOnePermitIfAvailable(
+          agentLimiters,
+          `${input.parentSessionID}:${input.subagentType}`,
+          Math.min(agentLimit, maxConcurrency),
+          input.effect,
+        )
+      : Effect.asSome(input.effect)
+  return withOnePermitIfAvailable(sessionLimiters, input.parentSessionID, maxConcurrency, inner).pipe(
+    Effect.map(Option.flatten),
+  )
 }
 
 /** Test/diagnostic helper: number of live per-session limiter entries. */

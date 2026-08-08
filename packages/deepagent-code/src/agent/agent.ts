@@ -300,6 +300,14 @@ export const layer = Layer.effect(
           // `task: "deny"` and edit/write staying denied prevents recursive fan-out and mutation —
           // they read and report, they do not delegate or change files. (deriveSubagentSessionPermission
           // already denies `task` by default; the explicit deny here is belt-and-suspenders.)
+          //
+          // BUG-001-405 Fix-A: `bash` is intentionally absent here. subagentIsWriteType() treats
+          // any `bash: allow` as write-capable (unrestricted shell can write files), so including
+          // it caused researcher to be classified as a writer → clean-workspace gate blocked every
+          // researcher task in a dirty repo. researcher/reviewer are read-only roles and must not
+          // carry generic bash. Structured read tools (grep/glob/list/read/code_intel) are
+          // sufficient for all research use cases. git_read covers git-history queries
+          // (git log/diff/blame/show/etc.) without triggering write-type detection.
           researcher: {
             name: "researcher",
             permission: Permission.merge(
@@ -309,7 +317,8 @@ export const layer = Layer.effect(
                 grep: "allow",
                 glob: "allow",
                 list: "allow",
-                bash: "allow",
+                // bash intentionally omitted — see BUG-001-405 Fix-A comment above
+                git_read: "allow",
                 webfetch: "allow",
                 websearch: "allow",
                 read: "allow",

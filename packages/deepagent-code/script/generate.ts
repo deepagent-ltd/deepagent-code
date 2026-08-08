@@ -1,14 +1,8 @@
-import path from "path"
-import { fileURLToPath } from "url"
+import path from "node:path"
+import { loadModelsData } from "./models-data"
 
-const __filename = fileURLToPath(import.meta.url)
-const __dirname = path.dirname(__filename)
-const dir = path.resolve(__dirname, "..")
+process.chdir(path.resolve(import.meta.dir, ".."))
 
-process.chdir(dir)
-
-const modelsUrl = process.env.DEEPAGENT_CODE_MODELS_URL || "https://models.dev"
-export const modelsData = process.env.MODELS_DEV_API_JSON
-  ? await Bun.file(process.env.MODELS_DEV_API_JSON).text()
-  : await fetch(`${modelsUrl}/api.json`).then((x) => x.text())
-console.log("Loaded models.dev snapshot")
+const models = await loadModelsData()
+export const modelsData = models.data
+console.log(`Loaded models.dev snapshot from ${models.source}`)

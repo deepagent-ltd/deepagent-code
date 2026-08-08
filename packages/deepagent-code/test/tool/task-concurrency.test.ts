@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { Effect, Ref } from "effect"
+import { Effect, Fiber, Option, Ref } from "effect"
 import { TaskConcurrency } from "../../src/tool/task-concurrency"
 
 /**
@@ -118,6 +118,36 @@ describe("§5a task concurrency semaphore (per-parent-session hard cap)", () => 
 
   test("limiter entries are reference-counted and cleaned up when drained", async () => {
     await Effect.runPromise(peakConcurrency({ n: 4, parentSessionID: "ses_gc", caps: { maxConcurrency: 2 } }))
+    expect(TaskConcurrency.activeSessionLimiters()).toBe(0)
+  })
+
+  test("non-blocking acquisition does not queue work when capacity is full", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const entered = yield* Ref.make(false)
+        const holder = yield* TaskConcurrency.withTaskSlot({
+          parentSessionID: "ses_nonblocking",
+          subagentType: "task",
+          caps: { maxConcurrency: 1 },
+          effect: Effect.gen(function* () {
+            yield* Ref.set(entered, true)
+            yield* Effect.never
+          }),
+        }).pipe(Effect.forkChild)
+        while (!(yield* Ref.get(entered))) yield* Effect.yieldNow
+
+        const rejected = yield* TaskConcurrency.withTaskSlotIfAvailable({
+          parentSessionID: "ses_nonblocking",
+          subagentType: "task",
+          caps: { maxConcurrency: 1 },
+          effect: Effect.succeed("must-not-run"),
+        })
+        yield* Fiber.interrupt(holder)
+        return rejected
+      }),
+    )
+
+    expect(Option.isNone(result)).toBe(true)
     expect(TaskConcurrency.activeSessionLimiters()).toBe(0)
   })
 })

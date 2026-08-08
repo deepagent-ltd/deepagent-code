@@ -1,6 +1,6 @@
 import fs from "fs/promises"
 import path from "path"
-import { describe, expect } from "bun:test"
+import { afterAll, beforeAll, describe, expect } from "bun:test"
 import { Effect, Layer, Schema } from "effect"
 import { Tool } from "@deepagent-code/core/public"
 import { Catalog } from "@deepagent-code/core/catalog"
@@ -22,6 +22,7 @@ import { ProjectReference } from "../src/project-reference"
 import { LocationSearch } from "../src/location-search"
 import { ToolRegistry } from "../src/tool/registry"
 import { ApplicationTools } from "../src/tool/application-tools"
+import { Flag } from "../src/flag/flag"
 
 const applicationTools = ApplicationTools.layer
 const it = testEffect(
@@ -44,6 +45,19 @@ const it = testEffect(
 )
 
 describe("LocationServiceMap", () => {
+  // ModelsDevPlugin.refresh() calls modelsDev.get() which acquires a cross-process
+  // Flock on models.json. On a developer machine where the main app holds that lock,
+  // PluginBoot.wait() never returns. Disable the models fetch for this test file so
+  // boot completes instantly without any network or file-locking. Same pattern as
+  // packages/core/test/models.test.ts.
+  const ORIGINAL_DISABLE_FETCH = Flag.DEEPAGENT_CODE_DISABLE_MODELS_FETCH
+  beforeAll(() => {
+    Flag.DEEPAGENT_CODE_DISABLE_MODELS_FETCH = true
+  })
+  afterAll(() => {
+    Flag.DEEPAGENT_CODE_DISABLE_MODELS_FETCH = ORIGINAL_DISABLE_FETCH
+  })
+
   it.live("isolates location state while sharing location policy with catalog", () =>
     Effect.acquireRelease(
       Effect.promise(() => Promise.all([tmpdir(), tmpdir()])),

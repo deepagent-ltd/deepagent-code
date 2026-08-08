@@ -10,7 +10,7 @@ import type {
   SessionStatus,
   SnapshotFileDiff,
 } from "@deepagent-code/sdk/v2/client"
-import type { State, VcsCache, SessionPlan, SessionGoal } from "./types"
+import type { State, VcsCache, SessionPlan, SessionGoal, SessionPlanUpdateOptions } from "./types"
 import { trimSessions } from "./session-trim"
 import { dropSessionCaches } from "./session-cache"
 import { diffs as list, message as clean } from "@/utils/diffs"
@@ -84,7 +84,11 @@ export function applyDirectoryEvent(input: {
   directory: string
   loadLsp: () => void
   vcsCache?: VcsCache
-  setSessionPlan?: (sessionID: string, plan: SessionPlan | undefined) => void
+  setSessionPlan?: (
+    sessionID: string,
+    plan: SessionPlan | undefined,
+    options?: SessionPlanUpdateOptions,
+  ) => void
   setSessionGoal?: (sessionID: string, goal: SessionGoal | undefined) => void
   retainedLimit?: number
 }) {
@@ -172,7 +176,9 @@ export function applyDirectoryEvent(input: {
       const props = event.properties as {
         sessionID: string
         plan_id: string
+        plan_version: number
         goal: string
+        assumptions: string[]
         active_step_id: string | null
         steps: SessionPlan["steps"]
         done: number
@@ -180,12 +186,14 @@ export function applyDirectoryEvent(input: {
       }
       input.setSessionPlan?.(props.sessionID, {
         plan_id: props.plan_id,
+        plan_version: props.plan_version,
         goal: props.goal,
+        assumptions: props.assumptions,
         active_step_id: props.active_step_id,
         steps: props.steps,
         done: props.done,
         total: props.total,
-      })
+      }, { source: "event" })
       break
     }
     case "goal.updated": {

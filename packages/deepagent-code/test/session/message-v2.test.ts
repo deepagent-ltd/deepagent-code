@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
+import { Schema } from "effect"
 import { APICallError } from "ai"
 import { MessageV2 } from "../../src/session/message-v2"
 import { ProviderTransform } from "@/provider/transform"
@@ -1519,6 +1520,19 @@ describe("session.message-v2.toModelMessage", () => {
 })
 
 describe("session.message-v2.fromError", () => {
+  test("round-trips PlanProtocolViolation through the Assistant schema", () => {
+    const error = new SessionV1.PlanProtocolViolationError({
+      message: "plan schema rejected",
+      sessionID,
+      attemptOrdinal: 2,
+      code: "schema",
+    }).toObject()
+    const encoded = JSON.parse(JSON.stringify(assistantInfo("msg_assistant-plan-error", "msg_parent", error)))
+    const decoded = Schema.decodeUnknownSync(SessionV1.Assistant)(encoded)
+    expect(decoded.error).toEqual(error)
+    expect(MessageV2.fromError(error, { providerID })).toEqual(error)
+  })
+
   test("serializes context_length_exceeded as ContextOverflowError", () => {
     const input = {
       type: "error",

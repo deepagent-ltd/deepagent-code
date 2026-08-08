@@ -99,6 +99,25 @@ export class ResetFailedError extends Schema.TaggedErrorClass<ResetFailedError>(
   message: Schema.String,
 }) {}
 
+// L3c (subagent-control-plane-design.zh-CN.md §3.2.2)
+// Exact-match worktree creation: no random-suffix fallback, crash-recoverable.
+export type WorktreeExactInput = {
+  readonly operationKey: string // used for receipt tracking by caller (e.g. child_session_id)
+  readonly name: string // desired worktree subdirectory name (slug)
+  readonly worktreeBranch: string // editing branch (MUST differ from session target branch)
+  readonly directory: string // absolute path for the worktree
+  readonly baseCommit: string // git commit SHA to check out from
+  readonly startCommand?: string // optional additional start script (usually omitted)
+}
+
+export class WorktreeExactConflictError extends Schema.TaggedErrorClass<WorktreeExactConflictError>()(
+  "WorktreeExactConflictError",
+  {
+    operationKey: Schema.String,
+    reason: Schema.String,
+  },
+) {}
+
 export class ListFailedError extends Schema.TaggedErrorClass<ListFailedError>()("WorktreeListFailedError", {
   message: Schema.String,
 }) {}
@@ -212,6 +231,13 @@ export interface Interface {
   readonly branchSummary: (input: RemoveInput) => Effect.Effect<BranchSummary, Error>
   // U3: merge the worktree branch back to the default branch (preflight + no auto-commit).
   readonly mergeBack: (input: RemoveInput) => Effect.Effect<MergeResult, Error>
+  // L3c (subagent-control-plane-design.zh-CN.md §3.2.2)
+  // Exact-match worktree creation with no random-suffix fallback.
+  // If the target directory already exists as a registered git worktree with a matching
+  // branch and HEAD == baseCommit, it is adopted.  Any mismatch returns WorktreeExactConflictError.
+  readonly ensureExact: (
+    input: WorktreeExactInput,
+  ) => Effect.Effect<Info, WorktreeExactConflictError | NotGitError | CreateFailedError>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/Worktree") {}
@@ -901,6 +927,93 @@ export const layer: Layer.Layer<
       diff,
       branchSummary,
       mergeBack,
+      // L3c: exact-match creation — no random-suffix fallback, caller holds receipt in task_run
+      ensureExact: Effect.fn("Worktree.ensureExact")(function* (input: WorktreeExactInput) {
+        const ctx = yield* InstanceState.context
+        if (ctx.project.vcs !== "git") {
+          return yield* new NotGitError({ message: "Worktrees are only supported for git projects" })
+        }
+
+        const targetDir = yield* canonical(input.directory)
+
+        // 1. Check if the target directory is already a registered git worktree
+        const listResult = yield* git(["worktree", "list", "--porcelain"], { cwd: ctx.worktree })
+        const entries = parseWorktreeList(listResult.text)
+        const existing = yield* locateWorktree(entries, targetDir)
+
+        if (existing) {
+          // Worktree exists — verify branch and HEAD match exactly
+          const branchRef = `refs/heads/${input.worktreeBranch}`
+          const existingBranch = existing.branch?.replace(/^refs\/heads\//, "")
+          if (existingBranch !== input.worktreeBranch) {
+            return yield* new WorktreeExactConflictError({
+              operationKey: input.operationKey,
+              reason: `existing worktree at ${targetDir} is on branch '${existingBranch}', expected '${input.worktreeBranch}'`,
+            })
+          }
+          // Verify HEAD == baseCommit
+          const headResult = yield* git(["-c", "core.hooksPath=/dev/null", "rev-parse", "HEAD"], { cwd: targetDir })
+          const head = headResult.text.trim()
+          if (head !== input.baseCommit) {
+            return yield* new WorktreeExactConflictError({
+              operationKey: input.operationKey,
+              reason: `existing worktree HEAD ${head} does not match expected baseCommit ${input.baseCommit}`,
+            })
+          }
+          // Exact match — adopt
+          return { name: input.name, branch: input.worktreeBranch, directory: targetDir } satisfies Info
+        }
+
+        // 2. Check if the worktree branch already exists (but at a different path)
+        const branchExistsResult = yield* git(
+          ["show-ref", "--verify", "--quiet", `refs/heads/${input.worktreeBranch}`],
+          { cwd: ctx.worktree },
+        ).pipe(Effect.orElseSucceed(() => ({ code: 1, text: "" })))
+
+        if (branchExistsResult.code === 0) {
+          // Branch exists but not at the expected path — conflict
+          const refHashResult = yield* git(["rev-parse", `refs/heads/${input.worktreeBranch}`], { cwd: ctx.worktree })
+          const refHash = refHashResult.text.trim()
+          if (refHash !== input.baseCommit) {
+            return yield* new WorktreeExactConflictError({
+              operationKey: input.operationKey,
+              reason: `branch '${input.worktreeBranch}' exists at ${refHash}, expected ${input.baseCommit}`,
+            })
+          }
+          // Branch exists at the right commit but directory isn't registered — create worktree checkout
+          const addResult = yield* git(["worktree", "add", input.directory, input.worktreeBranch], {
+            cwd: ctx.worktree,
+          })
+          if (addResult.code !== 0) {
+            return yield* new CreateFailedError({
+              message: addResult.stderr || addResult.text || "Failed to create git worktree (branch exists)",
+            })
+          }
+        } else {
+          // 3. Neither worktree nor branch exists — create fresh
+          yield* fs.makeDirectory(pathSvc.dirname(input.directory), { recursive: true }).pipe(Effect.orDie)
+          const addResult = yield* git(
+            ["worktree", "add", "-b", input.worktreeBranch, input.directory, input.baseCommit],
+            { cwd: ctx.worktree },
+          )
+          if (addResult.code !== 0) {
+            return yield* new CreateFailedError({
+              message: addResult.stderr || addResult.text || "Failed to create git worktree",
+            })
+          }
+        }
+
+        const info: Info = { name: input.name, branch: input.worktreeBranch, directory: targetDir }
+
+        // 4. A ready receipt is only valid after checkout and Instance bootstrap complete.
+        if (!(yield* boot(info, input.startCommand))) {
+          return yield* new CreateFailedError({
+            message: `Worktree bootstrap failed; preserved for recovery at ${info.directory}`,
+          })
+        }
+
+        return info
+      }),
     })
   }),
 )

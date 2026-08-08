@@ -18,7 +18,7 @@ import { Provider } from "@/provider/provider"
 import { Session } from "@/session/session"
 import { LLM } from "../../src/session/llm"
 import { MessageV2 } from "../../src/session/message-v2"
-import { SessionProcessor } from "../../src/session/processor"
+import { PlanProtocolTracker, SessionProcessor } from "../../src/session/processor"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { SessionStatus } from "../../src/session/status"
 import { SessionSummary } from "../../src/session/summary"
@@ -255,6 +255,190 @@ const fragmentFailureEnv = SessionProcessor.layer.pipe(
 )
 const itFragmentFailure = testEffect(fragmentFailureEnv)
 
+// §9.3 incident fixture LLM: sends actual malformed plan inputs from the BUG-010 incident.
+// Each call rotates through the exact 11 step shapes observed in the live session, using the
+// original (pre-v2) payload structure that lacks operation/version. A second variant (below)
+// uses forward-compatible envelopes with valid operation/version but the same malformed steps.
+const incidentStepShapes = [
+  { title: "ayContext", status: "active" },
+  { title: "Context", status: "pending" },
+  { title: "Context", status: "active" },
+  { title: "Context", status: "active" },
+  { title: "", status: "" },
+  { title: "Context", status: "active" },
+  { title: "", status: "active" },
+  { title: "Context", status: "pending" },
+  { title: "", status: "active" },
+  { title: "Context", status: "active" },
+  { title: "Context", status: "active" },
+] as const
+
+let incidentOrdinalOrig = 0
+// Original incident payloads (missing operation/version — structural reject)
+const incidentOriginalPayloadLLM = Layer.sync(LLM.Service, () =>
+  LLM.Service.of({
+    stream: () => {
+      const shape = incidentStepShapes[incidentOrdinalOrig % incidentStepShapes.length]
+      const id = `incident-orig-${incidentOrdinalOrig}`
+      incidentOrdinalOrig += 1
+      // Exact payload structure from the incident: no operation, no version fields
+      const input = {
+        goal: "complete the benchmark and compress collectives to 3.3ms",
+        steps: [{ step_id: "s1", title: shape.title, status: shape.status }],
+        active_step_id: shape.status === "active" ? "s1" : null,
+      }
+      return Stream.make(
+        LLMEvent.stepStart({ index: 0 }),
+        LLMEvent.toolInputStart({ id, name: "plan" }),
+        LLMEvent.toolInputEnd({ id, name: "plan" }),
+        LLMEvent.toolCall({ id, name: "plan", input }),
+        LLMEvent.toolResult({
+          id,
+          name: "plan",
+          result: {
+            type: "json",
+            value: {
+              title: "Plan needs correction",
+              output: `The plan was not committed (invalid_operation). Correct the plan payload and retry once.`,
+              metadata: { plan_protocol: "invalid", plan_error_code: "invalid_operation" },
+            },
+          },
+        }),
+        LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+        LLMEvent.finish({ reason: "stop" }),
+      )
+    },
+  }),
+)
+const incidentOriginalEnv = SessionProcessor.layer.pipe(
+  Layer.provide(summary),
+  Layer.provide(Image.defaultLayer),
+  Layer.provide(RuntimeFlags.layer({ experimentalEventSystem: true })),
+  Layer.provide(incidentOriginalPayloadLLM),
+  Layer.provideMerge(deps),
+)
+const itIncidentOriginal = testEffect(incidentOriginalEnv)
+
+let incidentOrdinalFwd = 0
+// Forward-compatible payloads: valid operation/version envelope, malformed steps only
+// (the semantic/quality oracle is responsible for rejecting these).
+const incidentForwardCompatPayloadLLM = Layer.sync(LLM.Service, () =>
+  LLM.Service.of({
+    stream: () => {
+      const shape = incidentStepShapes[incidentOrdinalFwd % incidentStepShapes.length]
+      const id = `incident-fwd-${incidentOrdinalFwd}`
+      incidentOrdinalFwd += 1
+      const input = {
+        operation: "replan",
+        expected_plan_id: "plan_fixture_base",
+        expected_version: 1,
+        replan_reason: "provider returned malformed plan arguments",
+        goal: "complete the benchmark and compress collectives to 3.3ms",
+        steps: [{ step_id: "s1", title: shape.title, status: shape.status }],
+        active_step_id: shape.status === "active" ? "s1" : null,
+      }
+      return Stream.make(
+        LLMEvent.stepStart({ index: 0 }),
+        LLMEvent.toolInputStart({ id, name: "plan" }),
+        LLMEvent.toolInputEnd({ id, name: "plan" }),
+        LLMEvent.toolCall({ id, name: "plan", input }),
+        LLMEvent.toolResult({
+          id,
+          name: "plan",
+          result: {
+            type: "json",
+            value: {
+              title: "Plan needs correction",
+              output: `The plan was not committed (suspicious_quality_regression). Correct the plan payload and retry once.`,
+              metadata: {
+                plan_protocol: "invalid",
+                plan_error_code: "suspicious_quality_regression",
+              },
+            },
+          },
+        }),
+        LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+        LLMEvent.finish({ reason: "stop" }),
+      )
+    },
+  }),
+)
+const incidentForwardCompatEnv = SessionProcessor.layer.pipe(
+  Layer.provide(summary),
+  Layer.provide(Image.defaultLayer),
+  Layer.provide(RuntimeFlags.layer({ experimentalEventSystem: true })),
+  Layer.provide(incidentForwardCompatPayloadLLM),
+  Layer.provideMerge(deps),
+)
+const itIncidentForwardCompat = testEffect(incidentForwardCompatEnv)
+
+const planProtocolLLM = Layer.sync(LLM.Service, () => {
+  let ordinal = 0
+  return LLM.Service.of({
+    stream: () => {
+      ordinal += 1
+      const id = `plan-protocol-${ordinal}`
+      return Stream.make(
+        LLMEvent.stepStart({ index: 0 }),
+        LLMEvent.toolInputStart({ id, name: "plan" }),
+        LLMEvent.toolInputEnd({ id, name: "plan" }),
+        LLMEvent.toolCall({ id, name: "plan", input: {} }),
+        LLMEvent.toolResult({
+          id,
+          name: "plan",
+          result: {
+            type: "json",
+            value: {
+              title: "Plan needs correction",
+              output: "invalid plan",
+              metadata: {
+                plan_protocol: "invalid",
+                plan_error_code: `invalid_${ordinal}`,
+              },
+            },
+          },
+        }),
+        LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+        LLMEvent.finish({ reason: "stop" }),
+      )
+    },
+  })
+})
+const planProtocolEnv = SessionProcessor.layer.pipe(
+  Layer.provide(summary),
+  Layer.provide(Image.defaultLayer),
+  Layer.provide(RuntimeFlags.layer({ experimentalEventSystem: true })),
+  Layer.provide(planProtocolLLM),
+  Layer.provideMerge(deps),
+)
+const itPlanProtocol = testEffect(planProtocolEnv)
+let orphanPlanOrdinal = 0
+const orphanPlanResultLLM = Layer.succeed(
+  LLM.Service,
+  LLM.Service.of({
+    stream: () => {
+      const id = `orphan-plan-result-${++orphanPlanOrdinal}`
+      return Stream.make(
+        LLMEvent.stepStart({ index: 0 }),
+        LLMEvent.toolResult({
+          id,
+          name: "plan",
+          result: { type: "error", value: "schema decode failed before execution" },
+        }),
+        LLMEvent.finish({ reason: "stop" }),
+      )
+    },
+  }),
+)
+const orphanPlanProtocolEnv = SessionProcessor.layer.pipe(
+  Layer.provide(summary),
+  Layer.provide(Image.defaultLayer),
+  Layer.provide(RuntimeFlags.layer({ experimentalEventSystem: true })),
+  Layer.provide(orphanPlanResultLLM),
+  Layer.provideMerge(deps),
+)
+const itOrphanPlanProtocol = testEffect(orphanPlanProtocolEnv)
+
 const boot = Effect.fn("test.boot")(function* () {
   const processors = yield* SessionProcessor.Service
   const session = yield* Session.Service
@@ -265,6 +449,120 @@ const boot = Effect.fn("test.boot")(function* () {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+itPlanProtocol.live("session.processor persists activity-scoped plan violations and stops without retry", () =>
+  provideTmpdirInstance(
+    (dir) =>
+      Effect.gen(function* () {
+        const { processors, session, provider } = yield* boot()
+        const chat = yield* session.create({})
+        const parent = yield* user(chat.id, "repair the plan")
+        const mdl = yield* provider.getModel(ref.providerID, ref.modelID)
+        const tracker = new PlanProtocolTracker()
+        const run = Effect.fn("test.runPlanProtocolTurn")(function* () {
+          const msg = yield* assistant(chat.id, parent.id, dir)
+          const handle = yield* processors.create({
+            assistantMessage: msg,
+            sessionID: chat.id,
+            model: mdl,
+            planTracker: tracker,
+          })
+          const result = yield* handle.process({
+            user: {
+              id: parent.id,
+              sessionID: chat.id,
+              role: "user",
+              time: parent.time,
+              agent: parent.agent,
+              model: { providerID: ref.providerID, modelID: ref.modelID },
+            } satisfies SessionV1.User,
+            sessionID: chat.id,
+            model: mdl,
+            agent: agent(),
+            system: [],
+            messages: [{ role: "user", content: "repair the plan" }],
+            tools: {},
+          })
+          return { handle, msg, parts: yield* MessageV2.parts(msg.id), result }
+        })
+
+        const first = yield* run()
+        const second = yield* run()
+        const firstPlan = first.parts.find(
+          (part): part is SessionV1.ToolPart => part.type === "tool" && part.tool === "plan",
+        )
+        const secondPlan = second.parts.find(
+          (part): part is SessionV1.ToolPart => part.type === "tool" && part.tool === "plan",
+        )
+
+        expect(first.result).toBe("continue")
+        expect(first.handle.message.error).toBeUndefined()
+        expect(firstPlan?.state.status).toBe("completed")
+        if (firstPlan?.state.status === "completed") expect(firstPlan.state.metadata.plan_attempt_ordinal).toBe(1)
+
+        expect(second.result).toBe("stop")
+        expect(second.handle.message.finish).toBe("error")
+        expect(second.handle.message.error).toMatchObject({
+          name: "PlanProtocolViolation",
+          data: { attemptOrdinal: 2, code: "invalid_2" },
+        })
+        expect(secondPlan?.state.status).toBe("completed")
+        if (secondPlan?.state.status === "completed") expect(secondPlan.state.metadata.plan_attempt_ordinal).toBe(2)
+      }),
+    { config: cfg },
+  ),
+)
+
+itOrphanPlanProtocol.live("schema failure before durable tool-call consumes the same plan budget", () =>
+  provideTmpdirInstance(
+    (dir) =>
+      Effect.gen(function* () {
+        const { processors, session, provider } = yield* boot()
+        const chat = yield* session.create({})
+        const parent = yield* user(chat.id, "repair the plan")
+        const mdl = yield* provider.getModel(ref.providerID, ref.modelID)
+        const tracker = new PlanProtocolTracker()
+        const run = Effect.fn("test.runOrphanPlanProtocolTurn")(function* () {
+          const msg = yield* assistant(chat.id, parent.id, dir)
+          const handle = yield* processors.create({
+            assistantMessage: msg,
+            sessionID: chat.id,
+            model: mdl,
+            planTracker: tracker,
+          })
+          const result = yield* handle.process({
+            user: {
+              id: parent.id,
+              sessionID: chat.id,
+              role: "user",
+              time: parent.time,
+              agent: parent.agent,
+              model: { providerID: ref.providerID, modelID: ref.modelID },
+            } satisfies SessionV1.User,
+            sessionID: chat.id,
+            model: mdl,
+            agent: agent(),
+            system: [],
+            messages: [{ role: "user", content: "repair the plan" }],
+            tools: {},
+          })
+          return { result, handle }
+        })
+
+        const first = yield* run()
+        const second = yield* run()
+        expect(first.result).toBe("continue")
+        expect(first.handle.message.error).toBeUndefined()
+        expect(second.result).toBe("stop")
+        expect(second.handle.message.finish).toBe("error")
+        expect(second.handle.message.error).toMatchObject({
+          name: "PlanProtocolViolation",
+          data: { attemptOrdinal: 2, code: "missing_tool_call" },
+        })
+      }),
+    { config: cfg },
+  ),
+)
 
 it.live("session.processor effect tests capture llm input cleanly", () =>
   provideTmpdirServer(
@@ -314,9 +612,10 @@ it.live("session.processor effect tests capture llm input cleanly", () =>
           settled: Effect.sync(() => {
             transitions.push("settled")
           }),
-          failed: () => Effect.sync(() => {
-            transitions.push("failed")
-          }),
+          failed: () =>
+            Effect.sync(() => {
+              transitions.push("failed")
+            }),
         })
         const parts = yield* MessageV2.parts(msg.id)
         const calls = yield* llm.calls
@@ -423,13 +722,13 @@ it.live("session.processor effect tests stop after token overflow requests compa
         const database = yield* Database.Service
         const { processors, session, provider } = yield* boot()
 
-        yield* llm.text("after", { usage: { input: 100, output: 0 } })
+        yield* llm.text("after", { usage: { input: 100_000, output: 0 } })
 
         const chat = yield* session.create({})
         const parent = yield* user(chat.id, "compact")
         const msg = yield* assistant(chat.id, parent.id, path.resolve(dir))
         const base = yield* provider.getModel(ref.providerID, ref.modelID)
-        const mdl = { ...base, limit: { context: 20, output: 10 } }
+        const mdl = { ...base, limit: { context: 100_000, output: 10 } }
         const handle = yield* processors.create({
           assistantMessage: msg,
           sessionID: chat.id,
@@ -454,7 +753,6 @@ it.live("session.processor effect tests stop after token overflow requests compa
         })
 
         const parts = yield* MessageV2.parts(msg.id)
-
         expect(value).toBe("compact")
         expect(parts.some((part) => part.type === "text" && part.text === "after")).toBe(true)
         expect(parts.some((part) => part.type === "step-finish")).toBe(true)
@@ -1177,6 +1475,202 @@ itFragmentFailure.live("session.processor effect tests flush partial v2 fragment
         expect(seen.indexOf(SessionEvent.Reasoning.Ended.type)).toBeLessThan(failed)
         expect(text).toBe("partial")
         expect(reasoning).toBe("thinking")
+      }),
+    { config: cfg },
+  ),
+)
+
+// ---------------------------------------------------------------------------
+// BUG-010 §9.3 — deterministic incident fixture (P0 for GO gate)
+// ---------------------------------------------------------------------------
+
+// §9.3 variant A: original incident payloads (missing operation/version → invalid_operation)
+// Must stop after exactly 2 dispatches with PlanProtocolViolation.
+itIncidentOriginal.live("§9.3 BUG-010: original incident payloads (no operation/version) stop at 2 dispatches", () =>
+  provideTmpdirInstance(
+    (dir) =>
+      Effect.gen(function* () {
+        const { processors, session, provider } = yield* boot()
+        const chat = yield* session.create({})
+        const parent = yield* user(chat.id, "build the benchmark suite")
+        const mdl = yield* provider.getModel(ref.providerID, ref.modelID)
+        const tracker = new PlanProtocolTracker()
+        let dispatchCount = 0
+
+        const run = Effect.fn("test.runIncidentOrigTurn")(function* () {
+          const msg = yield* assistant(chat.id, parent.id, dir)
+          const handle = yield* processors.create({
+            assistantMessage: msg,
+            sessionID: chat.id,
+            model: mdl,
+            planTracker: tracker,
+          })
+          dispatchCount += 1
+          const result = yield* handle.process({
+            user: {
+              id: parent.id,
+              sessionID: chat.id,
+              role: "user",
+              time: parent.time,
+              agent: parent.agent,
+              model: { providerID: ref.providerID, modelID: ref.modelID },
+            } satisfies SessionV1.User,
+            sessionID: chat.id,
+            model: mdl,
+            agent: agent(),
+            system: [],
+            messages: [{ role: "user", content: "build the benchmark suite" }],
+            tools: {},
+          })
+          return { handle, msg, parts: yield* MessageV2.parts(msg.id), result }
+        })
+
+        const first = yield* run()
+
+        // Dispatch 1: first malformed plan → correctable error, session continues
+        expect(first.result).toBe("continue")
+        expect(first.handle.message.error).toBeUndefined()
+        const firstPlan = first.parts.find(
+          (part): part is SessionV1.ToolPart => part.type === "tool" && part.tool === "plan",
+        )
+        if (firstPlan?.state.status === "completed") {
+          expect(firstPlan.state.metadata.plan_attempt_ordinal).toBe(1)
+          // §7.5: the output text must contain the attempt ordinal so the model can see it
+          expect(firstPlan.state.output).toContain("[Plan attempt 1 of 2]")
+        }
+
+        const second = yield* run()
+
+        // Dispatch 2: second consecutive malformed plan → PlanProtocolViolation, stops
+        expect(second.result).toBe("stop")
+        expect(second.handle.message.finish).toBe("error")
+        expect(second.handle.message.error).toMatchObject({
+          name: "PlanProtocolViolation",
+          data: { attemptOrdinal: 2 },
+        })
+
+        // §9.3 hard contract: physical Provider dispatch ≤ 2
+        expect(dispatchCount).toBeLessThanOrEqual(2)
+      }),
+    { config: cfg },
+  ),
+)
+
+// §9.3 variant B: forward-compatible payloads (valid envelope, malformed steps) stop at 2 dispatches.
+// This proves the semantic/quality oracle (not just structural decode) is what blocks them.
+itIncidentForwardCompat.live("§9.3 BUG-010: forward-compatible incident payloads stop at 2 dispatches", () =>
+  provideTmpdirInstance(
+    (dir) =>
+      Effect.gen(function* () {
+        const { processors, session, provider } = yield* boot()
+        const chat = yield* session.create({})
+        const parent = yield* user(chat.id, "build the benchmark suite")
+        const mdl = yield* provider.getModel(ref.providerID, ref.modelID)
+        const tracker = new PlanProtocolTracker()
+        let dispatchCount = 0
+
+        const run = Effect.fn("test.runIncidentFwdTurn")(function* () {
+          const msg = yield* assistant(chat.id, parent.id, dir)
+          const handle = yield* processors.create({
+            assistantMessage: msg,
+            sessionID: chat.id,
+            model: mdl,
+            planTracker: tracker,
+          })
+          dispatchCount += 1
+          const result = yield* handle.process({
+            user: {
+              id: parent.id,
+              sessionID: chat.id,
+              role: "user",
+              time: parent.time,
+              agent: parent.agent,
+              model: { providerID: ref.providerID, modelID: ref.modelID },
+            } satisfies SessionV1.User,
+            sessionID: chat.id,
+            model: mdl,
+            agent: agent(),
+            system: [],
+            messages: [{ role: "user", content: "build the benchmark suite" }],
+            tools: {},
+          })
+          return { handle, result }
+        })
+
+        const first = yield* run()
+        expect(first.result).toBe("continue")
+        expect(first.handle.message.error).toBeUndefined()
+
+        const second = yield* run()
+        expect(second.result).toBe("stop")
+        expect(second.handle.message.finish).toBe("error")
+        expect(second.handle.message.error).toMatchObject({ name: "PlanProtocolViolation" })
+
+        // §9.3 hard contract: physical Provider dispatch ≤ 2
+        expect(dispatchCount).toBeLessThanOrEqual(2)
+      }),
+    { config: cfg },
+  ),
+)
+
+// PlanProtocolViolation persistence + DB reload round-trip
+// §7.5: the error must survive a session reload (not be lost or downgraded to UnknownError).
+itPlanProtocol.live("PlanProtocolViolation is persisted to DB and survives message reload", () =>
+  provideTmpdirInstance(
+    (dir) =>
+      Effect.gen(function* () {
+        const { processors, session, provider } = yield* boot()
+        const chat = yield* session.create({})
+        const parent = yield* user(chat.id, "repair the plan")
+        const mdl = yield* provider.getModel(ref.providerID, ref.modelID)
+        const tracker = new PlanProtocolTracker()
+
+        const run = Effect.fn("test.runForPersistence")(function* () {
+          const msg = yield* assistant(chat.id, parent.id, dir)
+          const handle = yield* processors.create({
+            assistantMessage: msg,
+            sessionID: chat.id,
+            model: mdl,
+            planTracker: tracker,
+          })
+          yield* handle.process({
+            user: {
+              id: parent.id,
+              sessionID: chat.id,
+              role: "user",
+              time: parent.time,
+              agent: parent.agent,
+              model: { providerID: ref.providerID, modelID: ref.modelID },
+            } satisfies SessionV1.User,
+            sessionID: chat.id,
+            model: mdl,
+            agent: agent(),
+            system: [],
+            messages: [{ role: "user", content: "repair the plan" }],
+            tools: {},
+          })
+          return handle
+        })
+
+        yield* run() // first turn: correctable error
+        const second = yield* run() // second turn: PlanProtocolViolation
+
+        // Immediate check: error present on the live handle
+        expect(second.message.finish).toBe("error")
+        expect(second.message.error).toMatchObject({ name: "PlanProtocolViolation" })
+
+        // DB reload: load all messages for the session and find the last assistant message
+        const allMessages = yield* session.messages({ sessionID: chat.id })
+        const assistantMsgs = allMessages.filter((m) => m.info.role === "assistant")
+        const lastAssistant = assistantMsgs[assistantMsgs.length - 1]?.info
+
+        expect(lastAssistant?.role).toBe("assistant")
+        if (lastAssistant?.role === "assistant") {
+          // §7.5: after DB reload, PlanProtocolViolation must NOT be downgraded to UnknownError
+          expect(lastAssistant.finish).toBe("error")
+          expect(lastAssistant.error).toMatchObject({ name: "PlanProtocolViolation" })
+          expect(lastAssistant.error?.name).not.toBe("UnknownError")
+        }
       }),
     { config: cfg },
   ),
