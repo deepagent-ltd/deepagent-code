@@ -117,6 +117,8 @@ it.instance("researcher agent is a read-only subagent that denies edit/write/tas
     // mutation + recursive fan-out denied
     expect(evalPerm(researcher, "edit")).toBe("deny")
     expect(evalPerm(researcher, "write")).toBe("deny")
+    expect(evalPerm(researcher, "bash")).toBe("deny")
+    expect(evalPerm(researcher, "git_read")).toBe("allow")
     expect(Permission.evaluate("task", "researcher", researcher!.permission).action).toBe("deny")
   }),
 )
@@ -706,7 +708,7 @@ it.instance(
 // to auto through the alias (NOT throw "default agent build not found") — the alias applies at the
 // defaultInfo/defaultAgent path, not just Agent.get.
 it.instance(
-  "defaultAgent resolves legacy default_agent \"build\" to auto",
+  'defaultAgent resolves legacy default_agent "build" to auto',
   () =>
     Effect.gen(function* () {
       const agent = yield* load((svc) => svc.defaultAgent())

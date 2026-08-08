@@ -2,7 +2,7 @@
 
 A GitHub Action that integrates [deepagent-code](https://deepagent-code.ai) directly into your GitHub workflow.
 
-Current Action release: `github-v1.4.4`. The release workflow reads the target version from `github/VERSION` and publishes that exact tag.
+The release workflow reads the target version from `github/VERSION` and publishes that exact tag.
 
 Mention `/deepagent-code` in your comment, and deepagent-code will execute tasks within your GitHub Actions runner.
 
@@ -90,7 +90,7 @@ This will walk you through installing the GitHub app, creating the workflow, and
               persist-credentials: false
 
           - name: Run deepagent-code
-            uses: deepagent-ltd/deepagent-code/github@github-v1.4.4
+            uses: deepagent-ltd/deepagent-code/github@github-v1.4.5
             env:
              ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
              GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

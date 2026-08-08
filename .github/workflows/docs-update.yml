@@ -43,7 +43,7 @@ jobs:
 
       - name: Run deepagent-code
         if: steps.commits.outputs.has_commits == 'true'
-        uses: deepagent-ltd/deepagent-code/github@github-v1.4.4
+        uses: deepagent-ltd/deepagent-code/github@github-v1.4.5
         env:
           DEEPAGENT_CODE_API_KEY: ${{ secrets.DEEPAGENT_CODE_API_KEY }}
         with:

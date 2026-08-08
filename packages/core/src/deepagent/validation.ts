@@ -1,18 +1,40 @@
-import type { ValidationResult } from "./round-state"
+import type { ValidationFailureKind, ValidationResult } from "./round-state"
+
+export type ValidationCommandSource = "package_script" | "builtin" | "agents_md" | "user"
+export type ValidationScriptDialect = "posix"
+
+export type ValidationCommand =
+  | {
+      readonly id: string
+      readonly source: ValidationCommandSource
+      readonly transport: "argv"
+      readonly executable: string
+      readonly args: readonly string[]
+      readonly display: string
+    }
+  | {
+      readonly id: string
+      readonly source: ValidationCommandSource
+      readonly transport: ValidationScriptDialect
+      readonly script: string
+      readonly display: string
+    }
+
+export type ValidationCommandInput = string | ValidationCommand
 
 export type ValidationPlan = {
-  readonly commands: readonly string[]
+  readonly commands: readonly ValidationCommand[]
   readonly timeout_ms: number
   readonly failFast: boolean
 }
 
 export type ValidationConfig = {
   readonly cwd: string
-  readonly commands: readonly string[]
+  readonly commands: readonly ValidationCommandInput[]
   readonly timeout_ms?: number
 }
 
-export const inferValidationCommands = (context: {
+export const inferValidationPlan = (context: {
   readonly cwd: string
   readonly packageJson?: { scripts?: Record<string, string> }
   readonly agentsMd?: string
@@ -21,39 +43,104 @@ export const inferValidationCommands = (context: {
   // The package-script runner for this workspace (e.g. "npm run", "bun run"). Defaults to npm.
   // P2-7: single inference impl; the deepagent-code production path passes "bun run".
   readonly runner?: string
-}): string[] => {
-  const commands: string[] = []
+}): ValidationCommand[] => {
+  const commands: ValidationCommand[] = []
   const run = context.runner ?? "npm run"
-  const runnerBin = run.split(/\s+/)[0] ?? "npm" // "bun"/"npm" for the bare typecheck fallback
+  const runner = run.trim().split(/\s+/).filter(Boolean)
+  const runnerBin = runner[0] ?? "npm"
+  const packageScript = (name: string): ValidationCommand => ({
+    id: `package:${name}`,
+    source: "package_script",
+    transport: "argv",
+    executable: runnerBin,
+    args: [...runner.slice(1), name],
+    display: `${run} ${name}`,
+  })
 
   if (context.packageJson?.scripts) {
     const scripts = context.packageJson.scripts
-    if (scripts.typecheck) commands.push(`${run} typecheck`)
-    else if (scripts["type-check"]) commands.push(`${run} type-check`)
-    else if (context.hasTypeScript) commands.push(runnerBin === "bun" ? "bun typecheck" : "npx tsc --noEmit")
+    if (scripts.typecheck) commands.push(packageScript("typecheck"))
+    else if (scripts["type-check"]) commands.push(packageScript("type-check"))
+    else if (context.hasTypeScript)
+      commands.push(
+        runnerBin === "bun"
+          ? {
+              id: "builtin:typecheck",
+              source: "builtin",
+              transport: "argv",
+              executable: "bun",
+              args: ["typecheck"],
+              display: "bun typecheck",
+            }
+          : {
+              id: "builtin:typecheck",
+              source: "builtin",
+              transport: "argv",
+              executable: "npx",
+              args: ["tsc", "--noEmit"],
+              display: "npx tsc --noEmit",
+            },
+      )
 
-    if (scripts.lint) commands.push(`${run} lint`)
+    if (scripts.lint) commands.push(packageScript("lint"))
     // P1-3: the test command is part of the micro-round validation gate — a failing test means
     // "not done". Only added when a test script actually exists (no blind test runs).
-    if (scripts.test) commands.push(`${run} test`)
-    if (scripts.build && !scripts.test) commands.push(`${run} build`)
+    if (scripts.test) commands.push(packageScript("test"))
+    if (scripts.build && !scripts.test) commands.push(packageScript("build"))
   } else if (context.hasTypeScript) {
-    commands.push("npx tsc --noEmit")
+    commands.push({
+      id: "builtin:typecheck",
+      source: "builtin",
+      transport: "argv",
+      executable: "npx",
+      args: ["tsc", "--noEmit"],
+      display: "npx tsc --noEmit",
+    })
   }
 
   if (context.hasPython) {
-    commands.push("python -m py_compile *.py")
+    commands.push({
+      id: "builtin:python-compile",
+      source: "builtin",
+      transport: "argv",
+      executable: "python",
+      args: ["-m", "compileall", "-q", "."],
+      display: "python -m compileall -q .",
+    })
   }
 
   if (context.agentsMd) {
     const inferredFromAgents = extractCommandsFromAgentsMd(context.agentsMd)
-    for (const cmd of inferredFromAgents) {
-      if (!commands.includes(cmd)) commands.push(cmd)
-    }
+    for (const cmd of inferredFromAgents)
+      if (!commands.some((item) => item.display === cmd))
+        commands.push({
+          id: `agents:${commands.length}`,
+          source: "agents_md",
+          transport: "posix",
+          script: cmd,
+          display: cmd,
+        })
   }
 
   return commands
 }
+
+export const inferValidationCommands = (context: Parameters<typeof inferValidationPlan>[0]): string[] =>
+  inferValidationPlan(context).map((command) => command.display)
+
+export const normalizeValidationCommand = (command: ValidationCommandInput): ValidationCommand =>
+  typeof command === "string"
+    ? {
+        id: `user:${command}`,
+        source: "user",
+        transport: "posix",
+        script: command,
+        display: command,
+      }
+    : command
+
+export const validationCommandDisplay = (command: ValidationCommandInput): string =>
+  normalizeValidationCommand(command).display
 
 // P2-7: the single AGENTS.md command extractor (was duplicated in workspace-context with a
 // drifting regex). Matches both "`cmd` - typecheck" list items and "run `cmd` to typecheck" prose.
@@ -70,7 +157,10 @@ export const extractCommandsFromAgentsMd = (content: string): string[] => {
 }
 
 export const buildValidationPlan = (config: ValidationConfig): ValidationPlan => ({
-  commands: config.commands.length > 0 ? config.commands : ["echo 'no validation commands configured'"],
+  commands:
+    config.commands.length > 0
+      ? config.commands.map(normalizeValidationCommand)
+      : [normalizeValidationCommand("echo 'no validation commands configured'")],
   timeout_ms: config.timeout_ms ?? 60_000,
   failFast: true,
 })
@@ -80,9 +170,11 @@ export const parseValidationOutput = (
   exitCode: number,
   output: string,
   duration_ms: number,
+  kind: ValidationFailureKind = "command_exit",
 ): ValidationResult => ({
   command,
-  passed: exitCode === 0,
+  passed: kind === "command_exit" && exitCode === 0,
+  kind,
   exit_code: exitCode,
   output: output.slice(-4000),
   duration_ms,

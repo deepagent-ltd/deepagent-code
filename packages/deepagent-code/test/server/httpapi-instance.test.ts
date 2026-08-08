@@ -9,7 +9,16 @@ import { WorkspaceV2 } from "@deepagent-code/core/workspace"
 import { ControlPaths } from "../../src/server/routes/instance/httpapi/groups/control"
 import { InstancePaths } from "../../src/server/routes/instance/httpapi/groups/instance"
 import { SessionPaths } from "../../src/server/routes/instance/httpapi/groups/session"
+import {
+  DeepAgentGoalPlanBusyError,
+  DeepAgentGoalPlanConflictError,
+  DeepAgentGoalPlanUnavailableError,
+  DeepAgentGoalPlanValidationError,
+} from "../../src/server/routes/instance/httpapi/groups/deepagent"
+import { mapGoalPlanError } from "../../src/server/routes/instance/httpapi/handlers/deepagent"
 import { ProjectV2 } from "@deepagent-code/core/project"
+import { PlanConflictError, PlanValidationError } from "@deepagent-code/core/deepagent/plan-controller"
+import { PlanEditBusyError, PlanEditTargetUnavailableError } from "@deepagent-code/core/deepagent/plan-edit-protocol"
 import { QuestionID } from "../../src/question/schema"
 import { HttpApiApp } from "../../src/server/routes/instance/httpapi/server"
 import { HEADER as FenceHeader } from "../../src/server/shared/fence"
@@ -73,6 +82,45 @@ describe("instance HttpApi", () => {
     }),
   )
 
+  it.live("maps plan admission failures to the typed HTTP matrix without losing conflict context", () =>
+    Effect.sync(() => {
+      expect(mapGoalPlanError(new PlanValidationError("empty_steps", ["step-1"], "plan-1", 7))).toEqual(
+        new DeepAgentGoalPlanValidationError({
+          message: "Plan validation failed: empty_steps",
+          code: "empty_steps",
+          offending_step_ids: ["step-1"],
+          previous_plan_id: "plan-1",
+          previous_plan_version: 7,
+        }),
+      )
+      expect(
+        mapGoalPlanError(
+          new PlanConflictError(
+            { plan_id: "plan-1", doc_id: "doc-1", version: 7 },
+            { plan_id: "plan-2", doc_id: "doc-2", version: 8 },
+          ),
+        ),
+      ).toEqual(
+        new DeepAgentGoalPlanConflictError({
+          message: "Plan compare-and-commit precondition did not match the authoritative version",
+          expected_plan_id: "plan-1",
+          expected_version: 7,
+          actual_plan_id: "plan-2",
+          actual_version: 8,
+        }),
+      )
+      expect(mapGoalPlanError(new PlanEditBusyError("activity-1"))).toEqual(
+        new DeepAgentGoalPlanBusyError({
+          message: "A plan edit is already queued: activity-1",
+          activity_id: "activity-1",
+        }),
+      )
+      expect(mapGoalPlanError(new PlanEditTargetUnavailableError("session is idle"))).toEqual(
+        new DeepAgentGoalPlanUnavailableError({ message: "Plan edit target is unavailable: session is idle" }),
+      )
+    }),
+  )
+
   it.live("reports capabilities and protocol version", () =>
     Effect.gen(function* () {
       const response = yield* HttpClient.get("/global/capabilities")
@@ -92,7 +140,7 @@ describe("instance HttpApi", () => {
           // goal-tick chain is the live driver; daemon audit GO). This test builds RuntimeFlags from empty
           // env, so the capability endpoint reports the production defaults.
           v4EventDrivenIm: false,
-          v4AgentPushEnabled: false,
+          v4AgentPushEnabled: true,
           v4MultiAgentRuntime: true,
           v4ThreadEnabled: false,
           v4FileUploadEnabled: false,
@@ -104,7 +152,10 @@ describe("instance HttpApi", () => {
   it.live("§D2 GET /oversight/approvals returns an empty pending queue for a fresh workspace", () =>
     Effect.gen(function* () {
       const dir = yield* tmpdirScoped({ git: true })
-      const response = yield* HttpClientRequest.get("/oversight/approvals").pipe(directoryHeader(dir), HttpClient.execute)
+      const response = yield* HttpClientRequest.get("/oversight/approvals").pipe(
+        directoryHeader(dir),
+        HttpClient.execute,
+      )
       expect(response.status).toBe(200)
       expect(yield* response.json).toEqual({ items: [] })
     }),

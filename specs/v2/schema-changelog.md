@@ -1,5 +1,25 @@
 # V2 Schema Changelog
 
+## 2026-08-03: Import Graceful Session Restart Continuity
+
+Affected schema:
+
+- Add nullable private `session.time_suspended` and partial `session_time_suspended_idx`.
+- Add synchronized `session.execution.started.1`, `session.execution.succeeded.1`, `session.execution.failed.1`, and `session.execution.interrupted.1` events.
+- No public HTTP, OpenAPI, SDK, UI, prompt-delivery, or projected-message schema change.
+
+Change:
+
+- Expose process-local active execution snapshots and await-idle coordination.
+- Emit one started and one terminal durable observation for each process-local ownership chain.
+- Let managed hosts explicitly mark active Sessions before orderly teardown and atomically consume those markers for one concurrent resume attempt on the next start.
+
+Compatibility:
+
+- Existing rows receive `NULL`; migration does not infer suspension from historical events.
+- The compatibility Session layer remains no-op and restart actions are inert until a managed host invokes them.
+- This is graceful restart continuity only. It does not retry hard-crashed provider work, replay ambiguous tool side effects, or provide clustered execution ownership.
+
 ## 2026-06-05: Execute Automatic Session Compaction
 
 - Trigger automatic compaction before provider turns using the complete estimated request and absolute model-aware headroom.

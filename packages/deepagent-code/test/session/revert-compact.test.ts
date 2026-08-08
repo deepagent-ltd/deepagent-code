@@ -101,6 +101,38 @@ const tokens = {
 
 describe("revert + compact workflow", () => {
   it.live(
+    "stale cleanup cannot clear or delete through a newer revert epoch",
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const sessions = yield* Session.Service
+        const revert = yield* SessionRevert.Service
+        const info = yield* sessions.create({ title: "cleanup epoch fence" })
+        const first = yield* user(info.id)
+        yield* text(info.id, first.id, "first")
+        const second = yield* user(info.id)
+        yield* text(info.id, second.id, "second")
+        yield* sessions.commitRevert({
+          sessionID: info.id,
+          revert: { messageID: first.id },
+          summary: { additions: 0, deletions: 0, files: 0 },
+        })
+        const stale = yield* sessions.get(info.id)
+        const staleEpoch = yield* sessions.mutationEpoch(info.id)
+        yield* sessions.commitRevert({
+          sessionID: info.id,
+          revert: { messageID: second.id },
+          summary: { additions: 0, deletions: 0, files: 0 },
+        })
+
+        yield* revert.cleanup(stale, staleEpoch)
+
+        expect((yield* sessions.get(info.id)).revert?.messageID).toBe(second.id)
+        expect(yield* sessions.messages({ sessionID: info.id })).toHaveLength(2)
+      }),
+    ),
+  )
+
+  it.live(
     "should properly handle compact command after revert",
     provideTmpdirInstance(
       (dir) =>

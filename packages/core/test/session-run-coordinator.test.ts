@@ -41,6 +41,95 @@ describe("SessionRunCoordinator", () => {
     ),
   )
 
+  it.effect("snapshots only active ownership chains", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const firstStarted = yield* Deferred.make<void>()
+        const secondStarted = yield* Deferred.make<void>()
+        const firstGate = yield* Deferred.make<void>()
+        const secondGate = yield* Deferred.make<void>()
+        const coordinator = yield* SessionRunCoordinator.make({
+          drain: (key: string) =>
+            Deferred.succeed(key === "first" ? firstStarted : secondStarted, undefined).pipe(
+              Effect.andThen(Deferred.await(key === "first" ? firstGate : secondGate)),
+            ),
+        })
+
+        expect(Array.from(yield* coordinator.active)).toEqual([])
+        const first = yield* coordinator.run("first").pipe(Effect.forkChild)
+        yield* Deferred.await(firstStarted)
+        expect(Array.from(yield* coordinator.active)).toEqual(["first"])
+
+        const second = yield* coordinator.run("second").pipe(Effect.forkChild)
+        yield* Deferred.await(secondStarted)
+        expect(Array.from(yield* coordinator.active)).toEqual(["first", "second"])
+
+        yield* Deferred.succeed(firstGate, undefined)
+        yield* Fiber.join(first)
+        expect(Array.from(yield* coordinator.active)).toEqual(["second"])
+        yield* Deferred.succeed(secondGate, undefined)
+        yield* Fiber.join(second)
+        expect(Array.from(yield* coordinator.active)).toEqual([])
+      }),
+    ),
+  )
+
+  it.effect("reports one lifecycle for a coalesced ownership chain", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const firstStarted = yield* Deferred.make<void>()
+        const firstGate = yield* Deferred.make<void>()
+        const secondStarted = yield* Deferred.make<void>()
+        const lifecycle: string[] = []
+        let runs = 0
+        const coordinator = yield* SessionRunCoordinator.make({
+          started: (key: string) => Effect.sync(() => lifecycle.push(`started:${key}`)),
+          drain: () =>
+            Effect.sync(() => ++runs).pipe(
+              Effect.flatMap((run) =>
+                run === 1
+                  ? Deferred.succeed(firstStarted, undefined).pipe(Effect.andThen(Deferred.await(firstGate)))
+                  : Deferred.succeed(secondStarted, undefined),
+              ),
+            ),
+          settled: (key, exit) =>
+            Effect.sync(() => lifecycle.push(`settled:${key}:${Exit.isSuccess(exit) ? "success" : "failure"}`)),
+        })
+
+        const run = yield* coordinator.run("session").pipe(Effect.forkChild)
+        yield* Deferred.await(firstStarted)
+        yield* coordinator.wake("session")
+        yield* Deferred.succeed(firstGate, undefined)
+        yield* Deferred.await(secondStarted)
+        yield* Fiber.join(run)
+
+        expect(runs).toBe(2)
+        expect(lifecycle).toEqual(["started:session", "settled:session:success"])
+      }),
+    ),
+  )
+
+  it.effect("passes the interruption reason to lifecycle settlement", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const started = yield* Deferred.make<void>()
+        const reasons: Array<string | undefined> = []
+        const coordinator = yield* SessionRunCoordinator.make<string, void, never, string>({
+          drain: () => Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)),
+          settled: (_key, _exit, reason) => Effect.sync(() => reasons.push(reason)),
+        })
+
+        const run = yield* coordinator.run("session").pipe(Effect.exit, Effect.forkChild)
+        yield* Deferred.await(started)
+        yield* coordinator.interrupt("session", undefined, "shutdown")
+        yield* Fiber.join(run)
+
+        expect(reasons).toEqual(["shutdown"])
+        expect(Array.from(yield* coordinator.active)).toEqual([])
+      }),
+    ),
+  )
+
   it.effect("does nothing when interrupted while idle", () =>
     Effect.scoped(
       Effect.gen(function* () {

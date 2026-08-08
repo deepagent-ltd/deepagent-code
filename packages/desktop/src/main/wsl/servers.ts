@@ -49,6 +49,7 @@ type WslServersControllerOptions = {
   writeServers?: (servers: WslServerConfig[]) => void
   resolveDeepagentCode?: typeof resolveWslDeepagentCode
   readCommandVersion?: typeof readWslCommandVersion
+  listInstalledDistros?: typeof listInstalledWslDistros
 }
 
 export type WslServersController = ReturnType<typeof createWslServersController>
@@ -204,6 +205,16 @@ export function createWslServersController(
     setRuntime(id, { kind: "starting" })
     logger?.log("wsl sidecar starting", { id, distro: item.config.distro })
     try {
+      const installed = await (options?.listInstalledDistros ?? listInstalledWslDistros)()
+      const distro = installed.find((candidate) => candidate.name === item.config.distro)
+      if (distro?.version !== 2) {
+        throw new Error(
+          distro?.version === 1
+            ? `${item.config.distro} uses WSL1; DeepAgent Code requires WSL2`
+            : `${item.config.distro} is not an installed WSL2 distribution`,
+        )
+      }
+      setState({ installed })
       const sidecar = await spawnSidecar(item.config.distro)
       if (!isCurrentStartAttempt(id, attempt)) {
         try {

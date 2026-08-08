@@ -32,6 +32,10 @@ export type Suite = {
 const repository = path.resolve(import.meta.dir, "..")
 const defaultConfigFile = path.join(import.meta.dir, "live-llm.config.local.json")
 const reportFile = path.join(repository, "packages/llm/.artifacts/live-llm/all-tests.json")
+export const defaultModelsSnapshotFile = path.join(
+  repository,
+  "packages/deepagent-code/test/tool/fixtures/models-api.json",
+)
 
 export const suites: Suite[] = [
   {
@@ -191,6 +195,12 @@ export const suites: Suite[] = [
     realLLM: true,
   },
   {
+    id: "live:subagent-control-plane",
+    package: "deepagent-code",
+    command: ["bun", "run", "test:llm-live:subagent-control-plane"],
+    realLLM: true,
+  },
+  {
     id: "live:shell-exit-contract",
     package: "deepagent-code",
     command: ["bun", "run", "test:llm-live:shell-exit-contract"],
@@ -200,6 +210,12 @@ export const suites: Suite[] = [
     id: "live:stale-validation",
     package: "deepagent-code",
     command: ["bun", "run", "test:llm-live:stale-validation"],
+    realLLM: true,
+  },
+  {
+    id: "live:continuation-repetition",
+    package: "deepagent-code",
+    command: ["bun", "run", "test:llm-live:continuation-repetition"],
     realLLM: true,
   },
   {
@@ -323,6 +339,12 @@ export const suites: Suite[] = [
     realLLM: true,
   },
   {
+    id: "ext:prompt-intent-fencing",
+    package: "deepagent-code",
+    command: ["bun", "run", "test:llm-ext:prompt-intent-fencing"],
+    realLLM: true,
+  },
+  {
     id: "eval:autonomous",
     package: "deepagent-code",
     command: ["bun", "run", "test:llm-eval:autonomous"],
@@ -424,13 +446,13 @@ export function runnerEnvironment(
         "WAYLAND_DISPLAY",
         "XAUTHORITY",
         "DBUS_SESSION_BUS_ADDRESS",
-        "MODELS_DEV_API_JSON",
         "SystemRoot",
         "WINDIR",
         "ComSpec",
         "PATHEXT",
       ].flatMap((key) => (hostEnvironment[key] === undefined ? [] : ([[key, hostEnvironment[key]]] as const))),
     ),
+    MODELS_DEV_API_JSON: hostEnvironment.MODELS_DEV_API_JSON ?? defaultModelsSnapshotFile,
     ...(includeCredential
       ? {
           DEEPAGENT_CODE_LIVE_LLM_API_KEY_FILE: config.apiKeyFile,
@@ -446,7 +468,12 @@ export function runnerEnvironment(
 
 export function validateRunnerConfig(input: unknown, baseDirectory = repository): RunnerConfig {
   if (!isRecord(input)) throw new Error("Live LLM config must be a JSON object")
-  if ("apiKey" in input) throw new Error("apiKey is not accepted in live LLM JSON; use apiKeyFile")
+  if ("apiKey" in input) {
+    throw new Error(
+      "Legacy live LLM JSON field apiKey is not accepted; move the key to a chmod 600 one-line file and " +
+        "set apiKeyFile (recommended: ~/.deepagent/code/tmp/live-llm-deepseek.key)",
+    )
+  }
   const baseURL = requiredString(input.baseURL, "baseURL")
   if (!URL.canParse(baseURL)) throw new Error("baseURL must be a valid URL")
   const endpoint = new URL(baseURL)
@@ -470,25 +497,7 @@ export function validateRunnerConfig(input: unknown, baseDirectory = repository)
 }
 
 export async function validateSuiteManifest() {
-  const inventory = (
-    await Promise.all(
-      (["llm", "core", "deepagent-code", "desktop"] as const).map(async (packageName) => {
-        const payload: unknown = await Bun.file(path.join(repository, "packages", packageName, "package.json")).json()
-        if (!isRecord(payload) || !isRecord(payload.scripts)) {
-          throw new Error(`packages/${packageName}/package.json does not contain a scripts object`)
-        }
-        return Object.keys(payload.scripts)
-          .filter(
-            (script) =>
-              script.startsWith("test:llm-") &&
-              script !== "test:llm-routes" &&
-              script !== "test:llm-sandbox" &&
-              !script.startsWith("test:llm-det:"),
-          )
-          .map((script) => `${packageName}:${script}`)
-      }),
-    )
-  ).flat()
+  const inventory = await loadRealLLMSuiteInventory()
   const registered = suites
     .filter((suite) => suite.realLLM)
     .map((suite) => {
@@ -507,6 +516,28 @@ export async function validateSuiteManifest() {
         `${stale.length ? `; stale: ${stale.join(", ")}` : ""}`,
     )
   }
+}
+
+export async function loadRealLLMSuiteInventory() {
+  return (
+    await Promise.all(
+      (["llm", "core", "deepagent-code", "desktop"] as const).map(async (packageName) => {
+        const payload: unknown = await Bun.file(path.join(repository, "packages", packageName, "package.json")).json()
+        if (!isRecord(payload) || !isRecord(payload.scripts)) {
+          throw new Error(`packages/${packageName}/package.json does not contain a scripts object`)
+        }
+        return Object.keys(payload.scripts)
+          .filter(
+            (script) =>
+              script.startsWith("test:llm-") &&
+              script !== "test:llm-routes" &&
+              script !== "test:llm-sandbox" &&
+              !script.startsWith("test:llm-det:"),
+          )
+          .map((script) => `${packageName}:${script}`)
+      }),
+    )
+  ).flat()
 }
 
 async function main() {

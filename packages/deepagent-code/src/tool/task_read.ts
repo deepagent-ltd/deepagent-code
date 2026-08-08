@@ -1,6 +1,9 @@
 import * as Tool from "./tool"
 import { Session } from "@/session/session"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
+import { Database } from "@deepagent-code/core/database/database"
+import { TaskRunTable } from "@deepagent-code/core/session/sql"
+import { and, desc, eq } from "drizzle-orm"
 import { Effect, Schema } from "effect"
 import type { SessionID } from "@/session/schema"
 
@@ -69,6 +72,7 @@ export const TaskReadTool = Tool.define(
   id,
   Effect.gen(function* () {
     const sessions = yield* Session.Service
+    const database = yield* Database.Service
 
     const run = Effect.fn("TaskReadTool.execute")(function* (
       params: Schema.Schema.Type<typeof Parameters>,
@@ -78,11 +82,9 @@ export const TaskReadTool = Tool.define(
       const limit = Math.min(params.limit ?? DEFAULT_LIMIT, MAX_LIMIT)
 
       // §4.5 security boundary: verify the requested session is a direct child of the calling session.
-      const child = yield* sessions.get(childSessionID).pipe(
-        Effect.catchCause(() =>
-          Effect.fail(new Error(`task_read: session not found: ${params.task_id}`)),
-        ),
-      )
+      const child = yield* sessions
+        .get(childSessionID)
+        .pipe(Effect.catchCause(() => Effect.fail(new Error(`task_read: session not found: ${params.task_id}`))))
       if (child.parentID !== ctx.sessionID) {
         return yield* Effect.fail(
           new Error(
@@ -94,11 +96,21 @@ export const TaskReadTool = Tool.define(
 
       // Session owns the database binding; using its page API avoids reading from an unrelated
       // ambient Database service when this tool is composed into a larger runtime Layer.
-      const result = yield* sessions.messagesPage({
-        sessionID: childSessionID,
-        limit,
-        before: params.before,
-      }).pipe(Effect.catchCause(() => Effect.succeed({ items: [] as SessionV1.WithParts[], more: false, cursor: undefined as string | undefined })))
+      const result = yield* sessions
+        .messagesPage({
+          sessionID: childSessionID,
+          limit,
+          before: params.before,
+        })
+        .pipe(
+          Effect.catchCause(() =>
+            Effect.succeed({
+              items: [] as SessionV1.WithParts[],
+              more: false,
+              cursor: undefined as string | undefined,
+            }),
+          ),
+        )
       const page = result.items
       const nextCursor: string | undefined = result.cursor
       // A cursor is the only valid continuation token. Never advertise another page when a
@@ -106,13 +118,24 @@ export const TaskReadTool = Tool.define(
       // and restart from the newest messages.
       const hasMore = result.more && nextCursor !== undefined
 
-      // Read durable state from metadata.
+      const latestRun = yield* database.db
+        .select({ state: TaskRunTable.state, generation: TaskRunTable.generation })
+        .from(TaskRunTable)
+        .where(
+          and(eq(TaskRunTable.child_session_id, childSessionID), eq(TaskRunTable.parent_session_id, ctx.sessionID)),
+        )
+        .orderBy(desc(TaskRunTable.generation))
+        .get()
+        .pipe(Effect.orDie)
+
+      // Read durable state from task_run; metadata is only a legacy fallback.
       const deepagent = child.metadata?.["deepagent"] as Record<string, unknown> | undefined
       const subagent = deepagent?.["subagent"] as Record<string, unknown> | undefined
-      const durableState = subagent
-        ? (subagent["state"] as string | undefined) ??
-          (subagent["finished"] === true ? "completed" : "unknown")
-        : "running"
+      const durableState = latestRun
+        ? latestRun.state
+        : subagent
+          ? ((subagent["state"] as string | undefined) ?? (subagent["finished"] === true ? "completed" : "unknown"))
+          : "running"
 
       // Format transcript lines.
       const lines: string[] = []
@@ -162,6 +185,10 @@ export const TaskReadTool = Tool.define(
         hasMore && nextCursor
           ? `\n[Truncated. Older messages available. Call task_read({ task_id: "${childSessionID}", before: "${nextCursor}" }) for the previous page.]`
           : ""
+      const recoveryHint =
+        durableState === "recovery_required"
+          ? `\n[Recovery resolution required for generation ${latestRun?.generation ?? "?"}. The old run cannot continue. After explicit user approval, call task_recovery with resolution "failed" or "closed"; to continue afterward, invoke task with the same task_id.]`
+          : ""
 
       return {
         title: `Task transcript: ${child.title ?? childSessionID}`,
@@ -172,7 +199,7 @@ export const TaskReadTool = Tool.define(
           hasMore,
           ...(nextCursor !== undefined ? { before: nextCursor } : {}),
         },
-        output: transcript + paginationHint,
+        output: transcript + paginationHint + recoveryHint,
       }
     })
 
@@ -180,7 +207,9 @@ export const TaskReadTool = Tool.define(
       description: DESCRIPTION,
       parameters: Parameters,
       execute: (params: Schema.Schema.Type<typeof Parameters>, ctx: Tool.Context) =>
-        run(params, ctx).pipe(Effect.catchCause((cause) => Effect.die(cause))) as unknown as Effect.Effect<Tool.ExecuteResult>,
+        run(params, ctx).pipe(
+          Effect.catchCause((cause) => Effect.die(cause)),
+        ) as unknown as Effect.Effect<Tool.ExecuteResult>,
     }
   }),
 )

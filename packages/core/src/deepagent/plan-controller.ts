@@ -9,7 +9,7 @@
 // (new user message, tool failure, validation failure, no-progress fingerprint, pack change) — it
 // does NOT trust the model to report that it deviated. That is what makes the gate robust on MoE
 // models whose self-reporting is unreliable.
-import { randomUUID } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import type { AgentMode } from "./mode"
 import { classifyCommand } from "./command-intent"
 
@@ -56,6 +56,10 @@ export type PlanDoc = {
   readonly steps: readonly PlanStep[]
   // null in P0 (coarse-grained latch only); U9 makes it authoritative for high+ per-step binding.
   readonly active_step_id: string | null
+  /** The reason for the most recent explicit replan, retained for progress identity. */
+  readonly replan_reason?: string | null
+  /** Server-generated human plan-edit activity that produced this exact version, if any. */
+  readonly last_write_activity_id?: string | null
   readonly created_at: string
 }
 
@@ -198,6 +202,399 @@ const STATUS_ALIASES: Record<string, PlanStepStatus> = {
   skipped: "cancelled",
   stuck: "blocked",
 }
+
+export type PlanWriteOperation = "create" | "advance" | "replan"
+export type PlanWriteOrigin = "model_tool" | "human_goal_edit" | "runtime_goal_bridge" | "legacy_migration"
+export type PlanWriteStatus = PlanStepStatus | keyof typeof STATUS_ALIASES
+
+export type PlanWriteInput = {
+  readonly operation: PlanWriteOperation
+  readonly expected_plan_id: string | null
+  readonly expected_version: number | null
+  readonly replan_reason?: string
+  readonly goal: string
+  readonly assumptions?: readonly string[]
+  readonly steps: readonly {
+    readonly step_id?: string
+    readonly title: string
+    readonly status: PlanWriteStatus
+    readonly acceptance?: string | null
+    readonly assigned_agent?: string | null
+    readonly note?: string | null
+  }[]
+  readonly active_step_id: string | null
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+
+/** Decode a persisted or otherwise untrusted strict plan-write envelope. */
+export const decodePlanWriteInput = (value: unknown): PlanWriteInput | null => {
+  if (!isRecord(value)) return null
+  if (!(value.operation === "create" || value.operation === "advance" || value.operation === "replan")) return null
+  if (!(value.expected_plan_id === null || typeof value.expected_plan_id === "string")) return null
+  if (
+    !(
+      value.expected_version === null ||
+      (typeof value.expected_version === "number" &&
+        Number.isSafeInteger(value.expected_version) &&
+        value.expected_version >= 0)
+    )
+  )
+    return null
+  if (typeof value.goal !== "string" || !Array.isArray(value.steps)) return null
+  if (!(value.active_step_id === null || typeof value.active_step_id === "string")) return null
+  if (value.replan_reason !== undefined && typeof value.replan_reason !== "string") return null
+  if (
+    value.assumptions !== undefined &&
+    (!Array.isArray(value.assumptions) || value.assumptions.some((item) => typeof item !== "string"))
+  ) {
+    return null
+  }
+  const steps = value.steps.map((step) => {
+    if (!isRecord(step) || typeof step.title !== "string" || typeof step.status !== "string") return null
+    if (step.step_id !== undefined && typeof step.step_id !== "string") return null
+    if (step.acceptance !== undefined && step.acceptance !== null && typeof step.acceptance !== "string") return null
+    if (step.assigned_agent !== undefined && step.assigned_agent !== null && typeof step.assigned_agent !== "string")
+      return null
+    if (step.note !== undefined && step.note !== null && typeof step.note !== "string") return null
+    return {
+      ...(typeof step.step_id === "string" ? { step_id: step.step_id } : {}),
+      title: step.title,
+      status: step.status as PlanWriteStatus,
+      ...(step.acceptance !== undefined ? { acceptance: step.acceptance as string | null } : {}),
+      ...(step.assigned_agent !== undefined ? { assigned_agent: step.assigned_agent as string | null } : {}),
+      ...(step.note !== undefined ? { note: step.note as string | null } : {}),
+    }
+  })
+  if (steps.some((step) => step == null)) return null
+  return {
+    operation: value.operation,
+    expected_plan_id: value.expected_plan_id,
+    expected_version: value.expected_version,
+    ...(typeof value.replan_reason === "string" ? { replan_reason: value.replan_reason } : {}),
+    goal: value.goal,
+    ...(Array.isArray(value.assumptions) ? { assumptions: value.assumptions as string[] } : {}),
+    steps: steps.filter((step): step is NonNullable<typeof step> => step != null),
+    active_step_id: value.active_step_id,
+  }
+}
+
+export type PlanValidationCode =
+  | "invalid_operation"
+  | "invalid_precondition"
+  | "plan_already_exists"
+  | "plan_missing"
+  | "replan_reason_required"
+  | "invalid_replan_reason"
+  | "empty_goal"
+  | "empty_steps"
+  | "empty_title"
+  | "invalid_status"
+  | "duplicate_step_id"
+  | "invalid_active_step"
+  | "multiple_active_steps"
+  | "blocked_without_note"
+  | "unsafe_step_identity"
+  | "suspicious_quality_regression"
+
+export class PlanValidationError extends Error {
+  readonly _tag = "PlanValidationError"
+  override readonly name = "PlanValidationError"
+
+  constructor(
+    readonly code: PlanValidationCode,
+    readonly offending_step_ids: readonly string[] = [],
+    readonly previous_plan_id: string | null = null,
+    readonly previous_plan_version: number | null = null,
+    readonly attempt_ordinal = 0,
+    readonly candidate_hash?: string,
+    readonly challenge_id?: string,
+  ) {
+    super(`Plan validation failed: ${code}`)
+  }
+}
+
+export type PlanExpected = { readonly plan_id: string; readonly doc_id: string; readonly version: number }
+export type PlanActual = { readonly plan_id: string; readonly doc_id: string; readonly version: number } | null
+
+export class PlanConflictError extends Error {
+  readonly _tag = "PlanConflictError"
+  override readonly name = "PlanConflictError"
+
+  constructor(
+    readonly expected: PlanExpected | null,
+    readonly actual: PlanActual,
+  ) {
+    super("Plan compare-and-commit precondition did not match the authoritative version")
+  }
+}
+
+const normalizeStatus = (status: string): PlanStepStatus | undefined => {
+  const normalized = status.trim().toLowerCase()
+  if (STEP_STATUSES.has(normalized as PlanStepStatus)) return normalized as PlanStepStatus
+  return STATUS_ALIASES[normalized]
+}
+
+const normalizedText = (value: string | null | undefined): string => (value ?? "").trim()
+
+const planTextSize = (plan: PlanDoc): number =>
+  plan.steps.reduce(
+    (total, step) => total + [...normalizedText(step.title)].length + [...normalizedText(step.acceptance)].length,
+    0,
+  )
+
+const unresolved = (step: PlanStep): boolean => step.status === "pending" || step.status === "active"
+
+const hasSameIdentity = (left: PlanStep, right: PlanStep): boolean =>
+  normalizedText(left.title) === normalizedText(right.title) &&
+  normalizedText(left.acceptance) === normalizedText(right.acceptance)
+
+export const planWriteCandidateHash = (input: PlanWriteInput): string =>
+  `sha256:${createHash("sha256")
+    .update(
+      JSON.stringify({
+        operation: input.operation,
+        expected_plan_id: input.expected_plan_id,
+        expected_version: input.expected_version,
+        replan_reason: normalizedText(input.replan_reason),
+        goal: normalizedText(input.goal),
+        assumptions: (input.assumptions ?? []).map(normalizedText),
+        active_step_id: input.active_step_id,
+        steps: input.steps.map((step) => ({
+          step_id: normalizedText(step.step_id) || null,
+          title: normalizedText(step.title),
+          status: normalizedText(step.status).toLowerCase(),
+          acceptance: normalizedText(step.acceptance) || null,
+          assigned_agent: normalizedText(step.assigned_agent) || null,
+          note: normalizedText(step.note) || null,
+        })),
+      }),
+    )
+    .digest("hex")}`
+
+const qualityRegression = (previous: PlanDoc, candidate: PlanDoc): boolean => {
+  const previousUnresolved = previous.steps.filter(unresolved)
+  const candidateUnresolved = candidate.steps.filter(unresolved)
+  const previousChars = planTextSize(previous)
+  const candidateChars = planTextSize(candidate)
+  const previousAcceptanceSteps = previousUnresolved.filter((step) => normalizedText(step.acceptance) !== "")
+  const candidateAcceptanceSteps = candidateUnresolved.filter((step) => normalizedText(step.acceptance) !== "")
+  const candidateById = new Map(candidateUnresolved.map((step) => [step.step_id, step] as const))
+  const preservesAcceptanceIdentity = previousAcceptanceSteps.some((step) => {
+    const next = candidateById.get(step.step_id)
+    return next != null && hasSameIdentity(step, next)
+  })
+
+  if (previous.steps.length >= 2 && candidate.steps.length <= Math.floor(previous.steps.length / 2)) {
+    if (candidateChars * 2 < previousChars) return true
+  }
+  if (previousAcceptanceSteps.length >= 2 && candidateAcceptanceSteps.length === 0 && !preservesAcceptanceIdentity)
+    return true
+  if (
+    previousUnresolved.length >= 2 &&
+    candidateUnresolved.every((step) => !previous.steps.some((prior) => prior.step_id === step.step_id))
+  ) {
+    if (candidate.steps.reduce((total, step) => total + [...normalizedText(step.title)].length, 0) < 16) return true
+  }
+  return false
+}
+
+export const planProgressFingerprint = (plan: PlanDoc): string =>
+  JSON.stringify({
+    plan_id: plan.plan_id,
+    goal: normalizedText(plan.goal),
+    assumptions: plan.assumptions.map(normalizedText),
+    replan_reason: normalizedText(plan.replan_reason),
+    last_write_activity_id: plan.last_write_activity_id ?? null,
+    active_step_id: plan.active_step_id,
+    steps: plan.steps.map((step) => ({
+      step_id: step.step_id,
+      title: normalizedText(step.title),
+      acceptance: normalizedText(step.acceptance),
+      assigned_agent: normalizedText(step.assigned_agent),
+      status: step.status,
+      note: normalizedText(step.note),
+      evidence: [...(step.evidence ?? [])],
+    })),
+  })
+
+const requireExpected = (input: PlanWriteInput, previous: PlanDoc | null, ref: PlanExpected | null): void => {
+  if (input.operation === "create") {
+    if (input.expected_plan_id !== null || input.expected_version !== null) {
+      throw new PlanValidationError("invalid_precondition", [], previous?.plan_id ?? null, ref?.version ?? null)
+    }
+    if (previous != null)
+      throw new PlanValidationError("plan_already_exists", [], previous.plan_id, ref?.version ?? null)
+    return
+  }
+  if (previous == null || ref == null) {
+    throw new PlanValidationError("plan_missing")
+  }
+  if (
+    input.expected_plan_id !== previous.plan_id ||
+    input.expected_version !== ref.version ||
+    input.expected_plan_id == null ||
+    input.expected_version == null
+  ) {
+    throw new PlanConflictError(
+      input.expected_plan_id != null && input.expected_version != null
+        ? { plan_id: input.expected_plan_id, doc_id: ref.doc_id, version: input.expected_version }
+        : null,
+      { plan_id: previous.plan_id, doc_id: ref.doc_id, version: ref.version },
+    )
+  }
+}
+
+export const buildPlanFromWriteInput = (
+  sessionId: string,
+  input: PlanWriteInput,
+  previous: PlanDoc | null,
+  ref: PlanExpected | null,
+  options: { readonly allowQualityRegression?: boolean } = {},
+): PlanDoc => {
+  if (!("create" === input.operation || "advance" === input.operation || "replan" === input.operation)) {
+    throw new PlanValidationError("invalid_operation")
+  }
+  requireExpected(input, previous, ref)
+  if (normalizedText(input.goal) === "")
+    throw new PlanValidationError("empty_goal", [], previous?.plan_id ?? null, ref?.version ?? null)
+  if (input.steps.length === 0)
+    throw new PlanValidationError("empty_steps", [], previous?.plan_id ?? null, ref?.version ?? null)
+  if (input.operation === "replan") {
+    const reason = normalizedText(input.replan_reason)
+    if (reason === "")
+      throw new PlanValidationError("replan_reason_required", [], previous?.plan_id ?? null, ref?.version ?? null)
+    if ([...reason].length > 512)
+      throw new PlanValidationError("invalid_replan_reason", [], previous?.plan_id ?? null, ref?.version ?? null)
+  }
+
+  const priorById = new Map((previous?.steps ?? []).map((step) => [step.step_id, step] as const))
+  if (input.operation === "advance" && previous != null) {
+    const previousIds = previous.steps.map((step) => step.step_id)
+    const suppliedIds = input.steps.map((step) => normalizedText(step.step_id))
+    const suppliedAssumptions = (input.assumptions ?? previous.assumptions).map((value) => value.trim())
+    if (
+      suppliedIds.length !== previousIds.length ||
+      suppliedIds.some((stepID, index) => stepID === "" || stepID !== previousIds[index]) ||
+      normalizedText(input.goal) !== normalizedText(previous.goal) ||
+      JSON.stringify(suppliedAssumptions) !== JSON.stringify(previous.assumptions.map((value) => value.trim()))
+    ) {
+      throw new PlanValidationError(
+        "unsafe_step_identity",
+        suppliedIds.filter(Boolean),
+        previous.plan_id,
+        ref?.version ?? null,
+      )
+    }
+  }
+  const used = new Set<string>()
+  const steps = input.steps.map((step) => {
+    if (normalizedText(step.title) === "") {
+      throw new PlanValidationError("empty_title", [], previous?.plan_id ?? null, ref?.version ?? null)
+    }
+    const status = normalizeStatus(step.status)
+    if (!status) throw new PlanValidationError("invalid_status", [], previous?.plan_id ?? null, ref?.version ?? null)
+    const suppliedID = normalizedText(step.step_id)
+    if (input.operation === "advance" && suppliedID === "") {
+      throw new PlanValidationError("unsafe_step_identity", [], previous?.plan_id ?? null, ref?.version ?? null)
+    }
+    const stepID = suppliedID || `step_${randomUUID()}`
+    if (used.has(stepID))
+      throw new PlanValidationError("duplicate_step_id", [stepID], previous?.plan_id ?? null, ref?.version ?? null)
+    used.add(stepID)
+    const prior = priorById.get(stepID)
+    if (input.operation === "advance" && prior == null) {
+      throw new PlanValidationError("unsafe_step_identity", [stepID], previous?.plan_id ?? null, ref?.version ?? null)
+    }
+    if (input.operation === "advance" && prior != null) {
+      if (
+        normalizedText(prior.title) !== normalizedText(step.title) ||
+        normalizedText(prior.acceptance) !== normalizedText(step.acceptance) ||
+        normalizedText(prior.assigned_agent) !== normalizedText(step.assigned_agent)
+      ) {
+        throw new PlanValidationError("unsafe_step_identity", [stepID], previous?.plan_id ?? null, ref?.version ?? null)
+      }
+    }
+    if (
+      input.operation === "replan" &&
+      prior != null &&
+      suppliedID !== "" &&
+      (normalizedText(prior.title) !== normalizedText(step.title) ||
+        normalizedText(prior.acceptance) !== normalizedText(step.acceptance) ||
+        normalizedText(prior.assigned_agent) !== normalizedText(step.assigned_agent))
+    ) {
+      throw new PlanValidationError("unsafe_step_identity", [stepID], previous?.plan_id ?? null, ref?.version ?? null)
+    }
+    const sameIdentity = prior != null && hasSameIdentity(prior, { ...step, step_id: stepID, status })
+    return {
+      step_id: stepID,
+      title: normalizedText(step.title),
+      status,
+      acceptance: normalizedText(step.acceptance) || null,
+      assigned_agent: normalizedText(step.assigned_agent) || null,
+      evidence: sameIdentity ? [...(prior.evidence ?? [])] : [],
+      note: normalizedText(step.note) || null,
+    }
+  })
+  const active = steps.filter((step) => step.status === "active")
+  if (active.length > 1)
+    throw new PlanValidationError(
+      "multiple_active_steps",
+      active.map((step) => step.step_id),
+    )
+  if (input.active_step_id !== null && !used.has(input.active_step_id)) {
+    throw new PlanValidationError("invalid_active_step", [input.active_step_id])
+  }
+  if (
+    (input.active_step_id === null && active.length > 0) ||
+    (input.active_step_id !== null && active[0]?.step_id !== input.active_step_id)
+  ) {
+    throw new PlanValidationError(
+      "invalid_active_step",
+      input.active_step_id ? [input.active_step_id] : active.map((step) => step.step_id),
+    )
+  }
+  const blocked = steps.filter((step) => step.status === "blocked" && normalizedText(step.note) === "")
+  if (blocked.length > 0)
+    throw new PlanValidationError(
+      "blocked_without_note",
+      blocked.map((step) => step.step_id),
+    )
+
+  const candidate: PlanDoc = {
+    plan_id: previous?.plan_id ?? `plan_${randomUUID()}`,
+    session_id: sessionId,
+    goal: normalizedText(input.goal),
+    assumptions: (input.assumptions ?? (input.operation === "advance" ? previous?.assumptions : []) ?? []).map(
+      (value) => value.trim(),
+    ),
+    steps,
+    active_step_id: input.active_step_id,
+    replan_reason:
+      input.operation === "replan" ? normalizedText(input.replan_reason) : (previous?.replan_reason ?? null),
+    last_write_activity_id: null,
+    created_at: previous?.created_at ?? new Date().toISOString(),
+  }
+  if (
+    input.operation === "replan" &&
+    previous != null &&
+    !options.allowQualityRegression &&
+    qualityRegression(previous, candidate)
+  ) {
+    throw new PlanValidationError(
+      "suspicious_quality_regression",
+      candidate.steps.map((step) => step.step_id),
+      previous.plan_id,
+      ref?.version ?? null,
+      0,
+      planWriteCandidateHash(input),
+      randomUUID(),
+    )
+  }
+  return candidate
+}
+
 const normStatus = (s: string | undefined): PlanStepStatus => {
   const status = s?.trim().toLowerCase()
   if (!status) return "pending"
@@ -365,14 +762,17 @@ export const formatStepChange = (c: StepStatusChange): string =>
   c.from === null ? `${c.title}: →${c.to}` : `${c.title}: ${c.from}→${c.to}`
 
 // Compact, constant-size plan snapshot re-injected into context each turn (high+ only) so the model
-// can SEE its own checklist and report against it. One line per step; goal + progress header. We
-// deliberately omit acceptance/assumptions/evidence to keep this small (it is re-injected every
-// turn, so it must not grow with history).
-export const renderPlanSnapshot = (plan: PlanDoc): string => {
+// can SEE its own checklist and report against it. One line per step; the full form includes goal +
+// progress, while tool continuations omit the already-adjacent goal. We deliberately omit
+// acceptance/assumptions/evidence so it cannot grow with history.
+export const renderPlanSnapshot = (plan: PlanDoc, detail: "full" | "continuation" = "full"): string => {
   const { done, total } = planProgress(plan)
   const active = plan.steps.find((s) => s.step_id === plan.active_step_id) ?? null
   const lines = plan.steps.map((s) => `[${STATUS_MARK[s.status]}] ${s.title}`)
-  const header = `Current plan (${done}/${total} done) — goal: ${plan.goal}`
+  const header =
+    detail === "continuation"
+      ? `Current plan (${done}/${total} done)`
+      : `Current plan (${done}/${total} done) — goal: ${plan.goal}`
   const activeLine = active ? `Active step: ${active.title}` : "No step is marked active."
   return `${header}\n${lines.join("\n")}\n${activeLine}`
 }
@@ -460,5 +860,3 @@ export const attachEvidenceToNewlyDone = (
   })
   return changed ? { ...next, steps } : next
 }
-
-

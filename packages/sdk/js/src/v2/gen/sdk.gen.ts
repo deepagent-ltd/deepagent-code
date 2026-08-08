@@ -401,6 +401,8 @@ import type {
   SessionMessageResponses,
   SessionMessagesErrors,
   SessionMessagesResponses,
+  SessionPlanErrors,
+  SessionPlanResponses,
   SessionPromptAsyncErrors,
   SessionPromptAsyncResponses,
   SessionPromptErrors,
@@ -7314,6 +7316,38 @@ export class Session2 extends HeyApiClient {
   }
 
   /**
+   * Get session plan
+   *
+   * Retrieve the versioned durable plan snapshot for a session.
+   */
+  public plan<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<SessionPlanResponses, SessionPlanErrors, ThrowOnError>({
+      url: "/session/{sessionID}/plan",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
    * Get message diff
    *
    * Get the file changes (diff) that resulted from a specific user message in the session.
@@ -7394,6 +7428,9 @@ export class Session2 extends HeyApiClient {
       directory?: string
       workspace?: string
       messageID?: string
+      intentID?: string
+      intentSource?: "composer" | "intelligence" | "followup" | "rewrite"
+      intentVariant?: "original" | "rewritten"
       model?: {
         providerID: string
         modelID: string
@@ -7422,6 +7459,9 @@ export class Session2 extends HeyApiClient {
             { in: "query", key: "directory" },
             { in: "query", key: "workspace" },
             { in: "body", key: "messageID" },
+            { in: "body", key: "intentID" },
+            { in: "body", key: "intentSource" },
+            { in: "body", key: "intentVariant" },
             { in: "body", key: "model" },
             { in: "body", key: "agent" },
             { in: "body", key: "noReply" },
@@ -7764,6 +7804,8 @@ export class Session2 extends HeyApiClient {
       workspace?: string
       mode: "wish" | "intelligence"
       output_language?: "chinese" | "english"
+      intent_id?: string
+      intent_source?: "composer" | "intelligence" | "followup" | "rewrite"
       parts: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
     },
     options?: Options<never, ThrowOnError>,
@@ -7778,6 +7820,8 @@ export class Session2 extends HeyApiClient {
             { in: "query", key: "workspace" },
             { in: "body", key: "mode" },
             { in: "body", key: "output_language" },
+            { in: "body", key: "intent_id" },
+            { in: "body", key: "intent_source" },
             { in: "body", key: "parts" },
           ],
         },
@@ -7811,6 +7855,8 @@ export class Session2 extends HeyApiClient {
       workspace?: string
       mode: "wish" | "intelligence"
       output_language?: "chinese" | "english"
+      intent_id?: string
+      intent_source?: "composer" | "intelligence" | "followup" | "rewrite"
       parts: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
     },
     options?: Options<never, ThrowOnError>,
@@ -7825,6 +7871,8 @@ export class Session2 extends HeyApiClient {
             { in: "query", key: "workspace" },
             { in: "body", key: "mode" },
             { in: "body", key: "output_language" },
+            { in: "body", key: "intent_id" },
+            { in: "body", key: "intent_source" },
             { in: "body", key: "parts" },
           ],
         },
@@ -7885,7 +7933,7 @@ export class Session2 extends HeyApiClient {
   /**
    * Send async message
    *
-   * Create and send a new message to a session asynchronously, starting the session if needed and returning immediately.
+   * Durably admit a new message or steer, start session execution if needed, and return without waiting for model completion.
    */
   public promptAsync<ThrowOnError extends boolean = false>(
     parameters: {
@@ -7893,6 +7941,9 @@ export class Session2 extends HeyApiClient {
       directory?: string
       workspace?: string
       messageID?: string
+      intentID?: string
+      intentSource?: "composer" | "intelligence" | "followup" | "rewrite"
+      intentVariant?: "original" | "rewritten"
       model?: {
         providerID: string
         modelID: string
@@ -7921,6 +7972,9 @@ export class Session2 extends HeyApiClient {
             { in: "query", key: "directory" },
             { in: "query", key: "workspace" },
             { in: "body", key: "messageID" },
+            { in: "body", key: "intentID" },
+            { in: "body", key: "intentSource" },
+            { in: "body", key: "intentVariant" },
             { in: "body", key: "model" },
             { in: "body", key: "agent" },
             { in: "body", key: "noReply" },

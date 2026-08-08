@@ -1710,6 +1710,8 @@ export const layer = Layer.effect(
               },
               options: mergeDeep(existingModel?.options ?? {}, model.options ?? {}),
               limit: {
+                // BUG-007: unknown context stays 0 for the wire type (overflow.ts recognises 0 as
+                // "context_limit_unknown" and returns phase:"unavailable" instead of phase:"ok").
                 context: model.limit?.context ?? existingModel?.limit?.context ?? catalogModel?.limit.context ?? 0,
                 input: model.limit?.input ?? existingModel?.limit?.input ?? catalogModel?.limit.input,
                 output: model.limit?.output ?? existingModel?.limit?.output ?? catalogModel?.limit.output ?? 0,

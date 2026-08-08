@@ -1,15 +1,18 @@
 import { Effect, Schema } from "effect"
+import type { ValidationResult } from "./round-state"
 import { randomUUID } from "node:crypto"
 import type { DocumentStore } from "./document-store"
 import {
   type PlanDoc,
-  type PlanInput,
   type PlanStep,
   buildCompletionReport,
-  buildPlanFromInput,
+  buildPlanFromWriteInput,
   hasBlockedSteps,
+  planProgressFingerprint,
   planScope,
 } from "./plan-controller"
+import { type PlanEditCommand, PlanEditTargetUnavailableError } from "./plan-edit-protocol"
+import { compareAndCommitPlanDocument, decodePlanDoc } from "./plan-store"
 
 // V3.9 §D — Goal Loop（自主长跑原语）. A supervised, cross-tick control loop: given an OBJECTIVELY
 // decidable completion criterion, the loop drives 计划→执行→验证→迭代 until the criteria are met or a
@@ -153,7 +156,9 @@ export class InvalidGoalError extends Schema.TaggedErrorClass<InvalidGoalError>(
  */
 export type GraderPorts = {
   /** Run the given validation commands; `pass` iff ALL succeeded. */
-  readonly runTests: (commands: readonly string[]) => Effect.Effect<{ readonly pass: boolean }>
+  readonly runTests: (
+    commands: readonly string[],
+  ) => Effect.Effect<{ readonly pass: boolean; readonly results?: readonly ValidationResult[] }>
   /**
    * Highest diagnostic severity currently present, or null when there are none. `checked` MUST be false
    * when the port could not actually compute diagnostics (LSP crashed/timed out, no client covered the
@@ -197,7 +202,10 @@ const evaluateOne = (
   Effect.gen(function* () {
     switch (criterion.kind) {
       case "tests_pass": {
-        const { pass } = yield* ports.runTests(criterion.commands)
+        const { pass, results } = yield* ports.runTests(criterion.commands)
+        const runnerFailure = results?.find((result) => result.kind !== "command_exit")
+        if (runnerFailure)
+          return `tests_pass: validation runner failed (${runnerFailure.kind}) for [${runnerFailure.command}]`
         return pass ? null : `tests_pass: one or more of [${criterion.commands.join(", ")}] failed`
       }
       case "no_diagnostics": {
@@ -442,14 +450,10 @@ const stateSlug = (goalId: string): string => `goal-state-${goalId}`
 
 // The plan doc body is the JSON-serialized PlanDoc (the goal carrier). Parse defensively — a malformed
 // / absent body yields null so plan_complete reports a gap rather than crashing the loop.
-const readPlan = (store: DocumentStore, planDocId: string): { plan: PlanDoc | null; version: number } => {
-  const doc = store.get(planDocId)
+const readPlan = (store: DocumentStore, planDocId: string, version?: number): { plan: PlanDoc | null; version: number } => {
+  const doc = store.get(planDocId, version)
   if (!doc) return { plan: null, version: 0 }
-  try {
-    return { plan: JSON.parse(doc.body) as PlanDoc, version: doc.version }
-  } catch {
-    return { plan: null, version: doc.version }
-  }
+  return { plan: decodePlanDoc(doc.body), version: doc.version }
 }
 
 // Step-status fingerprint drives no-progress / stall detection (independent of the doc version used
@@ -512,50 +516,6 @@ const loadState = (deps: ControllerDeps, handle: GoalHandle): GoalRuntimeState |
         lastDeliveredFeedback: parsed.lastDeliveredFeedback ?? [],
         budgetTokenScope: parsed.budgetTokenScope ?? "gross",
       }
-    } catch {
-      return null
-    }
-  }
-  return null
-}
-
-// V4.1 cross-process cold recovery — a durable home for a PENDING USER PLAN EDIT so the event-driven
-// GoalTickConsumer (which may run on a cold fiber with no in-memory control map) can pick it up. The
-// in-process driver historically kept the pending PlanInput ONLY in the goal-manager `controls` map;
-// that is invisible to a cold consumer. We persist it as a `run_context` doc under the SAME store, but
-// DELIBERATELY WITHOUT the `goal_id` extension (which `loadState` matches on at line ~434) — instead we
-// mark it with `pending_edit_goal_id`, so `loadState` skips it (its goal_id is undefined ≠ the handle's)
-// and never tries to parse a PlanInput as GoalRuntimeState. An empty body is the "no pending edit"
-// sentinel (there is no doc delete API). The consumer reads it via its own fresh store handle; the
-// content-equality clear in markPlanEditConsumed preserves a newer edit written between read and clear.
-const pendingEditSlug = (goalId: string): string => `goal-pending-edit-${goalId}`
-
-export const persistPendingPlanEdit = (
-  store: DocumentStore,
-  sessionId: string,
-  goalId: string,
-  plan: PlanInput | null,
-): void => {
-  store.upsert({
-    type: "run_context",
-    scope: planScope(sessionId),
-    description: `goal pending plan edit ${goalId}`,
-    idSlug: pendingEditSlug(goalId),
-    body: plan == null ? "" : JSON.stringify(plan),
-    provenance: { source: "runner", run_ref: planScope(sessionId) },
-    // NOTE: pending_edit_goal_id, NOT goal_id — keeps loadState() from ever matching this doc.
-    extensions: { pending_edit_goal_id: goalId },
-  })
-}
-
-export const readPendingPlanEdit = (store: DocumentStore, sessionId: string, goalId: string): PlanInput | null => {
-  for (const ref of store.list({ type: "run_context", scope: planScope(sessionId) })) {
-    const doc = store.get(ref.id)
-    if (!doc) continue
-    if (doc.extensions?.pending_edit_goal_id !== goalId) continue
-    if (!doc.body.trim()) return null // sentinel: consumed / never set
-    try {
-      return JSON.parse(doc.body) as PlanInput
     } catch {
       return null
     }
@@ -758,7 +718,10 @@ export interface GoalLoop {
    *      re-baseline gives the revision a fresh runway.
    * No-op when no persisted state exists for the handle (goal not started / already gone).
    */
-  readonly applyPlanEdit: (handle: GoalHandle, edit: PlanInput) => Effect.Effect<void>
+  readonly applyPlanEdit: (
+    handle: GoalHandle,
+    command: PlanEditCommand,
+  ) => Effect.Effect<{ readonly plan_id: string; readonly doc_id: string; readonly version: number; readonly changed: boolean }, unknown>
 }
 
 // §D.4 start validation — HARD, no defaults that bypass. criteria empty → not objectively decidable;
@@ -1060,48 +1023,78 @@ export const makeGoalLoop = (deps: ControllerDeps): GoalLoop => {
       persistState(deps, { ...state, phase: "stopped", lastOutcome: state.lastOutcome })
     })
 
-  const applyPlanEdit: GoalLoop["applyPlanEdit"] = (handle, edit) =>
-    Effect.sync(() => {
+  const applyPlanEdit: GoalLoop["applyPlanEdit"] = (handle, command) =>
+    Effect.try({
+      try: () => {
       const state = loadState(deps, handle)
-      // No persisted state (goal not started / gone), or already terminal → nothing to edit/re-baseline.
-      if (state == null || isTerminalPhase(state.phase)) return
-      // Reconcile the user's revision against the CURRENT durable plan (via this driver's own store
-      // handle) so step ids + accumulated evidence are PRESERVED across the rewrite (buildPlanFromInput
-      // matches revised steps to prior steps by id). Reading `previous` here — not in the HTTP fiber —
-      // is why evidence isn't lost: the driver's handle holds the up-to-date doc incl. the last tick's
-      // mirrored-back progress.
+      if (state == null) throw new PlanEditTargetUnavailableError("goal state not found")
+      if (isTerminalPhase(state.phase)) throw new PlanEditTargetUnavailableError(`goal is ${state.phase}`)
+      if (command.session_id !== handle.sessionId || command.goal_id !== handle.goalId) {
+        throw new PlanEditTargetUnavailableError("command identity does not match the goal handle")
+      }
+
+      const expectedVersion = command.plan_write.expected_version
+      if (expectedVersion != null) {
+        const recovered = readPlan(deps.store, state.planDocId, expectedVersion + 1)
+        if (recovered.plan?.last_write_activity_id === command.activity_id) {
+          const current = readPlan(deps.store, state.planDocId)
+          if (current.plan == null) throw new PlanEditTargetUnavailableError("authoritative plan is malformed")
+          persistPlanEditBaseline(deps, state, current.plan)
+          return {
+            plan_id: recovered.plan.plan_id,
+            doc_id: state.planDocId,
+            version: recovered.version,
+            changed: true,
+          }
+        }
+      }
+
       const existing = deps.store.get(state.planDocId)
-      // The goal's plan doc must already exist (start materialized it). If it is somehow gone, do NOT
-      // fabricate an orphan under a fresh id — a re-baseline against a doc the tick can't read would be
-      // silent data loss. Bail (no-op) so the caller's ok:true never lies about a lost edit.
-      if (existing == null) return
+      if (existing == null) throw new PlanEditTargetUnavailableError("authoritative plan document not found")
       const previous = readPlan(deps.store, state.planDocId).plan
-      const editedPlan = buildPlanFromInput(state.sessionId, edit, previous)
-      // 1) Write the edited plan back to THE SAME durable doc by id (version+1), so the next tick's
-      //    readPlan(state.planDocId) sees the revision. Writing by id — not upsert-by-logical-key —
-      //    avoids the description/idSlug matching that would otherwise mint an orphan doc (upsert's
-      //    findLogical keys on description, which need not equal the doc materialize() wrote). A
-      //    fingerprint-identical edit is a no-op (updateWithProvenance returns cur unchanged, INV-4).
-      //    provenance.source="human" records the human-authored revision (vs the model's plan-tool edits).
-      deps.store.updateWithProvenance(state.planDocId, JSON.stringify(editedPlan), {
-        source: "human",
-        run_ref: planScope(state.sessionId),
+      if (previous == null) throw new PlanEditTargetUnavailableError("authoritative plan is malformed")
+      const editedPlan = buildPlanFromWriteInput(
+        state.sessionId,
+        command.plan_write,
+        previous,
+        { plan_id: previous.plan_id, doc_id: existing.id, version: existing.version },
+        { allowQualityRegression: command.confirmed_challenge_id != null },
+      )
+      if (
+        planProgressFingerprint({ ...editedPlan, last_write_activity_id: null }) ===
+        planProgressFingerprint({ ...previous, last_write_activity_id: null })
+      ) {
+        persistPlanEditBaseline(deps, state, previous)
+        return { plan_id: previous.plan_id, doc_id: existing.id, version: existing.version, changed: false }
+      }
+      const committed = compareAndCommitPlanDocument(deps.store, {
+        sessionId: state.sessionId,
+        expected: {
+          plan_id: command.plan_write.expected_plan_id ?? previous.plan_id,
+          doc_id: existing.id,
+          version: command.plan_write.expected_version ?? existing.version,
+        },
+        candidate: { ...editedPlan, last_write_activity_id: command.activity_id },
+        origin: "human_goal_edit",
       })
-      // 2) Re-baseline: reset stall + set the progress baselines to the EDITED plan, and null the
-      //    processed-version so the next tick runs against the revision (not deduped, not a false stall).
-      persistState(deps, {
-        ...state,
-        stallCount: 0,
-        lastFingerprint: planFingerprint(editedPlan),
-        lastDoneCount: doneStepCount(editedPlan),
-        lastEvidenceCount: evidenceCount(editedPlan),
-        // metCount is criteria-derived (independent of plan structure); leave it — a plan edit does not
-        // retroactively un-meet a satisfied criterion, and the next tick re-grades regardless.
-        lastProcessedVersion: null,
-      })
+      persistPlanEditBaseline(deps, state, committed.plan)
+      return { plan_id: committed.plan.plan_id, doc_id: committed.doc_id, version: committed.version, changed: true }
+      },
+      catch: (error) => error,
     })
 
   return { start, tick, status, stop, applyPlanEdit }
+}
+
+const persistPlanEditBaseline = (deps: ControllerDeps, state: GoalRuntimeState, plan: PlanDoc): void => {
+  persistState(deps, {
+    ...state,
+    stallCount: 0,
+    lastFingerprint: planFingerprint(plan),
+    lastDoneCount: doneStepCount(plan),
+    lastEvidenceCount: evidenceCount(plan),
+    lastProcessedVersion: null,
+  })
 }
 
 export * as GoalLoop from "./goal-loop"

@@ -5,7 +5,6 @@ import { readdir, rm } from "node:fs/promises"
 import { resolveChannel } from "./utils"
 
 const channel = resolveChannel()
-await rm("out", { recursive: true, force: true })
 await rm("resources/icons", { recursive: true, force: true })
 await Promise.all(
   (await readdir("resources").catch(() => []))
