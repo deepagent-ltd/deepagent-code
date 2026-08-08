@@ -94,6 +94,12 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { archiveSessionOnCompletion } from "@/wiki/session-archive"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Database } from "@deepagent-code/core/database/database"
+import { SessionToolRequestReceiptTable } from "./tool-request-receipt.sql"
+import {
+  SessionToolArgumentReceiptTable,
+  type ToolArgumentReceiptLayer,
+  type ToolArgumentValidationOutcome,
+} from "./tool-argument-receipt.sql"
 import { SessionEvent } from "@deepagent-code/core/session/event"
 import { SessionMessage } from "@deepagent-code/core/session/message"
 import { SessionInput } from "@deepagent-code/core/session/input"
@@ -101,6 +107,7 @@ import { ContextFederationRollout } from "@deepagent-code/core/context-federatio
 import { ContextFederationExecutionParity } from "@deepagent-code/core/context-federation/execution-parity"
 import { Hash } from "@deepagent-code/core/util/hash"
 import { SessionFederatedContext } from "@/context-federation/session-context-runtime"
+import { ContextFederationReadiness } from "@/context-federation/readiness"
 import { ModelV2 } from "@deepagent-code/core/model"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import {
@@ -112,7 +119,7 @@ import {
 } from "@deepagent-code/core/session/prompt"
 import { Reference } from "@/reference/reference"
 import * as DateTime from "effect/DateTime"
-import { eq } from "drizzle-orm"
+import { and, eq, max } from "drizzle-orm"
 import { SessionTable, TaskRunTable } from "@deepagent-code/core/session/sql"
 import { referencePromptMetadata, referenceTextPart } from "./prompt/reference"
 import { SessionReminders } from "./reminders"
@@ -387,6 +394,7 @@ export const layer = Layer.effect(
     const git = Option.getOrUndefined(yield* Effect.serviceOption(Git.Service))
     const queue = Option.getOrUndefined(yield* Effect.serviceOption(PRQueue.Service))
     const federation = Option.getOrUndefined(yield* Effect.serviceOption(SessionFederatedContext.Service))
+    const federationReadiness = Option.getOrUndefined(yield* Effect.serviceOption(ContextFederationReadiness.Service))
     const federationRollout = ContextFederationRollout.resolve(
       {
         contextFederationShadow: flags.contextFederationShadow,
@@ -2396,12 +2404,21 @@ export const layer = Layer.effect(
         // of "module" for ResearchResult) and the AI SDK silently rejects them before execute().
         let structuredFailedAttempts = 0
         const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
-        const sessionFederationRollout = ContextFederationRollout.resolveProject(federationRollout, session.projectID, {
-          stage: flags.contextFederationRolloutStage,
-          percentage: flags.contextFederationRolloutPercent,
-          internalProjectScopeKeys: flags.contextFederationInternalProjects,
-          killSwitch: flags.contextFederationKillSwitch,
-        })
+        const sessionFederationEligibility = ContextFederationRollout.resolveProject(
+          federationRollout,
+          session.projectID,
+          {
+            stage: flags.contextFederationRolloutStage,
+            percentage: flags.contextFederationRolloutPercent,
+            internalProjectScopeKeys: flags.contextFederationInternalProjects,
+            killSwitch: flags.contextFederationKillSwitch,
+          },
+        )
+        const activateFederation = () =>
+          (federationReadiness?.snapshot() ?? Effect.succeed(ContextFederationReadiness.unavailableSnapshot())).pipe(
+            Effect.map((readiness) => ContextFederationRollout.activate(sessionFederationEligibility, readiness)),
+          )
+        let sessionFederationRollout = yield* activateFederation()
 
         // V3.8 App-A C2.5 (Stage 5): the Conversation Log writer. Constructed ONCE per run so its
         // in-memory seq + seen-set persist across the loop's iterations (dedup by content identity).
@@ -2412,8 +2429,9 @@ export const layer = Layer.effect(
         // instance) created in this runLoop call so cross-message ABABAB/ABCABC/... patterns
         // are detectable.  Reset implicitly on the next runLoop invocation (new variable).
         const toolSequenceTracker = new SessionProcessor.ToolSequenceTracker()
+        const planProtocolTracker = new SessionProcessor.PlanProtocolTracker()
 
-        const initialMessages = yield* MessageV2.filterCompactedEffect(sessionID).pipe(
+        const initialMessages = yield* MessageV2.promptHistoryEffect(sessionID).pipe(
           Effect.provideService(Database.Service, database),
         )
         const initialUser = MessageV2.latest(initialMessages).user
@@ -2466,7 +2484,7 @@ export const layer = Layer.effect(
             pendingContextInputIds = [...pendingContextInputIds, ...absorbed]
           }
 
-          let msgs = yield* MessageV2.filterCompactedEffect(sessionID).pipe(
+          let msgs = yield* MessageV2.promptHistoryEffect(sessionID).pipe(
             Effect.provideService(Database.Service, database),
           )
 
@@ -2660,11 +2678,20 @@ export const layer = Layer.effect(
                 continue
               }
               if (action === "hard") {
-                // Bump the generation + reset flags BEFORE compaction so a mid-compaction crash still
-                // recovers into the fresh window (the durable write is the世代 marker).
+                // BUG-005: the old "Bump generation BEFORE compaction" pattern is now DEPRECATED.
+                // windowEpoch is bumped here only to reset the soft-landing reminder/fallback flags
+                // for the next generation (so the next window can warn + flush again).  It is NOT a
+                // history boundary marker — PromptEpoch is the sole history authority and is only
+                // activated by compaction.process() on confirmed successful summary (CompactionCommitted).
                 yield* writeSoftLandingState(sessionID, nextState)
                 yield* compaction.create({ sessionID, agent: lastUser.agent, model: lastUser.model, auto: true })
                 continue
+              }
+              if (action === "guard") {
+                yield* slog.warn("context limit unavailable; complete request preflight is authoritative", {
+                  reason: status.reason,
+                  hardLine: status.hardLine,
+                })
               }
               // action === "none": fallback already delivered this epoch (still under hard line), reminder
               // debounced, or below the soft line — proceed with the turn normally.
@@ -2736,12 +2763,14 @@ export const layer = Layer.effect(
               sessionID,
               model,
               sequenceTracker: toolSequenceTracker,
+              planTracker: planProtocolTracker,
               loopPolicy: finalizerMode || taskActivity ? "error" : "ask",
               noProgressLimit: taskActivity?.maxNoProgress,
             })
             .pipe(Effect.onInterrupt(() => finalizeInterruptedAssistant))
 
           const outcome: "break" | "continue" = yield* Effect.gen(function* () {
+            sessionFederationRollout = yield* activateFederation()
             const lastUserMsg = msgs.findLast((m) => m.info.role === "user")
             const bypassAgentCheck = lastUserMsg?.parts.some((p) => p.type === "agent") ?? false
             const promptOps = yield* ops()
@@ -2814,7 +2843,7 @@ export const layer = Layer.effect(
               sys.environment(model),
               instruction.system().pipe(Effect.orDie),
             ]).pipe(Effect.map(([skills, env, instructions]) => [...env, ...instructions, ...(skills ? [skills] : [])]))
-            activeContext =
+            const federationResolution =
               federation && sessionFederationRollout.enabled.contextFederationShadow && !finalizerMode
                 ? yield* federation
                     .resolve({
@@ -2833,8 +2862,15 @@ export const layer = Layer.effect(
                       model,
                       ...(activeContext ? { current: activeContext.selection } : {}),
                     })
-                    .pipe(Effect.orDie)
+                    .pipe(Effect.exit)
                 : undefined
+            if (federationResolution && Exit.isFailure(federationResolution)) {
+              slog.warn("context federation resolve degraded to legacy request", {
+                cause: Cause.pretty(federationResolution.cause),
+              })
+            }
+            activeContext =
+              federationResolution && Exit.isSuccess(federationResolution) ? federationResolution.value : undefined
             if (activeContext) activeFederatedContexts.set(sessionID, activeContext)
             pendingContextInputIds = []
             const projectedContext =
@@ -2844,10 +2880,8 @@ export const layer = Layer.effect(
             // Schema/finalizer guidance changes per request and must not enter the provider-cached
             // system prefix. Keep it in the same ephemeral tail used for other volatile runtime
             // context; the durable user prompt and the StructuredOutput tool remain the hard gates.
-            const runtimeTail = [buildStructuredOutputRuntimeTail(format, finalizerMode), projectedContext]
-              .filter(Boolean)
-              .join("\n\n")
-            const streamInput: LLM.StreamInput = {
+            const structuredRuntimeTail = buildStructuredOutputRuntimeTail(format, finalizerMode)
+            const baseStreamInput: LLM.StreamInput = {
               user: lastUser,
               agent,
               permission: session.permission,
@@ -2859,9 +2893,8 @@ export const layer = Layer.effect(
               model,
               toolChoice: finalizerDecision?.toolChoice ?? (format.type === "json_schema" ? "required" : undefined),
               reasoning: finalizerDecision?.reasoning,
-              ...(runtimeTail ? { runtimeTail } : {}),
-              ...(projectedContext ? { federatedProjection: true, durableAttempt: true } : {}),
-              ...(!sessionFederationRollout.enabled.contextProjectionV2 && activeContext
+              ...(structuredRuntimeTail ? { runtimeTail: structuredRuntimeTail } : {}),
+              ...(!projectedContext && activeContext
                 ? {
                     federatedShadow: activeContext.selection.selectedRefs.reduce(
                       (counts, selected) => ({ ...counts, [selected.ref.graph]: counts[selected.ref.graph] + 1 }),
@@ -2870,19 +2903,262 @@ export const layer = Layer.effect(
                   }
                 : {}),
             }
-            const providerAttempt =
-              sessionFederationRollout.enabled.contextProjectionV2 && activeContext && federation
+            const projectedStreamInput: LLM.StreamInput = projectedContext
+              ? {
+                  ...baseStreamInput,
+                  runtimeTail: [structuredRuntimeTail, projectedContext].filter(Boolean).join("\n\n"),
+                  federatedProjection: true,
+                  durableAttempt: true,
+                }
+              : baseStreamInput
+            const preparedProviderAttempt =
+              projectedContext && activeContext && federation
                 ? yield* federation
                     .prepareProviderTurn({
                       selection: activeContext.selection,
                       envelope: activeContext.envelope,
-                      requestHash: providerRequestHash(streamInput),
+                      requestHash: providerRequestHash(projectedStreamInput),
                       providerId: model.providerID,
                       observedLocationMutationEpoch: activeContext.observedLocationMutationEpoch,
                     })
-                    .pipe(Effect.orDie)
+                    .pipe(Effect.exit)
                 : undefined
-            const result = yield* handle.process(streamInput, providerAttempt)
+            if (preparedProviderAttempt && Exit.isFailure(preparedProviderAttempt)) {
+              slog.warn("provider attempt prepare degraded to request without projection", {
+                cause: Cause.pretty(preparedProviderAttempt.cause),
+              })
+            }
+            const streamInput =
+              projectedContext && preparedProviderAttempt && Exit.isSuccess(preparedProviderAttempt)
+                ? projectedStreamInput
+                : projectedContext
+                  ? {
+                      ...baseStreamInput,
+                      federatedShadow: activeContext?.selection.selectedRefs.reduce(
+                        (counts, selected) => ({ ...counts, [selected.ref.graph]: counts[selected.ref.graph] + 1 }),
+                        { code: 0, knowledge: 0, memory: 0, documents: 0 },
+                      ),
+                    }
+                  : baseStreamInput
+            const providerAttempt =
+              preparedProviderAttempt && Exit.isSuccess(preparedProviderAttempt)
+                ? preparedProviderAttempt.value
+                : undefined
+            const registryToolIds = yield* registry.ids()
+            const fallbackReceiptID = Hash.sha256(`${sessionID}:provider-request:${handle.message.id}:${randomUUID()}`)
+            const receiptAdmission = yield* db
+              .transaction(
+                (tx) =>
+                  Effect.gen(function* () {
+                    const latest = yield* tx
+                      .select({ request_ordinal: max(SessionToolRequestReceiptTable.request_ordinal) })
+                      .from(SessionToolRequestReceiptTable)
+                      .where(eq(SessionToolRequestReceiptTable.session_id, sessionID))
+                      .get()
+                    const requestOrdinal = (latest?.request_ordinal ?? 0) + 1
+                    const receiptID = Hash.sha256(
+                      `${sessionID}:provider-request:${requestOrdinal}:${handle.message.id}`,
+                    )
+                    yield* tx.insert(SessionToolRequestReceiptTable).values({
+                      receipt_id: receiptID,
+                      request_ordinal: requestOrdinal,
+                      session_id: sessionID,
+                      user_message_id: lastUser.id,
+                      assistant_message_id: handle.message.id,
+                      provider_attempt_id: providerAttempt?.attemptId,
+                      provider_id: model.providerID,
+                      model_id: model.id,
+                      protocol: LLM.toolChoiceProtocol(model),
+                      registry_tool_ids: registryToolIds,
+                      permission_filtered_tool_ids: [],
+                      final_offered_tool_ids: [],
+                      call_ids: [],
+                      tool_definition_hash: null,
+                      tool_choice_mode: streamInput.toolChoice,
+                      adapter_tool_capability: "unknown",
+                      adapter_lowering_outcome: null,
+                      request_state: "prepared",
+                      created_at: Date.now(),
+                    })
+                    return { receiptID, admitted: true as const }
+                  }),
+                { behavior: "immediate" },
+              )
+              .pipe(
+                Effect.catchCause((cause) =>
+                  Effect.sync(() => {
+                    slog.warn("provider request receipt admission failed", {
+                      cause: Cause.pretty(cause),
+                      metric: "provider_request_receipt_degraded_total",
+                      increment: 1,
+                    })
+                    return { receiptID: fallbackReceiptID, admitted: false as const }
+                  }),
+                ),
+              )
+            const receiptID = receiptAdmission.receiptID
+            const receiptWriteState = { available: receiptAdmission.admitted }
+            const bestEffortReceiptWrite = (operation: string, write: Effect.Effect<unknown, unknown>) =>
+              Effect.suspend(() => {
+                if (!receiptWriteState.available) return Effect.void
+                return write.pipe(
+                  Effect.asVoid,
+                  Effect.catchCause((cause) =>
+                    Effect.sync(() => {
+                      receiptWriteState.available = false
+                      slog.warn("provider request receipt write failed", {
+                        operation,
+                        receiptID,
+                        cause: Cause.pretty(cause),
+                        metric: "provider_request_receipt_degraded_total",
+                        increment: 1,
+                      })
+                    }),
+                  ),
+                )
+              })
+            const writeArgumentReceipt = (input: {
+              layer: ToolArgumentReceiptLayer
+              ordinal: number
+              callID?: string
+              toolName?: string
+              eventType?: string
+              payloadHash?: string
+              payloadLength?: number
+              payloadKeys: readonly string[]
+              unavailableReason?: string
+              validationOutcome: ToolArgumentValidationOutcome
+            }) =>
+              bestEffortReceiptWrite(
+                `argument:${input.layer}`,
+                db
+                  .insert(SessionToolArgumentReceiptTable)
+                  .values({
+                    receipt_id: receiptID,
+                    layer: input.layer,
+                    ordinal: input.ordinal,
+                    call_id: input.callID,
+                    tool_name: input.toolName,
+                    event_type: input.eventType ?? "unknown",
+                    payload_hash: input.payloadHash,
+                    payload_length: input.payloadLength,
+                    payload_keys: [...input.payloadKeys],
+                    unavailable_reason: input.unavailableReason,
+                    validation_outcome: input.validationOutcome,
+                    created_at: Date.now(),
+                  })
+                  .run(),
+              )
+            const result = yield* handle.process(
+              {
+                ...streamInput,
+                requestReceipt: {
+                  prepared: (prepared) => {
+                    const finalOfferedToolIds = Object.keys(prepared.finalOfferedTools)
+                    const definitions = Object.entries(prepared.finalOfferedTools)
+                      .toSorted(([a], [b]) => a.localeCompare(b))
+                      .map(([name, definition]) => ({
+                        name,
+                        description: definition.description,
+                        inputSchema: "inputSchema" in definition ? definition.inputSchema : undefined,
+                      }))
+                    return bestEffortReceiptWrite(
+                      "prepared",
+                      db
+                        .update(SessionToolRequestReceiptTable)
+                        .set({
+                          permission_filtered_tool_ids: [...prepared.permissionFilteredToolIds],
+                          final_offered_tool_ids: finalOfferedToolIds,
+                          tool_definition_hash: Hash.sha256(stableJson(definitions)),
+                          adapter_tool_capability: prepared.adapterToolCapability,
+                          adapter_lowering_outcome: prepared.adapterLoweringOutcome,
+                          estimated_input_tokens: prepared.budget.estimatedFullRequestTokens,
+                          physical_input_budget: prepared.budget.physicalInputBudget,
+                          reserved_output_tokens: prepared.budget.reservedOutputTokens,
+                          safety_margin_tokens: prepared.budget.safetyMargin,
+                          context_limit_provenance: prepared.budget.provenance,
+                          request_state: "prepared",
+                        })
+                        .where(
+                          and(
+                            eq(SessionToolRequestReceiptTable.receipt_id, receiptID),
+                            eq(SessionToolRequestReceiptTable.request_state, "prepared"),
+                          ),
+                        )
+                        .run(),
+                    )
+                  },
+                  dispatched: () =>
+                    bestEffortReceiptWrite(
+                      "dispatched",
+                      db
+                        .update(SessionToolRequestReceiptTable)
+                        .set({ request_state: "dispatched" })
+                        .where(
+                          and(
+                            eq(SessionToolRequestReceiptTable.receipt_id, receiptID),
+                            eq(SessionToolRequestReceiptTable.request_state, "prepared"),
+                          ),
+                        )
+                        .run(),
+                    ),
+                  rejected: ({ budget, reason }) =>
+                    bestEffortReceiptWrite(
+                      "rejected",
+                      db
+                        .update(SessionToolRequestReceiptTable)
+                        .set({
+                          estimated_input_tokens: budget.estimatedFullRequestTokens,
+                          physical_input_budget: budget.physicalInputBudget,
+                          reserved_output_tokens: budget.reservedOutputTokens,
+                          safety_margin_tokens: budget.safetyMargin,
+                          context_limit_provenance: budget.provenance,
+                          request_state: "rejected",
+                          request_error_code: reason,
+                        })
+                        .where(
+                          and(
+                            eq(SessionToolRequestReceiptTable.receipt_id, receiptID),
+                            eq(SessionToolRequestReceiptTable.request_state, "prepared"),
+                          ),
+                        )
+                        .run(),
+                    ),
+                  aiSdkInput: (input) => writeArgumentReceipt({ layer: "ai_sdk_input", ...input }),
+                  rawFrame: (input) => writeArgumentReceipt({ layer: "raw_frame", ...input }),
+                  adapterAssembly: (input) => writeArgumentReceipt({ layer: "adapter_assembly", ...input }),
+                  processorDecoded: (input) => writeArgumentReceipt({ layer: "processor_decoded", ...input }),
+                  processorValidation: (input) =>
+                    bestEffortReceiptWrite(
+                      "argument:processor_decoded:validation",
+                      db
+                        .update(SessionToolArgumentReceiptTable)
+                        .set({ validation_outcome: input.validationOutcome })
+                        .where(
+                          and(
+                            eq(SessionToolArgumentReceiptTable.receipt_id, receiptID),
+                            eq(SessionToolArgumentReceiptTable.layer, "processor_decoded"),
+                            eq(SessionToolArgumentReceiptTable.call_id, input.callID),
+                          ),
+                        )
+                        .run(),
+                    ),
+                },
+              },
+              providerAttempt,
+            )
+            const observedCallIds =
+              (yield* sessions.messages({ sessionID }).pipe(Effect.orDie))
+                .find((message) => message.info.id === handle.message.id)
+                ?.parts.flatMap((part) => (part.type === "tool" ? [part.callID] : [])) ?? []
+            yield* bestEffortReceiptWrite(
+              "observed_call_ids",
+              db
+                .update(SessionToolRequestReceiptTable)
+                .set({ call_ids: observedCallIds })
+                .where(eq(SessionToolRequestReceiptTable.receipt_id, receiptID))
+                .run(),
+            )
 
             if (structured !== undefined) {
               handle.message.structured = structured
@@ -2928,7 +3204,7 @@ export const layer = Layer.effect(
             if (format.type === "json_schema" && handle.message.finish === "tool-calls") {
               // Re-read the latest message parts to detect if StructuredOutput was attempted
               // this step. We check the CURRENT assistant message's parts (by handle.message.id).
-              const latestMsgs = yield* MessageV2.filterCompactedEffect(sessionID).pipe(
+              const latestMsgs = yield* MessageV2.promptHistoryEffect(sessionID).pipe(
                 Effect.provideService(Database.Service, database),
               )
               const currentAssistantMsg = latestMsgs.findLast(
@@ -3011,7 +3287,7 @@ export const layer = Layer.effect(
         // Final archive pass: the last assistant turn only completes AFTER the loop's final iteration,
         // so re-scan once more to capture its now-settled text/reasoning/tool parts. Deduped, so any
         // already-logged parts are skipped. default-safe.
-        const finalMsgs = yield* MessageV2.filterCompactedEffect(sessionID).pipe(
+        const finalMsgs = yield* MessageV2.promptHistoryEffect(sessionID).pipe(
           Effect.provideService(Database.Service, database),
           Effect.orElseSucceed(() => [] as SessionV1.WithParts[]),
         )
@@ -3684,7 +3960,13 @@ export const defaultLayer = Layer.suspend(() =>
     Layer.provide(Permission.defaultLayer),
     Layer.provide(MCP.defaultLayer),
     Layer.provide(LSP.defaultLayer),
-    Layer.provide(Layer.merge(SessionFederatedContext.defaultLayer, ToolRegistry.defaultLayer)),
+    Layer.provide(
+      Layer.mergeAll(
+        SessionFederatedContext.defaultLayer,
+        ContextFederationReadiness.defaultLayer,
+        ToolRegistry.defaultLayer,
+      ),
+    ),
     Layer.provide(Truncate.configuredLayer),
     Layer.provide(Provider.defaultLayer),
     Layer.provide(Config.defaultLayer),

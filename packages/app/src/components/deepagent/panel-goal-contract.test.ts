@@ -8,6 +8,7 @@ import {
   resumeGoal,
   stopGoal,
   goalStatus,
+  buildGoalPlanWrite,
   editPlanGoal,
   fetchCapabilities,
 } from "./panel-goal.api"
@@ -54,7 +55,12 @@ describe("Expert Panel route contract (§C)", () => {
 
   test("armPanel POSTs /deepagent/panel/arm with rounds and returns the effective armed state + depth", async () => {
     const calls: Recorded[] = []
-    const result = await armPanel(client(calls, { sessionID: "ses_1", armed: true, rounds: "multi" }), "ses_1", true, "multi")
+    const result = await armPanel(
+      client(calls, { sessionID: "ses_1", armed: true, rounds: "multi" }),
+      "ses_1",
+      true,
+      "multi",
+    )
     expect(calls).toEqual([
       {
         method: "POST",
@@ -75,7 +81,11 @@ describe("Expert Panel route contract (§C)", () => {
 
   test("fetchPanelStatus tolerates a missing body (disarmed, not explicit, single-round default)", async () => {
     const calls: Recorded[] = []
-    expect(await fetchPanelStatus(client(calls, {}), "ses_1")).toEqual({ armed: false, explicit: false, rounds: "single" })
+    expect(await fetchPanelStatus(client(calls, {}), "ses_1")).toEqual({
+      armed: false,
+      explicit: false,
+      rounds: "single",
+    })
   })
 })
 
@@ -118,27 +128,166 @@ describe("Goal Loop route contract (§D)", () => {
     expect(await goalStatus(client(calls, { goal: null }), "ses_1")).toBeNull()
   })
 
-  test("editPlanGoal POSTs /deepagent/goal/edit-plan with { sessionID, plan } and returns ok", async () => {
+  test("editPlanGoal POSTs the strict durable admission envelope and returns its receipt", async () => {
     const calls: Recorded[] = []
-    const plan = {
+    const planWrite = {
+      operation: "advance" as const,
+      expected_plan_id: "plan_1",
+      expected_version: 7,
       goal: "ship it",
-      steps: [
-        { step_id: "step_1", title: "revised", status: "pending" },
-        { title: "new step" },
-      ],
+      assumptions: ["CI is available"],
+      steps: [{ step_id: "step_1", title: "verify", status: "active" as const }],
+      active_step_id: "step_1",
     }
-    const ok = await editPlanGoal(client(calls, { ok: true }), "ses_1", plan)
+    const receipt = {
+      state: "queued" as const,
+      activity_id: "activity_1",
+      request_id: "request_1",
+      candidate_hash: `sha256:${"a".repeat(64)}`,
+    }
+    const result = await editPlanGoal(client(calls, receipt), {
+      sessionID: "ses_1",
+      requestID: "request_1",
+      planWrite,
+      qualityChallengeID: "challenge_1",
+    })
     expect(calls).toEqual([
-      { method: "POST", url: "/deepagent/goal/edit-plan", body: { sessionID: "ses_1", plan }, headers: JSON_HEADERS },
+      {
+        method: "POST",
+        url: "/deepagent/goal/edit-plan",
+        body: {
+          sessionID: "ses_1",
+          request_id: "request_1",
+          plan_write: planWrite,
+          quality_challenge_id: "challenge_1",
+        },
+        headers: JSON_HEADERS,
+      },
     ])
-    expect(ok).toBe(true)
+    expect(result).toEqual(receipt)
   })
 
-  test("editPlanGoal returns false when the server refuses (no goal / terminal)", async () => {
+  test("editPlanGoal leaves a missing response body explicit", async () => {
     const calls: Recorded[] = []
-    expect(await editPlanGoal(client(calls, { ok: false }), "ses_1", { goal: "g", steps: [] })).toBe(false)
-    // ...and tolerates a missing body (older server) as false.
-    expect(await editPlanGoal(client(calls, {}), "ses_1", { goal: "g", steps: [] })).toBe(false)
+    expect(
+      await editPlanGoal(client(calls, undefined), {
+        sessionID: "ses_1",
+        requestID: "request_1",
+        planWrite: {
+          operation: "advance",
+          expected_plan_id: "plan_1",
+          expected_version: 1,
+          goal: "g",
+          assumptions: [],
+          steps: [{ step_id: "step_1", title: "step", status: "active" }],
+          active_step_id: "step_1",
+        },
+      }),
+    ).toBeUndefined()
+  })
+
+  test("buildGoalPlanWrite emits advance for status and blocker-note changes", () => {
+    const result = buildGoalPlanWrite(
+      {
+        plan_id: "plan_1",
+        plan_version: 4,
+        goal: "ship",
+        assumptions: ["CI"],
+        steps: [
+          { step_id: "step_a", title: "Implement", acceptance: "tests pass", assigned_agent: "build" },
+          { step_id: "step_b", title: "Review", acceptance: "approved", assigned_agent: "review" },
+        ],
+      },
+      {
+        goal: "ship",
+        assumptions: ["CI"],
+        steps: [
+          {
+            step_id: "step_a",
+            title: "Implement",
+            acceptance: "tests pass",
+            assigned_agent: "build",
+            status: "done",
+          },
+          {
+            step_id: "step_b",
+            title: "Review",
+            acceptance: "approved",
+            assigned_agent: "review",
+            status: "blocked",
+            note: "waiting for owner",
+          },
+        ],
+      },
+    )
+
+    expect(result.operation).toBe("advance")
+    expect(result.expected_plan_id).toBe("plan_1")
+    expect(result.expected_version).toBe(4)
+    expect(result.steps.map((step) => step.step_id)).toEqual(["step_a", "step_b"])
+    expect(result.active_step_id).toBeNull()
+    expect(result.steps[0]).toMatchObject({ acceptance: "tests pass", assigned_agent: "build", note: null })
+    expect(result.steps[1]).toMatchObject({
+      acceptance: "approved",
+      assigned_agent: "review",
+      note: "waiting for owner",
+    })
+  })
+
+  test("buildGoalPlanWrite keeps absent optional fields as explicit wire nulls", () => {
+    const result = buildGoalPlanWrite(
+      {
+        plan_id: "plan_1",
+        plan_version: 1,
+        goal: "ship",
+        assumptions: [],
+        steps: [{ step_id: "step_a", title: "Implement" }],
+      },
+      {
+        goal: "ship",
+        assumptions: [],
+        steps: [{ step_id: "step_a", title: "Implement", status: "active" }],
+      },
+    )
+
+    expect(result.steps[0]).toEqual({
+      step_id: "step_a",
+      title: "Implement",
+      status: "active",
+      acceptance: null,
+      assigned_agent: null,
+      note: null,
+    })
+  })
+
+  test("buildGoalPlanWrite replans structural edits without rebinding a renamed step identity", () => {
+    const ids = ["step_fresh"]
+    const result = buildGoalPlanWrite(
+      {
+        plan_id: "plan_1",
+        plan_version: 9,
+        goal: "ship",
+        assumptions: [],
+        steps: [
+          { step_id: "step_a", title: "Implement", acceptance: "tests pass" },
+          { step_id: "step_b", title: "Review", acceptance: "approved" },
+        ],
+      },
+      {
+        goal: "ship",
+        assumptions: [],
+        steps: [
+          { step_id: "step_b", title: "Review", acceptance: "approved", status: "pending" },
+          { step_id: "step_a", title: "Implement and deploy", acceptance: "tests pass", status: "active" },
+        ],
+      },
+      () => ids.shift() ?? "unexpected",
+    )
+
+    expect(result.operation).toBe("replan")
+    expect(result.replan_reason).toBe("human_goal_edit")
+    expect(result.steps.map((step) => step.step_id)).toEqual(["step_b", "step_fresh"])
+    expect(result.active_step_id).toBe("step_fresh")
   })
 })
 

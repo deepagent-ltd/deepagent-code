@@ -40,9 +40,97 @@ import { LLMNativeRuntime } from "./llm/native-runtime"
 import { LLMRequestPrep } from "./llm/request"
 import { FreeformTools } from "./llm/freeform-tools"
 import { configureGateway } from "@/deepagent/config"
+import { requestBudget, type RequestBudgetStatus } from "./overflow"
+import { Token } from "@/util/token"
+import { Hash } from "@deepagent-code/core/util/hash"
 
 const log = Log.create({ service: "llm" })
 export const OUTPUT_TOKEN_MAX = ProviderTransform.OUTPUT_TOKEN_MAX
+
+const RECEIPT_KEY_LIMIT = 32
+
+/**
+ * Convert provider-owned values into bounded evidence.  The receipt proves that
+ * two layers saw the same shape without persisting prompts, file contents, or
+ * tool arguments.  Circular/unsupported provider metadata is recorded as an
+ * unavailable payload instead of breaking the stream.
+ */
+export function boundedReceiptPayload(value: unknown) {
+  const payloadKeys = isRecord(value) ? Object.keys(value).toSorted().slice(0, RECEIPT_KEY_LIMIT) : []
+  if (value === undefined) {
+    return {
+      payloadHash: undefined,
+      payloadLength: undefined,
+      payloadKeys,
+      unavailableReason: "payload_unavailable",
+    }
+  }
+  const serialized = (() => {
+    try {
+      return typeof value === "string" ? value : stableReceiptJson(value)
+    } catch {
+      return undefined
+    }
+  })()
+  if (serialized === undefined) {
+    return {
+      payloadHash: undefined,
+      payloadLength: undefined,
+      payloadKeys,
+      unavailableReason: "payload_not_serializable",
+    }
+  }
+  return {
+    payloadHash: Hash.sha256(serialized),
+    payloadLength: serialized.length,
+    payloadKeys,
+    unavailableReason: undefined,
+  }
+}
+
+function stableReceiptJson(value: unknown, ancestors = new WeakSet<object>()): string {
+  if (value === null || typeof value !== "object") {
+    const serialized = JSON.stringify(value)
+    if (serialized === undefined) throw new Error("Unsupported receipt payload")
+    return serialized
+  }
+  if (ancestors.has(value)) throw new Error("Circular receipt payload")
+  ancestors.add(value)
+  const serialized = Array.isArray(value)
+    ? `[${value.map((item) => stableReceiptJson(item, ancestors)).join(",")}]`
+    : `{${Object.entries(value)
+        .filter(([, item]) => item !== undefined)
+        .toSorted(([a], [b]) => a.localeCompare(b))
+        .map(([key, item]) => `${JSON.stringify(key)}:${stableReceiptJson(item, ancestors)}`)
+        .join(",")}}`
+  ancestors.delete(value)
+  return serialized
+}
+
+function adapterReceiptDetails(event: LLMEvent) {
+  if (event.type === "tool-call") return { callID: event.id, toolName: event.name, payload: event.input }
+  if (event.type === "tool-error") {
+    return {
+      callID: event.id,
+      toolName: event.name,
+      payload: undefined,
+      unavailableReason: "adapter_did_not_emit_decoded_input",
+    }
+  }
+  return undefined
+}
+
+function adapterValidationOutcome(event: LLMEvent, validatedCallIDs: Set<string>): "schema_valid" | "schema_invalid" {
+  if (event.type === "tool-call") {
+    if (event.inputValidation === "schema_invalid") return "schema_invalid"
+    validatedCallIDs.add(event.id)
+    return "schema_valid"
+  }
+  if (event.type !== "tool-error") return "schema_invalid"
+  return InvalidToolInputError.isInstance(event.error) || !validatedCallIDs.has(event.id)
+    ? "schema_invalid"
+    : "schema_valid"
+}
 
 const deepagentModelAuthProviderID = (model: Provider.Model) => {
   if (model.providerID !== "deepagent") return
@@ -203,6 +291,64 @@ export type StreamInput = {
   federatedShadow?: Readonly<Record<"code" | "knowledge" | "memory" | "documents", number>>
   /** A durable attempt owns retry safety for this request; provider-internal retries must stay disabled. */
   durableAttempt?: boolean
+  /** Internal durable receipt hook invoked after permission filtering and adapter preparation. */
+  requestReceipt?: {
+    readonly prepared: (input: {
+      readonly permissionFilteredToolIds: readonly string[]
+      readonly finalOfferedTools: Readonly<Record<string, Tool>>
+      readonly adapterToolCapability: "supported" | "unsupported" | "unknown"
+      readonly adapterLoweringOutcome: "ok" | "schema_rejected" | "omitted_no_support"
+      readonly budget: RequestBudgetStatus
+    }) => Effect.Effect<void>
+    readonly dispatched: () => Effect.Effect<void>
+    readonly rejected: (input: { readonly budget: RequestBudgetStatus; readonly reason: string }) => Effect.Effect<void>
+    readonly aiSdkInput: (input: {
+      readonly ordinal: number
+      readonly eventType: string
+      readonly callID?: string
+      readonly toolName?: string
+      readonly payloadHash?: string
+      readonly payloadLength?: number
+      readonly payloadKeys: readonly string[]
+      readonly unavailableReason?: string
+      readonly validationOutcome: "not_evaluated" | "schema_valid" | "schema_invalid"
+    }) => Effect.Effect<void>
+    readonly rawFrame: (input: {
+      readonly ordinal: number
+      readonly eventType: string
+      readonly payloadHash?: string
+      readonly payloadLength?: number
+      readonly payloadKeys: readonly string[]
+      readonly unavailableReason?: string
+      readonly validationOutcome: "not_evaluated"
+    }) => Effect.Effect<void>
+    readonly adapterAssembly: (input: {
+      readonly ordinal: number
+      readonly eventType: string
+      readonly callID?: string
+      readonly toolName?: string
+      readonly payloadHash?: string
+      readonly payloadLength?: number
+      readonly payloadKeys: readonly string[]
+      readonly unavailableReason?: string
+      readonly validationOutcome: "schema_valid" | "schema_invalid"
+    }) => Effect.Effect<void>
+    readonly processorDecoded: (input: {
+      readonly ordinal: number
+      readonly eventType: string
+      readonly callID: string
+      readonly toolName: string
+      readonly payloadHash?: string
+      readonly payloadLength?: number
+      readonly payloadKeys: readonly string[]
+      readonly unavailableReason?: string
+      readonly validationOutcome: "schema_valid" | "schema_invalid"
+    }) => Effect.Effect<void>
+    readonly processorValidation: (input: {
+      readonly callID: string
+      readonly validationOutcome: "schema_invalid" | "semantic_valid" | "semantic_invalid" | "conflict" | "no_progress"
+    }) => Effect.Effect<void>
+  }
 }
 
 export type StreamRequest = StreamInput & {
@@ -457,6 +603,52 @@ const live: Layer.Layer<
       }
 
       const runtimeTools = prepared.tools
+      const budget = requestBudget({
+        model: input.model,
+        outputTokenMax: flags.outputTokenMax,
+        estimatedFullRequestTokens: Token.estimate(
+          JSON.stringify({
+            system: prepared.system,
+            messages: prepared.messages,
+            tools: Object.entries(runtimeTools)
+              .toSorted(([a], [b]) => a.localeCompare(b))
+              .map(([name, definition]) => ({
+                name,
+                description: definition.description,
+                inputSchema: "inputSchema" in definition ? definition.inputSchema : undefined,
+              })),
+            toolChoice: effectiveToolChoice,
+          }),
+        ),
+      })
+      if (budget.decision === "unavailable") {
+        const reason = budget.reason ?? "physical_budget_exceeded"
+        yield* input.requestReceipt?.rejected({ budget, reason }) ?? Effect.void
+        return yield* Effect.fail(
+          new SessionV1.ContextOverflowError({
+            message:
+              reason === "context_limit_unknown"
+                ? "Provider context limit is unknown; configure an endpoint/model override before continuing this long request."
+                : reason === "context_limit_invalid"
+                  ? "Provider context limit is invalid; correct the endpoint/model configuration before continuing."
+                  : "The complete provider request exceeds the physical input budget.",
+          }),
+        )
+      }
+      yield* input.requestReceipt?.prepared({
+        permissionFilteredToolIds: Object.keys(prepared.tools),
+        finalOfferedTools: runtimeTools,
+        adapterToolCapability:
+          toolChoiceProtocol(input.model) === "unknown"
+            ? "unknown"
+            : input.model.capabilities.toolcall
+              ? "supported"
+              : "unsupported",
+        adapterLoweringOutcome:
+          Object.keys(input.tools).length > 0 && Object.keys(runtimeTools).length === 0 ? "omitted_no_support" : "ok",
+        budget,
+      }) ?? Effect.void
+      yield* input.requestReceipt?.dispatched() ?? Effect.void
 
       const tracer = cfg.experimental?.openTelemetry
         ? Option.getOrUndefined(yield* Effect.serviceOption(OtelTracer.OtelTracer))
@@ -495,6 +687,13 @@ const live: Layer.Layer<
           metadata: prepared.metadata,
         })
         if (native.type === "supported") {
+          yield* input.requestReceipt?.aiSdkInput({
+            ordinal: 0,
+            eventType: "native-runtime",
+            payloadKeys: [],
+            unavailableReason: "native_runtime_selected",
+            validationOutcome: "not_evaluated",
+          }) ?? Effect.void
           yield* Effect.logInfo("llm runtime selected").pipe(
             Effect.annotateLogs({
               "llm.runtime": "native",
@@ -622,7 +821,7 @@ const live: Layer.Layer<
           maxOutputTokens: prepared.params.maxOutputTokens,
           abortSignal: input.abort,
           headers: prepared.headers,
-          maxRetries: input.durableAttempt ? 0 : providerMaxRetries ?? input.retries ?? 0,
+          maxRetries: input.durableAttempt ? 0 : (providerMaxRetries ?? input.retries ?? 0),
           messages: prepared.messages,
           model: wrapLanguageModel({
             model: language,
@@ -667,15 +866,98 @@ const live: Layer.Layer<
 
             const result = yield* run({ ...input, abort: ctrl.signal })
 
-            if (result.type === "native") return result.stream
+            if (result.type === "native") {
+              let adapterOrdinal = 0
+              const validatedCallIDs = new Set<string>()
+              return result.stream.pipe(
+                Stream.tap((event) => {
+                  if (!input.requestReceipt) return Effect.void
+                  const details = adapterReceiptDetails(event)
+                  if (!details) return Effect.void
+                  return input.requestReceipt.adapterAssembly({
+                    ordinal: adapterOrdinal++,
+                    eventType: event.type,
+                    callID: details.callID,
+                    toolName: details.toolName,
+                    validationOutcome: adapterValidationOutcome(event, validatedCallIDs),
+                    ...(details.payload === undefined
+                      ? {
+                          payloadHash: undefined,
+                          payloadLength: undefined,
+                          payloadKeys: [],
+                          unavailableReason: details.unavailableReason,
+                        }
+                      : boundedReceiptPayload(details.payload)),
+                  })
+                }),
+                Stream.ensuring(
+                  input.requestReceipt
+                    ? input.requestReceipt.rawFrame({
+                        ordinal: 0,
+                        eventType: "native-runtime",
+                        payloadKeys: [],
+                        unavailableReason: "native_runtime_did_not_expose_raw_frame",
+                        validationOutcome: "not_evaluated",
+                      })
+                    : Effect.void,
+                ),
+              )
+            }
 
             // Adapter seam: both runtimes expose the same LLMEvent stream. Native
             // already returns one; AI SDK streams are converted here.
             const state = LLMAISDK.adapterState()
+            const aiSdkCallIDs = new Set<string>()
+            const validatedCallIDs = new Set<string>()
+            let aiSdkOrdinal = 0
+            let adapterOrdinal = 0
             return Stream.fromAsyncIterable(result.result.fullStream, (e) =>
               e instanceof Error ? e : new Error(String(e)),
             ).pipe(
-              Stream.mapEffect((event) => LLMAISDK.toLLMEvents(state, event)),
+              Stream.mapEffect((event) =>
+                Effect.gen(function* () {
+                  const receipt = input.requestReceipt
+                  if (
+                    receipt &&
+                    (event.type === "tool-call" || event.type === "tool-error") &&
+                    !aiSdkCallIDs.has(event.toolCallId)
+                  ) {
+                    aiSdkCallIDs.add(event.toolCallId)
+                    yield* receipt.aiSdkInput({
+                      ordinal: aiSdkOrdinal++,
+                      eventType: event.type,
+                      callID: event.toolCallId,
+                      toolName: event.toolName,
+                      validationOutcome:
+                        event.type === "tool-error" ? "schema_invalid" : LLMAISDK.toolCallInputValidation(event),
+                      ...boundedReceiptPayload(event.input),
+                    })
+                  }
+                  const events = yield* LLMAISDK.toLLMEvents(state, event)
+                  if (receipt) {
+                    yield* Effect.forEach(events, (mapped) => {
+                      const details = adapterReceiptDetails(mapped)
+                      if (!details) return Effect.void
+                      return receipt.adapterAssembly({
+                        ordinal: adapterOrdinal++,
+                        eventType: mapped.type,
+                        callID: details.callID,
+                        toolName: details.toolName,
+                        validationOutcome: adapterValidationOutcome(mapped, validatedCallIDs),
+                        ...(details.payload === undefined
+                          ? {
+                              payloadHash: undefined,
+                              payloadLength: undefined,
+                              payloadKeys: [],
+                              unavailableReason: details.unavailableReason,
+                            }
+                          : boundedReceiptPayload(details.payload)),
+                      })
+                    })
+                  }
+                  return events
+                }),
+              ),
               Stream.flatMap((events) => Stream.fromIterable(events)),
               (events) =>
                 AgentGateway.manageStream(
@@ -691,6 +973,20 @@ const live: Layer.Layer<
                     metadata: result.metadata,
                   },
                   events,
+                ).pipe(
+                  Stream.ensuring(
+                    Effect.suspend(() =>
+                      input.requestReceipt
+                        ? input.requestReceipt.rawFrame({
+                            ordinal: 0,
+                            eventType: "ai-sdk-runtime",
+                            payloadKeys: [],
+                            unavailableReason: "provider_transport_did_not_expose_raw_frame",
+                            validationOutcome: "not_evaluated",
+                          })
+                        : Effect.void,
+                    ),
+                  ),
                 ),
             )
           }),

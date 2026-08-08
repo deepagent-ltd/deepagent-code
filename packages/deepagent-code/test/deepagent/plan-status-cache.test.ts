@@ -47,13 +47,18 @@ const model = () =>
     headers: {},
   }) as any
 
-async function prepare(sessionID: string, messages: any[], metadata?: Record<string, unknown>) {
+async function prepare(
+  sessionID: string,
+  messages: any[],
+  metadata?: Record<string, unknown>,
+  agent: { name: string; mode: "primary" | "subagent" } = { name: "build", mode: "primary" },
+) {
   return Effect.runPromise(
     LLMRequestPrep.prepare({
       user: user(sessionID, metadata),
       sessionID,
       model: model(),
-      agent: { name: "build", mode: "primary", prompt: "generic agent prompt", options: {}, permission: [] } as any,
+      agent: { ...agent, prompt: "generic agent prompt", options: {}, permission: [] } as any,
       system: ["You are deepagent-code, an interactive CLI tool that helps users with software engineering tasks."],
       messages,
       tools: {},
@@ -76,9 +81,9 @@ function seedPlan(sessionID: string, doneCount: number, total: number, mutations
   const steps = Array.from({ length: total }, (_, i) => ({
     step_id: `step_${i + 1}`,
     title: `Step ${i + 1}`,
-    status: i < doneCount ? ("done" as const) : ("pending" as const),
+    status: i < doneCount ? ("done" as const) : i === doneCount ? ("active" as const) : ("pending" as const),
   }))
-  const activeStep = steps.find((s) => s.status === "pending")
+  const activeStep = steps.find((s) => s.status === "active")
   const plan = AgentGateway.DeepAgentPlanController.buildPlanFromInput(sessionID, {
     goal: "ship the feature",
     steps,
@@ -121,6 +126,7 @@ describe("plan-status prompt-cache fix", () => {
     expect(status).not.toBeNull()
     expect(status!).toContain("<plan-status>")
     expect(status!).toContain("Current plan (1/3 done)")
+    expect(status!).toMatch(/Plan precondition: plan_id=plan_.+ plan_version=1/)
     AgentGateway.configure({ enabled: false, agentMode: "high" })
   })
 
@@ -129,6 +135,19 @@ describe("plan-status prompt-cache fix", () => {
     const sessionID = `ses_planstatus_general_${crypto.randomUUID()}`
     seedPlan(sessionID, 1, 3, 0)
     expect(SessionReminders.renderPlanStatus(sessionID)).toBeNull()
+    AgentGateway.configure({ enabled: false, agentMode: "high" })
+  })
+
+  test("goal-worker receives the durable plan identity in lightweight/general mode", async () => {
+    AgentGateway.configure({ enabled: true, agentMode: "general" })
+    const sessionID = `ses_planstatus_goal_worker_${crypto.randomUUID()}`
+    seedPlan(sessionID, 0, 2, 0)
+    const prepared = await prepare(sessionID, [{ role: "user", content: "complete the goal" }], undefined, {
+      name: "goal-worker",
+      mode: "subagent",
+    })
+    expect(prepared.messages.at(-1)?.content).toContain("<plan-status>")
+    expect(prepared.messages.at(-1)?.content).toMatch(/Plan precondition: plan_id=plan_.+ plan_version=1/)
     AgentGateway.configure({ enabled: false, agentMode: "high" })
   })
 
@@ -174,7 +193,10 @@ describe("plan-status prompt-cache fix", () => {
     const history = [
       { role: "user", content: "implement the parser" },
       { role: "assistant", content: "step 1" },
-      { role: "tool", content: [{ type: "tool-result", toolCallId: "t1", toolName: "edit", output: { type: "text", value: "ok" } }] },
+      {
+        role: "tool",
+        content: [{ type: "tool-result", toolCallId: "t1", toolName: "edit", output: { type: "text", value: "ok" } }],
+      },
     ] as any[]
 
     // Step A: 1/3 done, 2 mutations.
@@ -268,7 +290,10 @@ describe("V4.1 §S3.1 — goal plan hot-edit stays runtime-tail scoped", () => {
   // Apply a user plan revision the way the goal bridge surfaces it to the prompt on the next tick: the
   // reconciled PlanDoc is set into the session's plan-state (getPlan/setPlan), which is renderPlanStatus's
   // source of truth. Mirrors buildPlanFromInput → setPlan, the seedChildPlan path in goal-loop-wiring.
-  const applyEdit = (sessionID: string, revised: Parameters<typeof AgentGateway.DeepAgentPlanController.buildPlanFromInput>[1]) => {
+  const applyEdit = (
+    sessionID: string,
+    revised: Parameters<typeof AgentGateway.DeepAgentPlanController.buildPlanFromInput>[1],
+  ) => {
     const prior = AgentGateway.DeepAgentSessionState.getPlan(sessionID)
     const plan = AgentGateway.DeepAgentPlanController.buildPlanFromInput(sessionID, revised, prior as never)
     AgentGateway.DeepAgentSessionState.setPlan(sessionID, plan)
@@ -280,7 +305,10 @@ describe("V4.1 §S3.1 — goal plan hot-edit stays runtime-tail scoped", () => {
     const history = [
       { role: "user", content: "drive the goal" },
       { role: "assistant", content: "ticking" },
-      { role: "tool", content: [{ type: "tool-result", toolCallId: "t1", toolName: "edit", output: { type: "text", value: "ok" } }] },
+      {
+        role: "tool",
+        content: [{ type: "tool-result", toolCallId: "t1", toolName: "edit", output: { type: "text", value: "ok" } }],
+      },
     ] as any[]
 
     // Before the edit: a 3-step plan, first done.
@@ -317,7 +345,10 @@ describe("V4.1 §S3.1 — goal plan hot-edit stays runtime-tail scoped", () => {
     )
 
     // Cache telemetry remains diagnostic-only across the plan edit.
-    applyEdit(sessionID, { goal: "ship the feature", steps: [{ step_id: "step_1", title: "reworked", status: "pending" }] })
+    applyEdit(sessionID, {
+      goal: "ship the feature",
+      steps: [{ step_id: "step_1", title: "reworked", status: "pending" }],
+    })
     expect(LLMRequestPrep.recordCacheHitOutcome(sessionID, { input: 12, cache: { read: 1180, write: 0 } })).toBe(
       "stable",
     )

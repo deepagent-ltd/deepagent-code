@@ -4,7 +4,12 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { Effect } from "effect"
 import { DocumentStore } from "@deepagent-code/core/deepagent/document-store"
-import { createPlanDoc, type PlanDoc, type PlanStep, type PlanInput } from "@deepagent-code/core/deepagent/plan-controller"
+import { createPlanDoc, type PlanDoc, type PlanStep } from "@deepagent-code/core/deepagent/plan-controller"
+import {
+  createPlanEditCommand,
+  type PlanEditCommand,
+  type PlanEditSettlement,
+} from "@deepagent-code/core/deepagent/plan-edit-protocol"
 import type {
   ControllerDeps,
   GraderPorts,
@@ -207,27 +212,42 @@ describe("startGoal + runToCompletion", () => {
   })
 })
 
-describe("V4.1 §S2 — goal plan hot-edit port (pendingPlanEdit / markPlanEditConsumed)", () => {
-  test("drains a pending plan edit BETWEEN ticks, applies it to the durable doc, then stamps consumed", async () => {
+describe("V4.1 §S2 — goal plan hot-edit port (durable command settlement)", () => {
+  test("drains a pending command BETWEEN ticks, applies it, and settles it exactly once", async () => {
     const planDocId = materializePlanDoc({ store, sessionId: SESSION, plan: plan([step("a", "pending")]) })
     const deps = controllerDeps()
 
-    // One pending edit, delivered on the FIRST iteration then cleared by markPlanEditConsumed.
-    let pending: PlanInput | null = { goal: "reach the goal", steps: [{ step_id: "a", title: "renamed", status: "pending" }] }
-    let consumedCount = 0
-    let consumedWith: PlanInput | null = null
+    let pending: PlanEditCommand | null = null
+    let settled: PlanEditSettlement | null = null
     const ports: GoalDriverPorts = {
       ...noopPorts,
-      pendingPlanEdit: () => Effect.succeed(pending),
-      // The driver passes the EXACT edit it drained+applied so the port can identity-guard the clear.
-      markPlanEditConsumed: (applied) =>
+      pendingPlanEdit: () => {
+        const doc = store.get(planDocId)!
+        const current = JSON.parse(doc.body) as PlanDoc
+        pending ??= createPlanEditCommand({
+          requestID: "request-1",
+          sessionID: SESSION,
+          goalID: handle?.goalId ?? "pending",
+          planWrite: {
+            operation: "replan",
+            expected_plan_id: current.plan_id,
+            expected_version: doc.version,
+            replan_reason: "human goal edit",
+            goal: current.goal,
+            assumptions: current.assumptions,
+            steps: [{ title: "renamed", status: "pending" }],
+            active_step_id: null,
+          },
+        })
+        return Effect.succeed(pending)
+      },
+      settlePlanEdit: (_command, settlement) =>
         Effect.sync(() => {
-          consumedCount += 1
-          consumedWith = applied
+          settled = settlement
           pending = null
         }),
     }
-    const { handle } = await Effect.runPromise(
+    const started = await Effect.runPromise(
       startGoal({
         deps,
         planDocId,
@@ -235,6 +255,7 @@ describe("V4.1 §S2 — goal plan hot-edit port (pendingPlanEdit / markPlanEditC
         limits: { maxTicks: 10, maxTokens: 10_000, maxWallclockMs: 10_000 },
       }),
     )
+    const handle = started.handle
 
     // The plan never completes (step stays pending, executor is a no-op) so the run stalls out; what we
     // assert is that the edit landed on the durable doc and was consumed exactly once.
@@ -242,14 +263,11 @@ describe("V4.1 §S2 — goal plan hot-edit port (pendingPlanEdit / markPlanEditC
 
     const revised = JSON.parse(store.get(planDocId)!.body) as PlanDoc
     expect(revised.steps[0].title).toBe("renamed")
-    expect(consumedCount).toBe(1)
-    // The consume call received the SAME edit object the driver applied (enables the manager's identity
-    // guard so a newer edit admitted mid-apply is not clobbered).
-    expect(consumedWith).not.toBeNull()
-    expect((consumedWith as unknown as PlanInput).steps[0]!.title).toBe("renamed")
+    expect(revised.steps[0].step_id).not.toBe("a")
+    expect((settled as PlanEditSettlement | null)?.state).toBe("applied")
   })
 
-  test("a pendingPlanEdit port DEFECT does not crash the driver (degrades to no edit this iteration)", async () => {
+  test("a pending command port defect fails closed instead of silently skipping the command", async () => {
     const planDocId = materializePlanDoc({ store, sessionId: SESSION, plan: plan([step("a", "done")]) })
     const deps = controllerDeps()
     const ports: GoalDriverPorts = {
@@ -264,9 +282,55 @@ describe("V4.1 §S2 — goal plan hot-edit port (pendingPlanEdit / markPlanEditC
         limits: { maxTicks: 10, maxTokens: 10_000, maxWallclockMs: 10_000 },
       }),
     )
-    // The plan is already complete; despite the throwing port, the driver still drives to done.
-    const outcome = await Effect.runPromise(runToCompletion({ deps, handle, ports }))
-    expect(outcome).toBe("done")
+    await expect(Effect.runPromise(runToCompletion({ deps, handle, ports }))).rejects.toThrow("port blew up")
+  })
+
+  test("a rejected plan edit settles terminally and is not retried forever", async () => {
+    const planDocId = materializePlanDoc({ store, sessionId: SESSION, plan: plan([step("a", "done")]) })
+    const before = store.get(planDocId)!.body
+    const deps = controllerDeps()
+    let pending: PlanEditCommand | null = null
+    let settlement: PlanEditSettlement | null = null
+    const ports: GoalDriverPorts = {
+      ...noopPorts,
+      pendingPlanEdit: () => {
+        const doc = store.get(planDocId)!
+        const current = JSON.parse(doc.body) as PlanDoc
+        pending ??= createPlanEditCommand({
+          requestID: "request-rejected",
+          sessionID: SESSION,
+          goalID: handle?.goalId ?? "pending",
+          planWrite: {
+            operation: "advance",
+            expected_plan_id: current.plan_id,
+            expected_version: doc.version,
+            goal: current.goal,
+            assumptions: current.assumptions,
+            steps: [{ step_id: "a", title: "renamed", status: "done" }],
+            active_step_id: null,
+          },
+        })
+        return Effect.succeed(pending)
+      },
+      settlePlanEdit: (_command, value) => Effect.sync(() => {
+        settlement = value
+        pending = null
+      }),
+    }
+
+    const started = await Effect.runPromise(
+      startGoal({
+        deps,
+        planDocId,
+        criteria: [{ kind: "plan_complete" }],
+        limits: { maxTicks: 10, maxTokens: 10_000, maxWallclockMs: 10_000 },
+      }),
+    )
+    const handle = started.handle
+    expect(await Effect.runPromise(runToCompletion({ deps, handle, ports }))).toBe("done")
+    expect((settlement as PlanEditSettlement | null)?.state).toBe("rejected")
+    expect(pending).toBeNull()
+    expect(store.get(planDocId)!.body).toBe(before)
   })
 
   test("no pending edit (null) ⇒ the goal runs exactly as before, doc untouched", async () => {
@@ -277,7 +341,6 @@ describe("V4.1 §S2 — goal plan hot-edit port (pendingPlanEdit / markPlanEditC
     const ports: GoalDriverPorts = {
       ...noopPorts,
       pendingPlanEdit: () => Effect.succeed(null),
-      markPlanEditConsumed: () => Effect.sync(() => (consumed = true)),
     }
     const { handle } = await Effect.runPromise(
       startGoal({

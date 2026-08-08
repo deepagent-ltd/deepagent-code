@@ -5,7 +5,13 @@ import path from "node:path"
 import * as PlanStore from "../../src/deepagent/plan-store"
 import * as SessionState from "../../src/deepagent/session-state"
 import { DocumentStore } from "../../src/deepagent/document-store"
-import { createPlanDoc, type PlanDoc, type PlanStep } from "../../src/deepagent/plan-controller"
+import {
+  createPlanDoc,
+  PlanConflictError,
+  PlanValidationError,
+  type PlanDoc,
+  type PlanStep,
+} from "../../src/deepagent/plan-controller"
 
 // I33-1 (deepagentcore-v4.0.3): the DocumentStore `type:"plan"` doc is the SINGLE structural authority
 // for a session's plan. session-state.setPlan/getPlan delegate to plan-store; the goal path writes the
@@ -63,6 +69,106 @@ describe("I33-1 plan-store single authority", () => {
     const changed = plan("s2", [step("step_1", "done")])
     expect(PlanStore.setPlanDoc("s2", changed).version).toBe(2)
     expect(PlanStore.getPlanDoc("s2")?.steps[0].status).toBe("done")
+  })
+
+  test("compareAndCommitPlan enforces a logical version precondition", () => {
+    const sid = "s_cas"
+    const first = plan(sid, [step("step_1")])
+    const created = PlanStore.compareAndCommitPlan({ sessionId: sid, expected: null, candidate: first, origin: "model_tool" })
+    expect(created.version).toBe(1)
+    const expected = { plan_id: first.plan_id, doc_id: created.doc_id, version: created.version }
+    const second = { ...first, steps: [{ ...first.steps[0], status: "done" as const }] }
+    const committed = PlanStore.compareAndCommitPlan({ sessionId: sid, expected, candidate: second, origin: "model_tool" })
+    expect(committed.version).toBe(2)
+    expect(() =>
+      PlanStore.compareAndCommitPlan({
+        sessionId: sid,
+        expected,
+        candidate: { ...second, goal: "stale writer" },
+        origin: "model_tool",
+      }),
+    ).toThrow(PlanConflictError)
+    expect(PlanStore.planDocRef(sid)?.version).toBe(2)
+  })
+
+  test("compareAndCommitPlan refuses to overwrite an existing malformed authority", () => {
+    const sid = "s_malformed"
+    const authority = DocumentStore.shared(PlanStore.planStoreRoot(sid))
+    authority.upsert({
+      type: "plan",
+      scope: PlanStore.planScope(sid),
+      description: PlanStore.planDescription(sid),
+      idSlug: `plan-${sid}`,
+      body: "{not-json",
+      provenance: { source: "model", run_ref: PlanStore.planScope(sid) },
+    })
+    expect(() =>
+      PlanStore.compareAndCommitPlan({
+        sessionId: sid,
+        expected: null,
+        candidate: plan(sid, [step("step_1")]),
+        origin: "legacy_migration",
+      }),
+    ).toThrow(PlanValidationError)
+    expect(authority.list({ type: "plan", scope: PlanStore.planScope(sid) })).toHaveLength(1)
+  })
+
+  test("compareAndCommitPlan refuses parseable authorities that violate PlanDoc invariants", () => {
+    const fixtures = [
+      (value: PlanDoc): unknown => ({ ...value, steps: [] }),
+      (value: PlanDoc): unknown => ({ ...value, steps: [{ ...value.steps[0], status: "unknown" }] }),
+      (value: PlanDoc): unknown => ({ ...value, active_step_id: value.steps[0]!.step_id }),
+    ]
+
+    fixtures.forEach((malform, index) => {
+      const sid = `s_malformed_shape_${index}`
+      const authority = DocumentStore.shared(PlanStore.planStoreRoot(sid))
+      const malformed = malform(plan(sid, [step("step_1")]))
+      const stored = authority.upsert({
+        type: "plan",
+        scope: PlanStore.planScope(sid),
+        description: PlanStore.planDescription(sid),
+        idSlug: `plan-${sid}`,
+        body: JSON.stringify(malformed),
+        provenance: { source: "model", run_ref: PlanStore.planScope(sid) },
+      })
+
+      expect(PlanStore.getPlanDoc(sid)).toBeNull()
+      expect(() =>
+        PlanStore.compareAndCommitPlan({
+          sessionId: sid,
+          expected: null,
+          candidate: plan(sid, [step("replacement")]),
+          origin: "legacy_migration",
+        }),
+      ).toThrow(PlanValidationError)
+      expect(authority.get(stored.id)?.body).toBe(JSON.stringify(malformed))
+      expect(authority.get(stored.id)?.version).toBe(1)
+    })
+  })
+
+  test("compareAndCommitPlan validates the candidate at the CAS boundary", () => {
+    const sid = "s_invalid_candidate"
+    const malformed = { ...plan(sid, [step("step_1")]), steps: [] } as PlanDoc
+    expect(() =>
+      PlanStore.compareAndCommitPlan({
+        sessionId: sid,
+        expected: null,
+        candidate: malformed,
+        origin: "runtime_goal_bridge",
+      }),
+    ).toThrow(PlanValidationError)
+    expect(DocumentStore.shared(PlanStore.planStoreRoot(sid)).list({ type: "plan" })).toHaveLength(0)
+
+    expect(() =>
+      PlanStore.compareAndCommitPlan({
+        sessionId: sid,
+        expected: null,
+        candidate: { ...plan(sid, [step("step_1")]), session_id: "another-session" },
+        origin: "runtime_goal_bridge",
+      }),
+    ).toThrow(PlanValidationError)
+    expect(DocumentStore.shared(PlanStore.planStoreRoot(sid)).list({ type: "plan" })).toHaveLength(0)
   })
 
   test("session-state.setPlan/getPlan delegate to the store (body NOT on session state)", async () => {
@@ -159,5 +265,44 @@ describe("I33-1 plan-store single authority", () => {
     writeFileSync(path.join(stateDir, "sessions.json"), JSON.stringify(legacy))
     SessionState.configure(stateDir) // load; migration sees the store already has a plan -> skips
     expect(PlanStore.getPlanDoc("s7")?.steps[0].status).toBe("done") // newer store doc preserved
+  })
+
+  test("legacy migration rejects a malformed inline plan instead of making it authoritative", () => {
+    const malformed = { ...plan("s8", [step("step_1")]), steps: [] }
+    mkdirSync(stateDir, { recursive: true })
+    writeFileSync(
+      path.join(stateDir, "sessions.json"),
+      JSON.stringify({
+        s8: {
+          sessionId: "s8",
+          mode: "high",
+          completedAt: null,
+          planLatch: {
+            plan_id: malformed.plan_id,
+            latch: "fresh",
+            stale_reason: null,
+            replan_count: 0,
+            consecutive_blocks: 0,
+          },
+          plan: malformed,
+        },
+      }),
+    )
+    DocumentStore.__resetSharedRegistryForTests()
+    SessionState.configure(stateDir)
+    expect(PlanStore.getPlanDoc("s8")).toBeNull()
+    expect(SessionState.getPlan("s8")).toBeNull()
+    const diagnostics = DocumentStore.shared(PlanStore.planStoreRoot("s8")).list({
+      type: "diagnosis",
+      scope: PlanStore.planScope("s8"),
+      status: "quarantined",
+    })
+    expect(diagnostics).toHaveLength(1)
+    expect(JSON.parse(DocumentStore.shared(PlanStore.planStoreRoot("s8")).get(diagnostics[0]!.id)!.body)).toMatchObject({
+      kind: "legacy_plan_migration",
+      session_id: "s8",
+      plan_id: malformed.plan_id,
+      code: "empty_steps",
+    })
   })
 })

@@ -26,7 +26,7 @@ jobs:
       - uses: ./.github/actions/setup-bun
 
       - name: Run deepagent-code
-        uses: deepagent-ltd/deepagent-code/github@github-v1.4.4
+        uses: deepagent-ltd/deepagent-code/github@github-v1.4.5
         env:
           DEEPAGENT_CODE_API_KEY: ${{ secrets.DEEPAGENT_CODE_API_KEY }}
           DEEPAGENT_CODE_PERMISSION: '{"bash": "deny"}'

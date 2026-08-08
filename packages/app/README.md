@@ -2,8 +2,6 @@
 
 SolidJS front-end shell for the DeepAgent Code desktop app (Electron/Tauri).
 
-Current release: Desktop 1.4.4, powered by DeepAgent Core V4.0.5.
-
 ## Stack
 
 - **UI:** SolidJS + Vite (Bun)

@@ -37,6 +37,7 @@ import { CodeIntelFacade } from "@/code-intelligence/facade"
 import { ContextFederationRollout } from "@deepagent-code/core/context-federation/rollout"
 import { ContextQueryTool } from "./context_query"
 import { ContextQueryFacade } from "@/context-federation/context-query-facade"
+import { ContextFederationReadiness } from "@/context-federation/readiness"
 import { ProfileTool } from "./profile"
 import { DebugTool } from "./debug"
 import { QueryLogTool } from "./query_log"
@@ -52,7 +53,7 @@ import { GitReadTool } from "./git_read"
 import { Glob } from "@deepagent-code/core/util/glob"
 import path from "path"
 import { pathToFileURL } from "url"
-import { Effect, Layer, Context } from "effect"
+import { Effect, Layer, Context, Option } from "effect"
 import { FetchHttpClient, HttpClient } from "effect/unstable/http"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { CrossSpawnSpawner } from "@deepagent-code/core/cross-spawn-spawner"
@@ -146,6 +147,7 @@ const layerWithFacades: Layer.Layer<
     const agents = yield* Agent.Service
     const truncate = yield* Truncate.Service
     const flags = yield* RuntimeFlags.Service
+    const federationReadiness = Option.getOrUndefined(yield* Effect.serviceOption(ContextFederationReadiness.Service))
     yield* EffectFlock.Service
 
     const invalid = yield* InvalidTool
@@ -311,6 +313,10 @@ const layerWithFacades: Layer.Layer<
           patch_chunk: Tool.init(patchchunk),
           question: Tool.init(question),
           lsp: Tool.init(lsptool),
+          // BUG-009 §6.4: v2 code_intel switches on contextQueryToolsV2, but only when the
+          // CodeIntelV2 facade is actually available.  If v2 initialization fails (empty/cold
+          // code graph, CodeQueryService unavailable), fall back to v1 silently so the tool
+          // remains useful.  v1 removal requires explicit parity evidence — not done here.
           code_intel: Effect.succeed(rollout.enabled.contextQueryToolsV2 ? codeIntelV2 : codeIntelV1),
           profile: Tool.init(profiletool),
           debug: Tool.init(debugtool),
@@ -388,15 +394,14 @@ const layerWithFacades: Layer.Layer<
 
     const tools: Interface["tools"] = Effect.fn("ToolRegistry.tools")(function* (input) {
       const registryState = yield* InstanceState.get(state)
-      const projectRollout = ContextFederationRollout.resolveProject(
-        rollout,
-        input.projectScopeKey ?? "project_scope_unbound",
-        {
+      const projectRollout = ContextFederationRollout.activate(
+        ContextFederationRollout.resolveProject(rollout, input.projectScopeKey ?? "project_scope_unbound", {
           stage: flags.contextFederationRolloutStage,
           percentage: flags.contextFederationRolloutPercent,
           internalProjectScopeKeys: flags.contextFederationInternalProjects,
           killSwitch: flags.contextFederationKillSwitch,
-        },
+        }),
+        yield* federationReadiness?.snapshot() ?? Effect.succeed(ContextFederationReadiness.unavailableSnapshot()),
       )
       const filtered = [...registryState.builtin, ...registryState.custom].flatMap((tool) => {
         if (tool.id === PRFinalizeTool.id && input.agent.mode !== "primary") return []
@@ -471,7 +476,13 @@ const noopBootstrapInstanceStore = InstanceStore.defaultLayer.pipe(
 
 export const defaultLayer = Layer.suspend(() =>
   layer.pipe(
-    Layer.provide(Layer.merge(CodeIntelFacade.defaultLayer, ContextQueryFacade.defaultLayer)),
+    Layer.provide(
+      Layer.mergeAll(
+        CodeIntelFacade.defaultLayer,
+        ContextQueryFacade.defaultLayer,
+        ContextFederationReadiness.defaultLayer,
+      ),
+    ),
     // Ordered dependency chain (must stay explicit so instances are SHARED):
     // DebugService.layer needs RuntimeBase.Service + EventV2Bridge.Service; RuntimeBase.layer
     // needs Worktree.Service. Providing them outermost-last means the EventV2Bridge in the

@@ -10,13 +10,11 @@ import {
   buildPlanFromInput,
   type PlanDoc,
   type PlanStep,
-  type PlanInput,
 } from "../../src/deepagent/plan-controller"
+import { createPlanEditCommand } from "../../src/deepagent/plan-edit-protocol"
 import {
   makeGoalLoop,
   readGoalTickCursor,
-  persistPendingPlanEdit,
-  readPendingPlanEdit,
   evaluateForController,
   budgetNotice,
   InvalidGoalError,
@@ -816,7 +814,7 @@ describe("V3.9 §D — confirmed-bug regressions (2026-07-14)", () => {
     const clock = new FakeClock()
     // step a is done, step b is blocked → buildCompletionReport.complete is true (blocked counts as
     // resolved), which previously made plan_complete report DONE and silently swallowed the blocker.
-    const planDocId = putPlan([step("a", "done"), step("b", "blocked")])
+    const planDocId = putPlan([step("a", "done"), { ...step("b", "blocked"), note: "dependency unavailable" }])
     const loop = makeGoalLoop(deps({}, clock))
     const handle = await Effect.runPromise(loop.start(spec(planDocId)))
     const outcome = await Effect.runPromise(loop.tick(handle))
@@ -828,7 +826,10 @@ describe("V3.9 §D — confirmed-bug regressions (2026-07-14)", () => {
   })
 
   test("BUG#6: evaluateForController surfaces a blocked plan as an unmet, escalating gap", async () => {
-    const blockedPlan = createPlanDoc(SESSION, "g", [step("a", "done"), step("b", "blocked")])
+    const blockedPlan = createPlanDoc(SESSION, "g", [
+      step("a", "done"),
+      { ...step("b", "blocked"), note: "dependency unavailable" },
+    ])
     const res = await Effect.runPromise(
       evaluateForController([{ kind: "plan_complete" }], passingPorts(), blockedPlan),
     )
@@ -917,11 +918,31 @@ describe("V3.9 §D — process restart recovery (§D.6 可恢复)", () => {
 })
 
 describe("V4.1 §S2 — goal plan hot-edit (applyPlanEdit)", () => {
-  // A user plan edit expressed as the loose PlanInput the route/handler forwards.
-  const edit = (steps: { title: string; step_id?: string; status?: string }[], goal = "reach the goal"): PlanInput => ({
-    goal,
-    steps,
-  })
+  const edit = (
+    planDocId: string,
+    goalId: string,
+    steps: { title: string; step_id?: string; status?: string }[],
+    goal = "reach the goal",
+    operation: "advance" | "replan" = "replan",
+  ) => {
+    const doc = store.get(planDocId)!
+    const plan = JSON.parse(doc.body) as PlanDoc
+    return createPlanEditCommand({
+      requestID: `request-${crypto.randomUUID()}`,
+      sessionID: SESSION,
+      goalID: goalId,
+      planWrite: {
+        operation,
+        expected_plan_id: plan.plan_id,
+        expected_version: doc.version,
+        ...(operation === "replan" ? { replan_reason: "human goal edit" } : {}),
+        goal,
+        assumptions: plan.assumptions,
+        steps: steps.map((step) => ({ ...step, status: step.status ?? "pending" })),
+        active_step_id: steps.find((step) => step.status === "active")?.step_id ?? null,
+      },
+    })
+  }
 
   test("upserts the edited plan to the durable doc (version+1) so the next tick sees the revision", async () => {
     const clock = new FakeClock()
@@ -930,7 +951,7 @@ describe("V4.1 §S2 — goal plan hot-edit (applyPlanEdit)", () => {
     const loop = makeGoalLoop(deps({}, clock))
     const handle = await Effect.runPromise(loop.start(spec(planDocId)))
 
-    await Effect.runPromise(loop.applyPlanEdit(handle, edit([{ title: "revised step", status: "pending" }])))
+    await Effect.runPromise(loop.applyPlanEdit(handle, edit(planDocId, handle.goalId, [{ title: "revised step", status: "pending" }])))
 
     const doc = store.get(planDocId)!
     expect(doc.version).toBeGreaterThan(v0)
@@ -940,7 +961,7 @@ describe("V4.1 §S2 — goal plan hot-edit (applyPlanEdit)", () => {
     expect(doc.provenance.source).toBe("human")
   })
 
-  test("preserves step ids + accumulated evidence across the rewrite (buildPlanFromInput reconciliation)", async () => {
+  test("rejects retitling an existing step so evidence cannot be rebound to new work", async () => {
     const clock = new FakeClock()
     // Seed a plan whose step "a" already carries evidence (as the executor's mirror-back would leave it).
     const seeded = createPlanDoc(SESSION, "reach the goal", [{ ...step("a", "active"), evidence: ["tests pass"] }])
@@ -955,13 +976,17 @@ describe("V4.1 §S2 — goal plan hot-edit (applyPlanEdit)", () => {
     const loop = makeGoalLoop(deps({}, clock))
     const handle = await Effect.runPromise(loop.start(spec(planDocId)))
 
-    // The user re-titles the SAME step (same id) — evidence must survive (it is runtime-owned, never
-    // taken from the loose input).
-    await Effect.runPromise(loop.applyPlanEdit(handle, edit([{ step_id: "a", title: "renamed", status: "active" }])))
+    // Reusing the same id for a different title is ambiguous: a human edit must assign a new id before
+    // any evidence can move to the new work item.
+    await expect(
+      Effect.runPromise(
+        loop.applyPlanEdit(handle, edit(planDocId, handle.goalId, [{ step_id: "a", title: "renamed", status: "active" }])),
+      ),
+    ).rejects.toThrow("unsafe_step_identity")
 
     const revised = JSON.parse(store.get(planDocId)!.body) as PlanDoc
     expect(revised.steps[0].step_id).toBe("a")
-    expect(revised.steps[0].title).toBe("renamed")
+    expect(revised.steps[0].title).toBe("a")
     expect(revised.steps[0].evidence).toEqual(["tests pass"])
   })
 
@@ -987,7 +1012,10 @@ describe("V4.1 §S2 — goal plan hot-edit (applyPlanEdit)", () => {
 
     // User re-opens the step (done→pending) + adds a new one. The re-baseline resets stallCount to 0.
     await Effect.runPromise(
-      loop.applyPlanEdit(handle, edit([{ step_id: "a", title: "a", status: "pending" }, { title: "b", status: "pending" }])),
+      loop.applyPlanEdit(
+        handle,
+        edit(planDocId, handle.goalId, [{ step_id: "a", title: "a", status: "pending" }, { title: "b", status: "pending" }]),
+      ),
     )
     const afterEdit = await Effect.runPromise(loop.status(handle))
     expect(afterEdit.stallCount).toBe(0)
@@ -998,11 +1026,24 @@ describe("V4.1 §S2 — goal plan hot-edit (applyPlanEdit)", () => {
     expect(outcome).toBe("continue")
   })
 
-  test("no-op on an unknown/unstarted goal (never throws, never creates a doc)", async () => {
+  test("rejects an unknown/unstarted goal and never creates a doc", async () => {
     const clock = new FakeClock()
     const loop = makeGoalLoop(deps({}, clock))
     const handle = { goalId: "nope", planDocId: "no-doc", sessionId: SESSION }
-    await Effect.runPromise(loop.applyPlanEdit(handle, edit([{ title: "x" }])))
+    const command = createPlanEditCommand({
+      requestID: "request-unknown",
+      sessionID: SESSION,
+      goalID: "nope",
+      planWrite: {
+        operation: "create",
+        expected_plan_id: null,
+        expected_version: null,
+        goal: "reach the goal",
+        steps: [{ title: "x", status: "pending" }],
+        active_step_id: null,
+      },
+    })
+    await expect(Effect.runPromise(loop.applyPlanEdit(handle, command))).rejects.toThrow("goal state not found")
     expect(store.get("no-doc")).toBeNull()
   })
 
@@ -1014,7 +1055,11 @@ describe("V4.1 §S2 — goal plan hot-edit (applyPlanEdit)", () => {
     await Effect.runPromise(loop.stop(handle))
     const vAfterStop = store.get(planDocId)!.version
 
-    await Effect.runPromise(loop.applyPlanEdit(handle, edit([{ title: "revised" }])))
+    await expect(
+      Effect.runPromise(loop.applyPlanEdit(handle, edit(planDocId, handle.goalId, [{ title: "revised" }]))),
+    ).rejects.toThrow(
+      "goal is stopped",
+    )
 
     // Terminal → the edit is ignored; the durable doc is untouched.
     expect(store.get(planDocId)!.version).toBe(vAfterStop)
@@ -1041,9 +1086,15 @@ describe("V4.1 §S2 — goal plan hot-edit (applyPlanEdit)", () => {
     const v0 = store.get(planDocId)!.version
 
     // An edit that reconciles to the exact same body + same (human) provenance ⇒ INV-4 no-op.
-    await Effect.runPromise(loop.applyPlanEdit(handle, edit([{ step_id: "a", title: "a", status: "pending" }])))
+    const result = await Effect.runPromise(
+      loop.applyPlanEdit(
+        handle,
+        edit(planDocId, handle.goalId, [{ step_id: "a", title: "a", status: "pending" }], "reach the goal", "advance"),
+      ),
+    )
 
     expect(store.get(planDocId)!.version).toBe(v0)
+    expect(result.changed).toBe(false)
   })
 })
 
@@ -1289,59 +1340,5 @@ describe("V4.0.1 P2 — net-generation token accounting (§4.4/§4.5, budgetToke
     await Effect.runPromise(loop2.tick(handle))
     const status = await Effect.runPromise(loop2.status(handle))
     expect(status.ledger.tokens).toBe(2_100) // 2 × 1050 gross — stays gross despite the flag flip
-  })
-})
-
-// V4.0.1 P3(a) — tick idempotency / crash recovery. The infrastructure already exists (durable command
-// cursor + plan-version dedup on the event path; shared run_context doc for both drivers); these tests
-// pin the DURABILITY guarantees that the exactly-once story rests on. `persistPendingPlanEdit` /
-// `readPendingPlanEdit` are pure functions over a DocumentStore, so "cold recovery" is modeled by opening
-// a FRESH DocumentStore handle over the same on-disk root — the exact "second process" reconstruction the
-// event-driven cold-recovery test uses (goal-tick-cold-recovery.test.ts).
-describe("V4.0.1 P3(a) — pendingPlanEdit durability + cold recovery", () => {
-  const GOAL = "g-pending-1"
-  const editInput: PlanInput = { goal: "reach the goal", steps: [{ title: "revised", status: "pending" }] }
-
-  test("a persisted pending edit survives a process restart (fresh store over the same root)", () => {
-    persistPendingPlanEdit(store, SESSION, GOAL, editInput)
-
-    // Simulate a process restart: NOTHING in memory, only the run_context doc on disk. A brand-new store
-    // handle over the same root must reconstruct the pending edit byte-for-byte.
-    const recovered = readPendingPlanEdit(new DocumentStore(root), SESSION, GOAL)
-    expect(recovered).toEqual(editInput)
-  })
-
-  test("consume-once: writing the null sentinel clears the edit, and a re-read after restart stays cleared", () => {
-    persistPendingPlanEdit(store, SESSION, GOAL, editInput)
-    expect(readPendingPlanEdit(store, SESSION, GOAL)).toEqual(editInput)
-
-    // markPlanEditConsumed persists the empty-body sentinel (plan == null). Once consumed it must never
-    // re-materialize — not on this handle, and not after a cold restart.
-    persistPendingPlanEdit(store, SESSION, GOAL, null)
-    expect(readPendingPlanEdit(store, SESSION, GOAL)).toBeNull()
-    expect(readPendingPlanEdit(new DocumentStore(root), SESSION, GOAL)).toBeNull()
-  })
-
-  test("a pending edit is keyed per goal — reading a different goalId never returns another goal's edit", () => {
-    persistPendingPlanEdit(store, SESSION, GOAL, editInput)
-    // pending_edit_goal_id scopes the doc: a sibling goal in the same session sees nothing.
-    expect(readPendingPlanEdit(new DocumentStore(root), SESSION, "g-other")).toBeNull()
-    expect(readPendingPlanEdit(new DocumentStore(root), SESSION, GOAL)).toEqual(editInput)
-  })
-
-  test("the latest write wins across a restart (a newer edit persisted after read is preserved)", () => {
-    persistPendingPlanEdit(store, SESSION, GOAL, editInput)
-    const newer: PlanInput = { goal: "reach the goal", steps: [{ title: "newer step", status: "active" }] }
-    // A second edit lands (e.g. the user revised again before the first was consumed) — the durable doc
-    // reflects the newest content, and a cold reader sees it.
-    persistPendingPlanEdit(store, SESSION, GOAL, newer)
-    expect(readPendingPlanEdit(new DocumentStore(root), SESSION, GOAL)).toEqual(newer)
-  })
-
-  test("the pending-edit doc is invisible to the goal-tick cursor (kept off loadState's run_context match)", () => {
-    // The pending-edit doc uses `pending_edit_goal_id`, NOT `goal_id`, so it must never be mistaken for the
-    // goal's run-state doc — otherwise readGoalTickCursor could parse the edit body as GoalRuntimeState.
-    persistPendingPlanEdit(store, SESSION, GOAL, editInput)
-    expect(readGoalTickCursor(new DocumentStore(root), SESSION, GOAL)).toBeNull()
   })
 })

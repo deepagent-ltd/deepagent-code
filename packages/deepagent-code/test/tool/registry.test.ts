@@ -42,6 +42,8 @@ import { RuntimeBase } from "@/runtime/base"
 import { Worktree } from "@/worktree"
 import { CodeIntelFacade } from "@/code-intelligence/facade"
 import { ContextQueryFacade } from "@/context-federation/context-query-facade"
+import { ContextFederationReadiness } from "@/context-federation/readiness"
+import { ContextFederationRollout } from "@deepagent-code/core/context-federation/rollout"
 import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
 
 const node = CrossSpawnSpawner.defaultLayer
@@ -52,6 +54,7 @@ const configLayer = TestConfig.layer({
 type RegistryLayerOptions = {
   flags?: Partial<RuntimeFlags.Info>
   plugin?: Layer.Layer<Plugin.Service>
+  readiness?: ContextFederationRollout.DerivedContextDataReadiness
 }
 
 const registryLayer = (opts: RegistryLayerOptions = {}) =>
@@ -90,7 +93,16 @@ const registryLayer = (opts: RegistryLayerOptions = {}) =>
           Search.defaultLayer,
           Truncate.defaultLayer,
           Layer.succeed(CodeIntelFacade.Service, CodeIntelFacade.Service.of({ execute: () => Effect.die("unused") })),
-          Layer.succeed(ContextQueryFacade.Service, ContextQueryFacade.Service.of({ execute: () => Effect.die("unused") })),
+          Layer.succeed(
+            ContextQueryFacade.Service,
+            ContextQueryFacade.Service.of({ execute: () => Effect.die("unused") }),
+          ),
+          Layer.succeed(
+            ContextFederationReadiness.Service,
+            ContextFederationReadiness.Service.of({
+              snapshot: () => Effect.succeed(opts.readiness ?? ContextFederationRollout.READINESS_READY_STUB),
+            }),
+          ),
         ),
       ),
     )
@@ -134,31 +146,71 @@ const itNoCodeIntel = testEffect(
   Layer.mergeAll(registryLayer({ flags: { codeIntelTool: false } }), node, Agent.defaultLayer),
 )
 const itContextToolsV2 = testEffect(
-  Layer.mergeAll(registryLayer({ flags: {
-    contextFederationShadow: true,
-    locationIndexesV2Shadow: true,
-    contextProjectionV2: true,
-    contextQueryToolsV2: true,
-  } }), node, Agent.defaultLayer),
+  Layer.mergeAll(
+    registryLayer({
+      flags: {
+        contextFederationShadow: true,
+        locationIndexesV2Shadow: true,
+        contextProjectionV2: true,
+        contextQueryToolsV2: true,
+      },
+    }),
+    node,
+    Agent.defaultLayer,
+  ),
 )
 const itContextToolsV2Internal = testEffect(
-  Layer.mergeAll(registryLayer({ flags: {
-    contextFederationShadow: true,
-    locationIndexesV2Shadow: true,
-    contextProjectionV2: true,
-    contextQueryToolsV2: true,
-    contextFederationRolloutStage: "internal",
-    contextFederationInternalProjects: ["project_scope_internal"],
-  } }), node, Agent.defaultLayer),
+  Layer.mergeAll(
+    registryLayer({
+      flags: {
+        contextFederationShadow: true,
+        locationIndexesV2Shadow: true,
+        contextProjectionV2: true,
+        contextQueryToolsV2: true,
+        contextFederationRolloutStage: "internal",
+        contextFederationInternalProjects: ["project_scope_internal"],
+      },
+    }),
+    node,
+    Agent.defaultLayer,
+  ),
 )
 const itContextToolsV2Killed = testEffect(
-  Layer.mergeAll(registryLayer({ flags: {
-    contextFederationShadow: true,
-    locationIndexesV2Shadow: true,
-    contextProjectionV2: true,
-    contextQueryToolsV2: true,
-    contextFederationKillSwitch: true,
-  } }), node, Agent.defaultLayer),
+  Layer.mergeAll(
+    registryLayer({
+      flags: {
+        contextFederationShadow: true,
+        locationIndexesV2Shadow: true,
+        contextProjectionV2: true,
+        contextQueryToolsV2: true,
+        contextFederationKillSwitch: true,
+      },
+    }),
+    node,
+    Agent.defaultLayer,
+  ),
+)
+const itContextToolsV2Degraded = testEffect(
+  Layer.mergeAll(
+    registryLayer({
+      flags: {
+        contextFederationShadow: true,
+        locationIndexesV2Shadow: true,
+        contextProjectionV2: true,
+        contextQueryToolsV2: true,
+      },
+      readiness: {
+        state: "degraded",
+        identityBound: true,
+        indexAvailable: false,
+        storageHealthy: true,
+        observedAt: Date.now(),
+        expiresAt: Number.MAX_SAFE_INTEGER,
+      },
+    }),
+    node,
+    Agent.defaultLayer,
+  ),
 )
 
 afterEach(async () => {
@@ -739,6 +791,22 @@ describe("tool.registry", () => {
   )
 
   itContextToolsV2Killed.instance("removes active context tools immediately under the kill switch", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const agents = yield* Agent.Service
+      const tools = yield* registry.tools({
+        providerID: ProviderV2.ID.make("deepagent-code"),
+        modelID: ModelV2.ID.make("test"),
+        agent: yield* agents.defaultInfo(),
+        projectScopeKey: "project_scope_internal",
+      })
+
+      expect(tools.map((tool) => tool.id)).not.toContain("context_query")
+      expect(tools.filter((tool) => tool.id === "code_intel")).toHaveLength(1)
+    }),
+  )
+
+  itContextToolsV2Degraded.instance("keeps v1 code_intel when v2 context data is degraded", () =>
     Effect.gen(function* () {
       const registry = yield* ToolRegistry.Service
       const agents = yield* Agent.Service

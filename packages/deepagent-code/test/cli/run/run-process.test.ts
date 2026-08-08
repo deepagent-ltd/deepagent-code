@@ -16,6 +16,22 @@ const goalEnvironment = {
   DEEPAGENT_CODE_V4_GOAL_TICK_EVENT_DRIVEN: "false",
 }
 
+const completeCurrentPlan = (objective: string) => (hit: { body: Record<string, unknown> }) => {
+  const precondition = JSON.stringify(hit.body).match(/Plan precondition: plan_id=(\S+) plan_version=(\d+)/)
+  if (!precondition) throw new Error("goal-worker prompt omitted the plan precondition")
+  return {
+    name: "plan",
+    input: {
+      operation: "advance",
+      expected_plan_id: precondition[1],
+      expected_version: Number(precondition[2]),
+      goal: objective,
+      steps: [{ step_id: "step_1", title: objective, status: "done" }],
+      active_step_id: null,
+    },
+  }
+}
+
 describe("deepagentCode run (non-interactive subprocess)", () => {
   // Happy path: prompt completes, output reaches stdout, process exits 0.
   // If this fails, all the others likely will too — debug here first.
@@ -171,10 +187,7 @@ describe("deepagentCode run (non-interactive subprocess)", () => {
     ({ llm, deepagentCode }) =>
       Effect.gen(function* () {
         const objective = "Complete the deterministic CLI goal"
-        yield* llm.tool("plan", {
-          goal: objective,
-          steps: [{ step_id: "step_1", title: objective, status: "done" }],
-        })
+        yield* llm.toolFrom(completeCurrentPlan(objective))
         yield* llm.text("Goal step completed")
 
         const result = yield* deepagentCode.run(objective, {
@@ -204,9 +217,7 @@ describe("deepagentCode run (non-interactive subprocess)", () => {
             "phase" in event.goal &&
             event.goal.phase === "done",
         )
-        const terminal = events.findIndex(
-          (event) => event.type === "session_terminal" && event.phase === "done",
-        )
+        const terminal = events.findIndex((event) => event.type === "session_terminal" && event.phase === "done")
 
         expect(start).toBeGreaterThanOrEqual(0)
         expect(running).toBeGreaterThan(start)
@@ -228,23 +239,12 @@ describe("deepagentCode run (non-interactive subprocess)", () => {
         yield* Effect.promise(() =>
           Bun.write(
             path.join(home, ".deepagent-code/plans/goal+plan.md"),
-            [
-              "## Goal",
-              objective,
-              "",
-              "## Criteria",
-              "- plan complete",
-              "",
-              "## Plan",
-              `- [>] ${objective}`,
-              "",
-            ].join("\n"),
+            ["## Goal", objective, "", "## Criteria", "- plan complete", "", "## Plan", `- [>] ${objective}`, ""].join(
+              "\n",
+            ),
           ),
         )
-        yield* llm.tool("plan", {
-          goal: objective,
-          steps: [{ step_id: "step_1", title: objective, status: "done" }],
-        })
+        yield* llm.toolFrom(completeCurrentPlan(objective))
         yield* llm.text("Plan-file goal completed")
 
         const result = yield* deepagentCode.spawn(
@@ -276,8 +276,7 @@ describe("deepagentCode run (non-interactive subprocess)", () => {
         expect(
           events.some(
             (event) =>
-              event.type === "session_terminal" &&
-              ["rolled_back", "needs_human"].includes(String(event.phase)),
+              event.type === "session_terminal" && ["rolled_back", "needs_human"].includes(String(event.phase)),
           ),
         ).toBe(true)
       }),
