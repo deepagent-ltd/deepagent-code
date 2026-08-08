@@ -108,9 +108,17 @@ export const ensureSessionBranch = Effect.fn("PRCollaboration.ensureSessionBranc
       if (!repository) return false
       const status = yield* input.git.porcelainStatus(input.directory)
       if (!status?.clean) {
+        // BUG-001-405 Fix-C: truncate the path list to avoid flooding the parent model context.
+        // Dumping all dirty/untracked paths produced 86 k-char errors in observed sessions.
+        const MAX_SHOWN = 10
+        const allPaths = status?.paths ?? []
+        const shown = allPaths.slice(0, MAX_SHOWN).join(", ")
+        const overflow = allPaths.length > MAX_SHOWN ? ` … and ${allPaths.length - MAX_SHOWN} more` : ""
         return yield* Effect.fail(
           new Error(
-            `Write-subagent collaboration requires a clean parent checkout; preserve or commit these paths first: ${status?.paths.join(", ") || "unknown"}`,
+            `Write-subagent collaboration requires a clean parent checkout. ` +
+              `${allPaths.length} path(s) are modified/untracked — commit or stash them first. ` +
+              `Examples: ${shown}${overflow}`,
           ),
         )
       }

@@ -407,6 +407,7 @@ const isManagedDeepAgentRuntimeWith = (config: CurrentConfig) =>
 
 import {
   buildSystemPrompt,
+  buildVolatileContinuationContext,
   buildVolatileRoundContext,
   type KnowledgeRefProjection,
   type PromptContext,
@@ -487,6 +488,9 @@ export const systemPrompt = (_providerID: string, context?: PromptContext) =>
 // when the DeepAgent runtime is active, matching systemPrompt().
 export const volatileRoundContext = (context: PromptContext): string =>
   isActiveDeepAgentRuntime() ? buildVolatileRoundContext(context) : ""
+
+export const volatileContinuationContext = (): string =>
+  isActiveDeepAgentRuntime() ? buildVolatileContinuationContext() : ""
 
 export const preflight = (input: RunInput): Effect.Effect<void, LLMError> => preflightWith(input, current)
 

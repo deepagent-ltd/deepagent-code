@@ -1,5 +1,14 @@
 # Changelog
 
+## Desktop 1.4.5 / DeepAgent Core V4.0.6 - Bounded planning and runtime hardening
+
+- Make compaction durable through explicit run/attempt lifecycle records and Prompt Epoch authority, with bounded text-only summary retries and typed terminal failures.
+- Reject unknown context limits before unsafe dispatch and compare raw-token phases without treating missing provider metadata as a known capacity.
+- Add readiness-aware context federation and per-turn provider request/argument receipts across adapter, AI SDK, processor, and available raw-frame boundaries.
+- Enforce atomic plan admission, versioned compare-and-commit, last-known-good preservation, bounded malformed-plan attempts, durable human edits, and cursor-safe UI reconciliation.
+- Verify the compiled and installed package with the typed plan HTTP matrix and a DeepSeek malformed-recovery plus happy-path plan run.
+- Align Desktop 1.4.5, DeepAgent Core V4.0.6, GitHub Action `github-v1.4.5`, package metadata, updater tags, workflow references, and public release documentation.
+
 ## Desktop 1.4.4 / DeepAgent Core V4.0.5 - Durable context and collaboration
 
 - Persist AgentExecution claims, leases, generations, resource locks, token debits, terminal metadata, and handoffs for event-driven multi-Agent work.

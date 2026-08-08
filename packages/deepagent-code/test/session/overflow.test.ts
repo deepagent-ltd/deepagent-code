@@ -4,6 +4,7 @@ import type { Provider } from "@/provider/provider"
 import { Option, Schema } from "effect"
 import {
   overflowStatus,
+  requestBudget,
   softLandingDecision,
   isOverflow,
   decide,
@@ -115,23 +116,30 @@ describe("overflowStatus lines", () => {
     }
   })
 
-  test("context===0 model never overflows", () => {
+  test("context===0 (unknown limit) returns unavailable, not ok", () => {
+    // BUG-007 RC-3: context=0 is the fallback for an *unknown* limit — it must return a typed
+    // "unavailable" phase with reason "context_limit_unknown", NOT the same "ok" as auto=false.
     const zero = model({ context: 0 })
-    expect(overflowStatus({ cfg: c, model: zero, tokens: 1_000_000 }).phase).toBe("ok")
+    const st = overflowStatus({ cfg: c, model: zero, tokens: 1_000_000 })
+    expect(st.phase).toBe("unavailable")
+    expect(st.reason).toBe("context_limit_unknown")
+    // isOverflow is still false (unavailable ≠ hard), but for the right reason.
+    expect(isOverflow({ cfg: c, model: zero, tokens: tokensFor(1_000_000) })).toBe(false)
   })
 
-  test("prefixTokens deduction (BodyAfterPrefix): a larger prefix does NOT advance the lines", () => {
-    // Same raw token count, but growing the static prefix reduces `used`, so the phase de-escalates.
-    // The soft/fallback/hard LINES themselves are unchanged by prefixTokens.
-    const raw = hard // would be "hard" with prefixTokens=0
+  test("prefixTokens do NOT reduce phase: raw >= hardLine must always be 'hard'", () => {
+    // BUG-007 RC-5: prefixTokens are for cache/cost diagnostics only; they must NOT lower the
+    // phase decision. raw=hard means the complete provider-visible request has already hit the
+    // hard line — a large static prefix does not make it safe to continue.
+    const raw = hard // 100_000 = hardLine
     const noPrefix = overflowStatus({ cfg: c, model: m, tokens: raw, prefixTokens: 0 })
-    // raw=100_000 body-after-prefix=100_000 ⇒ hard. Deduct a 15_000 prefix ⇒ body=85_000 ⇒ fallback
-    // band (>= fallbackLine 88_000? no → 85_000 is in [soft 80k, fallback 88k) ⇒ reminder).
     const withPrefix = overflowStatus({ cfg: c, model: m, tokens: raw, prefixTokens: 15_000 })
+    // Both cases: raw request has reached hardLine → must be "hard".
     expect(noPrefix.phase).toBe("hard")
-    expect(withPrefix.used).toBe(raw - 15_000) // 85_000
-    expect(withPrefix.phase).toBe("reminder")
-    // The LINES are prefix-independent (a bigger prefix does NOT advance soft/hard).
+    expect(withPrefix.phase).toBe("hard") // previously "reminder" — that was the bug
+    // `used` (body-after-prefix) is preserved in the receipt for cache/cost analysis.
+    expect(withPrefix.used).toBe(raw - 15_000) // 85_000 — diagnostic, not threshold input
+    // The LINES are prefix-independent.
     expect(withPrefix.softLine).toBe(noPrefix.softLine)
     expect(withPrefix.fallbackLine).toBe(noPrefix.fallbackLine)
     expect(withPrefix.hardLine).toBe(noPrefix.hardLine)
@@ -141,6 +149,38 @@ describe("overflowStatus lines", () => {
     const st = overflowStatus({ cfg: c, model: m, tokens: 100, prefixTokens: 5_000 })
     expect(st.used).toBe(0)
     expect(st.phase).toBe("ok")
+  })
+})
+
+describe("requestBudget complete-request preflight (BUG-007)", () => {
+  test("uses the smaller input/context physical budget and never deducts prefix", () => {
+    const status = requestBudget({ model: model(), estimatedFullRequestTokens: 110_000 })
+    expect(status.physicalInputBudget).toBe(110_000)
+    expect(status.decision).toBe("unavailable")
+    expect(status.provenance).toBe("model_limit")
+  })
+
+  test("allows a short unknown-limit request but fails closed past the host guard", () => {
+    const previous = process.env["DEEPAGENT_CODE_UNKNOWN_CONTEXT_GUARD"]
+    process.env["DEEPAGENT_CODE_UNKNOWN_CONTEXT_GUARD"] = "1000"
+    try {
+      const short = requestBudget({ model: model({ context: 0 }), estimatedFullRequestTokens: 999 })
+      const long = requestBudget({ model: model({ context: 0 }), estimatedFullRequestTokens: 1000 })
+      expect(short.decision).toBe("ok")
+      expect(short.provenance).toBe("host_guard")
+      expect(long.decision).toBe("unavailable")
+      expect(long.reason).toBe("context_limit_unknown")
+    } finally {
+      if (previous === undefined) delete process.env["DEEPAGENT_CODE_UNKNOWN_CONTEXT_GUARD"]
+      else process.env["DEEPAGENT_CODE_UNKNOWN_CONTEXT_GUARD"] = previous
+    }
+  })
+
+  test("fails closed for an invalid negative context limit", () => {
+    const status = requestBudget({ model: model({ context: -1 }), estimatedFullRequestTokens: 1 })
+    expect(status.decision).toBe("unavailable")
+    expect(status.reason).toBe("context_limit_invalid")
+    expect(status.provenance).toBe("model_limit")
   })
 })
 
@@ -157,6 +197,14 @@ describe("softLandingDecision state machine", () => {
     const { action, nextState } = softLandingDecision({ status: status(soft - 1), state, step: 3 })
     expect(action).toBe("none")
     expect(nextState).toEqual(state)
+  })
+
+  test("unknown limit emits an explicit guard action", () => {
+    const unknown = overflowStatus({ cfg: c, model: model({ context: 0 }), tokens: 1 })
+    const state = initialSoftLandingState
+    const decision = softLandingDecision({ status: unknown, state, step: 3 })
+    expect(decision.action).toBe("guard")
+    expect(decision.nextState).toEqual(state)
   })
 
   test("reminder injects once then debounces for N turns", () => {
@@ -247,7 +295,12 @@ describe("CompactionSoftLandingState durability (cold recovery)", () => {
   })
 
   test("round-trips the new optional fields (prefillInputTokens + outputContinuationCount)", () => {
-    const state = { windowEpoch: 2, autoCompactFallbackDelivered: true, prefillInputTokens: 45_000, outputContinuationCount: 1 }
+    const state = {
+      windowEpoch: 2,
+      autoCompactFallbackDelivered: true,
+      prefillInputTokens: 45_000,
+      outputContinuationCount: 1,
+    }
     const decoded = decode(JSON.parse(JSON.stringify(state)))
     expect(Option.isSome(decoded)).toBe(true)
     const v = Option.getOrThrow(decoded)
@@ -256,30 +309,32 @@ describe("CompactionSoftLandingState durability (cold recovery)", () => {
   })
 })
 
-// V4.0.1 P0 BodyAfterPrefix — the full-window SAFETY CAP that guards the raw total once a prefix is
-// deducted, so a huge prefix cannot let real usage silently exceed the model's input window.
-describe("overflowStatus full-window safety cap (BodyAfterPrefix)", () => {
+// BUG-007 RC-5: raw-token phase decisions.
+// prefixTokens are diagnostics only; they never de-escalate a phase.  The old "BodyAfterPrefix"
+// design (subtract prefix, then compare body against hardLine) was the root cause.
+describe("overflowStatus: raw tokens drive all phase thresholds (BUG-007 RC-5)", () => {
   const m = model() // input=110_000, usable/hardLine=100_000
   const c = cfg()
 
-  test("raw total at/over the model input window forces hard even when body-after-prefix is small", () => {
-    // A 90k prefix makes body tiny, but raw total 110_000 hits the real input window ⇒ hard (safety cap).
+  test("raw total at/over hardLine forces 'hard' even with a large prefix", () => {
+    // A 90k prefix makes body tiny (used=20k), but raw=110k >= hardLine=100k ⇒ hard.
     const st = overflowStatus({ cfg: c, model: m, tokens: 110_000, prefixTokens: 90_000 })
-    expect(st.used).toBe(20_000) // body is well under every line
-    expect(st.phase).toBe("hard") // ...but the raw total hit the full window
+    expect(st.used).toBe(20_000) // body-after-prefix preserved in receipt
+    expect(st.phase).toBe("hard")
   })
 
-  test("safety cap is inert when prefix=0 (byte-for-byte pre-BodyAfterPrefix)", () => {
-    // With no prefix, used==raw and the cap adds nothing: below soft(80k) is ok, [soft,fallback) reminder.
+  test("prefix=0 leaves raw==used, behaviour is unchanged", () => {
+    // With no prefix, raw==used and the phase logic is unchanged.
     expect(overflowStatus({ cfg: c, model: m, tokens: 70_000, prefixTokens: 0 }).phase).toBe("ok")
     expect(overflowStatus({ cfg: c, model: m, tokens: 85_000, prefixTokens: 0 }).phase).toBe("reminder")
   })
 
-  test("body-after-prefix stays the primary trigger below the full window", () => {
-    // raw 95_000 < fullWindow 110_000, prefix 10_000 ⇒ body 85_000 ⇒ reminder (not forced hard).
+  test("prefix does NOT de-escalate phase — raw 95k >= fallbackLine 88k → fallback", () => {
+    // BUG-007 fix: old code deducted prefix first → body=85k → 'reminder'. Correct: raw 95k
+    // already crosses fallbackLine 88k, so the phase must be 'fallback' regardless of prefix.
     const st = overflowStatus({ cfg: c, model: m, tokens: 95_000, prefixTokens: 10_000 })
-    expect(st.used).toBe(85_000)
-    expect(st.phase).toBe("reminder")
+    expect(st.used).toBe(85_000) // `used` kept for diagnostics (cache/cost)
+    expect(st.phase).toBe("fallback") // was "reminder" — that was the bug
   })
 })
 

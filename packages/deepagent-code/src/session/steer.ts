@@ -1,11 +1,20 @@
 import { and, asc, eq, inArray, isNull } from "drizzle-orm"
-import { Context, Data, DateTime, Effect, Layer, Schema } from "effect"
+import { Context, Data, DateTime, Effect, Layer, Schema, Types } from "effect"
 import { Database } from "@deepagent-code/core/database/database"
 import { SessionInput } from "@deepagent-code/core/session/input"
 import { SessionMessage } from "@deepagent-code/core/session/message"
 import { Prompt } from "@deepagent-code/core/session/prompt"
-import { SessionSteerTable } from "@deepagent-code/core/session/sql"
-import { SessionID } from "./schema"
+import {
+  MessageTable,
+  PartTable,
+  SessionIntentTable,
+  SessionSteerTable,
+  SessionTable,
+} from "@deepagent-code/core/session/sql"
+import { SessionV1 } from "@deepagent-code/core/v1/session"
+import { MessageID, SessionID } from "./schema"
+import type { Receipt } from "./prompt-intent"
+import { SessionMutationEpoch } from "./mutation-epoch"
 
 // V4.1 §S1.1 — the durable mid-turn STEER buffer.
 //
@@ -22,18 +31,10 @@ import { SessionID } from "./schema"
 // `Prompt` payload schema and `Delivery` literal from core. Drained steers are persisted as ordinary
 // V1 user messages by the runLoop (prompt.ts), landing at the tail of real history — cache-safe.
 //
-// EXACTLY-ONCE MATERIALIZATION (no loss, no duplicate). Draining a steer into history is a
-// PERSIST-FIRST protocol split across two service calls the runLoop orchestrates in order:
-//   1. `pending(sessionID)` — a NON-consuming read of the ordered pending steers.
-//   2. runLoop persists each as a V1 user message keyed by the steer's OWN id (idempotent upsert).
-//   3. `markConsumed(...)` — stamp those rows consumed.
-// This deliberately AVOIDS the earlier stamp-then-persist ordering, which had a permanent-loss window:
-// a crash after the stamp commit but before the message was materialized would leave the steer marked
-// consumed yet never in history — the user's steering message lost forever. With persist-first, a
-// crash between steps 2 and 3 leaves the row still pending; the next drain re-persists (a no-op upsert
-// on the same message id — see prompt.ts drainSteers, which keys the message AND its text part by the
-// steer id) and then stamps. At-least-once persist + idempotent upsert = exactly-once materialization,
-// and `markConsumed`'s `consumed_seq IS NULL` guard keeps it consume-once against a concurrent drain.
+// Chat steers cross one transaction boundary in `materialize`: the V1 message, all parts, and consume
+// stamp commit together after re-checking the Session mutation epoch. Goal steers use `markConsumed`
+// without V1 materialization. A revert advances the epoch and supersedes every old pending row, so an
+// admission or drain that loses the race cannot append after the rewritten history boundary.
 
 export type Delivery = SessionInput.Delivery
 
@@ -51,6 +52,7 @@ export class Admitted extends Schema.Class<Admitted>("SessionSteer.Admitted")({
   sessionID: SessionID,
   prompt: Prompt,
   delivery: SessionInput.Delivery,
+  mutationEpoch: Schema.Int,
   timeCreated: Schema.Finite,
 }) {}
 
@@ -64,6 +66,7 @@ const fromRow = (row: typeof SessionSteerTable.$inferSelect): Admitted =>
     sessionID: SessionID.make(row.session_id),
     prompt: decodePrompt(row.prompt),
     delivery: row.delivery,
+    mutationEpoch: row.mutation_epoch,
     timeCreated: row.time_created,
   })
 
@@ -76,21 +79,22 @@ export interface Interface {
     readonly prompt: Prompt
     readonly delivery?: Delivery
     readonly correlationID?: string
-  }) => Effect.Effect<Admitted, CorrelationConflict>
-  // NON-consuming read of pending steers for the session, in send-order (ascending `seq`). Persist-first
-  // step 1: the runLoop reads these, materializes each as a V1 history message keyed by the steer id
-  // (idempotent), THEN calls markConsumed. Reading does NOT mark anything — a crash before markConsumed
-  // leaves the rows pending so the next drain re-materializes (no loss).
+    readonly intent?: Receipt & {
+      readonly state: "admitting"
+      readonly ownerToken: string
+      readonly messageID: MessageID
+    }
+  }) => Effect.Effect<Admitted, CorrelationConflict | SessionMutationEpoch.Stale>
+  // NON-consuming read of current-epoch pending steers in send-order. The chat runLoop follows this with
+  // atomic `materialize`; the goal driver follows it with `markConsumed` after applying the guidance.
   //
   // V4.1 §S1.3 DELIVERY DIMENSION: `delivery` scopes the read to ONE delivery channel (default "steer",
   // so S1.1's parent-runLoop drain is unchanged). This is what lets TWO drainers coexist on the SAME
   // session id without contention: the parent runLoop drains `delivery="steer"` while the goal driver
   // drains `delivery="goal_steer"` — disjoint rows, never first-come-first-served over the same buffer.
   readonly pending: (sessionID: SessionID, delivery?: Delivery) => Effect.Effect<ReadonlyArray<Admitted>>
-  // Stamp the given steer ids consumed, in ONE transaction, re-asserting `consumed_seq IS NULL` so a
-  // concurrent drain can never re-claim them. Called by the runLoop AFTER the messages are durably
-  // persisted (persist-first). Idempotent: already-consumed ids are skipped by the WHERE guard. The
-  // `delivery` filter (default "steer") keeps the stamp scoped to the caller's own channel.
+  // Stamp current-epoch steer ids consumed. This remains the goal-driver path; chat history uses the
+  // stronger `materialize` transaction. Idempotent and scoped to the caller's delivery channel.
   readonly markConsumed: (
     sessionID: SessionID,
     ids: ReadonlyArray<SessionMessage.ID>,
@@ -98,6 +102,11 @@ export interface Interface {
   ) => Effect.Effect<void>
   // Non-consuming peek used by the loop's needsFollowUp decision. `delivery` (default "steer") scopes it.
   readonly hasPending: (sessionID: SessionID, delivery?: Delivery) => Effect.Effect<boolean>
+  readonly materialize: (input: {
+    readonly admitted: Admitted
+    readonly info: SessionV1.User
+    readonly parts: ReadonlyArray<SessionV1.Part>
+  }) => Effect.Effect<boolean, SessionMutationEpoch.Stale>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/SessionSteer") {}
@@ -107,59 +116,129 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const { db } = yield* Database.Service
 
-    const findByCorrelation = (sessionID: SessionID, correlationID: string) =>
-      db
-        .select()
-        .from(SessionSteerTable)
-        .where(
-          and(eq(SessionSteerTable.session_id, sessionID), eq(SessionSteerTable.correlation_id, correlationID)),
-        )
-        .get()
-        .pipe(
-          Effect.orDie,
-          Effect.map((row) => (row === undefined ? undefined : fromRow(row))),
-        )
-
     const admit: Interface["admit"] = Effect.fn("SessionSteer.admit")(function* (input) {
       const delivery = input.delivery ?? "steer"
       const timeCreated = DateTime.toEpochMillis(yield* DateTime.now)
-      // Always server-minted: the canonical durable/V1 message ID is never client-supplied.
       const id = SessionMessage.ID.create()
-      const inserted = yield* db
-        .insert(SessionSteerTable)
-        .values({
-          id,
-          session_id: input.sessionID,
-          correlation_id: input.correlationID,
-          prompt: encodePrompt(input.prompt),
-          delivery,
-          time_created: timeCreated,
-        })
-        .onConflictDoNothing()
-        .returning()
-        .get()
-        .pipe(Effect.orDie)
-      if (inserted) return fromRow(inserted)
-      // Correlation conflict path: another row with the same (session, correlationID) already exists.
-      if (input.correlationID === undefined)
-        return yield* Effect.die("SessionSteer.admit: server-generated id conflicted (impossible)")
-      const existing = yield* findByCorrelation(input.sessionID, input.correlationID)
-      if (!existing) return yield* Effect.die("SessionSteer.admit: conflicting correlation row vanished")
-      // Identical payload = idempotent retry; different payload = explicit conflict.
-      if (existing.delivery === delivery && Prompt.equivalence(existing.prompt, input.prompt)) return existing
-      return yield* Effect.fail(
-        new CorrelationConflict({ sessionID: input.sessionID, correlationID: input.correlationID }),
-      )
+      return yield* db
+        .transaction(
+          (tx) =>
+            Effect.gen(function* () {
+              const session = yield* tx
+                .select({ mutationEpoch: SessionTable.mutation_epoch })
+                .from(SessionTable)
+                .where(eq(SessionTable.id, input.sessionID))
+                .get()
+                .pipe(Effect.orDie)
+              if (!session) return yield* Effect.die(`Session not found: ${input.sessionID}`)
+              if (
+                input.intent &&
+                (input.intent.sessionID !== input.sessionID || input.intent.messageID !== input.correlationID)
+              )
+                return yield* Effect.die("SessionSteer.admit: intent identity does not match steer admission")
+              if (input.intent?.mutationEpoch !== undefined && input.intent.mutationEpoch !== session.mutationEpoch)
+                return yield* Effect.fail(
+                  new SessionMutationEpoch.Stale({
+                    sessionID: input.sessionID,
+                    observed: input.intent.mutationEpoch,
+                    current: session.mutationEpoch,
+                  }),
+                )
+              const inserted = yield* tx
+                .insert(SessionSteerTable)
+                .values({
+                  id,
+                  session_id: input.sessionID,
+                  correlation_id: input.correlationID,
+                  prompt: encodePrompt(input.prompt),
+                  delivery,
+                  mutation_epoch: session.mutationEpoch,
+                  time_created: timeCreated,
+                })
+                .onConflictDoNothing()
+                .returning()
+                .get()
+                .pipe(Effect.orDie)
+              const row =
+                inserted ??
+                (input.correlationID
+                  ? yield* tx
+                      .select()
+                      .from(SessionSteerTable)
+                      .where(
+                        and(
+                          eq(SessionSteerTable.session_id, input.sessionID),
+                          eq(SessionSteerTable.correlation_id, input.correlationID),
+                        ),
+                      )
+                      .get()
+                      .pipe(Effect.orDie)
+                  : undefined)
+              if (!row) return yield* Effect.die("SessionSteer.admit: server-generated id conflicted (impossible)")
+              const admitted = fromRow(row)
+              if (admitted.mutationEpoch !== session.mutationEpoch)
+                return yield* Effect.fail(
+                  new SessionMutationEpoch.Stale({
+                    sessionID: input.sessionID,
+                    observed: admitted.mutationEpoch,
+                    current: session.mutationEpoch,
+                  }),
+                )
+              if (!inserted && (admitted.delivery !== delivery || !Prompt.equivalence(admitted.prompt, input.prompt)))
+                return yield* Effect.fail(
+                  new CorrelationConflict({ sessionID: input.sessionID, correlationID: input.correlationID! }),
+                )
+              if (input.intent) {
+                const intent = yield* tx
+                  .update(SessionIntentTable)
+                  .set({
+                    state: "admitted",
+                    delivery,
+                    admitted_message_id: admitted.id,
+                    owner_token: null,
+                    lease_expires_at: null,
+                    time_admitted: timeCreated,
+                    time_updated: timeCreated,
+                    version: input.intent.version + 1,
+                  })
+                  .where(
+                    and(
+                      eq(SessionIntentTable.intent_id, input.intent.intentID),
+                      eq(SessionIntentTable.session_id, input.sessionID),
+                      eq(SessionIntentTable.state, "admitting"),
+                      eq(SessionIntentTable.owner_token, input.intent.ownerToken),
+                      eq(SessionIntentTable.mutation_epoch, session.mutationEpoch),
+                    ),
+                  )
+                  .returning({ intentID: SessionIntentTable.intent_id })
+                  .get()
+                  .pipe(Effect.orDie)
+                if (!intent) return yield* Effect.die("SessionSteer.admit: intent admission ownership was lost")
+              }
+              return admitted
+            }),
+          { behavior: "immediate" },
+        )
+        .pipe(Effect.catchTag("SqlError", Effect.die))
     })
 
     const pending: Interface["pending"] = Effect.fn("SessionSteer.pending")(function* (sessionID, delivery = "steer") {
+      const session = yield* db
+        .select({ mutationEpoch: SessionTable.mutation_epoch })
+        .from(SessionTable)
+        .where(eq(SessionTable.id, sessionID))
+        .get()
+        .pipe(Effect.orDie)
+      if (!session) return []
       const rows = yield* db
         .select()
         .from(SessionSteerTable)
         .where(
           and(
             eq(SessionSteerTable.session_id, sessionID),
+            eq(SessionSteerTable.mutation_epoch, session.mutationEpoch),
             isNull(SessionSteerTable.consumed_seq),
+            isNull(SessionSteerTable.superseded_at),
             eq(SessionSteerTable.delivery, delivery),
           ),
         )
@@ -175,6 +254,13 @@ export const layer = Layer.effect(
       delivery = "steer",
     ) {
       if (ids.length === 0) return
+      const session = yield* db
+        .select({ mutationEpoch: SessionTable.mutation_epoch })
+        .from(SessionTable)
+        .where(eq(SessionTable.id, sessionID))
+        .get()
+        .pipe(Effect.orDie)
+      if (!session) return
       // Persist-first step 3: stamp consumed AFTER the caller has durably materialized the messages.
       // `consumed_seq` records the wall-clock of the stamp (any non-null == consumed). Re-assert
       // `consumed_seq IS NULL` in the WHERE so a concurrent drain that already claimed a row is a no-op
@@ -188,7 +274,9 @@ export const layer = Layer.effect(
           .where(
             and(
               eq(SessionSteerTable.session_id, sessionID),
+              eq(SessionSteerTable.mutation_epoch, session.mutationEpoch),
               isNull(SessionSteerTable.consumed_seq),
+              isNull(SessionSteerTable.superseded_at),
               eq(SessionSteerTable.delivery, delivery),
               inArray(SessionSteerTable.id, [...ids]),
             ),
@@ -202,13 +290,22 @@ export const layer = Layer.effect(
       sessionID,
       delivery = "steer",
     ) {
+      const session = yield* db
+        .select({ mutationEpoch: SessionTable.mutation_epoch })
+        .from(SessionTable)
+        .where(eq(SessionTable.id, sessionID))
+        .get()
+        .pipe(Effect.orDie)
+      if (!session) return false
       const row = yield* db
         .select({ seq: SessionSteerTable.seq })
         .from(SessionSteerTable)
         .where(
           and(
             eq(SessionSteerTable.session_id, sessionID),
+            eq(SessionSteerTable.mutation_epoch, session.mutationEpoch),
             isNull(SessionSteerTable.consumed_seq),
+            isNull(SessionSteerTable.superseded_at),
             eq(SessionSteerTable.delivery, delivery),
           ),
         )
@@ -218,7 +315,120 @@ export const layer = Layer.effect(
       return row !== undefined
     })
 
-    return Service.of({ admit, pending, markConsumed, hasPending })
+    const materialize: Interface["materialize"] = Effect.fn("SessionSteer.materialize")(function* (input) {
+      if (String(input.info.id) !== String(input.admitted.id) || input.info.sessionID !== input.admitted.sessionID)
+        return yield* Effect.die("SessionSteer.materialize: message identity does not match admitted steer")
+      if (input.parts.some((part) => part.messageID !== input.info.id || part.sessionID !== input.info.sessionID))
+        return yield* Effect.die("SessionSteer.materialize: part identity does not match admitted steer")
+      return yield* db
+        .transaction(
+          (tx) =>
+            Effect.gen(function* () {
+              const session = yield* tx
+                .select({ mutationEpoch: SessionTable.mutation_epoch })
+                .from(SessionTable)
+                .where(eq(SessionTable.id, input.admitted.sessionID))
+                .get()
+                .pipe(Effect.orDie)
+              if (!session) return false
+              if (session.mutationEpoch !== input.admitted.mutationEpoch)
+                return yield* Effect.fail(
+                  new SessionMutationEpoch.Stale({
+                    sessionID: input.admitted.sessionID,
+                    observed: input.admitted.mutationEpoch,
+                    current: session.mutationEpoch,
+                  }),
+                )
+              const row = yield* tx
+                .select({ id: SessionSteerTable.id })
+                .from(SessionSteerTable)
+                .where(
+                  and(
+                    eq(SessionSteerTable.id, input.admitted.id),
+                    eq(SessionSteerTable.mutation_epoch, session.mutationEpoch),
+                    isNull(SessionSteerTable.consumed_seq),
+                    isNull(SessionSteerTable.superseded_at),
+                  ),
+                )
+                .get()
+                .pipe(Effect.orDie)
+              if (!row) return false
+              const { id: _, sessionID: __, ...message } = input.info
+              const data = message as Types.DeepMutable<typeof message>
+              const storedMessage = yield* tx
+                .select()
+                .from(MessageTable)
+                .where(eq(MessageTable.id, input.info.id))
+                .get()
+                .pipe(Effect.orDie)
+              if (
+                storedMessage &&
+                (storedMessage.session_id !== input.info.sessionID ||
+                  JSON.stringify(storedMessage.data) !== JSON.stringify(data))
+              )
+                return yield* Effect.die("SessionSteer.materialize: message ID conflicts with persisted content")
+              if (!storedMessage)
+                yield* tx
+                  .insert(MessageTable)
+                  .values({
+                    id: input.info.id,
+                    session_id: input.info.sessionID,
+                    time_created: input.info.time.created,
+                    data,
+                  })
+                  .run()
+                  .pipe(Effect.orDie)
+              yield* Effect.forEach(input.parts, (part) => {
+                const { id: _, messageID: __, sessionID: ___, ...data } = part
+                return Effect.gen(function* () {
+                  const stored = yield* tx
+                    .select()
+                    .from(PartTable)
+                    .where(eq(PartTable.id, part.id))
+                    .get()
+                    .pipe(Effect.orDie)
+                  if (
+                    stored &&
+                    (stored.message_id !== part.messageID ||
+                      stored.session_id !== part.sessionID ||
+                      JSON.stringify(stored.data) !== JSON.stringify(data))
+                  )
+                    return yield* Effect.die("SessionSteer.materialize: part ID conflicts with persisted content")
+                  if (!stored)
+                    yield* tx
+                      .insert(PartTable)
+                      .values({
+                        id: part.id,
+                        message_id: part.messageID,
+                        session_id: part.sessionID,
+                        time_created: input.info.time.created,
+                        data: data as Types.DeepMutable<typeof data>,
+                      })
+                      .run()
+                      .pipe(Effect.orDie)
+                })
+              })
+              yield* tx
+                .update(SessionSteerTable)
+                .set({ consumed_seq: DateTime.toEpochMillis(yield* DateTime.now) })
+                .where(
+                  and(
+                    eq(SessionSteerTable.id, input.admitted.id),
+                    eq(SessionSteerTable.mutation_epoch, session.mutationEpoch),
+                    isNull(SessionSteerTable.consumed_seq),
+                    isNull(SessionSteerTable.superseded_at),
+                  ),
+                )
+                .run()
+                .pipe(Effect.orDie)
+              return true
+            }),
+          { behavior: "immediate" },
+        )
+        .pipe(Effect.catchTag("SqlError", Effect.die))
+    })
+
+    return Service.of({ admit, pending, markConsumed, hasPending, materialize })
   }),
 )
 

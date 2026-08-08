@@ -14,8 +14,6 @@
   <a href="https://github.com/deepagent-ltd/deepagent-code-enterprise">Enterprise</a>
 </p>
 
-<p align="center"><sub>Desktop 1.4.4 · DeepAgent Core V4.0.5</sub></p>
-
 ---
 
 DeepAgent Code is an AI coding workspace for work that lasts longer than one prompt. It combines a production coding-agent runtime with durable sessions, connected project memory, live planning, code intelligence, multi-agent collaboration, and human oversight.
@@ -92,19 +90,6 @@ For high-risk decisions, convene an **Expert Panel**. Correctness, security, per
 ### Team and agent messaging
 
 Project IM brings people and agents into the same thread. Mention an agent to start a scoped run with project context, stream its progress, inspect its artifacts, and keep the answer attached to the conversation that requested it.
-
-## DeepAgent Core V4.0.5
-
-Desktop 1.4.4 ships the durable context and collaboration release. It connects Session V2, federated context, delegated execution, Git/PR review, and human supervision without moving durable authority back into process-local agent loops:
-
-- **Durable context and execution:** prompt admission, Context Epoch selection, AgentExecution claims, leases, generations, resource locks, token debits, terminal metadata, and handoffs are persisted before scheduling provider work.
-- **Complete multi-agent Git/PR collaboration:** write workers use canonical isolated worktrees, commit only scoped changes, and enqueue SHA-bound PRs. A normal Reviewer handles each item, merges are serialized with `--no-ff`, and a Senior Reviewer closes the batch.
-- **Generation-fenced supervision:** resume, cancellation, timeout, takeover, review feedback, and cleanup reuse durable Session identity while preventing stale workers from settling newer work.
-- **One private filesystem root:** Core, CLI, Desktop, WSL, databases, logs, caches, and temporary files stay under `~/.deepagent/code/`; production writes cannot be redirected by ordinary environment variables.
-- **Cache-safe real-model verification:** stable prompt prefixes are separated from volatile tails, finalizer and compaction baselines are isolated, and the DeepSeek matrix covers sandboxed tools, cache retention, parallel workers, PR closure, recovery, strength inheritance, and EVAL scoring.
-- **Release-grade verification:** deterministic state-machine tests, cross-process ownership tests, real-model suites, packaged sidecar checks, Desktop UI coverage, and source-map smoke tests exercise the production entry points.
-
-V4.0.5 retains the durable documents, event delivery, governed learning, secure credential boundaries, and fail-closed provider/tool contracts established in the V4.0 line.
 
 ## Installation
 

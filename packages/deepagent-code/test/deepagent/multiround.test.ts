@@ -61,6 +61,7 @@ function setup() {
 const vr = (command: string, passed: boolean) => ({
   command,
   passed,
+  kind: "command_exit" as const,
   exit_code: passed ? 0 : 1,
   output: passed ? "ok" : "FAIL: npm test failed",
   duration_ms: 1,
@@ -431,16 +432,22 @@ describe("A3 macro-round suggestion ({status,body}, objective)", () => {
 })
 
 // T3 (S1-v3.4): three-light triage routing in the microbatch loop.
-const vrCode = (command: string, exit_code: number, output: string) => ({
+const vrCode = (
+  command: string,
+  exit_code: number,
+  output: string,
+  kind: AgentGateway.ValidationResult["kind"] = "command_exit",
+) => ({
   command,
   passed: exit_code === 0,
+  kind,
   exit_code,
   output,
   duration_ms: 1,
 })
 
 describe("T3 microbatch triage routing", () => {
-  test("🔴 env failure (exit 127) -> stops immediately without revising, needs_human with reason", async () => {
+  test("🔴 typed bootstrap failure -> stops immediately without revising, needs_human with reason", async () => {
     const sessionID = setup()
     let revises = 0
     let emitted: { status: string; body: string } | undefined
@@ -448,7 +455,8 @@ describe("T3 microbatch triage routing", () => {
       maybeRunRounds(
         ops(sessionID, {
           maxRounds: 3,
-          runValidation: () => Effect.succeed([vrCode("npm test", 127, "npm: command not found")]),
+          runValidation: () =>
+            Effect.succeed([vrCode("npm test", -1, "validation bootstrap failed", "shell_bootstrap_failed")]),
           reviseTurn: () => {
             revises++
             return Effect.succeed("revised")

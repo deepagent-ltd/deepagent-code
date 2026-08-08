@@ -26,7 +26,9 @@ type Demand = { readonly _tag: "run" } | { readonly _tag: "wake"; readonly seq?:
  * `interrupt` stops the current ownership chain. Advisory wakes from before the interrupt
  * boundary are suppressed; advisory wakes after the boundary run after cleanup.
  */
-export interface Coordinator<Key, A, E> {
+export interface Coordinator<Key, A, E, Reason = never> {
+  /** Snapshots keys with an ownership chain active in this process. */
+  readonly active: Effect.Effect<ReadonlySet<Key>>
   /** Starts or joins one explicit drain generation. */
   readonly run: (key: Key) => Effect.Effect<A, E>
   /** Coalesces one wake-up after durable work is recorded. */
@@ -34,11 +36,11 @@ export interface Coordinator<Key, A, E> {
   /** Waits until the current ownership chain settles. */
   readonly awaitIdle: (key: Key) => Effect.Effect<void, E>
   /** Interrupts the active ownership chain without automatically draining pending wakes. */
-  readonly interrupt: (key: Key, seq?: number) => Effect.Effect<void>
+  readonly interrupt: (key: Key, seq?: number, reason?: Reason) => Effect.Effect<void>
 }
 
 /** One Session's process-local execution lane: one active demand and at most one coalesced follow-up. */
-type Entry<A, E> = {
+type Entry<A, E, Reason> = {
   readonly done: Deferred.Deferred<A, E>
   readonly settled: Deferred.Deferred<Exit.Exit<A, E>>
   current: Demand
@@ -47,6 +49,9 @@ type Entry<A, E> = {
   interruptSeq?: number
   owner?: Fiber.Fiber<void, never>
   stopping: boolean
+  started: boolean
+  terminalizing: boolean
+  interruptionReason?: Reason
 }
 
 /** Combines follow-up demand: runs dominate, while wakes retain the newest durable admission sequence. */
@@ -62,12 +67,16 @@ const maxSeq = (left: number | undefined, right: number | undefined) => {
 }
 
 /** Constructs a scoped coordinator. Every in-memory transition is synchronous. */
-export const make = <Key, A, E>(options: {
+export const make = <Key, A, E, Reason = never>(options: {
   readonly drain: (key: Key, mode: Mode) => Effect.Effect<A, E>
   readonly onFailure?: (key: Key, cause: Cause.Cause<E>) => Effect.Effect<void>
-}): Effect.Effect<Coordinator<Key, A, E>, never, Scope.Scope> =>
+  /** Runs once before the first drain in one process-local ownership chain. */
+  readonly started?: (key: Key) => Effect.Effect<void>
+  /** Runs once after the final drain in one process-local ownership chain. */
+  readonly settled?: (key: Key, exit: Exit.Exit<A, E>, reason?: Reason) => Effect.Effect<void>
+}): Effect.Effect<Coordinator<Key, A, E, Reason>, never, Scope.Scope> =>
   Effect.gen(function* () {
-    const active = new Map<Key, Entry<A, E>>()
+    const active = new Map<Key, Entry<A, E, Reason>>()
     const interruptSeq = new Map<Key, number>()
     const report = yield* FiberSet.makeRuntime<never, void, never>()
     const fork = yield* FiberSet.makeRuntime<never, void, never>()
@@ -82,25 +91,39 @@ export const make = <Key, A, E>(options: {
       }),
     )
 
-    const makeEntry = (current: Demand, explicitWaiter?: Deferred.Deferred<A, E>): Entry<A, E> => ({
+    const makeEntry = (current: Demand, explicitWaiter?: Deferred.Deferred<A, E>): Entry<A, E, Reason> => ({
       done: Deferred.makeUnsafe<A, E>(),
       settled: Deferred.makeUnsafe<Exit.Exit<A, E>>(),
       current,
       explicitWaiter,
       stopping: false,
+      started: false,
+      terminalizing: false,
     })
 
-    const start = (key: Key, entry: Entry<A, E>, demand: Demand, successor = false) => {
+    const start = (key: Key, entry: Entry<A, E, Reason>, demand: Demand, successor = false) => {
       const ready = Deferred.makeUnsafe<void>()
       const drain = Effect.suspend(() => options.drain(key, demand._tag))
+      const started = Effect.suspend(() => {
+        if (entry.started) return Effect.void
+        entry.started = true
+        return options.started?.(key) ?? Effect.void
+      })
       // Initial work retains immediate-start behavior but cannot run before ownership is published.
       // Observer-started successors yield once so synchronous drains cannot recurse on the JS stack.
       const owner = fork(
-        (successor
-          ? Effect.yieldNow.pipe(Effect.andThen(drain))
-          : Deferred.await(ready).pipe(Effect.andThen(drain))
-        ).pipe(
-          Effect.onExit((exit) => Effect.sync(() => settle(key, entry, demand, exit))),
+        started.pipe(
+          Effect.andThen(
+            successor ? Effect.yieldNow.pipe(Effect.andThen(drain)) : Deferred.await(ready).pipe(Effect.andThen(drain)),
+          ),
+          Effect.onExit((exit) => {
+            if (exit._tag === "Success" && !entry.stopping && entry.pending !== undefined)
+              return Effect.sync(() => settle(key, entry, demand, exit))
+            entry.terminalizing = true
+            return (options.settled?.(key, exit, entry.interruptionReason) ?? Effect.void).pipe(
+              Effect.ensuring(Effect.sync(() => settle(key, entry, demand, exit))),
+            )
+          }),
           Effect.exit,
           Effect.asVoid,
         ),
@@ -109,7 +132,7 @@ export const make = <Key, A, E>(options: {
       if (!successor) Deferred.doneUnsafe(ready, Effect.void)
     }
 
-    const settle = (key: Key, entry: Entry<A, E>, demand: Demand, exit: Exit.Exit<A, E>) => {
+    const settle = (key: Key, entry: Entry<A, E, Reason>, demand: Demand, exit: Exit.Exit<A, E>) => {
       if (closed) {
         Deferred.doneUnsafe(entry.done, exit)
         Deferred.doneUnsafe(entry.settled, Effect.succeed(exit))
@@ -128,7 +151,7 @@ export const make = <Key, A, E>(options: {
         Deferred.doneUnsafe(entry.settled, Effect.succeed(exit))
         return
       }
-      if (exit._tag === "Success" && !entry.stopping) {
+      if (exit._tag === "Success" && !entry.stopping && !entry.terminalizing) {
         if (entry.pending !== undefined) {
           const pending = entry.pending
           entry.pending = undefined
@@ -190,7 +213,7 @@ export const make = <Key, A, E>(options: {
         if (firstFailure !== undefined) return yield* Effect.failCause(firstFailure)
       })
 
-    const interrupt = (key: Key, seq?: number): Effect.Effect<void> =>
+    const interrupt = (key: Key, seq?: number, reason?: Reason): Effect.Effect<void> =>
       Effect.suspend(() => {
         const entry = active.get(key)
         const latest = interruptSeq.get(key)
@@ -206,17 +229,25 @@ export const make = <Key, A, E>(options: {
         )
           return Effect.void
         if (entry.stopping) {
+          if (reason !== undefined) entry.interruptionReason = reason
           entry.interruptSeq = maxSeq(entry.interruptSeq, seq)
           suppressPendingAtOrBefore(entry, seq)
           return Fiber.interrupt(entry.owner)
         }
         entry.stopping = true
+        entry.interruptionReason = reason
         entry.interruptSeq = seq
         suppressPendingAtOrBefore(entry, seq)
         return Fiber.interrupt(entry.owner)
       })
 
-    return { run, wake, awaitIdle, interrupt }
+    return {
+      active: Effect.sync(() => new Set(active.keys())),
+      run,
+      wake,
+      awaitIdle,
+      interrupt,
+    }
 
     function run(key: Key): Effect.Effect<A, E> {
       return Effect.uninterruptibleMask((restore) => {
@@ -245,7 +276,7 @@ export const make = <Key, A, E>(options: {
       return Effect.raceFirst(Deferred.await(done), Deferred.await(shutdown).pipe(Effect.andThen(Effect.interrupt)))
     }
 
-    function acceptsWake(entry: Entry<A, E>, seq: number | undefined) {
+    function acceptsWake(entry: Entry<A, E, Reason>, seq: number | undefined) {
       return !entry.stopping || (entry.interruptSeq !== undefined && seq !== undefined && seq > entry.interruptSeq)
     }
 
@@ -254,7 +285,7 @@ export const make = <Key, A, E>(options: {
       return latest === undefined || (seq !== undefined && seq > latest)
     }
 
-    function suppressPendingAtOrBefore(entry: Entry<A, E>, seq: number | undefined) {
+    function suppressPendingAtOrBefore(entry: Entry<A, E, Reason>, seq: number | undefined) {
       if (
         entry.pending?._tag === "wake" &&
         seq !== undefined &&

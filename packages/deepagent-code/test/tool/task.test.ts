@@ -28,6 +28,10 @@ import { pollWithTimeout, testEffect } from "../lib/effect"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { ModelV2 } from "@deepagent-code/core/model"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
+import { TaskRunEventTable, TaskRunTable } from "@deepagent-code/core/session/sql"
+import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
+import { and, eq } from "drizzle-orm"
+import { requestInterrupt } from "../../src/tool/task-run"
 
 // Read the agent_mode_override a task injected onto the child session's first user-message metadata.
 const childOverride = (input: SessionPrompt.PromptInput | undefined): string | undefined => {
@@ -58,6 +62,7 @@ const layer = (flags: Partial<RuntimeFlags.Info> = {}) =>
 
 const it = testEffect(layer())
 const background = testEffect(layer({ experimentalBackgroundSubagents: true }))
+const durableBackground = testEffect(layer({ experimentalBackgroundSubagents: true, subagentControlPlane: "durable" }))
 const worktreeFixture = { directory: "", safeRemoved: 0 }
 const worktreeIsolation = testEffect(
   Layer.mergeAll(
@@ -85,6 +90,23 @@ const worktreeIsolation = testEffect(
   ),
 )
 const automaticWorktree = testEffect(Layer.mergeAll(layer(), Worktree.defaultLayer, Git.defaultLayer, PRQueue.layer))
+const durableAutomaticWorktree = testEffect(
+  Layer.mergeAll(
+    layer({ experimentalBackgroundSubagents: true, subagentControlPlane: "durable" }),
+    Worktree.defaultLayer,
+    Git.defaultLayer,
+    PRQueue.layer,
+    EffectFlock.defaultLayer,
+  ),
+)
+const durableAutomaticWorktreeWithoutQueue = testEffect(
+  Layer.mergeAll(
+    layer({ experimentalBackgroundSubagents: true, subagentControlPlane: "durable" }),
+    Worktree.defaultLayer,
+    Git.defaultLayer,
+    EffectFlock.defaultLayer,
+  ),
+)
 const automaticWorktreeWithTimeout = testEffect(
   Layer.mergeAll(layer({ subagentTimeoutMs: 5_000 }), Worktree.defaultLayer, Git.defaultLayer, PRQueue.layer),
 )
@@ -144,6 +166,47 @@ function stubOps(opts?: { onPrompt?: (input: SessionPrompt.PromptInput) => void;
   }
 }
 
+function durableOps(onPrepare?: () => void): TaskPromptOps {
+  return {
+    cancel: () => Effect.void,
+    resolvePromptParts: (template) => Effect.succeed([{ type: "text", text: template }]),
+    prepareTaskInput: (input, timeCreated) =>
+      Effect.sync(() => {
+        onPrepare?.()
+        const part = input.parts[0]
+        if (!input.messageID || !input.agent || !input.model || part?.type !== "text") {
+          throw new Error("invalid durable preparation fixture")
+        }
+        return {
+          info: {
+            id: input.messageID,
+            role: "user",
+            sessionID: input.sessionID,
+            time: { created: timeCreated },
+            agent: input.agent,
+            model: {
+              providerID: input.model.providerID,
+              modelID: input.model.modelID,
+              variant: input.variant,
+            },
+            tools: input.tools,
+            metadata: input.metadata,
+          },
+          parts: [
+            {
+              id: PartID.ascending(),
+              messageID: input.messageID,
+              sessionID: input.sessionID,
+              type: "text",
+              text: part.text,
+            },
+          ],
+        }
+      }),
+    prompt: (input) => Effect.succeed(reply(input, "provider must not run during durable admission")),
+  }
+}
+
 function reply(input: SessionPrompt.PromptInput, text: string): SessionV1.WithParts {
   const id = MessageID.ascending()
   return {
@@ -191,6 +254,353 @@ function sampleSchema(schema: Record<string, unknown>): unknown {
 }
 
 describe("tool.task", () => {
+  durableBackground.instance("runs durable prompt preparation once across exact admission redelivery", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const { db } = yield* Database.Service
+      const { chat, assistant } = yield* seed()
+      const tool = yield* TaskTool
+      const def = yield* tool.init()
+      let prepares = 0
+      const promptOps = durableOps(() => {
+        prepares++
+      })
+      const execute = () =>
+        def.execute(
+          {
+            description: "durable exact preparation",
+            prompt: "inspect only",
+            subagent_type: "researcher",
+            background: true,
+          },
+          {
+            sessionID: chat.id,
+            messageID: assistant.id,
+            callID: "tool_durable_exact_prepare",
+            agent: "build",
+            abort: new AbortController().signal,
+            extra: { promptOps },
+            messages: [],
+            metadata: () => Effect.void,
+            ask: () => Effect.void,
+          },
+        )
+
+      const first = yield* execute()
+      const second = yield* execute()
+      const runs = yield* db
+        .select({ state: TaskRunTable.state, inputState: TaskRunTable.input_state })
+        .from(TaskRunTable)
+        .where(
+          and(eq(TaskRunTable.parent_session_id, chat.id), eq(TaskRunTable.tool_call_id, "tool_durable_exact_prepare")),
+        )
+        .all()
+        .pipe(Effect.orDie)
+
+      expect(prepares).toBe(1)
+      expect(first.metadata.sessionId).toBe(second.metadata.sessionId)
+      expect(runs).toEqual([{ state: "queued", inputState: "ready" }])
+      expect(yield* sessions.messages({ sessionID: SessionID.make(first.metadata.sessionId) })).toHaveLength(1)
+    }),
+  )
+
+  durableAutomaticWorktree.instance(
+    "persists exact workspace receipts before queuing a durable writer",
+    () =>
+      Effect.gen(function* () {
+        const directory = (yield* TestInstance).directory
+        const sessions = yield* Session.Service
+        const { db } = yield* Database.Service
+        const git = yield* Git.Service
+        const { chat, assistant } = yield* seed()
+        const tool = yield* TaskTool
+        const def = yield* tool.init()
+
+        const result = yield* def.execute(
+          {
+            description: "durable isolated writer",
+            prompt: "prepare an isolated implementation",
+            subagent_type: "general",
+            background: true,
+          },
+          {
+            sessionID: chat.id,
+            messageID: assistant.id,
+            callID: "tool_durable_workspace_receipts",
+            agent: "build",
+            abort: new AbortController().signal,
+            extra: { promptOps: durableOps() },
+            messages: [],
+            metadata: () => Effect.void,
+            ask: () => Effect.void,
+          },
+        )
+
+        const run = yield* db
+          .select({
+            runID: TaskRunTable.run_id,
+            state: TaskRunTable.state,
+            inputState: TaskRunTable.input_state,
+            childSessionID: TaskRunTable.child_session_id,
+            operationKey: TaskRunTable.workspace_operation_key,
+            repositoryRoot: TaskRunTable.workspace_repository_root,
+            baseCommit: TaskRunTable.workspace_base_commit,
+            statusHash: TaskRunTable.workspace_status_hash,
+            preflightState: TaskRunTable.workspace_preflight_state,
+            branchState: TaskRunTable.workspace_branch_state,
+            targetBranch: TaskRunTable.workspace_target_branch,
+            worktreeState: TaskRunTable.worktree_state,
+            worktreeDirectory: TaskRunTable.worktree_directory,
+            worktreeBranch: TaskRunTable.worktree_branch,
+          })
+          .from(TaskRunTable)
+          .where(eq(TaskRunTable.tool_call_id, "tool_durable_workspace_receipts"))
+          .get()
+          .pipe(Effect.orDie)
+        if (!run) return yield* Effect.die(new Error("durable workspace run was not persisted"))
+        if (!run.targetBranch || !run.worktreeDirectory || !run.worktreeBranch) {
+          return yield* Effect.die(new Error("durable workspace receipts are incomplete"))
+        }
+
+        const child = yield* sessions.get(SessionID.make(result.metadata.sessionId))
+        const events = yield* db
+          .select({ type: TaskRunEventTable.type })
+          .from(TaskRunEventTable)
+          .where(eq(TaskRunEventTable.run_id, run.runID))
+          .all()
+          .pipe(Effect.orDie)
+        const eventTypes = new Set(events.map((event) => event.type))
+
+        expect(run.state).toBe("queued")
+        expect(run.inputState).toBe("ready")
+        expect(run.operationKey).toBe(run.childSessionID)
+        expect(run.repositoryRoot).toBe(directory)
+        expect(run.baseCommit).toBeTruthy()
+        expect(run.statusHash).toBeTruthy()
+        expect(run.preflightState).toBe("ready")
+        expect(run.branchState).toBe("ready")
+        expect(run.worktreeState).toBe("ready")
+        expect(run.targetBranch).toBe(`deepagent-code/session-${chat.id}`)
+        expect(run.worktreeBranch).not.toBe(run.targetBranch)
+        expect(child.directory).toBe(run.worktreeDirectory)
+        expect(yield* git.branch(directory)).toBe(run.targetBranch)
+        expect(yield* git.branch(child.directory)).toBe(run.worktreeBranch)
+        expect(eventTypes).toEqual(
+          new Set([
+            "run_admitted",
+            "workspace_preflight_ready",
+            "session_branch_started",
+            "session_branch_ready",
+            "worktree_started",
+            "worktree_ready",
+            "input_admitting",
+            "input_admitted",
+            "run_queued",
+          ]),
+        )
+      }),
+    { git: true },
+    15_000,
+  )
+
+  durableAutomaticWorktreeWithoutQueue.instance(
+    "fails a durable automatic writer before workspace or provider work when the PR queue is unavailable",
+    () =>
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        const worktree = yield* Worktree.Service
+        const { chat, assistant } = yield* seed()
+        const def = yield* (yield* TaskTool).init()
+        let prepares = 0
+
+        const result = yield* Effect.exit(
+          def.execute(
+            {
+              description: "durable writer without queue",
+              prompt: "must not execute",
+              subagent_type: "general",
+              background: true,
+            },
+            {
+              sessionID: chat.id,
+              messageID: assistant.id,
+              callID: "tool_durable_pr_queue_unavailable",
+              agent: "build",
+              abort: new AbortController().signal,
+              extra: { promptOps: durableOps(() => prepares++) },
+              messages: [],
+              metadata: () => Effect.void,
+              ask: () => Effect.void,
+            },
+          ),
+        )
+        const run = yield* db
+          .select({ state: TaskRunTable.state, reason: TaskRunTable.reason })
+          .from(TaskRunTable)
+          .where(eq(TaskRunTable.tool_call_id, "tool_durable_pr_queue_unavailable"))
+          .get()
+          .pipe(Effect.orDie)
+
+        expect(Exit.isFailure(result)).toBe(true)
+        expect(run).toEqual({ state: "failed", reason: "pr_queue_unavailable" })
+        expect(prepares).toBe(0)
+        expect(yield* worktree.list()).toEqual([])
+      }),
+    { git: true },
+    15_000,
+  )
+
+  durableAutomaticWorktree.instance(
+    "reuses the durable child worktree for a continuation with a dirty parent",
+    () =>
+      Effect.gen(function* () {
+        const directory = (yield* TestInstance).directory
+        const { db } = yield* Database.Service
+        const git = yield* Git.Service
+        const { chat, assistant } = yield* seed()
+        const tool = yield* TaskTool
+        const def = yield* tool.init()
+        const context = (callID: string) => ({
+          sessionID: chat.id,
+          messageID: assistant.id,
+          callID,
+          agent: "build",
+          abort: new AbortController().signal,
+          extra: { promptOps: durableOps() },
+          messages: [],
+          metadata: () => Effect.void,
+          ask: () => Effect.void,
+        })
+
+        const first = yield* def.execute(
+          {
+            description: "first durable writer generation",
+            prompt: "prepare the first isolated change",
+            subagent_type: "general",
+            background: true,
+          },
+          context("tool_durable_workspace_generation_1"),
+        )
+        const firstRun = yield* db
+          .select({ runID: TaskRunTable.run_id })
+          .from(TaskRunTable)
+          .where(eq(TaskRunTable.tool_call_id, "tool_durable_workspace_generation_1"))
+          .get()
+          .pipe(Effect.orDie)
+        if (!firstRun) return yield* Effect.die(new Error("first durable generation was not persisted"))
+        yield* requestInterrupt({ runID: firstRun.runID, reason: "test_continuation" }).pipe(
+          Effect.provideService(Database.Service, { db }),
+        )
+        yield* Effect.promise(() => Bun.write(path.join(directory, "parent-dirty.txt"), "preserve parent change\n"))
+
+        const resumed = yield* def.execute(
+          {
+            description: "resume durable writer generation",
+            prompt: "continue in the existing child workspace",
+            subagent_type: "general",
+            background: true,
+            task_id: first.metadata.sessionId,
+          },
+          context("tool_durable_workspace_generation_2"),
+        )
+        const runs = yield* db
+          .select({
+            runID: TaskRunTable.run_id,
+            generation: TaskRunTable.generation,
+            state: TaskRunTable.state,
+            sessionMode: TaskRunTable.session_mode,
+            continuationOfRunID: TaskRunTable.continuation_of_run_id,
+            operationKey: TaskRunTable.workspace_operation_key,
+            preflightState: TaskRunTable.workspace_preflight_state,
+            branchState: TaskRunTable.workspace_branch_state,
+            targetBranch: TaskRunTable.workspace_target_branch,
+            worktreeState: TaskRunTable.worktree_state,
+            worktreeDirectory: TaskRunTable.worktree_directory,
+            worktreeBranch: TaskRunTable.worktree_branch,
+          })
+          .from(TaskRunTable)
+          .where(eq(TaskRunTable.child_session_id, first.metadata.sessionId))
+          .orderBy(TaskRunTable.generation)
+          .all()
+          .pipe(Effect.orDie)
+
+        expect(resumed.metadata.sessionId).toBe(first.metadata.sessionId)
+        expect(runs).toHaveLength(2)
+        expect(runs[0]?.state).toBe("cancelled")
+        expect(runs[0]?.sessionMode).toBe("new")
+        expect(runs[1]?.state).toBe("queued")
+        expect(runs[1]?.sessionMode).toBe("resume")
+        expect(runs[1]?.continuationOfRunID).toBe(runs[0]?.runID)
+        expect(runs[1]?.operationKey).toBe(first.metadata.sessionId)
+        expect(runs[1]?.preflightState).toBe("ready")
+        expect(runs[1]?.branchState).toBe("ready")
+        expect(runs[1]?.targetBranch).toBe(runs[0]?.targetBranch)
+        expect(runs[1]?.worktreeState).toBe("ready")
+        expect(runs[1]?.worktreeDirectory).toBe(runs[0]?.worktreeDirectory)
+        expect(runs[1]?.worktreeBranch).toBe(runs[0]?.worktreeBranch)
+        expect((yield* git.porcelainStatus(directory))?.paths).toContain("parent-dirty.txt")
+      }),
+    { git: true },
+    15_000,
+  )
+
+  durableAutomaticWorktree.instance(
+    "keeps explicit durable isolation caller-owned and outside automatic PR targeting",
+    () =>
+      Effect.gen(function* () {
+        const directory = (yield* TestInstance).directory
+        const sessions = yield* Session.Service
+        const { db } = yield* Database.Service
+        const git = yield* Git.Service
+        const initialBranch = yield* git.branch(directory)
+        const { chat, assistant } = yield* seed()
+        const tool = yield* TaskTool
+        const result = yield* (yield* tool.init()).execute(
+          {
+            description: "explicit durable isolation",
+            prompt: "inspect in an isolated checkout",
+            subagent_type: "general",
+            isolation: "worktree",
+            background: true,
+          },
+          {
+            sessionID: chat.id,
+            messageID: assistant.id,
+            callID: "tool_durable_explicit_isolation",
+            agent: "build",
+            abort: new AbortController().signal,
+            extra: { promptOps: durableOps() },
+            messages: [],
+            metadata: () => Effect.void,
+            ask: () => Effect.void,
+          },
+        )
+        const run = yield* db
+          .select({
+            owner: TaskRunTable.workspace_owner,
+            branchState: TaskRunTable.workspace_branch_state,
+            targetBranch: TaskRunTable.workspace_target_branch,
+            worktreeState: TaskRunTable.worktree_state,
+            worktreeDirectory: TaskRunTable.worktree_directory,
+          })
+          .from(TaskRunTable)
+          .where(eq(TaskRunTable.tool_call_id, "tool_durable_explicit_isolation"))
+          .get()
+          .pipe(Effect.orDie)
+
+        expect(run).toMatchObject({
+          owner: "caller",
+          branchState: "none",
+          targetBranch: null,
+          worktreeState: "ready",
+        })
+        expect(run?.worktreeDirectory).toBe((yield* sessions.get(SessionID.make(result.metadata.sessionId))).directory)
+        expect(yield* git.branch(directory)).toBe(initialBranch)
+      }),
+    { git: true },
+    15_000,
+  )
+
   it.instance(
     "description sorts subagents by name and is stable across calls",
     () =>
@@ -536,7 +946,11 @@ describe("tool.task", () => {
       expect(yield* Effect.promise(() => cancelled.promise)).toBe(input.sessionID)
 
       const exit = yield* Fiber.await(fiber)
-      expect(Exit.isSuccess(exit)).toBe(true)
+      expect(Exit.isFailure(exit)).toBe(true)
+      const jobs = yield* BackgroundJob.Service
+      expect((yield* jobs.get(input.sessionID))?.status).toBe("cancelled")
+      const sessions = yield* Session.Service
+      expect((yield* sessions.get(input.sessionID)).metadata?.deepagent?.subagent?.state).toBe("interrupted")
     }),
   )
 
@@ -947,6 +1361,78 @@ describe("tool.task", () => {
     15_000,
   )
 
+  automaticWorktree.instance(
+    "preserves unsubmitted continuation changes while the existing PR is awaiting review",
+    () =>
+      Effect.gen(function* () {
+        const sessions = yield* Session.Service
+        const queue = yield* PRQueue.Service
+        const { db } = yield* Database.Service
+        const { chat, assistant } = yield* seed()
+        const def = yield* (yield* TaskTool).init()
+        const promptOps: TaskPromptOps = {
+          cancel: () => Effect.void,
+          resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
+          prompt: (input) =>
+            Effect.gen(function* () {
+              const child = yield* sessions.get(input.sessionID)
+              const revision = input.parts.some((part) => part.type === "text" && part.text.includes("second"))
+                ? "second\n"
+                : "first\n"
+              yield* Effect.promise(() => Bun.write(path.join(child.directory, "pending-review.txt"), revision))
+              return reply(input, revision.trim())
+            }),
+        }
+        const context = (callID: string) => ({
+          sessionID: chat.id,
+          messageID: assistant.id,
+          callID,
+          agent: "build",
+          abort: new AbortController().signal,
+          extra: { promptOps },
+          messages: [],
+          metadata: () => Effect.void,
+          ask: () => Effect.void,
+        })
+
+        const first = yield* def.execute(
+          { description: "prepare pending review", prompt: "write first revision", subagent_type: "general" },
+          context("tool_pending_review_first"),
+        )
+        const initial = yield* queue.get(String(first.metadata.prId))
+        const child = yield* sessions.get(first.metadata.sessionId)
+        const second = yield* Effect.exit(
+          def.execute(
+            {
+              description: "continue pending review",
+              prompt: "write second revision",
+              subagent_type: "general",
+              task_id: String(first.metadata.sessionId),
+            },
+            context("tool_pending_review_second"),
+          ),
+        )
+        const preserved = yield* queue.get(initial!.id)
+        const blockedRun = yield* db
+          .select({ state: TaskRunTable.state, reason: TaskRunTable.reason })
+          .from(TaskRunTable)
+          .where(eq(TaskRunTable.tool_call_id, "tool_pending_review_second"))
+          .get()
+          .pipe(Effect.orDie)
+
+        expect(Exit.isFailure(second)).toBe(true)
+        expect(initial?.status).toBe("awaiting_review")
+        expect(preserved?.status).toBe("awaiting_review")
+        expect(preserved?.workerHead).toBe(initial?.workerHead)
+        expect(blockedRun).toEqual({ state: "failed", reason: "pr_resume_blocked" })
+        expect(yield* Effect.promise(() => Bun.file(path.join(child.directory, "pending-review.txt")).text())).toBe(
+          "first\n",
+        )
+      }),
+    { git: true },
+    15_000,
+  )
+
   automaticWorktreeWithTimeout.instance(
     "commits and queues uncommitted worker output through the timeout-supervised path",
     () =>
@@ -1082,7 +1568,7 @@ describe("tool.task", () => {
   )
 
   automaticWorktree.instance(
-    "keeps a successful sibling isolated while a concurrent worker exhausts bounded takeover",
+    "keeps both worktrees available when one concurrent worker fails without replay",
     () =>
       Effect.gen(function* () {
         const directory = (yield* TestInstance).directory
@@ -1116,7 +1602,7 @@ describe("tool.task", () => {
                     Effect.gen(function* () {
                       const child = yield* sessions.get(input.sessionID)
                       children.push(child.id)
-                      if (!fail) yield* Effect.promise(() => Bun.write(path.join(child.directory, file), `${file}\n`))
+                      yield* Effect.promise(() => Bun.write(path.join(child.directory, file), `${file}\n`))
                       started++
                       if (started === 2) yield* Deferred.succeed(bothStarted, undefined)
                       yield* Deferred.await(bothStarted)
@@ -1138,21 +1624,27 @@ describe("tool.task", () => {
 
         expect(Exit.isFailure(failed)).toBe(true)
         expect(Exit.isSuccess(succeeded)).toBe(true)
-        expect(children).toHaveLength(4)
+        expect(children).toHaveLength(2)
         const childStates = yield* Effect.forEach(children, (childID) =>
           sessions
             .get(childID)
             .pipe(Effect.map((child) => ({ childID, state: child.metadata?.deepagent?.subagent?.state }))),
         )
-        expect(childStates.map((child) => child.state).sort()).toEqual(["cancelled", "cancelled", "completed", "error"])
+        expect(childStates.map((child) => child.state).sort()).toEqual(["completed", "error"])
         const successfulChild = childStates.find((child) => child.state === "completed")
         if (!successfulChild) return yield* Effect.die("successful sibling session is missing")
+        const failedChild = childStates.find((child) => child.state === "error")
+        if (!failedChild) return yield* Effect.die("failed sibling session is missing")
         const queued = (yield* queue.list()).filter((entry) => entry.parentID === chat.id)
         expect(queued).toHaveLength(1)
         expect(queued[0]?.workerID).toBe(successfulChild.childID)
         expect(yield* Effect.promise(() => Bun.file(path.join(directory, "successful.txt")).exists())).toBe(false)
         expect(yield* Effect.promise(() => Bun.file(path.join(directory, "failed.txt")).exists())).toBe(false)
-        expect(yield* worktree.list()).toHaveLength(1)
+        const failedSession = yield* sessions.get(failedChild.childID)
+        expect(yield* Effect.promise(() => Bun.file(path.join(failedSession.directory, "failed.txt")).exists())).toBe(
+          true,
+        )
+        expect(yield* worktree.list()).toHaveLength(2)
       }),
     { git: true },
     15_000,

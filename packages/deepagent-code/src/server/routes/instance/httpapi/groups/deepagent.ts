@@ -8,6 +8,7 @@ import {
   WorkspaceRoutingQueryFields,
 } from "../middleware/workspace-routing"
 import { described } from "./metadata"
+import { NonNegativeInt } from "@deepagent-code/core/schema"
 
 const root = "/deepagent"
 
@@ -17,6 +18,52 @@ export class DeepAgentPromotionError extends Schema.ErrorClass<DeepAgentPromotio
   },
   { httpApiStatus: 400 },
 ) {}
+
+export class DeepAgentGoalPlanValidationError extends Schema.ErrorClass<DeepAgentGoalPlanValidationError>(
+  "DeepAgentGoalPlanValidationError",
+)(
+  {
+    message: Schema.String,
+    code: Schema.String,
+    offending_step_ids: Schema.Array(Schema.String),
+    previous_plan_id: Schema.NullOr(Schema.String),
+    previous_plan_version: Schema.NullOr(Schema.Number),
+  },
+  { httpApiStatus: 422 },
+) {}
+
+export class DeepAgentGoalPlanConflictError extends Schema.ErrorClass<DeepAgentGoalPlanConflictError>(
+  "DeepAgentGoalPlanConflictError",
+)(
+  {
+    message: Schema.String,
+    expected_plan_id: Schema.NullOr(Schema.String),
+    expected_version: Schema.NullOr(Schema.Number),
+    actual_plan_id: Schema.NullOr(Schema.String),
+    actual_version: Schema.NullOr(Schema.Number),
+  },
+  { httpApiStatus: 409 },
+) {}
+
+export class DeepAgentGoalPlanBusyError extends Schema.ErrorClass<DeepAgentGoalPlanBusyError>(
+  "DeepAgentGoalPlanBusyError",
+)({ message: Schema.String, activity_id: Schema.String }, { httpApiStatus: 409 }) {}
+
+export class DeepAgentGoalPlanChallengeError extends Schema.ErrorClass<DeepAgentGoalPlanChallengeError>(
+  "DeepAgentGoalPlanChallengeError",
+)({ message: Schema.String, reason: Schema.String }, { httpApiStatus: 409 }) {}
+
+export class DeepAgentGoalPlanUnavailableError extends Schema.ErrorClass<DeepAgentGoalPlanUnavailableError>(
+  "DeepAgentGoalPlanUnavailableError",
+)({ message: Schema.String }, { httpApiStatus: 503 }) {}
+
+export const DeepAgentGoalPlanError = [
+  DeepAgentGoalPlanValidationError,
+  DeepAgentGoalPlanConflictError,
+  DeepAgentGoalPlanBusyError,
+  DeepAgentGoalPlanChallengeError,
+  DeepAgentGoalPlanUnavailableError,
+] as const
 
 // V3 reviewer (F4): expose recent run reviews so the reviewer UI is no longer a dead link.
 export const DeepAgentCandidateNode = Schema.Struct({
@@ -330,30 +377,79 @@ export const DeepAgentGoalStartInput = Schema.Struct({
 /** Goal lifecycle mutations that only need the session id. */
 export const DeepAgentGoalSessionInput = Schema.Struct({ sessionID: Schema.String })
 
-/**
- * POST /deepagent/goal/edit-plan — V4.1 §S2 GOAL PLAN HOT-EDIT. A user revises the plan of a RUNNING or
- * PAUSED goal; the driver applies it BETWEEN ticks (durable-doc upsert + stall re-baseline). The step
- * shape mirrors plan-controller PlanInput (loose input: step_id/status/acceptance optional; evidence is
- * runtime-owned and never taken from input). `ok:false` when no goal is running or it reached a terminal
- * phase (no orphan edit).
- */
+/** POST /deepagent/goal/edit-plan — strict durable plan-edit admission envelope. */
 export const DeepAgentGoalPlanStepInput = Schema.Struct({
   step_id: Schema.optional(Schema.String),
   title: Schema.String,
-  status: Schema.optional(Schema.String),
+  status: Schema.Literals([
+    "pending",
+    "active",
+    "done",
+    "cancelled",
+    "blocked",
+    "completed",
+    "in_progress",
+    "in_review",
+    "skipped",
+    "stuck",
+  ]),
   acceptance: Schema.optional(Schema.NullOr(Schema.String)),
   assigned_agent: Schema.optional(Schema.NullOr(Schema.String)),
   note: Schema.optional(Schema.NullOr(Schema.String)),
 })
-export const DeepAgentGoalPlanInput = Schema.Struct({
+export const DeepAgentGoalPlanWriteInput = Schema.Struct({
+  operation: Schema.Literals(["create", "advance", "replan"]),
+  expected_plan_id: Schema.NullOr(Schema.String),
+  expected_version: Schema.NullOr(NonNegativeInt),
   goal: Schema.String,
   steps: Schema.Array(DeepAgentGoalPlanStepInput),
-  assumptions: Schema.optional(Schema.Array(Schema.String)),
-  active_step_id: Schema.optional(Schema.NullOr(Schema.String)),
+  assumptions: Schema.Array(Schema.String),
+  active_step_id: Schema.NullOr(Schema.String),
+  replan_reason: Schema.optional(Schema.String),
 })
 export const DeepAgentGoalEditPlanInput = Schema.Struct({
   sessionID: Schema.String,
-  plan: DeepAgentGoalPlanInput,
+  request_id: Schema.String,
+  plan_write: DeepAgentGoalPlanWriteInput,
+  quality_challenge_id: Schema.optional(Schema.String),
+})
+
+const DeepAgentGoalPlanChallenge = Schema.Struct({
+  challenge_id: Schema.String,
+  candidate_hash: Schema.String,
+  expected_plan_id: Schema.String,
+  expected_version: Schema.Number,
+  issued_at: Schema.String,
+  expires_at: Schema.String,
+})
+const DeepAgentGoalPlanFailure = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("validation"),
+    code: Schema.String,
+    offending_step_ids: Schema.Array(Schema.String),
+    previous_plan_id: Schema.NullOr(Schema.String),
+    previous_plan_version: Schema.NullOr(Schema.Number),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("conflict"),
+    expected_plan_id: Schema.NullOr(Schema.String),
+    expected_version: Schema.NullOr(Schema.Number),
+    actual_plan_id: Schema.NullOr(Schema.String),
+    actual_version: Schema.NullOr(Schema.Number),
+  }),
+  Schema.Struct({ kind: Schema.Literal("target_unavailable"), message: Schema.String }),
+  Schema.Struct({ kind: Schema.Literal("runtime_error"), message: Schema.String }),
+])
+export const DeepAgentGoalPlanEditResult = Schema.Struct({
+  state: Schema.Literals(["challenged", "queued", "applied", "rejected", "conflict", "runtime_error"]),
+  activity_id: Schema.String,
+  request_id: Schema.String,
+  candidate_hash: Schema.String,
+  challenge: Schema.optional(DeepAgentGoalPlanChallenge),
+  result: Schema.optional(
+    Schema.Struct({ plan_id: Schema.String, doc_id: Schema.String, version: Schema.Number, changed: Schema.Boolean }),
+  ),
+  failure: Schema.optional(DeepAgentGoalPlanFailure),
 })
 
 export const DeepAgentGoalSnapshot = Schema.Struct({
@@ -728,14 +824,14 @@ export const DeepAgentApi = HttpApi.make("deepagent").add(
       HttpApiEndpoint.post("goalEditPlan", `${root}/goal/edit-plan`, {
         query: WorkspaceRoutingQuery,
         payload: DeepAgentGoalEditPlanInput,
-        success: described(DeepAgentGoalMutateResult, "Whether the plan edit was enqueued for the goal"),
-        error: DeepAgentPromotionError,
+        success: described(DeepAgentGoalPlanEditResult, "The durable plan-edit activity receipt"),
+        error: DeepAgentGoalPlanError,
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "deepagent.goal.editPlan",
           summary: "Hot-edit the plan of a running/paused Goal Loop",
           description:
-            "V4.1 §S2: enqueue a user plan revision on the goal control channel. The driver applies it between ticks (durable-doc upsert + stall re-baseline). ok:false when no goal is running or it reached a terminal phase.",
+            "V4.1 §S2: admit a strict plan-write command into the durable activity mailbox. The driver settles the receipt after CAS and re-baseline.",
         }),
       ),
     )

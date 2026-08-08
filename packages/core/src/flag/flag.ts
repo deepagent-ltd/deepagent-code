@@ -1,4 +1,5 @@
 import { Config } from "effect"
+import { InstallationCommit } from "../installation/version"
 
 export function truthy(key: string) {
   const value = process.env[key]?.toLowerCase()
@@ -32,7 +33,7 @@ export const Flag = {
   DEEPAGENT_CODE_SERVER_USERNAME: process.env["DEEPAGENT_CODE_SERVER_USERNAME"],
   // Server Edition: CI injects the deepagent-code commit into workspace images so
   // the gateway can report/version-check the data plane (server-v1 §13.3).
-  DEEPAGENT_CODE_COMMIT: process.env["DEEPAGENT_CODE_COMMIT"],
+  DEEPAGENT_CODE_COMMIT: InstallationCommit ?? process.env["DEEPAGENT_CODE_COMMIT"],
   // Server Edition: when running inside a gateway-managed workspace container,
   // provider keys are injected via env and must not persist to the volume (§20.4).
   // Getter so tests can toggle it per-case (matches the experimental-flag pattern).

@@ -1,7 +1,7 @@
 import { describe, expect } from "bun:test"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { Database } from "@deepagent-code/core/database/database"
-import { Cause, Effect, Exit, Layer, Option } from "effect"
+import { Cause, Effect, Exit, Fiber, Layer } from "effect"
 import { mkdir } from "node:fs/promises"
 import { Agent } from "../../src/agent/agent"
 import { BackgroundJob } from "@/background/job"
@@ -80,16 +80,12 @@ const worktreeMock = Layer.mock(Worktree.Service, {
   },
 })
 
-const takeover = testEffect(layer({ subagentTimeoutMs: 50, subagentTakeoverLimit: 2 }))
-const takeoverOnce = testEffect(layer({ subagentTimeoutMs: 50, subagentTakeoverLimit: 1 }))
-const takeoverWorktree = testEffect(
-  Layer.mergeAll(layer({ subagentTimeoutMs: 50, subagentTakeoverLimit: 1 }), worktreeMock),
+const timed = testEffect(layer({ subagentTimeoutMs: 50 }))
+const timedWorktree = testEffect(
+  Layer.mergeAll(layer({ subagentTimeoutMs: 50 }), worktreeMock),
 )
-const takeoverBackgroundWorktree = testEffect(
-  Layer.mergeAll(layer({ subagentTimeoutMs: 50, subagentTakeoverLimit: 2 }), worktreeMock),
-)
-const e2e = testEffect(
-  Layer.mergeAll(layer({ subagentTimeoutMs: 50, subagentTakeoverLimit: 2, subagentOutputMaxChars: 10 }), worktreeMock),
+const timedBackgroundWorktree = testEffect(
+  Layer.mergeAll(layer({ subagentTimeoutMs: 50 }), worktreeMock),
 )
 const bounded = testEffect(layer({ subagentOutputMaxChars: 10 }))
 const off = testEffect(layer({ subagentTimeoutMs: undefined, subagentOutputMaxChars: undefined }))
@@ -152,17 +148,31 @@ function reply(input: SessionPrompt.PromptInput, text: string): SessionV1.WithPa
   }
 }
 
+function failedReply(input: SessionPrompt.PromptInput, error: SessionV1.Assistant["error"]): SessionV1.WithParts {
+  const result = reply(input, "")
+  if (result.info.role !== "assistant") throw new Error("expected an assistant reply")
+  result.info.finish = "error"
+  result.info.error = error
+  result.parts = []
+  return result
+}
+
 const stubOps = (prompt: TaskPromptOps["prompt"]): TaskPromptOps => ({
   cancel: () => Effect.void,
   resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
   prompt,
 })
 
-const execCtx = (chat: { id: SessionID }, assistant: { id: MessageID }, promptOps: TaskPromptOps) => ({
+const execCtx = (
+  chat: { id: SessionID },
+  assistant: { id: MessageID },
+  promptOps: TaskPromptOps,
+  abort = new AbortController().signal,
+) => ({
   sessionID: chat.id,
   messageID: assistant.id,
   agent: "build",
-  abort: new AbortController().signal,
+  abort,
   extra: { promptOps },
   messages: [],
   metadata: () => Effect.void,
@@ -172,78 +182,8 @@ const execCtx = (chat: { id: SessionID }, assistant: { id: MessageID }, promptOp
 const subagentState = (metadata: unknown) =>
   (metadata as { deepagent?: { subagent?: { state?: string } } } | undefined)?.deepagent?.subagent?.state
 
-describe("tool.task takeover (v4.0.4 block1 1a+1b)", () => {
-  takeover.instance("a hung subagent is cancelled and retried, and the retry result is delivered", () =>
-    Effect.gen(function* () {
-      const { chat, assistant } = yield* seed()
-      const tool = yield* TaskTool
-      const def = yield* tool.init()
-      const calls: SessionID[] = []
-      const promptOps = stubOps((input) => {
-        calls.push(input.sessionID)
-        if (calls.length === 1) return Effect.never
-        return Effect.succeed(reply(input, "recovered"))
-      })
-
-      const result = yield* def.execute(
-        { description: "inspect bug", prompt: "look into the cache key path", subagent_type: "general" },
-        execCtx(chat, assistant, promptOps),
-      )
-
-      expect(result.output).toContain(`state="completed"`)
-      expect(result.output).toContain("recovered")
-      expect(result.metadata.sessionId).toBe(calls[1])
-      expect(calls).toHaveLength(2)
-      expect(calls[0]).not.toBe(calls[1])
-
-      const jobs = yield* BackgroundJob.Service
-      expect((yield* jobs.get(calls[0]!))?.status).toBe("cancelled")
-      expect((yield* jobs.get(calls[1]!))?.status).toBe("completed")
-      expect(TaskConcurrency.activeSessionLimiters()).toBe(0)
-
-      const sessions = yield* Session.Service
-      expect(subagentState((yield* sessions.get(calls[0]!)).metadata)).toBe("cancelled")
-      expect(subagentState((yield* sessions.get(calls[1]!)).metadata)).toBe("completed")
-    }),
-  )
-
-  takeover.instance(
-    "a crashing subagent is retried and the retry result is delivered",
-    () =>
-      Effect.gen(function* () {
-        const { chat, assistant } = yield* seed()
-        const tool = yield* TaskTool
-        const def = yield* tool.init()
-        const calls: SessionID[] = []
-        const promptOps = stubOps((input) => {
-          calls.push(input.sessionID)
-          if (calls.length === 1) return Effect.fail(new Error("boom"))
-          return Effect.succeed(reply(input, "ok after retry"))
-        })
-
-        const completed = yield* def
-          .execute(
-            { description: "inspect bug", prompt: "look into the cache key path", subagent_type: "general" },
-            execCtx(chat, assistant, promptOps),
-          )
-          .pipe(Effect.timeoutOption("5 seconds"))
-        if (Option.isNone(completed)) {
-          const jobs = yield* BackgroundJob.Service.pipe(Effect.flatMap((service) => service.list()))
-          return yield* Effect.fail(
-            new Error(`Crash takeover stalled after ${calls.length} prompt call(s): ${JSON.stringify(jobs)}`),
-          )
-        }
-        const result = completed.value
-
-        expect(result.output).toContain(`state="completed"`)
-        expect(result.output).toContain("ok after retry")
-        expect(calls).toHaveLength(2)
-        expect(calls[0]).not.toBe(calls[1])
-      }),
-    10_000,
-  )
-
-  takeoverOnce.instance("exhausting the takeover limit surfaces a bounded failure to the parent", () =>
+describe("tool.task explicit recovery (no automatic replay)", () => {
+  timed.instance("a hung subagent is interrupted without creating a replacement child", () =>
     Effect.gen(function* () {
       const { chat, assistant } = yield* seed()
       const tool = yield* TaskTool
@@ -263,21 +203,165 @@ describe("tool.task takeover (v4.0.4 block1 1a+1b)", () => {
 
       expect(Exit.isFailure(exit)).toBe(true)
       const failure = Exit.isFailure(exit) ? Cause.pretty(exit.cause) : ""
-      expect(failure).toContain("[timeout]")
-      expect(failure).toContain("bounded takeover")
+      expect(failure).toContain("[attempt_timeout]")
+      expect(failure).toContain("Automatic retry is disabled")
       expect(failure).toContain("task_read")
-      expect(calls).toHaveLength(2)
+      expect(failure).toContain(String(calls[0]))
+      expect(calls).toHaveLength(1)
 
       const jobs = yield* BackgroundJob.Service
       expect((yield* jobs.get(calls[0]!))?.status).toBe("cancelled")
-      expect((yield* jobs.get(calls[1]!))?.status).toBe("cancelled")
+      expect(TaskConcurrency.activeSessionLimiters()).toBe(0)
 
       const sessions = yield* Session.Service
-      expect(subagentState((yield* sessions.get(calls[1]!)).metadata)).toBe("error")
+      expect(subagentState((yield* sessions.get(calls[0]!)).metadata)).toBe("interrupted")
     }),
   )
 
-  takeoverWorktree.instance("takeover recycles the worktree and teardown happens at completion points", () =>
+  timed.instance(
+    "a crashing subagent fails without replaying provider work",
+    () =>
+      Effect.gen(function* () {
+        const { chat, assistant } = yield* seed()
+        const tool = yield* TaskTool
+        const def = yield* tool.init()
+        const calls: SessionID[] = []
+        const promptOps = stubOps((input) => {
+          calls.push(input.sessionID)
+          return Effect.fail(new Error("boom"))
+        })
+
+        const exit = yield* def
+          .execute(
+            { description: "inspect bug", prompt: "look into the cache key path", subagent_type: "general" },
+            execCtx(chat, assistant, promptOps),
+          )
+          .pipe(Effect.exit)
+
+        expect(Exit.isFailure(exit)).toBe(true)
+        const failure = Exit.isFailure(exit) ? Cause.pretty(exit.cause) : ""
+        expect(failure).toContain("[runtime_error]")
+        expect(failure).toContain("not automatically retried")
+        expect(failure).toContain("task_read")
+        expect(calls).toHaveLength(1)
+
+        const jobs = yield* BackgroundJob.Service
+        expect((yield* jobs.get(calls[0]!))?.status).toBe("error")
+        const sessions = yield* Session.Service
+        expect(subagentState((yield* sessions.get(calls[0]!)).metadata)).toBe("error")
+      }),
+    10_000,
+  )
+
+  timed.instance("timeout returns one bounded recovery pointer to the original child", () =>
+    Effect.gen(function* () {
+      const { chat, assistant } = yield* seed()
+      const tool = yield* TaskTool
+      const def = yield* tool.init()
+      const calls: SessionID[] = []
+      const promptOps = stubOps((input) => {
+        calls.push(input.sessionID)
+        return Effect.never
+      })
+
+      const exit = yield* def
+        .execute(
+          { description: "inspect bug", prompt: "look into the cache key path", subagent_type: "general" },
+          execCtx(chat, assistant, promptOps),
+        )
+        .pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      const failure = Exit.isFailure(exit) ? Cause.pretty(exit.cause) : ""
+      expect(failure).toContain("[attempt_timeout]")
+      expect(failure).toContain("Automatic retry is disabled")
+      expect(failure).toContain("task_read")
+      expect(calls).toHaveLength(1)
+      expect(failure).toContain(String(calls[0]))
+
+      const jobs = yield* BackgroundJob.Service
+      expect((yield* jobs.get(calls[0]!))?.status).toBe("cancelled")
+
+      const sessions = yield* Session.Service
+      expect(subagentState((yield* sessions.get(calls[0]!)).metadata)).toBe("interrupted")
+    }),
+  )
+
+  timed.instance("legacy token budget errors settle as terminal errors without replay", () =>
+    Effect.gen(function* () {
+      const { chat, assistant } = yield* seed()
+      const tool = yield* TaskTool
+      const def = yield* tool.init()
+      const calls: SessionID[] = []
+      const promptOps = stubOps((input) => {
+        calls.push(input.sessionID)
+        return Effect.succeed(
+          failedReply(
+            input,
+            new SessionV1.TaskBudgetExceededError({
+              message: "legacy token budget reached",
+              budget: "tokens",
+              limit: 200_000,
+              used: 200_001,
+            }).toObject(),
+          ),
+        )
+      })
+
+      const exit = yield* def
+        .execute(
+          { description: "inspect bug", prompt: "look into the cache key path", subagent_type: "general" },
+          execCtx(chat, assistant, promptOps),
+        )
+        .pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      expect(Exit.isFailure(exit) ? Cause.pretty(exit.cause) : "").toContain("[budget_exhausted]")
+      expect(calls).toHaveLength(1)
+
+      const jobs = yield* BackgroundJob.Service
+      expect((yield* jobs.get(calls[0]!))?.status).toBe("error")
+      const sessions = yield* Session.Service
+      expect(subagentState((yield* sessions.get(calls[0]!)).metadata)).toBe("error")
+    }),
+  )
+
+  timed.instance("foreground abort cancels the job without relying on child-session cancellation", () =>
+    Effect.gen(function* () {
+      const { chat, assistant } = yield* seed()
+      const tool = yield* TaskTool
+      const def = yield* tool.init()
+      const calls: SessionID[] = []
+      const abort = new AbortController()
+      const promptOps = stubOps((input) => {
+        calls.push(input.sessionID)
+        return Effect.never
+      })
+      const fiber = yield* def
+        .execute(
+          { description: "inspect bug", prompt: "look into the cache key path", subagent_type: "general" },
+          execCtx(chat, assistant, promptOps, abort.signal),
+        )
+        .pipe(Effect.forkChild)
+
+      yield* pollWithTimeout(
+        Effect.sync(() => (calls.length === 1 ? true : undefined)),
+        "foreground task never started",
+      )
+      abort.abort()
+      const exit = yield* Fiber.await(fiber)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      expect(Exit.isFailure(exit) ? Cause.pretty(exit.cause) : "").toContain("Task interrupted by the user")
+      expect(calls).toHaveLength(1)
+      const jobs = yield* BackgroundJob.Service
+      expect((yield* jobs.get(calls[0]!))?.status).toBe("cancelled")
+      const sessions = yield* Session.Service
+      expect(subagentState((yield* sessions.get(calls[0]!)).metadata)).toBe("interrupted")
+    }),
+  )
+
+  timedWorktree.instance("timeout preserves the original worktree for explicit recovery", () =>
     Effect.gen(function* () {
       resetWorktreeLog()
       const { chat, assistant } = yield* seed()
@@ -298,11 +382,9 @@ describe("tool.task takeover (v4.0.4 block1 1a+1b)", () => {
         .pipe(Effect.exit)
 
       expect(Exit.isFailure(exit)).toBe(true)
-      expect(Exit.isFailure(exit) ? Cause.pretty(exit.cause) : "").toContain("[timeout]")
-      // One worktree per attempt (same fork base, fresh name). The superseded first attempt is
-      // force-recycled; the final explicit worktree stays available for recovery.
-      expect(wt.created).toHaveLength(2)
-      expect(wt.removed).toEqual([wt.created[0]])
+      expect(Exit.isFailure(exit) ? Cause.pretty(exit.cause) : "").toContain("[attempt_timeout]")
+      expect(wt.created).toHaveLength(1)
+      expect(wt.removed).toEqual([])
       expect(wt.safeRemoved).toEqual([])
     }),
   )
@@ -330,7 +412,7 @@ describe("tool.task takeover (v4.0.4 block1 1a+1b)", () => {
     }),
   )
 
-  takeoverBackgroundWorktree.instance("background tasks drive the timeout-takeover-inject chain end to end", () =>
+  timedBackgroundWorktree.instance("background timeout reports the original child without replay", () =>
     Effect.gen(function* () {
       resetWorktreeLog()
       const jobs = yield* BackgroundJob.Service
@@ -346,8 +428,7 @@ describe("tool.task takeover (v4.0.4 block1 1a+1b)", () => {
           return Effect.succeed(reply(input, "injected"))
         }
         calls.push(input.sessionID)
-        if (calls.length === 1) return Effect.never
-        return Effect.succeed(reply(input, "background recovered"))
+        return Effect.never
       })
 
       const started = yield* def.execute(
@@ -364,54 +445,19 @@ describe("tool.task takeover (v4.0.4 block1 1a+1b)", () => {
 
       yield* pollWithTimeout(
         Effect.gen(function* () {
-          const list = yield* jobs.list()
-          const done = list.find((job) => job.status === "completed" && job.output === "background recovered")
-          return done ? (true as const) : undefined
+          return injected.length > 0 ? (true as const) : undefined
         }),
-        "background takeover chain never completed",
+        "background timeout notification was not injected",
       )
 
-      expect(calls).toHaveLength(2)
-      expect(injected.length).toBeGreaterThan(0)
-      expect(injected[0]).toContain("background recovered")
-      expect(injected[0]).toContain("takeover")
-      expect(wt.created).toHaveLength(2)
-      expect(wt.removed).toEqual([wt.created[0]])
-      expect(wt.safeRemoved).toEqual([])
-    }),
-  )
-
-  e2e.instance("spawn → timeout → takeover → teardown → bounded injection (block1 chain)", () =>
-    Effect.gen(function* () {
-      resetWorktreeLog()
-      const { chat, assistant } = yield* seed()
-      const tool = yield* TaskTool
-      const def = yield* tool.init()
-      const calls: SessionID[] = []
-      const promptOps = stubOps((input) => {
-        calls.push(input.sessionID)
-        if (calls.length === 1) return Effect.never
-        return Effect.succeed(reply(input, "z".repeat(50)))
-      })
-
-      const result = yield* def.execute(
-        {
-          description: "inspect bug",
-          prompt: "look into the cache key path",
-          subagent_type: "general",
-          isolation: "worktree",
-        },
-        execCtx(chat, assistant, promptOps),
-      )
-
-      expect(result.output).toContain(`state="completed"`)
-      expect(result.output).toContain("…[truncated")
-      expect(result.output).toContain("z".repeat(10))
-      expect(result.output).not.toContain("z".repeat(50))
-      expect(calls).toHaveLength(2)
-      expect(calls[0]).not.toBe(calls[1])
-      expect(wt.created).toHaveLength(2)
-      expect(wt.removed).toEqual([wt.created[0]])
+      expect(calls).toHaveLength(1)
+      expect(injected[0]).toContain("timed out")
+      expect(injected[0]).toContain("Automatic retry is disabled")
+      expect(injected[0]).toContain("task_read")
+      expect(injected[0]).toContain(String(calls[0]))
+      expect((yield* jobs.get(calls[0]!))?.status).toBe("cancelled")
+      expect(wt.created).toHaveLength(1)
+      expect(wt.removed).toEqual([])
       expect(wt.safeRemoved).toEqual([])
     }),
   )

@@ -24,7 +24,7 @@ type Hit = {
 type Match = (hit: Hit) => boolean
 
 type Queue = {
-  item: Item
+  item: Item | ((hit: Hit) => Item)
   match?: Match
 }
 
@@ -636,6 +636,7 @@ namespace TestLLMServer {
     readonly pushMatch: (match: Match, ...input: (Item | Reply)[]) => Effect.Effect<void>
     readonly textMatch: (match: Match, value: string, opts?: { usage?: Usage }) => Effect.Effect<void>
     readonly toolMatch: (match: Match, name: string, input: unknown) => Effect.Effect<void>
+    readonly toolFrom: (resolve: (hit: Hit) => { name: string; input: unknown }) => Effect.Effect<void>
     readonly text: (value: string, opts?: { usage?: Usage }) => Effect.Effect<void>
     readonly tool: (name: string, input: unknown) => Effect.Effect<void>
     readonly toolHang: (name: string, input: unknown) => Effect.Effect<void>
@@ -686,7 +687,7 @@ export class TestLLMServer extends Context.Service<TestLLMServer, TestLLMServer.
         if (index === -1) return
         const first = list[index]
         list = [...list.slice(0, index), ...list.slice(index + 1)]
-        return first.item
+        return typeof first.item === "function" ? first.item(hit) : first.item
       }
 
       const handle = Effect.fn("TestLLMServer.handle")(function* (mode: "chat" | "responses") {
@@ -752,6 +753,19 @@ export class TestLLMServer extends Context.Service<TestLLMServer, TestLLMServer.
         }),
         toolMatch: Effect.fn("TestLLMServer.toolMatch")(function* (match: Match, name: string, input: unknown) {
           queueMatch(match, reply().tool(name, input).item())
+        }),
+        toolFrom: Effect.fn("TestLLMServer.toolFrom")(function* (
+          resolve: (hit: Hit) => { name: string; input: unknown },
+        ) {
+          list = [
+            ...list,
+            {
+              item: (hit: Hit) => {
+                const tool = resolve(hit)
+                return reply().tool(tool.name, tool.input).item()
+              },
+            },
+          ]
         }),
         text: Effect.fn("TestLLMServer.text")(function* (value: string, opts?: { usage?: Usage }) {
           const out = reply().text(value)

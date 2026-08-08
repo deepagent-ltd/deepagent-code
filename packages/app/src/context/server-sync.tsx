@@ -46,9 +46,31 @@ import type { ServerScope } from "@/utils/server-scope"
 import { persisted } from "@/utils/persist"
 import { isFilesystemRootDir } from "@/utils/filesystem-root"
 import { toggleMcp } from "./global-sync/mcp"
-import type { SessionPlan, SessionPlanStep, SessionGoal } from "./global-sync/types"
+import {
+  acceptsSessionPlanUpdate,
+  hasSessionPlanIdentityConflict,
+  sessionPlanCursor,
+  type SessionPlan,
+  type SessionPlanStep,
+  type SessionGoal,
+  type SessionPlanUpdateOptions,
+} from "./global-sync/types"
 
 export type { SessionPlan, SessionPlanStep, SessionGoal }
+
+export async function syncRetainedSessionPlanSnapshots(input: {
+  stores: Readonly<Record<string, { readonly session: readonly { readonly id: string }[] }>>
+  plans: Readonly<Record<string, SessionPlan>>
+  sync: (directory: string, sessionID: string) => Promise<void>
+}) {
+  await Promise.all(
+    Object.entries(input.stores).flatMap(([directory, store]) =>
+      store.session
+        .filter((session) => input.plans[session.id] !== undefined)
+        .map((session) => input.sync(directory, session.id)),
+    ),
+  )
+}
 
 const PROVIDER_MODEL_REFRESH_INTERVAL_MS = 24 * 60 * 60 * 1000
 
@@ -115,6 +137,8 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
   const sdkCache = new Map<string, DeepAgentCodeClient>()
   const booting = new Map<string, Promise<void>>()
   const sessionLoads = new Map<string, Promise<void>>()
+  const planLoads = new Map<string, Promise<void>>()
+  const planReloads = new Set<string>()
   const sessionMeta = new Map<string, { limit: number }>()
 
   const sdkFor = (directory: string) => {
@@ -244,9 +268,16 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
   }) as typeof setGlobalStore
 
   // Set/clear the live plan for a session.
-  const setSessionPlan = (sessionID: string, plan: SessionPlan | undefined) => {
+  const setSessionPlan = (sessionID: string, plan: SessionPlan | undefined, options: SessionPlanUpdateOptions = {}) => {
     if (!sessionID) return
+    const source = options.source ?? "event"
+    const current = globalStore.session_plan[sessionID]
+    if (!acceptsSessionPlanUpdate(current, plan, options)) return
     if (!plan) {
+      // A reconnect snapshot is authoritative, but an event-only clear must not erase a newer
+      // snapshot/event that arrived out of order. The backend does not emit plan deletion events,
+      // so only an explicit snapshot may clear an existing cache.
+      if (source !== "snapshot" && current) return
       setGlobalStore(
         "session_plan",
         produce((draft) => {
@@ -281,6 +312,69 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
       return
     }
     setGlobalStore("session_goal", sessionID, reconcile(goal))
+  }
+
+  const syncSessionPlan = (directory: string, sessionID: string): Promise<void> => {
+    const key = `${directoryKey(directory)}\n${sessionID}`
+    const pending = planLoads.get(key)
+    if (pending) return pending
+
+    const snapshotBaseline = sessionPlanCursor(globalStore.session_plan[sessionID])
+    const promise = retry(() => sdkFor(directory).session.plan({ sessionID }))
+      .then((response) => {
+        if (!children.children[directoryKey(directory)]) return
+        const snapshot = response.data
+        if (!snapshot?.plan) {
+          setSessionPlan(sessionID, undefined, { source: "snapshot", snapshotBaseline })
+          return
+        }
+        if (typeof snapshot.plan_version !== "number") {
+          throw new Error(`plan snapshot is missing its authority version for ${sessionID}`)
+        }
+        const plan = snapshot.plan
+        setSessionPlan(
+          sessionID,
+          {
+            plan_id: plan.plan_id,
+            plan_version: snapshot.plan_version,
+            goal: plan.goal,
+            assumptions: [...plan.assumptions],
+            active_step_id: plan.active_step_id,
+            steps: plan.steps.map((step) => ({
+              step_id: step.step_id,
+              title: step.title,
+              status: step.status,
+              acceptance: step.acceptance,
+              assigned_agent: step.assigned_agent,
+              evidence: step.evidence,
+              note: step.note,
+            })),
+            done: plan.steps.filter((step) => step.status === "done").length,
+            total: plan.steps.length,
+          },
+          { source: "snapshot", snapshotBaseline },
+        )
+      })
+      .finally(() => {
+        planLoads.delete(key)
+        if (!planReloads.delete(key)) return
+        void syncSessionPlan(directory, sessionID).catch((error) => {
+          console.error("Failed to reload session plan after an identity race", error)
+        })
+      })
+    planLoads.set(key, promise)
+    return promise
+  }
+
+  const recalibrateSessionPlan = (directory: string, sessionID: string) => {
+    const key = `${directoryKey(directory)}\n${sessionID}`
+    if (planLoads.has(key)) {
+      planReloads.add(key)
+      return
+    }
+    void syncSessionPlan(directory, sessionID).catch((error) => {
+      console.error("Failed to recalibrate session plan after an identity conflict", error)
+    })
   }
 
   const paused = () => untrack(() => globalStore.reload) !== undefined
@@ -445,6 +539,11 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
         translate: language.t,
         queryClient,
       })
+      await syncRetainedSessionPlanSnapshots({
+        stores: { [key]: child[0] },
+        plans: globalStore.session_plan,
+        sync: syncSessionPlan,
+      })
     })
 
     booting.set(key, promise)
@@ -490,7 +589,13 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
       store,
       setStore,
       push: queue.push,
-      setSessionPlan,
+      setSessionPlan: (sessionID, plan, options) => {
+        const conflict = hasSessionPlanIdentityConflict(globalStore.session_plan[sessionID], plan)
+        setSessionPlan(sessionID, plan, options)
+        if (conflict && (options?.source ?? "event") === "event") {
+          recalibrateSessionPlan(directory, sessionID)
+        }
+      },
       setSessionGoal,
       retainedLimit: sessionMeta.get(key)?.limit,
       vcsCache: children.vcsCache.get(key),
@@ -644,6 +749,7 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
     project: projectApi,
     plan: {
       set: setSessionPlan,
+      sync: syncSessionPlan,
     },
     goal: {
       set: setSessionGoal,

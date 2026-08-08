@@ -22,6 +22,10 @@ export type Event =
   | EventSessionNextPromptAdmitted
   | EventSessionNextPromptPromoted
   | EventSessionNextInterruptRequested
+  | EventSessionExecutionStarted
+  | EventSessionExecutionSucceeded
+  | EventSessionExecutionFailed
+  | EventSessionExecutionInterrupted
   | EventSessionNextContextUpdated
   | EventSessionNextSynthetic
   | EventSessionNextShellStarted
@@ -362,6 +366,16 @@ export type OutputDegenerationError = {
   }
 }
 
+export type PlanProtocolViolation = {
+  name: "PlanProtocolViolation"
+  data: {
+    message: string
+    sessionID?: string
+    attemptOrdinal: number
+    code?: string
+  }
+}
+
 export type AssistantMessage = {
   id: string
   sessionID: string
@@ -381,6 +395,7 @@ export type AssistantMessage = {
     | ContextOverflowError
     | ApiError
     | OutputDegenerationError
+    | PlanProtocolViolation
   parentID: string
   modelID: string
   providerID: string
@@ -923,6 +938,40 @@ export type GlobalEvent = {
       }
     | {
         id: string
+        type: "session.execution.started"
+        properties: {
+          timestamp: number
+          sessionID: string
+        }
+      }
+    | {
+        id: string
+        type: "session.execution.succeeded"
+        properties: {
+          timestamp: number
+          sessionID: string
+        }
+      }
+    | {
+        id: string
+        type: "session.execution.failed"
+        properties: {
+          timestamp: number
+          sessionID: string
+          error: SessionErrorUnknown
+        }
+      }
+    | {
+        id: string
+        type: "session.execution.interrupted"
+        properties: {
+          timestamp: number
+          sessionID: string
+          reason: "user" | "shutdown" | "superseded"
+        }
+      }
+    | {
+        id: string
         type: "session.next.context.updated"
         properties: {
           timestamp: number
@@ -1449,6 +1498,7 @@ export type GlobalEvent = {
             | ContextOverflowError
             | ApiError
             | OutputDegenerationError
+            | PlanProtocolViolation
         }
       }
     | {
@@ -1643,6 +1693,7 @@ export type GlobalEvent = {
           sessionID: string
           plan_id: string
           goal: string
+          plan_version: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
           active_step_id: string
           steps: Array<{
             step_id: string
@@ -1651,6 +1702,7 @@ export type GlobalEvent = {
             acceptance?: string
             assigned_agent?: string
             note?: string
+            evidence?: Array<string>
           }>
           done: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
           total: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
@@ -1766,6 +1818,10 @@ export type GlobalEvent = {
     | SyncEventSessionNextPromptAdmitted
     | SyncEventSessionNextPromptPromoted
     | SyncEventSessionNextInterruptRequested
+    | SyncEventSessionExecutionStarted
+    | SyncEventSessionExecutionSucceeded
+    | SyncEventSessionExecutionFailed
+    | SyncEventSessionExecutionInterrupted
     | SyncEventSessionNextContextUpdated
     | SyncEventSessionNextSynthetic
     | SyncEventSessionNextShellStarted
@@ -3293,6 +3349,12 @@ export type SubtaskPartInput = {
   command?: string
 }
 
+export type ConflictError = {
+  _tag: "ConflictError"
+  message: string
+  resource?: string
+}
+
 export type SessionBusyError = {
   _tag: "SessionBusyError"
   sessionID: string
@@ -3399,12 +3461,6 @@ export type SessionsResponse = {
 export type InvalidCursorError = {
   _tag: "InvalidCursorError"
   message: string
-}
-
-export type ConflictError = {
-  _tag: "ConflictError"
-  message: string
-  resource?: string
 }
 
 export type ServiceUnavailableError = {
@@ -3987,6 +4043,68 @@ export type SyncEventSessionNextInterruptRequested = {
     data: {
       timestamp: number
       sessionID: string
+    }
+  }
+}
+
+export type SyncEventSessionExecutionStarted = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.execution.started.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+    }
+  }
+}
+
+export type SyncEventSessionExecutionSucceeded = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.execution.succeeded.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+    }
+  }
+}
+
+export type SyncEventSessionExecutionFailed = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.execution.failed.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      error: SessionErrorUnknown
+    }
+  }
+}
+
+export type SyncEventSessionExecutionInterrupted = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.execution.interrupted.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      reason: "user" | "shutdown" | "superseded"
     }
   }
 }
@@ -5124,6 +5242,44 @@ export type EventSessionNextInterruptRequested = {
   }
 }
 
+export type EventSessionExecutionStarted = {
+  id: string
+  type: "session.execution.started"
+  properties: {
+    timestamp: number
+    sessionID: string
+  }
+}
+
+export type EventSessionExecutionSucceeded = {
+  id: string
+  type: "session.execution.succeeded"
+  properties: {
+    timestamp: number
+    sessionID: string
+  }
+}
+
+export type EventSessionExecutionFailed = {
+  id: string
+  type: "session.execution.failed"
+  properties: {
+    timestamp: number
+    sessionID: string
+    error: SessionErrorUnknown
+  }
+}
+
+export type EventSessionExecutionInterrupted = {
+  id: string
+  type: "session.execution.interrupted"
+  properties: {
+    timestamp: number
+    sessionID: string
+    reason: "user" | "shutdown" | "superseded"
+  }
+}
+
 export type EventSessionNextContextUpdated = {
   id: string
   type: "session.next.context.updated"
@@ -5638,6 +5794,7 @@ export type EventSessionError = {
       | ContextOverflowError
       | ApiError
       | OutputDegenerationError1
+      | PlanProtocolViolation
   }
 }
 
@@ -5856,6 +6013,7 @@ export type EventPlanUpdated = {
     sessionID: string
     plan_id: string
     goal: string
+    plan_version: number | "NaN" | "Infinity" | "-Infinity"
     active_step_id: string
     steps: Array<{
       step_id: string
@@ -5864,6 +6022,7 @@ export type EventPlanUpdated = {
       acceptance?: string
       assigned_agent?: string
       note?: string
+      evidence?: Array<string>
     }>
     done: number | "NaN" | "Infinity" | "-Infinity"
     total: number | "NaN" | "Infinity" | "-Infinity"
@@ -12319,6 +12478,61 @@ export type SessionTodoResponses = {
 
 export type SessionTodoResponse = SessionTodoResponses[keyof SessionTodoResponses]
 
+export type SessionPlanData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/plan"
+}
+
+export type SessionPlanErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionPlanError = SessionPlanErrors[keyof SessionPlanErrors]
+
+export type SessionPlanResponses = {
+  /**
+   * Current durable session plan
+   */
+  200: {
+    plan: {
+      plan_id: string
+      session_id: string
+      goal: string
+      assumptions: Array<string>
+      steps: Array<{
+        step_id: string
+        title: string
+        status: string
+        acceptance: string
+        assigned_agent: string
+        evidence: Array<string>
+        note: string
+      }>
+      active_step_id: string
+      replan_reason?: string
+      created_at: string
+    }
+    doc_id: string
+    plan_version: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+}
+
+export type SessionPlanResponse = SessionPlanResponses[keyof SessionPlanResponses]
+
 export type SessionDiffData = {
   body?: never
   path: {
@@ -12392,6 +12606,9 @@ export type SessionMessagesResponse2 = SessionMessagesResponses[keyof SessionMes
 export type SessionPromptData = {
   body?: {
     messageID?: string
+    intentID?: string
+    intentSource?: "composer" | "intelligence" | "followup" | "rewrite"
+    intentVariant?: "original" | "rewritten"
     model?: {
       providerID: string
       modelID: string
@@ -12428,6 +12645,10 @@ export type SessionPromptErrors = {
    * NotFoundError
    */
   404: NotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
 }
 
 export type SessionPromptError = SessionPromptErrors[keyof SessionPromptErrors]
@@ -12745,6 +12966,8 @@ export type SessionPromptPrepareData = {
   body?: {
     mode: "wish" | "intelligence"
     output_language?: "chinese" | "english"
+    intent_id?: string
+    intent_source?: "composer" | "intelligence" | "followup" | "rewrite"
     parts: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
   }
   path: {
@@ -12766,6 +12989,10 @@ export type SessionPromptPrepareErrors = {
    * NotFoundError
    */
   404: NotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
 }
 
 export type SessionPromptPrepareError = SessionPromptPrepareErrors[keyof SessionPromptPrepareErrors]
@@ -12782,6 +13009,7 @@ export type SessionPromptPrepareResponses = {
     route: "code" | "general"
     goal: string
     preview: string
+    intent_id?: string
   }
 }
 
@@ -12791,6 +13019,8 @@ export type SessionPromptPrepareStreamData = {
   body?: {
     mode: "wish" | "intelligence"
     output_language?: "chinese" | "english"
+    intent_id?: string
+    intent_source?: "composer" | "intelligence" | "followup" | "rewrite"
     parts: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
   }
   path: {
@@ -12812,6 +13042,10 @@ export type SessionPromptPrepareStreamErrors = {
    * NotFoundError
    */
   404: NotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
 }
 
 export type SessionPromptPrepareStreamError = SessionPromptPrepareStreamErrors[keyof SessionPromptPrepareStreamErrors]
@@ -12866,6 +13100,9 @@ export type SessionPromptSuggestionResponse = SessionPromptSuggestionResponses[k
 export type SessionPromptAsyncData = {
   body?: {
     messageID?: string
+    intentID?: string
+    intentSource?: "composer" | "intelligence" | "followup" | "rewrite"
+    intentVariant?: "original" | "rewritten"
     model?: {
       providerID: string
       modelID: string
@@ -12902,6 +13139,10 @@ export type SessionPromptAsyncErrors = {
    * NotFoundError
    */
   404: NotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
 }
 
 export type SessionPromptAsyncError = SessionPromptAsyncErrors[keyof SessionPromptAsyncErrors]
