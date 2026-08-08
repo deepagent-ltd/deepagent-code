@@ -154,6 +154,7 @@ export const ToolCall = Schema.Struct({
   id: ToolCallID,
   name: Schema.String,
   input: Schema.Unknown,
+  inputValidation: Schema.optional(Schema.Literals(["schema_valid", "schema_invalid"])),
   providerExecuted: Schema.optional(Schema.Boolean),
   providerMetadata: Schema.optional(ProviderMetadata),
 }).annotate({ identifier: "LLM.Event.ToolCall" })

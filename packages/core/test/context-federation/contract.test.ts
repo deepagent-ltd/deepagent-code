@@ -177,6 +177,52 @@ describe("context federation rollout dependencies", () => {
     expect(decision.blocked.contextProjectionV2).toContain("context_federation_kill_switch")
   })
 
+  test("requires derived readiness after Project eligibility", () => {
+    const eligible = ContextFederationRollout.resolveProject(
+      ContextFederationRollout.resolve(allRequested, { coreV2ParityVerified: true }),
+      "project_scope_ready",
+      { stage: "all", percentage: 100, internalProjectScopeKeys: [], killSwitch: false },
+    )
+    const now = Date.now()
+    const missingIdentity = ContextFederationRollout.activate(eligible, {
+      state: "uninitialized",
+      identityBound: false,
+      indexAvailable: false,
+      storageHealthy: true,
+      observedAt: now,
+      expiresAt: now + 1_000,
+    })
+    expect(missingIdentity.enabled.contextProjectionV2).toBe(false)
+    expect(missingIdentity.blocked.contextProjectionV2).toContain("data_readiness_identity_missing")
+
+    const expired = ContextFederationRollout.activate(eligible, {
+      ...ContextFederationRollout.READINESS_READY_STUB,
+      observedAt: now - 2_000,
+      expiresAt: now - 1_000,
+    })
+    expect(expired.enabled.contextQueryToolsV2).toBe(false)
+    expect(expired.blocked.contextQueryToolsV2).toContain("data_readiness_expired")
+
+    const degraded = ContextFederationRollout.activate(eligible, {
+      state: "degraded",
+      identityBound: true,
+      indexAvailable: false,
+      storageHealthy: true,
+      observedAt: now,
+      expiresAt: now + 1_000,
+    })
+    expect(degraded.enabled.contextProjectionV2).toBe(false)
+    expect(degraded.enabled.contextQueryToolsV2).toBe(false)
+    expect(degraded.enabled.contextFederationShadow).toBe(true)
+
+    expect(
+      ContextFederationRollout.activate(eligible, {
+        ...ContextFederationRollout.READINESS_READY_STUB,
+        observedAt: now,
+      }).enabled,
+    ).toEqual(allRequested)
+  })
+
   test("rollback rehearsal fails on durable loss or indeterminate requeue", () => {
     const before = {
       admissionIds: ["input_1"],

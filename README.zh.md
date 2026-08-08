@@ -14,8 +14,6 @@
   <a href="https://github.com/deepagent-ltd/deepagent-code-enterprise">Enterprise 版本</a>
 </p>
 
-<p align="center"><sub>桌面版 1.4.4 · DeepAgent Core V4.0.5</sub></p>
-
 ---
 
 DeepAgent Code 是一套面向长期工作的 AI 编程工作区。它把生产级编程智能体运行时与持久会话、相互连通的项目记忆、实时计划、代码智能、多智能体协作和人类监督组合在一起。
@@ -92,19 +90,6 @@ DeepAgent 可以把独立工作拆分给数量有界、相互隔离的 Worker。
 ### 团队与智能体消息
 
 项目 IM 把团队成员和智能体放进同一条讨论。@ 某个智能体即可启动有明确作用域的运行，使用项目上下文、流式展示进度、关联执行工件，并把答案留在发起任务的对话里。
-
-## DeepAgent Core V4.0.5
-
-桌面版 1.4.4 搭载持久上下文与协作版本。它把 Session V2、联邦上下文、委派执行、Git/PR 审阅和人类监督连接起来，同时不把持久权威退回到进程内 Agent loop：
-
-- **持久上下文与执行：** prompt 准入、Context Epoch 选择、AgentExecution claim、lease、generation、资源锁、token debit、终态 metadata 和 handoff 都在调度 provider work 前持久化。
-- **完整多 Agent Git/PR 协作：** 写 Worker 使用 canonical 隔离 worktree，只提交作用域内改动，并进入绑定精确 SHA 的 PR queue。普通 Reviewer 逐项审阅，协调器串行执行 `--no-ff` merge，再由 Senior Reviewer 完成批次复审。
-- **受 generation fence 保护的监督：** 恢复、取消、超时、接管、审阅反馈和清理复用持久 Session 身份，同时阻止过期 Worker 结算较新的工作。
-- **唯一私有文件数据根：** Core、CLI、Desktop、WSL、数据库、日志、缓存和临时文件统一位于 `~/.deepagent/code/`；普通环境变量不能重定向生产写入。
-- **缓存安全的真实模型验证：** 稳定 prompt prefix 与易变 tail 分离，finalizer 和 compaction 使用隔离基线；DeepSeek 矩阵覆盖 sandbox 工具、缓存保持、并行 Worker、PR 闭环、恢复、强度继承与 EVAL 评分。
-- **发布级验证：** 确定性状态机测试、跨进程 ownership 测试、真实模型 suite、packaged sidecar 检查、Desktop UI 覆盖和 source-map smoke 共同验证生产入口。
-
-V4.0.5 保留 V4.0 系列建立的持久文档、可靠事件投递、知识治理、安全凭据边界以及失败关闭的 provider/tool 合同。
 
 ## 安装
 

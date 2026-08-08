@@ -16,6 +16,7 @@ import { Parameters as Grep } from "../../src/tool/grep"
 import { Parameters as Invalid } from "../../src/tool/invalid"
 import { Parameters as Lsp } from "../../src/tool/lsp"
 import { Parameters as Plan } from "../../src/tool/plan"
+import { PlanWriteParameters } from "../../src/tool/plan-write"
 import { Parameters as Question } from "../../src/tool/question"
 import { Parameters as Read } from "../../src/tool/read"
 import { Parameters as Shell } from "../../src/tool/shell"
@@ -100,6 +101,46 @@ describe("tool parameters", () => {
     })
     test("rejects non-string patchText", () => {
       expect(accepts(ApplyPatch, { patchText: 123 })).toBe(false)
+    })
+  })
+
+  describe("plan-write protocol admission", () => {
+    test("rejects the original historical payload before execute", () => {
+      const historical = [
+        ["ayContext", "active"],
+        ["Context", "pending"],
+        ["Context", "active"],
+        ["Context", "active"],
+        ["", ""],
+        ["Context", "active"],
+        ["", "active"],
+        ["Context", "pending"],
+        ["", "active"],
+        ["Context", "active"],
+        ["Context", "active"],
+      ] as const
+      for (const [title, status] of historical) {
+        expect(
+          accepts(PlanWriteParameters, {
+            goal: "现场计划目标",
+            steps: [{ title, status }],
+          }),
+        ).toBe(false)
+      }
+    })
+
+    test("accepts the forward-compatible envelope so semantic validation remains the failing boundary", () => {
+      expect(
+        accepts(PlanWriteParameters, {
+          operation: "replan",
+          expected_plan_id: "plan_fixture",
+          expected_version: 1,
+          replan_reason: "provider returned malformed steps",
+          goal: "ship the change",
+          steps: [{ step_id: "s1", title: "", status: "pending" }],
+          active_step_id: null,
+        }),
+      ).toBe(true)
     })
   })
 

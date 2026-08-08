@@ -64,7 +64,7 @@ Or you can set it up manually.
               persist-credentials: false
 
           - name: Run DeepAgent Code
-            uses: deepagent-ltd/deepagent-code/github@github-v1.4.4
+            uses: deepagent-ltd/deepagent-code/github@github-v1.4.5
             env:
              ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
             with:
@@ -140,7 +140,7 @@ jobs:
           persist-credentials: false
 
       - name: Run DeepAgent Code
-        uses: deepagent-ltd/deepagent-code/github@github-v1.4.4
+        uses: deepagent-ltd/deepagent-code/github@github-v1.4.5
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         with:
@@ -177,7 +177,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - uses: deepagent-ltd/deepagent-code/github@github-v1.4.4
+      - uses: deepagent-ltd/deepagent-code/github@github-v1.4.5
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -233,7 +233,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: deepagent-ltd/deepagent-code/github@github-v1.4.4
+      - uses: deepagent-ltd/deepagent-code/github@github-v1.4.5
         if: steps.check.outputs.result == 'true'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -255,7 +255,7 @@ For `issues` events, the `prompt` input is **required** since there's no comment
 Override the default prompt to customize DeepAgent Code's behavior for your workflow.
 
 ```yaml title=".github/workflows/deepagent-code.yml"
-- uses: deepagent-ltd/deepagent-code/github@github-v1.4.4
+- uses: deepagent-ltd/deepagent-code/github@github-v1.4.5
   with:
     model: anthropic/claude-sonnet-4-5
     prompt: |

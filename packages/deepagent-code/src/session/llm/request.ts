@@ -157,6 +157,11 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
         .filter((x) => x)
         .join("\n"),
     ]
+    if (input.agent.name === "goal-worker") {
+      volatileRoundContext =
+        SessionReminders.renderPlanStatus(input.sessionID, "full", { includeLightweight: true }) ?? ""
+      volatileContextKind = volatileRoundContext ? "round" : "none"
+    }
   }
 
   const header = system[0]

@@ -117,6 +117,17 @@ describe("session.retry.delay", () => {
 })
 
 describe("session.retry.retryable", () => {
+  test("never retries activity-terminal plan protocol violations", () => {
+    const error = new SessionV1.PlanProtocolViolationError({
+      message: "plan protocol budget exhausted",
+      sessionID: SessionID.make("session-plan-protocol"),
+      attemptOrdinal: 2,
+      code: "schema",
+    }).toObject()
+
+    expect(SessionRetry.retryable(error, retryProvider)).toBeUndefined()
+  })
+
   test("maps too_many_requests json messages", () => {
     const error = wrap(JSON.stringify({ type: "error", error: { type: "too_many_requests" } }))
     expect(SessionRetry.retryable(error, retryProvider)).toEqual({ message: "Too Many Requests" })

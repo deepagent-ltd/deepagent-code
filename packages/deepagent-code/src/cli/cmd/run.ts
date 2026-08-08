@@ -918,10 +918,11 @@ export const RunCommand = effectCmd({
           }
 
           if (args.goal) {
+            const objective = initialInput?.trim()
             const result = await client.deepagent.goal
               .start({
                 sessionID,
-                ...(message.trim() ? { objective: message.trim() } : {}),
+                ...(objective ? { objective } : {}),
               })
               .catch((error) => ({ data: undefined, error }))
             if (result.error || !result.data) {

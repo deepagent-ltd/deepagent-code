@@ -1,6 +1,7 @@
 import { PermissionV1 } from "@deepagent-code/core/v1/permission"
 import { Database } from "@deepagent-code/core/database/database"
 import { Agent } from "@/agent/agent"
+import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { ContextFederationDiagnostics } from "@/context-federation/diagnostics"
@@ -116,6 +117,28 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const todo = Effect.fn("SessionHttpApi.todo")(function* (ctx: { params: { sessionID: SessionID } }) {
       yield* requireSession(ctx.params.sessionID)
       return yield* todoSvc.get(ctx.params.sessionID)
+    })
+
+    const plan = Effect.fn("SessionHttpApi.plan")(function* (ctx: { params: { sessionID: SessionID } }) {
+      yield* requireSession(ctx.params.sessionID)
+      const current = AgentGateway.DeepAgentPlanStore.getPlanDoc(ctx.params.sessionID)
+      const ref = AgentGateway.DeepAgentPlanStore.planDocRef(ctx.params.sessionID)
+      return {
+        plan: current
+          ? {
+              ...current,
+              steps: current.steps.map((step) => ({
+                ...step,
+                acceptance: step.acceptance ?? null,
+                assigned_agent: step.assigned_agent ?? null,
+                evidence: [...(step.evidence ?? [])],
+                note: step.note ?? null,
+              })),
+            }
+          : null,
+        doc_id: ref?.id ?? null,
+        plan_version: ref?.version ?? null,
+      }
     })
 
     const diff = Effect.fn("SessionHttpApi.diff")(function* (ctx: {
@@ -628,6 +651,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       .handle("get", get)
       .handle("children", children)
       .handle("todo", todo)
+      .handle("plan", plan)
       .handle("diff", diff)
       .handle("messages", messages)
       .handle("message", message)

@@ -33,14 +33,33 @@ function fallbackBuffer(): number {
   return Number.isFinite(raw) && raw >= 0 ? raw : AUTO_COMPACT_FALLBACK_BUFFER
 }
 
-export type CompactionPhase = "ok" | "reminder" | "fallback" | "hard"
+export type CompactionPhase = "ok" | "reminder" | "fallback" | "hard" | "unavailable"
+
+// BUG-007: reason disambiguates the two "not hard" paths so callers can distinguish
+// a model with auto=false (user intent) from a model with unknown context limit (data gap).
+export type OverflowUnavailableReason = "context_limit_unknown" | "auto_disabled"
+
+export type RequestBudgetDecision = "ok" | "unavailable"
+
+export interface RequestBudgetStatus {
+  readonly decision: RequestBudgetDecision
+  readonly reason?: "context_limit_unknown" | "context_limit_invalid" | "physical_budget_exceeded"
+  readonly estimatedFullRequestTokens: number
+  readonly physicalInputBudget: number
+  readonly reservedOutputTokens: number
+  readonly safetyMargin: number
+  readonly provenance: "model_limit" | "host_guard"
+}
 
 export interface OverflowStatus {
   readonly phase: CompactionPhase
-  readonly used: number // body-after-prefix token 估算
+  // Only present when phase === "unavailable" or when compaction is auto_disabled.
+  readonly reason?: OverflowUnavailableReason
+  readonly used: number // body-after-prefix token count — kept for cache/cost diagnostics only
+  readonly prefixTokens: number // the prefix that was deducted to produce `used` — receipt field
   readonly softLine: number // usable × REMINDER_FRACTION
   readonly fallbackLine: number // hardLine - AUTO_COMPACT_FALLBACK_BUFFER
-  readonly hardLine: number // 现有 usable()
+  readonly hardLine: number // usable() — the hard compaction threshold
 }
 
 // V4.0.1 P0 — the durable soft-landing state, carried on session metadata so it survives cold recovery.
@@ -80,9 +99,73 @@ export function outputContinuationMax(): number {
   return Number.isInteger(raw) && raw >= 0 ? raw : OUTPUT_CONTINUATION_MAX
 }
 
+function positiveEnv(name: string, fallback: number) {
+  const value = Number(process.env[name])
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback
+}
+
+export function requestBudget(input: {
+  model: Provider.Model
+  estimatedFullRequestTokens: number
+  outputTokenMax?: number
+}): RequestBudgetStatus {
+  const reservedOutputTokens = ProviderTransform.maxOutputTokens(input.model, input.outputTokenMax)
+  const safetyMargin = positiveEnv("DEEPAGENT_CODE_CONTEXT_SAFETY_MARGIN", 1_024)
+  const context = input.model.limit.context
+  if (!Number.isFinite(context) || context < 0) {
+    return {
+      decision: "unavailable",
+      reason: "context_limit_invalid",
+      estimatedFullRequestTokens: input.estimatedFullRequestTokens,
+      physicalInputBudget: 0,
+      reservedOutputTokens,
+      safetyMargin,
+      provenance: "model_limit",
+    }
+  }
+  if (context === 0) {
+    const hostGuard = positiveEnv("DEEPAGENT_CODE_UNKNOWN_CONTEXT_GUARD", 32_768)
+    return {
+      decision: input.estimatedFullRequestTokens < hostGuard ? "ok" : "unavailable",
+      ...(input.estimatedFullRequestTokens >= hostGuard ? { reason: "context_limit_unknown" as const } : {}),
+      estimatedFullRequestTokens: input.estimatedFullRequestTokens,
+      physicalInputBudget: hostGuard,
+      reservedOutputTokens,
+      safetyMargin,
+      provenance: "host_guard",
+    }
+  }
+
+  const contextBudget = context - reservedOutputTokens - safetyMargin
+  const physicalInputBudget = input.model.limit.input ? Math.min(input.model.limit.input, contextBudget) : contextBudget
+  if (physicalInputBudget <= 0) {
+    return {
+      decision: "unavailable",
+      reason: "context_limit_invalid",
+      estimatedFullRequestTokens: input.estimatedFullRequestTokens,
+      physicalInputBudget,
+      reservedOutputTokens,
+      safetyMargin,
+      provenance: "model_limit",
+    }
+  }
+  return {
+    decision: input.estimatedFullRequestTokens < physicalInputBudget ? "ok" : "unavailable",
+    ...(input.estimatedFullRequestTokens >= physicalInputBudget ? { reason: "physical_budget_exceeded" as const } : {}),
+    estimatedFullRequestTokens: input.estimatedFullRequestTokens,
+    physicalInputBudget,
+    reservedOutputTokens,
+    safetyMargin,
+    provenance: "model_limit",
+  }
+}
+
 export function usable(input: { cfg: ConfigV1.Info; model: Provider.Model; outputTokenMax?: number }) {
   const context = input.model.limit.context
-  if (context === 0) return 0
+  // BUG-007: context=0 means "unknown" (resolver fallback). Return 0 so callers that only need the
+  // numeric budget get a safe zero, but overflowStatus() uses its own typed path for the "unavailable"
+  // phase rather than treating 0 the same as auto=false.
+  if (!context) return 0
 
   const reserved =
     input.cfg.compaction?.reserved ??
@@ -102,10 +185,10 @@ export function tokensUsed(tokens: SessionV1.Assistant["tokens"]): number {
 // layers: with it false this collapses to the pre-V4.0.1 single-threshold ok/hard behavior (逐字节
 // equivalent), so callers can wire it straight to the softLandingCompaction flag.
 //
-// BodyAfterPrefix (§2.3): `prefixTokens` is subtracted from the raw count so a large byte-stable static
-// prefix (system prompt + skills + tool defs) does not eat the soft-landing budget. Per the §9.1 risk
-// note, callers that cannot cheaply obtain an accurate prefix estimate pass 0 (equivalent to whole-body
-// accounting) — the deduction is wired but a no-op until a real estimate is available.
+// BUG-007 RC-5: Phase decisions use the complete raw token count (`input.tokens`), NOT the
+// body-after-prefix value. A cached prefix still occupies the model's context window; subtracting it
+// from the threshold comparison was incorrect and could let a full-sized request slip past the hard line.
+// `prefixTokens` is preserved in the return value for cache/cost diagnostics only.
 export function overflowStatus(input: {
   cfg: ConfigV1.Info
   model: Provider.Model
@@ -117,9 +200,7 @@ export function overflowStatus(input: {
   const hardLine = usable(input)
   const softLandingEnabled = input.softLanding ?? true
   const prefix = Math.max(0, input.prefixTokens ?? 0)
-  // Body-after-prefix (§2.3, Codex core/src/session/context_window.rs): subtract the per-window prefix
-  // BASELINE so the soft/fallback/hard lines fire on BODY growth, not on the fixed static prefix. Never
-  // let the baseline drive `used` negative.
+  // body-after-prefix is kept for cache/cost diagnostics and the `used` receipt field.
   const used = Math.max(0, input.tokens - prefix)
 
   // Reminder line first, then clamp the fallback line into [softLine, hardLine] so the three lines stay
@@ -127,40 +208,48 @@ export function overflowStatus(input: {
   const softLine = hardLine * reminderFraction()
   const fallbackLine = Math.min(hardLine, Math.max(softLine, hardLine - fallbackBuffer()))
 
-  // No compaction ⇒ no soft-landing (autocompact disabled, or the model reports no context window).
-  if (input.cfg.compaction?.auto === false || input.model.limit.context === 0) {
-    return { phase: "ok", used, softLine, fallbackLine, hardLine }
+  // BUG-007: context=0 is the resolver fallback for an *unknown* limit — it must NOT be treated the
+  // same as the user explicitly disabling compaction (auto=false). Return a typed "unavailable" result
+  // so the caller can show a meaningful degraded state / fail-closed guard.
+  if (!input.model.limit.context) {
+    return {
+      phase: "unavailable",
+      reason: "context_limit_unknown",
+      used,
+      prefixTokens: prefix,
+      softLine,
+      fallbackLine,
+      hardLine: 0,
+    }
   }
 
-  // Full-window SAFETY CAP (Codex's second, independent check — core/src/session/context_window.rs: body
-  // >= 0.9*window OR total >= full window). body-after-prefix is the PRIMARY trigger, but a huge prefix
-  // must never let the RAW un-deducted total silently blow past the real input window. So a hard
-  // compaction ALSO fires when the raw total reaches the model's actual input limit (the true window,
-  // ABOVE the reserved-output `hardLine`), whichever crosses first. When we have no input limit, fall
-  // back to context. Only meaningful once a prefix is deducted (prefix>0); with prefix=0, used==raw so
-  // this is redundant and byte-for-byte the pre-BodyAfterPrefix behavior.
-  const fullWindow = input.model.limit.input || input.model.limit.context
-  const rawOverFullWindow = prefix > 0 && input.tokens >= fullWindow
+  // User explicitly disabled autocompaction — return "ok" with a distinct reason.
+  if (input.cfg.compaction?.auto === false) {
+    return { phase: "ok", reason: "auto_disabled", used, prefixTokens: prefix, softLine, fallbackLine, hardLine }
+  }
 
+  // BUG-007 RC-5: compare the *complete* raw request token count against each threshold.
+  // Prefix occupies model context and must not be deducted from safety budgets.
+  const raw = input.tokens
   const phase: CompactionPhase =
-    used >= hardLine || rawOverFullWindow
+    raw >= hardLine
       ? "hard"
       : !softLandingEnabled
         ? "ok"
-        : used >= fallbackLine
+        : raw >= fallbackLine
           ? "fallback"
-          : used >= softLine
+          : raw >= softLine
             ? "reminder"
             : "ok"
 
-  return { phase, used, softLine, fallbackLine, hardLine }
+  return { phase, used, prefixTokens: prefix, softLine, fallbackLine, hardLine }
 }
 
 // How many turns must pass before the soft REMINDER is re-injected while the used tokens linger in the
 // [soft, fallback) band — a debounce so a long stretch near the soft line does not spam the tail.
 export const REMINDER_DEBOUNCE_TURNS = 5
 
-export type SoftLandingAction = "none" | "reminder" | "fallback" | "hard"
+export type SoftLandingAction = "none" | "reminder" | "fallback" | "hard" | "guard"
 
 // V4.0.1 P0 — the PURE soft-landing state machine. Given the current overflow `status`, the persisted
 // `state`, and the current turn `step`, decide what side effect the turn loop should run and the next
@@ -176,6 +265,10 @@ export function softLandingDecision(input: {
   const debounce = input.debounceTurns ?? REMINDER_DEBOUNCE_TURNS
 
   switch (status.phase) {
+    case "unavailable":
+      // The complete-request preflight is the authoritative dispatch gate. Keep this explicit
+      // diagnostic action separate from "none" so an unknown limit cannot look like a healthy band.
+      return { action: "guard", nextState: state }
     case "hard":
       // Real LLM-summary compaction happens. Bump the generation and clear the soft-landing flags so the
       // NEXT window can warn + flush again from scratch. Note the fresh object also DROPS

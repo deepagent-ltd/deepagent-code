@@ -62,6 +62,7 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { TestContextFacades } from "../fixture/context-facades"
 import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
+import { PromptEpoch } from "@/session/prompt-epoch"
 import { MessageTable, SessionIntentTable, SessionSteerTable, SessionTable } from "@deepagent-code/core/session/sql"
 import { eq } from "drizzle-orm"
 import { SessionMutationEpoch } from "../../src/session/mutation-epoch"
@@ -203,6 +204,7 @@ function makePrompt(steering: boolean) {
     status,
     Database.defaultLayer,
     EventV2Bridge.defaultLayer,
+    PromptEpoch.defaultLayer,
   ).pipe(Layer.provideMerge(infra))
   const question = Question.layer.pipe(Layer.provideMerge(deps))
   const todo = Todo.layer.pipe(Layer.provideMerge(deps))

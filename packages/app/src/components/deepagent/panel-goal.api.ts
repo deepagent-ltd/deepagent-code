@@ -183,38 +183,169 @@ export const stopGoal = (client: PanelGoalClient, sessionID: string) => goalMuta
 
 /** A plan step as the edit-plan payload carries it (loose input: step_id/status optional, mirroring the
  * backend PlanInput — evidence is runtime-owned and never sent from the client). */
+export type GoalPlanStatus = "pending" | "active" | "done" | "cancelled" | "blocked"
+
 export type GoalPlanStepInput = {
   step_id?: string
   title: string
-  status?: string
+  status: GoalPlanStatus
   acceptance?: string | null
   assigned_agent?: string | null
   note?: string | null
 }
-export type GoalPlanInput = {
+export type GoalPlanWriteInput = {
+  operation: "create" | "advance" | "replan"
+  expected_plan_id: string | null
+  expected_version: number | null
+  replan_reason?: string
   goal: string
   steps: GoalPlanStepInput[]
-  assumptions?: string[]
-  active_step_id?: string | null
+  assumptions: string[]
+  active_step_id: string | null
+}
+
+export type GoalPlanEditChallenge = {
+  challenge_id: string
+  candidate_hash: string
+  expected_plan_id: string
+  expected_version: number
+  issued_at: string
+  expires_at: string
+}
+
+export type GoalPlanEditFailure =
+  | {
+      kind: "validation"
+      code: string
+      offending_step_ids: string[]
+      previous_plan_id: string | null
+      previous_plan_version: number | null
+    }
+  | {
+      kind: "conflict"
+      expected_plan_id: string | null
+      expected_version: number | null
+      actual_plan_id: string | null
+      actual_version: number | null
+    }
+  | { kind: "target_unavailable" | "runtime_error"; message: string }
+
+export type GoalPlanEditReceipt = {
+  state: "challenged" | "queued" | "applied" | "rejected" | "conflict" | "runtime_error"
+  activity_id: string
+  request_id: string
+  candidate_hash: string
+  challenge?: GoalPlanEditChallenge
+  result?: { plan_id: string; doc_id: string; version: number; changed: boolean }
+  failure?: GoalPlanEditFailure
+}
+
+export type GoalPlanEditDraft = {
+  goal: string
+  assumptions: string[]
+  steps: GoalPlanStepInput[]
 }
 
 /**
- * V4.1 §S2 — hot-edit the plan of a RUNNING or PAUSED goal. POSTs the revised plan on the goal control
- * channel; the driver applies it between ticks (durable-doc upsert + stall re-baseline). Returns false
- * when no goal is running or it reached a terminal phase (the server's orphan guard).
+ * Build a versioned write against the exact live-plan snapshot the user edited. Structural changes
+ * are replans; a status/note-only update over the same ordered identities is an advance.
  */
+export const buildGoalPlanWrite = (
+  current: {
+    plan_id: string
+    plan_version: number
+    goal: string
+    assumptions: string[]
+    steps: Array<{
+      step_id: string
+      title: string
+      acceptance?: string | null
+      assigned_agent?: string | null
+    }>
+  },
+  draft: GoalPlanEditDraft,
+  createStepID: () => string = () => `step_${globalThis.crypto.randomUUID()}`,
+): GoalPlanWriteInput => {
+  const goal = draft.goal.trim()
+  const assumptions = draft.assumptions.map((value) => value.trim())
+  if (!goal || !Number.isSafeInteger(current.plan_version) || current.plan_version < 0) {
+    throw new Error("Plan edit requires a valid authority snapshot")
+  }
+  if (draft.steps.length === 0) throw new Error("Plan edit requires at least one step")
+
+  const originalByID = new Map(current.steps.map((step) => [step.step_id, step] as const))
+  const text = (value: string | null | undefined) => (value ?? "").trim()
+  const sameIdentity = (left: GoalPlanStepInput, right: (typeof current.steps)[number]) =>
+    text(left.title) === text(right.title) &&
+    text(left.acceptance) === text(right.acceptance) &&
+    text(left.assigned_agent) === text(right.assigned_agent)
+  const structuralChange =
+    goal !== current.goal.trim() ||
+    JSON.stringify(assumptions) !== JSON.stringify(current.assumptions.map((value) => value.trim())) ||
+    draft.steps.length !== current.steps.length ||
+    draft.steps.some((step, index) => step.step_id !== current.steps[index]?.step_id || !sameIdentity(step, current.steps[index]))
+
+  const used = new Set<string>()
+  const freshStepID = () => {
+    const id = createStepID().trim()
+    if (!id || used.has(id) || originalByID.has(id)) throw new Error("Plan edit generated a duplicate step identity")
+    return id
+  }
+  const steps = draft.steps.map((step) => {
+    const original = step.step_id ? originalByID.get(step.step_id) : undefined
+    const stepID = original && sameIdentity(step, original) ? original.step_id : freshStepID()
+    if (used.has(stepID)) throw new Error("Plan edit contains a duplicate step identity")
+    used.add(stepID)
+    const title = step.title.trim()
+    const note = text(step.note) || null
+    if (!title) throw new Error("Plan edit step title cannot be empty")
+    if (step.status === "blocked" && !note) throw new Error("Blocked plan steps require a note")
+    return {
+      step_id: stepID,
+      title,
+      status: step.status,
+      acceptance: text(step.acceptance) || null,
+      assigned_agent: text(step.assigned_agent) || null,
+      note,
+    }
+  })
+  const active = steps.filter((step) => step.status === "active")
+  if (active.length > 1) throw new Error("Plan edit cannot contain multiple active steps")
+
+  return {
+    operation: structuralChange ? "replan" : "advance",
+    expected_plan_id: current.plan_id,
+    expected_version: current.plan_version,
+    ...(structuralChange ? { replan_reason: "human_goal_edit" } : {}),
+    goal,
+    assumptions,
+    steps,
+    active_step_id: active[0]?.step_id ?? null,
+  }
+}
+
+/** Admit a durable human plan-edit activity. Exact network retries reuse request_id. */
 export const editPlanGoal = async (
   client: PanelGoalClient,
-  sessionID: string,
-  plan: GoalPlanInput,
-): Promise<boolean> => {
-  const response = await client.client.request<{ ok: boolean }>({
+  input: {
+    sessionID: string
+    requestID: string
+    planWrite: GoalPlanWriteInput
+    qualityChallengeID?: string
+  },
+): Promise<GoalPlanEditReceipt | undefined> => {
+  const response = await client.client.request<GoalPlanEditReceipt>({
     method: "POST",
     url: "/deepagent/goal/edit-plan",
-    body: { sessionID, plan },
+    body: {
+      sessionID: input.sessionID,
+      request_id: input.requestID,
+      plan_write: input.planWrite,
+      ...(input.qualityChallengeID ? { quality_challenge_id: input.qualityChallengeID } : {}),
+    },
     headers: JSON_HEADERS,
   })
-  return response.data?.ok ?? false
+  return response.data
 }
 
 export const goalStatus = async (

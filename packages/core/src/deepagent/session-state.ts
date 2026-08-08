@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto"
 import path from "node:path"
 import { writeFileAtomic } from "./atomic-write"
 import * as PlanStore from "./plan-store"
+import { DocumentStore } from "./document-store"
 import type { AgentMode } from "./mode"
 import {
   createInitialRoundState,
@@ -25,6 +26,9 @@ import {
   recordGateBlock,
   resetGateBlocks,
   planStatusesChanged,
+  planProgressFingerprint,
+  buildPlanFromWriteInput,
+  PlanValidationError,
   type PlanLatchState,
   type StaleReason,
   type PlanDoc,
@@ -236,19 +240,40 @@ export const advanceToNextRound = (sessionId: string, decision: import("./mode")
 // plan is exactly the "I updated the plan" event that clears a stale latch (and bumps replan_count
 // via clearStale for the escape hatch). Binds the plan id to the latch.
 export const setPlan = (sessionId: string, plan: PlanDoc): void => {
+  // Compatibility entry point for legacy callers and migration tests. Production writers must use
+  // PlanStore.compareAndCommitPlan followed by bindPlan; this fallback retains the historical API
+  // without allowing the new model-tool path to bypass admission.
+  const previous = getPlan(sessionId)
+  PlanStore.setPlanDoc(sessionId, plan)
+  bindPlan(sessionId, plan, previous, previous == null || planProgressFingerprint(previous) !== planProgressFingerprint(plan))
+}
+
+/** Bind a plan that has already passed PlanStore admission to the hot session latch. */
+export const bindPlan = (
+  sessionId: string,
+  plan: PlanDoc,
+  previousPlan: PlanDoc | null = getPlan(sessionId),
+  changed = true,
+): void => {
   const state = sessions.get(sessionId)
   if (!state) return
+  // A semantic no-op may still be the first time a pre-existing authority is adopted into the hot
+  // latch. Bind only the pointer in that case; it is not plan progress and must not clear a stale
+  // latch, bump replan_count, or reset reporting counters.
+  if (!changed) {
+    if (state.planLatch.plan_id === plan.plan_id) return
+    state.planLatch = { ...state.planLatch, plan_id: plan.plan_id }
+    saveToDisk()
+    return
+  }
   // U10: reset the progress-nudge state ONLY when the model actually moved a step's status (or
   // added a step). A no-op re-write leaves the counter/flag running so the nudge is not silenced by
-  // an empty update ("report theater"). Compare against the CURRENT structural plan in the store.
-  const previous = getPlan(sessionId)
-  if (planStatusesChanged(previous, plan)) {
+  // an empty update ("report theater"). The caller passes the pre-commit snapshot because the
+  // authoritative store already contains `plan` by the time this hot-state binding runs.
+  if (planStatusesChanged(previousPlan, plan)) {
     state.mutationsSinceReport = 0
     state.validationPassedSinceReport = false
   }
-  // I33-1: the plan body is written to the single DocumentStore authority (plan-store); session state
-  // keeps only the latch pointer (plan_id). The store upsert is content-addressed + CAS-protected.
-  PlanStore.setPlanDoc(sessionId, plan)
   state.planLatch = clearStale({ ...state.planLatch, plan_id: plan.plan_id })
   saveToDisk()
 }
@@ -674,12 +699,73 @@ function loadFromDisk() {
       // a newer store doc (e.g. a goal edit) is never overwritten by a stale inline body.
       if (state.plan && !PlanStore.getPlanDoc(id)) {
         try {
-          PlanStore.setPlanDoc(id, state.plan)
-        } catch {
-          /* best-effort migration: a store hiccup must not block loading session state */
+          const admitted = buildPlanFromWriteInput(
+            id,
+            {
+              operation: "create",
+              expected_plan_id: null,
+              expected_version: null,
+              goal: state.plan.goal,
+              assumptions: state.plan.assumptions ?? [],
+              steps: state.plan.steps.map((step) => ({
+                step_id: step.step_id,
+                title: step.title,
+                status: step.status,
+                acceptance: step.acceptance ?? undefined,
+                assigned_agent: step.assigned_agent ?? undefined,
+                note: step.note ?? undefined,
+              })),
+              active_step_id: state.plan.active_step_id,
+            },
+            null,
+            null,
+          )
+          PlanStore.compareAndCommitPlan({
+            sessionId: id,
+            expected: null,
+            candidate: {
+              ...admitted,
+              plan_id: state.plan.plan_id,
+              created_at: state.plan.created_at,
+              replan_reason: state.plan.replan_reason ?? null,
+              steps: admitted.steps.map((step) => ({
+                ...step,
+                evidence: [...(state.plan!.steps.find((source) => source.step_id === step.step_id)?.evidence ?? [])],
+              })),
+            },
+            origin: "legacy_migration",
+          })
+        } catch (error) {
+          writeLegacyPlanMigrationDiagnostic(id, state.plan, error)
         }
       }
       sessions.set(id, normalizeState(state))
     }
   } catch {}
+}
+
+const writeLegacyPlanMigrationDiagnostic = (sessionId: string, plan: PlanDoc | null | undefined, error: unknown): void => {
+  const code = error instanceof PlanValidationError ? error.code : "legacy_plan_migration_failed"
+  const message = error instanceof Error ? error.message : String(error)
+  const store = DocumentStore.shared(PlanStore.planStoreRoot(sessionId))
+  const description = `DeepAgent legacy plan migration diagnostic ${sessionId}`
+  const doc = store.upsert({
+    type: "diagnosis",
+    scope: PlanStore.planScope(sessionId),
+    description,
+    idSlug: `plan-migration-${sessionId}`,
+    body: JSON.stringify({
+      schema_version: 1,
+      kind: "legacy_plan_migration",
+      status: "quarantined",
+      session_id: sessionId,
+      plan_id: plan?.plan_id ?? null,
+      code,
+      message,
+      observed_at: new Date().toISOString(),
+    }),
+    provenance: { source: "runner", run_ref: PlanStore.planScope(sessionId) },
+    tags: ["bug-010", "plan-migration", "quarantined"],
+  })
+  store.setStatus(doc.id, "quarantined")
 }
