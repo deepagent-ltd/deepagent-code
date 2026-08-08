@@ -13,6 +13,7 @@ import {
   Info,
   OutputDegenerationError,
   OutputLengthError,
+  PlanProtocolViolationError,
   Part,
   StructuredOutputError,
   SubtaskPart,
@@ -33,6 +34,7 @@ import { inArray } from "drizzle-orm"
 import { lt } from "drizzle-orm"
 import { or } from "drizzle-orm"
 import { MessageTable, PartTable, SessionTable } from "@deepagent-code/core/session/sql"
+import { SessionPromptEpochTable } from "./prompt-epoch.sql"
 import { ProviderError } from "@/provider/error"
 import { iife } from "@/util/iife"
 import { errorMessage } from "@/util/error"
@@ -646,6 +648,52 @@ export const filterCompactedEffect = Effect.fnUntraced(function* (sessionID: Ses
   return filterCompacted(yield* stream(sessionID))
 })
 
+export const promptHistoryEffect = Effect.fn("MessageV2.promptHistory")(function* (sessionID: SessionID) {
+  const { db } = yield* Database.Service
+  const epoch = yield* db
+    .select()
+    .from(SessionPromptEpochTable)
+    .where(and(eq(SessionPromptEpochTable.session_id, sessionID), eq(SessionPromptEpochTable.state, "active")))
+    .get()
+    .pipe(Effect.orDie)
+  const chronological = (yield* stream(sessionID)).reverse()
+  if (!epoch || epoch.epoch === 0) return chronological
+  if (!epoch.checkpoint_user_id || !epoch.checkpoint_assistant_id || !epoch.checkpoint_hash) {
+    return yield* Effect.die(new Error(`PromptEpoch ${sessionID}/${epoch.epoch} is missing checkpoint authority`))
+  }
+
+  const userIndex = chronological.findIndex((message) => message.info.id === epoch.checkpoint_user_id)
+  const assistantIndex = chronological.findIndex((message) => message.info.id === epoch.checkpoint_assistant_id)
+  const user = chronological[userIndex]
+  const assistant = chronological[assistantIndex]
+  if (
+    userIndex < 0 ||
+    assistantIndex <= userIndex ||
+    user?.info.role !== "user" ||
+    !user.parts.some((part) => part.type === "compaction") ||
+    assistant?.info.role !== "assistant" ||
+    assistant.info.parentID !== user.info.id ||
+    !assistant.info.summary ||
+    !assistant.info.finish ||
+    assistant.info.error
+  ) {
+    return yield* Effect.die(new Error(`PromptEpoch ${sessionID}/${epoch.epoch} checkpoint binding is invalid`))
+  }
+
+  const tailIndex = epoch.retained_tail_start_id
+    ? chronological.findIndex((message) => message.info.id === epoch.retained_tail_start_id)
+    : -1
+  if (epoch.retained_tail_start_id && (tailIndex < 0 || tailIndex >= userIndex)) {
+    return yield* Effect.die(new Error(`PromptEpoch ${sessionID}/${epoch.epoch} retained tail is invalid`))
+  }
+  return [
+    user,
+    assistant,
+    ...(tailIndex >= 0 ? chronological.slice(tailIndex, userIndex) : []),
+    ...chronological.slice(assistantIndex + 1),
+  ]
+})
+
 // filterCompacted reorders messages for model consumption
 // ([compaction-user, summary, ...retained tail..., continue-user]), so array
 // position is not chronological. Derive each binding by max id (MessageID
@@ -684,6 +732,8 @@ export function fromError(
           cause: e,
         },
       ).toObject()
+    case ContextOverflowError.isInstance(e):
+      return e
     case OutputLengthError.isInstance(e):
       return e
     case OutputDegenerationError.isInstance(e):
@@ -691,6 +741,8 @@ export function fromError(
     case DoomLoopError.isInstance(e):
       return e
     case TaskBudgetExceededError.isInstance(e):
+      return e
+    case PlanProtocolViolationError.isInstance(e):
       return e
     case LoadAPIKeyError.isInstance(e):
       return new AuthError(

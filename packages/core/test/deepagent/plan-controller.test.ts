@@ -8,6 +8,11 @@ import {
   isMutatingTool,
   createPlanDoc,
   buildPlanFromInput,
+  buildPlanFromWriteInput,
+  decodePlanWriteInput,
+  PlanConflictError,
+  PlanValidationError,
+  planWriteCandidateHash,
   planProgress,
   planScope,
   DEFAULT_REPLAN_LIMIT,
@@ -249,6 +254,343 @@ describe("plan doc scaffold", () => {
     })
     expect(doc.steps.map((s) => s.status)).toEqual(["blocked", "cancelled", "blocked"])
     expect(doc.steps[0].note).toBe("waiting on API key")
+  })
+})
+
+describe("strict plan write admission", () => {
+  const input = (overrides: Partial<Parameters<typeof buildPlanFromWriteInput>[1]> = {}) => ({
+    operation: "create" as const,
+    expected_plan_id: null,
+    expected_version: null,
+    goal: "ship a reliable change",
+    steps: [
+      { step_id: "s1", title: "implement", status: "active" as const, acceptance: "tests pass" },
+      { step_id: "s2", title: "verify", status: "pending" as const, acceptance: "review complete" },
+    ],
+    active_step_id: "s1",
+    ...overrides,
+  })
+
+  test("admits create and normalizes the explicit status vocabulary", () => {
+    const plan = buildPlanFromWriteInput("s1", input(), null, null)
+    expect(plan.steps.map((step) => step.status)).toEqual(["active", "pending"])
+    expect(plan.active_step_id).toBe("s1")
+  })
+
+  test("decodes untrusted plan writes and hashes normalized semantics without leaking content", () => {
+    const value = input({
+      goal: "  ship a reliable change  ",
+      steps: [
+        { title: "  implement  ", status: "ACTIVE", acceptance: " tests pass " },
+        { title: "verify", status: "pending" },
+      ],
+      active_step_id: null,
+    })
+    const decoded = decodePlanWriteInput(value)
+    expect(decoded).not.toBeNull()
+    expect(decodePlanWriteInput({ ...value, expected_version: 1.5 })).toBeNull()
+    expect(decodePlanWriteInput({ ...value, steps: [{ title: "x", status: 4 }] })).toBeNull()
+    const hash = planWriteCandidateHash(decoded!)
+    expect(hash).toMatch(/^sha256:[a-f0-9]{64}$/)
+    expect(hash).not.toContain("ship a reliable change")
+    expect(hash).toBe(planWriteCandidateHash({ ...decoded!, goal: "ship a reliable change" }))
+  })
+
+  test("quality challenge uses a stable candidate hash and a fresh challenge id", () => {
+    const previous = buildPlanFromWriteInput("s1", input(), null, null)
+    const candidate = input({
+      operation: "replan",
+      expected_plan_id: previous.plan_id,
+      expected_version: 1,
+      replan_reason: "replace unresolved work",
+      steps: [{ title: "do it", status: "pending" }],
+      active_step_id: null,
+    })
+    const capture = () => {
+      try {
+        buildPlanFromWriteInput(
+          "s1",
+          candidate,
+          previous,
+          { plan_id: previous.plan_id, doc_id: "doc:plan:s1", version: 1 },
+        )
+        throw new Error("candidate unexpectedly admitted")
+      } catch (error) {
+        expect(error).toBeInstanceOf(PlanValidationError)
+        return error as PlanValidationError
+      }
+    }
+    const first = capture()
+    const second = capture()
+    expect(first.candidate_hash).toBe(planWriteCandidateHash(candidate))
+    expect(second.candidate_hash).toBe(first.candidate_hash)
+    expect(second.challenge_id).not.toBe(first.challenge_id)
+  })
+
+  test("rejects malformed steps before any store write", () => {
+    expect(() =>
+      buildPlanFromWriteInput(
+        "s1",
+        input({ steps: [{ step_id: "s1", title: "", status: "active" }], active_step_id: "s1" }),
+        null,
+        null,
+      ),
+    ).toThrow("empty_title")
+    expect(() =>
+      buildPlanFromWriteInput(
+        "s1",
+        input({ steps: [{ step_id: "s1", title: "implement", status: "sideways" as never }], active_step_id: "s1" }),
+        null,
+        null,
+      ),
+    ).toThrow("invalid_status")
+  })
+
+  test("requires exact identity and version for advance", () => {
+    const previous = buildPlanFromWriteInput("s1", input(), null, null)
+    const ref = { plan_id: previous.plan_id, doc_id: "doc:plan:s1", version: 1 }
+    expect(() =>
+      buildPlanFromWriteInput(
+        "s1",
+        input({ operation: "advance", expected_plan_id: previous.plan_id, expected_version: 0 }),
+        previous,
+        ref,
+      ),
+    ).toThrow(PlanConflictError)
+    expect(() =>
+      buildPlanFromWriteInput(
+        "s1",
+        input({ operation: "advance", expected_plan_id: previous.plan_id, expected_version: 1, steps: [{ title: "implement", status: "done" }] }),
+        previous,
+        ref,
+      ),
+    ).toThrow(PlanValidationError)
+  })
+
+  test("advance preserves ordered step identity and immutable goal contracts", () => {
+    const previous = buildPlanFromWriteInput("s1", input(), null, null)
+    const ref = { plan_id: previous.plan_id, doc_id: "doc:plan:s1", version: 1 }
+    expect(() =>
+      buildPlanFromWriteInput(
+        "s1",
+        input({
+          operation: "advance",
+          expected_plan_id: previous.plan_id,
+          expected_version: 1,
+          goal: "a different goal",
+          steps: [
+            { step_id: "s2", title: "verify", status: "active", acceptance: "review complete" },
+            { step_id: "s1", title: "implement", status: "done", acceptance: "tests pass" },
+          ],
+          active_step_id: "s2",
+        }),
+        previous,
+        ref,
+      ),
+    ).toThrow("unsafe_step_identity")
+  })
+
+  test("quality challenge rejects a replan that drops unresolved work", () => {
+    const previous = buildPlanFromWriteInput("s1", input(), null, null)
+    const ref = { plan_id: previous.plan_id, doc_id: "doc:plan:s1", version: 1 }
+    expect(() =>
+      buildPlanFromWriteInput(
+        "s1",
+        input({
+          operation: "replan",
+          expected_plan_id: previous.plan_id,
+          expected_version: 1,
+          replan_reason: "provider correction",
+          steps: [{ step_id: "new", title: "do it", status: "active" }],
+          active_step_id: "new",
+        }),
+        previous,
+        ref,
+      ),
+    ).toThrow("suspicious_quality_regression")
+  })
+
+  test("quality oracle covers A/B/C, equality boundaries, and Unicode code points", () => {
+    const write = (
+      previous: PlanDoc,
+      steps: Parameters<typeof buildPlanFromWriteInput>[1]["steps"],
+      activeStepId: string | null,
+    ) =>
+      buildPlanFromWriteInput(
+        "s1",
+        {
+          operation: "replan",
+          expected_plan_id: previous.plan_id,
+          expected_version: 1,
+          replan_reason: "intentional test replan",
+          goal: previous.goal,
+          assumptions: previous.assumptions,
+          steps,
+          active_step_id: activeStepId,
+        },
+        previous,
+        { plan_id: previous.plan_id, doc_id: "doc:plan:s1", version: 1 },
+      )
+
+    const aPrevious = buildPlanFromWriteInput(
+      "s1",
+      input({
+        steps: [
+          { step_id: "a1", title: "abcdefghij", status: "active" },
+          { step_id: "a2", title: "abcdefghij", status: "pending" },
+          { step_id: "a3", title: "abcdefghij", status: "pending" },
+          { step_id: "a4", title: "abcdefghij", status: "pending" },
+        ],
+        active_step_id: "a1",
+      }),
+      null,
+      null,
+    )
+    expect(() =>
+      write(
+        aPrevious,
+        [
+          { step_id: "a1", title: "abcdefghij", status: "active" },
+          { step_id: "a2", title: "abcdefghij", status: "pending" },
+        ],
+        "a1",
+      ),
+    ).not.toThrow()
+    expect(() =>
+      write(
+        aPrevious,
+        [
+          { step_id: "new-a1", title: "abcdefghij", status: "active" },
+          { step_id: "new-a2", title: "abcdefghi", status: "pending" },
+        ],
+        "new-a1",
+      ),
+    ).toThrow("suspicious_quality_regression")
+
+    const bPrevious = buildPlanFromWriteInput(
+      "s1",
+      input({
+        steps: [
+          { step_id: "b1", title: "first accepted work item", status: "active", acceptance: "first proof" },
+          { step_id: "b2", title: "second accepted work item", status: "pending", acceptance: "second proof" },
+        ],
+        active_step_id: "b1",
+      }),
+      null,
+      null,
+    )
+    expect(() =>
+      write(
+        bPrevious,
+        [
+          { step_id: "new-b1", title: "replacement work item one", status: "active" },
+          { step_id: "new-b2", title: "replacement work item two", status: "pending" },
+        ],
+        "new-b1",
+      ),
+    ).toThrow("suspicious_quality_regression")
+    expect(() =>
+      write(
+        bPrevious,
+        [
+          { step_id: "new-b1", title: "replacement work item one", status: "active", acceptance: "new proof one" },
+          { step_id: "new-b2", title: "replacement work item two", status: "pending", acceptance: "new proof two" },
+        ],
+        "new-b1",
+      ),
+    ).not.toThrow()
+
+    const cPrevious = buildPlanFromWriteInput(
+      "s1",
+      input({
+        steps: [
+          { step_id: "c1", title: "first unresolved work", status: "active" },
+          { step_id: "c2", title: "second unresolved work", status: "pending" },
+        ],
+        active_step_id: "c1",
+      }),
+      null,
+      null,
+    )
+    expect(() =>
+      write(
+        cPrevious,
+        [
+          { step_id: "new-c1", title: "one", status: "active" },
+          { step_id: "new-c2", title: "two", status: "pending" },
+        ],
+        "new-c1",
+      ),
+    ).toThrow("suspicious_quality_regression")
+
+    const unicodePrevious = buildPlanFromWriteInput(
+      "s1",
+      input({
+        steps: [
+          { step_id: "u1", title: "😀😀", status: "active" },
+          { step_id: "u2", title: "😀😀", status: "pending" },
+        ],
+        active_step_id: "u1",
+      }),
+      null,
+      null,
+    )
+    expect(() => write(unicodePrevious, [{ step_id: "u1", title: "😀😀", status: "active" }], "u1")).not.toThrow()
+  })
+
+  test("deterministic incident fixture rejects all 11 malformed forward-compatible replans", () => {
+    const previous = buildPlanFromWriteInput(
+      "s1",
+      input({
+        steps: [
+          { step_id: "s1", title: "inspect the repository", status: "done", acceptance: "repository is understood" },
+          { step_id: "s2", title: "implement the guarded write path", status: "active", acceptance: "write path is validated" },
+          { step_id: "s3", title: "exercise the regression fixture", status: "pending", acceptance: "fixture is deterministic" },
+          { step_id: "s4", title: "verify persistence and recovery", status: "pending", acceptance: "recovery is covered" },
+          { step_id: "s5", title: "review the final diff", status: "pending", acceptance: "review is complete" },
+        ],
+        active_step_id: "s2",
+      }),
+      null,
+      null,
+    )
+    const ref = { plan_id: previous.plan_id, doc_id: "doc:plan:s1", version: 1 }
+    const malformed = [
+      ["ayContext", "active"],
+      ["Context", "pending"],
+      ["Context", "active"],
+      ["Context", "active"],
+      ["", ""],
+      ["Context", "active"],
+      ["", "active"],
+      ["Context", "pending"],
+      ["", "active"],
+      ["Context", "active"],
+      ["Context", "active"],
+    ] as const
+
+    for (const [title, status] of malformed) {
+      const candidate = {
+        operation: "replan" as const,
+        expected_plan_id: previous.plan_id,
+        expected_version: 1,
+        replan_reason: "provider returned a malformed plan payload",
+        goal: previous.goal,
+        assumptions: previous.assumptions,
+        steps: [{ step_id: "s2", title, status: status as "pending" | "active" }],
+        active_step_id: status === "active" ? "s2" : null,
+      }
+      expect(() => buildPlanFromWriteInput("s1", candidate, previous, ref)).toThrow(PlanValidationError)
+      try {
+        buildPlanFromWriteInput("s1", candidate, previous, ref)
+        throw new Error("fixture candidate unexpectedly admitted")
+      } catch (error) {
+        expect(error).toBeInstanceOf(PlanValidationError)
+        expect(["empty_title", "invalid_status", "unsafe_step_identity", "suspicious_quality_regression"]).toContain(
+          (error as PlanValidationError).code,
+        )
+      }
+    }
   })
 })
 

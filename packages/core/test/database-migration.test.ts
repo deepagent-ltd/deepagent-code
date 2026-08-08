@@ -4,7 +4,7 @@ import { fileURLToPath } from "url"
 import path from "path"
 import { SqliteClient } from "@effect/sql-sqlite-bun"
 import { EffectDrizzleSqlite } from "@deepagent-code/effect-drizzle-sqlite"
-import { Effect, Layer } from "effect"
+import { Effect, Exit, Layer } from "effect"
 import { eq, inArray, sql } from "drizzle-orm"
 import { DatabaseMigration } from "@deepagent-code/core/database/migration"
 import { migrations } from "@deepagent-code/core/database/migration.gen"
@@ -101,6 +101,63 @@ describe("DatabaseMigration", () => {
             sql`SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'session_time_suspended_idx'`,
           ),
         ).toEqual({ name: "session_time_suspended_idx" })
+        expect(
+          yield* db.get(
+            sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_tool_argument_receipt'`,
+          ),
+        ).toEqual({ name: "session_tool_argument_receipt" })
+        expect(
+          yield* db.all(
+            sql`SELECT name FROM sqlite_master WHERE type = 'index' AND name IN ('session_tool_argument_receipt_call_idx', 'session_tool_argument_receipt_created_idx') ORDER BY name`,
+          ),
+        ).toEqual([
+          { name: "session_tool_argument_receipt_call_idx" },
+          { name: "session_tool_argument_receipt_created_idx" },
+        ])
+        expect(
+          yield* db.get(
+            sql`SELECT name, dflt_value FROM pragma_table_info('session_tool_argument_receipt') WHERE name = 'validation_outcome'`,
+          ),
+        ).toEqual({ name: "validation_outcome", dflt_value: "'not_evaluated'" })
+        yield* db.run(sql`
+          INSERT INTO session_tool_request_receipt (
+            receipt_id, request_ordinal, session_id, user_message_id, provider_id, model_id,
+            registry_tool_ids, permission_filtered_tool_ids, final_offered_tool_ids, call_ids,
+            request_state, created_at
+          ) VALUES (
+            'receipt-constraint-test', 1, 'session-constraint-test', 'message-constraint-test',
+            'provider-test', 'model-test', '[]', '[]', '[]', '[]', 'dispatched', 1
+          )
+        `)
+        yield* db.run(sql`
+          INSERT INTO session_tool_argument_receipt (
+            receipt_id, layer, ordinal, event_type, payload_keys, unavailable_reason, created_at
+          ) VALUES (
+            'receipt-constraint-test', 'raw_frame', 0, 'raw', '[]', 'raw_receipt_gate_disabled', 1
+          )
+        `)
+        const emptyEvidence = yield* db
+          .run(
+            sql`
+            INSERT INTO session_tool_argument_receipt (
+              receipt_id, layer, ordinal, event_type, payload_keys, created_at
+            ) VALUES (
+              'receipt-constraint-test', 'ai_sdk_input', 0, 'tool-call', '[]', 1
+            )
+          `,
+          )
+          .pipe(Effect.exit)
+        expect(Exit.isFailure(emptyEvidence)).toBe(true)
+        const invalidOutcome = yield* db
+          .run(
+            sql`
+            UPDATE session_tool_argument_receipt
+            SET validation_outcome = 'untrusted'
+            WHERE receipt_id = 'receipt-constraint-test'
+          `,
+          )
+          .pipe(Effect.exit)
+        expect(Exit.isFailure(invalidOutcome)).toBe(true)
         expect(
           yield* db.all(
             sql`SELECT name FROM sqlite_master WHERE type = 'index' AND name IN ('event_aggregate_seq_idx', 'event_aggregate_type_seq_idx', 'session_input_session_pending_seq_idx', 'session_input_session_pending_delivery_seq_idx', 'session_input_session_admitted_seq_idx', 'session_input_session_promoted_seq_idx', 'session_message_session_idx', 'session_message_session_type_idx', 'session_message_session_seq_idx', 'session_message_session_type_seq_idx', 'session_message_session_time_created_id_idx') ORDER BY name`,

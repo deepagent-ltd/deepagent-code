@@ -555,6 +555,7 @@ export const routeManifest = [
       legacyBashRepair,
       legacySubagent,
       continuationRepetition,
+      compactionRetention,
       worktreeRouting,
       multiAgentParallelWorktrees,
       subagentIntensity,
@@ -579,6 +580,7 @@ export const routeManifest = [
     paths: [
       "packages/deepagent-code/src/session/prompt.ts",
       "packages/deepagent-code/src/session/processor.ts",
+      "packages/deepagent-code/src/session/tool-argument-receipt.sql.ts",
       "packages/deepagent-code/src/session/tools.ts",
     ],
     checks: ["llm-adapter", "session-continuation", "tool-files", "tool-bash-sandbox", "worktree-routing"],
@@ -601,6 +603,12 @@ export const routeManifest = [
     paths: [
       "packages/deepagent-code/src/session/steer.ts",
       "packages/deepagent-code/src/session/compaction.ts",
+      "packages/deepagent-code/src/session/compaction-sql.ts",
+      "packages/deepagent-code/src/session/prompt-epoch.ts",
+      "packages/deepagent-code/src/session/prompt-epoch.sql.ts",
+      "packages/deepagent-code/src/session/tool-argument-receipt.sql.ts",
+      "packages/deepagent-code/src/session/tool-request-receipt.sql.ts",
+      "packages/deepagent-code/src/session/message-v2.ts",
       "packages/deepagent-code/src/session/context-ledger.ts",
       "packages/deepagent-code/src/session/system.ts",
       "packages/core/src/system-context/**",
@@ -650,6 +658,7 @@ export const routeManifest = [
     id: "legacy-tool-registry",
     paths: [
       "packages/deepagent-code/src/tool/registry.ts",
+      "packages/deepagent-code/src/context-federation/readiness.ts",
       "packages/deepagent-code/src/tool/tool.ts",
       "packages/deepagent-code/src/tool/schema.ts",
       "packages/deepagent-code/src/tool/define.ts",
@@ -926,6 +935,11 @@ export const routeManifest = [
     paths: [
       "packages/deepagent-code/script/live-llm/compaction-retention.ts",
       "packages/deepagent-code/src/session/compaction.ts",
+      "packages/deepagent-code/src/session/compaction-sql.ts",
+      "packages/deepagent-code/src/session/prompt-epoch.ts",
+      "packages/deepagent-code/src/session/prompt-epoch.sql.ts",
+      "packages/deepagent-code/src/session/tool-request-receipt.sql.ts",
+      "packages/deepagent-code/src/session/message-v2.ts",
       "packages/deepagent-code/src/session/overflow.ts",
     ],
     checks: ["session-continuation"],

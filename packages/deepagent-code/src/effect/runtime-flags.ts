@@ -233,6 +233,9 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   // Process-local HMAC fingerprints, aggregate counts, and existing request/session identifiers only —
   // never raw prompt, message, tool, header, metadata, or credential values.
   assembledRequestFingerprint: bool("DEEPAGENT_CODE_ASSEMBLED_REQUEST_FINGERPRINT"),
+  // BUG-010 diagnostic gate. Normal receipts persist decoded argument hashes only. Raw provider
+  // chunks are provider-specific and potentially numerous, so inspect them only for an explicit gate.
+  toolArgumentRawReceipt: bool("DEEPAGENT_CODE_TOOL_ARGUMENT_RAW_RECEIPT"),
   experimentalWebSockets: bool("DEEPAGENT_CODE_EXPERIMENTAL_WEBSOCKETS"),
   // ── V4.0 event-driven Agent-OS — DEFAULT OFF (production-safe, operator opt-in) ──────────────────
   // Per §H3 (Feature Flags: all six ship OFF) and §H1 (staged rollout: shadow → low-risk → push

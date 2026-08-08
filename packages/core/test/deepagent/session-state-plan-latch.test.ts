@@ -67,6 +67,30 @@ describe("session-state plan latch", () => {
     expect(SessionState.getPlan("latch-s5")?.goal).toBe("ship it")
   })
 
+  test("a semantic no-op does not clear a stale latch or bump replan_count", () => {
+    const plan = {
+      plan_id: "plan_noop",
+      session_id: "latch-noop",
+      goal: "ship it",
+      assumptions: [],
+      steps: [{ step_id: "step_1", title: "build", status: "active" as const }],
+      active_step_id: "step_1",
+      created_at: new Date().toISOString(),
+    }
+    SessionState.getOrCreate("latch-noop", "high")
+    SessionState.setPlan("latch-noop", plan)
+    SessionState.markPlanStale("latch-noop", "no_progress")
+
+    SessionState.setPlan("latch-noop", plan)
+
+    expect(SessionState.planLatch("latch-noop")).toMatchObject({
+      plan_id: "plan_noop",
+      latch: "stale",
+      stale_reason: "no_progress",
+      replan_count: 0,
+    })
+  })
+
   test("latch survives a save/load round-trip via getOrCreate normalize", () => {
     SessionState.getOrCreate("latch-s6", "high")
     SessionState.markPlanStale("latch-s6", "no_progress")
@@ -90,9 +114,9 @@ describe("session-state progress-nudge counter", () => {
     SessionState.configure(mkdtempSync(path.join(tmpdir(), "plan-nudge-")))
   })
 
-  const plan = (steps: Array<{ id: string; status: string }>, activeId: string | null = null) => ({
+  const plan = (sessionID: string, steps: Array<{ id: string; status: string }>, activeId: string | null = null) => ({
     plan_id: "plan_x",
-    session_id: "sess",
+    session_id: sessionID,
     goal: "g",
     assumptions: [] as string[],
     steps: steps.map((s) => ({ step_id: s.id, title: s.id, status: s.status as never })),
@@ -108,7 +132,7 @@ describe("session-state progress-nudge counter", () => {
 
   test("recordMutation counts once a plan exists", () => {
     SessionState.getOrCreate("nudge-s2", "high")
-    SessionState.setPlan("nudge-s2", plan([{ id: "s1", status: "active" }], "s1"))
+    SessionState.setPlan("nudge-s2", plan("nudge-s2", [{ id: "s1", status: "active" }], "s1"))
     SessionState.recordMutation("nudge-s2")
     SessionState.recordMutation("nudge-s2")
     expect(SessionState.mutationsSinceReport("nudge-s2")).toBe(2)
@@ -116,29 +140,33 @@ describe("session-state progress-nudge counter", () => {
 
   test("a real status change resets the counter; a no-op re-write does not", () => {
     SessionState.getOrCreate("nudge-s3", "high")
-    SessionState.setPlan("nudge-s3", plan([{ id: "s1", status: "active" }], "s1"))
+    SessionState.setPlan("nudge-s3", plan("nudge-s3", [{ id: "s1", status: "active" }], "s1"))
     SessionState.recordMutation("nudge-s3")
     SessionState.recordMutation("nudge-s3")
     // no-op re-write (same statuses) -> counter keeps running (no report theater)
-    SessionState.setPlan("nudge-s3", plan([{ id: "s1", status: "active" }], "s1"))
+    SessionState.setPlan("nudge-s3", plan("nudge-s3", [{ id: "s1", status: "active" }], "s1"))
     expect(SessionState.mutationsSinceReport("nudge-s3")).toBe(2)
     // real status change -> reset
-    SessionState.setPlan("nudge-s3", plan([{ id: "s1", status: "done" }]))
+    SessionState.setPlan("nudge-s3", plan("nudge-s3", [{ id: "s1", status: "done" }]))
     expect(SessionState.mutationsSinceReport("nudge-s3")).toBe(0)
   })
 
   test("setPlan preserves evidence across a re-write (evidence is runtime-owned)", () => {
     SessionState.getOrCreate("nudge-s4", "high")
     SessionState.setPlan("nudge-s4", {
-      ...plan([{ id: "s1", status: "done" }]),
+      ...plan("nudge-s4", [{ id: "s1", status: "done" }]),
       steps: [{ step_id: "s1", title: "build", status: "done", evidence: ["run:1"] }],
     })
     // model re-writes the plan (adds a step) without repeating evidence
     SessionState.setPlan("nudge-s4", {
-      ...plan([
-        { id: "s1", status: "done" },
-        { id: "s2", status: "active" },
-      ]),
+      ...plan(
+        "nudge-s4",
+        [
+          { id: "s1", status: "done" },
+          { id: "s2", status: "active" },
+        ],
+        "s2",
+      ),
       steps: [
         { step_id: "s1", title: "build", status: "done" },
         { step_id: "s2", title: "test", status: "active" },
@@ -168,7 +196,7 @@ describe("session-state progress-nudge counter", () => {
 
   test("validationPassedSinceReport: set by an all-pass run, reset on a real status change", () => {
     SessionState.getOrCreate("nudge-s6", "high")
-    SessionState.setPlan("nudge-s6", plan([{ id: "s1", status: "active" }], "s1"))
+    SessionState.setPlan("nudge-s6", plan("nudge-s6", [{ id: "s1", status: "active" }], "s1"))
     expect(SessionState.validationPassedSinceReport("nudge-s6")).toBe(false)
     // a failing run does NOT set the semantic flag (it marks the latch stale instead)
     SessionState.recordValidation(
@@ -185,19 +213,67 @@ describe("session-state progress-nudge counter", () => {
     )
     expect(SessionState.validationPassedSinceReport("nudge-s6")).toBe(true)
     // a real status change clears it (fresh reporting window)
-    SessionState.setPlan("nudge-s6", plan([{ id: "s1", status: "done" }]))
+    SessionState.setPlan("nudge-s6", plan("nudge-s6", [{ id: "s1", status: "done" }]))
     expect(SessionState.validationPassedSinceReport("nudge-s6")).toBe(false)
   })
 
   test("validationPassedSinceReport: a no-op plan re-write does NOT clear the flag", () => {
     SessionState.getOrCreate("nudge-s7", "high")
-    SessionState.setPlan("nudge-s7", plan([{ id: "s1", status: "active" }], "s1"))
+    SessionState.setPlan("nudge-s7", plan("nudge-s7", [{ id: "s1", status: "active" }], "s1"))
     SessionState.recordValidation(
       "nudge-s7",
       [{ command: "tsc", passed: true, kind: "command_exit", exit_code: 0, output: "ok", duration_ms: 1 }],
       "ok",
     )
-    SessionState.setPlan("nudge-s7", plan([{ id: "s1", status: "active" }], "s1")) // no status change
+    SessionState.setPlan("nudge-s7", plan("nudge-s7", [{ id: "s1", status: "active" }], "s1")) // no status change
     expect(SessionState.validationPassedSinceReport("nudge-s7")).toBe(true)
+  })
+})
+
+// BUG-010 Fix-A §7.3: document that SessionState.setPlan() is a legacy compatibility seam.
+// It writes directly to PlanStore without going through the strict admission/CAS gate.
+// All NEW plan writers (model_tool, human_goal_edit, runtime_goal_bridge) must use
+// compareAndCommitPlan instead. This test pins the legacy behavior so changes to it are visible.
+describe("session-state setPlan compat seam (BUG-010 Fix-A)", () => {
+  beforeEach(() => {
+    SessionState.configure(mkdtempSync(path.join(tmpdir(), "plan-bypass-")))
+  })
+
+  test("setPlan writes a plan without operation/version preconditions (compat seam, not an admission gate)", () => {
+    const sessionID = "bypass-s1"
+    SessionState.getOrCreate(sessionID, "high")
+    // setPlan does NOT require operation/expected_plan_id/expected_version —
+    // this is intentionally a backwards-compat path used only by legacy callers.
+    const legacyPlan = {
+      plan_id: "plan_legacy",
+      session_id: sessionID,
+      goal: "legacy plan",
+      assumptions: [],
+      steps: [{ step_id: "s1", title: "step one", status: "active" as const }],
+      active_step_id: "s1",
+      created_at: new Date().toISOString(),
+    }
+    SessionState.setPlan(sessionID, legacyPlan)
+    // The call succeeds (no error thrown) — that's the definition of "bypass":
+    // it skips the semantic oracle and CAS precondition.
+    expect(SessionState.getPlan(sessionID)).not.toBeNull()
+  })
+
+  // This test is a regression guard: if setPlan is removed or made to throw, update the
+  // legacy callers listed in §7.3 (migration/tests) before removing it from the codebase.
+  test("setPlan is still callable — existing legacy/test callers depend on it", () => {
+    const sessionID = "bypass-s2"
+    SessionState.getOrCreate(sessionID, "high")
+    expect(() =>
+      SessionState.setPlan(sessionID, {
+        plan_id: "plan_compat",
+        session_id: sessionID,
+        goal: "compat",
+        assumptions: [],
+        steps: [{ step_id: "s1", title: "step", status: "pending" as const }],
+        active_step_id: null,
+        created_at: new Date().toISOString(),
+      }),
+    ).not.toThrow()
   })
 })

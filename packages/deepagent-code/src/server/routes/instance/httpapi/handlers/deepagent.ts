@@ -9,7 +9,14 @@ import { Effect } from "effect"
 import { buildRunReview, listRunIds } from "@/deepagent/run-review"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { InstanceHttpApi } from "../api"
-import { DeepAgentPromotionError } from "../groups/deepagent"
+import {
+  DeepAgentGoalPlanBusyError,
+  DeepAgentGoalPlanChallengeError,
+  DeepAgentGoalPlanConflictError,
+  DeepAgentGoalPlanUnavailableError,
+  DeepAgentGoalPlanValidationError,
+  DeepAgentPromotionError,
+} from "../groups/deepagent"
 import { WorkspaceRouteContext } from "../middleware/workspace-routing"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { SettingsStore } from "@/settings/store"
@@ -26,7 +33,70 @@ import { WIKI_EDITABLE_TYPES, type WikiPage } from "@/wiki/wiki-service"
 import type { PanelTurnRunner } from "@/panel/panelist-runner"
 import type { PanelVerdict } from "@/agent/schema/panel"
 import type { CompletionCriterion } from "@deepagent-code/core/deepagent/goal-loop"
-import type { PlanInput } from "@deepagent-code/core/deepagent/plan-controller"
+import { PlanConflictError, PlanValidationError } from "@deepagent-code/core/deepagent/plan-controller"
+import {
+  PlanEditBusyError,
+  PlanEditChallengeError,
+  PlanEditMailboxConflictError,
+  PlanEditProtocolCorruptionError,
+  PlanEditRequestConflictError,
+  PlanEditTargetUnavailableError,
+  type PlanEditReceipt,
+} from "@deepagent-code/core/deepagent/plan-edit-protocol"
+
+export const mapGoalPlanError = (error: GoalManager.GoalPlanEditAdmissionError) => {
+  if (error instanceof PlanValidationError) {
+    return new DeepAgentGoalPlanValidationError({
+      message: error.message,
+      code: error.code,
+      offending_step_ids: [...error.offending_step_ids],
+      previous_plan_id: error.previous_plan_id,
+      previous_plan_version: error.previous_plan_version,
+    })
+  }
+  if (error instanceof PlanConflictError) {
+    return new DeepAgentGoalPlanConflictError({
+      message: error.message,
+      expected_plan_id: error.expected?.plan_id ?? null,
+      expected_version: error.expected?.version ?? null,
+      actual_plan_id: error.actual?.plan_id ?? null,
+      actual_version: error.actual?.version ?? null,
+    })
+  }
+  if (error instanceof PlanEditBusyError) {
+    return new DeepAgentGoalPlanBusyError({ message: error.message, activity_id: error.activity_id })
+  }
+  if (error instanceof PlanEditChallengeError) {
+    return new DeepAgentGoalPlanChallengeError({ message: error.message, reason: error.reason })
+  }
+  if (error instanceof PlanEditRequestConflictError || error instanceof PlanEditMailboxConflictError) {
+    return new DeepAgentGoalPlanConflictError({
+      message: error.message,
+      expected_plan_id: null,
+      expected_version: null,
+      actual_plan_id: null,
+      actual_version: null,
+    })
+  }
+  if (
+    error instanceof PlanEditTargetUnavailableError ||
+    error instanceof PlanEditProtocolCorruptionError ||
+    error instanceof GoalManager.GoalPlanEditUnavailableError
+  ) {
+    return new DeepAgentGoalPlanUnavailableError({ message: error.message })
+  }
+  return new DeepAgentGoalPlanUnavailableError({ message: "unknown plan edit failure" })
+}
+
+const projectPlanReceipt = (receipt: PlanEditReceipt) => ({
+  state: receipt.state,
+  activity_id: receipt.command.activity_id,
+  request_id: receipt.command.request_id,
+  candidate_hash: receipt.command.candidate_hash,
+  ...(receipt.challenge ? { challenge: receipt.challenge } : {}),
+  ...(receipt.result ? { result: receipt.result } : {}),
+  ...(receipt.failure ? { failure: receipt.failure } : {}),
+})
 
 const dbgLog = Log.create({ service: "deepagent.packs.debug" })
 
@@ -598,27 +668,32 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
       if (!flags.experimentalGoalLoop) return { ok: false }
       return { ok: yield* goals.stop(ctx.payload.sessionID) }
     })
-    // V4.1 §S2 — hot-edit the plan of a running/paused goal. Normalize the wire payload (readonly step
-    // structs → the loose PlanInput the backend reconciles via buildPlanFromInput, preserving ids +
-    // runtime-owned evidence). GoalManager.editPlan enqueues it on the control channel (ok:false when no
-    // goal is running or the goal is terminal); the driver applies it between ticks.
     const goalEditPlan = Effect.fn("DeepAgentHttpApi.goalEditPlan")(function* (ctx) {
-      if (!flags.experimentalGoalLoop) return { ok: false }
-      const p = ctx.payload.plan
-      const plan: PlanInput = {
-        goal: p.goal,
-        steps: p.steps.map((s: (typeof p.steps)[number]) => ({
-          ...(s.step_id != null ? { step_id: s.step_id } : {}),
-          title: s.title,
-          ...(s.status != null ? { status: s.status } : {}),
-          ...(s.acceptance !== undefined ? { acceptance: s.acceptance } : {}),
-          ...(s.assigned_agent !== undefined ? { assigned_agent: s.assigned_agent } : {}),
-          ...(s.note !== undefined ? { note: s.note } : {}),
-        })),
-        ...(p.assumptions ? { assumptions: [...p.assumptions] } : {}),
-        ...(p.active_step_id !== undefined ? { active_step_id: p.active_step_id } : {}),
+      if (!flags.experimentalGoalLoop) {
+        return yield* Effect.fail(new DeepAgentGoalPlanUnavailableError({ message: "goal loop is disabled" }))
       }
-      return { ok: yield* goals.editPlan({ sessionID: ctx.payload.sessionID, plan }) }
+      const receipt = yield* goals
+        .editPlan({
+          sessionID: ctx.payload.sessionID,
+          requestID: ctx.payload.request_id,
+          planWrite: {
+            operation: ctx.payload.plan_write.operation,
+            expected_plan_id: ctx.payload.plan_write.expected_plan_id,
+            expected_version: ctx.payload.plan_write.expected_version,
+            goal: ctx.payload.plan_write.goal,
+            assumptions: ctx.payload.plan_write.assumptions,
+            steps: ctx.payload.plan_write.steps,
+            active_step_id: ctx.payload.plan_write.active_step_id,
+            ...(ctx.payload.plan_write.replan_reason !== undefined
+              ? { replan_reason: ctx.payload.plan_write.replan_reason }
+              : {}),
+          },
+          ...(ctx.payload.quality_challenge_id !== undefined
+            ? { qualityChallengeID: ctx.payload.quality_challenge_id }
+            : {}),
+        })
+        .pipe(Effect.mapError(mapGoalPlanError))
+      return projectPlanReceipt(receipt)
     })
     const goalStatus = Effect.fn("DeepAgentHttpApi.goalStatus")(function* (ctx) {
       return { goal: yield* goals.status(ctx.query.sessionID) }
