@@ -364,7 +364,7 @@ jobs:
           persist-credentials: false
 
       - name: Run deepagent-code
-        uses: deepagent-ltd/deepagent-code/github@github-v1.4.4${envStr}
+        uses: deepagent-ltd/deepagent-code/github@github-v1.4.5${envStr}
         with:
           model: ${provider}/${model}`,
         )

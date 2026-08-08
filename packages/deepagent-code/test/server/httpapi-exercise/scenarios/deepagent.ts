@@ -176,12 +176,21 @@ export const deepagentScenarios: Scenario[] = [
       headers: ctx.headers(),
       body: {
         sessionID: "session_httpapi_goal",
-        plan: { goal: "Exercise the route", steps: [{ title: "Verify the response" }] },
+        request_id: "request_httpapi_goal_edit",
+        plan_write: {
+          operation: "create",
+          expected_plan_id: null,
+          expected_version: null,
+          goal: "Exercise the route",
+          assumptions: [],
+          steps: [{ title: "Verify the response", status: "active", acceptance: null, note: null }],
+          active_step_id: null,
+        },
       },
     }))
-    .json(200, (body) => {
+    .json(503, (body) => {
       object(body)
-      check(body.ok === false, "disabled goal plan editing should fail closed")
+      check(body.message === "goal loop is disabled", "disabled goal plan editing should return typed unavailable")
     }),
   http.protected
     .get("/deepagent/goal/status", "deepagent.goal.status")

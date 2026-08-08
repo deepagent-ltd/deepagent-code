@@ -10,6 +10,7 @@ import type {
 } from "@deepagent-code/core/deepagent/goal-loop"
 import { budgetNotice } from "@deepagent-code/core/deepagent/goal-loop"
 import type { PlanDoc } from "@deepagent-code/core/deepagent/plan-controller"
+import type { ValidationResult } from "@deepagent-code/core/deepagent/round-state"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { ModelV2 } from "@deepagent-code/core/model"
 import { ProviderV2 } from "@deepagent-code/core/provider"
@@ -209,7 +210,9 @@ export type WorldStateProvider = () => Effect.Effect<string>
 
 export type GraderPortsDeps = {
   /** Reuses the workspace validation runner (same as the multi-round loop). */
-  readonly runValidation: (commands: readonly string[]) => Effect.Effect<{ readonly pass: boolean }>
+  readonly runValidation: (
+    commands: readonly string[],
+  ) => Effect.Effect<{ readonly pass: boolean; readonly results?: readonly ValidationResult[] }>
   /**
    * Live LSP diagnostics reduced to the single highest severity label, or null when genuinely clean.
    * `checked: false` signals the diagnostics could NOT be computed (see the port doc in goal-loop.ts) —
@@ -416,7 +419,7 @@ export const buildStepExecutor = (
  * plan doc (`planDocId`, body = JSON PlanDoc, the grader's source of truth). `agentMode` seeds the
  * child's session-state row. Both directions are defensive: a malformed/absent plan doc, a missing
  * child plan, or an unchanged mirror are all safe no-ops (they never throw and never write a spurious
- * version — DocumentStore.update is a no-op when the body is unchanged, INV-4).
+ * version — the plan authority compare-and-commit path is a no-op when the body is unchanged, INV-4).
  */
 export const makePlanBridge = (input: {
   readonly store: DocumentStore
@@ -435,7 +438,46 @@ export const makePlanBridge = (input: {
     // Ensure the child has a session-state row, then bind its plan to the goal plan so the worker's
     // `plan` tool (getPlan/setPlan keyed on the child id) reads and extends the REAL goal plan.
     AgentGateway.DeepAgentSessionState.getOrCreate(childSessionID, input.agentMode as never)
-    AgentGateway.DeepAgentSessionState.setPlan(childSessionID, plan as never)
+    const current = AgentGateway.DeepAgentPlanStore.getPlanDoc(childSessionID)
+    const ref = AgentGateway.DeepAgentPlanStore.planDocRef(childSessionID)
+    const expected = current && ref ? { plan_id: current.plan_id, doc_id: ref.id, version: ref.version } : null
+    const operation = current ? ("replan" as const) : ("create" as const)
+    const admitted = AgentGateway.DeepAgentPlanController.buildPlanFromWriteInput(
+      childSessionID,
+      {
+        operation,
+        expected_plan_id: current?.plan_id ?? null,
+        expected_version: ref?.version ?? null,
+        ...(operation === "replan" ? { replan_reason: "runtime_goal_bridge_seed" } : {}),
+        goal: (plan as PlanDoc).goal,
+        assumptions: (plan as PlanDoc).assumptions,
+        steps: (plan as PlanDoc).steps.map((step) => ({
+          step_id: step.step_id,
+          title: step.title,
+          status: step.status,
+          acceptance: step.acceptance ?? undefined,
+          assigned_agent: step.assigned_agent ?? undefined,
+          note: step.note ?? undefined,
+        })),
+        active_step_id: (plan as PlanDoc).active_step_id,
+      },
+      current,
+      expected,
+    )
+    const seeded = {
+      ...admitted,
+      steps: admitted.steps.map((step) => ({
+        ...step,
+        evidence: (plan as PlanDoc).steps.find((source) => source.step_id === step.step_id)?.evidence ?? [],
+      })),
+    }
+    const committed = AgentGateway.DeepAgentPlanStore.compareAndCommitPlan({
+      sessionId: childSessionID,
+      expected,
+      candidate: seeded,
+      origin: "runtime_goal_bridge",
+    })
+    AgentGateway.DeepAgentSessionState.bindPlan(childSessionID, committed.plan, current, committed.changed)
   },
   mirrorChildPlan: (childSessionID) => {
     const childPlan = AgentGateway.DeepAgentSessionState.getPlan(childSessionID)
@@ -460,13 +502,42 @@ export const makePlanBridge = (input: {
       }
     })
     const activeStepId =
-      childPlan.active_step_id && steps.some((step) => step.step_id === childPlan.active_step_id)
+      childPlan.active_step_id &&
+      steps.some((step) => step.step_id === childPlan.active_step_id && step.status === "active")
         ? childPlan.active_step_id
         : (steps.find((step) => step.status === "active")?.step_id ?? null)
     // Goal workers may advance existing steps, attach runtime evidence, and explain blockers. They may
     // not rewrite the goal, add/remove/re-title steps, or alter acceptance/assignment contracts.
-    // DocumentStore.update is content-addressed, so an unchanged restricted projection remains a no-op.
-    input.store.update(input.planDocId, JSON.stringify({ ...goalPlan, steps, active_step_id: activeStepId }))
+    // The plan authority preserves the same identity/evidence contracts and keeps an unchanged
+    // restricted projection as a no-op.
+    const candidate = { ...goalPlan, steps, active_step_id: activeStepId }
+    const admitted = AgentGateway.DeepAgentPlanController.buildPlanFromWriteInput(
+      goalPlan.session_id,
+      {
+        operation: "advance",
+        expected_plan_id: goalPlan.plan_id,
+        expected_version: doc.version,
+        goal: goalPlan.goal,
+        assumptions: goalPlan.assumptions,
+        steps: candidate.steps.map((step) => ({
+          step_id: step.step_id,
+          title: step.title,
+          status: step.status,
+          acceptance: step.acceptance ?? undefined,
+          assigned_agent: step.assigned_agent ?? undefined,
+          note: step.note ?? undefined,
+        })),
+        active_step_id: candidate.active_step_id,
+      },
+      goalPlan,
+      { plan_id: goalPlan.plan_id, doc_id: doc.id, version: doc.version },
+    )
+    AgentGateway.DeepAgentPlanStore.compareAndCommitPlanDocument(input.store, {
+      sessionId: goalPlan.session_id,
+      expected: { plan_id: goalPlan.plan_id, doc_id: doc.id, version: doc.version },
+      candidate: { ...admitted, steps: candidate.steps },
+      origin: "runtime_goal_bridge",
+    })
   },
 })
 
@@ -778,7 +849,7 @@ export const makeGoalLoopWiring = (
     const ports = buildGraderPorts({
       runValidation: (commands) =>
         Effect.promise(() => runValidationCommands(commands, input.cwd)).pipe(
-          Effect.map((results) => ({ pass: AgentGateway.DeepAgentValidation.allPassed(results) })),
+          Effect.map((results) => ({ pass: AgentGateway.DeepAgentValidation.allPassed(results), results })),
         ),
       diagnostics: () =>
         input

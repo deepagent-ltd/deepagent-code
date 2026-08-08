@@ -10,6 +10,38 @@ export type Requested = {
   readonly coreV2ExecutionOwner: boolean
 }
 
+// BUG-008: derived readiness snapshot — always derived from existing identity/index/adapter/storage
+// authorities; never writable independently.  Consumers call readinessFromAuthorities() to build it.
+export type ReadinessState = "uninitialized" | "building" | "ready" | "degraded" | "blocked"
+
+export type DerivedContextDataReadiness = {
+  /** Overall data-plane state for the owning security namespace / project / location. */
+  readonly state: ReadinessState
+  /** True when a canonical Project/Location identity row has been registered. */
+  readonly identityBound: boolean
+  /** True when at least one index incarnation is available for the location. */
+  readonly indexAvailable: boolean
+  /** True when durable selection/artifact/attempt storage probe succeeded. */
+  readonly storageHealthy: boolean
+  /** Unix ms when this snapshot was derived. */
+  readonly observedAt: number
+  /** Unix ms after which this snapshot must be re-derived. */
+  readonly expiresAt: number
+}
+
+/**
+ * Minimal safe readiness snapshot — all capabilities available, no TTL.
+ * Use only in tests; production code must derive from real authorities.
+ */
+export const READINESS_READY_STUB: DerivedContextDataReadiness = {
+  state: "ready",
+  identityBound: true,
+  indexAvailable: true,
+  storageHealthy: true,
+  observedAt: 0,
+  expiresAt: Number.MAX_SAFE_INTEGER,
+}
+
 export type Evidence = {
   readonly coreV2ParityVerified: boolean
 }
@@ -22,6 +54,9 @@ export type BlockReason =
   | "core_v2_parity_required"
   | "project_rollout_not_selected"
   | "context_federation_kill_switch"
+  | "data_readiness_identity_missing"
+  | "data_readiness_expired"
+  | "data_readiness_blocked"
 
 export type Decision = {
   readonly requested: Requested
@@ -97,6 +132,73 @@ export function resolve(requested: Requested, evidence: Evidence): Decision {
   }
 }
 
+/**
+ * BUG-008: combine eligibility + readiness into a final activation decision.
+ *
+ * Eligibility (flags, cohort, kill-switch) is the existing `resolve()` result.
+ * Readiness is derived from real identity/index/adapter/storage authorities.
+ *
+ * Safety policy (§6.4):
+ *   - expired, identity-missing, or blocked readiness → model-facing owners fail closed
+ *   - degraded readiness → shadow continues (logs degraded), projection/tools blocked
+ *   - ready → use the eligibility decision unchanged
+ *
+ * NOTE: core V2 execution owner has its own independent parity gate and is never
+ * activated by readiness alone — it must also pass `evidence.coreV2ParityVerified`.
+ */
+export function activate(eligibility: Decision, readiness: DerivedContextDataReadiness): Decision {
+  const now = Date.now()
+  const expired = now > readiness.expiresAt
+  const identityMissing = !readiness.identityBound
+
+  // Hard safety gates: fail closed for model-facing owners.
+  if (expired || identityMissing || readiness.state === "blocked") {
+    const reasons: BlockReason[] = expired
+      ? ["data_readiness_expired"]
+      : identityMissing
+        ? ["data_readiness_identity_missing"]
+        : ["data_readiness_blocked"]
+    const modelFacingOwners = ["contextProjectionV2", "contextQueryToolsV2", "coreV2ExecutionOwner"] as const
+    return {
+      ...eligibility,
+      enabled: {
+        ...eligibility.enabled,
+        contextProjectionV2: false,
+        contextQueryToolsV2: false,
+        coreV2ExecutionOwner: false,
+      },
+      blocked: modelFacingOwners.reduce(
+        (acc, stage) =>
+          eligibility.enabled[stage] ? { ...acc, [stage]: [...(eligibility.blocked[stage] ?? []), ...reasons] } : acc,
+        eligibility.blocked,
+      ),
+    }
+  }
+
+  // Degraded readiness: shadow can continue (availability/timeout), projection/tools blocked.
+  if (readiness.state === "degraded" || !readiness.indexAvailable || !readiness.storageHealthy) {
+    return {
+      ...eligibility,
+      enabled: {
+        ...eligibility.enabled,
+        contextProjectionV2: false,
+        contextQueryToolsV2: false,
+        // coreV2ExecutionOwner governed by its own parity gate — leave unchanged
+      },
+      blocked: (["contextProjectionV2", "contextQueryToolsV2"] as const).reduce(
+        (acc, stage) =>
+          eligibility.enabled[stage]
+            ? { ...acc, [stage]: [...(eligibility.blocked[stage] ?? []), "data_readiness_blocked"] }
+            : acc,
+        eligibility.blocked,
+      ),
+    }
+  }
+
+  // Ready: use eligibility as-is.
+  return eligibility
+}
+
 export function projectBucket(projectScopeKey: string): number {
   return Number.parseInt(Hash.sha256(`context-federation-rollout/v1:${projectScopeKey}`).slice(0, 8), 16) % 100
 }
@@ -104,19 +206,17 @@ export function projectBucket(projectScopeKey: string): number {
 export function resolveProject(decision: Decision, projectScopeKey: string, policy: ProjectPolicy): ProjectDecision {
   const percentage = Number.isFinite(policy.percentage) ? Math.max(0, Math.min(100, policy.percentage)) : 0
   const bucket = projectBucket(projectScopeKey)
-  const selected = policy.stage === "all" ||
+  const selected =
+    policy.stage === "all" ||
     (policy.stage === "internal" && policy.internalProjectScopeKeys.includes(projectScopeKey)) ||
     (policy.stage === "percentage" &&
       (policy.internalProjectScopeKeys.includes(projectScopeKey) || bucket < percentage))
   const disableModelOwners = policy.killSwitch || !selected
-  const reason: BlockReason = policy.killSwitch
-    ? "context_federation_kill_switch"
-    : "project_rollout_not_selected"
+  const reason: BlockReason = policy.killSwitch ? "context_federation_kill_switch" : "project_rollout_not_selected"
   const blocked = disableModelOwners
     ? (["contextProjectionV2", "contextQueryToolsV2", "coreV2ExecutionOwner"] as const).reduce(
-        (result, stage) => decision.enabled[stage]
-          ? { ...result, [stage]: [...(decision.blocked[stage] ?? []), reason] }
-          : result,
+        (result, stage) =>
+          decision.enabled[stage] ? { ...result, [stage]: [...(decision.blocked[stage] ?? []), reason] } : result,
         decision.blocked,
       )
     : decision.blocked

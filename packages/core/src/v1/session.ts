@@ -70,6 +70,12 @@ export const OutputDegenerationError = NamedError.create("OutputDegenerationErro
   ratio: Schema.Number,
   detectorVersion: Schema.String,
 })
+export const PlanProtocolViolationError = NamedError.create("PlanProtocolViolation", {
+  message: Schema.String,
+  sessionID: Schema.optional(SessionSchema.ID),
+  attemptOrdinal: NonNegativeInt,
+  code: Schema.optional(Schema.String),
+})
 
 export class OutputFormatText extends Schema.Class<OutputFormatText>("OutputFormatText")({
   type: Schema.Literal("text"),
@@ -411,6 +417,7 @@ const AssistantErrorSchema = Schema.Union([
   ContextOverflowError.EffectSchema,
   APIError.EffectSchema,
   OutputDegenerationError.EffectSchema,
+  PlanProtocolViolationError.EffectSchema,
 ]).annotate({ discriminator: "name" })
 type AssistantError = Schema.Schema.Type<typeof AssistantErrorSchema>
 

@@ -151,7 +151,12 @@ describe("task structured finalizer", () => {
     expect(calls[0]?.tools).toEqual({ task: false })
     expect(calls[0]?.metadata?.deepagent?.task_activity).toMatchObject({
       interactive: false,
-      budget: { max_steps: 64, max_tokens: 200_000, max_wall_ms: 1_800_000, max_no_progress: 6 },
+      budget: { max_steps: 64, max_wall_ms: 1_800_000, max_no_progress: 6 },
+    })
+    expect(calls[0]?.metadata?.deepagent?.task_activity?.budget).not.toHaveProperty("max_tokens")
+    expect(calls[0]?.parts[0]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining("You are a leaf subagent"),
     })
     expect(calls[1]?.format?.type).toBe("json_schema")
     expect(calls[1]?.tools).toBeUndefined()
@@ -225,7 +230,7 @@ describe("task structured finalizer", () => {
 
   test("research wall-time exhaustion returns a recoverable typed task error", async () => {
     const request = input(ops(() => Effect.never))
-    request.budget = { maxSteps: 2, maxTokens: 100, maxWallMs: 5, maxNoProgress: 2 }
+    request.budget = { maxSteps: 2, maxWallMs: 5, maxNoProgress: 2 }
 
     await expect(Effect.runPromise(runSubagentPrompt(request))).rejects.toThrow("[budget_exhausted]")
     await expect(Effect.runPromise(runSubagentPrompt(request))).rejects.toThrow(
