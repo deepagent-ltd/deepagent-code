@@ -19,6 +19,10 @@ import { prepareToolSandbox, type ToolSandbox } from "../../../core/script/live-
 
 export const runtimeProviderID = "live-deepseek"
 
+export function runtimeProviderIDFor(config: Pick<LiveLLMConfig, "providerID">) {
+  return config.providerID === "deepseek" ? runtimeProviderID : "live-kimi"
+}
+
 export async function directoryExists(directory: string): Promise<boolean> {
   try {
     return (await stat(directory)).isDirectory()
@@ -132,6 +136,7 @@ export type V4LiveEventCase = {
 
 export async function runLegacyLiveCases(input: {
   suite: string
+  config?: LiveLLMConfig
   cases: LegacyLiveCase[]
   permission: ConfigV1.Info["permission"]
   primaryPermission?: ConfigV1.Info["permission"]
@@ -155,7 +160,17 @@ export async function runLegacyLiveCases(input: {
   maxProviderTurns?: number
   toolOutput?: ConfigV1.Info["tool_output"]
   evaluateWorkspace?: (directory: string, sandbox?: ToolSandbox) => Promise<unknown>
-  beforeCase?: (input: { caseName: string; directory: string; sandbox?: ToolSandbox }) => Promise<void>
+  beforeCase?: (input: {
+    caseName: string
+    directory: string
+    sessionID: string
+    sandbox?: ToolSandbox
+  }) => Promise<void>
+  beforePermissionReply?: (input: {
+    caseName?: string
+    directory: string
+    request: PermissionV1.Request
+  }) => Promise<void>
   sharedSession?: boolean
   compactAfterCases?: string[]
   timeoutMs?: number
@@ -165,12 +180,14 @@ export async function runLegacyLiveCases(input: {
   steerDuringCases?: ReadonlyArray<{ duringCaseName: string; text: string }>
   observeAssembledRequestFingerprints?: boolean
   inspectDurability?: boolean
+  inspectPlan?: boolean
   subagentIntensity?: "inherit" | "downgrade"
   environment?: Readonly<Record<string, string>>
   panel?: LegacyPanelCase
   v4Event?: V4LiveEventCase
 }) {
-  const config = await loadLiveLLMConfig()
+  const config = input.config ?? (await loadLiveLLMConfig())
+  const liveProviderID = runtimeProviderIDFor(config)
   if (
     input.permissionBarrierCount !== undefined &&
     (!Number.isSafeInteger(input.permissionBarrierCount) || input.permissionBarrierCount < 2)
@@ -196,6 +213,7 @@ export async function runLegacyLiveCases(input: {
     await prepareIsolation(testRoot, isolatedHome, isolatedData, config, input.environment)
     const { ModelV2 } = await import("@deepagent-code/core/model")
     const { ProviderV2 } = await import("@deepagent-code/core/provider")
+    const { AgentGateway } = await import("@deepagent-code/core/agent-gateway")
     const { CrossSpawnSpawner } = await import("@deepagent-code/core/cross-spawn-spawner")
     const { EffectFlock } = await import("@deepagent-code/core/util/effect-flock")
     const { Context, Deferred, Effect, Fiber, Layer, Schedule } = await import("effect")
@@ -225,6 +243,7 @@ export async function runLegacyLiveCases(input: {
     const { MessageID } = await import("../../src/session/schema")
     const { SessionSteer } = await import("../../src/session/steer")
     const { Session } = await import("../../src/session/session")
+    const { SessionToolArgumentReceiptTable } = await import("../../src/session/tool-argument-receipt.sql")
     const { SessionToolRequestReceiptTable } = await import("../../src/session/tool-request-receipt.sql")
     const { SessionIntentTable } = await import("@deepagent-code/core/session/sql")
     const { EventDispatcher } = await import("../../src/session/event-dispatcher")
@@ -239,7 +258,7 @@ export async function runLegacyLiveCases(input: {
     const { makeTaskSubagentRunner } = await import("../../src/session/goal-loop-wiring")
     const { TestInstance, testInstanceStoreLayer, tmpdirScoped } = await import("../../test/fixture/fixture")
 
-    const providerID = ProviderV2.ID.make(runtimeProviderID)
+    const providerID = ProviderV2.ID.make(liveProviderID)
     const modelID = ModelV2.ID.make(config.modelID)
     const startedAt = Date.now()
     let sandbox: ToolSandbox | undefined
@@ -267,6 +286,7 @@ export async function runLegacyLiveCases(input: {
       const instances = input.v4Event ? yield* InstanceStore.Service : undefined
       const gitService = input.v4Event ? yield* Git.Service : undefined
       const prQueue = input.v4Event ? yield* PRQueue.Service : undefined
+      let activeCaseName: string | undefined
       const assembledRequestFingerprints: GlobalEvent[] = []
       const requestFingerprintListener = (event: GlobalEvent) => {
         if (event.payload?.type !== "session.request.assembled-fingerprint") return
@@ -297,6 +317,15 @@ export async function runLegacyLiveCases(input: {
           workspaceID: event.location?.workspaceID,
         })
         return Effect.gen(function* () {
+          if (input.beforePermissionReply) {
+            yield* Effect.promise(() =>
+              input.beforePermissionReply!({
+                caseName: activeCaseName,
+                directory: instance.directory,
+                request,
+              }),
+            )
+          }
           if (permissionBarrier && input.permissionBarrierCount) {
             if (permissionRequests.length === input.permissionBarrierCount) {
               permissionBarrierSnapshots.push(
@@ -576,9 +605,15 @@ export async function runLegacyLiveCases(input: {
       const observations = yield* Effect.forEach(input.cases, (testCase) =>
         Effect.gen(function* () {
           const session = sharedSession ?? (yield* sessions.create({ title: `Live ${input.suite}: ${testCase.name}` }))
+          activeCaseName = testCase.name
           if (input.beforeCase) {
             yield* Effect.promise(() =>
-              input.beforeCase!({ caseName: testCase.name, directory: instance.directory, sandbox }),
+              input.beforeCase!({
+                caseName: testCase.name,
+                directory: instance.directory,
+                sessionID: session.id,
+                sandbox,
+              }),
             )
           }
           const revertEvidence = testCase.revertBefore
@@ -835,7 +870,7 @@ export async function runLegacyLiveCases(input: {
           const panelCase = input.panel?.afterCaseName === testCase.name ? input.panel : undefined
           if (panelCase && sharedSession && agents) {
             const opinions: unknown[] = []
-            const model = { providerID: runtimeProviderID, modelID: config.modelID }
+            const model = { providerID: liveProviderID, modelID: config.modelID }
             const runTurn = makeTaskSubagentRunner({
               sessions,
               agents,
@@ -1046,35 +1081,52 @@ export async function runLegacyLiveCases(input: {
                 .pipe(Effect.orDie)
             : undefined
           const durability = input.inspectDurability
-            ? {
-                promptEpochs: yield* database.db
-                  .select()
-                  .from(SessionPromptEpochTable)
-                  .where(eq(SessionPromptEpochTable.session_id, session.id))
-                  .all()
-                  .pipe(Effect.orDie),
-                compactionRuns: yield* database.db
-                  .select()
-                  .from(CompactionRunTable)
-                  .where(eq(CompactionRunTable.session_id, session.id))
-                  .all()
-                  .pipe(Effect.orDie),
-                summaryAttempts: yield* database.db
-                  .select()
-                  .from(CompactionSummaryAttemptTable)
-                  .all()
-                  .pipe(Effect.orDie),
-                requestReceipts: yield* database.db
+            ? yield* Effect.gen(function* () {
+                const requestReceipts = yield* database.db
                   .select()
                   .from(SessionToolRequestReceiptTable)
                   .where(eq(SessionToolRequestReceiptTable.session_id, session.id))
                   .all()
-                  .pipe(Effect.orDie),
+                  .pipe(Effect.orDie)
+                const receiptIDs = new Set(requestReceipts.map((receipt) => receipt.receipt_id))
+                return {
+                  promptEpochs: yield* database.db
+                    .select()
+                    .from(SessionPromptEpochTable)
+                    .where(eq(SessionPromptEpochTable.session_id, session.id))
+                    .all()
+                    .pipe(Effect.orDie),
+                  compactionRuns: yield* database.db
+                    .select()
+                    .from(CompactionRunTable)
+                    .where(eq(CompactionRunTable.session_id, session.id))
+                    .all()
+                    .pipe(Effect.orDie),
+                  summaryAttempts: yield* database.db
+                    .select()
+                    .from(CompactionSummaryAttemptTable)
+                    .all()
+                    .pipe(Effect.orDie),
+                  requestReceipts,
+                  argumentReceipts: (yield* database.db
+                    .select()
+                    .from(SessionToolArgumentReceiptTable)
+                    .all()
+                    .pipe(Effect.orDie)).filter((receipt) => receiptIDs.has(receipt.receipt_id)),
+                }
+              })
+            : undefined
+          const plan = input.inspectPlan
+            ? {
+                document: AgentGateway.DeepAgentPlanStore.getPlanDoc(session.id),
+                ref: AgentGateway.DeepAgentPlanStore.planDocRef(session.id),
+                root: AgentGateway.DeepAgentPlanStore.planStoreRoot(session.id),
               }
             : undefined
           return {
             name: testCase.name,
             sessionID: session.id,
+            plan,
             assembledRequestFingerprints: assembledRequestFingerprints
               .slice(requestFingerprintCountBefore)
               .filter((event) => event.payload?.properties?.sessionID === session.id)
@@ -1361,7 +1413,7 @@ export async function runLegacyLiveCases(input: {
       stack: input.v4Event ? ("v4-event-runtime" as const) : ("legacy-session" as const),
       status: errors.length > 0 ? ("failed" as const) : ("passed" as const),
       error: errors.length > 0 ? errors : undefined,
-      fingerprint: { ...modelFingerprint(config), runtimeProviderID },
+      fingerprint: { ...modelFingerprint(config), runtimeProviderID: liveProviderID },
       preflight: { durationMs: preflight.durationMs },
       sandbox: sandbox?.evidence,
       initialVerifier,
@@ -1479,10 +1531,11 @@ export function liveWorkspaceConfig(
     subagentIntensity?: "inherit" | "downgrade"
   },
 ): ConfigV1.Info {
+  const liveProviderID = runtimeProviderIDFor(config)
   return {
     snapshot: false,
-    enabled_providers: [runtimeProviderID],
-    model: `${runtimeProviderID}/${config.modelID}`,
+    enabled_providers: [liveProviderID],
+    model: `${liveProviderID}/${config.modelID}`,
     permission,
     mcp,
     tool_output: options?.toolOutput,
@@ -1512,8 +1565,8 @@ export function liveWorkspaceConfig(
             },
           }
         : {}),
-      [runtimeProviderID]: {
-        name: "DeepSeek legacy live test",
+      [liveProviderID]: {
+        name: `${config.providerID === "deepseek" ? "DeepSeek" : "Kimi"} legacy live test`,
         env: [],
         npm: "@ai-sdk/openai-compatible",
         api: config.baseURL,
@@ -1526,15 +1579,18 @@ export function liveWorkspaceConfig(
         models: {
           [config.modelID]: {
             id: config.modelID,
-            name: "DeepSeek V4 Flash live test",
-            reasoning: false,
-            temperature: true,
+            name: `${config.modelID} live test`,
+            reasoning: config.providerID === "kimi",
+            temperature: config.providerID === "deepseek",
             tool_call: true,
             release_date: "2026-07-27",
             limit: { context: options?.modelContextTokens ?? 1_000_000, output: 2048 },
             cost: { input: 0, output: 0 },
             modalities: { input: ["text"], output: ["text"] },
-            options: { thinking: { type: "disabled" }, maxTokens: options?.modelMaxTokens ?? 512, temperature: 0 },
+            options:
+              config.providerID === "deepseek"
+                ? { thinking: { type: "disabled" }, maxTokens: options?.modelMaxTokens ?? 512, temperature: 0 }
+                : { reasoningEffort: "low", maxTokens: options?.modelMaxTokens ?? 1024 },
           },
         },
       },

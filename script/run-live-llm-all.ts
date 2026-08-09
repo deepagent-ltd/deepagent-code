@@ -225,6 +225,12 @@ export const suites: Suite[] = [
     realLLM: true,
   },
   {
+    id: "live:plan-advance",
+    package: "deepagent-code",
+    command: ["bun", "run", "test:llm-live:plan-advance"],
+    realLLM: true,
+  },
+  {
     id: "ext:finalizer-isolation",
     package: "deepagent-code",
     command: ["bun", "run", "test:llm-ext:finalizer-isolation"],

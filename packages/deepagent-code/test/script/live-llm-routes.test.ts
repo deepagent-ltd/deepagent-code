@@ -155,6 +155,7 @@ describe("live LLM route manifest", () => {
           "live:legacy-session:degeneration",
           "live:legacy-session:file-mutations",
           "live:legacy-session:file-read-search",
+          "live:legacy-session:plan-advance-contract",
           "live:legacy-session:shell-exit-contract",
           "live:legacy-session:stale-validation",
           "live:legacy-session:steer-boundary",
@@ -264,6 +265,27 @@ describe("live LLM route manifest", () => {
       expect(commandForModelRun(run!)).toEqual({
         cwd: "packages/deepagent-code",
         args: ["bun", "run", "test:llm-live:continuation-repetition"],
+      })
+    }
+  })
+
+  test("routes Plan parameter-contract changes to the dedicated real Provider suite", () => {
+    for (const path of [
+      "packages/core/src/deepagent/plan-controller.ts",
+      "packages/core/src/deepagent/prompt-policy.ts",
+      "packages/deepagent-code/src/session/llm/request.ts",
+      "packages/deepagent-code/src/session/reminders.ts",
+      "packages/deepagent-code/src/tool/plan-write.ts",
+      "packages/deepagent-code/script/live-llm/plan-advance-contract.ts",
+      "packages/deepagent-code/script/live-llm/plan-advance-oracle.ts",
+    ]) {
+      const run = selectRoutes([path]).runs.find(
+        (item) => modelRunKey(item) === "live:legacy-session:plan-advance-contract",
+      )
+      expect(run).toBeDefined()
+      expect(commandForModelRun(run!)).toEqual({
+        cwd: "packages/deepagent-code",
+        args: ["bun", "run", "test:llm-live:plan-advance"],
       })
     }
   })

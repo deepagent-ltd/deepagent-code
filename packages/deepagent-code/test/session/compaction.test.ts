@@ -547,6 +547,7 @@ describe("session.compaction.create", () => {
         const ssn = yield* SessionNs.Service
 
         const info = yield* ssn.create({})
+        const activityID = "msg_activity_for_compaction"
 
         yield* compact.create({
           sessionID: info.id,
@@ -554,11 +555,15 @@ describe("session.compaction.create", () => {
           model: ref,
           auto: true,
           overflow: true,
+          activityID,
         })
 
         const msgs = yield* ssn.messages({ sessionID: info.id })
         expect(msgs).toHaveLength(1)
         expect(msgs[0].info.role).toBe("user")
+        expect(
+          SessionProcessorModule.planProtocolActivityID(msgs[0].info.role === "user" ? msgs[0].info.metadata : undefined),
+        ).toBe(activityID)
         expect(msgs[0].parts).toHaveLength(1)
         expect(msgs[0].parts[0]).toMatchObject({
           type: "compaction",

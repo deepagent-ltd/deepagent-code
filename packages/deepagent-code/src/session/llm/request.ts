@@ -94,7 +94,8 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
   // provider-scoped. It applies to every upstream provider; `general` keeps the inherited
   // (deepagent-code) baseline prompt untouched.
   const agentMode = deepAgentAgentModeOverride(input.user.metadata) ?? AgentGateway.snapshot().agentMode
-  const isDeepAgentActive = AgentGateway.snapshot().mode === "enabled" && agentMode !== "general"
+  const isDeepAgentEnabled = AgentGateway.isDeepAgentRuntimeEnabled()
+  const isDeepAgentActive = isDeepAgentEnabled && agentMode !== "general"
   let system: string[]
   // The DeepAgent base system prompt stays byte-stable across a session. Per-turn runtime state
   // (round, stage, previous results, token budget, fan-out verdict) is rendered separately and sent
@@ -102,6 +103,7 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
   // entire history on Anthropic-compatible APIs and invalidate that provider-cache prefix.
   let volatileRoundContext = ""
   let volatileContextKind: "none" | "round" | "continuation" = "none"
+  let workflowPlanStatus: string | null = null
   let validationCommands: readonly string[] = []
 
   if (isDeepAgentActive) {
@@ -115,20 +117,24 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
       promptContext.context.previousResults !== null
     // Fold round context and plan status into one runtime update. The stable system prompt identifies
     // this tagged tail as trusted control and requires the model to apply it silently. `renderPlanStatus`
-    // returns null in lightweight mode / no plan. A first-round, non-orchestrated task gets no update.
+    // returns null in lightweight mode / no plan. An existing Plan always gets a tail, including a
+    // fresh non-orchestrated activity, because its next write parameters must never depend on history.
     const isToolContinuation = input.messages.at(-1)?.role === "tool"
-    volatileContextKind = isToolContinuation ? "continuation" : runtimeSystemRequired ? "round" : "none"
-    const roundCtx =
-      volatileContextKind === "continuation"
-        ? AgentGateway.volatileContinuationContext()
-        : volatileContextKind === "round"
-          ? AgentGateway.volatileRoundContext(promptContext.context)
-          : ""
+    const baseContextKind = isToolContinuation ? "continuation" : runtimeSystemRequired ? "round" : "none"
     const planStatus =
-      volatileContextKind === "none"
+      input.agent.name === "compaction"
         ? null
         : SessionReminders.renderPlanStatus(input.sessionID, isToolContinuation ? "continuation" : "full")
-    volatileRoundContext = [roundCtx, planStatus].filter((x) => x && x.length > 0).join("\n\n")
+    workflowPlanStatus = planStatus
+    volatileRoundContext =
+      baseContextKind === "continuation"
+        ? AgentGateway.volatileContinuationContext(planStatus ?? undefined)
+        : baseContextKind === "round"
+          ? AgentGateway.volatileRoundContext(promptContext.context, planStatus ?? undefined)
+          : planStatus
+            ? AgentGateway.volatilePlanContext(planStatus)
+            : ""
+    volatileContextKind = baseContextKind === "continuation" ? "continuation" : volatileRoundContext ? "round" : "none"
     logPrompt(input.sessionID, promptContext.context.round, system[0]).catch(() => {})
   } else {
     const baseAgentSystem = input.agent.prompt ? [input.agent.prompt] : SystemPrompt.provider(input.model)
@@ -157,9 +163,10 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
         .filter((x) => x)
         .join("\n"),
     ]
-    if (input.agent.name === "goal-worker") {
-      volatileRoundContext =
-        SessionReminders.renderPlanStatus(input.sessionID, "full", { includeLightweight: true }) ?? ""
+    if (isDeepAgentEnabled && input.agent.name !== "compaction") {
+      const planStatus = SessionReminders.renderPlanStatus(input.sessionID, "full", { includeLightweight: true })
+      workflowPlanStatus = planStatus
+      volatileRoundContext = planStatus ? AgentGateway.volatilePlanContext(planStatus) : ""
       volatileContextKind = volatileRoundContext ? "round" : "none"
     }
   }
@@ -235,6 +242,10 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
   ]
     .filter(Boolean)
     .join("\n\n")
+  // GitLab Workflow models receive `prepared.system` through their dedicated workflow protocol and
+  // intentionally do not receive synthetic user messages. Give them the exact Plan contract through
+  // that channel without moving unrelated volatile/reference context into the workflow system prompt.
+  if (workflowPlanStatus && input.isWorkflow) system.push(AgentGateway.volatilePlanContext(workflowPlanStatus))
   const messages =
     runtimeTail && !input.isWorkflow
       ? [...baseMessages, { role: "user", content: runtimeTail } satisfies ModelMessage]

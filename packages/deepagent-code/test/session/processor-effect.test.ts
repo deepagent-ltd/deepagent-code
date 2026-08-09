@@ -18,7 +18,12 @@ import { Provider } from "@/provider/provider"
 import { Session } from "@/session/session"
 import { LLM } from "../../src/session/llm"
 import { MessageV2 } from "../../src/session/message-v2"
-import { PlanProtocolTracker, SessionProcessor } from "../../src/session/processor"
+import {
+  PlanProtocolTracker,
+  restorePlanProtocolFailures,
+  SessionProcessor,
+  withPlanProtocolActivity,
+} from "../../src/session/processor"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { SessionStatus } from "../../src/session/status"
 import { SessionSummary } from "../../src/session/summary"
@@ -520,8 +525,9 @@ itOrphanPlanProtocol.live("schema failure before durable tool-call consumes the 
         const { processors, session, provider } = yield* boot()
         const chat = yield* session.create({})
         const parent = yield* user(chat.id, "repair the plan")
+        yield* session.updateMessage({ ...parent, metadata: withPlanProtocolActivity(undefined, parent.id) })
         const mdl = yield* provider.getModel(ref.providerID, ref.modelID)
-        const tracker = new PlanProtocolTracker()
+        let tracker = new PlanProtocolTracker()
         const run = Effect.fn("test.runOrphanPlanProtocolTurn")(function* () {
           const msg = yield* assistant(chat.id, parent.id, dir)
           const handle = yield* processors.create({
@@ -550,6 +556,16 @@ itOrphanPlanProtocol.live("schema failure before durable tool-call consumes the 
         })
 
         const first = yield* run()
+        const firstParts = yield* MessageV2.parts(first.handle.message.id)
+        const durableFailure = firstParts.find(
+          (part): part is SessionV1.ToolPart => part.type === "tool" && part.tool === "plan",
+        )
+        expect(durableFailure?.state.status).toBe("error")
+        if (durableFailure?.state.status === "error") {
+          expect(durableFailure.state.metadata).toMatchObject({ plan_protocol: "schema", plan_attempt_ordinal: 1 })
+        }
+        tracker = new PlanProtocolTracker(restorePlanProtocolFailures(yield* MessageV2.stream(chat.id)))
+        expect(restorePlanProtocolFailures(yield* MessageV2.stream(chat.id))).toBe(1)
         const second = yield* run()
         expect(first.result).toBe("continue")
         expect(first.handle.message.error).toBeUndefined()

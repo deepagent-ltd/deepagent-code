@@ -47,6 +47,7 @@ export const modelSuites = [
   "intelligence-draft-confirmation",
   "prompt-intent-fencing",
   "subagent-control-plane",
+  "plan-advance-contract",
 ] as const
 
 export type ExecutionStack = (typeof executionStacks)[number]
@@ -119,6 +120,7 @@ const goalGraderCliEntry = modelRun("ext", "cli-subprocess", "goal-grader-cli-en
 const intelligenceDraft = modelRun("ext", "legacy-session", "intelligence-draft-confirmation")
 const promptIntentFencing = modelRun("ext", "legacy-session", "prompt-intent-fencing")
 const subagentControlPlane = modelRun("live", "legacy-session", "subagent-control-plane")
+const planAdvanceContract = modelRun("live", "legacy-session", "plan-advance-contract")
 const allHarnessRuns = [
   adapterProvider,
   cliHeadless,
@@ -156,6 +158,7 @@ const allHarnessRuns = [
   intelligenceDraft,
   promptIntentFencing,
   subagentControlPlane,
+  planAdvanceContract,
 ]
 
 export const routeManifest = [
@@ -268,6 +271,15 @@ export const routeManifest = [
     paths: ["packages/deepagent-code/script/live-llm/continuation-repetition.ts"],
     checks: ["session-continuation"],
     runs: [continuationRepetition],
+  },
+  {
+    id: "live-llm-plan-advance-contract-harness",
+    paths: [
+      "packages/deepagent-code/script/live-llm/plan-advance-contract.ts",
+      "packages/deepagent-code/script/live-llm/plan-advance-oracle.ts",
+    ],
+    checks: ["live-llm-routes", "llm-adapter"],
+    runs: [planAdvanceContract],
   },
   {
     id: "live-llm-degeneration-harness",
@@ -574,6 +586,18 @@ export const routeManifest = [
     ],
     checks: ["live-llm-routes", "session-continuation"],
     runs: [continuationRepetition],
+  },
+  {
+    id: "plan-advance-contract-production",
+    paths: [
+      "packages/core/src/deepagent/plan-controller.ts",
+      "packages/core/src/deepagent/prompt-policy.ts",
+      "packages/deepagent-code/src/session/llm/request.ts",
+      "packages/deepagent-code/src/session/reminders.ts",
+      "packages/deepagent-code/src/tool/plan*.{ts,txt}",
+    ],
+    checks: ["live-llm-routes", "llm-adapter", "permission"],
+    runs: [planAdvanceContract],
   },
   {
     id: "legacy-session-prompt",

@@ -196,6 +196,10 @@ const modelCommands = new Map<string, DispatcherCommand>([
   ],
   ["live:legacy-session:degeneration", command("packages/deepagent-code", "bun", "run", "test:llm-live:degeneration")],
   [
+    "live:legacy-session:plan-advance-contract",
+    command("packages/deepagent-code", "bun", "run", "test:llm-live:plan-advance"),
+  ],
+  [
     "ext:legacy-session:subagent-finalizer-isolation",
     command("packages/deepagent-code", "bun", "run", "test:llm-ext:finalizer-isolation"),
   ],

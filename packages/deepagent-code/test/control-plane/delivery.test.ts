@@ -187,6 +187,15 @@ describe("DET-DELIVERY-01 durable notification delivery", () => {
         .get()
         .pipe(Effect.orDie)
       expect(row).toEqual({ status: "delivered", responseID: response.info.id })
+      const deliveredInput = yield* db
+        .select({ data: MessageTable.data })
+        .from(MessageTable)
+        .where(eq(MessageTable.id, item.messageID))
+        .get()
+        .pipe(Effect.orDie)
+      expect((deliveredInput?.data as SessionV1.User).metadata).toMatchObject({
+        deepagent: { planProtocolActivityID: item.messageID },
+      })
     }),
   )
 
