@@ -30,6 +30,7 @@ import {
   type SetSessionModeResponse,
 } from "@agentclientprotocol/sdk"
 import { InstallationVersion } from "@deepagent-code/core/installation/version"
+import { Identifier } from "@deepagent-code/core/util/identifier"
 import * as Log from "@deepagent-code/core/util/log"
 import type { Message, OpencodeClient, SessionMessageResponse } from "@deepagent-code/sdk/v2"
 import { Context, Effect, Layer, ManagedRuntime } from "effect"
@@ -85,6 +86,7 @@ export function make(input: {
   const directoryService = input.directory ?? makeDirectoryService(input.sdk)
   const registeredMcp = new Map<string, Set<string>>()
   const sessionSnapshots = new Map<string, Directory.Snapshot>()
+  const forkIntents = new Map<string, string>()
   const events = input.connection
     ? ACPEvent.start({ sdk: input.sdk, connection: input.connection, session })
     : undefined
@@ -356,6 +358,9 @@ export function make(input: {
   })
 
   const forkSession = Effect.fn("ACP.forkSession")(function* (params: ForkSessionRequest) {
+    const intentKey = `${params.cwd}\0${params.sessionId}`
+    const intentID = forkIntents.get(intentKey) ?? `acp-fork:${Identifier.ascending()}`
+    forkIntents.set(intentKey, intentID)
     const snapshot = yield* directorySnapshot(params.cwd)
     const forked = yield* request(
       () =>
@@ -367,6 +372,7 @@ export function make(input: {
             // -directory feature). This ACP path only ever meant the workspace scope → query.
             query_directory: params.cwd,
             sessionID: params.sessionId,
+            intentID,
           },
           { throwOnError: true },
         ),
@@ -392,6 +398,7 @@ export function make(input: {
     yield* registerMcpServers(input.sdk, registeredMcp, params.cwd, state.id, params.mcpServers ?? [])
     yield* sendAvailableCommands(input.connection, state.id, snapshot)
     yield* replayMessages(events, messages)
+    if (forkIntents.get(intentKey) === intentID) forkIntents.delete(intentKey)
 
     return {
       sessionId: state.id,
@@ -801,8 +808,11 @@ function defaultModelFromConfig(
   // a default. Configured model, deepagent-code provider, then sorted best model keep
   // the protocol response deterministic without extra session/message reads.
   const deepagentCodeProvider = providers[ProviderV2.ID.make("deepagent-code")]
-  const deepagentCodeModel = deepagentCodeProvider ? Provider.sort(Object.values(deepagentCodeProvider.models))[0] : undefined
-  if (deepagentCodeProvider && deepagentCodeModel) return { providerID: deepagentCodeProvider.id, modelID: deepagentCodeModel.id }
+  const deepagentCodeModel = deepagentCodeProvider
+    ? Provider.sort(Object.values(deepagentCodeProvider.models))[0]
+    : undefined
+  if (deepagentCodeProvider && deepagentCodeModel)
+    return { providerID: deepagentCodeProvider.id, modelID: deepagentCodeModel.id }
 
   const best = Provider.sort(Object.values(providers).flatMap((provider) => Object.values(provider.models)))[0]
   if (best) return { providerID: best.providerID, modelID: best.id }

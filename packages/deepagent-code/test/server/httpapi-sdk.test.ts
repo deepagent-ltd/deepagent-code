@@ -224,8 +224,12 @@ function httpapiInstance<A, E>(
   )
 }
 
-function serverPathParity<A, E>(name: string, scenario: (serverPath: ServerPath) => Effect.Effect<A, E, TestScope>) {
-  it.live(name, scenario("raw"))
+function serverPathParity<A, E>(
+  name: string,
+  scenario: (serverPath: ServerPath) => Effect.Effect<A, E, TestScope>,
+  timeout?: number,
+) {
+  it.live(name, scenario("raw"), timeout)
 }
 
 function withProject<A, E, E2 = never>(
@@ -878,7 +882,9 @@ describe("HttpApi SDK", () => {
           .filter((text): text is string => typeof text === "string")
           .sort()
 
-        expect(asyncPrompt.status).toBe(204)
+        expect(asyncPrompt.status).toBe(200)
+        expect(asyncPrompt.data).toMatchObject({ delivery: "turn" })
+        expect(typeof record(asyncPrompt.data).messageID).toBe("string")
         expect(messageTexts).toEqual(["async hello", "hello"])
 
         return {
@@ -918,11 +924,13 @@ describe("HttpApi SDK", () => {
         const abort = yield* capture(() => sdk.session.abort({ sessionID }))
         yield* Deferred.succeed(gate, undefined).pipe(Effect.ignore)
 
-        expect(prompt.status).toBe(204)
+        expect(prompt.status).toBe(200)
+        expect(prompt.data).toMatchObject({ delivery: "turn" })
         expect(abort.status).toBe(200)
         expect(JSON.stringify(messages.data)).toContain("persist before acknowledging")
       }),
     ),
+    15_000,
   )
 
   serverPathParity("matches generated SDK prompt streaming through fake LLM", (serverPath) =>

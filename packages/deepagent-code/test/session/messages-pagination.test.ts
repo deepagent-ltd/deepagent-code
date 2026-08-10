@@ -802,7 +802,7 @@ describe("MessageV2.filterCompacted", () => {
       const parentFiltered = MessageV2.filterCompacted(yield* MessageV2.stream(created.id))
       expect(parentFiltered.map((item) => item.info.id)).toEqual([c1, s1, u2, a2, u3, a3])
 
-      const forked = yield* session.fork({ sessionID: created.id })
+      const forked = yield* session.fork({ sessionID: created.id, intentID: "pagination-compaction-fork" })
       const childFiltered = MessageV2.filterCompacted(yield* MessageV2.stream(forked.id))
       expect(childFiltered).toHaveLength(parentFiltered.length)
 

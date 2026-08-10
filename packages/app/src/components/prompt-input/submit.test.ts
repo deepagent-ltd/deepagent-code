@@ -16,6 +16,7 @@ const optimistic: Array<{
   }
 }> = []
 const optimisticSeeded: boolean[] = []
+const optimisticRemoved: string[] = []
 const storedSessions: Record<string, Array<{ id: string; title?: string }>> = {}
 const promoted: Array<{ directory: string; sessionID: string }> = []
 const sentShell: string[] = []
@@ -90,7 +91,7 @@ const clientFor = (directory: string) => {
             releaseDelayedPrompt = resolve
           })
         }
-        return { data: undefined }
+        return { data: { messageID: "msg_server_admitted", delivery: "steer" } }
       },
       command: async () => ({ data: undefined }),
       abort: async () => ({ data: undefined }),
@@ -274,7 +275,9 @@ beforeAll(async () => {
                 !!storedSessions[value.directory]?.find((item) => item.id === value.sessionID)?.title,
             )
           },
-          remove: () => undefined,
+          remove: (value: { messageID: string }) => {
+            optimisticRemoved.push(value.messageID)
+          },
         },
       },
       set: () => undefined,
@@ -338,6 +341,7 @@ beforeEach(() => {
   enabledAutoAccept.length = 0
   optimistic.length = 0
   optimisticSeeded.length = 0
+  optimisticRemoved.length = 0
   promoted.length = 0
   params = {}
   sentShell.length = 0
@@ -455,6 +459,7 @@ describe("prompt submit worktree selection", () => {
         model: { providerID: "provider", modelID: "model", variant: "high" },
       },
     })
+    expect(optimisticRemoved).toHaveLength(1)
   })
 
   test("seeds new sessions before optimistic prompts are added", async () => {

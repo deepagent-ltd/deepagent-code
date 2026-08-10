@@ -1,7 +1,7 @@
-import type { AssistantMessage } from "@deepagent-code/sdk/v2"
 import type { TuiPlugin, TuiPluginApi } from "@deepagent-code/plugin/tui"
 import type { BuiltinTuiPlugin } from "../builtins"
 import { createMemo } from "solid-js"
+import { contextUsage } from "../../util/session"
 
 const id = "internal:sidebar-context"
 
@@ -17,20 +17,18 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
   const cost = createMemo(() => session()?.cost ?? 0)
 
   const state = createMemo(() => {
-    const last = msg().findLast((item): item is AssistantMessage => item.role === "assistant" && item.tokens.output > 0)
-    if (!last) {
+    const usage = contextUsage(msg(), props.api.state.part)
+    if (!usage) {
       return {
         tokens: 0,
         percent: null,
       }
     }
-
-    const tokens =
-      last.tokens.input + last.tokens.output + last.tokens.reasoning + last.tokens.cache.read + last.tokens.cache.write
-    const model = props.api.state.provider.find((item) => item.id === last.providerID)?.models[last.modelID]
+    const model = props.api.state.provider.find((item) => item.id === usage.providerID)?.models[usage.modelID]
+    const limit = model?.limit.input ?? model?.limit.context
     return {
-      tokens,
-      percent: model?.limit.context ? Math.round((tokens / model.limit.context) * 100) : null,
+      tokens: usage.tokens,
+      percent: limit ? Math.round((usage.tokens / limit) * 100) : null,
     }
   })
 

@@ -177,26 +177,33 @@ const select = (
     .filter(Boolean)
   if (conversation.length === 0) return
   let total = 0
-  let split = conversation.length
-  let splitPrefix = ""
-  let splitSuffix = ""
   for (let index = conversation.length - 1; index >= 0; index--) {
     const next = total + Token.estimate(conversation[index])
     if (next > tokens) {
       const remaining = Math.max(0, tokens - total) * 4
-      if (remaining > 0) {
-        splitPrefix = conversation[index].slice(0, -remaining)
-        splitSuffix = conversation[index].slice(-remaining)
-        split = index + 1
+      if (remaining <= 0)
+        return {
+          head: conversation.slice(0, index + 1).join("\n\n"),
+          recent: conversation.slice(index + 1).join("\n\n"),
+        }
+      const boundary = conversation[index].length - remaining
+      const splitAt =
+        boundary > 0 &&
+        boundary < conversation[index].length &&
+        /[\uD800-\uDBFF]/.test(conversation[index][boundary - 1]) &&
+        /[\uDC00-\uDFFF]/.test(conversation[index][boundary])
+          ? boundary - 1
+          : boundary
+      return {
+        head: [...conversation.slice(0, index), conversation[index].slice(0, splitAt)].filter(Boolean).join("\n\n"),
+        recent: [conversation[index].slice(splitAt), ...conversation.slice(index + 1)].filter(Boolean).join("\n\n"),
       }
-      break
     }
     total = next
-    split = index
   }
   return {
-    head: [...conversation.slice(0, split), splitPrefix].filter(Boolean).join("\n\n"),
-    recent: [splitSuffix, ...conversation.slice(split)].filter(Boolean).join("\n\n"),
+    head: "",
+    recent: conversation.join("\n\n"),
   }
 }
 
@@ -229,7 +236,7 @@ export const make = (dependencies: Dependencies) => {
       context: [previousSummary?.type === "compaction" ? previousSummary.recent : "", selected.head].filter(Boolean),
     })
     const summaryOutput = Math.min(output || SUMMARY_OUTPUT_TOKENS, SUMMARY_OUTPUT_TOKENS)
-    if (Token.estimate(summaryPrompt) > inputBudget(context, config.buffer)) return false
+    if (Token.estimate(summaryPrompt) > Math.max(0, context - summaryOutput)) return false
     const messageID = SessionMessage.ID.create()
     yield* dependencies.events.publish(SessionEvent.Compaction.Started, {
       sessionID: input.sessionID,

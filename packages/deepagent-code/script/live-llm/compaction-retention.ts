@@ -7,7 +7,6 @@ import { runLegacyLiveCases } from "./runtime"
 const markers = Array.from({ length: 3 }, () => `c1-${crypto.randomUUID()}`)
 const markerFiles = markers.map((marker) => `.deepagent-c1/${marker}.state`)
 const expectedOutput = `${markers.toSorted().join("\n")}\n`
-const filler = Array.from({ length: 6_000 }, (_, index) => `context-padding-${index}`).join(" ")
 const outputCaseName = "recover-from-world-state"
 
 const artifact = await runLegacyLiveCases({
@@ -16,7 +15,7 @@ const artifact = await runLegacyLiveCases({
   cases: [
     {
       name: "fill-context-window",
-      prompt: `Retain no facts from this padding. Reply only READY.\n${filler}`,
+      prompt: "Reply only READY.",
     },
     {
       name: outputCaseName,
@@ -30,14 +29,29 @@ const artifact = await runLegacyLiveCases({
     },
   ],
   sharedSession: true,
+  overrideReportedInputTokensAfterCases: [{ caseName: "fill-context-window", inputTokens: 25_000 }],
   inspectDurability: true,
   beforeCase: async ({ caseName, directory }) => {
     if (caseName === "fill-context-window") {
       await Promise.all(
         markerFiles.map(async (file) => {
           await mkdir(path.dirname(path.join(directory, file)), { recursive: true })
-          await Bun.write(path.join(directory, file), "world-state source\n")
+          await Bun.write(path.join(directory, file), "world-state baseline\n")
         }),
+      )
+      await git(directory, "add", "--", ...markerFiles)
+      await git(
+        directory,
+        "-c",
+        "user.name=DeepAgent Live",
+        "-c",
+        "user.email=live@deepagent.invalid",
+        "commit",
+        "-m",
+        "test: establish world-state baseline",
+      )
+      await Promise.all(
+        markerFiles.map((file) => Bun.write(path.join(directory, file), "world-state changed\n")),
       )
       return
     }
@@ -60,7 +74,7 @@ const artifact = await runLegacyLiveCases({
   primaryPrompt:
     "This is a constrained automatic-compaction contract. Follow the current user instruction exactly and use no tool except the one explicitly requested.",
   modelMaxTokens: 768,
-  modelContextTokens: 12_000,
+  modelContextTokens: 40_000,
   maxProviderTurns: 6,
   environment: {
     DEEPAGENT_CODE_SOFT_LANDING_COMPACTION: "false",
@@ -78,23 +92,35 @@ if (!artifact.sandbox?.hostReadDenied || !artifact.sandbox.systemHostReadDenied 
 
 const fill = requireCase(artifact.cases, "fill-context-window")
 const recovery = requireCase(artifact.cases, outputCaseName)
-const automatic = fill.newCompactions.filter((compaction) => compaction.auto)
+if (
+  fill.tokenUsageOverride?.originalInputTokens === undefined ||
+  fill.tokenUsageOverride.persistedInputTokens !== 25_000
+) {
+  throw new Error(`C1 did not persist the deterministic input-token override: ${JSON.stringify(fill.tokenUsageOverride)}`)
+}
+if (fill.usage.input < fill.tokenUsageOverride.persistedInputTokens) {
+  throw new Error(`C1 durable message reload lost the input-token override: ${JSON.stringify(fill.usage)}`)
+}
+const automatic = recovery.newCompactions.filter((compaction) => compaction.auto)
 if (automatic.length !== 1) {
   throw new Error(`Expected exactly one automatic compaction, received ${automatic.length}`)
 }
-if (fill.compactionCount !== 1 || recovery.compactionCount !== 1 || recovery.newCompactions.length !== 0) {
+if (fill.compactionCount !== 0 || recovery.compactionCount !== 1 || recovery.newCompactions.length !== 1) {
   throw new Error(`Unexpected compaction counts: fill=${fill.compactionCount}, recovery=${recovery.compactionCount}`)
 }
-if (fill.summaryTexts.length !== 1 || fill.summaryTexts.some((text) => markers.some((marker) => text.includes(marker)))) {
+if (
+  recovery.summaryTexts.length !== 1 ||
+  recovery.summaryTexts.some((text) => markers.some((marker) => text.includes(marker)))
+) {
   throw new Error("C1 marker leaked into or was missing from the automatic compaction summary boundary")
 }
-if (!fill.durability) throw new Error("C1 did not capture compaction durability evidence")
-const committedRuns = fill.durability.compactionRuns.filter((run) => run.state === "committed")
+if (!recovery.durability) throw new Error("C1 did not capture compaction durability evidence")
+const committedRuns = recovery.durability.compactionRuns.filter((run) => run.state === "committed")
 if (committedRuns.length !== 1) {
   throw new Error(`Expected exactly one committed compaction run, received ${committedRuns.length}`)
 }
 const committedRun = committedRuns[0]
-const summaryAttempts = fill.durability.summaryAttempts.filter(
+const summaryAttempts = recovery.durability.summaryAttempts.filter(
   (attempt) => attempt.run_id === committedRun.run_id,
 )
 if (summaryAttempts.length < 1 || summaryAttempts.length > 2) {
@@ -103,7 +129,7 @@ if (summaryAttempts.length < 1 || summaryAttempts.length > 2) {
 if (summaryAttempts.filter((attempt) => attempt.state === "settled").length !== 1) {
   throw new Error(`Expected one settled summary attempt: ${JSON.stringify(summaryAttempts)}`)
 }
-const activeEpochs = fill.durability.promptEpochs.filter((epoch) => epoch.state === "active")
+const activeEpochs = recovery.durability.promptEpochs.filter((epoch) => epoch.state === "active")
 if (
   activeEpochs.length !== 1 ||
   activeEpochs[0].epoch <= 0 ||
@@ -113,9 +139,12 @@ if (
   throw new Error(`C1 PromptEpoch did not bind the committed summary: ${JSON.stringify(activeEpochs)}`)
 }
 
-const worldState = fill.users.map((user) => user.syntheticText).find((text) => text.includes("<world-state>"))
+const worldState = recovery.durability.worldStateBaselines
+  .filter((baseline) => baseline.prompt_epoch === activeEpochs[0].epoch)
+  .map((baseline) => baseline.fragment)
+  .join("\n")
 if (!worldState || markers.some((marker) => !worldState.includes(marker))) {
-  throw new Error("C1 markers were not re-injected through the World State tail")
+  throw new Error("C1 markers were not committed into the active World State baseline")
 }
 const ordinaryUserText = artifact.cases.flatMap((testCase) => testCase.users.map((user) => user.text)).join("\n")
 if (markers.some((marker) => ordinaryUserText.includes(marker))) {
@@ -138,6 +167,9 @@ const writeReceipt = recovery.durability.requestReceipts.find(
 if (
   !writeReceipt ||
   writeReceipt.request_state !== "dispatched" ||
+  writeReceipt.prompt_epoch !== activeEpochs[0].epoch ||
+  writeReceipt.prompt_window_id !== activeEpochs[0].window_id ||
+  writeReceipt.world_state_baseline_hash !== activeEpochs[0].world_state_baseline_hash ||
   writeReceipt.adapter_lowering_outcome !== "ok" ||
   !writeReceipt.registry_tool_ids.includes("write") ||
   !writeReceipt.permission_filtered_tool_ids.includes("write") ||
@@ -186,10 +218,6 @@ await writeLiveArtifact(
   result,
   {
     redactions: [
-      {
-        value: filler,
-        replacement: `<context-padding count=6000 hash=${Bun.hash(filler).toString(16)}>`,
-      },
       ...markers.map((marker) => ({
         value: marker,
         replacement: `<hidden-marker hash=${Bun.hash(marker).toString(16)}>`,

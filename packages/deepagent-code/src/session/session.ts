@@ -27,11 +27,26 @@ import { inArray } from "drizzle-orm"
 import { lt } from "drizzle-orm"
 import { or } from "drizzle-orm"
 import type { SQL } from "drizzle-orm"
-import { PartTable, SessionIntentTable, SessionSteerTable, SessionTable } from "@deepagent-code/core/session/sql"
+import {
+  MessageTable,
+  PartTable,
+  SessionForkAdmissionTable,
+  SessionForkIntentTable,
+  SessionHistoryStateTable,
+  SessionIntentTable,
+  SessionPromptEpochMessageTable,
+  SessionSteerTable,
+  SessionTable,
+  SessionWorldStateBaselineTable,
+} from "@deepagent-code/core/session/sql"
 import { ProjectTable } from "@deepagent-code/core/project/sql"
 import { Log } from "@deepagent-code/core/util/log"
 import { MessageV2 } from "./message-v2"
-import { forwardLedgerOnFork, persistForkOrigin } from "./context-ledger"
+import {
+  collectSessionWorldStateBaseline,
+  forwardLedgerOnForkRequired,
+  persistForkOriginRequired,
+} from "./context-ledger"
 import { containsPath, type InstanceContext } from "../project/instance-context"
 import { InstanceState } from "@/effect/instance-state"
 import { Snapshot } from "@/snapshot"
@@ -44,19 +59,62 @@ import { Identifier } from "@/id/id"
 import type { Provider } from "@/provider/provider"
 import { Permission } from "@/permission"
 import { Global } from "@deepagent-code/core/global"
-import { DateTime, Effect, Layer, Option, Context, Schema, Types } from "effect"
+import { DateTime, Effect, Exit, Layer, Option, Context, Schema, Types } from "effect"
 import { AbsolutePath, NonNegativeInt, optionalOmitUndefined } from "@deepagent-code/core/schema"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { ModelV2 } from "@deepagent-code/core/model"
 import { Location } from "@deepagent-code/core/location"
 import { SessionEvent } from "@deepagent-code/core/session/event"
+import { Hash } from "@deepagent-code/core/util/hash"
+import { CanonicalJson } from "@deepagent-code/core/util/canonical-json"
+import { SessionPromptEpochTable } from "./prompt-epoch.sql"
+import { HistoryAuthority } from "./history-authority"
+import { Data } from "effect"
+import { KeyedMutex } from "@deepagent-code/core/effect/keyed-mutex"
 
 const log = Log.create({ service: "session" })
 const runtime = makeRuntime(Database.Service, Database.defaultLayer)
+const forkLocks = KeyedMutex.makeUnsafe<string>()
 
 const parentTitlePrefix = "New session - "
 const childTitlePrefix = "Child session - "
+const TASK_DROPPED_CONTEXT_SOURCES = new Set(["world_state", "runtime_instruction", "compaction_continue", "fork_hint"])
+
+const contextProvenanceSource = (value: unknown): string | undefined => {
+  if (!value || typeof value !== "object") return undefined
+  const deepagent = (value as Record<string, unknown>).deepagent
+  if (!deepagent || typeof deepagent !== "object") return undefined
+  const provenance = (deepagent as Record<string, unknown>).contextProvenance
+  if (!provenance || typeof provenance !== "object") return undefined
+  const source = (provenance as Record<string, unknown>).source
+  return typeof source === "string" ? source : undefined
+}
+
+const isTaskRuntimeMessage = (message: SessionV1.WithParts): boolean => {
+  const messageSource = contextProvenanceSource(message.info.role === "user" ? message.info.metadata : undefined)
+  return Boolean(messageSource && TASK_DROPPED_CONTEXT_SOURCES.has(messageSource))
+}
+
+const sanitizeTaskHistory = (messages: readonly SessionV1.WithParts[]): SessionV1.WithParts[] => {
+  const candidates = messages
+    .filter((message) => !isTaskRuntimeMessage(message))
+    .map((message) => ({
+      ...message,
+      parts: message.parts.filter((part) => {
+        const source = contextProvenanceSource("metadata" in part ? part.metadata : undefined)
+        return (
+          !(source && TASK_DROPPED_CONTEXT_SOURCES.has(source)) &&
+          !(part.type === "text" && (part.synthetic || part.metadata?.compaction_continue === true))
+        )
+      }),
+    }))
+    .filter((message) => message.parts.length > 0)
+  const keptIDs = new Set(candidates.map((message) => message.info.id))
+  return candidates.filter(
+    (message) => message.info.role !== "assistant" || !message.info.parentID || keptIDs.has(message.info.parentID),
+  )
+}
 
 export function isDefaultTitle(title: string) {
   return new RegExp(
@@ -278,6 +336,9 @@ export type CreateInput = Types.DeepMutable<Schema.Schema.Type<typeof CreateInpu
 
 export const ForkInput = Schema.Struct({
   sessionID: SessionID,
+  // Optional for pre-BUG-012 clients. New clients should send this retry key; when omitted the server
+  // creates a unique operation identity, preserving compatibility without conflating separate forks.
+  intentID: Schema.optional(Schema.NonEmptyString),
   messageID: Schema.optional(MessageID),
   // 附-D 阶段3: optionally fork into a specific directory instead of inheriting the source
   // session's directory. When omitted, fork behaves exactly as before (inherits ctx.directory).
@@ -483,6 +544,16 @@ export class BusyError extends Schema.TaggedErrorClass<BusyError>()("SessionBusy
   sessionID: SessionID,
 }) {}
 
+export class ForkConflict extends Data.TaggedError("Session.ForkConflict")<{
+  readonly intentID: string
+  readonly reason: string
+}> {}
+
+export class UnavailableError extends Schema.TaggedErrorClass<UnavailableError>()("SessionUnavailableError", {
+  sessionID: SessionID,
+  reason: Schema.String,
+}) {}
+
 export type NotFound = NotFoundError
 
 export interface Interface {
@@ -501,10 +572,17 @@ export interface Interface {
   }) => Effect.Effect<Info>
   readonly fork: (input: {
     sessionID: SessionID
+    intentID?: string
     messageID?: MessageID
     directory?: string
     isolate?: "worktree"
-  }) => Effect.Effect<Info, NotFound>
+    forkMode?: "foreground" | "task"
+    targetSessionID?: SessionID
+    childDepth?: number
+    taskRequestHash?: string
+  }) => Effect.Effect<Info, NotFound | ForkConflict>
+  readonly recoverForks: () => Effect.Effect<void>
+  readonly assertRunnable: (sessionID: SessionID) => Effect.Effect<void, UnavailableError>
   readonly touch: (sessionID: SessionID) => Effect.Effect<void>
   readonly get: (id: SessionID) => Effect.Effect<Info, NotFound>
   readonly mutationEpoch: (sessionID: SessionID) => Effect.Effect<number, NotFound>
@@ -731,12 +809,29 @@ export const layer: Layer.Layer<
 
     const updateMessage = <T extends SessionV1.Info>(msg: T): Effect.Effect<T> =>
       Effect.gen(function* () {
+        const existing = yield* db
+          .select({ session_id: MessageTable.session_id })
+          .from(MessageTable)
+          .where(eq(MessageTable.id, msg.id))
+          .get()
+          .pipe(Effect.orDie)
+        if (existing && existing.session_id !== msg.sessionID)
+          return yield* Effect.die(`Session.updateMessage: message ${msg.id} belongs to another Session`)
         yield* events.publish(SessionV1.Event.MessageUpdated, { sessionID: msg.sessionID, info: msg })
         return msg
       }).pipe(Effect.withSpan("Session.updateMessage"))
 
     const updatePart = <T extends SessionV1.Part>(part: T): Effect.Effect<T> =>
       Effect.gen(function* () {
+        yield* requireMessageOwnership({ sessionID: part.sessionID, messageID: part.messageID }).pipe(Effect.orDie)
+        const existing = yield* db
+          .select({ message_id: PartTable.message_id, session_id: PartTable.session_id })
+          .from(PartTable)
+          .where(eq(PartTable.id, part.id))
+          .get()
+          .pipe(Effect.orDie)
+        if (existing && (existing.message_id !== part.messageID || existing.session_id !== part.sessionID))
+          return yield* Effect.die(`Session.updatePart: part ${part.id} belongs to another message or Session`)
         yield* events.publish(SessionV1.Event.PartUpdated, {
           sessionID: part.sessionID,
           part: structuredClone(part),
@@ -744,6 +839,39 @@ export const layer: Layer.Layer<
         })
         return part
       }).pipe(Effect.withSpan("Session.updatePart"))
+
+    const requireMessageOwnership = Effect.fn("Session.requireMessageOwnership")(function* (input: {
+      sessionID: SessionID
+      messageID: MessageID
+    }) {
+      const row = yield* db
+        .select({ id: MessageTable.id })
+        .from(MessageTable)
+        .where(and(eq(MessageTable.id, input.messageID), eq(MessageTable.session_id, input.sessionID)))
+        .get()
+        .pipe(Effect.orDie)
+      if (!row) return yield* new NotFoundError({ message: `Message not found: ${input.messageID}` })
+    })
+
+    const requirePartOwnership = Effect.fn("Session.requirePartOwnership")(function* (input: {
+      sessionID: SessionID
+      messageID: MessageID
+      partID: PartID
+    }) {
+      const row = yield* db
+        .select({ id: PartTable.id })
+        .from(PartTable)
+        .where(
+          and(
+            eq(PartTable.id, input.partID),
+            eq(PartTable.message_id, input.messageID),
+            eq(PartTable.session_id, input.sessionID),
+          ),
+        )
+        .get()
+        .pipe(Effect.orDie)
+      if (!row) return yield* new NotFoundError({ message: `Part not found: ${input.partID}` })
+    })
 
     const getPart: Interface["getPart"] = Effect.fn("Session.getPart")(function* (input) {
       const row = yield* db
@@ -798,15 +926,444 @@ export const layer: Layer.Layer<
       })
     })
 
-    const fork = Effect.fn("Session.fork")(function* (input: {
+    const deliverForkEvents = Effect.fn("Session.deliverForkEvents")(function* (intentID: string) {
+      const owner = `fork-delivery:${Identifier.ascending("event")}`
+      const waitDeadline = Date.now() + 35_000
+      let claimed: typeof SessionForkIntentTable.$inferSelect | undefined
+      while (!claimed) {
+        const candidate = yield* db
+          .transaction(
+            (tx) =>
+              Effect.gen(function* () {
+                const row = yield* tx
+                  .select()
+                  .from(SessionForkIntentTable)
+                  .where(eq(SessionForkIntentTable.intent_id, intentID))
+                  .get()
+                if (!row) return yield* Effect.die(new Error(`fork intent missing after commit: ${intentID}`))
+                if (row.state === "complete") return row
+                if (row.state === "recovery_required") {
+                  return yield* Effect.fail(
+                    new ForkConflict({ intentID, reason: row.recovery_reason ?? "fork delivery requires recovery" }),
+                  )
+                }
+                if (row.state === "publishing" && row.lease_expires_at && row.lease_expires_at > Date.now()) return row
+                return yield* tx
+                  .update(SessionForkIntentTable)
+                  .set({
+                    state: "publishing",
+                    delivery_owner: owner,
+                    lease_expires_at: Date.now() + 30_000,
+                    delivery_attempts: sql`${SessionForkIntentTable.delivery_attempts} + 1`,
+                    time_updated: Date.now(),
+                  })
+                  .where(eq(SessionForkIntentTable.intent_id, intentID))
+                  .returning()
+                  .get()
+              }),
+            { behavior: "immediate" },
+          )
+          .pipe(Effect.orDie)
+        if (candidate.state === "complete") return yield* get(candidate.target_session_id)
+        if (candidate.delivery_owner === owner) {
+          claimed = candidate
+          continue
+        }
+        if (Date.now() >= waitDeadline) {
+          return yield* Effect.fail(
+            new ForkConflict({ intentID, reason: "fork delivery did not settle before timeout" }),
+          )
+        }
+        yield* Effect.sleep("25 millis")
+      }
+
+      return yield* Effect.gen(function* () {
+        const target = yield* get(claimed.target_session_id)
+        const targetProjection = yield* MessageV2.promptHistoryProjectionEffect(target.id).pipe(
+          Effect.provideService(Database.Service, database),
+          Effect.mapError(
+            (error) =>
+              new ForkConflict({
+                intentID,
+                reason: `target history validation failed: ${
+                  error instanceof MessageV2.HistoryAuthorityError ? error.reason : error.message
+                }`,
+              }),
+          ),
+        )
+        const targetWorldState = yield* MessageV2.promptWorldStateProjectionEffect(target.id).pipe(
+          Effect.provideService(Database.Service, database),
+          Effect.mapError(
+            (error) =>
+              new ForkConflict({
+                intentID,
+                reason: `target World State validation failed: ${
+                  error instanceof MessageV2.HistoryAuthorityError ? error.reason : error.message
+                }`,
+              }),
+          ),
+        )
+        if (
+          targetProjection.epoch !== claimed.target_prompt_epoch ||
+          targetProjection.window.windowID !== claimed.target_window_id ||
+          targetProjection.effectiveHistoryHash !== claimed.target_effective_history_hash ||
+          targetWorldState?.hash !== claimed.target_world_state_baseline_hash
+        ) {
+          const quarantined = yield* db
+            .update(SessionForkIntentTable)
+            .set({
+              state: "recovery_required",
+              recovery_reason: "target projection no longer matches committed fork manifest",
+              delivery_owner: null,
+              lease_expires_at: null,
+              time_updated: Date.now(),
+            })
+            .where(
+              and(
+                eq(SessionForkIntentTable.intent_id, intentID),
+                eq(SessionForkIntentTable.delivery_owner, owner),
+                eq(SessionForkIntentTable.state, "publishing"),
+              ),
+            )
+            .returning({ intent_id: SessionForkIntentTable.intent_id })
+            .get()
+            .pipe(Effect.orDie)
+          if (!quarantined) {
+            return yield* Effect.fail(new ForkConflict({ intentID, reason: "fork delivery ownership was lost" }))
+          }
+          return yield* Effect.fail(
+            new ForkConflict({ intentID, reason: "target projection no longer matches committed fork manifest" }),
+          )
+        }
+
+        const rows = yield* messages({ sessionID: target.id })
+        let cursor = claimed.event_cursor
+        let ordinal = 0
+        const publishOnce = Effect.fn("Session.deliverForkEvent")(function* (
+          publish: (commit: (seq: number) => Effect.Effect<void>) => Effect.Effect<unknown>,
+        ) {
+          const current = ordinal++
+          if (current < cursor) return
+          if (current !== cursor || current >= claimed.event_count) {
+            return yield* Effect.die(
+              new Error(`fork event cursor is not contiguous for ${intentID}: ${current}/${cursor}`),
+            )
+          }
+          const next = current + 1
+          yield* publish(() =>
+            db
+              .update(SessionForkIntentTable)
+              .set({ event_cursor: next, lease_expires_at: Date.now() + 30_000, time_updated: Date.now() })
+              .where(
+                and(
+                  eq(SessionForkIntentTable.intent_id, intentID),
+                  eq(SessionForkIntentTable.delivery_owner, owner),
+                  eq(SessionForkIntentTable.state, "publishing"),
+                  eq(SessionForkIntentTable.event_cursor, current),
+                ),
+              )
+              .returning({ intent_id: SessionForkIntentTable.intent_id })
+              .get()
+              .pipe(
+                Effect.orDie,
+                Effect.flatMap((advanced) =>
+                  advanced
+                    ? Effect.void
+                    : Effect.die(new ForkConflict({ intentID, reason: "fork delivery ownership was lost" })),
+                ),
+              ),
+          )
+          cursor = next
+        })
+
+        for (const row of rows) {
+          const messageEventID = EventV2.ID.make(
+            `evt_${Hash.sha256(`fork-event:v1:${intentID}:message:${row.info.id}`).slice(0, 26)}`,
+          )
+          yield* publishOnce((commit) =>
+            events.publish(
+              SessionV1.Event.MessageUpdated,
+              { sessionID: target.id, info: row.info },
+              { id: messageEventID, idempotent: true, commit },
+            ),
+          )
+          for (const part of row.parts) {
+            const partEventID = EventV2.ID.make(
+              `evt_${Hash.sha256(`fork-event:v1:${intentID}:part:${part.id}`).slice(0, 26)}`,
+            )
+            yield* publishOnce((commit) =>
+              events.publish(
+                SessionV1.Event.PartUpdated,
+                {
+                  sessionID: target.id,
+                  part,
+                  time: part.type === "text" ? (part.time?.start ?? row.info.time.created) : row.info.time.created,
+                },
+                { id: partEventID, idempotent: true, commit },
+              ),
+            )
+          }
+        }
+
+        const complete = {
+          ...target,
+          metadata:
+            claimed.fork_mode === "task"
+              ? {
+                  ...target.metadata,
+                  deepagent: {
+                    ...(target.metadata?.deepagent as Record<string, unknown> | undefined),
+                    task_fork_manifest: {
+                      ...((target.metadata?.deepagent as Record<string, unknown> | undefined)?.task_fork_manifest as
+                        | Record<string, unknown>
+                        | undefined),
+                      manifestState: "complete",
+                    },
+                  },
+                }
+              : {
+                  ...target.metadata,
+                  forkedFrom: {
+                    ...(target.metadata?.forkedFrom as Record<string, unknown>),
+                    manifestState: "complete",
+                  },
+                },
+          time: { ...target.time, updated: claimed.time_committed ?? claimed.time_created },
+        }
+        const completeEventID = EventV2.ID.make(`evt_${Hash.sha256(`fork-event:v1:${intentID}:complete`).slice(0, 26)}`)
+        yield* publishOnce((commit) =>
+          events.publish(
+            SessionV1.Event.Updated,
+            { sessionID: target.id, info: complete },
+            { id: completeEventID, idempotent: true, commit },
+          ),
+        )
+        if (cursor !== claimed.event_count) {
+          return yield* Effect.die(
+            new Error(`fork delivery count mismatch for ${intentID}: ${cursor}/${claimed.event_count}`),
+          )
+        }
+        const completed = yield* db
+          .update(SessionForkIntentTable)
+          .set({
+            state: "complete",
+            event_cursor: cursor,
+            delivery_owner: null,
+            lease_expires_at: null,
+            time_updated: Date.now(),
+            time_completed: Date.now(),
+          })
+          .where(
+            and(
+              eq(SessionForkIntentTable.intent_id, intentID),
+              eq(SessionForkIntentTable.delivery_owner, owner),
+              eq(SessionForkIntentTable.state, "publishing"),
+            ),
+          )
+          .returning({ intent_id: SessionForkIntentTable.intent_id })
+          .get()
+          .pipe(Effect.orDie)
+        if (!completed) {
+          return yield* Effect.fail(new ForkConflict({ intentID, reason: "fork delivery ownership was lost" }))
+        }
+        return complete
+      }).pipe(
+        Effect.onError(() =>
+          db
+            .update(SessionForkIntentTable)
+            .set({ state: "committed", delivery_owner: null, lease_expires_at: null, time_updated: Date.now() })
+            .where(
+              and(
+                eq(SessionForkIntentTable.intent_id, intentID),
+                eq(SessionForkIntentTable.delivery_owner, owner),
+                eq(SessionForkIntentTable.state, "publishing"),
+              ),
+            )
+            .run()
+            .pipe(Effect.orDie),
+        ),
+      )
+    })
+
+    const completeForkSideEffects = Effect.fn("Session.completeForkSideEffects")(function* (
+      intent: typeof SessionForkIntentTable.$inferSelect,
+    ) {
+      if (intent.side_effects_completed_at) return
+      if (intent.fork_mode === "foreground") {
+        yield* forwardLedgerOnForkRequired({
+          parentSessionID: intent.source_session_id,
+          forkSessionID: intent.target_session_id,
+        })
+        yield* persistForkOriginRequired({
+          forkSessionID: intent.target_session_id,
+          origin: {
+            parentSessionID: intent.source_session_id,
+            ...(intent.source_cutoff_message_id ? { cutoffMessageID: intent.source_cutoff_message_id } : {}),
+            forkedAt: intent.time_created,
+          },
+        })
+      }
+      const completed = yield* db
+        .update(SessionForkIntentTable)
+        .set({ side_effects_completed_at: Date.now(), time_updated: Date.now() })
+        .where(
+          and(
+            eq(SessionForkIntentTable.intent_id, intent.intent_id),
+            eq(SessionForkIntentTable.state, "complete"),
+            isNull(SessionForkIntentTable.side_effects_completed_at),
+          ),
+        )
+        .returning({ intent_id: SessionForkIntentTable.intent_id })
+        .get()
+        .pipe(Effect.orDie)
+      if (completed) return
+      const current = yield* db
+        .select({ side_effects_completed_at: SessionForkIntentTable.side_effects_completed_at })
+        .from(SessionForkIntentTable)
+        .where(eq(SessionForkIntentTable.intent_id, intent.intent_id))
+        .get()
+        .pipe(Effect.orDie)
+      if (current?.side_effects_completed_at) return
+      return yield* Effect.fail(
+        new ForkConflict({ intentID: intent.intent_id, reason: "fork side effects are not committable" }),
+      )
+    })
+
+    const forkUnlocked = Effect.fn("Session.fork")(function* (input: {
       sessionID: SessionID
+      intentID: string
       messageID?: MessageID
       directory?: string
       isolate?: "worktree"
+      forkMode?: "foreground" | "task"
+      targetSessionID?: SessionID
+      childDepth?: number
+      taskRequestHash?: string
     }) {
+      const forkMode = input.forkMode ?? "foreground"
+      const intentID = input.intentID
+      const requestHash = Hash.sha256(
+        CanonicalJson.stringify({
+          version: 2,
+          forkMode,
+          sourceSessionID: input.sessionID,
+          cutoffMessageID: input.messageID,
+          directory: input.directory,
+          isolate: input.isolate,
+          targetSessionID: input.targetSessionID,
+          childDepth: input.childDepth,
+          taskRequestHash: input.taskRequestHash,
+        }),
+      )
+      const retry = yield* db
+        .select()
+        .from(SessionForkIntentTable)
+        .where(eq(SessionForkIntentTable.intent_id, intentID))
+        .get()
+        .pipe(Effect.orDie)
+      if (retry) {
+        if (retry.request_hash !== requestHash) {
+          return yield* Effect.fail(
+            new ForkConflict({ intentID, reason: "fork intent was reused with different input" }),
+          )
+        }
+        const delivered = yield* deliverForkEvents(intentID)
+        const committed = yield* db
+          .select()
+          .from(SessionForkIntentTable)
+          .where(eq(SessionForkIntentTable.intent_id, intentID))
+          .get()
+          .pipe(Effect.orDie)
+        if (!committed) return yield* Effect.die(new Error(`fork intent disappeared during retry: ${intentID}`))
+        yield* completeForkSideEffects(committed)
+        return delivered
+      }
+      const existingAdmission = yield* db
+        .select()
+        .from(SessionForkAdmissionTable)
+        .where(eq(SessionForkAdmissionTable.intent_id, intentID))
+        .get()
+        .pipe(Effect.orDie)
+      if (existingAdmission?.request_hash !== undefined && existingAdmission.request_hash !== requestHash)
+        return yield* Effect.fail(
+          new ForkConflict({ intentID, reason: "fork admission was reused with different input" }),
+        )
+      if (existingAdmission?.state === "recovery_required")
+        return yield* Effect.fail(
+          new ForkConflict({
+            intentID,
+            reason: existingAdmission.recovery_reason ?? "fork admission requires recovery",
+          }),
+        )
+      if (existingAdmission?.state === "manifest_committed")
+        return yield* Effect.fail(
+          new ForkConflict({ intentID, reason: "fork admission committed without a readable child manifest" }),
+        )
+      if (input.targetSessionID && !existingAdmission) {
+        const target = yield* db
+          .select({ id: SessionTable.id })
+          .from(SessionTable)
+          .where(eq(SessionTable.id, input.targetSessionID))
+          .get()
+          .pipe(Effect.orDie)
+        if (target) {
+          return yield* Effect.fail(
+            new ForkConflict({ intentID, reason: "target session exists without the matching fork intent" }),
+          )
+        }
+      }
+
       const ctx = yield* InstanceState.context
       const original = yield* get(input.sessionID)
       const title = getForkedTitle(original.title)
+      const sourceProjection = yield* MessageV2.promptHistoryProjectionEffect(input.sessionID).pipe(
+        Effect.provideService(Database.Service, database),
+        Effect.mapError(
+          (error) =>
+            new ForkConflict({
+              intentID,
+              reason: `source history is unavailable: ${
+                error instanceof MessageV2.HistoryAuthorityError ? error.reason : error.message
+              }`,
+            }),
+        ),
+      )
+      const sourceSession = yield* db
+        .select({ mutation_epoch: SessionTable.mutation_epoch })
+        .from(SessionTable)
+        .where(eq(SessionTable.id, input.sessionID))
+        .get()
+        .pipe(Effect.orDie)
+      if (!sourceSession) return yield* new NotFoundError({ message: `Session not found: ${input.sessionID}` })
+      const cutoffIndex = input.messageID
+        ? sourceProjection.messages.findIndex((message) => message.info.id === input.messageID)
+        : sourceProjection.messages.length
+      if (cutoffIndex < 0) {
+        return yield* Effect.fail(
+          new ForkConflict({ intentID, reason: "fork cutoff is not part of the active effective history" }),
+        )
+      }
+      if (sourceProjection.epoch > 0 && cutoffIndex < 2) {
+        return yield* Effect.fail(
+          new ForkConflict({ intentID, reason: "fork cutoff splits the active checkpoint pair" }),
+        )
+      }
+      const sourceMessages =
+        forkMode === "task"
+          ? sanitizeTaskHistory(sourceProjection.messages.slice(0, cutoffIndex))
+          : sourceProjection.messages.slice(0, cutoffIndex)
+      if (sourceProjection.epoch > 0 && sourceMessages.length < 2) {
+        return yield* Effect.fail(new ForkConflict({ intentID, reason: "fork would omit the active checkpoint pair" }))
+      }
+      if (
+        forkMode === "task" &&
+        sourceProjection.epoch > 0 &&
+        (sourceMessages[0]?.info.role !== "user" ||
+          sourceMessages[1]?.info.role !== "assistant" ||
+          !sourceMessages[1].info.summary)
+      ) {
+        return yield* Effect.fail(new ForkConflict({ intentID, reason: "task sanitation removed the checkpoint pair" }))
+      }
 
       // Depth guard (max 3 levels ⇒ at most 2 forks deep). A fork's lineage is recorded in
       // `metadata.forkedFrom.parentSessionID` (foreground-safe: unlike `parentID`, it does NOT
@@ -834,113 +1391,750 @@ export const layer: Layer.Layer<
         )
       }
 
-      // 附-D 阶段4: optionally allocate a dedicated worktree for this fork. Mirrors the race-safe,
-      // non-git-tolerant pattern in tool/task.ts (P5 C7): the Worktree service is resolved OPTIONALLY
-      // so fork never becomes a hard requirement, the worktree name is unique per invocation via a
-      // monotonic identifier so concurrent forks can't collide on one name, and ONLY the non-git
-      // degradation (WorktreeNotGitError) falls back to a same-directory fork. Any other worktree
-      // failure is a defect (orDie) so it fails loud rather than silently un-isolating the fork —
-      // while keeping fork's typed error channel as NotFound.
+      // Freeze the exact child/resource identity before provisioning anything external. The admission
+      // row has no FK to the not-yet-created child, which is intentional: it is the crash boundary that
+      // the committed child manifest cannot represent.
       const worktreeOpt =
         input.isolate === "worktree" ? yield* Effect.serviceOption(Worktree.Service) : Option.none<Worktree.Interface>()
-      const worktreeInfo =
-        input.isolate === "worktree" && Option.isSome(worktreeOpt)
-          ? yield* worktreeOpt.value.createReady({ name: `fork-${Identifier.ascending("session")}` }).pipe(
-              Effect.catchTag("WorktreeNotGitError", () => Effect.succeed(undefined)),
-              Effect.orDie,
-            )
-          : undefined
-
-      // 附-D 阶段3: resolve the effective fork directory. Precedence: a fresh worktree (阶段4) >
-      // an explicit input.directory (阶段3) > the instance directory (today's behavior).
-      //
-      // Boundary guard (fail-closed): unlike create(), whose HTTP CreateInput schema does NOT expose a
-      // `directory` field (only trusted internal callers like tool/task.ts set it to a managed path),
-      // ForkInput DOES expose `directory` and it flows through the public ForkPayload/forkRaw HTTP
-      // route — so an untrusted client can pick the fork's cwd. sessionPath() only re-derives the
-      // stored `path` string; it does NOT stop the session's `directory` (the real cwd downstream
-      // tools operate in) from pointing outside the managed boundary. We therefore reject a
-      // client-supplied directory that escapes the instance boundary (ctx.directory OR the worktree
-      // root, per containsPath). The worktree-allocated path is trusted (Worktree.Service owns it and
-      // it can legitimately be a sibling of the checkout), and ctx.directory is trivially contained,
-      // so only an explicit input.directory is validated.
-      if (worktreeInfo === undefined && input.directory !== undefined && !containsPath(input.directory, ctx)) {
+      if (input.directory !== undefined && !containsPath(input.directory, ctx)) {
         return yield* Effect.die(new Error(`Fork directory escapes the project boundary: ${input.directory}`))
       }
-      const directory = worktreeInfo?.directory ?? input.directory ?? ctx.directory
+      const proposedTargetSessionID = existingAdmission
+        ? SessionID.make(existingAdmission.target_session_id)
+        : SessionID.descending(input.targetSessionID)
+      if (input.targetSessionID && proposedTargetSessionID !== input.targetSessionID)
+        return yield* Effect.fail(new ForkConflict({ intentID, reason: "fork target Session ID changed on retry" }))
+      const plannedWorktree =
+        existingAdmission?.isolation_mode === "worktree"
+          ? {
+              operationKey: intentID,
+              name: path.basename(existingAdmission.worktree_directory!),
+              worktreeBranch: existingAdmission.worktree_branch!,
+              directory: existingAdmission.worktree_directory!,
+              baseCommit: existingAdmission.worktree_base_commit!,
+            }
+          : input.isolate === "worktree" && Option.isSome(worktreeOpt)
+            ? yield* worktreeOpt.value
+                .planExact({ operationKey: intentID, name: `fork-${Hash.sha256(intentID).slice(0, 16)}` })
+                .pipe(
+                  Effect.catchTag("WorktreeNotGitError", () => Effect.succeed(undefined)),
+                  Effect.mapError((error) => new ForkConflict({ intentID, reason: error.message })),
+                )
+            : undefined
+      const now = Date.now()
+      const insertedAdmission = existingAdmission
+        ? undefined
+        : yield* db
+            .insert(SessionForkAdmissionTable)
+            .values({
+              intent_id: intentID,
+              request_hash: requestHash,
+              fork_mode: forkMode,
+              source_session_id: input.sessionID,
+              source_prompt_epoch: sourceProjection.epoch,
+              source_window_id: sourceProjection.window.windowID,
+              source_effective_history_hash: sourceProjection.effectiveHistoryHash,
+              source_mutation_epoch: sourceSession.mutation_epoch,
+              source_message_count: sourceProjection.messages.length,
+              source_cutoff_message_id: input.messageID ?? null,
+              projection_version: sourceProjection.projectionVersion,
+              sanitation_policy_version: forkMode === "task" ? 3 : 1,
+              requested_directory: input.directory ?? null,
+              isolation_mode: plannedWorktree ? "worktree" : "none",
+              requested_target_session_id: input.targetSessionID ?? null,
+              target_session_id: proposedTargetSessionID,
+              child_depth: input.childDepth ?? null,
+              task_request_hash: input.taskRequestHash ?? null,
+              worktree_directory: plannedWorktree?.directory ?? null,
+              worktree_branch: plannedWorktree?.worktreeBranch ?? null,
+              worktree_base_commit: plannedWorktree?.baseCommit ?? null,
+              state: plannedWorktree ? "admitted" : "ready",
+              recovery_reason: null,
+              time_created: now,
+              time_updated: now,
+            })
+            .onConflictDoNothing()
+            .returning()
+            .get()
+            .pipe(Effect.orDie)
+      const admission =
+        existingAdmission ??
+        insertedAdmission ??
+        (yield* db
+          .select()
+          .from(SessionForkAdmissionTable)
+          .where(eq(SessionForkAdmissionTable.intent_id, intentID))
+          .get()
+          .pipe(Effect.orDie))
+      if (!admission) {
+        const targetOwner = yield* db
+          .select({ intent_id: SessionForkAdmissionTable.intent_id })
+          .from(SessionForkAdmissionTable)
+          .where(eq(SessionForkAdmissionTable.target_session_id, proposedTargetSessionID))
+          .get()
+          .pipe(Effect.orDie)
+        return yield* Effect.fail(
+          new ForkConflict({
+            intentID,
+            reason: targetOwner
+              ? `fork target Session is reserved by ${targetOwner.intent_id}`
+              : "fork admission conflict did not resolve to a durable authority",
+          }),
+        )
+      }
+      if (admission.request_hash !== requestHash)
+        return yield* Effect.fail(
+          new ForkConflict({ intentID, reason: "fork admission was reused with different input" }),
+        )
+      const targetSessionID = SessionID.make(admission.target_session_id)
+      if (input.targetSessionID && targetSessionID !== input.targetSessionID)
+        return yield* Effect.fail(new ForkConflict({ intentID, reason: "fork target Session ID changed on retry" }))
+      if (
+        admission.source_prompt_epoch !== sourceProjection.epoch ||
+        admission.source_window_id !== sourceProjection.window.windowID ||
+        admission.source_effective_history_hash !== sourceProjection.effectiveHistoryHash ||
+        admission.source_mutation_epoch !== sourceSession.mutation_epoch ||
+        admission.source_message_count !== sourceProjection.messages.length ||
+        admission.projection_version !== sourceProjection.projectionVersion
+      ) {
+        yield* db
+          .update(SessionForkAdmissionTable)
+          .set({
+            state: "recovery_required",
+            recovery_reason: "source history changed after fork admission",
+            time_updated: now,
+          })
+          .where(eq(SessionForkAdmissionTable.intent_id, intentID))
+          .run()
+          .pipe(Effect.orDie)
+        return yield* Effect.fail(new ForkConflict({ intentID, reason: "source history changed after fork admission" }))
+      }
+      if (plannedWorktree && Option.isNone(worktreeOpt)) {
+        yield* db
+          .update(SessionForkAdmissionTable)
+          .set({
+            state: "recovery_required",
+            recovery_reason: "managed worktree service is unavailable during fork recovery",
+            time_updated: Date.now(),
+          })
+          .where(eq(SessionForkAdmissionTable.intent_id, intentID))
+          .run()
+          .pipe(Effect.orDie)
+        return yield* Effect.fail(
+          new ForkConflict({ intentID, reason: "managed worktree service is unavailable during fork recovery" }),
+        )
+      }
+      const worktreeInfo =
+        plannedWorktree && Option.isSome(worktreeOpt)
+          ? yield* Effect.gen(function* () {
+              yield* db
+                .update(SessionForkAdmissionTable)
+                .set({ state: "provisioning", time_updated: Date.now() })
+                .where(
+                  and(
+                    eq(SessionForkAdmissionTable.intent_id, intentID),
+                    eq(SessionForkAdmissionTable.state, "admitted"),
+                  ),
+                )
+                .run()
+                .pipe(Effect.orDie)
+              const provisioned = yield* worktreeOpt.value.ensureExact(plannedWorktree).pipe(
+                Effect.mapError(
+                  (error) =>
+                    new ForkConflict({
+                      intentID,
+                      reason: error instanceof Worktree.WorktreeExactConflictError ? error.reason : error.message,
+                    }),
+                ),
+                Effect.tapError((error) =>
+                  db
+                    .update(SessionForkAdmissionTable)
+                    .set({ state: "recovery_required", recovery_reason: error.reason, time_updated: Date.now() })
+                    .where(eq(SessionForkAdmissionTable.intent_id, intentID))
+                    .run()
+                    .pipe(Effect.orDie),
+                ),
+              )
+              yield* db
+                .update(SessionForkAdmissionTable)
+                .set({ state: "ready", recovery_reason: null, time_updated: Date.now() })
+                .where(
+                  and(
+                    eq(SessionForkAdmissionTable.intent_id, intentID),
+                    eq(SessionForkAdmissionTable.state, "provisioning"),
+                  ),
+                )
+                .run()
+                .pipe(Effect.orDie)
+              return provisioned
+            })
+          : undefined
+      const directory = worktreeInfo?.directory ?? admission.requested_directory ?? ctx.directory
+      const worldStateBaselineExit = yield* Effect.exit(collectSessionWorldStateBaseline({ workspacePath: directory }))
+      if (Exit.isFailure(worldStateBaselineExit)) {
+        yield* db
+          .update(SessionForkAdmissionTable)
+          .set({
+            state: "recovery_required",
+            recovery_reason: "world state baseline collection failed",
+            time_updated: Date.now(),
+          })
+          .where(eq(SessionForkAdmissionTable.intent_id, intentID))
+          .run()
+          .pipe(Effect.orDie)
+        return yield* Effect.failCause(worldStateBaselineExit.cause)
+      }
+      const worldStateBaseline = worldStateBaselineExit.value
       // Record the fork lineage on the new session's metadata so the client can (a) render a
       // "derived from ‹parent›" banner at the top of the transcript and (b) nest the fork under its
       // parent in the session tree. This is carried in `metadata` (already DB-persisted + synced to
       // the client + cloned by fork) rather than `parentID` — a fork is a foreground session, and
       // `parentID` would misclassify it as a background subagent. It mirrors the ForkOrigin marker
       // persisted below (context store), but travels with Session.Info so no extra IO/route is needed.
+      const firstWindowID = HistoryAuthority.windowID()
+      const targetWindowID = sourceProjection.epoch === 0 ? firstWindowID : HistoryAuthority.windowID()
+      const messageIDMap = new Map(
+        sourceMessages.map((message) => [
+          message.info.id,
+          MessageID.make(
+            `msg_${message.info.id.replace(/^msg_?/, "")}_${Hash.sha256(`fork-map:v1:${intentID}:${message.info.id}`).slice(0, 12)}`,
+          ),
+        ]),
+      )
+      const cloned = sourceMessages.map((message) => {
+        const id = messageIDMap.get(message.info.id)!
+        const info: SessionV1.Info =
+          message.info.role === "assistant"
+            ? {
+                ...message.info,
+                id,
+                sessionID: targetSessionID,
+                parentID: messageIDMap.get(message.info.parentID)!,
+              }
+            : { ...message.info, id, sessionID: targetSessionID }
+        if (info.role === "assistant" && !info.parentID) {
+          throw new ForkConflict({
+            intentID,
+            reason: `assistant ${message.info.id} has a parent outside the fork projection`,
+          })
+        }
+        return {
+          info,
+          parts: message.parts.map((part) => ({
+            ...part,
+            id: PartID.make(
+              `prt_${part.id.replace(/^prt_?/, "")}_${Hash.sha256(`fork-map:v1:${intentID}:${part.id}`).slice(0, 12)}`,
+            ),
+            messageID: id,
+            sessionID: targetSessionID,
+            ...(part.type === "compaction"
+              ? { tail_start_id: part.tail_start_id ? messageIDMap.get(part.tail_start_id) : undefined }
+              : {}),
+          })) as SessionV1.Part[],
+        }
+      })
+      const targetEffectiveHistoryHash = HistoryAuthority.hash(cloned)
       const forkedFrom = {
+        manifestVersion: 1,
+        manifestState: "prepared",
+        forkIntentID: intentID,
+        forkMode,
         parentSessionID: input.sessionID,
         parentTitle: original.title,
         ...(input.messageID ? { cutoffMessageID: input.messageID } : {}),
+        sourcePromptEpoch: sourceProjection.epoch,
+        sourceWindowID: sourceProjection.window.windowID,
+        sourceEffectiveHistoryHash: sourceProjection.effectiveHistoryHash,
+        sourceMutationEpoch: sourceSession.mutation_epoch,
+        sourceMessageCount: sourceProjection.messages.length,
+        projectionVersion: sourceProjection.projectionVersion,
+        sanitationPolicyVersion: forkMode === "task" ? 3 : 1,
+        ...(input.taskRequestHash ? { taskRequestHash: input.taskRequestHash } : {}),
+        targetPromptEpoch: sourceProjection.epoch === 0 ? 0 : 1,
+        targetWindowID,
+        targetEffectiveHistoryHash,
+        targetWorldStateBaselineHash: worldStateBaseline.hash,
         forkedAt: Date.now(),
       }
-      const session = yield* createNext({
+      const session: Info = {
+        id: targetSessionID,
+        slug: Slug.create(),
+        version: InstallationVersion,
+        projectID: ctx.project.id,
         directory,
         path: sessionPath(ctx.worktree, directory),
+        ...(forkMode === "task" ? { parentID: input.sessionID } : {}),
         workspaceID: original.workspaceID,
         title,
-        metadata: { ...structuredClone(original.metadata), forkedFrom },
-      })
-      const msgs = yield* messages({ sessionID: input.sessionID })
-      const idMap = new Map<string, MessageID>()
-
-      for (const msg of msgs) {
-        if (input.messageID && msg.info.id >= input.messageID) break
-        const newID = MessageID.ascending()
-        idMap.set(msg.info.id, newID)
-
-        const parentID = msg.info.role === "assistant" && msg.info.parentID ? idMap.get(msg.info.parentID) : undefined
-        const cloned = yield* updateMessage({
-          ...msg.info,
-          sessionID: session.id,
-          id: newID,
-          ...(parentID && { parentID }),
-        })
-
-        for (const part of msg.parts) {
-          const p: SessionV1.Part = {
-            ...part,
-            id: PartID.ascending(),
-            messageID: cloned.id,
-            sessionID: session.id,
-          }
-          if (p.type === "compaction" && p.tail_start_id) {
-            p.tail_start_id = idMap.get(p.tail_start_id)
-          }
-          yield* updatePart(p)
-        }
+        metadata:
+          forkMode === "task"
+            ? {
+                deepagent: {
+                  task_fork_manifest: forkedFrom,
+                  subagentDepth: input.childDepth ?? 0,
+                },
+              }
+            : { ...structuredClone(original.metadata), forkedFrom },
+        cost: 0,
+        tokens: EmptyTokens,
+        time: { created: Date.now(), updated: Date.now() },
+      }
+      const sourceCheckpointUserID = sourceProjection.epoch > 0 ? sourceMessages[0]?.info.id : undefined
+      const sourceCheckpointAssistantID = sourceProjection.epoch > 0 ? sourceMessages[1]?.info.id : undefined
+      const sourceMarker = sourceProjection.epoch > 0 ? sourceMessages[0] : undefined
+      const sourceTailStartID = sourceMarker?.parts.find(
+        (part): part is SessionV1.CompactionPart => part.type === "compaction",
+      )?.tail_start_id
+      const targetCheckpointUserID = sourceCheckpointUserID ? messageIDMap.get(sourceCheckpointUserID) : undefined
+      const targetCheckpointAssistantID = sourceCheckpointAssistantID
+        ? messageIDMap.get(sourceCheckpointAssistantID)
+        : undefined
+      const targetTailStartID = sourceTailStartID ? messageIDMap.get(sourceTailStartID) : undefined
+      if (sourceProjection.epoch > 0 && (!targetCheckpointUserID || !targetCheckpointAssistantID)) {
+        return yield* Effect.fail(
+          new ForkConflict({ intentID, reason: "fork projection has an invalid checkpoint pair" }),
+        )
       }
 
-      // 附-D fork memory completeness: fork now carries the parent's "memory", not just its
-      // messages/parts/metadata. (1) Forward the parent's Session Ledger (App-A §C2) into the fork's
-      // own ledger store so it opens with the parent's structured facts. (2) Persist an OBJECT cutoff
-      // marker (ForkOrigin) recording parent sessionID + the messageID the fork was cut at — the
-      // divergence point was previously only an imperative "skip messages" with no persisted record.
-      // Both are default-safe (recover from the CAUSE — DocumentStore construction throws
-      // synchronously; a copy/IO failure degrades to "fork without forwarded memory", never a failed
-      // fork), and both are keyed only by sessionID (context store root is under
-      // Global.Path.agent.data/state/context/<sessionID>) so they are independent of the fork's
-      // directory / dedicated worktree.
-      //
-      // SEAM — 附-D 阶段5 compare/merge (diff a fork's ledger against its parent, reconcile divergent
-      // branches) is a V4.0 parallel-exploration workflow and is NOT implemented here. The ForkOrigin
-      // marker written below is its future anchor: the cutoff point compare/merge will diff around.
-      yield* forwardLedgerOnFork({ parentSessionID: input.sessionID, forkSessionID: session.id })
-      yield* persistForkOrigin({
-        forkSessionID: session.id,
-        origin: {
-          parentSessionID: input.sessionID,
-          ...(input.messageID ? { cutoffMessageID: input.messageID } : {}),
-          forkedAt: Date.now(),
-        },
+      yield* events
+        .publish(
+          SessionV1.Event.Created,
+          { sessionID: session.id, info: session },
+          {
+            commit: () =>
+              Effect.gen(function* () {
+                const admitted = yield* db
+                  .select({
+                    state: SessionForkAdmissionTable.state,
+                    target_session_id: SessionForkAdmissionTable.target_session_id,
+                  })
+                  .from(SessionForkAdmissionTable)
+                  .where(eq(SessionForkAdmissionTable.intent_id, intentID))
+                  .get()
+                if (!admitted || admitted.state !== "ready" || admitted.target_session_id !== session.id)
+                  return yield* Effect.die(
+                    new ForkConflict({ intentID, reason: "fork admission is not ready for manifest commit" }),
+                  )
+                const currentSource = yield* MessageV2.promptHistoryProjectionEffect(input.sessionID).pipe(
+                  Effect.provideService(Database.Service, database),
+                  Effect.orDie,
+                )
+                const currentSession = yield* db
+                  .select({ mutation_epoch: SessionTable.mutation_epoch })
+                  .from(SessionTable)
+                  .where(eq(SessionTable.id, input.sessionID))
+                  .get()
+                if (
+                  !currentSession ||
+                  currentSession.mutation_epoch !== sourceSession.mutation_epoch ||
+                  currentSource.epoch !== sourceProjection.epoch ||
+                  currentSource.window.windowID !== sourceProjection.window.windowID ||
+                  currentSource.effectiveHistoryHash !== sourceProjection.effectiveHistoryHash ||
+                  currentSource.messages.length !== sourceProjection.messages.length
+                ) {
+                  return yield* Effect.die(new ForkConflict({ intentID, reason: "source history changed during fork" }))
+                }
+                const concurrent = yield* db
+                  .select({ request_hash: SessionForkIntentTable.request_hash })
+                  .from(SessionForkIntentTable)
+                  .where(eq(SessionForkIntentTable.intent_id, intentID))
+                  .get()
+                if (concurrent) {
+                  return yield* Effect.die(
+                    new ForkConflict({ intentID, reason: "fork intent was committed concurrently" }),
+                  )
+                }
+
+                for (const message of cloned) {
+                  yield* db
+                    .insert(MessageTable)
+                    .values({
+                      id: message.info.id,
+                      session_id: session.id,
+                      time_created: message.info.time.created,
+                      time_updated: message.info.time.created,
+                      data: Object.fromEntries(
+                        Object.entries(message.info).filter(([key]) => key !== "id" && key !== "sessionID"),
+                      ) as typeof MessageTable.$inferInsert.data,
+                    })
+                    .run()
+                  for (const part of message.parts) {
+                    yield* db
+                      .insert(PartTable)
+                      .values({
+                        id: part.id,
+                        message_id: message.info.id,
+                        session_id: session.id,
+                        time_created: message.info.time.created,
+                        time_updated: message.info.time.created,
+                        data: Object.fromEntries(
+                          Object.entries(part).filter(
+                            ([key]) => key !== "id" && key !== "messageID" && key !== "sessionID",
+                          ),
+                        ) as typeof PartTable.$inferInsert.data,
+                      })
+                      .run()
+                  }
+                }
+
+                const now = Date.now()
+                if (sourceProjection.epoch === 0) {
+                  yield* db
+                    .insert(SessionPromptEpochTable)
+                    .values({
+                      session_id: session.id,
+                      epoch: 0,
+                      state: "active",
+                      checkpoint_user_id: null,
+                      checkpoint_assistant_id: null,
+                      retained_tail_start_id: null,
+                      source_end_message_id: cloned.at(-1)?.info.id ?? null,
+                      checkpoint_hash: targetEffectiveHistoryHash,
+                      projection_version: HistoryAuthority.PROJECTION_VERSION,
+                      canonicalization_version: HistoryAuthority.CANONICALIZATION_VERSION,
+                      base_message_count: cloned.length,
+                      effective_history_hash: targetEffectiveHistoryHash,
+                      first_window_id: firstWindowID,
+                      previous_window_id: null,
+                      window_id: targetWindowID,
+                      world_state_baseline_hash: worldStateBaseline.hash,
+                      authority_state: "ready",
+                      recovery_reason: null,
+                      reason: "bootstrap",
+                      created_at: now,
+                      retired_at: null,
+                    })
+                    .run()
+                } else {
+                  yield* db
+                    .insert(SessionPromptEpochTable)
+                    .values([
+                      {
+                        session_id: session.id,
+                        epoch: 0,
+                        state: "retired",
+                        checkpoint_user_id: null,
+                        checkpoint_assistant_id: null,
+                        retained_tail_start_id: null,
+                        source_end_message_id: null,
+                        checkpoint_hash: HistoryAuthority.hash([]),
+                        projection_version: HistoryAuthority.PROJECTION_VERSION,
+                        canonicalization_version: HistoryAuthority.CANONICALIZATION_VERSION,
+                        base_message_count: 0,
+                        effective_history_hash: HistoryAuthority.hash([]),
+                        first_window_id: firstWindowID,
+                        previous_window_id: null,
+                        window_id: firstWindowID,
+                        world_state_baseline_hash: null,
+                        authority_state: "ready",
+                        recovery_reason: null,
+                        reason: "bootstrap",
+                        created_at: now,
+                        retired_at: now,
+                      },
+                      {
+                        session_id: session.id,
+                        epoch: 1,
+                        state: "active",
+                        checkpoint_user_id: targetCheckpointUserID!,
+                        checkpoint_assistant_id: targetCheckpointAssistantID!,
+                        retained_tail_start_id: targetTailStartID ?? null,
+                        source_end_message_id: cloned.at(-1)?.info.id ?? null,
+                        checkpoint_hash: targetEffectiveHistoryHash,
+                        projection_version: HistoryAuthority.PROJECTION_VERSION,
+                        canonicalization_version: HistoryAuthority.CANONICALIZATION_VERSION,
+                        base_message_count: cloned.length,
+                        effective_history_hash: targetEffectiveHistoryHash,
+                        first_window_id: firstWindowID,
+                        previous_window_id: firstWindowID,
+                        window_id: targetWindowID,
+                        world_state_baseline_hash: worldStateBaseline.hash,
+                        authority_state: "ready",
+                        recovery_reason: null,
+                        reason: "compaction",
+                        created_at: now,
+                        retired_at: null,
+                      },
+                    ])
+                    .run()
+                }
+                if (cloned.length > 0) {
+                  yield* db
+                    .insert(SessionPromptEpochMessageTable)
+                    .values(
+                      cloned.map((message, ordinal) => ({
+                        session_id: session.id,
+                        prompt_epoch: sourceProjection.epoch === 0 ? 0 : 1,
+                        ordinal,
+                        message_id: message.info.id,
+                      })),
+                    )
+                    .run()
+                }
+                yield* db
+                  .insert(SessionWorldStateBaselineTable)
+                  .values(
+                    worldStateBaseline.sections.map((section) => ({
+                      session_id: session.id,
+                      prompt_epoch: sourceProjection.epoch === 0 ? 0 : 1,
+                      section_id: section.sectionID,
+                      snapshot: section.snapshot,
+                      fragment: section.fragment,
+                      fragment_hash: section.fragmentHash,
+                      provenance: "fork_rebuilt" as const,
+                      created_at: now,
+                    })),
+                  )
+                  .run()
+                yield* db
+                  .insert(SessionHistoryStateTable)
+                  .values({
+                    session_id: session.id,
+                    state: "ready",
+                    reason: null,
+                    time_created: now,
+                    time_updated: now,
+                  })
+                  .run()
+                yield* db
+                  .insert(SessionForkIntentTable)
+                  .values({
+                    intent_id: intentID,
+                    request_hash: requestHash,
+                    fork_mode: forkMode,
+                    source_session_id: input.sessionID,
+                    source_prompt_epoch: sourceProjection.epoch,
+                    source_window_id: sourceProjection.window.windowID,
+                    source_effective_history_hash: sourceProjection.effectiveHistoryHash,
+                    source_mutation_epoch: sourceSession.mutation_epoch,
+                    source_message_count: sourceProjection.messages.length,
+                    source_cutoff_message_id: input.messageID ?? null,
+                    projection_version: sourceProjection.projectionVersion,
+                    sanitation_policy_version: forkMode === "task" ? 3 : 1,
+                    target_session_id: session.id,
+                    target_prompt_epoch: sourceProjection.epoch === 0 ? 0 : 1,
+                    target_window_id: targetWindowID,
+                    target_effective_history_hash: targetEffectiveHistoryHash,
+                    target_world_state_baseline_hash: worldStateBaseline.hash,
+                    cloned_message_count: cloned.length,
+                    cloned_part_count: cloned.reduce((total, message) => total + message.parts.length, 0),
+                    state: "committed",
+                    event_cursor: 0,
+                    event_count: cloned.reduce((total, message) => total + message.parts.length + 1, 1),
+                    delivery_owner: null,
+                    lease_expires_at: null,
+                    delivery_attempts: 0,
+                    recovery_reason: null,
+                    time_created: now,
+                    time_updated: now,
+                    time_committed: now,
+                    time_completed: null,
+                    side_effects_completed_at: null,
+                  })
+                  .run()
+                const committedAdmission = yield* db
+                  .update(SessionForkAdmissionTable)
+                  .set({ state: "manifest_committed", recovery_reason: null, time_updated: now })
+                  .where(
+                    and(
+                      eq(SessionForkAdmissionTable.intent_id, intentID),
+                      eq(SessionForkAdmissionTable.state, "ready"),
+                    ),
+                  )
+                  .returning({ intent_id: SessionForkAdmissionTable.intent_id })
+                  .get()
+                if (!committedAdmission)
+                  return yield* Effect.die(
+                    new ForkConflict({ intentID, reason: "fork admission ownership was lost during commit" }),
+                  )
+              }).pipe(Effect.orDie),
+          },
+        )
+        .pipe(
+          Effect.catchDefect((defect: unknown) =>
+            defect instanceof ForkConflict ? Effect.fail(defect) : Effect.die(defect),
+          ),
+          Effect.onError(() =>
+            db
+              .update(SessionForkAdmissionTable)
+              .set({
+                state: "recovery_required",
+                recovery_reason: "fork manifest commit failed after durable admission",
+                time_updated: Date.now(),
+              })
+              .where(
+                and(
+                  eq(SessionForkAdmissionTable.intent_id, intentID),
+                  inArray(SessionForkAdmissionTable.state, ["admitted", "provisioning", "ready"] as const),
+                ),
+              )
+              .run()
+              .pipe(Effect.ignore),
+          ),
+          Effect.catchIf(
+            (error) => error instanceof ForkConflict && error.reason === "fork intent was committed concurrently",
+            () =>
+              Effect.gen(function* () {
+                const concurrent = yield* db
+                  .select({ request_hash: SessionForkIntentTable.request_hash })
+                  .from(SessionForkIntentTable)
+                  .where(eq(SessionForkIntentTable.intent_id, intentID))
+                  .get()
+                  .pipe(Effect.orDie)
+                if (!concurrent) {
+                  return yield* Effect.die(new Error(`concurrent fork intent disappeared: ${intentID}`))
+                }
+                if (concurrent.request_hash !== requestHash) {
+                  return yield* Effect.fail(
+                    new ForkConflict({ intentID, reason: "fork intent was reused with different input" }),
+                  )
+                }
+              }),
+          ),
+        )
+
+      const delivered = yield* deliverForkEvents(intentID)
+      const committedIntent = yield* db
+        .select()
+        .from(SessionForkIntentTable)
+        .where(eq(SessionForkIntentTable.intent_id, intentID))
+        .get()
+        .pipe(Effect.orDie)
+      if (!committedIntent) return yield* Effect.die(new Error(`fork intent disappeared: ${intentID}`))
+      yield* completeForkSideEffects(committedIntent)
+      return delivered
+    })
+
+    const fork: Interface["fork"] = (input) => {
+      const intentID = input.intentID ?? `fork:${Identifier.ascending("session")}`
+      return forkLocks.withLock(intentID)(forkUnlocked({ ...input, intentID }))
+    }
+
+    const recoverForks: Interface["recoverForks"] = Effect.fn("Session.recoverForks")(function* () {
+      const now = Date.now()
+      const ctx = yield* InstanceState.context
+      const recoverableAdmissions = yield* db
+        .select({ admission: SessionForkAdmissionTable })
+        .from(SessionForkAdmissionTable)
+        .innerJoin(SessionTable, eq(SessionTable.id, SessionForkAdmissionTable.source_session_id))
+        .where(
+          and(
+            eq(SessionTable.project_id, ctx.project.id),
+            inArray(SessionForkAdmissionTable.state, ["admitted", "provisioning", "ready"] as const),
+          ),
+        )
+        .all()
+        .pipe(Effect.orDie)
+      yield* Effect.forEach(
+        recoverableAdmissions,
+        ({ admission }) =>
+          fork({
+            sessionID: SessionID.make(admission.source_session_id),
+            intentID: admission.intent_id,
+            messageID: admission.source_cutoff_message_id
+              ? MessageID.make(admission.source_cutoff_message_id)
+              : undefined,
+            directory: admission.requested_directory ?? undefined,
+            isolate: admission.isolation_mode === "worktree" ? "worktree" : undefined,
+            forkMode: admission.fork_mode,
+            targetSessionID: admission.requested_target_session_id
+              ? SessionID.make(admission.requested_target_session_id)
+              : undefined,
+            childDepth: admission.child_depth ?? undefined,
+            taskRequestHash: admission.task_request_hash ?? undefined,
+          }).pipe(Effect.catchCause(() => Effect.void)),
+        { discard: true },
+      )
+      const brokenAdmissions = yield* db
+        .select({ intent_id: SessionForkAdmissionTable.intent_id })
+        .from(SessionForkAdmissionTable)
+        .leftJoin(SessionForkIntentTable, eq(SessionForkIntentTable.intent_id, SessionForkAdmissionTable.intent_id))
+        .where(and(eq(SessionForkAdmissionTable.state, "manifest_committed"), isNull(SessionForkIntentTable.intent_id)))
+        .all()
+        .pipe(Effect.orDie)
+      if (brokenAdmissions.length > 0)
+        yield* db
+          .update(SessionForkAdmissionTable)
+          .set({
+            state: "recovery_required",
+            recovery_reason: "fork admission committed without a child manifest",
+            time_updated: now,
+          })
+          .where(
+            inArray(
+              SessionForkAdmissionTable.intent_id,
+              brokenAdmissions.map((row) => row.intent_id),
+            ),
+          )
+          .run()
+          .pipe(Effect.orDie)
+      yield* db
+        .update(SessionForkIntentTable)
+        .set({
+          state: "recovery_required",
+          recovery_reason: "fork preparation was committed without an atomic child manifest",
+          time_updated: now,
+        })
+        .where(eq(SessionForkIntentTable.state, "prepared"))
+        .run()
+        .pipe(Effect.orDie)
+      const due = (yield* db
+        .select()
+        .from(SessionForkIntentTable)
+        .where(
+          or(
+            inArray(SessionForkIntentTable.state, ["committed", "publishing"] as const),
+            and(eq(SessionForkIntentTable.state, "complete"), isNull(SessionForkIntentTable.side_effects_completed_at)),
+          ),
+        )
+        .all()
+        .pipe(Effect.orDie)).filter(
+        (intent) =>
+          intent.state === "committed" ||
+          intent.state === "complete" ||
+          !intent.lease_expires_at ||
+          intent.lease_expires_at <= now,
+      )
+      yield* Effect.forEach(
+        due,
+        (intent) =>
+          Effect.gen(function* () {
+            yield* deliverForkEvents(intent.intent_id)
+            yield* completeForkSideEffects(intent)
+          }).pipe(Effect.catchCause(() => Effect.void)),
+        { discard: true },
+      )
+    })
+
+    const assertRunnable: Interface["assertRunnable"] = Effect.fn("Session.assertRunnable")(function* (sessionID) {
+      const intent = yield* db
+        .select({
+          intent_id: SessionForkIntentTable.intent_id,
+          state: SessionForkIntentTable.state,
+          recovery_reason: SessionForkIntentTable.recovery_reason,
+          side_effects_completed_at: SessionForkIntentTable.side_effects_completed_at,
+        })
+        .from(SessionForkIntentTable)
+        .where(eq(SessionForkIntentTable.target_session_id, sessionID))
+        .get()
+        .pipe(Effect.orDie)
+      if (intent?.state === "complete" && intent.side_effects_completed_at !== null) return
+      if (intent)
+        return yield* new UnavailableError({
+          sessionID,
+          reason: intent.recovery_reason ?? `fork manifest ${intent.intent_id} is ${intent.state}`,
+        })
+      const admission = yield* db
+        .select({ intent_id: SessionForkAdmissionTable.intent_id, state: SessionForkAdmissionTable.state })
+        .from(SessionForkAdmissionTable)
+        .where(eq(SessionForkAdmissionTable.target_session_id, sessionID))
+        .get()
+        .pipe(Effect.orDie)
+      if (!admission) return
+      return yield* new UnavailableError({
+        sessionID,
+        reason: `fork admission ${admission.intent_id} is ${admission.state}`,
       })
-      return session
     })
 
     const patch = (sessionID: SessionID, info: Patch) =>
@@ -1172,6 +2366,7 @@ export const layer: Layer.Layer<
       sessionID: SessionID
       messageID: MessageID
     }) {
+      yield* requireMessageOwnership(input).pipe(Effect.orDie)
       yield* events.publish(SessionV1.Event.MessageRemoved, {
         sessionID: input.sessionID,
         messageID: input.messageID,
@@ -1184,6 +2379,7 @@ export const layer: Layer.Layer<
       messageID: MessageID
       partID: PartID
     }) {
+      yield* requirePartOwnership(input).pipe(Effect.orDie)
       yield* events.publish(SessionV1.Event.PartRemoved, {
         sessionID: input.sessionID,
         messageID: input.messageID,
@@ -1199,6 +2395,7 @@ export const layer: Layer.Layer<
       field: string
       delta: string
     }) {
+      yield* requirePartOwnership(input).pipe(Effect.orDie)
       yield* events.publish(MessageV2.Event.PartDelta, input)
     })
 
@@ -1226,6 +2423,8 @@ export const layer: Layer.Layer<
       listGlobal,
       create,
       fork,
+      recoverForks,
+      assertRunnable,
       touch,
       get,
       mutationEpoch,

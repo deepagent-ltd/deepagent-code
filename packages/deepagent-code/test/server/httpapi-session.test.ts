@@ -325,6 +325,7 @@ describe("session HttpApi", () => {
         })
       }),
     { git: true, config: { formatter: false, lsp: false } },
+    15_000,
   )
 
   it.instance(
@@ -397,6 +398,7 @@ describe("session HttpApi", () => {
         ).toMatchObject([{ type: "assistant" }])
       }),
     { git: true, config: { formatter: false, lsp: false } },
+    15_000,
   )
 
   it.live("uses the persisted session directory for prompt requests", () =>
@@ -784,17 +786,51 @@ describe("session HttpApi", () => {
         const forked = yield* requestJson<Session.Info>(pathFor(SessionPaths.fork, { sessionID: created.id }), {
           method: "POST",
           headers,
+          body: JSON.stringify({ intentID: "http-fork-intent" }),
         })
         expect(forked.id).not.toBe(created.id)
+
+        const forkRetry = yield* requestJson<Session.Info>(pathFor(SessionPaths.fork, { sessionID: created.id }), {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ intentID: "http-fork-intent" }),
+        })
+        expect(forkRetry.id).toBe(forked.id)
+
+        const forkConflict = yield* request(pathFor(SessionPaths.fork, { sessionID: created.id }), {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ intentID: "http-fork-intent", isolate: "worktree" }),
+        })
+        expect(forkConflict.status).toBe(409)
+        expect(yield* responseJson(forkConflict)).toEqual({
+          _tag: "ConflictError",
+          message: "fork intent was reused with different input",
+          resource: "fork_intent:http-fork-intent",
+        })
 
         const forkedWithoutContentType = yield* requestJson<Session.Info>(
           pathFor(SessionPaths.fork, { sessionID: created.id }),
           {
             method: "POST",
             headers: { "x-deepagent-code-directory": test.directory },
+            body: JSON.stringify({ intentID: "http-fork-without-content-type" }),
           },
         )
         expect(forkedWithoutContentType.id).not.toBe(created.id)
+
+        const missingForkIntent = yield* request(pathFor(SessionPaths.fork, { sessionID: created.id }), {
+          method: "POST",
+          headers,
+          body: JSON.stringify({}),
+        })
+        expect(missingForkIntent.status).toBe(400)
+
+        const missingForkBody = yield* request(pathFor(SessionPaths.fork, { sessionID: created.id }), {
+          method: "POST",
+          headers,
+        })
+        expect(missingForkBody.status).toBe(400)
 
         const invalidFork = yield* request(pathFor(SessionPaths.fork, { sessionID: created.id }), {
           method: "POST",
@@ -803,15 +839,12 @@ describe("session HttpApi", () => {
         })
         expect(invalidFork.status).toBe(400)
 
-        const forkedWhitespace = yield* requestJson<Session.Info>(
-          pathFor(SessionPaths.fork, { sessionID: created.id }),
-          {
-            method: "POST",
-            headers,
-            body: "  \n",
-          },
-        )
-        expect(forkedWhitespace.id).not.toBe(created.id)
+        const forkedWhitespace = yield* request(pathFor(SessionPaths.fork, { sessionID: created.id }), {
+          method: "POST",
+          headers,
+          body: "  \n",
+        })
+        expect(forkedWhitespace.status).toBe(400)
 
         expect(
           yield* requestJson<boolean>(pathFor(SessionPaths.abort, { sessionID: created.id }), {

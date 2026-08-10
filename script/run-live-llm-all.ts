@@ -333,6 +333,12 @@ export const suites: Suite[] = [
     realLLM: true,
   },
   {
+    id: "ext:context-authority",
+    package: "deepagent-code",
+    command: ["bun", "run", "test:llm-ext:context-authority"],
+    realLLM: true,
+  },
+  {
     id: "ext:expert-panel",
     package: "deepagent-code",
     command: ["bun", "run", "test:llm-ext:expert-panel"],

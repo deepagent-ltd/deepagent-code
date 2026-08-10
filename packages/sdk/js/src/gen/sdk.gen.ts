@@ -2852,26 +2852,42 @@ export class Goal extends HeyApiClient {
   /**
    * Hot-edit the plan of a running/paused Goal Loop
    *
-   * V4.1 §S2: enqueue a user plan revision on the goal control channel. The driver applies it between ticks (durable-doc upsert + stall re-baseline). ok:false when no goal is running or it reached a terminal phase.
+   * V4.1 §S2: admit a strict plan-write command into the durable activity mailbox. The driver settles the receipt after CAS and re-baseline.
    */
   public editPlan<ThrowOnError extends boolean = false>(
     parameters: {
       directory?: string
       workspace?: string
       sessionID: string
-      plan: {
+      request_id: string
+      plan_write: {
+        operation: "create" | "advance" | "replan"
+        expected_plan_id: string
+        expected_version: number
         goal: string
         steps: Array<{
           step_id?: string
           title: string
-          status?: string
+          status:
+            | "pending"
+            | "active"
+            | "done"
+            | "cancelled"
+            | "blocked"
+            | "completed"
+            | "in_progress"
+            | "in_review"
+            | "skipped"
+            | "stuck"
           acceptance?: string
           assigned_agent?: string
           note?: string
         }>
-        assumptions?: Array<string>
-        active_step_id?: string
+        assumptions: Array<string>
+        active_step_id: string
+        replan_reason?: string
       }
+      quality_challenge_id?: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -2883,7 +2899,9 @@ export class Goal extends HeyApiClient {
             { in: "query", key: "directory" },
             { in: "query", key: "workspace" },
             { in: "body", key: "sessionID" },
-            { in: "body", key: "plan" },
+            { in: "body", key: "request_id" },
+            { in: "body", key: "plan_write" },
+            { in: "body", key: "quality_challenge_id" },
           ],
         },
       ],
@@ -7569,6 +7587,7 @@ export class Session2 extends HeyApiClient {
       sessionID: string
       query_directory?: string
       workspace?: string
+      intentID?: string
       messageID?: string
       body_directory?: string
       isolate?: "worktree"
@@ -7587,6 +7606,7 @@ export class Session2 extends HeyApiClient {
               map: "directory",
             },
             { in: "query", key: "workspace" },
+            { in: "body", key: "intentID" },
             { in: "body", key: "messageID" },
             {
               in: "body",

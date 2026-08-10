@@ -1881,6 +1881,7 @@ export const layer = Layer.effect(
                   if (firstEvent) {
                     firstEvent = false
                     yield* providerAttempt?.streaming ?? Effect.void
+                    yield* streamInput.requestReceipt?.streaming() ?? Effect.void
                   }
                   yield* handleEvent(event)
                 }),
@@ -1889,47 +1890,49 @@ export const layer = Layer.effect(
               Stream.runDrain,
             )
           })
-          const dispatched = providerAttempt
-            ? streamed
-            : streamed.pipe(
-                Effect.retry(
-                  SessionRetry.policy({
-                    provider: input.model.providerID,
-                    parse,
-                    set: (info) => {
-                      // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
-                      const event = mirrorAssistant
-                        ? events.publish(SessionEvent.Retried, {
-                            sessionID: ctx.sessionID,
-                            attempt: info.attempt,
-                            error: {
+          const dispatched =
+            providerAttempt || streamInput.durableAttempt
+              ? streamed
+              : streamed.pipe(
+                  Effect.retry(
+                    SessionRetry.policy({
+                      provider: input.model.providerID,
+                      parse,
+                      set: (info) => {
+                        // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
+                        const event = mirrorAssistant
+                          ? events.publish(SessionEvent.Retried, {
+                              sessionID: ctx.sessionID,
+                              attempt: info.attempt,
+                              error: {
+                                message: info.message,
+                                isRetryable: true,
+                              },
+                              timestamp: DateTime.makeUnsafe(Date.now()),
+                            })
+                          : Effect.void
+                        return flushV2Fragments().pipe(
+                          Effect.andThen(event),
+                          Effect.andThen(
+                            status.set(ctx.sessionID, {
+                              type: "retry",
+                              attempt: info.attempt,
                               message: info.message,
-                              isRetryable: true,
-                            },
-                            timestamp: DateTime.makeUnsafe(Date.now()),
-                          })
-                        : Effect.void
-                      return flushV2Fragments().pipe(
-                        Effect.andThen(event),
-                        Effect.andThen(
-                          status.set(ctx.sessionID, {
-                            type: "retry",
-                            attempt: info.attempt,
-                            message: info.message,
-                            action: info.action,
-                            next: info.next,
-                          }),
-                        ),
-                      )
-                    },
-                  }),
-                ),
-              )
+                              action: info.action,
+                              next: info.next,
+                            }),
+                          ),
+                        )
+                      },
+                    }),
+                  ),
+                )
           const completed = dispatched.pipe(
             Effect.onInterrupt(() =>
               Effect.gen(function* () {
                 aborted = true
                 yield* providerAttempt?.failed(new DOMException("Aborted", "AbortError")) ?? Effect.void
+                yield* streamInput.requestReceipt?.failed(new DOMException("Aborted", "AbortError")) ?? Effect.void
                 if (!ctx.assistantMessage.error) {
                   yield* halt(new DOMException("Aborted", "AbortError"))
                 }
@@ -1950,8 +1953,20 @@ export const layer = Layer.effect(
                   )
                 : Effect.void,
             ),
-            Effect.tapError((error) => providerAttempt?.failed(error) ?? Effect.void),
-            Effect.tap(() => (providerAttempt && !ctx.assistantMessage.error ? providerAttempt.settled : Effect.void)),
+            Effect.tapError((error) =>
+              Effect.all([
+                providerAttempt?.failed(error) ?? Effect.void,
+                streamInput.requestReceipt?.failed(error) ?? Effect.void,
+              ]).pipe(Effect.asVoid),
+            ),
+            Effect.tap(() =>
+              ctx.assistantMessage.error
+                ? Effect.void
+                : Effect.all([
+                    providerAttempt?.settled ?? Effect.void,
+                    streamInput.requestReceipt?.settled() ?? Effect.void,
+                  ]).pipe(Effect.asVoid),
+            ),
           )
           yield* (
             propagateSummaryViolation

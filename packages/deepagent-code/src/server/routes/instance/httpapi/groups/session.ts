@@ -77,6 +77,10 @@ export const SummarizePayload = Schema.Struct({
   auto: Schema.optional(Schema.Boolean),
 })
 export const PromptPayload = Schema.Struct(Struct.omit(SessionPrompt.PromptInput.fields, ["sessionID"]))
+export const PromptAsyncAccepted = Schema.Struct({
+  messageID: MessageID,
+  delivery: Schema.Literals(["turn", "steer", "queue", "goal_steer"]),
+})
 export const PromptPreparePayload = Schema.Struct({
   // Legacy-compat: "wish" is the pre-rename wire literal for "intelligence". The server accepts BOTH
   // so an older client sending "wish" still works while new clients send "intelligence"; the handler
@@ -450,9 +454,9 @@ export const SessionApi = HttpApi.make("session")
         HttpApiEndpoint.post("fork", SessionPaths.fork, {
           params: { sessionID: SessionID },
           query: WorkspaceRoutingQuery,
-          payload: [HttpApiSchema.NoContent, ForkPayload],
+          payload: ForkPayload,
           success: described(Session.Info, "200"),
-          error: [HttpApiError.BadRequest, ApiNotFoundError],
+          error: [HttpApiError.BadRequest, ConflictError, ApiNotFoundError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "session.fork",
@@ -580,7 +584,7 @@ export const SessionApi = HttpApi.make("session")
           params: { sessionID: SessionID },
           query: WorkspaceRoutingQuery,
           payload: PromptPayload,
-          success: described(HttpApiSchema.NoContent, "Prompt accepted"),
+          success: described(PromptAsyncAccepted, "Prompt durably admitted"),
           error: [HttpApiError.BadRequest, ConflictError, ApiNotFoundError],
         }).annotateMerge(
           OpenApi.annotations({

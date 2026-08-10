@@ -119,6 +119,10 @@ describe("live LLM route manifest", () => {
         runs: ["ext:cli-subprocess:goal-grader-cli-entry", "live:cli-subprocess:cli-headless"],
       },
       {
+        path: "packages/deepagent-code/src/session/history-authority.ts",
+        runs: ["ext:cli-subprocess:context-authority", "ext:legacy-session:compaction-retention"],
+      },
+      {
         path: "packages/deepagent-code/src/panel/panel-convene-consumer.ts",
         runs: ["ext:legacy-session:expert-panel"],
       },
@@ -129,6 +133,7 @@ describe("live LLM route manifest", () => {
       {
         path: "packages/deepagent-code/script/live-llm/lifecycle.ts",
         runs: [
+          "ext:cli-subprocess:context-authority",
           "ext:cli-subprocess:goal-grader-cli-entry",
           "ext:legacy-session:compaction-retention",
           "ext:legacy-session:expert-panel",
@@ -706,9 +711,7 @@ describe("pre-push dispatcher", () => {
       "packages/deepagent-code/script/live-llm/prompt-intent-fencing.ts",
     ]) {
       const selected = selectRoutes([path])
-      const run = selected.runs.find(
-        (item) => modelRunKey(item) === "ext:legacy-session:prompt-intent-fencing",
-      )
+      const run = selected.runs.find((item) => modelRunKey(item) === "ext:legacy-session:prompt-intent-fencing")
       expect(run).toBeDefined()
       expect(selected.checks).toContain("prompt-intent")
       expect(run && commandForModelRun(run)).toEqual({

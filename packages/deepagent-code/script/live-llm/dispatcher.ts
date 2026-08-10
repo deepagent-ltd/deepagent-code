@@ -265,6 +265,10 @@ const modelCommands = new Map<string, DispatcherCommand>([
     "ext:legacy-session:compaction-retention",
     command("packages/deepagent-code", "bun", "run", "test:llm-ext:compaction-retention"),
   ],
+  [
+    "ext:cli-subprocess:context-authority",
+    command("packages/deepagent-code", "bun", "run", "test:llm-ext:context-authority"),
+  ],
   ["ext:legacy-session:expert-panel", command("packages/deepagent-code", "bun", "run", "test:llm-ext:expert-panel")],
   [
     "ext:legacy-session:intelligence-draft-confirmation",

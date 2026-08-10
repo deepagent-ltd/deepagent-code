@@ -43,7 +43,7 @@ import {
   SummarizePayload,
   UpdatePayload,
 } from "../groups/session"
-import { ConflictError, PermissionNotFoundError } from "../errors"
+import { ConflictError, PermissionNotFoundError, notFound } from "../errors"
 import * as SessionError from "./session-errors"
 
 const tryParseJson = (text: string) =>
@@ -250,14 +250,15 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
 
     const fork = Effect.fn("SessionHttpApi.fork")(function* (ctx: {
       params: { sessionID: SessionID }
-      payload?: typeof ForkPayload.Type
+      payload: typeof ForkPayload.Type
     }) {
-      return yield* SessionError.mapStorageNotFound(
+      return yield* SessionError.mapFork(
         session.fork({
           sessionID: ctx.params.sessionID,
-          messageID: ctx.payload?.messageID,
-          directory: ctx.payload?.directory,
-          isolate: ctx.payload?.isolate,
+          intentID: ctx.payload.intentID,
+          messageID: ctx.payload.messageID,
+          directory: ctx.payload.directory,
+          isolate: ctx.payload.isolate,
         }),
       )
     })
@@ -267,7 +268,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       request: HttpServerRequest.HttpServerRequest
     }) {
       const body = yield* Effect.orDie(ctx.request.text)
-      if (body.trim().length === 0) return yield* fork({ params: ctx.params })
+      if (body.trim().length === 0) return yield* new HttpApiError.BadRequest({})
 
       const json = yield* tryParseJson(body)
       const payload = yield* Schema.decodeUnknownEffect(ForkPayload)(json).pipe(
@@ -344,6 +345,13 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       payload: typeof PromptPayload.Type
     }) {
       yield* requireSession(ctx.params.sessionID)
+      yield* session
+        .assertRunnable(ctx.params.sessionID)
+        .pipe(
+          Effect.mapError(
+            (error) => new ConflictError({ message: error.reason, resource: `session:${error.sessionID}` }),
+          ),
+        )
       // V4.1 §S1.2: route through promptOrSteer — if the session is mid-turn, the message is absorbed as
       // a steer (the running turn picks it up at its next boundary) instead of erroring/blocking; if idle,
       // it runs a normal turn. For a completed turn we stream the assistant message as before (unchanged
@@ -500,9 +508,16 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       payload: typeof PromptPayload.Type
     }) {
       yield* requireSession(ctx.params.sessionID)
+      yield* session
+        .assertRunnable(ctx.params.sessionID)
+        .pipe(
+          Effect.mapError(
+            (error) => new ConflictError({ message: error.reason, resource: `session:${error.sessionID}` }),
+          ),
+        )
       // Return only after the input has crossed its durable admission boundary. Model execution stays
       // asynchronous, but callers may safely serialize destructive actions after this acknowledgement.
-      yield* promptSvc.promptAsync({ ...ctx.payload, sessionID: ctx.params.sessionID }).pipe(
+      const receipt = yield* promptSvc.promptAsync({ ...ctx.payload, sessionID: ctx.params.sessionID }).pipe(
         Effect.mapError((error) =>
           error instanceof SessionPromptIntent.Conflict
             ? new ConflictError({ message: error.reason, resource: `session_intent:${error.intentID}` })
@@ -519,7 +534,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
                 : new HttpApiError.BadRequest({}),
         ),
       )
-      return HttpApiSchema.NoContent.make()
+      return receipt
     })
 
     const command = Effect.fn("SessionHttpApi.command")(function* (ctx: {
@@ -576,6 +591,9 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     }) {
       yield* requireSession(ctx.params.sessionID)
       yield* SessionError.mapBusy(runState.assertNotBusy(ctx.params.sessionID))
+      const messages = yield* SessionError.mapStorageNotFound(session.messages({ sessionID: ctx.params.sessionID }))
+      if (!messages.some((message) => message.info.id === ctx.params.messageID))
+        return yield* notFound(`Message not found: ${ctx.params.messageID}`)
       yield* session.removeMessage(ctx.params)
       return true
     })
@@ -584,6 +602,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       params: { sessionID: SessionID; messageID: MessageID; partID: PartID }
     }) {
       yield* requireSession(ctx.params.sessionID)
+      if (!(yield* session.getPart(ctx.params))) return yield* notFound(`Part not found: ${ctx.params.partID}`)
       yield* session.removePart(ctx.params)
       return true
     })
@@ -601,6 +620,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       ) {
         return yield* new HttpApiError.BadRequest({})
       }
+      if (!(yield* session.getPart(ctx.params))) return yield* notFound(`Part not found: ${ctx.params.partID}`)
       return yield* session.updatePart(payload)
     })
 

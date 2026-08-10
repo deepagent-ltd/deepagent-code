@@ -173,6 +173,7 @@ export async function runLegacyLiveCases(input: {
   }) => Promise<void>
   sharedSession?: boolean
   compactAfterCases?: string[]
+  overrideReportedInputTokensAfterCases?: ReadonlyArray<{ caseName: string; inputTokens: number }>
   timeoutMs?: number
   // Inject a steering message through the production promptOrSteer ingress after the named case's
   // session runner reports an active turn. The original prompt remains in flight; the runtime records
@@ -199,6 +200,25 @@ export async function runLegacyLiveCases(input: {
   }
   if (!input.sharedSession && input.cases.some((testCase) => testCase.revertBefore)) {
     throw new Error("revertBefore requires sharedSession so the target and rewrite use one durable Session")
+  }
+  const inputTokenOverrides = new Map(
+    (input.overrideReportedInputTokensAfterCases ?? []).map((override) => [override.caseName, override.inputTokens]),
+  )
+  if (inputTokenOverrides.size !== (input.overrideReportedInputTokensAfterCases?.length ?? 0)) {
+    throw new Error("overrideReportedInputTokensAfterCases contains duplicate case names")
+  }
+  if (inputTokenOverrides.size > 0 && !input.sharedSession) {
+    throw new Error("overrideReportedInputTokensAfterCases requires sharedSession")
+  }
+  for (const [caseName, inputTokens] of inputTokenOverrides) {
+    const caseIndex = input.cases.findIndex((testCase) => testCase.name === caseName)
+    if (caseIndex < 0) throw new Error(`Unknown input-token override case ${caseName}`)
+    if (caseIndex === input.cases.length - 1) {
+      throw new Error(`Input-token override case ${caseName} has no subsequent turn`)
+    }
+    if (!Number.isSafeInteger(inputTokens) || inputTokens <= 0) {
+      throw new Error(`Input-token override for ${caseName} must be a positive safe integer`)
+    }
   }
   const preflight = await preflightLiveLLM(config)
   const testRoot = await mkdtemp(path.join(os.tmpdir(), `deepagent-code-${input.suite}-`))
@@ -236,6 +256,7 @@ export async function runLegacyLiveCases(input: {
     const { SessionCompaction } = await import("../../src/session/compaction")
     const { CompactionRunTable, CompactionSummaryAttemptTable } = await import("../../src/session/compaction-sql")
     const { SessionPromptEpochTable } = await import("../../src/session/prompt-epoch.sql")
+    const { SessionWorldStateBaselineTable } = await import("@deepagent-code/core/session/sql")
     const { SessionPromptIntent } = await import("../../src/session/prompt-intent")
     const { SessionPrompt } = await import("../../src/session/prompt")
     const { SessionRevert } = await import("../../src/session/revert")
@@ -867,6 +888,37 @@ export async function runLegacyLiveCases(input: {
                   )
                   return result
                 })
+          const inputTokenOverride = inputTokenOverrides.get(testCase.name)
+          const tokenUsageOverride =
+            inputTokenOverride === undefined
+              ? undefined
+              : yield* Effect.gen(function* () {
+                  if (result.info.role !== "assistant") {
+                    return yield* Effect.die(new Error(`Input-token override target ${testCase.name} was not assistant`))
+                  }
+                  const override = {
+                    originalInputTokens: result.info.tokens.input,
+                    originalTotalTokens: result.info.tokens.total,
+                    persistedInputTokens: inputTokenOverride,
+                    persistedTotalTokens:
+                      inputTokenOverride +
+                      result.info.tokens.output +
+                      result.info.tokens.reasoning +
+                      result.info.tokens.cache.read +
+                      result.info.tokens.cache.write,
+                  }
+                  // Fault injection is persisted through the production message event path. The next turn then
+                  // exercises the real overflow, compaction, PromptEpoch commit, and continuation lifecycle.
+                  yield* sessions.updateMessage({
+                    ...result.info,
+                    tokens: {
+                      ...result.info.tokens,
+                      total: override.persistedTotalTokens,
+                      input: override.persistedInputTokens,
+                    },
+                  })
+                  return override
+                })
           const panelCase = input.panel?.afterCaseName === testCase.name ? input.panel : undefined
           if (panelCase && sharedSession && agents) {
             const opinions: unknown[] = []
@@ -1096,6 +1148,12 @@ export async function runLegacyLiveCases(input: {
                     .where(eq(SessionPromptEpochTable.session_id, session.id))
                     .all()
                     .pipe(Effect.orDie),
+                  worldStateBaselines: yield* database.db
+                    .select()
+                    .from(SessionWorldStateBaselineTable)
+                    .where(eq(SessionWorldStateBaselineTable.session_id, session.id))
+                    .all()
+                    .pipe(Effect.orDie),
                   compactionRuns: yield* database.db
                     .select()
                     .from(CompactionRunTable)
@@ -1148,6 +1206,7 @@ export async function runLegacyLiveCases(input: {
                   retry: admissionRetryEvidence[0],
                 }
               : undefined,
+            tokenUsageOverride,
             revert: revertEvidence,
             users: currentUsers.map((message) => ({
               metadata: message.info.metadata,

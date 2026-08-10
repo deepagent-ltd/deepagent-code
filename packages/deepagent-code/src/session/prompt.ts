@@ -96,7 +96,6 @@ import { archiveSessionOnCompletion } from "@/wiki/session-archive"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Database } from "@deepagent-code/core/database/database"
 import { SessionToolRequestReceiptTable } from "./tool-request-receipt.sql"
-import { CompactionArtifactTable, CompactionRunTable } from "./compaction-sql"
 import {
   SessionToolArgumentReceiptTable,
   type ToolArgumentReceiptLayer,
@@ -122,8 +121,7 @@ import {
 import { Reference } from "@/reference/reference"
 import * as DateTime from "effect/DateTime"
 import { and, eq, inArray, isNull, max, ne, or } from "drizzle-orm"
-import { SessionHistoryStateTable, SessionTable, TaskRunTable } from "@deepagent-code/core/session/sql"
-import { SessionPromptEpochTable } from "./prompt-epoch.sql"
+import { SessionTable, TaskRunTable } from "@deepagent-code/core/session/sql"
 import { referencePromptMetadata, referenceTextPart } from "./prompt/reference"
 import { SessionReminders } from "./reminders"
 import { SessionTools } from "./tools"
@@ -156,267 +154,6 @@ globalThis.AI_SDK_LOG_WARNINGS = false
 const decodeMessageInfo = Schema.decodeUnknownExit(SessionV1.Info)
 const decodeMessagePart = Schema.decodeUnknownExit(SessionV1.Part)
 const providerReceiptOwner = `${process.pid}:${randomUUID()}`
-
-export const recoverProviderReceiptsOnStartup = Effect.fn("SessionPrompt.recoverProviderReceiptsOnStartup")(
-  function* () {
-    const sessions = yield* Session.Service
-    const { db } = yield* Database.Service
-    const staleOwner = or(
-      isNull(SessionToolRequestReceiptTable.owner_token),
-      ne(SessionToolRequestReceiptTable.owner_token, providerReceiptOwner),
-    )
-    const lostUnadmittedContinuations = yield* db
-      .select({
-        sessionID: CompactionRunTable.session_id,
-        messageID: CompactionArtifactTable.message_id,
-      })
-      .from(CompactionRunTable)
-      .innerJoin(CompactionArtifactTable, eq(CompactionArtifactTable.run_id, CompactionRunTable.run_id))
-      .where(
-        and(
-          eq(CompactionRunTable.state, "committed"),
-          eq(CompactionRunTable.continuation_state, "pending"),
-          eq(CompactionArtifactTable.state, "committed"),
-          inArray(CompactionArtifactTable.kind, ["replay", "continue"] as const),
-        ),
-      )
-      .all()
-      .pipe(Effect.orDie)
-    const lostUndispatchedReceipts = yield* db
-      .select({
-        receiptID: SessionToolRequestReceiptTable.receipt_id,
-        sessionID: SessionToolRequestReceiptTable.session_id,
-        assistantMessageID: SessionToolRequestReceiptTable.assistant_message_id,
-      })
-      .from(SessionToolRequestReceiptTable)
-      .where(
-        and(inArray(SessionToolRequestReceiptTable.provider_state, ["preparing", "prepared"] as const), staleOwner),
-      )
-      .all()
-      .pipe(Effect.orDie)
-    const lostStartedReceipts = yield* db
-      .select({
-        receiptID: SessionToolRequestReceiptTable.receipt_id,
-        sessionID: SessionToolRequestReceiptTable.session_id,
-        assistantMessageID: SessionToolRequestReceiptTable.assistant_message_id,
-      })
-      .from(SessionToolRequestReceiptTable)
-      .where(
-        and(inArray(SessionToolRequestReceiptTable.provider_state, ["dispatching", "streaming"] as const), staleOwner),
-      )
-      .all()
-      .pipe(Effect.orDie)
-    const unresolvedContinuationReceipts = yield* db
-      .select({
-        receiptID: SessionToolRequestReceiptTable.receipt_id,
-        sessionID: SessionToolRequestReceiptTable.session_id,
-        assistantMessageID: SessionToolRequestReceiptTable.assistant_message_id,
-      })
-      .from(CompactionRunTable)
-      .innerJoin(
-        SessionToolRequestReceiptTable,
-        eq(SessionToolRequestReceiptTable.receipt_id, CompactionRunTable.continuation_receipt_id),
-      )
-      .where(
-        and(
-          eq(CompactionRunTable.state, "committed"),
-          eq(CompactionRunTable.continuation_state, "indeterminate"),
-          isNull(SessionToolRequestReceiptTable.response_fingerprint),
-        ),
-      )
-      .all()
-      .pipe(Effect.orDie)
-    const unresolvedContinuationSessions = yield* db
-      .select({ sessionID: CompactionRunTable.session_id })
-      .from(CompactionRunTable)
-      .where(and(eq(CompactionRunTable.state, "committed"), eq(CompactionRunTable.continuation_state, "indeterminate")))
-      .all()
-      .pipe(Effect.orDie)
-    yield* db
-      .transaction(
-        (tx) =>
-          Effect.gen(function* () {
-            const undispatched = tx
-              .select({ receipt_id: SessionToolRequestReceiptTable.receipt_id })
-              .from(SessionToolRequestReceiptTable)
-              .where(
-                and(
-                  inArray(SessionToolRequestReceiptTable.provider_state, ["preparing", "prepared"] as const),
-                  staleOwner,
-                ),
-              )
-            const started = tx
-              .select({ receipt_id: SessionToolRequestReceiptTable.receipt_id })
-              .from(SessionToolRequestReceiptTable)
-              .where(
-                and(
-                  inArray(SessionToolRequestReceiptTable.provider_state, ["dispatching", "streaming"] as const),
-                  staleOwner,
-                ),
-              )
-            const now = Date.now()
-            yield* tx
-              .update(CompactionRunTable)
-              .set({
-                continuation_state: "pending",
-                continuation_receipt_id: null,
-                continuation_admitted_at: null,
-                continuation_dispatching_at: null,
-                continuation_terminal_at: null,
-                continuation_error_code: "provider_not_dispatched_before_process_restart",
-                continuation_wakeup_at: null,
-              })
-              .where(
-                and(
-                  eq(CompactionRunTable.state, "committed"),
-                  eq(CompactionRunTable.continuation_state, "admitted"),
-                  inArray(CompactionRunTable.continuation_receipt_id, undispatched),
-                ),
-              )
-              .run()
-            yield* tx
-              .update(CompactionRunTable)
-              .set({
-                continuation_state: "indeterminate",
-                continuation_terminal_at: now,
-                continuation_error_code: "provider_started_outcome_unknown_after_process_restart",
-              })
-              .where(
-                and(
-                  eq(CompactionRunTable.state, "committed"),
-                  eq(CompactionRunTable.continuation_state, "dispatching"),
-                  inArray(CompactionRunTable.continuation_receipt_id, started),
-                ),
-              )
-              .run()
-            yield* tx
-              .update(SessionToolRequestReceiptTable)
-              .set({
-                provider_state: "indeterminate_after_crash",
-                terminal_at: now,
-                request_error_code: "provider_started_outcome_unknown_after_process_restart",
-              })
-              .where(
-                and(
-                  inArray(SessionToolRequestReceiptTable.provider_state, ["dispatching", "streaming"] as const),
-                  staleOwner,
-                ),
-              )
-              .run()
-            yield* tx
-              .update(SessionToolRequestReceiptTable)
-              .set({
-                provider_state: "failed",
-                terminal_at: now,
-                request_error_code: "provider_not_dispatched_before_process_restart",
-              })
-              .where(
-                and(
-                  inArray(SessionToolRequestReceiptTable.provider_state, ["preparing", "prepared"] as const),
-                  staleOwner,
-                ),
-              )
-              .run()
-            yield* Effect.forEach(
-              [
-                ...new Set([
-                  ...lostStartedReceipts.map((receipt) => receipt.sessionID),
-                  ...unresolvedContinuationSessions.map((continuation) => continuation.sessionID),
-                ]),
-              ],
-              (sessionID) =>
-                Effect.gen(function* () {
-                  const reason = "provider outcome is unknown after process restart"
-                  yield* tx
-                    .update(SessionPromptEpochTable)
-                    .set({ authority_state: "recovery_required", recovery_reason: reason })
-                    .where(
-                      and(
-                        eq(SessionPromptEpochTable.session_id, sessionID),
-                        eq(SessionPromptEpochTable.state, "active"),
-                      ),
-                    )
-                    .run()
-                  yield* tx
-                    .insert(SessionHistoryStateTable)
-                    .values([
-                      {
-                        session_id: SessionID.make(sessionID),
-                        state: "recovery_required",
-                        reason,
-                        time_created: now,
-                        time_updated: now,
-                      },
-                    ])
-                    .onConflictDoUpdate({
-                      target: SessionHistoryStateTable.session_id,
-                      set: { state: "recovery_required", reason, time_updated: now },
-                    })
-                    .run()
-                }),
-              { discard: true },
-            )
-          }),
-        { behavior: "immediate" },
-      )
-      .pipe(Effect.orDie)
-    yield* Effect.forEach(
-      [...lostUndispatchedReceipts, ...lostStartedReceipts, ...unresolvedContinuationReceipts],
-      (receipt) =>
-        Effect.gen(function* () {
-          if (!receipt.assistantMessageID) return
-          const messages = yield* sessions.messages({ sessionID: SessionID.make(receipt.sessionID) }).pipe(Effect.orDie)
-          const assistant = messages.find(
-            (message) => message.info.id === receipt.assistantMessageID && message.info.role === "assistant",
-          )
-          if (!assistant || assistant.info.role !== "assistant" || assistant.info.time.completed) return
-          yield* sessions.updateMessage({
-            ...assistant.info,
-            finish: "error",
-            error: new NamedError.Unknown({
-              message:
-                lostStartedReceipts.some((started) => started.receiptID === receipt.receiptID) ||
-                unresolvedContinuationReceipts.some((unresolved) => unresolved.receiptID === receipt.receiptID)
-                  ? `Provider request ${receipt.receiptID} may have been dispatched before restart; explicit recovery is required.`
-                  : `Provider request ${receipt.receiptID} was not dispatched before restart; the durable continuation will be retried.`,
-            }).toObject(),
-            time: { ...assistant.info.time, completed: Date.now() },
-          })
-        }),
-      { discard: true },
-    )
-    yield* Effect.forEach(
-      lostUnadmittedContinuations,
-      (continuation) =>
-        Effect.gen(function* () {
-          const messages = yield* sessions
-            .messages({ sessionID: SessionID.make(continuation.sessionID) })
-            .pipe(Effect.orDie)
-          yield* Effect.forEach(
-            messages.filter(
-              (message): message is SessionV1.WithParts & { info: SessionV1.Assistant } =>
-                message.info.role === "assistant" &&
-                message.info.parentID === continuation.messageID &&
-                !message.info.time.completed,
-            ),
-            (assistant) =>
-              sessions.updateMessage({
-                ...assistant.info,
-                finish: "error",
-                error: new NamedError.Unknown({
-                  message:
-                    "The continuation process stopped before durable provider admission; the pending continuation will be retried.",
-                }).toObject(),
-                time: { ...assistant.info.time, completed: Date.now() },
-              }),
-            { discard: true },
-          )
-        }),
-      { discard: true },
-    )
-  },
-)
-
 // Coerce a structurally-valid Format value into a Format INSTANCE (see the call site in prompt()).
 const decodeFormatSync = Schema.decodeUnknownSync(SessionV1.Format)
 
@@ -690,7 +427,42 @@ export const layer = Layer.effect(
     )
     const database = yield* Database.Service
     const { db } = database
-    yield* recoverProviderReceiptsOnStartup()
+    yield* db
+      .update(SessionToolRequestReceiptTable)
+      .set({
+        provider_state: "indeterminate_after_crash",
+        terminal_at: Date.now(),
+        request_error_code: "provider_started_outcome_unknown_after_process_restart",
+      })
+      .where(
+        and(
+          inArray(SessionToolRequestReceiptTable.provider_state, ["dispatching", "streaming"] as const),
+          or(
+            isNull(SessionToolRequestReceiptTable.owner_token),
+            ne(SessionToolRequestReceiptTable.owner_token, providerReceiptOwner),
+          ),
+        ),
+      )
+      .run()
+      .pipe(Effect.orDie)
+    yield* db
+      .update(SessionToolRequestReceiptTable)
+      .set({
+        provider_state: "failed",
+        terminal_at: Date.now(),
+        request_error_code: "provider_not_dispatched_before_process_restart",
+      })
+      .where(
+        and(
+          inArray(SessionToolRequestReceiptTable.provider_state, ["preparing", "prepared"] as const),
+          or(
+            isNull(SessionToolRequestReceiptTable.owner_token),
+            ne(SessionToolRequestReceiptTable.owner_token, providerReceiptOwner),
+          ),
+        ),
+      )
+      .run()
+      .pipe(Effect.orDie)
     const activeFederatedContexts = new Map<SessionID, SessionFederatedContext.Resolved>()
     const settleFederatedActivity = (sessionID: SessionID, state: "settled" | "failed" | "interrupted") =>
       Effect.gen(function* () {
@@ -3105,6 +2877,7 @@ export const layer = Layer.effect(
             sessionID,
           }
           yield* sessions.updateMessage(msg)
+          yield* compaction.acknowledgeContinuation({ sessionID, messageID: lastUser.id })
 
           if (finalizerDecision?.capability === "unsupported" && !finalizerAllowsText) {
             msg.error = new NamedError.Unknown({
@@ -3130,18 +2903,6 @@ export const layer = Layer.effect(
             yield* sessions.updateMessage(msg)
           })
 
-          const receiptTerminal: {
-            value?: { state: "settled" } | { state: "failed"; errorCode: string }
-          } = {}
-          const receiptFinalizer: { value?: () => Effect.Effect<void> } = {}
-          const finalizeInterruptedTurn = Effect.uninterruptible(
-            Effect.gen(function* () {
-              yield* finalizeInterruptedAssistant
-              receiptTerminal.value ??= { state: "failed", errorCode: "AbortError" }
-              if (receiptFinalizer.value) yield* receiptFinalizer.value()
-            }),
-          )
-
           const handle = yield* processor
             .create({
               assistantMessage: msg,
@@ -3152,7 +2913,7 @@ export const layer = Layer.effect(
               loopPolicy: finalizerMode || taskActivity ? "error" : "ask",
               noProgressLimit: taskActivity?.maxNoProgress,
             })
-            .pipe(Effect.onInterrupt(() => finalizeInterruptedTurn))
+            .pipe(Effect.onInterrupt(() => finalizeInterruptedAssistant))
 
           const outcome: "break" | "continue" = yield* Effect.gen(function* () {
             sessionFederationRollout = yield* activateFederation()
@@ -3378,32 +3139,6 @@ export const layer = Layer.effect(
                     const receiptID = Hash.sha256(
                       `${sessionID}:provider-request:${requestOrdinal}:${handle.message.id}`,
                     )
-                    const continuation = yield* tx
-                      .select({
-                        runID: CompactionRunTable.run_id,
-                        state: CompactionRunTable.continuation_state,
-                      })
-                      .from(CompactionRunTable)
-                      .innerJoin(CompactionArtifactTable, eq(CompactionArtifactTable.run_id, CompactionRunTable.run_id))
-                      .where(
-                        and(
-                          eq(CompactionRunTable.session_id, sessionID),
-                          eq(CompactionRunTable.state, "committed"),
-                          eq(CompactionRunTable.continuation_state, "pending"),
-                          eq(CompactionArtifactTable.session_id, sessionID),
-                          eq(CompactionArtifactTable.message_id, lastUser.id),
-                          eq(CompactionArtifactTable.state, "committed"),
-                          inArray(CompactionArtifactTable.kind, ["replay", "continue"] as const),
-                        ),
-                      )
-                      .get()
-                    if (continuation && continuation.state !== "pending")
-                      return yield* Effect.die(
-                        new Error(
-                          `compaction continuation is not pending: ${continuation.runID}: ${continuation.state ?? "missing"}`,
-                        ),
-                      )
-                    const admittedAt = Date.now()
                     yield* tx.insert(SessionToolRequestReceiptTable).values({
                       receipt_id: receiptID,
                       request_ordinal: requestOrdinal,
@@ -3432,34 +3167,8 @@ export const layer = Layer.effect(
                       provider_state: "preparing",
                       owner_token: providerReceiptOwner,
                       request_state: "prepared",
-                      created_at: admittedAt,
+                      created_at: Date.now(),
                     })
-                    if (continuation) {
-                      const admitted = yield* tx
-                        .update(CompactionRunTable)
-                        .set({
-                          continuation_state: "admitted",
-                          continuation_receipt_id: receiptID,
-                          continuation_admitted_at: admittedAt,
-                          continuation_dispatching_at: null,
-                          continuation_terminal_at: null,
-                          continuation_error_code: null,
-                          continuation_wakeup_at: admittedAt,
-                        })
-                        .where(
-                          and(
-                            eq(CompactionRunTable.run_id, continuation.runID),
-                            eq(CompactionRunTable.state, "committed"),
-                            eq(CompactionRunTable.continuation_state, "pending"),
-                          ),
-                        )
-                        .returning({ runID: CompactionRunTable.run_id })
-                        .get()
-                      if (!admitted)
-                        return yield* Effect.die(
-                          new Error(`compaction continuation admission CAS lost: ${continuation.runID}`),
-                        )
-                    }
                     return receiptID
                   }),
                 { behavior: "immediate" },
@@ -3518,155 +3227,39 @@ export const layer = Layer.effect(
               values?: Partial<typeof SessionToolRequestReceiptTable.$inferInsert>
             }) =>
               db
-                .transaction(
-                  (tx) =>
-                    Effect.gen(function* () {
-                      const updated = yield* tx
-                        .update(SessionToolRequestReceiptTable)
-                        .set({ ...input.values, provider_state: input.to })
-                        .where(
-                          and(
-                            eq(SessionToolRequestReceiptTable.receipt_id, receiptID),
-                            inArray(SessionToolRequestReceiptTable.provider_state, [...input.from]),
-                          ),
-                        )
-                        .returning({ receiptID: SessionToolRequestReceiptTable.receipt_id })
-                        .get()
-                      if (!updated) {
-                        const current = yield* tx
-                          .select({ state: SessionToolRequestReceiptTable.provider_state })
-                          .from(SessionToolRequestReceiptTable)
-                          .where(eq(SessionToolRequestReceiptTable.receipt_id, receiptID))
-                          .get()
-                        if (current?.state === input.to) return false
-                        return yield* Effect.die(
-                          new Error(
-                            `provider receipt transition conflict: ${receiptID}: ${current?.state ?? "missing"} -> ${input.to}`,
-                          ),
-                        )
-                      }
-
-                      const continuation = yield* tx
-                        .select({
-                          runID: CompactionRunTable.run_id,
-                          state: CompactionRunTable.continuation_state,
-                        })
-                        .from(CompactionRunTable)
-                        .where(eq(CompactionRunTable.continuation_receipt_id, receiptID))
-                        .get()
-                      if (!continuation || input.to === "streaming") return true
-                      const target =
-                        input.to === "dispatching"
-                          ? "dispatching"
-                          : input.to === "settled"
-                            ? "settled"
-                            : input.to === "failed"
-                              ? "failed"
-                              : undefined
-                      if (!target) return true
-                      const expected: readonly ("admitted" | "dispatching")[] =
-                        target === "dispatching"
-                          ? ["admitted"]
-                          : target === "settled"
-                            ? ["dispatching"]
-                            : ["admitted", "dispatching"]
-                      if (continuation.state !== "admitted" && continuation.state !== "dispatching")
-                        return yield* Effect.die(
-                          new Error(
-                            `compaction continuation transition conflict: ${continuation.runID}: ${continuation.state ?? "missing"} -> ${target}`,
-                          ),
-                        )
-                      const transitionedAt = Date.now()
-                      const continuationUpdated = yield* tx
-                        .update(CompactionRunTable)
-                        .set({
-                          continuation_state: target,
-                          ...(target === "dispatching"
-                            ? {
-                                continuation_dispatching_at:
-                                  typeof input.values?.dispatching_at === "number"
-                                    ? input.values.dispatching_at
-                                    : transitionedAt,
-                              }
-                            : {
-                                continuation_terminal_at:
-                                  typeof input.values?.terminal_at === "number"
-                                    ? input.values.terminal_at
-                                    : transitionedAt,
-                                continuation_error_code:
-                                  target === "failed" ? (input.values?.request_error_code ?? "provider_error") : null,
-                              }),
-                        })
-                        .where(
-                          and(
-                            eq(CompactionRunTable.run_id, continuation.runID),
-                            inArray(CompactionRunTable.continuation_state, expected),
-                          ),
-                        )
-                        .returning({ runID: CompactionRunTable.run_id })
-                        .get()
-                      if (!continuationUpdated)
-                        return yield* Effect.die(
-                          new Error(`compaction continuation transition CAS lost: ${continuation.runID}`),
-                        )
-                      return true
-                    }),
-                  { behavior: "immediate" },
+                .update(SessionToolRequestReceiptTable)
+                .set({ ...input.values, provider_state: input.to })
+                .where(
+                  and(
+                    eq(SessionToolRequestReceiptTable.receipt_id, receiptID),
+                    inArray(SessionToolRequestReceiptTable.provider_state, [...input.from]),
+                  ),
                 )
-                .pipe(Effect.orDie)
-            const finalizeReceipt = () =>
-              Effect.gen(function* () {
-                const terminal = receiptTerminal.value
-                if (!terminal)
-                  return yield* Effect.die(new Error(`provider response terminal intent is missing: ${receiptID}`))
-                const finalResponse = (yield* sessions.messages({ sessionID }).pipe(Effect.orDie)).find(
-                  (message) => message.info.id === handle.message.id,
+                .returning({ receiptID: SessionToolRequestReceiptTable.receipt_id })
+                .get()
+                .pipe(
+                  Effect.orDie,
+                  Effect.flatMap((updated) => {
+                    if (updated) return Effect.succeed(true)
+                    return db
+                      .select({ state: SessionToolRequestReceiptTable.provider_state })
+                      .from(SessionToolRequestReceiptTable)
+                      .where(eq(SessionToolRequestReceiptTable.receipt_id, receiptID))
+                      .get()
+                      .pipe(
+                        Effect.orDie,
+                        Effect.flatMap((current) =>
+                          current?.state === input.to
+                            ? Effect.succeed(false)
+                            : Effect.die(
+                                new Error(
+                                  `provider receipt transition conflict: ${receiptID}: ${current?.state ?? "missing"} -> ${input.to}`,
+                                ),
+                              ),
+                        ),
+                      )
+                  }),
                 )
-                if (!finalResponse)
-                  return yield* Effect.die(new Error(`provider response is missing: ${handle.message.id}`))
-                const responseFingerprint = providerResponseFingerprint(finalResponse)
-                const finalized = yield* transitionReceipt({
-                  from:
-                    terminal.state === "settled"
-                      ? (["dispatching", "streaming"] as const)
-                      : (["preparing", "prepared", "dispatching", "streaming"] as const),
-                  to: terminal.state,
-                  values: {
-                    call_ids: finalResponse.parts.flatMap((part) => (part.type === "tool" ? [part.callID] : [])),
-                    response_fingerprint: responseFingerprint,
-                    terminal_at: Date.now(),
-                    request_error_code: terminal.state === "failed" ? terminal.errorCode : null,
-                  },
-                })
-                if (!finalized) {
-                  const current = yield* db
-                    .select({
-                      state: SessionToolRequestReceiptTable.provider_state,
-                      responseFingerprint: SessionToolRequestReceiptTable.response_fingerprint,
-                    })
-                    .from(SessionToolRequestReceiptTable)
-                    .where(eq(SessionToolRequestReceiptTable.receipt_id, receiptID))
-                    .get()
-                    .pipe(Effect.orDie)
-                  if (current?.state !== terminal.state || current.responseFingerprint !== responseFingerprint)
-                    return yield* Effect.die(
-                      new Error(`provider response receipt terminal replay diverged: ${receiptID}`),
-                    )
-                }
-                receiptFinalizer.value = undefined
-              })
-            receiptFinalizer.value = finalizeReceipt
-            const turnSettled = { value: false }
-            const settleProviderTurn = () =>
-              Effect.gen(function* () {
-                if (turnSettled.value) return
-                yield* finalizeReceipt()
-                turnSettled.value = true
-                // Summary diffs mutate user-message metadata. Run them only after the Provider
-                // receipt is terminal so cancellation cannot strand an admitted request.
-                if (step === 1 && !finalizerMode)
-                  yield* summary.summarize({ sessionID, messageID: lastUser.id }).pipe(Effect.ignore)
-              })
             const prepareAdapterReceipt = (input: {
               finalRequestHash: string
               promptCacheKey?: string
@@ -3774,45 +3367,42 @@ export const layer = Layer.effect(
                     })
                     if (transitioned && providerAttempt) yield* providerAttempt.streaming.pipe(Effect.orDie)
                   }),
-                // Processor cleanup durably completes the assistant after these callbacks. Keep the
-                // terminal intent in memory until that cleanup and the response fingerprint are ready,
-                // then commit the receipt and continuation terminal states together below.
                 settled: () =>
                   Effect.gen(function* () {
-                    receiptTerminal.value = { state: "settled" }
-                    if (providerAttempt) yield* providerAttempt.settled.pipe(Effect.orDie)
+                    const transitioned = yield* transitionReceipt({
+                      from: ["dispatching", "streaming"],
+                      to: "settled",
+                      values: { terminal_at: Date.now() },
+                    })
+                    if (transitioned && providerAttempt) yield* providerAttempt.settled.pipe(Effect.orDie)
                   }),
                 failed: (error) =>
                   Effect.gen(function* () {
-                    receiptTerminal.value ??= {
-                      state: "failed",
-                      errorCode: error instanceof Error ? error.name : "provider_error",
-                    }
-                    if (providerAttempt) yield* providerAttempt.failed(error).pipe(Effect.orDie)
+                    const transitioned = yield* transitionReceipt({
+                      from: ["preparing", "prepared", "dispatching", "streaming"],
+                      to: "failed",
+                      values: {
+                        terminal_at: Date.now(),
+                        request_error_code: error instanceof Error ? error.name : "provider_error",
+                      },
+                    })
+                    if (transitioned && providerAttempt) yield* providerAttempt.failed(error).pipe(Effect.orDie)
                   }),
                 rejected: ({ budget, reason }) =>
-                  Effect.gen(function* () {
-                    receiptTerminal.value = { state: "failed", errorCode: reason }
-                    yield* db
-                      .update(SessionToolRequestReceiptTable)
-                      .set({
-                        estimated_input_tokens: budget.estimatedFullRequestTokens,
-                        physical_input_budget: budget.physicalInputBudget,
-                        reserved_output_tokens: budget.reservedOutputTokens,
-                        safety_margin_tokens: budget.safetyMargin,
-                        context_limit_provenance: budget.provenance,
-                        request_state: "rejected",
-                        request_error_code: reason,
-                      })
-                      .where(
-                        and(
-                          eq(SessionToolRequestReceiptTable.receipt_id, receiptID),
-                          eq(SessionToolRequestReceiptTable.provider_state, "preparing"),
-                        ),
-                      )
-                      .run()
-                      .pipe(Effect.orDie)
-                  }),
+                  transitionReceipt({
+                    from: ["preparing", "prepared"],
+                    to: "failed",
+                    values: {
+                      estimated_input_tokens: budget.estimatedFullRequestTokens,
+                      physical_input_budget: budget.physicalInputBudget,
+                      reserved_output_tokens: budget.reservedOutputTokens,
+                      safety_margin_tokens: budget.safetyMargin,
+                      context_limit_provenance: budget.provenance,
+                      request_state: "rejected",
+                      request_error_code: reason,
+                      terminal_at: Date.now(),
+                    },
+                  }).pipe(Effect.asVoid),
                 aiSdkInput: (input) => writeArgumentReceipt({ layer: "ai_sdk_input", ...input }),
                 rawFrame: (input) => writeArgumentReceipt({ layer: "raw_frame", ...input }),
                 adapterAssembly: (input) => writeArgumentReceipt({ layer: "adapter_assembly", ...input }),
@@ -3834,16 +3424,35 @@ export const layer = Layer.effect(
                   ),
               },
             })
+            // Summary diffs update user-message metadata covered by the history authority hash.
+            // Persist them only after this provider turn settles so they cannot race dispatch.
+            if (step === 1 && !finalizerMode)
+              yield* summary.summarize({ sessionID, messageID: lastUser.id }).pipe(Effect.ignore)
             const response = (yield* sessions.messages({ sessionID }).pipe(Effect.orDie)).find(
               (message) => message.info.id === handle.message.id,
             )
             if (!response) return yield* Effect.die(new Error(`provider response is missing: ${handle.message.id}`))
+            const responseFingerprint = Hash.sha256(stableJson(response))
+            const observedCallIds = response.parts.flatMap((part) => (part.type === "tool" ? [part.callID] : []))
+            const finalized = yield* db
+              .update(SessionToolRequestReceiptTable)
+              .set({ call_ids: observedCallIds, response_fingerprint: responseFingerprint })
+              .where(
+                and(
+                  eq(SessionToolRequestReceiptTable.receipt_id, receiptID),
+                  inArray(SessionToolRequestReceiptTable.provider_state, ["settled", "failed"] as const),
+                ),
+              )
+              .returning({ receiptID: SessionToolRequestReceiptTable.receipt_id })
+              .get()
+              .pipe(Effect.orDie)
+            if (!finalized)
+              return yield* Effect.die(new Error(`provider response receipt is not terminal: ${receiptID}`))
 
             if (structured !== undefined) {
               handle.message.structured = structured
               handle.message.finish = handle.message.finish ?? "stop"
               yield* sessions.updateMessage(handle.message)
-              yield* settleProviderTurn()
               return "break" as const
             }
 
@@ -3853,10 +3462,7 @@ export const layer = Layer.effect(
                 response.parts.some(
                   (part) => part.type === "text" && !part.synthetic && !part.ignored && part.text.trim() !== "",
                 )
-              if (hasTextFallback) {
-                yield* settleProviderTurn()
-                return "break" as const
-              }
+              if (hasTextFallback) return "break" as const
               if (!handle.message.error) {
                 handle.message.error = new SessionV1.StructuredOutputError({
                   message: "Finalizer did not produce valid structured output",
@@ -3864,7 +3470,6 @@ export const layer = Layer.effect(
                 }).toObject()
                 yield* sessions.updateMessage(handle.message)
               }
-              yield* settleProviderTurn()
               return "break" as const
             }
 
@@ -3876,7 +3481,6 @@ export const layer = Layer.effect(
                   retries: 0,
                 }).toObject()
                 yield* sessions.updateMessage(handle.message)
-                yield* settleProviderTurn()
                 return "break" as const
               }
             }
@@ -3916,7 +3520,6 @@ export const layer = Layer.effect(
                     retries: structuredFailedAttempts,
                   }).toObject()
                   yield* sessions.updateMessage(handle.message)
-                  yield* settleProviderTurn()
                   yield* slog.warn("structured-output retry cap reached", {
                     attempts: structuredFailedAttempts,
                     retryMax,
@@ -3928,7 +3531,6 @@ export const layer = Layer.effect(
                 // correction text appears as a user instruction in the next model context —
                 // not as assistant output (which the model treats with lower compliance).
                 if (fields.length > 0) {
-                  yield* settleProviderTurn()
                   yield* injectTailReminder(
                     sessionID,
                     `[structured-output correction] Your StructuredOutput call did not match the required schema. Required top-level fields: ${fieldList}. Please call StructuredOutput again using EXACTLY these field names.`,
@@ -3940,7 +3542,6 @@ export const layer = Layer.effect(
               }
             }
 
-            yield* settleProviderTurn()
             if (result === "stop") return "break" as const
             if (result === "compact") {
               // V4.0.1 P0 — a turn-internal hard compaction (the provider signalled overflow mid-stream).
@@ -3965,7 +3566,7 @@ export const layer = Layer.effect(
             return "continue" as const
           }).pipe(
             Effect.ensuring(instruction.clear(handle.message.id)),
-            Effect.onInterrupt(() => finalizeInterruptedTurn),
+            Effect.onInterrupt(() => finalizeInterruptedAssistant),
           )
           // V4.1 §S1.1 needsFollowUp: the model finished this step (outcome === "break"), but if a steer
           // arrived while it was running, do NOT exit — loop once more so the top-of-loop drain absorbs
@@ -4956,18 +4557,8 @@ function stableJson(value: unknown, seen = new WeakSet<object>()): string {
   return result
 }
 
-/** @internal Exported for deterministic receipt verification. */
-function providerResponseFingerprint(response: SessionV1.WithParts) {
-  return Hash.sha256(stableJson(response))
-}
-
 /** @internal Exported for testing */
-export {
-  buildStructuredOutputRuntimeTail,
-  buildStructuredOutputSystemPrompt,
-  extractSchemaTopLevelFields,
-  providerResponseFingerprint,
-}
+export { buildStructuredOutputRuntimeTail, buildStructuredOutputSystemPrompt, extractSchemaTopLevelFields }
 
 export function createStructuredOutputTool(input: {
   schema: Record<string, any>

@@ -8,6 +8,7 @@ import { useRoute } from "../../context/route"
 import { useDialog, type DialogContext } from "../../ui/dialog"
 import type { PromptInfo } from "../../component/prompt/history"
 import { stripPromptPartIDs as strip } from "../../prompt/part"
+import { acquireForkIntent, completeForkIntent } from "../../util/session"
 
 export function DialogForkFromTimeline(props: { sessionID: string; onMove: (messageID?: string) => void }) {
   const sync = useSync()
@@ -25,7 +26,10 @@ export function DialogForkFromTimeline(props: { sessionID: string; onMove: (mess
       title: "Full session",
       value: undefined,
       onSelect: async (dialog: DialogContext) => {
-        const forked = await sdk.client.session.fork({ sessionID: props.sessionID })
+        const intentKey = `${props.sessionID}:full`
+        const intentID = acquireForkIntent(intentKey)
+        const forked = await sdk.client.session.fork({ sessionID: props.sessionID, intentID })
+        if (forked.data) completeForkIntent(intentKey, intentID)
         route.navigate({
           sessionID: forked.data!.id,
           type: "session",
@@ -45,10 +49,14 @@ export function DialogForkFromTimeline(props: { sessionID: string; onMove: (mess
         value: message.id,
         footer: Locale.time(message.time.created),
         onSelect: async (dialog) => {
+          const intentKey = `${props.sessionID}:${message.id}`
+          const intentID = acquireForkIntent(intentKey)
           const forked = await sdk.client.session.fork({
             sessionID: props.sessionID,
             messageID: message.id,
+            intentID,
           })
+          if (forked.data) completeForkIntent(intentKey, intentID)
           const parts = sync.data.part[message.id] ?? []
           const prompt = parts.reduce(
             (agg, part) => {

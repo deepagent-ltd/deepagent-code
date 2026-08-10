@@ -53,7 +53,7 @@ describe("session action routes", () => {
         const forked = yield* requestInDirectory(`/session/${session.id}/fork`, test.directory, {
           method: "POST",
           headers,
-          body: JSON.stringify({}),
+          body: JSON.stringify({ intentID: "session-actions-fork" }),
         })
         expect(forked.status).toBe(200)
 

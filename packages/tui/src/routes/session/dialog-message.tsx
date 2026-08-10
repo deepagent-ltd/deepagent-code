@@ -6,6 +6,7 @@ import { useRoute } from "../../context/route"
 import { useClipboard } from "../../context/clipboard"
 import type { PromptInfo } from "../../component/prompt/history"
 import { stripPromptPartIDs as strip } from "../../prompt/part"
+import { acquireForkIntent, completeForkIntent } from "../../util/session"
 
 export function DialogMessage(props: {
   messageID: string
@@ -78,10 +79,14 @@ export function DialogMessage(props: {
           value: "session.fork",
           description: "create a new session",
           onSelect: async (dialog) => {
+            const intentKey = `${props.sessionID}:${props.messageID}`
+            const intentID = acquireForkIntent(intentKey)
             const result = await sdk.client.session.fork({
               sessionID: props.sessionID,
               messageID: props.messageID,
+              intentID,
             })
+            if (result.data) completeForkIntent(intentKey, intentID)
             const msg = message()
             const prompt = msg
               ? sync.data.part[msg.id].reduce(

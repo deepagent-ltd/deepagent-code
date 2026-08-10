@@ -33,7 +33,7 @@ import {
 } from "./environment"
 import { color, printHeader, printResults } from "./report"
 import { coverageResult, parseOptions, routeKey, routeKeys, selectedScenarios } from "./routing"
-import { runScenario } from "./runner"
+import { runScenario, verifyValidCredentials } from "./runner"
 import { disposeApps } from "./backend"
 import { runtime } from "./runtime"
 import { type Scenario } from "./types"
@@ -1044,6 +1044,26 @@ const scenarios: Scenario[] = [
       check(body.title === "Get me", "should preserve seeded title")
     }),
   http.protected
+    .get("/session/{sessionID}/context", "session.contextDiagnostics")
+    .seeded((ctx) => ctx.session({ title: "HTTP API Context Diagnostics" }))
+    .at((ctx) => ({
+      path: route("/session/{sessionID}/context", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+    }))
+    .json(200, object, "status"),
+  http.protected
+    .post("/session/{sessionID}/context/attempt/{attemptID}/resolve", "session.contextAttemptResolve")
+    .seeded((ctx) => ctx.session({ title: "HTTP API Context Attempt" }))
+    .at((ctx) => ({
+      path: route("/session/{sessionID}/context/attempt/{attemptID}/resolve", {
+        sessionID: ctx.state.id,
+        attemptID: "attempt_httpapi_missing",
+      }),
+      headers: ctx.headers(),
+      body: { decision: "abandoned", reason: "operator verified no provider work committed" },
+    }))
+    .status(400, undefined, "status"),
+  http.protected
     .get("/session/{sessionID}/plan", "session.plan")
     .seeded((ctx) => ctx.session({ title: "Plan snapshot session" }))
     .at((ctx) => ({
@@ -1256,7 +1276,7 @@ const scenarios: Scenario[] = [
     .at((ctx) => ({
       path: route("/session/{sessionID}/fork", { sessionID: ctx.state.id }),
       headers: ctx.headers(),
-      body: {},
+      body: { intentID: "httpapi-session-fork" },
     }))
     .json(
       200,
@@ -1651,6 +1671,15 @@ const main = Effect.gen(function* () {
     database: exerciseDatabasePath,
     global: exerciseGlobalRoot,
   })
+
+  // Protected routes share one Authorization middleware. Exercise valid credentials once on a
+  // read-only global route; generic valid requests can otherwise invoke optional-payload mutations.
+  if (options.mode === "auth") {
+    const scenario = scenarios.find((item) => item.kind === "active" && item.name === "global.capabilities")
+    if (!scenario || scenario.kind !== "active")
+      return yield* Effect.fail(new Error("missing side-effect-free valid credential probe"))
+    yield* verifyValidCredentials(scenario)
+  }
 
   const results =
     options.mode === "coverage"

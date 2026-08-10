@@ -15,6 +15,7 @@ import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { MessageID, SessionID } from "./schema"
 import type { Receipt } from "./prompt-intent"
 import { SessionMutationEpoch } from "./mutation-epoch"
+import { SessionPromptEpochTable } from "./prompt-epoch.sql"
 
 // V4.1 §S1.1 — the durable mid-turn STEER buffer.
 //
@@ -102,6 +103,10 @@ export interface Interface {
   ) => Effect.Effect<void>
   // Non-consuming peek used by the loop's needsFollowUp decision. `delivery` (default "steer") scopes it.
   readonly hasPending: (sessionID: SessionID, delivery?: Delivery) => Effect.Effect<boolean>
+  // Reserve a stable history timestamp immediately before V1 materialization. It is ordered strictly
+  // after the active PromptEpoch boundary so a steer admitted before compaction cannot sort into the
+  // retired physical prefix. The reservation is durable and reused by crash retries.
+  readonly materializationTime: (admitted: Admitted) => Effect.Effect<number, SessionMutationEpoch.Stale>
   readonly materialize: (input: {
     readonly admitted: Admitted
     readonly info: SessionV1.User
@@ -315,6 +320,80 @@ export const layer = Layer.effect(
       return row !== undefined
     })
 
+    const materializationTime: Interface["materializationTime"] = Effect.fn("SessionSteer.materializationTime")(
+      function* (admitted) {
+        return yield* db
+          .transaction(
+            (tx) =>
+              Effect.gen(function* () {
+                const session = yield* tx
+                  .select({ mutationEpoch: SessionTable.mutation_epoch })
+                  .from(SessionTable)
+                  .where(eq(SessionTable.id, admitted.sessionID))
+                  .get()
+                  .pipe(Effect.orDie)
+                if (!session) return yield* Effect.die(`Session not found: ${admitted.sessionID}`)
+                if (session.mutationEpoch !== admitted.mutationEpoch)
+                  return yield* Effect.fail(
+                    new SessionMutationEpoch.Stale({
+                      sessionID: admitted.sessionID,
+                      observed: admitted.mutationEpoch,
+                      current: session.mutationEpoch,
+                    }),
+                  )
+                const steer = yield* tx
+                  .select({ materialized_at: SessionSteerTable.materialized_at })
+                  .from(SessionSteerTable)
+                  .where(
+                    and(
+                      eq(SessionSteerTable.id, admitted.id),
+                      eq(SessionSteerTable.mutation_epoch, session.mutationEpoch),
+                      isNull(SessionSteerTable.consumed_seq),
+                      isNull(SessionSteerTable.superseded_at),
+                    ),
+                  )
+                  .get()
+                  .pipe(Effect.orDie)
+                if (!steer) return yield* Effect.die(`Pending steer not found: ${admitted.id}`)
+                if (steer.materialized_at !== null) return steer.materialized_at
+                const epoch = yield* tx
+                  .select({ source_end_message_id: SessionPromptEpochTable.source_end_message_id })
+                  .from(SessionPromptEpochTable)
+                  .where(
+                    and(
+                      eq(SessionPromptEpochTable.session_id, admitted.sessionID),
+                      eq(SessionPromptEpochTable.state, "active"),
+                    ),
+                  )
+                  .get()
+                  .pipe(Effect.orDie)
+                const boundary = epoch?.source_end_message_id
+                  ? yield* tx
+                      .select({ time_created: MessageTable.time_created })
+                      .from(MessageTable)
+                      .where(eq(MessageTable.id, MessageID.make(epoch.source_end_message_id)))
+                      .get()
+                      .pipe(Effect.orDie)
+                  : undefined
+                const materializedAt = Math.max(
+                  DateTime.toEpochMillis(yield* DateTime.now),
+                  (boundary?.time_created ?? -1) + 1,
+                )
+                const reserved = yield* tx
+                  .update(SessionSteerTable)
+                  .set({ materialized_at: materializedAt })
+                  .where(and(eq(SessionSteerTable.id, admitted.id), isNull(SessionSteerTable.materialized_at)))
+                  .returning({ materialized_at: SessionSteerTable.materialized_at })
+                  .get()
+                  .pipe(Effect.orDie)
+                return reserved?.materialized_at ?? materializedAt
+              }),
+            { behavior: "immediate" },
+          )
+          .pipe(Effect.catchTag("SqlError", Effect.die))
+      },
+    )
+
     const materialize: Interface["materialize"] = Effect.fn("SessionSteer.materialize")(function* (input) {
       if (String(input.info.id) !== String(input.admitted.id) || input.info.sessionID !== input.admitted.sessionID)
         return yield* Effect.die("SessionSteer.materialize: message identity does not match admitted steer")
@@ -428,7 +507,7 @@ export const layer = Layer.effect(
         .pipe(Effect.catchTag("SqlError", Effect.die))
     })
 
-    return Service.of({ admit, pending, markConsumed, hasPending, materialize })
+    return Service.of({ admit, pending, markConsumed, hasPending, materializationTime, materialize })
   }),
 )
 
