@@ -1,5 +1,5 @@
 import { NodeHttpServer, NodeServices } from "@effect/platform-node"
-import { Config, Layer } from "effect"
+import { Config, ConfigProvider, Layer } from "effect"
 import { HttpClient, HttpClientRequest, HttpRouter, HttpServer } from "effect/unstable/http"
 import { layerWebSocketConstructorGlobal } from "effect/unstable/socket/Socket"
 import { HttpApiApp } from "../../src/server/routes/instance/httpapi/server"
@@ -12,11 +12,16 @@ const servedRoutes: Layer.Layer<never, Config.ConfigError, HttpServer.HttpServer
   },
 )
 
-export const httpApiLayer = servedRoutes.pipe(
-  Layer.provide(layerWebSocketConstructorGlobal),
-  Layer.provideMerge(NodeHttpServer.layerTest),
-  Layer.provideMerge(NodeServices.layer),
-)
+export function httpApiLayerWithConfig(input: Record<string, unknown>) {
+  return servedRoutes.pipe(
+    Layer.provide(layerWebSocketConstructorGlobal),
+    Layer.provideMerge(NodeHttpServer.layerTest),
+    Layer.provideMerge(NodeServices.layer),
+    Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown(input))),
+  )
+}
+
+export const httpApiLayer = httpApiLayerWithConfig({})
 
 export function request(path: string, init?: RequestInit) {
   const url = new URL(path, "http://localhost")
