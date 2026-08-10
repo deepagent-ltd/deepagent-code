@@ -1383,8 +1383,11 @@ const scenarios: Scenario[] = [
         parts: [{ type: "text", text: "hello async" }],
       },
     }))
-    .status(204, (ctx) =>
+    .status(200, (body, ctx) =>
       Effect.gen(function* () {
+        object(body)
+        check(typeof body.messageID === "string" && body.messageID.length > 0, "async prompt should return message ID")
+        check(body.delivery === "turn", "async prompt should return the durable delivery mode")
         yield* ctx.llmWait(1)
       }),
     ),
