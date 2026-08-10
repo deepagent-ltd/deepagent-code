@@ -3,18 +3,13 @@ import { Bonjour } from "bonjour-service"
 
 const log = Log.create({ service: "mdns" })
 
-let bonjour: Bonjour | undefined
-let currentPort: number | undefined
-
 export function publish(port: number, domain?: string) {
-  if (currentPort === port) return
-  if (bonjour) unpublish()
-
+  let bonjour: Bonjour | undefined
   try {
+    const instance = (bonjour = new Bonjour())
     const host = domain ?? "deepagent-code.local"
     const name = `deepagent-code-${port}`
-    bonjour = new Bonjour()
-    const service = bonjour.publish({
+    const service = instance.publish({
       name,
       type: "http",
       host,
@@ -30,30 +25,32 @@ export function publish(port: number, domain?: string) {
       log.error("mDNS service error", { error: err })
     })
 
-    currentPort = port
+    let unpublished = false
+    return {
+      unpublish() {
+        if (unpublished) return
+        unpublished = true
+        try {
+          instance.unpublishAll()
+        } catch (err) {
+          log.error("mDNS unpublish failed", { error: err })
+        }
+        try {
+          instance.destroy()
+        } catch (err) {
+          log.error("mDNS destroy failed", { error: err })
+        }
+        log.info("mDNS service unpublished")
+      },
+    }
   } catch (err) {
     log.error("mDNS publish failed", { error: err })
-    if (bonjour) {
-      try {
-        bonjour.destroy()
-      } catch {}
-    }
-    bonjour = undefined
-    currentPort = undefined
-  }
-}
-
-export function unpublish() {
-  if (bonjour) {
     try {
-      bonjour.unpublishAll()
-      bonjour.destroy()
-    } catch (err) {
-      log.error("mDNS unpublish failed", { error: err })
+      bonjour?.destroy()
+    } catch (destroyError) {
+      log.error("mDNS destroy failed", { error: destroyError })
     }
-    bonjour = undefined
-    currentPort = undefined
-    log.info("mDNS service unpublished")
+    return { unpublish() {} }
   }
 }
 
