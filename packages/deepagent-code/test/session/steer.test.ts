@@ -798,6 +798,13 @@ on.instance(
       const messages = yield* sessions.messages({ sessionID: chat.id })
       const persisted = messages.filter((message) => message.info.id === receipt.messageID)
       expect(persisted).toHaveLength(1)
+      expect(persisted[0]?.info.role === "user" ? persisted[0].info.metadata : undefined).toMatchObject({
+        deepagent: {
+          promptAdmission: {
+            clientMessageID,
+          },
+        },
+      })
       expect(
         persisted[0]?.parts.filter((part) => part.type === "text" && part.text === "STEERED-ASYNC"),
       ).toHaveLength(1)

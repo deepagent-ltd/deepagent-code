@@ -1,5 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, mock, test } from "bun:test"
-import type { Prompt } from "@/context/prompt"
+import type { ContextItem, Prompt } from "@/context/prompt"
 
 let createPromptSubmit: typeof import("./submit").createPromptSubmit
 
@@ -33,6 +33,8 @@ const sentPromptAsync: Array<{
   directory: string
   metadata?: unknown
   text?: string
+  parts?: Array<{ id?: string; type: string; text?: string }>
+  messageID?: string
   intentID?: string
   intentSource?: string
   intentVariant?: string
@@ -48,8 +50,10 @@ let variant: string | undefined
 let promptMode: "direct" | "intelligence" | "wish" = "direct"
 let appLocale = "en"
 let releaseDelayedPrompt: (() => void) | undefined
+const rejectedAdmissionReceipts = new Set<string>()
 
 const promptValue: Prompt = [{ type: "text", content: "ls", start: 0, end: 2 }]
+const promptContextItems: Array<ContextItem & { key: string }> = []
 const flushAsyncSubmit = () => new Promise((resolve) => setTimeout(resolve, 0))
 
 const clientFor = (directory: string) => {
@@ -73,6 +77,7 @@ const clientFor = (directory: string) => {
       promptAsync: async (payload?: {
         metadata?: unknown
         parts?: Array<{ type: string; text?: string }>
+        messageID?: string
         intentID?: string
         intentSource?: string
         intentVariant?: string
@@ -81,11 +86,20 @@ const clientFor = (directory: string) => {
           directory,
           metadata: payload?.metadata,
           text: payload?.parts?.find((part) => part.type === "text")?.text,
+          parts: payload?.parts,
+          messageID: payload?.messageID,
           intentID: payload?.intentID,
           intentSource: payload?.intentSource,
           intentVariant: payload?.intentVariant,
         }
         sentPromptAsync.push(sent)
+        if (
+          (sent.text === "receipt lost" || sent.text === "Edited retry goal") &&
+          !rejectedAdmissionReceipts.has(sent.text)
+        ) {
+          rejectedAdmissionReceipts.add(sent.text)
+          throw new Error("connection closed after durable admission")
+        }
         if (sent.text === "prompt waits after admission") {
           await new Promise<void>((resolve) => {
             releaseDelayedPrompt = resolve
@@ -140,8 +154,8 @@ const clientFor = (directory: string) => {
           }
         }
         const result = {
-          prompt_draft_id: "prompt_draft:test:1",
-          context_plan_id: "context_plan:test:1",
+          prompt_draft_id: `prompt_draft:test:${preparedDrafts.length}`,
+          context_plan_id: `context_plan:test:${preparedDrafts.length}`,
           state: "draft_ready",
           mode: payload.body?.mode ?? "intelligence",
           route: text === "hello" ? "general" : "code",
@@ -228,9 +242,14 @@ beforeAll(async () => {
       reset: () => undefined,
       set: () => undefined,
       context: {
-        add: () => undefined,
-        remove: () => undefined,
-        items: () => [],
+        add: (item: ContextItem) => {
+          promptContextItems.push({ ...item, key: `restored:${promptContextItems.length}:${item.path}` })
+        },
+        remove: (key: string) => {
+          const index = promptContextItems.findIndex((item) => item.key === key)
+          if (index >= 0) promptContextItems.splice(index, 1)
+        },
+        items: () => promptContextItems,
       },
     }),
   }))
@@ -351,6 +370,7 @@ beforeEach(() => {
   sentPromptAsync.length = 0
   promptPrepareEvents.length = 0
   promptPrepareProgress.length = 0
+  promptContextItems.length = 0
   promptValue[0] = { type: "text", content: "ls", start: 0, end: 2 }
   selected = "/repo/worktree-a"
   variant = undefined
@@ -358,6 +378,7 @@ beforeEach(() => {
   appLocale = "en"
   releaseDelayedPrompt?.()
   releaseDelayedPrompt = undefined
+  rejectedAdmissionReceipts.clear()
   for (const key of Object.keys(storedSessions)) delete storedSessions[key]
 })
 
@@ -787,6 +808,115 @@ describe("prompt submit worktree selection", () => {
     await cancel
     expect(canceled).toBe(true)
     expect(sentPromptAsync).toHaveLength(1)
+    promptValue[0] = { type: "text", content: "ls", start: 0, end: 2 }
+  })
+
+  test("reuses submission identity when the durable admission receipt is lost", async () => {
+    params = { id: "session-1" }
+    promptValue[0] = { type: "text", content: "receipt lost", start: 0, end: 12 }
+    const context = {
+      type: "file" as const,
+      path: "src/retry.ts",
+      comment: "keep this review context",
+      commentID: "comment-1",
+      key: "original-ui-key",
+    }
+    promptContextItems.push(context, {
+      type: "file",
+      path: "src/reference.ts",
+      key: "reference-ui-key",
+    })
+
+    const submit = createPromptSubmit({
+      info: () => ({ id: "session-1" }),
+      imageAttachments: () => [],
+      commentCount: () => 0,
+      autoAccept: () => false,
+      mode: () => "normal",
+      working: () => false,
+      editor: () => undefined,
+      queueScroll: () => undefined,
+      promptLength: (value) => value.reduce((sum, part) => sum + ("content" in part ? part.content.length : 0), 0),
+      addToHistory: () => undefined,
+      resetHistoryNavigation: () => undefined,
+      setMode: () => undefined,
+      setPopover: () => undefined,
+      onSubmit: () => undefined,
+    })
+
+    const event = { preventDefault: () => undefined } as unknown as Event
+    await submit.handleSubmit(event)
+    await flushAsyncSubmit()
+
+    expect(promptContextItems.find((item) => item.commentID === context.commentID)?.key).not.toBe(context.key)
+
+    await submit.handleSubmit(event)
+    await flushAsyncSubmit()
+
+    expect(sentPromptAsync).toHaveLength(2)
+    expect(sentPromptAsync[0]?.messageID).toBeDefined()
+    expect(sentPromptAsync[1]?.messageID).toBe(sentPromptAsync[0]?.messageID)
+    expect(sentPromptAsync[0]?.intentID).toBeDefined()
+    expect(sentPromptAsync[1]?.intentID).toBe(sentPromptAsync[0]?.intentID)
+    expect(sentPromptAsync[1]?.parts).toEqual(sentPromptAsync[0]?.parts)
+
+    promptContextItems.push({ ...context, key: "new-ui-key-after-success" })
+    await submit.handleSubmit(event)
+    await flushAsyncSubmit()
+
+    expect(sentPromptAsync).toHaveLength(3)
+    expect(sentPromptAsync[2]?.messageID).not.toBe(sentPromptAsync[0]?.messageID)
+    expect(sentPromptAsync[2]?.intentID).not.toBe(sentPromptAsync[0]?.intentID)
+    promptValue[0] = { type: "text", content: "ls", start: 0, end: 2 }
+  })
+
+  test("reuses the final prepared payload when an intelligence admission receipt is lost", async () => {
+    params = { id: "session-1" }
+    promptMode = "intelligence"
+    promptValue[0] = { type: "text", content: "intelligence receipt lost", start: 0, end: 25 }
+    let confirms = 0
+
+    const submit = createPromptSubmit({
+      info: () => ({ id: "session-1" }),
+      imageAttachments: () => [],
+      commentCount: () => 0,
+      autoAccept: () => false,
+      mode: () => "normal",
+      working: () => false,
+      editor: () => undefined,
+      queueScroll: () => undefined,
+      promptLength: (value) => value.reduce((sum, part) => sum + ("content" in part ? part.content.length : 0), 0),
+      addToHistory: () => undefined,
+      resetHistoryNavigation: () => undefined,
+      setMode: () => undefined,
+      setPopover: () => undefined,
+      confirmPromptDraft: async () => {
+        confirms += 1
+        return { editedGoal: "Edited retry goal" }
+      },
+      onSubmit: () => undefined,
+    })
+
+    const event = { preventDefault: () => undefined } as unknown as Event
+    await submit.handleSubmit(event)
+    await flushAsyncSubmit()
+    await submit.handleSubmit(event)
+    await flushAsyncSubmit()
+
+    expect(preparedDrafts).toHaveLength(1)
+    expect(confirms).toBe(1)
+    expect(sentPromptAsync).toHaveLength(2)
+    expect(sentPromptAsync[1]?.messageID).toBe(sentPromptAsync[0]?.messageID)
+    expect(sentPromptAsync[1]?.intentID).toBe(sentPromptAsync[0]?.intentID)
+    expect(sentPromptAsync[1]?.parts).toEqual(sentPromptAsync[0]?.parts)
+    expect(sentPromptAsync[1]?.metadata).toEqual(sentPromptAsync[0]?.metadata)
+    expect(sentPromptAsync[1]?.metadata).toMatchObject({
+      deepagent: {
+        prompt_pipeline: {
+          confirmed_draft_id: "prompt_draft:test:1",
+        },
+      },
+    })
     promptValue[0] = { type: "text", content: "ls", start: 0, end: 2 }
   })
 })

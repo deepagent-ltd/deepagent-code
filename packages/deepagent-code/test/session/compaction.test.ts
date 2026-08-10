@@ -1215,27 +1215,27 @@ describe("session.compaction.process", () => {
   )
 
   it.instance(
-    "replays the prior user turn on overflow when earlier context exists",
+    "uses a synthetic continuation instead of replaying the latest media user turn",
     Effect.gen(function* () {
       const ssn = yield* SessionNs.Service
       const session = yield* ssn.create({})
       yield* createUserMessage(session.id, "root")
-      const replay = yield* createUserMessage(session.id, "image")
+      const request = yield* createUserMessage(session.id, "image request")
       yield* ssn.updatePart({
         id: PartID.ascending(),
-        messageID: replay.id,
+        messageID: request.id,
         sessionID: session.id,
         type: "file",
         mime: "image/png",
         filename: "cat.png",
         url: "https://example.com/cat.png",
       })
-      const msg = yield* createUserMessage(session.id, "current")
-      const msgs = yield* ssn.messages({ sessionID: session.id })
+      const marker = yield* createUserMessage(session.id, "compaction marker")
+      const before = yield* ssn.messages({ sessionID: session.id })
 
       const result = yield* SessionCompaction.use.process({
-        parentID: msg.id,
-        messages: msgs,
+        parentID: marker.id,
+        messages: before,
         sessionID: session.id,
         auto: true,
         overflow: true,
@@ -1243,8 +1243,10 @@ describe("session.compaction.process", () => {
 
       const messages = yield* ssn.messages({ sessionID: session.id })
       const last = messages.at(-1)
-      const marker = messages.flatMap((message) => message.parts).find((part) => part.type === "compaction")
-      const continuation = last?.parts.find((part) => part.type !== "compaction")
+      const markerPart = messages.flatMap((message) => message.parts).find((part) => part.type === "compaction")
+      const continuation = last?.parts.find(
+        (part) => part.type === "text" && part.metadata?.compaction_continue === true,
+      )
       const { db } = yield* Database.Service
       const provenance = yield* db
         .select({ id: PartTable.id, provenance: PartTable.provenance })
@@ -1252,65 +1254,96 @@ describe("session.compaction.process", () => {
         .where(
           inArray(
             PartTable.id,
-            [marker?.id, continuation?.id].filter((id): id is PartID => id !== undefined),
+            [markerPart?.id, continuation?.id].filter((id): id is PartID => id !== undefined),
           ),
         )
+        .all()
+        .pipe(Effect.orDie)
+      const artifacts = yield* db
+        .select({ kind: CompactionArtifactTable.kind })
+        .from(CompactionArtifactTable)
         .all()
         .pipe(Effect.orDie)
 
       expect(result).toBe("continue")
       expect(last?.info.role).toBe("user")
-      const summary = (yield* ssn.messages({ sessionID: session.id })).find(
-        (message) => message.info.role === "assistant" && message.info.summary,
-      )
+      const summary = messages.find((message) => message.info.role === "assistant" && message.info.summary)
       expect(summary).toBeDefined()
       expect(last!.info.id > summary!.info.id).toBe(true)
-      expect(last?.parts.some((part) => part.type === "file")).toBe(false)
       expect(
-        last?.parts.some((part) => part.type === "text" && part.text.includes("Attached image/png: cat.png")),
-      ).toBe(true)
-      expect(provenance.find((part) => part.id === marker?.id)?.provenance).toMatchObject({
+        messages
+          .flatMap((message) => message.parts)
+          .filter((part) => part.type === "text" && part.text === "image request"),
+      ).toHaveLength(1)
+      expect(continuation?.type === "text" ? continuation.synthetic : false).toBe(true)
+      expect(continuation?.type === "text" ? continuation.text : "").toContain("media files were removed from context")
+      expect(
+        messages
+          .flatMap((message) => message.parts)
+          .some((part) => part.type === "text" && part.text.includes("Attached image/png: cat.png")),
+      ).toBe(false)
+      expect(provenance.find((part) => part.id === markerPart?.id)?.provenance).toMatchObject({
         source: "compaction_marker",
         owner_session_id: session.id,
         durable: true,
       })
       expect(provenance.find((part) => part.id === continuation?.id)?.provenance).toMatchObject({
-        source: "compaction_replay",
+        source: "compaction_continue",
         owner_session_id: session.id,
         durable: true,
       })
+      expect(artifacts.some((artifact) => artifact.kind === "replay")).toBe(false)
     }),
   )
 
   it.instance(
-    "selects overflow replay only for a prior user turn with media",
+    "does not replay stale media across a newer text-only user request",
     Effect.gen(function* () {
       const ssn = yield* SessionNs.Service
       const session = yield* ssn.create({})
-      yield* createUserMessage(session.id, "earlier context")
-      const request = yield* createUserMessage(session.id, "text-only request")
-      const marker = yield* createUserMessage(session.id, "compaction marker")
-      const msgs = yield* ssn.messages({ sessionID: session.id })
-
-      expect(SessionCompaction.overflowReplayCandidate(msgs, marker.id)).toBeUndefined()
-
+      yield* createUserMessage(session.id, "root")
+      const staleMedia = yield* createUserMessage(session.id, "old media request")
       yield* ssn.updatePart({
         id: PartID.ascending(),
-        messageID: request.id,
+        messageID: staleMedia.id,
         sessionID: session.id,
         type: "file",
         mime: "image/png",
-        filename: "request.png",
-        url: "https://example.com/request.png",
+        filename: "old.png",
+        url: "https://example.com/old.png",
       })
-      const withMedia = yield* ssn.messages({ sessionID: session.id })
+      yield* createUserMessage(session.id, "latest text-only request")
+      const marker = yield* createUserMessage(session.id, "compaction marker")
+      const before = yield* ssn.messages({ sessionID: session.id })
 
-      expect(SessionCompaction.overflowReplayCandidate(withMedia, marker.id)?.info.id).toBe(request.id)
+      const result = yield* SessionCompaction.use.process({
+        parentID: marker.id,
+        messages: before,
+        sessionID: session.id,
+        auto: true,
+        overflow: true,
+      })
+
+      const messages = yield* ssn.messages({ sessionID: session.id })
+      const continuation = messages
+        .at(-1)
+        ?.parts.find((part) => part.type === "text" && part.metadata?.compaction_continue === true)
+      const { db } = yield* Database.Service
+      const provenance = yield* db.select({ provenance: PartTable.provenance }).from(PartTable).all().pipe(Effect.orDie)
+
+      expect(result).toBe("continue")
+      expect(continuation?.type === "text" ? continuation.synthetic : false).toBe(true)
+      expect(
+        messages
+          .flatMap((message) => message.parts)
+          .filter((part) => part.type === "text" && part.text === "old media request"),
+      ).toHaveLength(1)
+      expect(provenance.some((part) => part.provenance?.source === "compaction_replay")).toBe(false)
     }),
   )
 
   it.instance(
-    "falls back to overflow guidance when no replayable turn exists",
+    "uses overflow guidance for a text-only user turn",
     Effect.gen(function* () {
       const ssn = yield* SessionNs.Service
       const session = yield* ssn.create({})

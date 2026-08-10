@@ -111,21 +111,6 @@ function completedCompactions(messages: SessionV1.WithParts[]) {
   })
 }
 
-export function overflowReplayCandidate(messages: SessionV1.WithParts[], parentID: MessageID) {
-  const parentIndex = messages.findIndex((message) => message.info.id === parentID)
-  const index = messages.findLastIndex(
-    (message, index) =>
-      index < parentIndex &&
-      message.info.role === "user" &&
-      !message.parts.some((part) => part.type === "compaction") &&
-      message.parts.some((part) => part.type === "file" && MessageV2.isMedia(part.mime)),
-  )
-  if (index < 0) return
-  const message = messages[index]
-  if (message.info.role !== "user") return
-  return { index, info: message.info, parts: message.parts }
-}
-
 function preserveRecentBudget(input: { cfg: ConfigV1.Info; model: Provider.Model }) {
   return (
     input.cfg.compaction?.preserve_recent_tokens ??
@@ -242,6 +227,8 @@ export const layer = Layer.effect(
       const artifacts = yield* db
         .select()
         .from(CompactionArtifactTable)
+        // Older builds may have committed replay artifacts. They remain publishable for recovery,
+        // but current compaction runs only create synthetic continuation artifacts.
         .where(
           and(
             eq(CompactionArtifactTable.run_id, runID),
@@ -716,7 +703,7 @@ export const layer = Layer.effect(
       worldStateBaseline: SessionWorldStateBaseline
       continuation?: {
         readonly message: SessionV1.WithParts
-        readonly kind: "replay" | "continue"
+        readonly kind: "continue"
       }
     }) {
       return yield* db
@@ -845,10 +832,7 @@ export const layer = Layer.effect(
                       message_id: continuation.message.info.id,
                       session_id: continuation.message.info.sessionID,
                       provenance: {
-                        source:
-                          continuation.kind === "replay"
-                            ? ("compaction_replay" as const)
-                            : ("compaction_continue" as const),
+                        source: "compaction_continue" as const,
                         owner_session_id: input.sessionID,
                         owner_prompt_epoch: epoch.epoch,
                         owner_run_id: input.runID,
@@ -1091,29 +1075,11 @@ export const layer = Layer.effect(
         )
       }
 
-      let messages = input.messages
-      let replay:
-        | {
-            info: SessionV1.User
-            parts: SessionV1.Part[]
-          }
-        | undefined
-      if (input.overflow) {
-        // Overflow replay exists to retry a media-bearing request after stripping its attachments.
-        // Replaying every text-only user turn creates a second durable user message when compaction
-        // follows a busy-session steer; ordinary text continues through the synthetic continuation below.
-        const candidate = overflowReplayCandidate(input.messages, input.parentID)
-        if (candidate) {
-          replay = { info: candidate.info, parts: candidate.parts }
-          messages = input.messages.slice(0, candidate.index)
-        }
-        const hasContent =
-          replay && messages.some((m) => m.info.role === "user" && !m.parts.some((p) => p.type === "compaction"))
-        if (!hasContent) {
-          replay = undefined
-          messages = input.messages
-        }
-      }
+      // Compaction is a history projection boundary, not a second user submission.
+      // Keep the original history for summarization and use the synthetic continuation below when
+      // the provider overflow was caused by media. This avoids durable `compaction_replay` user
+      // messages, which are indistinguishable from a real repeated prompt in the UI and history.
+      const messages = input.messages
 
       const agent = yield* agents.get("compaction")
       const model = agent.model
@@ -1279,9 +1245,7 @@ export const layer = Layer.effect(
 
       if (result === "compact") {
         currentProcessor.message.error = new SessionV1.ContextOverflowError({
-          message: replay
-            ? "Conversation history too large to compact - exceeds model context limit"
-            : "Session too large to compact - context exceeds model limit even after stripping media",
+          message: "Session too large to compact - context exceeds model limit even after stripping media",
         }).toObject()
         currentProcessor.message.finish = "error"
         yield* session.updateMessage(currentProcessor.message)
@@ -1291,57 +1255,6 @@ export const layer = Layer.effect(
 
       const continuation = yield* Effect.gen(function* () {
         if (result !== "continue" || !input.auto) return
-        if (replay) {
-          const original = replay.info
-          const replayMsg: SessionV1.User = {
-            id: MessageID.make(
-              `${currentProcessor.message.id}_replay_${Hash.sha256(`compaction-replay:v2:${run.run_id}`).slice(0, 12)}`,
-            ),
-            role: "user",
-            sessionID: input.sessionID,
-            time: { created: Date.now() },
-            agent: original.agent,
-            model: original.model,
-            format: original.format,
-            tools: original.tools,
-            system: original.system,
-            metadata: {
-              ...original.metadata,
-              deepagent: {
-                ...(original.metadata?.deepagent as Record<string, unknown> | undefined),
-                contextProvenance: {
-                  source: "compaction_replay",
-                  ownerSessionID: input.sessionID,
-                  ownerPromptEpoch: activeEpoch.epoch + 1,
-                  ownerRunID: run.run_id,
-                  durable: true,
-                },
-              },
-            },
-          }
-          const replayMessage: SessionV1.WithParts = {
-            info: replayMsg,
-            parts: replay.parts.flatMap((part) => {
-              if (part.type === "compaction") return []
-              const replayPart =
-                part.type === "file" && MessageV2.isMedia(part.mime)
-                  ? { type: "text" as const, text: `[Attached ${part.mime}: ${part.filename ?? "file"}]` }
-                  : part
-              return [
-                {
-                  ...replayPart,
-                  id: PartID.make(
-                    `prt_${Hash.sha256(`compaction-replay-part:v1:${run.run_id}:${part.id}`).slice(0, 26)}`,
-                  ),
-                  messageID: replayMsg.id,
-                  sessionID: input.sessionID,
-                } as SessionV1.Part,
-              ]
-            }),
-          }
-          return { message: replayMessage, kind: "replay" as const }
-        }
-
         const info = yield* provider.getProvider(userMessage.model.providerID)
         if (
           (yield* plugin.trigger(
