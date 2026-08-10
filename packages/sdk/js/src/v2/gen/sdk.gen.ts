@@ -7587,7 +7587,7 @@ export class Session2 extends HeyApiClient {
       sessionID: string
       query_directory?: string
       workspace?: string
-      intentID?: string
+      intentID: string
       messageID?: string
       body_directory?: string
       isolate?: "worktree"

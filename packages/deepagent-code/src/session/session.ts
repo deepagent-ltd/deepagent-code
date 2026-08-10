@@ -336,9 +336,9 @@ export type CreateInput = Types.DeepMutable<Schema.Schema.Type<typeof CreateInpu
 
 export const ForkInput = Schema.Struct({
   sessionID: SessionID,
-  // Optional for pre-BUG-012 clients. New clients should send this retry key; when omitted the server
-  // creates a unique operation identity, preserving compatibility without conflating separate forks.
-  intentID: Schema.optional(Schema.NonEmptyString),
+  // The retry identity is required at every admission boundary. Generating it inside fork() would
+  // turn a response-loss retry into a second child instead of adopting the committed operation.
+  intentID: Schema.NonEmptyString,
   messageID: Schema.optional(MessageID),
   // 附-D 阶段3: optionally fork into a specific directory instead of inheriting the source
   // session's directory. When omitted, fork behaves exactly as before (inherits ctx.directory).
@@ -572,7 +572,7 @@ export interface Interface {
   }) => Effect.Effect<Info>
   readonly fork: (input: {
     sessionID: SessionID
-    intentID?: string
+    intentID: string
     messageID?: MessageID
     directory?: string
     isolate?: "worktree"
@@ -2006,8 +2006,7 @@ export const layer: Layer.Layer<
     })
 
     const fork: Interface["fork"] = (input) => {
-      const intentID = input.intentID ?? `fork:${Identifier.ascending("session")}`
-      return forkLocks.withLock(intentID)(forkUnlocked({ ...input, intentID }))
+      return forkLocks.withLock(input.intentID)(forkUnlocked(input))
     }
 
     const recoverForks: Interface["recoverForks"] = Effect.fn("Session.recoverForks")(function* () {

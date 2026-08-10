@@ -12860,7 +12860,7 @@ export type SessionMessageResponse = SessionMessageResponses[keyof SessionMessag
 
 export type SessionForkData = {
   body?: {
-    intentID?: string
+    intentID: string
     messageID?: string
     directory?: string
     isolate?: "worktree"
