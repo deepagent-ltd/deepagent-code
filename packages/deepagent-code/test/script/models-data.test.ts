@@ -35,6 +35,7 @@ describe("models.dev build data", () => {
 
     expect(result.source).toBe(file)
     expect(JSON.parse(result.data)).toEqual(catalog)
+    expect(result.sha256).toBe(new Bun.CryptoHasher("sha256").update(JSON.stringify(catalog)).digest("hex"))
   })
 
   test("fetches a fresh catalog and persists the last good copy", async () => {
@@ -78,5 +79,28 @@ describe("models.dev build data", () => {
     await expect(loadModelsData({ environment: { MODELS_DEV_API_JSON: file } })).rejects.toThrow(
       "Configured models.dev snapshot is invalid",
     )
+  })
+
+  test("does not read or rewrite a builder-local cache when the network is unavailable", async () => {
+    await using directory = await fixture()
+    const cacheFile = path.join(directory.root, "models.json")
+    const builderOnly = {
+      "builder-only": {
+        id: "builder-only",
+        name: "Builder only",
+        models: { leaked: { id: "leaked" } },
+      },
+    }
+    await Bun.write(cacheFile, JSON.stringify(builderOnly))
+
+    const result = await loadModelsData({
+      environment: { DEEPAGENT_CODE_MODELS_URL: "http://127.0.0.1:1" },
+      cacheFile,
+      requestTimeoutMs: 200,
+    })
+
+    expect(result.source).toBe(path.resolve(import.meta.dir, "../tool/fixtures/models-api.json"))
+    expect(JSON.parse(result.data)["builder-only"]).toBeUndefined()
+    expect(await Bun.file(cacheFile).json()).toEqual(builderOnly)
   })
 })
