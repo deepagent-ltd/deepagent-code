@@ -90,6 +90,7 @@ import { projectDurableSettledRun, projectRecoveredSubagentRun, TaskTool, type T
 import { SessionRunState } from "./run-state"
 import { SessionSteer } from "./steer"
 import { SessionPromptIntent } from "./prompt-intent"
+import { pause as pauseAtActivityCrashPoint } from "./activity-crash-test"
 import { writeGovernanceAudit } from "./goal-governance-audit"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { archiveSessionOnCompletion } from "@/wiki/session-archive"
@@ -691,6 +692,14 @@ export const layer = Layer.effect(
     const database = yield* Database.Service
     const { db } = database
     yield* recoverProviderReceiptsOnStartup()
+    yield* SessionPromptIntent.recoverActiveActivities().pipe(
+      Effect.provideService(Database.Service, database),
+      Effect.tap((count) =>
+        count > 0
+          ? Effect.logWarning(`marked ${count} legacy activities recovery_required after restart`)
+          : Effect.void,
+      ),
+    )
     const activeFederatedContexts = new Map<SessionID, SessionFederatedContext.Resolved>()
     const settleFederatedActivity = (sessionID: SessionID, state: "settled" | "failed" | "interrupted") =>
       Effect.gen(function* () {
@@ -2210,6 +2219,63 @@ export const layer = Layer.effect(
       if (FSUtil.resolve(session.directory) !== FSUtil.resolve(current.directory)) {
         return yield* instances.provide({ directory: session.directory }, prompt(input, lifecycle))
       }
+      if (!lifecycle?.intent) {
+        if (!flags.v4Steering)
+          yield* SessionPromptIntent.retireDisabledSteerActivity(input.sessionID).pipe(
+            Effect.provideService(Database.Service, database),
+          )
+        const messageID = input.messageID ?? MessageID.ascending()
+        const intentID = input.intentID ?? `legacy-prompt:${input.sessionID}:${messageID}`
+        const claimed = yield* SessionPromptIntent.claim({
+          intentID,
+          sessionID: input.sessionID,
+          source: input.intentSource ?? "composer",
+          variant: input.intentVariant ?? "original",
+          payloadHash: promptIntentPayloadHash(input),
+          messageID,
+        }).pipe(Effect.provideService(Database.Service, database))
+        if (claimed.kind === "admitted") {
+          if (claimed.receipt.delivery !== "turn")
+            return yield* Effect.die(
+              new Error(`direct prompt intent ${claimed.receipt.intentID} was admitted as ${claimed.receipt.delivery}`),
+            )
+          const existing = yield* MessageV2.get({
+            sessionID: input.sessionID,
+            messageID: claimed.receipt.messageID,
+          }).pipe(Effect.provideService(Database.Service, database), Effect.orDie)
+          if (!existing) return yield* Effect.die(`admitted prompt message is missing: ${claimed.receipt.messageID}`)
+          return existing
+        }
+        const admittedInput = {
+          ...input,
+          messageID: claimed.receipt.messageID,
+          parts: stableIntentParts(input.parts, claimed.receipt.intentID),
+        }
+        const lifecycleWithIntent: PromptLifecycle = {
+          intent: claimed.receipt,
+          ready: (receipt) =>
+            SessionPromptIntent.complete({
+              intentID: claimed.receipt.intentID,
+              ownerToken: claimed.receipt.ownerToken,
+              messageID: receipt.messageID,
+              delivery: receipt.delivery,
+            }).pipe(Effect.provideService(Database.Service, database), Effect.asVoid, Effect.orDie),
+        }
+        return yield* prompt(admittedInput, lifecycleWithIntent).pipe(
+          Effect.tapError(() =>
+            SessionPromptIntent.fail({
+              intentID: claimed.receipt.intentID,
+              ownerToken: claimed.receipt.ownerToken,
+            }).pipe(Effect.provideService(Database.Service, database)),
+          ),
+          Effect.onInterrupt(() =>
+            SessionPromptIntent.fail({
+              intentID: claimed.receipt.intentID,
+              ownerToken: claimed.receipt.ownerToken,
+            }).pipe(Effect.provideService(Database.Service, database)),
+          ),
+        )
+      }
       const mutationEpoch =
         lifecycle?.intent?.mutationEpoch ?? (yield* sessions.mutationEpoch(session.id).pipe(Effect.orDie))
       yield* revert.cleanup(session, mutationEpoch)
@@ -2753,6 +2819,28 @@ export const layer = Layer.effect(
               ),
         )
         const initialUser = MessageV2.latest(initialMessages).user
+        let legacyActivity = initialUser
+          ? yield* SessionPromptIntent.activityForMessage({ sessionID, messageID: initialUser.id }).pipe(
+              Effect.provideService(Database.Service, database),
+              Effect.map((activity) => (activity?.state === "active" ? activity : undefined)),
+            )
+          : undefined
+        const publishActivityProgress = (progress: SessionPromptIntent.Progress) =>
+          Effect.gen(function* () {
+            if (!progress.textPartID) return
+            const messages = yield* sessions.messages({ sessionID }).pipe(Effect.orDie)
+            const parts = messages
+              .find((message) => message.info.id === progress.assistantMessageID)
+              ?.parts.filter(
+                (candidate): candidate is SessionV1.TextPart =>
+                  candidate.type === "text" &&
+                  candidate.metadata?.deepagent_activity_progress?.activity_id === progress.activityID &&
+                  candidate.metadata.deepagent_activity_progress.revision === progress.revision &&
+                  candidate.metadata.deepagent_activity_progress.state === progress.state,
+              )
+            if (!parts?.length) return
+            yield* Effect.forEach(parts, sessions.updatePart, { discard: true })
+          })
         const initialFinalizer = isStructuredFinalizer(initialUser?.metadata)
         let activeContext: SessionFederatedContext.Resolved | undefined
         let pendingContextInputIds: string[] = drainFirst || !initialUser ? [] : [initialUser.id]
@@ -2817,6 +2905,11 @@ export const layer = Layer.effect(
           const { user: lastUser, assistant: lastAssistant, finished: lastFinished, tasks } = MessageV2.latest(msgs)
 
           if (!lastUser) throw new Error("No user message found in stream. This should never happen.")
+          const currentLegacyActivity = yield* SessionPromptIntent.activityForMessage({
+            sessionID,
+            messageID: lastUser.id,
+          }).pipe(Effect.provideService(Database.Service, database))
+          if (currentLegacyActivity?.state === "active") legacyActivity = currentLegacyActivity
           const finalizerMode = isStructuredFinalizer(lastUser.metadata)
           const finalizerAllowsText = structuredFinalizerAllowsText(lastUser.metadata)
 
@@ -3134,11 +3227,17 @@ export const layer = Layer.effect(
             value?: { state: "settled" } | { state: "failed"; errorCode: string }
           } = {}
           const receiptFinalizer: { value?: () => Effect.Effect<void> } = {}
+          const activityProgressFinalizer: { value?: () => Effect.Effect<void> } = {}
           const finalizeInterruptedTurn = Effect.uninterruptible(
             Effect.gen(function* () {
               yield* finalizeInterruptedAssistant
               receiptTerminal.value ??= { state: "failed", errorCode: "AbortError" }
               if (receiptFinalizer.value) yield* receiptFinalizer.value()
+              if (activityProgressFinalizer.value) yield* activityProgressFinalizer.value()
+              if (legacyActivity && !activityProgressFinalizer.value)
+                yield* SessionPromptIntent.interruptActivity(legacyActivity.activityID).pipe(
+                  Effect.provideService(Database.Service, database),
+                )
             }),
           )
 
@@ -3191,7 +3290,7 @@ export const layer = Layer.effect(
               ToolSemanticFingerprint.resolve(tools[toolName], args),
             )
             toolSequenceTracker.setResultFingerprintResolver((toolName, result) =>
-              ToolSemanticFingerprint.resolveResult(tools[toolName], result),
+              ToolSemanticFingerprint.resolveResult(tools[toolName], result, toolName),
             )
 
             const providerHistory = finalizerMode
@@ -3199,10 +3298,9 @@ export const layer = Layer.effect(
               : (yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: structuredClone(msgs) }))
                   .messages
 
-            // PR-1: Compute the terminal boundary for cross-model reasoning projection.
-            // The most recent settled assistant message (has finish, no pending tool calls)
-            // defines the boundary. Same-model reasoning remains append-only because removing
-            // signed thinking after settlement rewrites the provider prefix and busts its cache.
+            // The most recent settled assistant message defines where provider reasoning stops
+            // being an active tool continuation. Projection still preserves signed/encrypted
+            // provider prefixes when the selected protocol declares that replay capability.
             let terminalBoundaryID: MessageID | undefined
             for (const msg of providerHistory) {
               if (msg.info.role !== "assistant") continue
@@ -3465,6 +3563,23 @@ export const layer = Layer.effect(
                 { behavior: "immediate" },
               )
               .pipe(Effect.orDie)
+            const progressActivity = legacyActivity
+            if (progressActivity)
+              yield* SessionPromptIntent.beginProgress({
+                activityID: progressActivity.activityID,
+                assistantMessageID: handle.message.id,
+                providerReceiptID: receiptID,
+              }).pipe(Effect.provideService(Database.Service, database))
+            if (progressActivity)
+              activityProgressFinalizer.value = () =>
+                SessionPromptIntent.settleProgress({
+                  activityID: progressActivity.activityID,
+                  assistantMessageID: handle.message.id,
+                }).pipe(
+                  Effect.provideService(Database.Service, database),
+                  Effect.tap(publishActivityProgress),
+                  Effect.asVoid,
+                )
             const bestEffortReceiptWrite = (operation: string, write: Effect.Effect<unknown, unknown>) =>
               write.pipe(
                 Effect.asVoid,
@@ -3661,6 +3776,9 @@ export const layer = Layer.effect(
               Effect.gen(function* () {
                 if (turnSettled.value) return
                 yield* finalizeReceipt()
+                yield* pauseAtActivityCrashPoint("after_provider_receipt_terminal")
+                if (activityProgressFinalizer.value) yield* activityProgressFinalizer.value()
+                yield* pauseAtActivityCrashPoint("after_progress_settled")
                 turnSettled.value = true
                 // Summary diffs mutate user-message metadata. Run them only after the Provider
                 // receipt is terminal so cancellation cannot strand an admitted request.
@@ -3772,7 +3890,9 @@ export const layer = Layer.effect(
                       to: "streaming",
                       values: { streaming_at: Date.now() },
                     })
-                    if (transitioned && providerAttempt) yield* providerAttempt.streaming.pipe(Effect.orDie)
+                    if (!transitioned) return
+                    if (providerAttempt) yield* providerAttempt.streaming.pipe(Effect.orDie)
+                    yield* pauseAtActivityCrashPoint("after_provider_streaming")
                   }),
                 // Processor cleanup durably completes the assistant after these callbacks. Keep the
                 // terminal intent in memory until that cleanup and the response fingerprint are ready,
@@ -4036,6 +4156,12 @@ export const layer = Layer.effect(
       return admitted
     })
 
+    const drainPendingSteers = Effect.fn("SessionPrompt.drainPendingSteers")(function* (sessionID: SessionID) {
+      while (yield* steerBuffer.hasPending(sessionID, "steer")) {
+        yield* loop({ sessionID, drainFirst: true })
+      }
+    })
+
     // V4.1 §S1.2 — the ingress decision. Both the HTTP prompt route and the IM agent executor call THIS
     // instead of prompt() directly, so the steer-vs-turn choice lives in exactly one place.
     //
@@ -4100,8 +4226,17 @@ export const layer = Layer.effect(
         intent: lifecycle?.intent,
       })
       if (lifecycle) yield* lifecycle.ready({ messageID: MessageID.make(admitted.id), delivery: "steer" })
-      // Race guard (see header): a pure-drain turn absorbs a steer stranded by the isBusy→admit window.
-      yield* loop({ sessionID: input.sessionID, drainFirst: true }).pipe(Effect.ignore, Effect.forkIn(scope))
+      // Race guard (see header): if this call joins a turn that already passed its final drain point,
+      // re-check the durable buffer after that runner settles and start a pure-drain turn. Repeat until
+      // the admitted steer is consumed so the isBusy→admit→runner-idle window cannot strand an activity.
+      yield* drainPendingSteers(input.sessionID).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logError("failed to drain raced steer").pipe(
+            Effect.annotateLogs({ sessionID: input.sessionID, steerID: admitted.id, cause }),
+          ),
+        ),
+        Effect.forkIn(scope),
+      )
       return { kind: "steer" as const, delivery: "steer" as const, admitted }
     })
 

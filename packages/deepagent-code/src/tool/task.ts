@@ -1355,7 +1355,7 @@ export const TaskTool = Tool.define(
       // L3a: Freeze mutation_capability at admission time (design §2.2.1)
       // L3b: Workspace preflight — automatic writers must reject dirty workspaces (design §3.2, §15.3.3)
       // -----------------------------------------------------------------------
-      // BUG-001-405 Fix-D: separate capability classification from isolation policy.
+      // BUG-405-001 Fix-D: separate capability classification from isolation policy.
       //   agentIsWriteCapable — does the agent's permission ruleset allow file mutation?
       //     Drives mutation_capability in the DB and the preflight dirty-workspace check.
       //

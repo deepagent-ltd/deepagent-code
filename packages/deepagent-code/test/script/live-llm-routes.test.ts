@@ -151,22 +151,26 @@ describe("live LLM route manifest", () => {
           "ext:legacy-session:subagent-resume",
           "ext:legacy-session:subagent-takeover",
           "ext:legacy-session:subagent-worktree-routing",
+          "ext:renderer-ui:activity-progress-package",
           "ext:v4-event-runtime:v4-multi-agent-runtime",
           "live:adapter:provider-smoke",
           "live:adapter:structured-output",
           "live:cli-subprocess:cli-headless",
+          "live:legacy-session:activity-progress-lifecycle",
           "live:legacy-session:bash-repair",
           "live:legacy-session:continuation-repetition",
           "live:legacy-session:degeneration",
           "live:legacy-session:file-mutations",
           "live:legacy-session:file-read-search",
           "live:legacy-session:plan-advance-contract",
+          "live:legacy-session:plan-create-replan-contract",
           "live:legacy-session:shell-exit-contract",
           "live:legacy-session:stale-validation",
           "live:legacy-session:steer-boundary",
           "live:legacy-session:structured-output",
           "live:legacy-session:subagent-control-plane",
           "live:legacy-session:subagent-foreground",
+          "live:packaged-sidecar:activity-progress-restart",
           "live:session-v2:bash-repair",
           "live:session-v2:file-mutations",
           "live:session-v2:file-read-search",
@@ -180,6 +184,14 @@ describe("live LLM route manifest", () => {
       {
         path: "packages/desktop/scripts/live-llm/packaged-sidecar.ts",
         runs: ["ext:packaged-sidecar:packaged-sidecar"],
+      },
+      {
+        path: "packages/desktop/scripts/live-llm/activity-progress-restart.ts",
+        runs: ["live:packaged-sidecar:activity-progress-restart"],
+      },
+      {
+        path: "packages/desktop/scripts/live-llm/activity-progress-package.ts",
+        runs: ["ext:renderer-ui:activity-progress-package"],
       },
       {
         path: "packages/desktop/scripts/live-llm/desktop-subagents.ts",
@@ -293,6 +305,73 @@ describe("live LLM route manifest", () => {
         args: ["bun", "run", "test:llm-live:plan-advance"],
       })
     }
+  })
+
+  test("routes Plan create/replan authority changes to the DeepSeek real Provider suite", () => {
+    for (const path of [
+      "packages/core/src/deepagent/plan-controller.ts",
+      "packages/deepagent-code/src/tool/plan-write.ts",
+      "packages/deepagent-code/src/tool/plan-write.txt",
+      "packages/deepagent-code/script/live-llm/plan-create-replan-contract.ts",
+      "packages/deepagent-code/script/live-llm/plan-create-replan-oracle.ts",
+    ]) {
+      const run = selectRoutes([path]).runs.find(
+        (item) => modelRunKey(item) === "live:legacy-session:plan-create-replan-contract",
+      )
+      expect(run).toBeDefined()
+      expect(commandForModelRun(run!)).toEqual({
+        cwd: "packages/deepagent-code",
+        args: ["bun", "run", "test:llm-live:plan-create-replan"],
+      })
+    }
+  })
+
+  test("routes activity progress lifecycle changes to the DeepSeek real Provider suite", () => {
+    for (const path of [
+      "packages/app/src/pages/session/message-timeline.data.ts",
+      "packages/deepagent-code/src/session/activity-sql.ts",
+      "packages/deepagent-code/src/session/prompt-intent.ts",
+      "packages/deepagent-code/src/session/prompt.ts",
+      "packages/deepagent-code/src/session/steer.ts",
+      "packages/deepagent-code/script/live-llm/activity-progress-lifecycle.ts",
+      "packages/deepagent-code/script/live-llm/activity-progress-oracle.ts",
+    ]) {
+      const run = selectRoutes([path]).runs.find(
+        (item) => modelRunKey(item) === "live:legacy-session:activity-progress-lifecycle",
+      )
+      expect(run).toBeDefined()
+      expect(commandForModelRun(run!)).toEqual({
+        cwd: "packages/deepagent-code",
+        args: ["bun", "run", "test:llm-live:activity-progress"],
+      })
+    }
+  })
+
+  test("routes activity progress production changes through restart and packaged GUI release gates", () => {
+    const selected = selectRoutes([
+      "packages/app/src/pages/session/message-timeline.data.ts",
+      "packages/deepagent-code/src/session/prompt-intent.ts",
+      "packages/deepagent-code/src/session/prompt.ts",
+    ])
+
+    expect(selected.runs.map(modelRunKey)).toContain("live:packaged-sidecar:activity-progress-restart")
+    expect(selected.runs.map(modelRunKey)).toContain("ext:renderer-ui:activity-progress-package")
+    expect(
+      commandForModelRun(
+        selected.runs.find((run) => modelRunKey(run) === "live:packaged-sidecar:activity-progress-restart")!,
+      ),
+    ).toEqual({
+      cwd: "packages/desktop",
+      args: ["bun", "run", "test:llm-live:activity-progress-restart"],
+    })
+    expect(
+      commandForModelRun(
+        selected.runs.find((run) => modelRunKey(run) === "ext:renderer-ui:activity-progress-package")!,
+      ),
+    ).toEqual({
+      cwd: "packages/desktop",
+      args: ["bun", "run", "test:llm-release:activity-progress-package"],
+    })
   })
 
   test("keeps bounded takeover reachable from its harness and supervision seams", () => {
