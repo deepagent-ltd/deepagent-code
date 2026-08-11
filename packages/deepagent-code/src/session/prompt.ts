@@ -2828,24 +2828,17 @@ export const layer = Layer.effect(
           Effect.gen(function* () {
             if (!progress.textPartID) return
             const messages = yield* sessions.messages({ sessionID }).pipe(Effect.orDie)
-            const part = messages
+            const parts = messages
               .find((message) => message.info.id === progress.assistantMessageID)
-              ?.parts.find(
+              ?.parts.filter(
                 (candidate): candidate is SessionV1.TextPart =>
-                  candidate.id === progress.textPartID && candidate.type === "text",
+                  candidate.type === "text" &&
+                  candidate.metadata?.deepagent_activity_progress?.activity_id === progress.activityID &&
+                  candidate.metadata.deepagent_activity_progress.revision === progress.revision &&
+                  candidate.metadata.deepagent_activity_progress.state === progress.state,
               )
-            if (!part) return
-            yield* sessions.updatePart({
-              ...part,
-              metadata: {
-                ...(part.metadata ?? {}),
-                deepagent_activity_progress: {
-                  activity_id: progress.activityID,
-                  revision: progress.revision,
-                  state: progress.state,
-                },
-              },
-            })
+            if (!parts?.length) return
+            yield* Effect.forEach(parts, sessions.updatePart, { discard: true })
           })
         const initialFinalizer = isStructuredFinalizer(initialUser?.metadata)
         let activeContext: SessionFederatedContext.Resolved | undefined
@@ -4158,6 +4151,12 @@ export const layer = Layer.effect(
       return admitted
     })
 
+    const drainPendingSteers = Effect.fn("SessionPrompt.drainPendingSteers")(function* (sessionID: SessionID) {
+      while (yield* steerBuffer.hasPending(sessionID, "steer")) {
+        yield* loop({ sessionID, drainFirst: true })
+      }
+    })
+
     // V4.1 §S1.2 — the ingress decision. Both the HTTP prompt route and the IM agent executor call THIS
     // instead of prompt() directly, so the steer-vs-turn choice lives in exactly one place.
     //
@@ -4222,8 +4221,17 @@ export const layer = Layer.effect(
         intent: lifecycle?.intent,
       })
       if (lifecycle) yield* lifecycle.ready({ messageID: MessageID.make(admitted.id), delivery: "steer" })
-      // Race guard (see header): a pure-drain turn absorbs a steer stranded by the isBusy→admit window.
-      yield* loop({ sessionID: input.sessionID, drainFirst: true }).pipe(Effect.ignore, Effect.forkIn(scope))
+      // Race guard (see header): if this call joins a turn that already passed its final drain point,
+      // re-check the durable buffer after that runner settles and start a pure-drain turn. Repeat until
+      // the admitted steer is consumed so the isBusy→admit→runner-idle window cannot strand an activity.
+      yield* drainPendingSteers(input.sessionID).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logError("failed to drain raced steer").pipe(
+            Effect.annotateLogs({ sessionID: input.sessionID, steerID: admitted.id, cause }),
+          ),
+        ),
+        Effect.forkIn(scope),
+      )
       return { kind: "steer" as const, delivery: "steer" as const, admitted }
     })
 

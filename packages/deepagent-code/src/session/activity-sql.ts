@@ -42,6 +42,7 @@ export const SessionLegacyActivityTable = sqliteTable(
     session_id: text().notNull(),
     ordinal: integer().notNull(),
     trigger_admission_id: text().notNull(),
+    owner_token: text().notNull(),
     state: text().$type<"active" | "settled" | "failed" | "interrupted" | "recovery_required">().notNull(),
     terminal_reason: text(),
     created_at: integer().notNull(),

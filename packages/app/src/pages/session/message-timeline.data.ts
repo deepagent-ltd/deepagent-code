@@ -294,14 +294,21 @@ export namespace Timeline {
     refs: T[],
     visibility?: ReadonlySet<string>,
   ) {
-    if (visibility)
-      return refs.filter((ref) => {
-        if (!activityProgress(ref.part)) return true
-        return visibility.has(`${ref.messageID}:${ref.part.id}`)
-      })
-    const selected = new Map<string, { ref: T; revision: number; terminal: boolean }>()
+    const progressByMessage = new Map<string, NonNullable<ReturnType<typeof activityProgress>>>()
     refs.forEach((ref) => {
       const marker = activityProgress(ref.part)
+      if (marker) progressByMessage.set(ref.messageID, marker)
+    })
+    const markerFor = (ref: T) =>
+      activityProgress(ref.part) ?? (ref.part.type === "text" ? progressByMessage.get(ref.messageID) : undefined)
+    if (visibility)
+      return refs.filter((ref) => {
+        if (!markerFor(ref)) return true
+        return visibility.has(`${ref.messageID}:${ref.part.id}`)
+      })
+    const selected = new Map<string, { revision: number; terminal: boolean }>()
+    refs.forEach((ref) => {
+      const marker = markerFor(ref)
       if (!marker) return
       const terminal = marker.state !== "progress"
       const current = selected.get(marker.activityID)
@@ -310,10 +317,14 @@ export namespace Timeline {
         ((current.terminal && !terminal) || (current.terminal === terminal && current.revision > marker.revision))
       )
         return
-      selected.set(marker.activityID, { ref, revision: marker.revision, terminal })
+      selected.set(marker.activityID, { revision: marker.revision, terminal })
     })
-    const visible = new Set([...selected.values()].map((item) => item.ref))
-    return refs.filter((ref) => !activityProgress(ref.part) || visible.has(ref))
+    return refs.filter((ref) => {
+      const marker = markerFor(ref)
+      if (!marker) return true
+      const current = selected.get(marker.activityID)
+      return current?.revision === marker.revision && current.terminal === (marker.state !== "progress")
+    })
   }
 
   function activityProgress(part: Part) {

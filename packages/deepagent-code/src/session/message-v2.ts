@@ -552,9 +552,10 @@ export const toModelMessagesEffect = Effect.fnUntraced(function* (
             hasReasoningState(part, reasoningReplay)
           )
         })
+      const settledActivityProgress = msg.parts.some((part) => part.type === "text" && isActivityProgress(part))
       for (const part of msg.parts) {
         if (part.type === "text") {
-          if (!isActive && isActivityProgress(part)) continue
+          if (!isActive && settledActivityProgress) continue
           const text = part.text === "" && hasSignedReasoning ? " " : part.text
           assistantMessage.parts.push({
             type: "text",

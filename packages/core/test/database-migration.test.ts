@@ -27,6 +27,7 @@ import sessionMetadataMigration from "@deepagent-code/core/database/migration/20
 import compactionContinuationAdmissionMigration from "@deepagent-code/core/database/migration/20260810160000_compaction_continuation_admission"
 import partIntegrityBackfillMigration from "@deepagent-code/core/database/migration/20260810170000_part_integrity_backfill"
 import legacyActivityProgressMigration from "@deepagent-code/core/database/migration/20260811090000_legacy_activity_progress"
+import legacyActivityOwnerMigration from "@deepagent-code/core/database/migration/20260811100000_legacy_activity_owner"
 import type { SqlClient as SqlClientService } from "effect/unstable/sql/SqlClient"
 import { Database } from "@deepagent-code/core/database/database"
 import { tmpdir } from "./fixture/tmpdir"
@@ -262,6 +263,17 @@ describe("DatabaseMigration", () => {
         yield* db.run(sql`INSERT INTO session_legacy_activity_admission
           (activity_id, admission_id, ordinal, role, attached_at)
           VALUES ('legacy-activity', 'legacy-admission', 0, 'trigger', 12)`)
+        yield* DatabaseMigration.applyOnly(db, [legacyActivityOwnerMigration])
+        expect(
+          yield* db.get(sql`SELECT owner_token FROM session_legacy_activity WHERE activity_id = 'legacy-activity'`),
+        ).toEqual({ owner_token: "pre-owner-migration" })
+        expect(
+          Exit.isFailure(
+            yield* db
+              .run(sql`UPDATE session_legacy_activity SET owner_token = 'other' WHERE activity_id = 'legacy-activity'`)
+              .pipe(Effect.exit),
+          ),
+        ).toBe(true)
         expect(
           Exit.isFailure(
             yield* db

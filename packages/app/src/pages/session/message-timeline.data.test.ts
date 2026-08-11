@@ -115,15 +115,26 @@ describe("message timeline activity progress", () => {
     ).toEqual(["prt_final_2"])
   })
 
-  test("collapses one activity across separate parent user rows", async () => {
+  test("collapses every text part in one activity across separate parent user rows", async () => {
     const { Timeline } = await import("./message-timeline.data")
     const user2 = { ...user, id: "msg_user_2" }
     const firstAssistant = assistant("msg_cross_a0")
     const secondAssistant = { ...assistant("msg_cross_a1"), parentID: user2.id }
+    const plain = (messageID: string, id: string, text: string) =>
+      ({ id, sessionID: user.sessionID, messageID, type: "text", text }) as Part
     const messages = [firstAssistant, secondAssistant]
     const parts = new Map([
-      [firstAssistant.id, [progress(firstAssistant.id, 0, "progress")]],
-      [secondAssistant.id, [progress(secondAssistant.id, 1, "progress")]],
+      [
+        firstAssistant.id,
+        [progress(firstAssistant.id, 0, "progress"), plain(firstAssistant.id, "prt_cross_old_plain", "old detail")],
+      ],
+      [
+        secondAssistant.id,
+        [
+          progress(secondAssistant.id, 1, "progress"),
+          plain(secondAssistant.id, "prt_cross_latest_plain", "latest detail"),
+        ],
+      ],
     ])
     const getParts = (id: string) => parts.get(id) ?? []
     const visibility = Timeline.activityProgressVisibility(messages, getParts)
@@ -152,6 +163,26 @@ describe("message timeline activity progress", () => {
       secondRows.flatMap((row) =>
         row._tag === "AssistantPart" && row.group.type === "part" ? [row.group.ref.partID] : [],
       ),
-    ).toEqual(["prt_progress_1"])
+    ).toEqual(["prt_progress_1", "prt_cross_latest_plain"])
+  })
+
+  test("applies one revision marker to every text part in the assistant message", async () => {
+    const { Timeline } = await import("./message-timeline.data")
+    const messages = [assistant("msg_multi_a0"), { ...assistant("msg_multi_a1"), finish: "stop" }]
+    const plain = (messageID: string, id: string, text: string) =>
+      ({ id, sessionID: user.sessionID, messageID, type: "text", text }) as Part
+    const parts = new Map([
+      [messages[0].id, [progress(messages[0].id, 0, "progress"), plain(messages[0].id, "prt_old_plain", "old detail")]],
+      [
+        messages[1].id,
+        [progress(messages[1].id, 1, "final"), plain(messages[1].id, "prt_final_plain", "final detail")],
+      ],
+    ])
+
+    const rows = Timeline.constructMessageRows(user, (id) => parts.get(id) ?? [], messages, 0, false, "idle", false)
+
+    expect(
+      rows.flatMap((row) => (row._tag === "AssistantPart" && row.group.type === "part" ? [row.group.ref.partID] : [])),
+    ).toEqual(["prt_final_1", "prt_final_plain"])
   })
 })

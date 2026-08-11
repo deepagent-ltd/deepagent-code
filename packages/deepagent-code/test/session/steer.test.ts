@@ -1167,3 +1167,59 @@ on.instance(
     }),
   20_000,
 )
+
+on.instance(
+  "promptOrSteer rechecks the durable buffer after joining a runner that cannot absorb the steer",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const steer = yield* SessionSteer.Service
+      const sessions = yield* Session.Service
+      const state = yield* SessionRunState.Service
+      const chat = yield* sessions.create({
+        title: "isBusy admission race",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      yield* llm.text("initial answer")
+      const initial = yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        model: ref,
+        parts: [{ type: "text", text: "initial" }],
+      })
+      const entered = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      const occupied = yield* state
+        .ensureRunning(
+          chat.id,
+          Effect.succeed(initial),
+          Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release)), Effect.as(initial)),
+        )
+        .pipe(Effect.forkChild)
+      yield* Deferred.await(entered)
+      expect(yield* state.isBusy(chat.id)).toBe(true)
+      yield* llm.text("raced steer answer")
+
+      const routed = yield* prompt.promptOrSteer({
+        sessionID: chat.id,
+        agent: "build",
+        model: ref,
+        parts: [{ type: "text", text: "RACED-STEER" }],
+      })
+      expect(routed.kind).toBe("steer")
+      expect(yield* steer.hasPending(chat.id, "steer")).toBe(true)
+
+      yield* Deferred.succeed(release, undefined)
+      yield* Fiber.await(occupied)
+      yield* llm.wait(2)
+
+      expect(yield* steer.hasPending(chat.id, "steer")).toBe(false)
+      expect(
+        (yield* sessions.messages({ sessionID: chat.id })).some((message) =>
+          message.parts.some((part) => part.type === "text" && part.text === "RACED-STEER"),
+        ),
+      ).toBe(true)
+    }),
+  20_000,
+)

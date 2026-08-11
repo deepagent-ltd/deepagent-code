@@ -1105,7 +1105,10 @@ describe("session.message-v2.toModelMessage", () => {
     const input: SessionV1.WithParts[] = [
       {
         info: assistantInfo(assistantID, "msg_001"),
-        parts: [progress] as SessionV1.Part[],
+        parts: [
+          progress,
+          { ...basePart(assistantID, "p2"), type: "text", text: "tool-call lead-in" },
+        ] as SessionV1.Part[],
       },
     ]
 
@@ -1116,7 +1119,10 @@ describe("session.message-v2.toModelMessage", () => {
     ).toStrictEqual([
       {
         role: "assistant",
-        content: [{ type: "text", text: "continuing implementation" }],
+        content: [
+          { type: "text", text: "continuing implementation" },
+          { type: "text", text: "tool-call lead-in" },
+        ],
       },
     ])
     expect(
@@ -1139,6 +1145,7 @@ describe("session.message-v2.toModelMessage", () => {
                   },
                 },
               },
+              { ...basePart(assistantID, "p2"), type: "text", text: "tool-call lead-in" },
             ] as SessionV1.Part[],
           },
         ],
@@ -1148,7 +1155,10 @@ describe("session.message-v2.toModelMessage", () => {
     ).toStrictEqual([
       {
         role: "assistant",
-        content: [{ type: "text", text: "continuing implementation" }],
+        content: [
+          { type: "text", text: "continuing implementation" },
+          { type: "text", text: "tool-call lead-in" },
+        ],
       },
     ])
   })

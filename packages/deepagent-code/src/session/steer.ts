@@ -22,6 +22,7 @@ import {
   SessionLegacyActivityAdmissionTable,
   SessionLegacyActivityTable,
 } from "./activity-sql"
+import { SessionActivityOwner } from "./activity-owner"
 
 // V4.1 §S1.1 — the durable mid-turn STEER buffer.
 //
@@ -326,6 +327,7 @@ export const layer = Layer.effect(
                       session_id: input.sessionID,
                       ordinal: (latest?.ordinal ?? -1) + 1,
                       trigger_admission_id: admissionID,
+                      owner_token: SessionActivityOwner.processOwnerToken,
                       state: "active",
                       created_at: timeCreated,
                     })

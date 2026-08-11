@@ -248,13 +248,22 @@ describe("SessionPromptIntent", () => {
         .pipe(Effect.orDie)
       yield* db
         .insert(PartTable)
-        .values({
-          id: PartID.make("prt_progress_final"),
-          message_id: assistantID,
-          session_id: sessionID,
-          time_created: 2,
-          data: { type: "text", text: "final answer" } as typeof PartTable.$inferInsert.data,
-        })
+        .values([
+          {
+            id: PartID.make("prt_progress_preamble"),
+            message_id: assistantID,
+            session_id: sessionID,
+            time_created: 2,
+            data: { type: "text", text: "final preamble" } as typeof PartTable.$inferInsert.data,
+          },
+          {
+            id: PartID.make("prt_progress_final"),
+            message_id: assistantID,
+            session_id: sessionID,
+            time_created: 2,
+            data: { type: "text", text: "final answer" } as typeof PartTable.$inferInsert.data,
+          },
+        ])
         .run()
         .pipe(Effect.orDie)
       yield* db
@@ -285,7 +294,8 @@ describe("SessionPromptIntent", () => {
         providerReceiptID: "receipt-progress-final",
       })
 
-      expect(yield* SessionPromptIntent.recoverActiveActivities()).toBe(1)
+      expect(yield* SessionPromptIntent.recoverActiveActivities()).toBe(0)
+      expect(yield* SessionPromptIntent.recoverActiveActivities("next-process-owner")).toBe(1)
       expect(
         yield* db
           .select()
@@ -295,7 +305,7 @@ describe("SessionPromptIntent", () => {
           .pipe(Effect.orDie),
       ).toMatchObject({
         state: "final",
-        text_part_id: "prt_progress_final",
+        text_part_id: expect.stringMatching(/^prt_progress_/),
         response_fingerprint: "response-final",
       })
       expect(
@@ -306,6 +316,37 @@ describe("SessionPromptIntent", () => {
           .get()
           .pipe(Effect.orDie),
       ).toMatchObject({ state: "settled", terminal_reason: "stop" })
+      expect(
+        yield* db
+          .select({ data: PartTable.data })
+          .from(PartTable)
+          .where(eq(PartTable.message_id, assistantID))
+          .all()
+          .pipe(Effect.orDie),
+      ).toEqual([
+        expect.objectContaining({
+          data: expect.objectContaining({
+            metadata: {
+              deepagent_activity_progress: {
+                activity_id: activity.activityID,
+                revision: 0,
+                state: "final",
+              },
+            },
+          }),
+        }),
+        expect.objectContaining({
+          data: expect.objectContaining({
+            metadata: {
+              deepagent_activity_progress: {
+                activity_id: activity.activityID,
+                revision: 0,
+                state: "final",
+              },
+            },
+          }),
+        }),
+      ])
     }),
   )
 

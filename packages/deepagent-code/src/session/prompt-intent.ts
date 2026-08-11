@@ -20,6 +20,7 @@ import {
   SessionLegacyActivityTable,
 } from "./activity-sql"
 import { SessionToolRequestReceiptTable } from "./tool-request-receipt.sql"
+import { SessionActivityOwner } from "./activity-owner"
 
 export type Source = "composer" | "intelligence" | "followup" | "rewrite"
 export type Variant = "original" | "rewritten"
@@ -627,6 +628,7 @@ export const materializeTurn = Effect.fn("SessionPromptIntent.materializeTurn")(
                 session_id: input.receipt.sessionID,
                 ordinal: (latest?.ordinal ?? -1) + 1,
                 trigger_admission_id: admissionID,
+                owner_token: SessionActivityOwner.processOwnerToken,
                 state: "active",
                 terminal_reason: null,
                 created_at: now,
@@ -816,9 +818,15 @@ export const settleProgress = Effect.fn("SessionPromptIntent.settleProgress")(fu
           const parts = yield* tx
             .select()
             .from(PartTable)
-            .where(eq(PartTable.message_id, input.assistantMessageID))
+            .where(
+              and(
+                eq(PartTable.message_id, input.assistantMessageID),
+                eq(PartTable.session_id, SessionID.make(receipt.session_id)),
+              ),
+            )
             .all()
-          const text = parts.findLast((part) => {
+          const textParts = parts.filter((part) => part.data.type === "text")
+          const text = textParts.findLast((part) => {
             if (part.data.type !== "text") return false
             return (part.data as Omit<SessionV1.TextPart, "id" | "sessionID" | "messageID">).text.trim() !== ""
           })
@@ -864,6 +872,36 @@ export const settleProgress = Effect.fn("SessionPromptIntent.settleProgress")(fu
             .get()
           if (!updated)
             return yield* Effect.die(new Error(`activity progress settlement CAS lost: ${input.activityID}`))
+          yield* Effect.forEach(
+            textParts,
+            (part) => {
+              const data = part.data as Omit<SessionV1.TextPart, "id" | "sessionID" | "messageID">
+              return tx
+                .update(PartTable)
+                .set({
+                  data: {
+                    ...data,
+                    metadata: {
+                      ...(data.metadata ?? {}),
+                      deepagent_activity_progress: {
+                        activity_id: input.activityID,
+                        revision: current.revision,
+                        state,
+                      },
+                    },
+                  } as typeof PartTable.$inferInsert.data,
+                })
+                .where(
+                  and(
+                    eq(PartTable.id, part.id),
+                    eq(PartTable.message_id, input.assistantMessageID),
+                    eq(PartTable.session_id, SessionID.make(receipt.session_id)),
+                  ),
+                )
+                .run()
+            },
+            { discard: true },
+          )
           if (state !== "progress") {
             const activityState =
               state === "final" ? "settled" : state === "interrupted" ? "interrupted" : "recovery_required"
@@ -892,12 +930,19 @@ export const settleProgress = Effect.fn("SessionPromptIntent.settleProgress")(fu
     .pipe(Effect.orDie)
 })
 
-export const recoverActiveActivities = Effect.fn("SessionPromptIntent.recoverActiveActivities")(function* () {
+export const recoverActiveActivities = Effect.fn("SessionPromptIntent.recoverActiveActivities")(function* (
+  ownerToken = SessionActivityOwner.processOwnerToken,
+) {
   const { db } = yield* Database.Service
   const active = yield* db
     .select({ activityID: SessionLegacyActivityTable.activity_id })
     .from(SessionLegacyActivityTable)
-    .where(eq(SessionLegacyActivityTable.state, "active"))
+    .where(
+      and(
+        eq(SessionLegacyActivityTable.state, "active"),
+        sql`${SessionLegacyActivityTable.owner_token} != ${ownerToken}`,
+      ),
+    )
     .all()
     .pipe(Effect.orDie)
   yield* Effect.forEach(
