@@ -253,6 +253,10 @@ for (const item of targets) {
           ...(sourceCommit ? { sourceCommit } : {}),
           ...(sourceDirty !== undefined ? { sourceDirty } : {}),
           binarySha256,
+          modelsDev: {
+            source: generated.modelsSource,
+            sha256: generated.modelsSha256,
+          },
         },
       },
       null,

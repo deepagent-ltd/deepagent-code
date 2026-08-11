@@ -18,6 +18,11 @@ async function fixture() {
 describe("auditPackageInputs", () => {
   test("accepts generated application assets", async () => {
     await using root = await fixture()
+    await mkdir(path.join(root.root, "out", "main", "chunks"), { recursive: true })
+    await writeFile(
+      path.join(root.root, "out", "main", "chunks", "models-dev.build.json"),
+      JSON.stringify({ source: "test/tool/fixtures/models-api.json", sha256: "a".repeat(64) }),
+    )
     await expect(auditPackageInputs(root.root)).resolves.toBeUndefined()
   })
 
@@ -44,4 +49,27 @@ describe("auditPackageInputs", () => {
     await symlink(path.join(root.root, "out", "main", "index.js"), path.join(root.root, "resources", "linked.js"))
     await expect(auditPackageInputs(root.root)).rejects.toThrow("symbolic link")
   })
+
+  for (const runtimeFile of [
+    "config.json",
+    "config.jsonc",
+    "deepagent-code.json",
+    "deepagent-code.jsonc",
+    "provider-template.jsonc",
+    "mcp-auth.json",
+    "mcp-secrets.json",
+    "models.json",
+    "model.json",
+    "plugin-meta.json",
+    "sessions.json",
+    "artifact-key.json",
+    "token-keyring.json",
+    "password",
+  ]) {
+    test(`rejects runtime configuration or state file ${runtimeFile}`, async () => {
+      await using root = await fixture()
+      await writeFile(path.join(root.root, "resources", runtimeFile), "{}")
+      await expect(auditPackageInputs(root.root)).rejects.toThrow("runtime user-data file")
+    })
+  }
 })

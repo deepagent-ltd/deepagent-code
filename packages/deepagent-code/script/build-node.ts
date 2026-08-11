@@ -28,6 +28,16 @@ const result = await Bun.build({
   },
 })
 if (!result.success) throw new AggregateError(result.logs, "Failed to build the Node server")
+await Bun.file("./dist/node/models-dev.build.json").write(
+  JSON.stringify(
+    {
+      source: generated.modelsSource,
+      sha256: generated.modelsSha256,
+    },
+    null,
+    2,
+  ),
+)
 
 // Bun preserves CommonJS __dirname/__filename values for bundled dependencies. Those values point
 // at the build machine and are unusable after installation, so make the bundle reproducible and
