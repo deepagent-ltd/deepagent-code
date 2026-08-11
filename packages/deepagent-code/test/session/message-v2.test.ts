@@ -1083,16 +1083,88 @@ describe("session.message-v2.toModelMessage", () => {
     expect(await MessageV2.toModelMessages(input, model)).toStrictEqual([
       {
         role: "assistant",
+        content: [{ type: "text", text: "partial answer" }],
+      },
+    ])
+  })
+
+  test("replays activity progress only while its tool continuation is active", async () => {
+    const assistantID = "msg_002"
+    const progress = {
+      ...basePart(assistantID, "p1"),
+      type: "text" as const,
+      text: "continuing implementation",
+      metadata: {
+        deepagent_activity_progress: {
+          activity_id: "activity-1",
+          revision: 1,
+          state: "progress",
+        },
+      },
+    }
+    const input: SessionV1.WithParts[] = [
+      {
+        info: assistantInfo(assistantID, "msg_001"),
+        parts: [
+          progress,
+          { ...basePart(assistantID, "p2"), type: "text", text: "tool-call lead-in" },
+        ] as SessionV1.Part[],
+      },
+    ]
+
+    expect(
+      await MessageV2.toModelMessages(input, model, {
+        terminalBoundaryID: MessageID.make("msg_001"),
+      }),
+    ).toStrictEqual([
+      {
+        role: "assistant",
         content: [
-          { type: "reasoning", text: "thinking", providerOptions: undefined },
-          { type: "text", text: "partial answer" },
+          { type: "text", text: "continuing implementation" },
+          { type: "text", text: "tool-call lead-in" },
+        ],
+      },
+    ])
+    expect(
+      await MessageV2.toModelMessages(input, model, {
+        terminalBoundaryID: MessageID.make(assistantID),
+      }),
+    ).toStrictEqual([])
+    expect(
+      await MessageV2.toModelMessages(
+        [
+          {
+            info: input[0].info,
+            parts: [
+              {
+                ...progress,
+                metadata: {
+                  deepagent_activity_progress: {
+                    ...progress.metadata.deepagent_activity_progress,
+                    state: "final",
+                  },
+                },
+              },
+              { ...basePart(assistantID, "p2"), type: "text", text: "tool-call lead-in" },
+            ] as SessionV1.Part[],
+          },
+        ],
+        model,
+        { terminalBoundaryID: MessageID.make(assistantID) },
+      ),
+    ).toStrictEqual([
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "continuing implementation" },
+          { type: "text", text: "tool-call lead-in" },
         ],
       },
     ])
   })
 
   test("preserves OpenRouter reasoning details through provider transform", async () => {
-    const assistantID = "m-assistant"
+    const assistantID = "msg_002"
     const openrouterModel: Provider.Model = {
       ...model,
       id: ModelV2.ID.make("deepseek/deepseek-v4-pro"),
@@ -1144,7 +1216,13 @@ describe("session.message-v2.toModelMessage", () => {
     ]
 
     expect(
-      ProviderTransform.message(await MessageV2.toModelMessages(input, openrouterModel), openrouterModel, {}),
+      ProviderTransform.message(
+        await MessageV2.toModelMessages(input, openrouterModel, {
+          terminalBoundaryID: MessageID.make("msg_000"),
+        }),
+        openrouterModel,
+        {},
+      ),
     ).toStrictEqual([
       {
         role: "assistant",
@@ -1164,7 +1242,67 @@ describe("session.message-v2.toModelMessage", () => {
     ])
   })
 
-  test("preserves settled same-model reasoning so a new user turn keeps the cached prefix", async () => {
+  test("replays metadata-free interleaved reasoning only for an active tool continuation", async () => {
+    const assistantID = "msg_002"
+    const deepseekModel: Provider.Model = {
+      ...model,
+      id: ModelV2.ID.make("deepseek-v4-pro"),
+      providerID: ProviderV2.ID.make("deepseek"),
+      api: {
+        id: "deepseek-v4-pro",
+        url: "https://api.deepseek.com/v1",
+        npm: "@ai-sdk/openai-compatible",
+      },
+      capabilities: {
+        ...model.capabilities,
+        reasoning: true,
+        interleaved: { field: "reasoning_content" },
+      },
+    }
+    const input: SessionV1.WithParts[] = [
+      {
+        info: assistantInfo(assistantID, "msg_001", undefined, {
+          providerID: deepseekModel.providerID,
+          modelID: deepseekModel.id,
+        }),
+        parts: [
+          {
+            ...basePart(assistantID, "p1"),
+            type: "reasoning",
+            text: "ordinary reasoning",
+            time: { start: 0, end: 1 },
+          },
+          { ...basePart(assistantID, "p2"), type: "text", text: "working" },
+        ] as SessionV1.Part[],
+      },
+    ]
+
+    expect(
+      await MessageV2.toModelMessages(input, deepseekModel, {
+        terminalBoundaryID: MessageID.make("msg_001"),
+      }),
+    ).toStrictEqual([
+      {
+        role: "assistant",
+        content: [
+          { type: "reasoning", text: "ordinary reasoning", providerOptions: undefined },
+          { type: "text", text: "working" },
+        ],
+      },
+    ])
+    expect(
+      await MessageV2.toModelMessages(input, deepseekModel, {
+        terminalBoundaryID: MessageID.make(assistantID),
+      }),
+    ).toStrictEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "working" }],
+      },
+    ])
+  })
+
+  test("preserves settled signed Anthropic reasoning so a new user turn keeps the cached prefix", async () => {
     const anthropicModel: Provider.Model = {
       ...model,
       id: ModelV2.ID.make("kimi-k3"),
@@ -1238,6 +1376,127 @@ describe("session.message-v2.toModelMessage", () => {
         { type: "text", text: "working" },
       ],
     })
+  })
+
+  test("drops settled Anthropic reasoning without a valid signed prefix", async () => {
+    const assistantID = "msg_002"
+    const anthropicModel: Provider.Model = {
+      ...model,
+      id: ModelV2.ID.make("kimi-k3"),
+      providerID: ProviderV2.ID.make("kimi-for-coding"),
+      api: {
+        id: "kimi-k3",
+        url: "https://api.kimi.com/coding/v1",
+        npm: "@ai-sdk/anthropic",
+      },
+      capabilities: {
+        ...model.capabilities,
+        reasoning: true,
+      },
+    }
+    const input: SessionV1.WithParts[] = [
+      {
+        info: assistantInfo(assistantID, "msg_001", undefined, {
+          providerID: anthropicModel.providerID,
+          modelID: anthropicModel.id,
+        }),
+        parts: [
+          {
+            ...basePart(assistantID, "p1"),
+            type: "reasoning",
+            text: "unsigned reasoning",
+            time: { start: 0, end: 1 },
+            metadata: { anthropic: { signature: " " } },
+          },
+          { ...basePart(assistantID, "p2"), type: "text", text: "answer" },
+        ] as SessionV1.Part[],
+      },
+    ]
+
+    expect(
+      await MessageV2.toModelMessages(input, anthropicModel, {
+        terminalBoundaryID: MessageID.make(assistantID),
+      }),
+    ).toStrictEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "answer" }],
+      },
+    ])
+  })
+
+  test("preserves settled encrypted OpenAI reasoning state", async () => {
+    const assistantID = "msg_002"
+    const input: SessionV1.WithParts[] = [
+      {
+        info: assistantInfo(assistantID, "msg_001"),
+        parts: [
+          {
+            ...basePart(assistantID, "p1"),
+            type: "reasoning",
+            text: "reasoning summary",
+            time: { start: 0, end: 1 },
+            metadata: { openai: { reasoningEncryptedContent: "encrypted-state" } },
+          },
+          { ...basePart(assistantID, "p2"), type: "text", text: "answer" },
+        ] as SessionV1.Part[],
+      },
+    ]
+
+    expect(
+      await MessageV2.toModelMessages(input, model, {
+        terminalBoundaryID: MessageID.make(assistantID),
+      }),
+    ).toStrictEqual([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "reasoning",
+            text: "reasoning summary",
+            providerOptions: { openai: { reasoningEncryptedContent: "encrypted-state" } },
+          },
+          { type: "text", text: "answer" },
+        ],
+      },
+    ])
+  })
+
+  test("requires encrypted state for OpenAI even when interleaved reasoning is enabled", async () => {
+    const assistantID = "msg_002"
+    const interleavedOpenAI: Provider.Model = {
+      ...model,
+      capabilities: {
+        ...model.capabilities,
+        reasoning: true,
+        interleaved: { field: "reasoning_content" },
+      },
+    }
+    const input: SessionV1.WithParts[] = [
+      {
+        info: assistantInfo(assistantID, "msg_001"),
+        parts: [
+          {
+            ...basePart(assistantID, "p1"),
+            type: "reasoning",
+            text: "reasoning without encrypted state",
+            time: { start: 0, end: 1 },
+          },
+          { ...basePart(assistantID, "p2"), type: "text", text: "answer" },
+        ] as SessionV1.Part[],
+      },
+    ]
+
+    expect(
+      await MessageV2.toModelMessages(input, interleavedOpenAI, {
+        terminalBoundaryID: MessageID.make("msg_001"),
+      }),
+    ).toStrictEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "answer" }],
+      },
+    ])
   })
 
   test("still drops settled reasoning when projecting history to a different model", async () => {
@@ -1418,6 +1677,14 @@ describe("session.message-v2.toModelMessage", () => {
   test("substitutes space for empty text between signed reasoning blocks", async () => {
     // Reproduces the bug pattern: [reasoning(sig), text(""), reasoning(sig), text(full)]
     const assistantID = "m-assistant"
+    const anthropicModel: Provider.Model = {
+      ...model,
+      api: {
+        id: model.api.id,
+        url: model.api.url,
+        npm: "@ai-sdk/anthropic",
+      },
+    }
     const input: SessionV1.WithParts[] = [
       {
         info: assistantInfo(assistantID, "m-parent"),
@@ -1442,7 +1709,7 @@ describe("session.message-v2.toModelMessage", () => {
       },
     ]
 
-    const result = await MessageV2.toModelMessages(input, model)
+    const result = await MessageV2.toModelMessages(input, anthropicModel)
 
     // step-start splits into two assistant messages; SDK's groupIntoBlocks merges them later
     expect(result).toHaveLength(2)
@@ -1454,6 +1721,14 @@ describe("session.message-v2.toModelMessage", () => {
     // Bedrock signed reasoning is preserved as reasoning metadata, but unlike the
     // direct Anthropic path we do not preserve empty text separators for Bedrock.
     const assistantID = "m-assistant-bedrock"
+    const bedrockModel: Provider.Model = {
+      ...model,
+      api: {
+        id: model.api.id,
+        url: model.api.url,
+        npm: "@ai-sdk/amazon-bedrock",
+      },
+    }
     const input: SessionV1.WithParts[] = [
       {
         info: assistantInfo(assistantID, "m-parent"),
@@ -1470,9 +1745,10 @@ describe("session.message-v2.toModelMessage", () => {
       },
     ]
 
-    const result = await MessageV2.toModelMessages(input, model)
+    const result = await MessageV2.toModelMessages(input, bedrockModel)
 
     expect(result).toHaveLength(1)
+    expect((result[0].content as any[]).some((part) => part.type === "reasoning")).toBeTrue()
     const texts = (result[0].content as any[]).filter((p) => p.type === "text")
     expect(texts.map((t) => t.text)).toStrictEqual(["", "answer"])
   })

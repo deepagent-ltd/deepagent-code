@@ -12,7 +12,13 @@ import { Plugin } from "@/plugin"
 import { Config } from "@/config/config"
 import { NotFoundError } from "@/storage/storage"
 import { Database } from "@deepagent-code/core/database/database"
-import { MessageTable, PartTable, SessionTable, SessionWorldStateBaselineTable } from "@deepagent-code/core/session/sql"
+import {
+  MessageTable,
+  PartTable,
+  SessionHistoryStateTable,
+  SessionTable,
+  SessionWorldStateBaselineTable,
+} from "@deepagent-code/core/session/sql"
 import { PromptEpoch } from "./prompt-epoch"
 import {
   CompactionArtifactTable,
@@ -46,6 +52,7 @@ import { LLM } from "./llm"
 import { HistoryAuthority } from "./history-authority"
 import { Identifier } from "@/id/id"
 import { Project } from "@deepagent-code/core/project"
+import { SessionPromptEpochTable } from "./prompt-epoch.sql"
 
 const log = Log.create({ service: "session.compaction" })
 
@@ -710,7 +717,7 @@ export const layer = Layer.effect(
         .pipe(Effect.orDie)
     })
 
-    const failRun = (runID: string, kind: string) =>
+    const failRun = (runID: string, kind: string, recoverySessionID?: SessionID) =>
       db
         .transaction(
           (tx) =>
@@ -730,6 +737,34 @@ export const layer = Layer.effect(
                 .set({ state: "orphaned" })
                 .where(and(eq(CompactionArtifactTable.run_id, runID), eq(CompactionArtifactTable.state, "pending")))
                 .run()
+              if (recoverySessionID) {
+                const now = Date.now()
+                const reason = `compaction ${runID} failed with ${kind}; deterministic history recovery is required`
+                yield* tx
+                  .update(SessionPromptEpochTable)
+                  .set({ authority_state: "recovery_required", recovery_reason: reason })
+                  .where(
+                    and(
+                      eq(SessionPromptEpochTable.session_id, recoverySessionID),
+                      eq(SessionPromptEpochTable.state, "active"),
+                    ),
+                  )
+                  .run()
+                yield* tx
+                  .insert(SessionHistoryStateTable)
+                  .values({
+                    session_id: recoverySessionID,
+                    state: "recovery_required",
+                    reason,
+                    time_created: now,
+                    time_updated: now,
+                  })
+                  .onConflictDoUpdate({
+                    target: SessionHistoryStateTable.session_id,
+                    set: { state: "recovery_required", reason, time_updated: now },
+                  })
+                  .run()
+              }
             }),
           { behavior: "immediate" },
         )
@@ -1313,7 +1348,7 @@ export const layer = Layer.effect(
         }).toObject()
         currentProcessor.message.finish = "error"
         yield* session.updateMessage(currentProcessor.message)
-        yield* failRun(run.run_id, "summary_context_overflow")
+        yield* failRun(run.run_id, "summary_context_overflow", input.sessionID)
         return "stop"
       }
 

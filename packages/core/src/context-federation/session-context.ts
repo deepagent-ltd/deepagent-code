@@ -1,7 +1,7 @@
 export * as SessionContext from "./session-context"
 
 import { randomBytes } from "node:crypto"
-import { and, asc, desc, eq, inArray, max } from "drizzle-orm"
+import { and, asc, desc, eq, inArray, max, sql } from "drizzle-orm"
 import { Context, Effect, Layer, Schema } from "effect"
 import { Database } from "../database/database"
 import { Hash } from "../util/hash"
@@ -221,12 +221,7 @@ export type CommitSelectionInput = {
   readonly rendered: Rendered
   readonly artifact: Omit<
     AuditArtifact,
-    | "schemaVersion"
-    | "selectionId"
-    | "queryFingerprint"
-    | "authorizationFingerprint"
-    | "graphStatuses"
-    | "selected"
+    "schemaVersion" | "selectionId" | "queryFingerprint" | "authorizationFingerprint" | "graphStatuses" | "selected"
   >
   readonly now?: number
 }
@@ -266,6 +261,16 @@ export const layer = Layer.effect(
             if (!admitted) return yield* new InputError({ reason: "missing" })
             if (admitted.session_id !== input.sessionId) return yield* new InputError({ reason: "wrong_session" })
             if (admitted.promoted_seq === null) return yield* new InputError({ reason: "not_promoted" })
+            yield* tx.run(sql`
+              INSERT INTO session_activity_admission (
+                admission_id, session_id, source_kind, session_input_id, admitted_message_id,
+                delivery, payload_fingerprint_kind, payload_fingerprint, created_at
+              ) VALUES (
+                ${`v2:${admitted.id}`}, ${admitted.session_id}, 'session_input', ${admitted.id}, ${admitted.id},
+                ${admitted.delivery}, 'payload_hash', ${Hash.sha256(JSON.stringify(admitted.prompt))}, ${admitted.time_created}
+              )
+              ON CONFLICT(session_input_id) DO NOTHING
+            `)
             const owned = yield* tx
               .select({ activity_id: SessionActivityInputTable.activity_id })
               .from(SessionActivityInputTable)
