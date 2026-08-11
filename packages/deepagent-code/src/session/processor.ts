@@ -157,7 +157,7 @@ export class ToolSequenceTracker {
       this.equivalentResultCount = 0
       return undefined
     }
-    const resultSignature = `${toolName}:${canonicalJson(resolved)}`
+    const resultSignature = `${this.calls[idx].fingerprint}:${canonicalJson(resolved)}`
     const progressSignature = canonicalJson(progress)
     this.equivalentResultCount =
       resultSignature === this.previousResultSignature && progressSignature === this.previousProgressSignature
@@ -328,21 +328,22 @@ export const restorePlanProtocolFailures = (messages: readonly PlanProtocolHisto
     )
   const uniqueAttempts = [
     ...new Map(
-      attempts.map((attempt) => [attempt.messageID + "\x00" + (attempt.part.callID ?? attempt.part.id), attempt] as const),
+      attempts.map(
+        (attempt) => [attempt.messageID + "\x00" + (attempt.part.callID ?? attempt.part.id), attempt] as const,
+      ),
     ).values(),
   ]
-  return uniqueAttempts
-    .reduce((consecutive, item) => {
-      const metadata = item.part.state && isRecord(item.part.state.metadata) ? item.part.state.metadata : undefined
-      const protocol = metadata?.plan_protocol
-      if (protocol === "success" || protocol === "progress") return 0
-      if (!(protocol === "invalid" || protocol === "conflict" || protocol === "schema" || protocol === "no_progress"))
-        return consecutive
-      const ordinal = metadata?.plan_attempt_ordinal
-      return typeof ordinal === "number" && Number.isSafeInteger(ordinal) && ordinal > 0
-        ? Math.max(consecutive + 1, ordinal)
-        : consecutive + 1
-    }, 0)
+  return uniqueAttempts.reduce((consecutive, item) => {
+    const metadata = item.part.state && isRecord(item.part.state.metadata) ? item.part.state.metadata : undefined
+    const protocol = metadata?.plan_protocol
+    if (protocol === "success" || protocol === "progress") return 0
+    if (!(protocol === "invalid" || protocol === "conflict" || protocol === "schema" || protocol === "no_progress"))
+      return consecutive
+    const ordinal = metadata?.plan_attempt_ordinal
+    return typeof ordinal === "number" && Number.isSafeInteger(ordinal) && ordinal > 0
+      ? Math.max(consecutive + 1, ordinal)
+      : consecutive + 1
+  }, 0)
 }
 
 /**
@@ -1342,7 +1343,11 @@ export const layer = Layer.effect(
                 value.name === "plan" ? ctx.planTracker?.settle(planTrackerCallID(value.id), "schema") : undefined
               if (protocol) {
                 yield* recordProcessorValidation(value.id, "schema_invalid")
-                yield* persistMissingPlanToolCall(value.id, protocol, "Plan result arrived without a durable tool call.")
+                yield* persistMissingPlanToolCall(
+                  value.id,
+                  protocol,
+                  "Plan result arrived without a durable tool call.",
+                )
                 if (protocol.terminal)
                   yield* Effect.fail(
                     new SessionV1.PlanProtocolViolationError({
@@ -1497,7 +1502,9 @@ export const layer = Layer.effect(
               yield* persistMissingPlanToolCall(
                 value.id,
                 toolCall ? undefined : protocol,
-                schemaInvalid ? "Plan tool input failed schema validation before a durable tool call was written." : value.message,
+                schemaInvalid
+                  ? "Plan tool input failed schema validation before a durable tool call was written."
+                  : value.message,
               )
             // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
             if (mirrorAssistant) {
