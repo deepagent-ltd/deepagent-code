@@ -81,7 +81,7 @@ describe("models.dev build data", () => {
     )
   })
 
-  test("does not read or rewrite a builder-local cache when the network is unavailable", async () => {
+  test("fails instead of silently embedding the repository fixture when the network is unavailable", async () => {
     await using directory = await fixture()
     const cacheFile = path.join(directory.root, "models.json")
     const builderOnly = {
@@ -93,14 +93,13 @@ describe("models.dev build data", () => {
     }
     await Bun.write(cacheFile, JSON.stringify(builderOnly))
 
-    const result = await loadModelsData({
-      environment: { DEEPAGENT_CODE_MODELS_URL: "http://127.0.0.1:1" },
-      cacheFile,
-      requestTimeoutMs: 200,
-    })
-
-    expect(result.source).toBe(path.resolve(import.meta.dir, "../tool/fixtures/models-api.json"))
-    expect(JSON.parse(result.data)["builder-only"]).toBeUndefined()
+    await expect(
+      loadModelsData({
+        environment: { DEEPAGENT_CODE_MODELS_URL: "http://127.0.0.1:1" },
+        cacheFile,
+        requestTimeoutMs: 200,
+      }),
+    ).rejects.toThrow("no explicit fallback was provided")
     expect(await Bun.file(cacheFile).json()).toEqual(builderOnly)
   })
 })

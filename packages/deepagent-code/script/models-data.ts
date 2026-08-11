@@ -1,8 +1,6 @@
 import { mkdir, rename, rm } from "node:fs/promises"
 import path from "node:path"
 
-const repositorySnapshotFile = path.resolve(import.meta.dir, "../test/tool/fixtures/models-api.json")
-
 export async function loadModelsData(
   options: {
     environment?: Readonly<Record<string, string | undefined>>
@@ -36,9 +34,12 @@ export async function loadModelsData(
     return result(remote, `${modelsURL}/api.json`)
   }
 
-  // Build inputs must not depend on the builder's DeepAgent/OpenCode runtime caches. A caller may
-  // pass explicit fallback files for tests or controlled builds; the default is the committed copy.
-  const fallbacks = options.fallbackFiles ?? [repositorySnapshotFile]
+  // A fallback is deliberately opt-in. Production builds must use the models.dev response rather
+  // than silently embedding a stale test fixture when the network is unavailable.
+  const fallbacks = options.fallbackFiles
+  if (!fallbacks) {
+    throw new Error(`Unable to load models.dev catalog from ${modelsURL}; no explicit fallback was provided`)
+  }
   const cached = (await Promise.all(fallbacks.map(async (file) => ({ file, data: await readCatalog(file) })))).find(
     (item): item is { file: string; data: Record<string, unknown> } => item.data !== undefined,
   )
