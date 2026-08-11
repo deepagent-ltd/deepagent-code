@@ -1,6 +1,6 @@
-// BUG-005: PromptEpoch — the unique model history boundary authority.
+// BUG-405-005: PromptEpoch — the unique model history boundary authority.
 //
-// Design contract (docs/4.0.4_r6.md §11, docs/bug-005-405.md §4.4):
+// Design contract (docs/4.0.4_r6.md §11, docs/bug-405-005.md §4.4):
 //   - One "active" epoch per session at most (enforced by partial unique index).
 //   - Epoch 0 is the bootstrap epoch: no checkpoint refs, full transcript selection.
 //   - A new epoch is ONLY activated by CompactionCommitted — never by epoch-first writes.

@@ -108,7 +108,7 @@ export const ensureSessionBranch = Effect.fn("PRCollaboration.ensureSessionBranc
       if (!repository) return false
       const status = yield* input.git.porcelainStatus(input.directory)
       if (!status?.clean) {
-        // BUG-001-405 Fix-C: truncate the path list to avoid flooding the parent model context.
+        // BUG-405-001 Fix-C: truncate the path list to avoid flooding the parent model context.
         // Dumping all dirty/untracked paths produced 86 k-char errors in observed sessions.
         const MAX_SHOWN = 10
         const allPaths = status?.paths ?? []

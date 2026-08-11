@@ -45,7 +45,7 @@ export const PlanEvent = {
 const PlanStep = Schema.Struct({
   step_id: Schema.optional(Schema.String).annotate({
     description:
-      "Stable id; required for advance, copy it for an unchanged replan step, and omit it for create or a genuinely new replan step so the server allocates it",
+      "Stable id; required for advance, copy it only for a retained replan step, and omit it for create or a new replan step. Create rejects supplied IDs; replan rejects unknown supplied IDs",
   }),
   title: Schema.optional(Schema.String).annotate({
     description: "What this step does; required for create/replan and ignored for advance",
@@ -94,7 +94,7 @@ export const Parameters = Schema.Struct({
   }),
   active_step_id: Schema.optional(Schema.NullOr(Schema.String)).annotate({
     description:
-      "For create/replan, omit this field and mark at most one step active; the server derives its allocated ID. For advance, copy a visible step_id, omit to retain it, or use null to clear it",
+      "For create/replan, omit this field because supplying it is rejected; mark at most one step active and the server derives its ID. For advance, copy a visible step_id, omit to retain it, or use null to clear it",
   }),
 })
 export const PlanWriteParameters = Parameters
@@ -239,7 +239,7 @@ export const PlanTool = Tool.define<typeof Parameters, Metadata, EventV2Bridge.S
                 offendingText,
                 " Correct the plan payload and retry once.",
                 validation.challenge_id ? " Confirmation: " + validation.challenge_id : "",
-                renderModelPlanCorrection(params.operation, validation.code, previous, ref),
+                renderModelPlanCorrection(params, validation.code, previous, ref),
               ].join("")
               return {
                 title: "Plan needs correction",
@@ -319,7 +319,7 @@ export const PlanTool = Tool.define<typeof Parameters, Metadata, EventV2Bridge.S
             acceptanceWarnings.length > 0 ? `\n\n⚠ ${acceptanceWarnings.join("; ")}. Verify before finalizing.` : ""
           return {
             title: `Plan: ${done}/${total} steps`,
-            output: `${AgentGateway.DeepAgentPlanController.renderPlanWriteContext(plan, version)}${changeSummary}${warnSummary}`,
+            output: renderModelPlanSuccess(plan, version, `${changeSummary}${warnSummary}`),
             metadata: {
               plan_id: plan.plan_id,
               goal: plan.goal,
@@ -339,9 +339,9 @@ export const PlanTool = Tool.define<typeof Parameters, Metadata, EventV2Bridge.S
   }),
 )
 
-// The core controller keeps the full-document contract for human and HTTP writes. Model advances
-// use this adapter so compact snapshots and model restatements cannot mutate authoritative identity
-// fields; only status, note, and active-step intent crosses the model boundary.
+// The core controller keeps the full-document contract for human and HTTP writes. This adapter
+// supplies model-owned intent to that strict boundary without letting the model allocate opaque IDs
+// or reconstruct authority fields omitted from compact context.
 export const normalizeModelPlanWrite = (
   params: Schema.Schema.Type<typeof Parameters>,
   previous: ReturnType<typeof AgentGateway.DeepAgentPlanStore.getPlanDoc>,
@@ -358,16 +358,22 @@ export const normalizeModelPlanWrite = (
     goal: params.goal ?? "",
   }
 
-  if (params.operation === "create" || previous == null) {
-    // Model-created IDs are never authoritative. Keep explicit null so a contradictory active status
-    // remains a validation error, and derive every non-null pointer after server allocation.
-    const deriveActive = params.active_step_id === undefined || params.active_step_id !== null
+  if (params.operation === "create") {
+    const suppliedIDs = params.steps.map((step) => step.step_id?.trim()).filter((stepID) => stepID !== undefined)
+    if (suppliedIDs.length > 0 || params.active_step_id !== undefined) {
+      throw new AgentGateway.DeepAgentPlanController.PlanValidationError("unsafe_step_identity", [
+        ...new Set([...suppliedIDs, ...(typeof params.active_step_id === "string" ? [params.active_step_id] : [])]),
+      ])
+    }
     return {
       ...base,
       assumptions: params.assumptions,
-      ...(deriveActive ? {} : { active_step_id: null }),
-      steps: params.steps.map((step) => ({ ...step, step_id: undefined, title: step.title ?? "" })),
+      steps: params.steps.map((step) => ({ ...step, title: step.title ?? "" })),
     }
+  }
+
+  if (previous == null) {
+    throw new AgentGateway.DeepAgentPlanController.PlanValidationError("plan_missing")
   }
 
   if (params.operation === "advance") {
@@ -431,22 +437,16 @@ export const normalizeModelPlanWrite = (
       previous.plan_id,
     )
   }
+  if (params.active_step_id !== undefined) {
+    throw new AgentGateway.DeepAgentPlanController.PlanValidationError(
+      "unsafe_step_identity",
+      typeof params.active_step_id === "string" ? [params.active_step_id] : [],
+      previous.plan_id,
+    )
+  }
   return {
     ...base,
-    goal: previous.goal,
     assumptions: params.assumptions === undefined ? [...previous.assumptions] : params.assumptions,
-    active_step_id:
-      params.active_step_id === undefined
-        ? undefined
-        : params.active_step_id !== null &&
-            !params.steps.some((step) => step.step_id?.trim() === params.active_step_id?.trim()) &&
-            params.steps.every((step) => (step.step_id?.trim() ?? "") === "") &&
-            !knownIDs.has(params.active_step_id.trim()) &&
-            params.steps.filter(
-              (step) => AgentGateway.DeepAgentPlanController.normalizePlanStepStatus(step.status) === "active",
-            ).length === 1
-          ? undefined
-          : params.active_step_id,
     steps: params.steps.map((update) => {
       const stepID = update.step_id?.trim() ?? ""
       const prior = stepID === "" ? undefined : previous.steps.find((step) => step.step_id === stepID)
@@ -463,43 +463,70 @@ export const normalizeModelPlanWrite = (
 }
 
 export const renderModelPlanCorrection = (
-  operation: Schema.Schema.Type<typeof Parameters>["operation"],
+  params: Schema.Schema.Type<typeof Parameters>,
   code: AgentGateway.DeepAgentPlanController.PlanValidationCode,
   previous: ReturnType<typeof AgentGateway.DeepAgentPlanStore.getPlanDoc>,
   ref: ReturnType<typeof AgentGateway.DeepAgentPlanStore.planDocRef>,
 ): string => {
-  if (operation === "advance") return renderPlanRetryBase(previous, ref)
+  if (params.operation === "advance") return renderPlanRetryBase(previous, ref)
   if (code === "plan_already_exists") {
     return (
       "\n\nCorrection protocol: create cannot replace an existing plan. Use advance for status/note changes or replan for structural changes, with the exact authoritative precondition below." +
       renderPlanRetryBase(previous, ref)
     )
   }
-  if (operation === "create") {
+  if (params.operation === "create") {
     return (
-      "\n\nCorrection protocol for create: use " +
-      JSON.stringify({ expected_plan_id: null, expected_version: null }) +
-      ". Omit active_step_id; mark at most one step status=active and the server will allocate missing step_id values, then derive active_step_id. Do not invent a future server ID."
+      "\n\nCorrection protocol for create: copy the schema-valid payload below. It deliberately omits every step_id and active_step_id; the server allocates IDs and derives the active pointer. Do not invent a future server ID.\n" +
+      JSON.stringify({
+        operation: "create",
+        expected_plan_id: null,
+        expected_version: null,
+        ...(params.goal !== undefined ? { goal: params.goal } : {}),
+        ...(params.assumptions !== undefined ? { assumptions: params.assumptions } : {}),
+        steps: params.steps.map((step) => ({
+          ...(step.title !== undefined ? { title: step.title } : {}),
+          status: step.status,
+          ...(step.acceptance !== undefined ? { acceptance: step.acceptance } : {}),
+          ...(step.assigned_agent !== undefined ? { assigned_agent: step.assigned_agent } : {}),
+          ...(step.note !== undefined ? { note: step.note } : {}),
+        })),
+      })
     )
   }
   if (previous == null || ref == null) {
     return "\n\nAuthoritative replan parameters are unavailable. Do not guess expected_plan_id, expected_version, step_id, or active_step_id. If no plan exists, use create with null expected values."
   }
   return (
-    "\n\nCorrection protocol for replan: copy the exact precondition below. For a retained step, copy its exact step_id, title, acceptance, and assigned_agent; the server also fills acceptance/assigned_agent when omitted. Omit step_id for every new step so the server allocates it. Omit active_step_id and mark at most one step status=active; the server derives its ID after allocation. Omit assumptions to retain the authoritative list, or send [] only when you intentionally clear it.\n" +
+    "\n\nCorrection protocol for replan: start from the schema-valid authoritative payload below. Retain a step only with its exact step_id; for every new step, omit step_id. Omit active_step_id and mark at most one step status=active so the server derives its ID after allocation. Omit assumptions to retain the authoritative list, or send [] only when you intentionally clear it.\n" +
     JSON.stringify({
+      operation: "replan",
       expected_plan_id: previous.plan_id,
       expected_version: ref.version,
-      assumptions: previous.assumptions,
-      existing_steps: previous.steps.map((step) => ({
+      replan_reason: params.replan_reason?.trim() || "Correct the rejected replan against current authority",
+      goal: params.goal ?? previous.goal,
+      ...(params.assumptions !== undefined ? { assumptions: params.assumptions } : {}),
+      steps: previous.steps.map((step) => ({
         step_id: step.step_id,
         title: step.title,
-        acceptance: step.acceptance,
-        assigned_agent: step.assigned_agent,
+        status: step.status,
+        ...(step.acceptance != null ? { acceptance: step.acceptance } : {}),
+        ...(step.assigned_agent != null ? { assigned_agent: step.assigned_agent } : {}),
+        ...(step.note != null ? { note: step.note } : {}),
       })),
     })
   )
 }
+
+export const renderModelPlanSuccess = (
+  plan: AgentGateway.DeepAgentPlanController.PlanDoc,
+  version: number,
+  summary = "",
+): string =>
+  AgentGateway.DeepAgentPlanController.renderPlanWriteContext(plan, version) +
+  summary +
+  "\n\nCopyable parameters for the next plan update:\n" +
+  JSON.stringify(modelAdvanceParameters(plan, version))
 
 export const renderPlanRetryBase = (
   previous: ReturnType<typeof AgentGateway.DeepAgentPlanStore.getPlanDoc>,
@@ -511,15 +538,18 @@ export const renderPlanRetryBase = (
   }
   return (
     "\n\nAuthoritative plan parameters (copy expected_* and step_id values exactly; do not infer them):\n" +
-    JSON.stringify({
-      expected_plan_id: previous.plan_id,
-      expected_version: ref.version,
-      active_step_id: previous.active_step_id,
-      steps: previous.steps.map((step) => ({
-        step_id: step.step_id,
-        status: step.status,
-        ...(step.note != null ? { note: step.note } : {}),
-      })),
-    })
+    JSON.stringify(modelAdvanceParameters(previous, ref.version))
   )
 }
+
+const modelAdvanceParameters = (plan: AgentGateway.DeepAgentPlanController.PlanDoc, version: number) => ({
+  operation: "advance" as const,
+  expected_plan_id: plan.plan_id,
+  expected_version: version,
+  active_step_id: plan.active_step_id,
+  steps: plan.steps.map((step) => ({
+    step_id: step.step_id,
+    status: step.status,
+    ...(step.note != null ? { note: step.note } : {}),
+  })),
+})

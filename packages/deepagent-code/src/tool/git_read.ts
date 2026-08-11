@@ -3,7 +3,7 @@
  *
  * Permission name: "git_read" (intentionally absent from EDIT_CLASS_PERMISSIONS,
  * so subagentIsWriteType() returns false for agents that only hold this permission —
- * see BUG-001-405 Fix-A in agent.ts).
+ * see BUG-405-001 Fix-A in agent.ts).
  *
  * Implementation note: this tool uses Node's child_process.execFile directly rather
  * than Git.Service so that it adds no new service requirement to the tool registry's
