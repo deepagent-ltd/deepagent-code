@@ -150,6 +150,9 @@ export async function writeLiveArtifact(
   artifact: unknown,
   options?: {
     redactions?: ReadonlyArray<{ value: string; replacement?: string }>
+    harnessFiles?: ReadonlyArray<string>
+    evidenceFiles?: ReadonlyArray<string>
+    oracleVersion?: string
   },
 ) {
   await mkdir(config.artifactDirectory, { recursive: true })
@@ -169,14 +172,71 @@ export async function writeLiveArtifact(
       replacement: item.replacement ?? "<redacted>",
     })),
   ]
+  const evidence = isRecord(artifact)
+    ? { ...artifact, provenance: await liveArtifactProvenance(options) }
+    : { artifact, provenance: await liveArtifactProvenance(options) }
   const serialized = replacements
     .filter((item) => item.value.length > 1)
     .sort((a, b) => b.value.length - a.value.length)
     .reduce(
       (contents, item) => contents.replaceAll(item.value, item.replacement),
-      JSON.stringify(artifact, undefined, 2) ?? "null",
+      JSON.stringify(evidence, undefined, 2),
     )
   await Bun.write(path.join(config.artifactDirectory, `${suite}.json`), `${serialized}\n`)
+}
+
+async function liveArtifactProvenance(options?: {
+  harnessFiles?: ReadonlyArray<string>
+  evidenceFiles?: ReadonlyArray<string>
+  oracleVersion?: string
+}) {
+  const repository = path.resolve(import.meta.dir, "../../../..")
+  const status = gitOutput(repository, ["status", "--porcelain", "--untracked-files=all"])
+  const harnessFiles = await hashRepositoryFiles(repository, options?.harnessFiles ?? [])
+  const evidenceFiles = await hashRepositoryFiles(repository, options?.evidenceFiles ?? [])
+  return {
+    schema: "deepagent-live-evidence-v1",
+    sourceCommit: gitOutput(repository, ["rev-parse", "HEAD"]) ?? null,
+    sourceTree: gitOutput(repository, ["rev-parse", "HEAD^{tree}"]) ?? null,
+    sourceDirty: status === undefined ? null : status.length > 0,
+    oracleVersion: options?.oracleVersion ?? null,
+    oracleHash: hashEvidence(harnessFiles),
+    routeManifestHash: harnessFiles.find((file) => file.path.endsWith("/routes.ts"))?.sha256 ?? null,
+    runtime: {
+      bun: Bun.version,
+      platform: process.platform,
+      arch: process.arch,
+    },
+    harnessFiles,
+    evidenceFiles,
+  }
+}
+
+async function hashRepositoryFiles(repository: string, files: ReadonlyArray<string>) {
+  return Promise.all(
+    files.toSorted().map(async (file) => {
+      const absolute = path.resolve(repository, file)
+      const relative = path.relative(repository, absolute).replaceAll("\\", "/")
+      if (relative.startsWith("../") || path.isAbsolute(relative)) {
+        throw new Error(`Live artifact file must be inside the repository: ${file}`)
+      }
+      if (!(await Bun.file(absolute).exists())) throw new Error(`Live artifact file does not exist: ${relative}`)
+      return {
+        path: relative,
+        sha256: new Bun.CryptoHasher("sha256").update(await Bun.file(absolute).bytes()).digest("hex"),
+      }
+    }),
+  )
+}
+
+function hashEvidence(files: ReadonlyArray<{ path: string; sha256: string }>) {
+  return new Bun.CryptoHasher("sha256").update(JSON.stringify(files)).digest("hex")
+}
+
+function gitOutput(repository: string, args: string[]) {
+  const result = Bun.spawnSync(["git", "-C", repository, ...args], { stdout: "pipe", stderr: "ignore" })
+  if (result.exitCode !== 0) return
+  return result.stdout.toString().trim()
 }
 
 function requiredString(value: unknown, name: string) {

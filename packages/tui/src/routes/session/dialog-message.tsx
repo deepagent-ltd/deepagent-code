@@ -6,7 +6,9 @@ import { useRoute } from "../../context/route"
 import { useClipboard } from "../../context/clipboard"
 import type { PromptInfo } from "../../component/prompt/history"
 import { stripPromptPartIDs as strip } from "../../prompt/part"
-import { acquireForkIntent, completeForkIntent } from "../../util/session"
+import { requestSessionFork } from "../../util/session"
+import { useToast } from "../../ui/toast"
+import { errorMessage } from "../../util/error"
 
 export function DialogMessage(props: {
   messageID: string
@@ -18,6 +20,7 @@ export function DialogMessage(props: {
   const message = createMemo(() => sync.data.message[props.sessionID]?.find((x) => x.id === props.messageID))
   const route = useRoute()
   const clipboard = useClipboard()
+  const toast = useToast()
 
   return (
     <DialogSelect
@@ -80,13 +83,24 @@ export function DialogMessage(props: {
           description: "create a new session",
           onSelect: async (dialog) => {
             const intentKey = `${props.sessionID}:${props.messageID}`
-            const intentID = acquireForkIntent(intentKey)
-            const result = await sdk.client.session.fork({
-              sessionID: props.sessionID,
-              messageID: props.messageID,
-              intentID,
+            const result = await requestSessionFork({
+              key: intentKey,
+              request: (intentID) =>
+                sdk.client.session.fork({
+                  sessionID: props.sessionID,
+                  messageID: props.messageID,
+                  intentID,
+                }),
             })
-            if (result.data) completeForkIntent(intentKey, intentID)
+            if ("error" in result) {
+              toast.show({
+                title: "Fork failed",
+                message: errorMessage(result.error),
+                variant: "error",
+                duration: 8000,
+              })
+              return
+            }
             const msg = message()
             const prompt = msg
               ? sync.data.part[msg.id].reduce(
@@ -101,7 +115,7 @@ export function DialogMessage(props: {
                 )
               : undefined
             route.navigate({
-              sessionID: result.data!.id,
+              sessionID: result.sessionID,
               type: "session",
               prompt,
             })

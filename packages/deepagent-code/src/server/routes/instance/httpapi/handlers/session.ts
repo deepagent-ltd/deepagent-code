@@ -33,6 +33,7 @@ import {
   DiffQuery,
   ForkPayload,
   InitPayload,
+  LegacyForkPayload,
   ListQuery,
   MessagesQuery,
   PermissionResponsePayload,
@@ -45,6 +46,7 @@ import {
 } from "../groups/session"
 import { ConflictError, PermissionNotFoundError, notFound } from "../errors"
 import * as SessionError from "./session-errors"
+import { randomUUID } from "node:crypto"
 
 const tryParseJson = (text: string) =>
   Effect.try({
@@ -255,7 +257,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       return yield* SessionError.mapFork(
         session.fork({
           sessionID: ctx.params.sessionID,
-          intentID: ctx.payload.intentID,
+          intentID: ctx.payload.intentID ?? `legacy_fork_${randomUUID()}`,
           messageID: ctx.payload.messageID,
           directory: ctx.payload.directory,
           isolate: ctx.payload.isolate,
@@ -268,13 +270,14 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       request: HttpServerRequest.HttpServerRequest
     }) {
       const body = yield* Effect.orDie(ctx.request.text)
-      if (body.trim().length === 0) return yield* new HttpApiError.BadRequest({})
-
-      const json = yield* tryParseJson(body)
-      const payload = yield* Schema.decodeUnknownEffect(ForkPayload)(json).pipe(
+      const json = body.trim().length === 0 ? {} : yield* tryParseJson(body)
+      const payload = yield* Schema.decodeUnknownEffect(LegacyForkPayload)(json).pipe(
         Effect.mapError(() => new HttpApiError.BadRequest({})),
       )
-      return yield* fork({ params: ctx.params, payload })
+      return yield* fork({
+        params: ctx.params,
+        payload: { ...payload, intentID: payload.intentID ?? `legacy_fork_${randomUUID()}` },
+      })
     })
 
     const abort = Effect.fn("SessionHttpApi.abort")(function* (ctx: { params: { sessionID: SessionID } }) {

@@ -8,13 +8,16 @@ import { useRoute } from "../../context/route"
 import { useDialog, type DialogContext } from "../../ui/dialog"
 import type { PromptInfo } from "../../component/prompt/history"
 import { stripPromptPartIDs as strip } from "../../prompt/part"
-import { acquireForkIntent, completeForkIntent } from "../../util/session"
+import { requestSessionFork } from "../../util/session"
+import { useToast } from "../../ui/toast"
+import { errorMessage } from "../../util/error"
 
 export function DialogForkFromTimeline(props: { sessionID: string; onMove: (messageID?: string) => void }) {
   const sync = useSync()
   const dialog = useDialog()
   const sdk = useSDK()
   const route = useRoute()
+  const toast = useToast()
 
   onMount(() => {
     dialog.setSize("large")
@@ -27,11 +30,16 @@ export function DialogForkFromTimeline(props: { sessionID: string; onMove: (mess
       value: undefined,
       onSelect: async (dialog: DialogContext) => {
         const intentKey = `${props.sessionID}:full`
-        const intentID = acquireForkIntent(intentKey)
-        const forked = await sdk.client.session.fork({ sessionID: props.sessionID, intentID })
-        if (forked.data) completeForkIntent(intentKey, intentID)
+        const forked = await requestSessionFork({
+          key: intentKey,
+          request: (intentID) => sdk.client.session.fork({ sessionID: props.sessionID, intentID }),
+        })
+        if ("error" in forked) {
+          toast.show({ title: "Fork failed", message: errorMessage(forked.error), variant: "error", duration: 8000 })
+          return
+        }
         route.navigate({
-          sessionID: forked.data!.id,
+          sessionID: forked.sessionID,
           type: "session",
         })
         dialog.clear()
@@ -50,13 +58,19 @@ export function DialogForkFromTimeline(props: { sessionID: string; onMove: (mess
         footer: Locale.time(message.time.created),
         onSelect: async (dialog) => {
           const intentKey = `${props.sessionID}:${message.id}`
-          const intentID = acquireForkIntent(intentKey)
-          const forked = await sdk.client.session.fork({
-            sessionID: props.sessionID,
-            messageID: message.id,
-            intentID,
+          const forked = await requestSessionFork({
+            key: intentKey,
+            request: (intentID) =>
+              sdk.client.session.fork({
+                sessionID: props.sessionID,
+                messageID: message.id,
+                intentID,
+              }),
           })
-          if (forked.data) completeForkIntent(intentKey, intentID)
+          if ("error" in forked) {
+            toast.show({ title: "Fork failed", message: errorMessage(forked.error), variant: "error", duration: 8000 })
+            return
+          }
           const parts = sync.data.part[message.id] ?? []
           const prompt = parts.reduce(
             (agg, part) => {
@@ -69,7 +83,7 @@ export function DialogForkFromTimeline(props: { sessionID: string; onMove: (mess
             { input: "", parts: [] as PromptInfo["parts"] },
           )
           route.navigate({
-            sessionID: forked.data!.id,
+            sessionID: forked.sessionID,
             type: "session",
             prompt,
           })

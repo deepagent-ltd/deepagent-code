@@ -66,6 +66,10 @@ export const UpdatePayload = Schema.Struct({
   ),
 })
 export const ForkPayload = Schema.Struct(Struct.omit(Session.ForkInput.fields, ["sessionID"]))
+export const LegacyForkPayload = Schema.Struct({
+  ...Struct.omit(Session.ForkInput.fields, ["sessionID", "intentID"]),
+  intentID: Schema.optional(Schema.NonEmptyString),
+})
 export const InitPayload = Schema.Struct({
   modelID: ModelV2.ID,
   providerID: ProviderV2.ID,
@@ -461,7 +465,8 @@ export const SessionApi = HttpApi.make("session")
           OpenApi.annotations({
             identifier: "session.fork",
             summary: "Fork session",
-            description: "Create a new session by forking an existing session at a specific message point.",
+            description:
+              "Create a new session by forking an existing session at a specific message point. intentID is required so response-loss retries adopt the same child. Older bodyless HTTP clients remain supported by a compatibility parser.",
           }),
         ),
         HttpApiEndpoint.post("abort", SessionPaths.abort, {

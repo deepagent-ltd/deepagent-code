@@ -2,6 +2,9 @@ import { Identifier } from "@deepagent-code/core/util/identifier"
 import type { Message, Part } from "@deepagent-code/sdk/v2"
 
 const pendingForkIntents = new Map<string, string>()
+const pendingForkRequests = new Map<string, Promise<ForkSessionResult>>()
+
+type ForkSessionResult = { sessionID: string } | { error: unknown }
 
 export function isDefaultTitle(title: string) {
   return /^(New session - |Child session - )\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(title)
@@ -18,6 +21,29 @@ export function acquireForkIntent(key: string) {
 export function completeForkIntent(key: string, intentID: string) {
   if (pendingForkIntents.get(key) !== intentID) return
   pendingForkIntents.delete(key)
+}
+
+export function requestSessionFork(input: {
+  key: string
+  request: (intentID: string) => Promise<{ data?: { id?: string }; error?: unknown }>
+}) {
+  const current = pendingForkRequests.get(input.key)
+  if (current) return current
+
+  const intentID = acquireForkIntent(input.key)
+  const pending = Promise.resolve()
+    .then(() => input.request(intentID))
+    .then(
+      (result): ForkSessionResult => {
+        if (!result.data?.id) return { error: result.error ?? "server returned no fork session" }
+        completeForkIntent(input.key, intentID)
+        return { sessionID: result.data.id }
+      },
+      (error): ForkSessionResult => ({ error }),
+    )
+    .finally(() => pendingForkRequests.delete(input.key))
+  pendingForkRequests.set(input.key, pending)
+  return pending
 }
 
 export function contextUsage(messages: readonly Message[], parts: (messageID: string) => readonly Part[]) {

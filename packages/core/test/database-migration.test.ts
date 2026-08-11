@@ -24,6 +24,8 @@ import { AbsolutePath } from "@deepagent-code/core/schema"
 import { SessionSchema } from "@deepagent-code/core/session/schema"
 import { SessionTable } from "@deepagent-code/core/session/sql"
 import sessionMetadataMigration from "@deepagent-code/core/database/migration/20260511173437_session-metadata"
+import compactionContinuationAdmissionMigration from "@deepagent-code/core/database/migration/20260810160000_compaction_continuation_admission"
+import partIntegrityBackfillMigration from "@deepagent-code/core/database/migration/20260810170000_part_integrity_backfill"
 import type { SqlClient as SqlClientService } from "effect/unstable/sql/SqlClient"
 import { Database } from "@deepagent-code/core/database/database"
 import { tmpdir } from "./fixture/tmpdir"
@@ -1194,6 +1196,235 @@ describe("DatabaseMigration", () => {
             (index) => index.name === "deepagent_event_drop_event_id_idx",
           ),
         ).toMatchObject({ unique: 1 })
+      }),
+    )
+  })
+
+  test("compaction continuation admission migrates legacy wakeups from durable provider evidence", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(sql`
+          CREATE TABLE compaction_run (
+            run_id text PRIMARY KEY NOT NULL,
+            session_id text NOT NULL,
+            state text NOT NULL,
+            continuation_wakeup_at integer
+          )
+        `)
+        yield* db.run(sql`
+          CREATE TABLE compaction_artifact (
+            run_id text NOT NULL,
+            session_id text NOT NULL,
+            message_id text NOT NULL,
+            state text NOT NULL,
+            kind text NOT NULL
+          )
+        `)
+        yield* db.run(sql`
+          CREATE TABLE session_tool_request_receipt (
+            receipt_id text PRIMARY KEY NOT NULL,
+            request_ordinal integer NOT NULL,
+            session_id text NOT NULL,
+            user_message_id text NOT NULL,
+            provider_state text NOT NULL,
+            dispatching_at integer,
+            terminal_at integer,
+            request_error_code text,
+            response_fingerprint text,
+            created_at integer NOT NULL
+          )
+        `)
+        yield* db.run(sql`
+          INSERT INTO compaction_run (run_id, session_id, state, continuation_wakeup_at) VALUES
+            ('orphan-wakeup', 'ses_orphan', 'committed', 10),
+            ('prepared-wakeup', 'ses_prepared', 'committed', 20),
+            ('dispatching-wakeup', 'ses_dispatching', 'committed', 30),
+            ('settled-without-response', 'ses_incomplete', 'committed', 40)
+        `)
+        yield* db.run(sql`
+          INSERT INTO compaction_artifact (run_id, session_id, message_id, state, kind) VALUES
+            ('orphan-wakeup', 'ses_orphan', 'msg_orphan', 'committed', 'continue'),
+            ('prepared-wakeup', 'ses_prepared', 'msg_prepared', 'committed', 'continue'),
+            ('dispatching-wakeup', 'ses_dispatching', 'msg_dispatching', 'committed', 'continue'),
+            ('settled-without-response', 'ses_incomplete', 'msg_incomplete', 'committed', 'continue')
+        `)
+        yield* db.run(sql`
+          INSERT INTO session_tool_request_receipt
+            (receipt_id, request_ordinal, session_id, user_message_id, provider_state,
+             dispatching_at, terminal_at, request_error_code, created_at)
+          VALUES
+            ('receipt-prepared', 1, 'ses_prepared', 'msg_prepared', 'prepared', NULL, NULL, NULL, 21),
+            ('receipt-dispatching', 1, 'ses_dispatching', 'msg_dispatching', 'dispatching', 31, NULL, NULL, 31),
+            ('receipt-incomplete', 1, 'ses_incomplete', 'msg_incomplete', 'settled', 41, 42, NULL, 41)
+        `)
+
+        yield* DatabaseMigration.applyOnly(db, [compactionContinuationAdmissionMigration])
+
+        expect(
+          yield* db.all(sql`
+            SELECT run_id, continuation_state, continuation_receipt_id,
+                   continuation_admitted_at, continuation_dispatching_at, continuation_error_code
+            FROM compaction_run
+            ORDER BY run_id
+          `),
+        ).toEqual([
+          {
+            run_id: "dispatching-wakeup",
+            continuation_state: "dispatching",
+            continuation_receipt_id: "receipt-dispatching",
+            continuation_admitted_at: 30,
+            continuation_dispatching_at: 31,
+            continuation_error_code: null,
+          },
+          {
+            run_id: "orphan-wakeup",
+            continuation_state: "pending",
+            continuation_receipt_id: null,
+            continuation_admitted_at: null,
+            continuation_dispatching_at: null,
+            continuation_error_code: "legacy_wakeup_without_provider_admission",
+          },
+          {
+            run_id: "prepared-wakeup",
+            continuation_state: "admitted",
+            continuation_receipt_id: "receipt-prepared",
+            continuation_admitted_at: 20,
+            continuation_dispatching_at: null,
+            continuation_error_code: null,
+          },
+          {
+            run_id: "settled-without-response",
+            continuation_state: "indeterminate",
+            continuation_receipt_id: "receipt-incomplete",
+            continuation_admitted_at: 40,
+            continuation_dispatching_at: 41,
+            continuation_error_code: null,
+          },
+        ])
+        expect(
+          Exit.isFailure(
+            yield* db
+              .run(
+                sql`
+                UPDATE compaction_run
+                SET continuation_state = 'settled', continuation_terminal_at = 40
+                WHERE run_id = 'orphan-wakeup'
+              `,
+              )
+              .pipe(Effect.exit),
+          ),
+        ).toBe(true)
+        expect(
+          Exit.isFailure(
+            yield* db
+              .run(
+                sql`
+                UPDATE compaction_run
+                SET continuation_state = 'settled', continuation_terminal_at = 40
+                WHERE run_id = 'dispatching-wakeup'
+              `,
+              )
+              .pipe(Effect.exit),
+          ),
+        ).toBe(true)
+        yield* db.run(sql`
+          UPDATE session_tool_request_receipt
+          SET provider_state = 'settled', response_fingerprint = 'response-hash', terminal_at = 40
+          WHERE receipt_id = 'receipt-dispatching'
+        `)
+        yield* db.run(sql`
+          UPDATE compaction_run
+          SET continuation_state = 'settled', continuation_terminal_at = 40
+          WHERE run_id = 'dispatching-wakeup'
+        `)
+        expect(
+          yield* db.get(sql`
+            SELECT continuation_state, continuation_terminal_at
+            FROM compaction_run
+            WHERE run_id = 'dispatching-wakeup'
+          `),
+        ).toEqual({ continuation_state: "settled", continuation_terminal_at: 40 })
+      }),
+    )
+  })
+
+  test("part integrity backfill quarantines pre-existing cross-session rows and blocks history", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(sql`
+          CREATE TABLE project (id text PRIMARY KEY NOT NULL, worktree text, sandboxes text,
+            time_created integer NOT NULL, time_updated integer NOT NULL)
+        `)
+        yield* db.run(sql`
+          CREATE TABLE session (id text PRIMARY KEY NOT NULL, project_id text NOT NULL,
+            slug text NOT NULL, directory text NOT NULL, title text NOT NULL, version text NOT NULL,
+            time_created integer NOT NULL, time_updated integer NOT NULL)
+        `)
+        yield* db.run(sql`
+          CREATE TABLE message (id text PRIMARY KEY NOT NULL, session_id text NOT NULL,
+            time_created integer NOT NULL, time_updated integer NOT NULL, data text NOT NULL)
+        `)
+        yield* db.run(sql`
+          CREATE TABLE part (id text PRIMARY KEY NOT NULL, message_id text NOT NULL,
+            session_id text NOT NULL, time_created integer NOT NULL, time_updated integer NOT NULL,
+            data text NOT NULL)
+        `)
+        yield* db.run(sql`
+          CREATE TABLE session_prompt_epoch (session_id text NOT NULL, epoch integer NOT NULL,
+            state text NOT NULL, authority_state text, recovery_reason text,
+            PRIMARY KEY (session_id, epoch))
+        `)
+        yield* db.run(sql`
+          CREATE TABLE session_history_state (session_id text PRIMARY KEY NOT NULL,
+            state text NOT NULL, reason text, time_created integer NOT NULL, time_updated integer NOT NULL,
+            FOREIGN KEY (session_id) REFERENCES session(id) ON DELETE CASCADE)
+        `)
+        yield* db.run(sql`PRAGMA foreign_keys = ON`)
+        yield* db.run(sql`INSERT INTO project VALUES ('p', '/repo', '[]', 1, 1)`)
+        yield* db.run(sql`INSERT INTO session VALUES
+          ('session-a', 'p', 'a', '/repo', 'A', '1', 1, 1),
+          ('session-b', 'p', 'b', '/repo', 'B', '1', 1, 1)`)
+        yield* db.run(sql`INSERT INTO message VALUES ('message-a', 'session-a', 1, 1, '{}')`)
+        yield* db.run(sql`INSERT INTO part VALUES
+          ('part-bad', 'message-a', 'session-b', 1, 1, '{"type":"text","text":"secret"}'),
+          ('part-missing-session', 'message-a', 'session-missing', 1, 1, '{"type":"text","text":"orphan"}')`)
+        yield* db.run(sql`INSERT INTO session_prompt_epoch VALUES ('session-a', 0, 'active', 'legacy_pending', NULL)`)
+        yield* db.run(sql`INSERT INTO session_prompt_epoch VALUES ('session-b', 0, 'active', 'legacy_pending', NULL)`)
+
+        yield* DatabaseMigration.applyOnly(db, [partIntegrityBackfillMigration])
+
+        expect(
+          yield* db.all(
+            sql`SELECT part_id, message_id, part_session_id, message_session_id, reason FROM session_part_integrity_quarantine ORDER BY part_id`,
+          ),
+        ).toEqual([
+          {
+            part_id: "part-bad",
+            message_id: "message-a",
+            part_session_id: "session-b",
+            message_session_id: "session-a",
+            reason: "part_parent_cross_session",
+          },
+          {
+            part_id: "part-missing-session",
+            message_id: "message-a",
+            part_session_id: "session-missing",
+            message_session_id: "session-a",
+            reason: "part_parent_cross_session",
+          },
+        ])
+        expect(yield* db.all(sql`SELECT session_id, state FROM session_history_state ORDER BY session_id`)).toEqual([
+          { session_id: "session-a", state: "recovery_required" },
+          { session_id: "session-b", state: "recovery_required" },
+        ])
+        expect(
+          yield* db.all(sql`SELECT session_id, authority_state FROM session_prompt_epoch ORDER BY session_id`),
+        ).toEqual([
+          { session_id: "session-a", authority_state: "recovery_required" },
+          { session_id: "session-b", authority_state: "recovery_required" },
+        ])
       }),
     )
   })

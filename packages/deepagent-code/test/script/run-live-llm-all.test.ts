@@ -310,6 +310,40 @@ describe("all real LLM test runner", () => {
     expect(artifact.length).toBeLessThan(1_000)
   })
 
+  test("binds live artifacts to source, runtime, route, and oracle hashes", async () => {
+    await using directory = await tmpdir()
+    await writeLiveArtifact(
+      { artifactDirectory: directory.path },
+      "provenance",
+      { status: "passed" },
+      {
+        harnessFiles: ["packages/deepagent-code/script/live-llm/routes.ts", "packages/llm/script/live-llm/config.ts"],
+        oracleVersion: "provenance-test-v1",
+      },
+    )
+
+    const artifact: unknown = await Bun.file(path.join(directory.path, "provenance.json")).json()
+    expect(artifact).toMatchObject({
+      status: "passed",
+      provenance: {
+        schema: "deepagent-live-evidence-v1",
+        sourceCommit: expect.any(String),
+        sourceTree: expect.any(String),
+        sourceDirty: expect.any(Boolean),
+        oracleVersion: "provenance-test-v1",
+        oracleHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+        routeManifestHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+        runtime: { bun: expect.any(String), platform: process.platform, arch: process.arch },
+        harnessFiles: expect.arrayContaining([
+          {
+            path: "packages/deepagent-code/script/live-llm/routes.ts",
+            sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+          },
+        ]),
+      },
+    })
+  })
+
   test("suite manifest itself has no duplicate IDs", () => {
     expect(new Set(suites.map((suite) => suite.id)).size).toBe(suites.length)
   })

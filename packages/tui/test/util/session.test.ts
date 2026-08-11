@@ -1,6 +1,12 @@
 import { describe, expect, test } from "bun:test"
 import type { Message, Part } from "@deepagent-code/sdk/v2"
-import { acquireForkIntent, completeForkIntent, contextUsage, isDefaultTitle } from "../../src/util/session"
+import {
+  acquireForkIntent,
+  completeForkIntent,
+  contextUsage,
+  isDefaultTitle,
+  requestSessionFork,
+} from "../../src/util/session"
 
 const user = (id: string) =>
   ({
@@ -54,6 +60,74 @@ describe("util.session", () => {
     expect(acquireForkIntent(key)).toBe(intentID)
     completeForkIntent(key, intentID)
     expect(acquireForkIntent(key)).not.toBe(intentID)
+  })
+
+  test("retries failed fork requests with the same intent and releases it after success", async () => {
+    const key = "session:retry"
+    const intents: string[] = []
+    const failed = await requestSessionFork({
+      key,
+      request: async (intentID) => {
+        intents.push(intentID)
+        return { error: { data: { message: "temporarily unavailable" } } }
+      },
+    })
+
+    expect(failed).toEqual({ error: { data: { message: "temporarily unavailable" } } })
+    const recovered = await requestSessionFork({
+      key,
+      request: async (intentID) => {
+        intents.push(intentID)
+        return { data: { id: "ses_child" } }
+      },
+    })
+
+    expect(recovered).toEqual({ sessionID: "ses_child" })
+    expect(intents[0]).toBe(intents[1])
+    expect(acquireForkIntent(key)).not.toBe(intents[0])
+  })
+
+  test("turns thrown fork failures into retryable outcomes", async () => {
+    const key = "session:throw"
+    const error = new Error("connection lost")
+    const firstIntent = acquireForkIntent(key)
+
+    expect(
+      await requestSessionFork({
+        key,
+        request: async () => {
+          throw error
+        },
+      }),
+    ).toEqual({ error })
+    expect(acquireForkIntent(key)).toBe(firstIntent)
+
+    completeForkIntent(key, firstIntent)
+  })
+
+  test("coalesces concurrent fork requests for one intent", async () => {
+    const key = "session:concurrent"
+    let finish!: (value: { data: { id: string } }) => void
+    const response = new Promise<{ data: { id: string } }>((resolve) => {
+      finish = resolve
+    })
+    let calls = 0
+    const request = () =>
+      requestSessionFork({
+        key,
+        request: async () => {
+          calls++
+          return response
+        },
+      })
+
+    const first = request()
+    const second = request()
+    expect(first).toBe(second)
+    expect(calls).toBe(0)
+    finish({ data: { id: "ses_single" } })
+    expect(await Promise.all([first, second])).toEqual([{ sessionID: "ses_single" }, { sessionID: "ses_single" }])
+    expect(calls).toBe(1)
   })
 
   test("counts only retained provider context", () => {

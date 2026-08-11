@@ -7580,7 +7580,7 @@ export class Session2 extends HeyApiClient {
   /**
    * Fork session
    *
-   * Create a new session by forking an existing session at a specific message point.
+   * Create a new session by forking an existing session at a specific message point. intentID is required so response-loss retries adopt the same child. Older bodyless HTTP clients remain supported by a compatibility parser.
    */
   public fork<ThrowOnError extends boolean = false>(
     parameters: {

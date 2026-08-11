@@ -652,13 +652,13 @@ function makeUsageService(sdk: OpencodeClient) {
     )
     if (!messages) return
 
-    const message = UsageService.latestAssistantMessage(messages)
-    if (!message?.providerID || !message.modelID) return
+    const context = UsageService.retainedContext(messages)
+    if (!context?.providerID || !context.modelID) return
 
     const size = yield* contextLimit({
       directory: params.directory,
-      providerID: ProviderV2.ID.make(message.providerID),
-      modelID: ModelV2.ID.make(message.modelID),
+      providerID: ProviderV2.ID.make(context.providerID),
+      modelID: ModelV2.ID.make(context.modelID),
     })
     if (!size) return
 
@@ -668,7 +668,7 @@ function makeUsageService(sdk: OpencodeClient) {
           sessionId: params.sessionID,
           update: {
             sessionUpdate: "usage_update",
-            used: message.tokens.input + message.tokens.cache.read,
+            used: context.used,
             size,
             cost: { amount: UsageService.totalSessionCost(messages), currency: "USD" },
           },

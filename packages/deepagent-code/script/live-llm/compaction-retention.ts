@@ -50,9 +50,7 @@ const artifact = await runLegacyLiveCases({
         "-m",
         "test: establish world-state baseline",
       )
-      await Promise.all(
-        markerFiles.map((file) => Bun.write(path.join(directory, file), "world-state changed\n")),
-      )
+      await Promise.all(markerFiles.map((file) => Bun.write(path.join(directory, file), "world-state changed\n")))
       return
     }
     if (caseName === outputCaseName && (await Bun.file(path.join(directory, "output.txt")).exists())) {
@@ -96,7 +94,9 @@ if (
   fill.tokenUsageOverride?.originalInputTokens === undefined ||
   fill.tokenUsageOverride.persistedInputTokens !== 25_000
 ) {
-  throw new Error(`C1 did not persist the deterministic input-token override: ${JSON.stringify(fill.tokenUsageOverride)}`)
+  throw new Error(
+    `C1 did not persist the deterministic input-token override: ${JSON.stringify(fill.tokenUsageOverride)}`,
+  )
 }
 if (fill.usage.input < fill.tokenUsageOverride.persistedInputTokens) {
   throw new Error(`C1 durable message reload lost the input-token override: ${JSON.stringify(fill.usage)}`)
@@ -120,9 +120,7 @@ if (committedRuns.length !== 1) {
   throw new Error(`Expected exactly one committed compaction run, received ${committedRuns.length}`)
 }
 const committedRun = committedRuns[0]
-const summaryAttempts = recovery.durability.summaryAttempts.filter(
-  (attempt) => attempt.run_id === committedRun.run_id,
-)
+const summaryAttempts = recovery.durability.summaryAttempts.filter((attempt) => attempt.run_id === committedRun.run_id)
 if (summaryAttempts.length < 1 || summaryAttempts.length > 2) {
   throw new Error(`Expected one or two durable summary attempts, received ${summaryAttempts.length}`)
 }
@@ -223,6 +221,13 @@ await writeLiveArtifact(
         replacement: `<hidden-marker hash=${Bun.hash(marker).toString(16)}>`,
       })),
     ],
+    harnessFiles: [
+      "packages/deepagent-code/script/live-llm/compaction-retention.ts",
+      "packages/deepagent-code/script/live-llm/routes.ts",
+      "packages/deepagent-code/script/live-llm/runtime.ts",
+      "packages/llm/script/live-llm/config.ts",
+    ],
+    oracleVersion: "bug-012-compaction-retention-v2",
   },
 )
 console.log(
@@ -256,10 +261,7 @@ async function evaluateFreshCopy(directory: string, sandbox?: { shell: string })
       lstat(path.join(fresh, "output.txt")),
     ])
     return {
-      passed:
-        exitCode === 0 &&
-        stat.isFile() &&
-        changedPaths.join("\0") === expectedPaths.join("\0"),
+      passed: exitCode === 0 && stat.isFile() && changedPaths.join("\0") === expectedPaths.join("\0"),
       sandboxed: true,
       freshCopy: true,
       exitCode,

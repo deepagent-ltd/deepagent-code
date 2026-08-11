@@ -447,6 +447,21 @@ describe("Session context window authority", () => {
     }),
   )
 
+  it.instance("blocks a legacy fork before a new prompt can mutate physical history", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const legacy = yield* sessions.create({
+        metadata: { forkedFrom: { parentSessionID: "ses_legacy_parent", forkedAt: Date.now() } },
+      })
+
+      const blocked = yield* sessions.assertRunnable(legacy.id).pipe(Effect.exit)
+      expect(blocked._tag).toBe("Failure")
+      expect((yield* sessions.messages({ sessionID: legacy.id })).length).toBe(0)
+
+      yield* sessions.remove(legacy.id)
+    }),
+  )
+
   it.instance("quarantines a bootstrapped legacy task child instead of legalizing its raw history", () =>
     Effect.gen(function* () {
       const sessions = yield* Session.Service

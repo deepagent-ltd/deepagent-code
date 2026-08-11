@@ -122,6 +122,15 @@ export const PartTable = sqliteTable(
   ],
 )
 
+export const SessionPartIntegrityQuarantineTable = sqliteTable("session_part_integrity_quarantine", {
+  part_id: text().$type<PartID>().primaryKey(),
+  message_id: text().$type<MessageID>().notNull(),
+  part_session_id: text().$type<SessionSchema.ID>().notNull(),
+  message_session_id: text().$type<SessionSchema.ID>().notNull(),
+  reason: text().notNull(),
+  quarantined_at: integer().notNull(),
+})
+
 // DEPRECATED (task-tracking unification): the `todowrite` tool that wrote this table was removed in
 // favor of the `plan` system. No LLM-facing tool writes here anymore. The table is retained (not
 // dropped) for migration safety and so the existing read/REST path keeps working for historical

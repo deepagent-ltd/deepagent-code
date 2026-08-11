@@ -283,17 +283,21 @@ function hydrate(db: Database.Interface["db"], rows: (typeof MessageTable.$infer
   return Effect.gen(function* () {
     if (ids.length > 0) {
       const partRows = yield* db
-        .select()
+        .select({ part: PartTable })
         .from(PartTable)
+        .innerJoin(
+          MessageTable,
+          and(eq(MessageTable.id, PartTable.message_id), eq(MessageTable.session_id, PartTable.session_id)),
+        )
         .where(inArray(PartTable.message_id, ids))
         .orderBy(PartTable.message_id, PartTable.id)
         .all()
         .pipe(Effect.orDie)
       for (const row of partRows) {
-        const next = part(row)
-        const list = partByMessage.get(row.message_id)
+        const next = part(row.part)
+        const list = partByMessage.get(row.part.message_id)
         if (list) list.push(next)
-        else partByMessage.set(row.message_id, [next])
+        else partByMessage.set(row.part.message_id, [next])
       }
     }
 
@@ -301,6 +305,30 @@ function hydrate(db: Database.Interface["db"], rows: (typeof MessageTable.$infer
       info: info(row),
       parts: partByMessage.get(row.id) ?? [],
     }))
+  })
+}
+
+export function messagesInTransaction(
+  tx: Database.Interface["db"],
+  sessionID: SessionID,
+  messageIDs: readonly MessageID[],
+) {
+  return Effect.gen(function* () {
+    if (messageIDs.length === 0) return [] as WithParts[]
+    const rows = yield* tx
+      .select()
+      .from(MessageTable)
+      .where(and(eq(MessageTable.session_id, sessionID), inArray(MessageTable.id, [...messageIDs])))
+      .all()
+    if (rows.length !== messageIDs.length) return
+    const hydrated = yield* hydrate(tx, rows)
+    const byID = new Map(hydrated.map((message) => [message.info.id, message]))
+    const ordered = messageIDs.flatMap((messageID) => {
+      const message = byID.get(messageID)
+      return message ? [message] : []
+    })
+    if (ordered.length !== messageIDs.length) return
+    return ordered
   })
 }
 
@@ -696,13 +724,17 @@ export function parts(messageID: MessageID) {
   return Effect.gen(function* () {
     const { db } = yield* Database.Service
     const rows = yield* db
-      .select()
+      .select({ part: PartTable })
       .from(PartTable)
+      .innerJoin(
+        MessageTable,
+        and(eq(MessageTable.id, PartTable.message_id), eq(MessageTable.session_id, PartTable.session_id)),
+      )
       .where(eq(PartTable.message_id, messageID))
       .orderBy(PartTable.id)
       .all()
       .pipe(Effect.orDie)
-    return rows.map(part)
+    return rows.map((row) => part(row.part))
   })
 }
 

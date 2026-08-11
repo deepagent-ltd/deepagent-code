@@ -34,6 +34,7 @@ import {
   SessionForkIntentTable,
   SessionHistoryStateTable,
   SessionIntentTable,
+  SessionPartIntegrityQuarantineTable,
   SessionPromptEpochMessageTable,
   SessionSteerTable,
   SessionTable,
@@ -2106,6 +2107,22 @@ export const layer: Layer.Layer<
     })
 
     const assertRunnable: Interface["assertRunnable"] = Effect.fn("Session.assertRunnable")(function* (sessionID) {
+      const quarantinedPart = yield* db
+        .select({ part_id: SessionPartIntegrityQuarantineTable.part_id })
+        .from(SessionPartIntegrityQuarantineTable)
+        .where(
+          or(
+            eq(SessionPartIntegrityQuarantineTable.part_session_id, sessionID),
+            eq(SessionPartIntegrityQuarantineTable.message_session_id, sessionID),
+          ),
+        )
+        .get()
+        .pipe(Effect.orDie)
+      if (quarantinedPart)
+        return yield* new UnavailableError({
+          sessionID,
+          reason: `legacy cross-session Part ${quarantinedPart.part_id} requires history repair`,
+        })
       const intent = yield* db
         .select({
           intent_id: SessionForkIntentTable.intent_id,
@@ -2117,22 +2134,71 @@ export const layer: Layer.Layer<
         .where(eq(SessionForkIntentTable.target_session_id, sessionID))
         .get()
         .pipe(Effect.orDie)
-      if (intent?.state === "complete" && intent.side_effects_completed_at !== null) return
-      if (intent)
+      if (intent && (intent.state !== "complete" || intent.side_effects_completed_at === null))
         return yield* new UnavailableError({
           sessionID,
           reason: intent.recovery_reason ?? `fork manifest ${intent.intent_id} is ${intent.state}`,
         })
-      const admission = yield* db
-        .select({ intent_id: SessionForkAdmissionTable.intent_id, state: SessionForkAdmissionTable.state })
-        .from(SessionForkAdmissionTable)
-        .where(eq(SessionForkAdmissionTable.target_session_id, sessionID))
+      if (!intent) {
+        const admission = yield* db
+          .select({ intent_id: SessionForkAdmissionTable.intent_id, state: SessionForkAdmissionTable.state })
+          .from(SessionForkAdmissionTable)
+          .where(eq(SessionForkAdmissionTable.target_session_id, sessionID))
+          .get()
+          .pipe(Effect.orDie)
+        if (admission)
+          return yield* new UnavailableError({
+            sessionID,
+            reason: `fork admission ${admission.intent_id} is ${admission.state}`,
+          })
+        const session = yield* db
+          .select({ metadata: SessionTable.metadata })
+          .from(SessionTable)
+          .where(eq(SessionTable.id, sessionID))
+          .get()
+          .pipe(Effect.orDie)
+        const deepagent =
+          session?.metadata?.deepagent && typeof session.metadata.deepagent === "object"
+            ? (session.metadata.deepagent as Record<string, unknown>)
+            : undefined
+        if (deepagent?.task_fork_manifest || session?.metadata?.task_fork_manifest)
+          return yield* new UnavailableError({
+            sessionID,
+            reason: "legacy task fork has no verifiable sanitation manifest",
+          })
+        if (session?.metadata?.forkedFrom)
+          return yield* new UnavailableError({
+            sessionID,
+            reason: "legacy foreground fork has no verifiable source projection manifest",
+          })
+      }
+      const history = yield* db
+        .select({
+          state: SessionHistoryStateTable.state,
+          reason: SessionHistoryStateTable.reason,
+        })
+        .from(SessionHistoryStateTable)
+        .where(eq(SessionHistoryStateTable.session_id, sessionID))
         .get()
         .pipe(Effect.orDie)
-      if (!admission) return
+      if (history?.state === "recovery_required")
+        return yield* new UnavailableError({
+          sessionID,
+          reason: history.reason ?? "session history recovery is required",
+        })
+      const epoch = yield* db
+        .select({
+          authority_state: SessionPromptEpochTable.authority_state,
+          recovery_reason: SessionPromptEpochTable.recovery_reason,
+        })
+        .from(SessionPromptEpochTable)
+        .where(and(eq(SessionPromptEpochTable.session_id, sessionID), eq(SessionPromptEpochTable.state, "active")))
+        .get()
+        .pipe(Effect.orDie)
+      if (epoch?.authority_state !== "recovery_required") return
       return yield* new UnavailableError({
         sessionID,
-        reason: `fork admission ${admission.intent_id} is ${admission.state}`,
+        reason: epoch.recovery_reason ?? "session history recovery is required",
       })
     })
 

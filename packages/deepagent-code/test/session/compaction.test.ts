@@ -14,6 +14,7 @@ import { Image } from "@/image/image"
 import { Agent } from "../../src/agent/agent"
 import { LLM } from "../../src/session/llm"
 import { SessionCompaction } from "../../src/session/compaction"
+import { HistoryAuthority } from "../../src/session/history-authority"
 import { Token } from "@/util/token"
 import * as Log from "@deepagent-code/core/util/log"
 import { Permission } from "../../src/permission"
@@ -999,6 +1000,9 @@ describe("session.compaction.process", () => {
 
       expect(result).toBe("continue")
       expect(last?.info.role).toBe("user")
+      if (last?.info.role === "user") {
+        expect(SessionProcessorModule.planProtocolActivityID(last.info.metadata)).toBe(msg.id)
+      }
       const summary = all.find((message) => message.info.role === "assistant" && message.info.summary)
       expect(summary).toBeDefined()
       expect(last!.info.id > summary!.info.id).toBe(true)
@@ -1693,6 +1697,63 @@ describe("session.compaction.process", () => {
           expect(history.map((message) => message.info.id)).toEqual([original.id])
         }).pipe(withCompaction({ llm: stub.layer, plugin: gatedAutocontinue(ready, release) }))
       }),
+    { git: true },
+  )
+
+  itCompaction.instance(
+    "rejects a replacement whose summary Part changed after candidate hashing",
+    () =>
+      Effect.gen(function* () {
+        const ssn = yield* SessionNs.Service
+        const session = yield* ssn.create({})
+        const marker = yield* createUserMessage(session.id, "replacement source")
+        const markerPart = yield* ssn.updatePart({
+          id: PartID.ascending(),
+          messageID: marker.id,
+          sessionID: session.id,
+          type: "compaction",
+          auto: false,
+        })
+        const summary = yield* createSummaryAssistantMessage(session.id, marker.id, session.directory, "summary v1")
+        const replacement = (yield* ssn.messages({ sessionID: session.id })).filter(
+          (message) => message.info.id === marker.id || message.info.id === summary.id,
+        )
+        const target = replacement.map((message) =>
+          message.info.id !== marker.id
+            ? message
+            : {
+                info: message.info,
+                parts: message.parts.map((part) =>
+                  part.id === markerPart.id ? { ...markerPart, context_tokens: 42 } : part,
+                ),
+              },
+        )
+        const candidateHash = HistoryAuthority.hash(target)
+        const summaryPart = replacement
+          .find((message) => message.info.id === summary.id)
+          ?.parts.find((part) => part.type === "text")
+        expect(summaryPart).toBeDefined()
+        if (!summaryPart || summaryPart.type !== "text") return
+        yield* ssn.updatePart({ ...summaryPart, text: "summary mutated after hashing" })
+
+        const { db } = yield* Database.Service
+        expect(
+          yield* db.transaction((tx) =>
+            SessionCompaction.validateReplacementTargetInTransaction({
+              tx: tx as unknown as Database.Interface["db"],
+              sessionID: session.id,
+              replacementMessageIDs: [marker.id, summary.id],
+              checkpointUserID: marker.id,
+              checkpointAssistantID: summary.id,
+              markerMessageID: marker.id,
+              markerPartID: markerPart.id,
+              contextTokens: 42,
+              checkpointHash: candidateHash,
+              effectiveHistoryHash: candidateHash,
+            }),
+          ),
+        ).toBe(false)
+      }).pipe(withCompaction({ llm: llm().layer })),
     { git: true },
   )
 

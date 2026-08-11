@@ -76,5 +76,7 @@ export const migrations = (
     import("./migration/20260810130000_bug_012_runtime_integrity"),
     import("./migration/20260810140000_bug_012_compaction_cas"),
     import("./migration/20260810150000_provider_receipt_authority"),
+    import("./migration/20260810160000_compaction_continuation_admission"),
+    import("./migration/20260810170000_part_integrity_backfill"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

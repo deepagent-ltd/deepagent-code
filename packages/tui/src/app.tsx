@@ -54,7 +54,7 @@ import { PromptStashProvider } from "./component/prompt/stash"
 import { DialogAlert } from "./ui/dialog-alert"
 import { DialogConfirm } from "./ui/dialog-confirm"
 import { ToastProvider, useToast } from "./ui/toast"
-import { acquireForkIntent, completeForkIntent, isDefaultTitle } from "./util/session"
+import { isDefaultTitle, requestSessionFork } from "./util/session"
 import { KVProvider, useKV } from "./context/kv"
 import * as Model from "./util/model"
 import { ArgsProvider, useArgs, type Args } from "./context/args"
@@ -417,26 +417,28 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
     kv.get("paste_summary_enabled", !sync.data.config.experimental?.disable_paste_summary),
   )
 
-  const forkStartupSession = (sourceSessionID: string, intentKey: string) => {
-    const intentID = acquireForkIntent(intentKey)
-    void sdk.client.session
-      .fork({ sessionID: sourceSessionID, intentID })
-      .then((result) => {
-        if (result.data?.id) {
-          completeForkIntent(intentKey, intentID)
-          route.navigate({ type: "session", sessionID: result.data.id })
-          return
-        }
-        toast.show({
-          title: "Fork failed",
-          message: errorMessage(result.error ?? "server returned no fork session"),
-          variant: "error",
-          duration: 8000,
-        })
+  const forkStartupSession = async (sourceSessionID: string, intentKey: string) => {
+    while (true) {
+      const result = await requestSessionFork({
+        key: intentKey,
+        request: (intentID) => sdk.client.session.fork({ sessionID: sourceSessionID, intentID }),
       })
-      .catch((error) => {
-        toast.show({ title: "Fork failed", message: errorMessage(error), variant: "error", duration: 8000 })
-      })
+      if ("sessionID" in result) {
+        route.navigate({ type: "session", sessionID: result.sessionID })
+        return
+      }
+
+      toast.show({ title: "Fork failed", message: errorMessage(result.error), variant: "error", duration: 8000 })
+      const retry = await DialogConfirm.show(
+        dialog,
+        "Retry fork?",
+        `${errorMessage(result.error)}\n\nRetry uses the same request identity to avoid creating a duplicate session.`,
+        "Continue original",
+      )
+      if (retry) continue
+      route.navigate({ type: "session", sessionID: sourceSessionID })
+      return
+    }
   }
 
   // Update terminal window title based on current route and session
@@ -499,7 +501,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       continued = true
       if (args.fork) {
         const intentKey = `${match}:startup-continue`
-        forkStartupSession(match, intentKey)
+        void forkStartupSession(match, intentKey)
       } else {
         route.navigate({ type: "session", sessionID: match })
       }
@@ -514,7 +516,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
     if (forked || sync.status !== "complete" || !args.sessionID || !args.fork) return
     forked = true
     const intentKey = `${args.sessionID}:startup-session`
-    forkStartupSession(args.sessionID, intentKey)
+    void forkStartupSession(args.sessionID, intentKey)
   })
 
   createEffect(

@@ -318,6 +318,8 @@ if (!enabled) {
         expect(retry.status).toBe(200)
         expect(stringField(retry.body, "id", "retried fork")).toBe(childID)
 
+        const finalChildSnapshot: unknown = JSON.parse(childMessagesAfterRestart.body)
+
         const evidence = {
           suite: "context-authority-live",
           mode: "ext" as const,
@@ -361,6 +363,28 @@ if (!enabled) {
               effectiveHistoryHash: childActiveBeforeRestart.effective_history_hash,
               exactForkRetryAdopted: true,
             },
+            authority: {
+              parentAfterCompaction: compactedParent,
+              childBeforeRestart: childAuthorityBeforeRestart,
+              malformedAfterCorruption: malformedAuthority,
+            },
+            forkIntent,
+            requestReceipts: {
+              parentAfterCompaction: parentReceipt,
+              childFirstTurn: childReceipt,
+              childRestartTurn: restartReceipt,
+            },
+            snapshots: {
+              compactionTimeline: compactedMessages.body,
+              compactionTimelineSha256: sha256Json(compactedMessages.body),
+              finalChild: finalChildSnapshot,
+              finalChildSha256: sha256Json(finalChildSnapshot),
+            },
+            dispatchCounts: {
+              parent: receiptCount(databasePath, parentID),
+              child: receiptCount(databasePath, childID),
+              malformed: receiptCount(databasePath, malformedID),
+            },
             worldStateMarkerHash: Bun.hash(marker).toString(16),
           },
           durationMs: Date.now() - startedAt,
@@ -369,6 +393,14 @@ if (!enabled) {
         yield* Effect.promise(() =>
           writeLiveArtifact(config, evidence.suite, evidence, {
             redactions: [{ value: marker, replacement: `<world-state-marker hash=${Bun.hash(marker).toString(16)}>` }],
+            harnessFiles: [
+              "packages/deepagent-code/test/cli/serve/live-context-authority.test.ts",
+              "packages/deepagent-code/script/live-llm/context-authority.ts",
+              "packages/deepagent-code/script/live-llm/routes.ts",
+              "packages/deepagent-code/script/live-llm/runtime.ts",
+              "packages/llm/script/live-llm/config.ts",
+            ],
+            oracleVersion: "bug-012-context-authority-v2",
           }),
         )
         second.kill()
@@ -401,9 +433,7 @@ function stringField(value: unknown, field: string, label: string) {
 function assistantSucceeded(value: unknown) {
   if (!isRecord(value) || !isRecord(value.info) || !isRecord(value.info.time)) return false
   return (
-    value.info.role === "assistant" &&
-    value.info.error === undefined &&
-    typeof value.info.time.completed === "number"
+    value.info.role === "assistant" && value.info.error === undefined && typeof value.info.time.completed === "number"
   )
 }
 
@@ -506,7 +536,12 @@ function latestReceipt(databasePath: string, sessionID: string) {
       `SELECT receipt_id, request_ordinal, provider_id, model_id, prompt_epoch, prompt_window_id,
               effective_history_hash, world_state_baseline_hash, prompt_cache_key, provider_request_hash,
               response_chain_reuse_decision, response_chain_refusal_reason, estimated_input_tokens,
-              request_state
+              request_input_hash, final_request_hash, protocol, registry_tool_ids,
+              permission_filtered_tool_ids, final_offered_tool_ids, tool_definition_hash,
+              adapter_tool_capability, adapter_lowering_outcome, physical_input_budget,
+              reserved_output_tokens, safety_margin_tokens, context_limit_provenance,
+              provider_state, adapter_prepared_at, dispatching_at, streaming_at, terminal_at,
+              response_fingerprint, request_error_code, request_state, created_at
          FROM session_tool_request_receipt
         WHERE session_id = ?
         ORDER BY request_ordinal DESC
@@ -526,7 +561,28 @@ function latestReceipt(databasePath: string, sessionID: string) {
     response_chain_reuse_decision: string | null
     response_chain_refusal_reason: string | null
     estimated_input_tokens: number | null
+    request_input_hash: string | null
+    final_request_hash: string | null
+    protocol: string | null
+    registry_tool_ids: string
+    permission_filtered_tool_ids: string
+    final_offered_tool_ids: string
+    tool_definition_hash: string | null
+    adapter_tool_capability: string | null
+    adapter_lowering_outcome: string | null
+    physical_input_budget: number | null
+    reserved_output_tokens: number | null
+    safety_margin_tokens: number | null
+    context_limit_provenance: string | null
+    provider_state: string
+    adapter_prepared_at: number | null
+    dispatching_at: number | null
+    streaming_at: number | null
+    terminal_at: number | null
+    response_fingerprint: string | null
+    request_error_code: string | null
     request_state: string
+    created_at: number
   } | null
   database.close()
   if (!receipt) throw new Error(`Session ${sessionID} has no Provider request receipt`)
@@ -542,25 +598,51 @@ function receiptCount(databasePath: string, sessionID: string) {
   return row.count
 }
 
+function sha256Json(value: unknown) {
+  return new Bun.CryptoHasher("sha256").update(JSON.stringify(value)).digest("hex")
+}
+
 function readForkIntent(databasePath: string, intentID: string) {
   const database = new Database(databasePath, { readonly: true })
   const intent = database
     .query(
-      `SELECT intent_id, state, source_window_id, target_window_id, source_message_count,
-              cloned_message_count, target_effective_history_hash, target_world_state_baseline_hash,
-              side_effects_completed_at
+      `SELECT intent_id, request_hash, fork_mode, state, source_session_id, source_prompt_epoch,
+              source_effective_history_hash, source_mutation_epoch, source_cutoff_message_id,
+              source_window_id, source_message_count, projection_version, sanitation_policy_version,
+              target_session_id, target_prompt_epoch, target_window_id, cloned_message_count,
+              cloned_part_count, target_effective_history_hash, target_world_state_baseline_hash,
+              event_cursor, event_count, delivery_attempts, time_created, time_committed,
+              time_completed, side_effects_completed_at
          FROM session_fork_intent
         WHERE intent_id = ?`,
     )
     .get(intentID) as {
     intent_id: string
+    request_hash: string
+    fork_mode: string
     state: string
+    source_session_id: string
+    source_prompt_epoch: number
+    source_effective_history_hash: string
+    source_mutation_epoch: number
+    source_cutoff_message_id: string | null
     source_window_id: string
-    target_window_id: string
     source_message_count: number
+    projection_version: number
+    sanitation_policy_version: number
+    target_session_id: string
+    target_prompt_epoch: number
+    target_window_id: string
     cloned_message_count: number
+    cloned_part_count: number
     target_effective_history_hash: string
     target_world_state_baseline_hash: string
+    event_cursor: number
+    event_count: number
+    delivery_attempts: number
+    time_created: number
+    time_committed: number | null
+    time_completed: number | null
     side_effects_completed_at: number | null
   } | null
   database.close()

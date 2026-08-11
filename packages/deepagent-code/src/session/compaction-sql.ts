@@ -2,6 +2,13 @@
 import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core"
 
 export type CompactionRunState = "requested" | "summarizing" | "committed" | "failed" | "indeterminate"
+export type CompactionContinuationState =
+  | "pending"
+  | "admitted"
+  | "dispatching"
+  | "settled"
+  | "failed"
+  | "indeterminate"
 export type CompactionRunTrigger = "turn_start" | "provider_overflow" | "manual"
 export type SummaryAttemptState =
   | "prepared"
@@ -39,6 +46,12 @@ export const CompactionRunTable = sqliteTable("compaction_run", {
   ledger_mirrored_at: integer(),
   bridge_carried_at: integer(),
   continuation_wakeup_at: integer(),
+  continuation_state: text().$type<CompactionContinuationState>(),
+  continuation_receipt_id: text(),
+  continuation_admitted_at: integer(),
+  continuation_dispatching_at: integer(),
+  continuation_terminal_at: integer(),
+  continuation_error_code: text(),
 })
 
 export const CompactionSummaryAttemptTable = sqliteTable("compaction_summary_attempt", {
