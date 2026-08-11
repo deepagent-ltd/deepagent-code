@@ -3,6 +3,14 @@
 import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core"
 
 export type RequestReceiptState = "prepared" | "dispatched" | "rejected"
+export type ProviderReceiptState =
+  | "preparing"
+  | "prepared"
+  | "dispatching"
+  | "streaming"
+  | "settled"
+  | "failed"
+  | "indeterminate_after_crash"
 export type AdapterToolCapability = "supported" | "unsupported" | "unknown"
 export type AdapterLoweringOutcome = "ok" | "schema_rejected" | "omitted_no_support"
 
@@ -29,6 +37,23 @@ export const SessionToolRequestReceiptTable = sqliteTable("session_tool_request_
   reserved_output_tokens: integer(),
   safety_margin_tokens: integer(),
   context_limit_provenance: text().$type<"model_limit" | "host_guard">(),
+  prompt_epoch: integer(),
+  prompt_window_id: text(),
+  effective_history_hash: text(),
+  world_state_baseline_hash: text(),
+  prompt_cache_key: text(),
+  provider_request_hash: text(),
+  response_chain_reuse_decision: text().$type<"not_supported" | "refused" | "reused">(),
+  response_chain_refusal_reason: text(),
+  request_input_hash: text(),
+  final_request_hash: text(),
+  provider_state: text().$type<ProviderReceiptState>().notNull().default("preparing"),
+  adapter_prepared_at: integer(),
+  dispatching_at: integer(),
+  streaming_at: integer(),
+  terminal_at: integer(),
+  response_fingerprint: text(),
+  owner_token: text(),
   request_state: text().$type<RequestReceiptState>().notNull(),
   request_error_code: text(),
   created_at: integer().notNull(),

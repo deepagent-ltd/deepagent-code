@@ -227,6 +227,7 @@ export function admitParentInput(input: {
             },
             metadata: {
               deepagent: {
+                planProtocolActivityID: input.item.messageID,
                 task_notification: {
                   run_id: input.item.runID,
                   outbox_id: input.item.id,

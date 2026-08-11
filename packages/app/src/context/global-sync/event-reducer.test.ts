@@ -430,6 +430,42 @@ describe("applyDirectoryEvent", () => {
     expect(store.part.msg_2).toBeUndefined()
   })
 
+  test("reconciles a canonical steer event before its HTTP receipt", () => {
+    const sessionID = "ses_1"
+    const clientMessageID = "msg_client"
+    const canonical = {
+      ...userMessage("msg_server", sessionID),
+      metadata: {
+        deepagent: {
+          promptAdmission: {
+            clientMessageID,
+          },
+        },
+      },
+    } as Message
+    const clientPart = textPart("prt_client", sessionID, clientMessageID)
+    const [store, setStore] = createStore(
+      baseState({
+        message: { [sessionID]: [userMessage(clientMessageID, sessionID)] },
+        part: { [clientMessageID]: [clientPart] },
+        part_text_accum_delta: { [clientPart.id]: "pending" },
+      }),
+    )
+
+    applyDirectoryEvent({
+      event: { type: "message.updated", properties: { info: canonical } },
+      store,
+      setStore,
+      push() {},
+      directory: "/tmp",
+      loadLsp() {},
+    })
+
+    expect(store.message[sessionID]?.map((message) => message.id)).toEqual([canonical.id])
+    expect(store.part[clientMessageID]).toBeUndefined()
+    expect(store.part_text_accum_delta[clientPart.id]).toBeUndefined()
+  })
+
   test("upserts and prunes message parts", () => {
     const sessionID = "ses_1"
     const messageID = "msg_1"

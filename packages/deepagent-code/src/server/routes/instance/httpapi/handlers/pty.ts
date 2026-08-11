@@ -250,8 +250,8 @@ export const ptyConnectHandlers = HttpApiBuilder.group(PtyConnectApi, "pty-conne
               Effect.catchReason("SocketError", "SocketCloseError", () => Effect.void),
               Effect.catch(() => Effect.void),
             )
-        const registered = yield* WebSocketTracker.register(write(WebSocketTracker.SERVER_CLOSING_EVENT()))
-        if (!registered) {
+        const registration = yield* WebSocketTracker.register(write(WebSocketTracker.SERVER_CLOSING_EVENT()))
+        if (!registration.accepted) {
           yield* closeAccepted(WebSocketTracker.SERVER_CLOSING_EVENT())
           return HttpServerResponse.empty()
         }
@@ -285,18 +285,19 @@ export const ptyConnectHandlers = HttpApiBuilder.group(PtyConnectApi, "pty-conne
 
         // The handshake runs inside `socket.runRaw`, after the input callback is
         // registered, so the client cannot send frames before PTY input is wired.
-        yield* socket
-          .runRaw((message) => handlePtyInput(handler, message))
-          .pipe(
-            Effect.catchReason("SocketError", "SocketCloseError", () => Effect.void),
-            Effect.ensuring(
-              Effect.sync(() => {
-                closed = true
-                handler.onClose()
-              }),
-            ),
-            Effect.orDie,
-          )
+        yield* Effect.raceFirst(
+          socket.runRaw((message) => handlePtyInput(handler, message)),
+          registration.shutdown,
+        ).pipe(
+          Effect.catchReason("SocketError", "SocketCloseError", () => Effect.void),
+          Effect.ensuring(
+            Effect.sync(() => {
+              closed = true
+              handler.onClose()
+            }),
+          ),
+          Effect.orDie,
+        )
         return HttpServerResponse.empty()
       }),
     )

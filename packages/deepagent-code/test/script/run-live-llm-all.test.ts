@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { chmod, mkdir, realpath } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { loadLiveLLMConfig, writeLiveArtifact } from "../../../llm/script/live-llm/config"
+import { loadLiveLLMConfig, loadPlanLiveLLMConfig, writeLiveArtifact } from "../../../llm/script/live-llm/config"
 import { directoryExists, liveSubprocessEnvironment, liveWorkspaceConfig } from "../../script/live-llm/runtime"
 import { tmpdir } from "../fixture/fixture"
 import {
@@ -176,9 +176,28 @@ describe("all real LLM test runner", () => {
     })
     expect(loaded.apiKey).toBe("file-only-key")
     expect(loaded.apiKeyFile).toBe(await realpath(file))
+    const kimi = await loadPlanLiveLLMConfig({
+      DEEPAGENT_CODE_LIVE_LLM_API_KEY_FILE: file,
+      DEEPAGENT_CODE_PLAN_LIVE_LLM_PROVIDER: "kimi",
+    })
+    expect(kimi).toMatchObject({
+      providerID: "kimi",
+      modelID: "kimi-k3",
+      baseURL: "https://api.moonshot.ai/v1",
+    })
     await expect(loadLiveLLMConfig({ DEEPSEEK_API_KEY: "ambient-user-key" })).rejects.toThrow(
       "Raw API key environment variables are not accepted",
     )
+    await expect(loadPlanLiveLLMConfig({ MOONSHOT_API_KEY: "ambient-user-key" })).rejects.toThrow(
+      "Raw API key environment variables are not accepted",
+    )
+    await expect(
+      loadPlanLiveLLMConfig({
+        DEEPAGENT_CODE_LIVE_LLM_API_KEY_FILE: file,
+        DEEPAGENT_CODE_PLAN_LIVE_LLM_PROVIDER: "kimi",
+        DEEPAGENT_CODE_LIVE_LLM_BASE_URL: "https://example.com",
+      }),
+    ).rejects.toThrow("Official Kimi live tests require https://api.moonshot.ai/v1")
 
     await chmod(file, 0o644)
     await expect(loadLiveLLMConfig({ DEEPAGENT_CODE_LIVE_LLM_API_KEY_FILE: file })).rejects.toThrow("chmod 600")
@@ -207,6 +226,25 @@ describe("all real LLM test runner", () => {
     expect(serialized).toContain(`{file:${config.apiKeyFile}}`)
     expect(serialized).not.toContain(apiKey)
     expect(workspaceConfig.provider?.["live-deepseek"]?.env).toEqual([])
+
+    const kimi = liveWorkspaceConfig(
+      {
+        providerID: "kimi",
+        modelID: "kimi-k3",
+        baseURL: "https://api.moonshot.ai/v1",
+        apiKey,
+        apiKeyFile: config.apiKeyFile,
+        timeoutMs: config.requestTimeoutMs,
+        artifactDirectory: "/isolated/artifacts",
+      },
+      { "*": "deny" },
+    )
+    expect(JSON.stringify(kimi)).not.toContain(apiKey)
+    expect(kimi.provider?.["live-kimi"]?.models?.["kimi-k3"]).toMatchObject({
+      reasoning: true,
+      temperature: false,
+      options: { reasoningEffort: "low" },
+    })
   })
 
   test("overwrites a stale provider success artifact when configuration fails", async () => {
@@ -270,6 +308,40 @@ describe("all real LLM test runner", () => {
     expect(artifact).not.toContain(padding)
     expect(artifact).toContain("<hidden-marker>")
     expect(artifact.length).toBeLessThan(1_000)
+  })
+
+  test("binds live artifacts to source, runtime, route, and oracle hashes", async () => {
+    await using directory = await tmpdir()
+    await writeLiveArtifact(
+      { artifactDirectory: directory.path },
+      "provenance",
+      { status: "passed" },
+      {
+        harnessFiles: ["packages/deepagent-code/script/live-llm/routes.ts", "packages/llm/script/live-llm/config.ts"],
+        oracleVersion: "provenance-test-v1",
+      },
+    )
+
+    const artifact: unknown = await Bun.file(path.join(directory.path, "provenance.json")).json()
+    expect(artifact).toMatchObject({
+      status: "passed",
+      provenance: {
+        schema: "deepagent-live-evidence-v1",
+        sourceCommit: expect.any(String),
+        sourceTree: expect.any(String),
+        sourceDirty: expect.any(Boolean),
+        oracleVersion: "provenance-test-v1",
+        oracleHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+        routeManifestHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+        runtime: { bun: expect.any(String), platform: process.platform, arch: process.arch },
+        harnessFiles: expect.arrayContaining([
+          {
+            path: "packages/deepagent-code/script/live-llm/routes.ts",
+            sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+          },
+        ]),
+      },
+    })
   })
 
   test("suite manifest itself has no duplicate IDs", () => {

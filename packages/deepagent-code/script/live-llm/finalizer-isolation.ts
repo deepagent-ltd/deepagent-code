@@ -5,12 +5,12 @@ import { runLegacyLiveCases } from "./runtime"
 
 // Suite D1 (design/real-llm-testing.md) — subagent finalizer isolation. The researcher child runs two
 // phases in ONE child Session: a research turn with the normal read-only registry, then a bounded
-// finalizer turn whose registry is emptied down to `StructuredOutput` alone (prompt.ts: `tools =
-// finalizerMode ? {} : SessionTools.resolve(...)`). The regression this guards: research-phase tools
+// finalizer turn whose registry is emptied down to `StructuredOutput` alone in strict mode (prompt.ts:
+// `tools = finalizerMode ? {} : SessionTools.resolve(...)`); the text fallback has no tools. The regression this guards: research-phase tools
 // leaking into the finalizer turn, which produced empty/invalid structured results or let the model
-// keep researching instead of finalizing. The finalizer turn is identified durably — it is the only
-// child assistant carrying a non-null `structured` (the research prompt has no `format`, so
-// `structured` stays undefined there).
+// keep researching instead of finalizing. A compliant provider returns one StructuredOutput call;
+// a format-weaker provider may use the bounded second text-only finalizer, whose JSON is still
+// validated locally by the task controller.
 const markers = {
   module: `module-${crypto.randomUUID()}`,
   mechanism: `mechanism-${crypto.randomUUID()}`,
@@ -81,19 +81,30 @@ if (
   throw new Error("Child research phase did not read the fixture through a completed read tool")
 }
 const structuredCalls = childTools.filter((tool) => tool.name === "StructuredOutput" && tool.status === "completed")
-if (structuredCalls.length !== 1) {
+if (structuredCalls.length > 1) {
   throw new Error(
-    `Expected exactly one completed child StructuredOutput call, received ${structuredCalls.length}: ` +
+    `Expected at most one completed child StructuredOutput call, received ${structuredCalls.length}: ` +
       childTools.map((tool) => `${tool.name}:${tool.status}`).join(", "),
   )
 }
-const finalizers = child.assistants.filter((assistant) => assistant.structured !== undefined)
-if (finalizers.length !== 1) {
-  throw new Error(`Expected exactly one child finalizer turn, received ${finalizers.length}`)
+const strictFinalizer = child.assistants.find((assistant) => assistant.structured !== undefined)
+const textFallbackUsers = child.users.filter(
+  (user) => nestedRecordOptional(user.metadata, ["deepagent", "structured_finalizer"])?.allow_text === true,
+)
+const textFinalizers = child.assistants.filter((assistant) => extractJson(assistant.text) !== undefined)
+const finalizer = strictFinalizer ?? textFinalizers.at(-1)
+if (
+  !finalizer ||
+  (strictFinalizer && structuredCalls.length !== 1) ||
+  (!strictFinalizer && textFallbackUsers.length === 0)
+) {
+  throw new Error(
+    `Expected one structured or validated text finalizer turn, received strict=${strictFinalizer ? 1 : 0}, ` +
+      `text=${textFinalizers.length}, text_fallback_users=${textFallbackUsers.length}`,
+  )
 }
 // The finalizer's OWN tools array is the isolation oracle: a leaked research tool would land as a
 // completed part on this same assistant message, not on an earlier research turn.
-const finalizer = finalizers[0]
 const foreignFinalizerTools = finalizer.tools.filter(
   (tool) => tool.status === "completed" && tool.name !== "StructuredOutput",
 )
@@ -102,14 +113,17 @@ if (foreignFinalizerTools.length > 0) {
     `Finalizer turn executed research-phase tools: ${foreignFinalizerTools.map((tool) => tool.name).join(", ")}`,
   )
 }
-if (!finalizer.tools.some((tool) => tool.name === "StructuredOutput" && tool.status === "completed")) {
+if (
+  strictFinalizer &&
+  !finalizer.tools.some((tool) => tool.name === "StructuredOutput" && tool.status === "completed")
+) {
   throw new Error("Finalizer turn carries a structured result without its own completed StructuredOutput call")
 }
 const subagent = nestedRecord(child.metadata, ["deepagent", "subagent"])
 if (subagent.state !== "completed" || subagent.finished !== true || subagent.reason !== "structured_output_valid") {
   throw new Error(`Child durable metadata is not a valid completed structured result: ${JSON.stringify(subagent)}`)
 }
-const result = record(finalizer.structured, "ResearchResult")
+const result = record(finalizer.structured ?? extractJson(finalizer.text), "ResearchResult")
 if (result.module !== markers.module || result.mechanism !== markers.mechanism) {
   throw new Error("Child ResearchResult scalar fields are not byte-exact copies of the fixture")
 }
@@ -150,13 +164,11 @@ if (parentRead) throw new Error("Parent read the fixture itself, so child isolat
 // Production guard: unexpected parent tool errors indicate the parent called a denied tool
 // (e.g., task_status or task_read). Deny decisions do NOT fire permission events so they
 // won't appear in permissionRequests — this explicit check catches them.
-const unexpectedParentErrors = observation.tools.filter(
-  tool => tool.status === "error" && tool.name !== "task",
-)
+const unexpectedParentErrors = observation.tools.filter((tool) => tool.status === "error" && tool.name !== "task")
 if (unexpectedParentErrors.length > 0) {
   throw new Error(
     `Parent made ${unexpectedParentErrors.length} unexpected denied tool call(s): ` +
-      unexpectedParentErrors.map(t => t.name).join(", ") +
+      unexpectedParentErrors.map((t) => t.name).join(", ") +
       " — check primaryPermission matches the parent prompt",
   )
 }
@@ -168,6 +180,7 @@ const resultArtifact = {
     childSessionID: child.id,
     childAssistantTurns: child.assistants.length,
     structuredOutputCallCount: structuredCalls.length,
+    finalizerTransport: strictFinalizer ? "structured_tool" : "validated_text",
     finalizerTurnForeignToolCount: foreignFinalizerTools.length,
     researchToolNames: childTools.map((tool) => tool.name),
     parentReadOfFixture: parentRead !== undefined,
@@ -192,13 +205,52 @@ function record(value: unknown, name: string): Record<string, unknown> {
   return value as Record<string, unknown>
 }
 
+function extractJson(text: string): unknown {
+  const trimmed = text.trim()
+  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1]?.trim()
+  const objectStart = trimmed.indexOf("{")
+  const objectEnd = trimmed.lastIndexOf("}")
+  const candidates = [
+    trimmed,
+    fenced,
+    objectStart !== -1 && objectEnd > objectStart ? trimmed.slice(objectStart, objectEnd + 1) : undefined,
+  ].filter((candidate): candidate is string => candidate !== undefined)
+  for (const candidate of candidates) {
+    try {
+      return JSON.parse(candidate)
+    } catch {
+      continue
+    }
+  }
+  return undefined
+}
+
+function nestedRecordOptional(value: unknown, keys: string[]) {
+  return keys.reduce<Record<string, unknown> | undefined>(
+    (current, key) => {
+      if (!current) return undefined
+      const next = current[key]
+      if (typeof next !== "object" || next === null || Array.isArray(next)) return undefined
+      return next as Record<string, unknown>
+    },
+    typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : undefined,
+  )
+}
+
 function nestedRecord(value: unknown, keys: string[]) {
-  const result = keys.reduce<Record<string, unknown> | undefined>((current, key) => {
-    if (!current) return undefined
-    const next = current[key]
-    if (typeof next !== "object" || next === null || Array.isArray(next)) return undefined
-    return next as Record<string, unknown>
-  }, typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined)
+  const result = keys.reduce<Record<string, unknown> | undefined>(
+    (current, key) => {
+      if (!current) return undefined
+      const next = current[key]
+      if (typeof next !== "object" || next === null || Array.isArray(next)) return undefined
+      return next as Record<string, unknown>
+    },
+    typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : undefined,
+  )
   if (!result) throw new Error(`Missing object path ${keys.join(".")}`)
   return result
 }

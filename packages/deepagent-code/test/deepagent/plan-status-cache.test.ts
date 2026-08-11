@@ -52,6 +52,7 @@ async function prepare(
   messages: any[],
   metadata?: Record<string, unknown>,
   agent: { name: string; mode: "primary" | "subagent" } = { name: "build", mode: "primary" },
+  isWorkflow = false,
 ) {
   return Effect.runPromise(
     LLMRequestPrep.prepare({
@@ -66,7 +67,7 @@ async function prepare(
       auth: undefined,
       plugin,
       flags: { outputTokenMax: 32_000, client: "test" } as any,
-      isWorkflow: false,
+      isWorkflow,
     }),
   )
 }
@@ -126,7 +127,9 @@ describe("plan-status prompt-cache fix", () => {
     expect(status).not.toBeNull()
     expect(status!).toContain("<plan-status>")
     expect(status!).toContain("Current plan (1/3 done)")
-    expect(status!).toMatch(/Plan precondition: plan_id=plan_.+ plan_version=1/)
+    expect(status!).toContain('[x] step_id="step_1" status="done" title="Step 1"')
+    expect(status!).toContain('Active step: active_step_id="step_2" title="Step 2"')
+    expect(status!).toMatch(/Plan write precondition: expected_plan_id="plan_.+" expected_version=1/)
     AgentGateway.configure({ enabled: false, agentMode: "high" })
   })
 
@@ -147,7 +150,60 @@ describe("plan-status prompt-cache fix", () => {
       mode: "subagent",
     })
     expect(prepared.messages.at(-1)?.content).toContain("<plan-status>")
-    expect(prepared.messages.at(-1)?.content).toMatch(/Plan precondition: plan_id=plan_.+ plan_version=1/)
+    expect(prepared.messages.at(-1)?.content).toContain('step_id="step_1"')
+    expect(prepared.messages.at(-1)?.content).toMatch(
+      /Plan write precondition: expected_plan_id="plan_.+" expected_version=1/,
+    )
+    AgentGateway.configure({ enabled: false, agentMode: "high" })
+  })
+
+  test("an ordinary general-mode activity with an existing plan receives exact write parameters", async () => {
+    AgentGateway.configure({ enabled: true, agentMode: "general" })
+    const sessionID = `ses_planstatus_general_existing_${crypto.randomUUID()}`
+    seedPlan(sessionID, 1, 2, 0)
+    const prepared = await prepare(sessionID, [{ role: "user", content: "continue the existing work" }])
+    expect(prepared.messages.at(-1)?.content).toContain("<plan-status>")
+    expect(prepared.messages.at(-1)?.content).toContain('step_id="step_1"')
+    expect(prepared.messages.at(-1)?.content).toContain('active_step_id="step_2"')
+    expect(prepared.messages.at(-1)?.content).toMatch(
+      /Plan write precondition: expected_plan_id="plan_.+" expected_version=1/,
+    )
+    AgentGateway.configure({ enabled: false, agentMode: "high" })
+  })
+
+  test("disabled runtime keeps an existing Plan out of the baseline request", async () => {
+    AgentGateway.configure({ enabled: false, agentMode: "high" })
+    const sessionID = `ses_planstatus_disabled_${crypto.randomUUID()}`
+    seedPlan(sessionID, 1, 2, 0)
+    const prepared = await prepare(sessionID, [{ role: "user", content: "continue without DeepAgent" }])
+
+    expect(JSON.stringify(prepared.messages)).not.toContain("<plan-status>")
+    expect(runtimeContext(prepared)).toBe("")
+    expect(prepared.messages.at(-1)?.content).toBe("continue without DeepAgent")
+    expect(prepared.system.join("\n")).not.toContain("<plan-status>")
+  })
+
+  test("general-mode compaction requests remain isolated from the session plan", async () => {
+    AgentGateway.configure({ enabled: true, agentMode: "general" })
+    const sessionID = `ses_planstatus_compaction_${crypto.randomUUID()}`
+    seedPlan(sessionID, 1, 2, 0)
+    const prepared = await prepare(sessionID, [{ role: "user", content: "summarize" }], undefined, {
+      name: "compaction",
+      mode: "subagent",
+    })
+    expect(JSON.stringify(prepared.messages)).not.toContain("<plan-status>")
+    AgentGateway.configure({ enabled: false, agentMode: "high" })
+  })
+
+  test("high-mode compaction requests remain isolated from the session plan", async () => {
+    AgentGateway.configure({ enabled: true, agentMode: "high" })
+    const sessionID = `ses_planstatus_compaction_high_${crypto.randomUUID()}`
+    seedPlan(sessionID, 1, 2, 0)
+    const prepared = await prepare(sessionID, [{ role: "user", content: "summarize" }], undefined, {
+      name: "compaction",
+      mode: "primary",
+    })
+    expect(JSON.stringify(prepared.messages)).not.toContain("<plan-status>")
     AgentGateway.configure({ enabled: false, agentMode: "high" })
   })
 
@@ -159,13 +215,36 @@ describe("plan-status prompt-cache fix", () => {
     AgentGateway.configure({ enabled: false, agentMode: "high" })
   })
 
-  test("does not send first-round plan telemetry for a non-orchestrated task", async () => {
+  test("sends exact plan write parameters on a fresh non-orchestrated activity", async () => {
     AgentGateway.configure({ enabled: true, agentMode: "high" })
     const sessionID = `ses_planstatus_noop_${crypto.randomUUID()}`
     seedPlan(sessionID, 0, 2, 0)
     const prepared = await prepare(sessionID, [{ role: "user", content: "fix one typo" }])
-    expect(runtimeContext(prepared)).toBe("")
-    expect(JSON.stringify(prepared.messages.filter((message) => message.role === "user"))).not.toContain("plan-status")
+    expect(runtimeContext(prepared)).toContain("<plan-status>")
+    expect(runtimeContext(prepared)).toContain('step_id="step_1"')
+    expect(runtimeContext(prepared)).toContain('active_step_id="step_1"')
+    expect(runtimeContext(prepared)).toMatch(/Plan write precondition: expected_plan_id="plan_.+" expected_version=1/)
+    expect(durableUserHistory(prepared)).not.toContain("<plan-status>")
+    AgentGateway.configure({ enabled: false, agentMode: "high" })
+  })
+
+  test("sends exact plan write parameters through the workflow system channel", async () => {
+    AgentGateway.configure({ enabled: true, agentMode: "high" })
+    const sessionID = `ses_planstatus_workflow_${crypto.randomUUID()}`
+    seedPlan(sessionID, 0, 2, 0)
+    const prepared = await prepare(
+      sessionID,
+      [{ role: "user", content: "continue through the workflow" }],
+      undefined,
+      { name: "build", mode: "primary" },
+      true,
+    )
+    const workflowSystem = prepared.system.join("\n")
+    expect(workflowSystem).toContain("<deepagent-round-context>")
+    expect(workflowSystem).toContain("<plan-status>")
+    expect(workflowSystem).toContain('step_id="step_1" status="active"')
+    expect(workflowSystem).toMatch(/expected_plan_id="plan_.+" expected_version=1/)
+    expect(JSON.stringify(prepared.messages)).not.toContain("<plan-status>")
     AgentGateway.configure({ enabled: false, agentMode: "high" })
   })
 
@@ -271,6 +350,14 @@ describe("plan-status prompt-cache fix", () => {
     expect(runtimeContext(continuation)).toContain("# Tool continuation")
     expect(runtimeContext(continuation)).toContain("<plan-status>")
     expect(runtimeContext(continuation)).toContain("Current plan (1/3 done)")
+    expect(runtimeContext(continuation)).toContain('step_id="step_1" status="done"')
+    expect(runtimeContext(continuation)).toContain('active_step_id="step_2"')
+    expect(runtimeContext(continuation)).toMatch(
+      /Plan write precondition: expected_plan_id="plan_.+" expected_version=1/,
+    )
+    expect(runtimeContext(continuation).indexOf("</plan-status>")).toBeLessThan(
+      runtimeContext(continuation).indexOf("</deepagent-round-context>"),
+    )
     expect(runtimeContext(continuation)).not.toContain("# Task Context")
     expect(runtimeContext(continuation)).not.toContain("# Activation")
     expect(runtimeContext(continuation)).not.toContain("goal: ship the feature")

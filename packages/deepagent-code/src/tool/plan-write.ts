@@ -44,15 +44,24 @@ export const PlanEvent = {
 
 const PlanStep = Schema.Struct({
   step_id: Schema.optional(Schema.String).annotate({
-    description: "Stable id; required for advance, omit only when create/replan should allocate a new identity",
+    description:
+      "Stable id; required for advance, copy it for an unchanged replan step, and omit it for create or a genuinely new replan step so the server allocates it",
   }),
-  title: Schema.String.annotate({ description: "What this step does" }),
+  title: Schema.optional(Schema.String).annotate({
+    description: "What this step does; required for create/replan and ignored for advance",
+  }),
   status: Schema.String.annotate({ description: "pending | active | done | cancelled | blocked" }),
   // No NullOr: a nested optional(NullOr(...)) emits a double-nested anyOf whose inner
   // {type:null} survives normalize() and is rejected by some third-party providers (no-reply).
   // Optional already covers "absent"; strict admission normalizes missing values to null.
-  acceptance: Schema.optional(Schema.String).annotate({ description: "How you know this step is done" }),
-  assigned_agent: Schema.optional(Schema.String).annotate({ description: "Subagent type to delegate to" }),
+  acceptance: Schema.optional(Schema.String).annotate({
+    description:
+      "Acceptance criterion for create/replan; when retaining a replan step, omit to copy the authoritative value shown in the correction",
+  }),
+  assigned_agent: Schema.optional(Schema.String).annotate({
+    description:
+      "Subagent type for create/replan; when retaining a replan step, omit to copy the authoritative value shown in the correction",
+  }),
   note: Schema.optional(Schema.String).annotate({
     description: "Short note; REQUIRED when status is 'blocked' — say why you are stuck",
   }),
@@ -62,15 +71,31 @@ export const Parameters = Schema.Struct({
   operation: Schema.Literals(["create", "advance", "replan"]).annotate({
     description: "create a plan, advance an existing plan, or replan with a reason",
   }),
-  expected_plan_id: Schema.NullOr(Schema.String),
-  expected_version: Schema.NullOr(NonNegativeInt),
-  replan_reason: Schema.optional(Schema.String),
-  goal: Schema.String.annotate({ description: "One sentence: what 'done' means for this task" }),
-  steps: Schema.mutable(Schema.Array(PlanStep)).annotate({ description: "Ordered plan steps" }),
-  assumptions: Schema.optional(Schema.mutable(Schema.Array(Schema.String))).annotate({
-    description: "Facts the plan relies on",
+  expected_plan_id: Schema.NullOr(Schema.String).annotate({
+    description:
+      "Use null for create; for advance/replan copy expected_plan_id exactly from the latest <plan-status> or plan result",
   }),
-  active_step_id: Schema.NullOr(Schema.String).annotate({ description: "The step currently being worked on" }),
+  expected_version: Schema.NullOr(NonNegativeInt).annotate({
+    description:
+      "Use null for create; for advance/replan copy expected_version exactly from the latest <plan-status> or plan result",
+  }),
+  replan_reason: Schema.optional(Schema.String).annotate({
+    description: "Required for replan; omit for create/advance",
+  }),
+  goal: Schema.optional(Schema.String).annotate({
+    description: "One sentence: what 'done' means for this task; required for create/replan",
+  }),
+  steps: Schema.mutable(Schema.Array(PlanStep)).annotate({
+    description:
+      "Ordered plan steps for create/replan; for advance copy existing step_id values from <plan-status> and send status/note updates",
+  }),
+  assumptions: Schema.optional(Schema.mutable(Schema.Array(Schema.String))).annotate({
+    description: "Facts for create; for replan omit to retain the authoritative list, or send [] to clear it",
+  }),
+  active_step_id: Schema.optional(Schema.NullOr(Schema.String)).annotate({
+    description:
+      "For create/replan, omit this field and mark at most one step active; the server derives its allocated ID. For advance, copy a visible step_id, omit to retain it, or use null to clear it",
+  }),
 })
 export const PlanWriteParameters = Parameters
 
@@ -84,6 +109,7 @@ type Metadata = {
   plan_version?: number
   plan_attempt_ordinal?: number
   plan_error_code?: string
+  plan_error_step_ids?: string[]
   challenge_id?: string
 }
 
@@ -98,19 +124,25 @@ export const PlanTool = Tool.define<typeof Parameters, Metadata, EventV2Bridge.S
       // object key order. The version/precondition remains part of the fingerprint so repeated stale
       // retries are visible, while runtime evidence is intentionally excluded from model input.
       semanticFingerprint: (input: Schema.Schema.Type<typeof Parameters>) => ({
+        // Advance is a status patch at this boundary. Identity fields are
+        // server-owned and intentionally excluded from its semantic proposal.
+        advance_patch: input.operation === "advance",
         operation: input.operation,
         expected_plan_id: input.expected_plan_id,
         expected_version: input.expected_version,
-        replan_reason: input.replan_reason ?? null,
-        goal: input.goal.trim(),
-        assumptions: (input.assumptions ?? []).map((value) => value.trim()),
-        active_step_id: input.active_step_id,
+        replan_reason: input.operation === "advance" ? null : (input.replan_reason ?? null),
+        goal: input.operation === "advance" ? null : (input.goal?.trim() ?? null),
+        assumptions: input.operation === "advance" ? [] : (input.assumptions ?? []).map((value) => value.trim()),
+        active_step_id:
+          input.operation === "advance" && input.active_step_id === undefined
+            ? "retain"
+            : (input.active_step_id ?? null),
         steps: input.steps.map((step) => ({
           step_id: step.step_id ?? null,
-          title: step.title.trim(),
+          title: input.operation === "advance" ? null : (step.title?.trim() ?? null),
           status: step.status.trim().toLowerCase(),
-          acceptance: step.acceptance ?? null,
-          assigned_agent: step.assigned_agent ?? null,
+          acceptance: input.operation === "advance" ? null : (step.acceptance ?? null),
+          assigned_agent: input.operation === "advance" ? null : (step.assigned_agent ?? null),
           note: step.note ?? null,
         })),
       }),
@@ -140,16 +172,7 @@ export const PlanTool = Tool.define<typeof Parameters, Metadata, EventV2Bridge.S
             try: () => {
               const built = AgentGateway.DeepAgentPlanController.buildPlanFromWriteInput(
                 ctx.sessionID,
-                {
-                  operation: params.operation,
-                  expected_plan_id: params.expected_plan_id,
-                  expected_version: params.expected_version,
-                  replan_reason: params.replan_reason,
-                  goal: params.goal,
-                  steps: params.steps,
-                  assumptions: params.assumptions,
-                  active_step_id: params.active_step_id,
-                },
+                normalizeModelPlanWrite(params, previous, expectedRef),
                 previous,
                 expectedRef,
               )
@@ -186,32 +209,49 @@ export const PlanTool = Tool.define<typeof Parameters, Metadata, EventV2Bridge.S
             const error = attempt.error
             if (error instanceof AgentGateway.DeepAgentPlanController.PlanConflictError) {
               const conflict = error as InstanceType<typeof AgentGateway.DeepAgentPlanController.PlanConflictError>
+              const current = AgentGateway.DeepAgentPlanStore.getPlanDoc(ctx.sessionID)
+              const currentRef = AgentGateway.DeepAgentPlanStore.planDocRef(ctx.sessionID)
+              const currentProgress = current
+                ? AgentGateway.DeepAgentPlanController.planProgress(current)
+                : { done: 0, total: 0 }
               return {
                 title: "Plan conflict",
-                output: "The plan changed before this update was committed. Re-read the current plan and retry with its exact plan_id and version.",
+                output:
+                  "The plan changed before this update was committed. Re-read the current plan and retry with its exact expected_plan_id and expected_version." +
+                  renderPlanRetryBase(current, currentRef),
                 metadata: {
-                  plan_id: conflict.actual?.plan_id ?? previous?.plan_id ?? "",
-                  goal: previous?.goal ?? params.goal,
-                  done: previous ? AgentGateway.DeepAgentPlanController.planProgress(previous).done : 0,
-                  total: previous ? AgentGateway.DeepAgentPlanController.planProgress(previous).total : 0,
+                  plan_id: conflict.actual?.plan_id ?? current?.plan_id ?? previous?.plan_id ?? "",
+                  goal: current?.goal ?? previous?.goal ?? params.goal ?? "",
+                  done: currentProgress.done,
+                  total: currentProgress.total,
                   plan_protocol: "conflict",
                   plan_error_code: "plan_conflict",
-                  plan_version: conflict.actual?.version ?? ref?.version ?? 0,
+                  plan_version: conflict.actual?.version ?? currentRef?.version ?? ref?.version ?? 0,
                 },
               }
             }
             if (error instanceof AgentGateway.DeepAgentPlanController.PlanValidationError) {
               const validation = error
+              const offending = validation.offending_step_ids
+              const offendingText = offending.length ? " Offending step IDs: " + offending.join(", ") + "." : ""
+              const validationOutput = [
+                "The plan was not committed (" + validation.code + ").",
+                offendingText,
+                " Correct the plan payload and retry once.",
+                validation.challenge_id ? " Confirmation: " + validation.challenge_id : "",
+                renderModelPlanCorrection(params.operation, validation.code, previous, ref),
+              ].join("")
               return {
                 title: "Plan needs correction",
-                output: `The plan was not committed (${validation.code}). Correct the plan payload and retry once.${validation.challenge_id ? ` Confirmation: ${validation.challenge_id}` : ""}`,
+                output: validationOutput,
                 metadata: {
                   plan_id: previous?.plan_id ?? "",
-                  goal: previous?.goal ?? params.goal,
+                  goal: previous?.goal ?? params.goal ?? "",
                   done: previous ? AgentGateway.DeepAgentPlanController.planProgress(previous).done : 0,
                   total: previous ? AgentGateway.DeepAgentPlanController.planProgress(previous).total : 0,
                   plan_protocol: "invalid",
                   plan_error_code: validation.code,
+                  ...(offending.length ? { plan_error_step_ids: [...offending] } : {}),
                   ...(validation.challenge_id ? { challenge_id: validation.challenge_id } : {}),
                   ...(ref ? { plan_version: ref.version } : {}),
                 },
@@ -262,33 +302,24 @@ export const PlanTool = Tool.define<typeof Parameters, Metadata, EventV2Bridge.S
               .pipe(
                 Effect.catchCause((cause) =>
                   Effect.logWarning("plan.updated publication failed; snapshot remains authoritative").pipe(
-                    Effect.annotateLogs({ sessionID: ctx.sessionID, plan_id: plan.plan_id, plan_version: version, cause }),
+                    Effect.annotateLogs({
+                      sessionID: ctx.sessionID,
+                      plan_id: plan.plan_id,
+                      plan_version: version,
+                      cause,
+                    }),
                     Effect.asVoid,
                   ),
                 ),
               )
           }
 
-          const lines = plan.steps.map((s) => {
-            const mark =
-              s.status === "done"
-                ? "x"
-                : s.status === "cancelled"
-                  ? "-"
-                  : s.status === "blocked"
-                    ? "!"
-                    : s.status === "active"
-                      ? ">"
-                      : " "
-            const suffix = s.status === "blocked" && s.note ? ` — blocked: ${s.note}` : ""
-            return `[${mark}] ${s.title}${suffix}`
-          })
           const changeSummary = changeLines.length > 0 ? `\n\nChanges: ${changeLines.join("; ")}` : ""
           const warnSummary =
             acceptanceWarnings.length > 0 ? `\n\n⚠ ${acceptanceWarnings.join("; ")}. Verify before finalizing.` : ""
           return {
             title: `Plan: ${done}/${total} steps`,
-            output: `Goal: ${plan.goal}\n${lines.join("\n")}${changeSummary}${warnSummary}`,
+            output: `${AgentGateway.DeepAgentPlanController.renderPlanWriteContext(plan, version)}${changeSummary}${warnSummary}`,
             metadata: {
               plan_id: plan.plan_id,
               goal: plan.goal,
@@ -307,3 +338,188 @@ export const PlanTool = Tool.define<typeof Parameters, Metadata, EventV2Bridge.S
     } satisfies Tool.DefWithoutID<typeof Parameters, Metadata>
   }),
 )
+
+// The core controller keeps the full-document contract for human and HTTP writes. Model advances
+// use this adapter so compact snapshots and model restatements cannot mutate authoritative identity
+// fields; only status, note, and active-step intent crosses the model boundary.
+export const normalizeModelPlanWrite = (
+  params: Schema.Schema.Type<typeof Parameters>,
+  previous: ReturnType<typeof AgentGateway.DeepAgentPlanStore.getPlanDoc>,
+  expected: AgentGateway.DeepAgentPlanController.PlanExpected | null,
+) => {
+  // Stale writers are concurrency conflicts even when a concurrent replan also changed step IDs.
+  // Check the shared core precondition before interpreting the patch against current authority.
+  AgentGateway.DeepAgentPlanController.requirePlanWriteExpected(params, previous, expected)
+  const base = {
+    operation: params.operation,
+    expected_plan_id: params.expected_plan_id,
+    expected_version: params.expected_version,
+    ...(params.replan_reason !== undefined ? { replan_reason: params.replan_reason } : {}),
+    goal: params.goal ?? "",
+  }
+
+  if (params.operation === "create" || previous == null) {
+    // Model-created IDs are never authoritative. Keep explicit null so a contradictory active status
+    // remains a validation error, and derive every non-null pointer after server allocation.
+    const deriveActive = params.active_step_id === undefined || params.active_step_id !== null
+    return {
+      ...base,
+      assumptions: params.assumptions,
+      ...(deriveActive ? {} : { active_step_id: null }),
+      steps: params.steps.map((step) => ({ ...step, step_id: undefined, title: step.title ?? "" })),
+    }
+  }
+
+  if (params.operation === "advance") {
+    const suppliedIDs = params.steps.map((step) => step.step_id?.trim() ?? "")
+    if (suppliedIDs.some((stepID) => stepID === "")) {
+      throw new AgentGateway.DeepAgentPlanController.PlanValidationError("unsafe_step_identity", [], previous.plan_id)
+    }
+    const duplicateIDs = suppliedIDs.filter((stepID, index) => suppliedIDs.indexOf(stepID) !== index)
+    if (duplicateIDs.length > 0) {
+      throw new AgentGateway.DeepAgentPlanController.PlanValidationError(
+        "duplicate_step_id",
+        [...new Set(duplicateIDs)],
+        previous.plan_id,
+      )
+    }
+    const knownIDs = new Set(previous.steps.map((step) => step.step_id))
+    const unknownIDs = suppliedIDs.filter((stepID) => !knownIDs.has(stepID))
+    if (unknownIDs.length > 0) {
+      throw new AgentGateway.DeepAgentPlanController.PlanValidationError(
+        "unsafe_step_identity",
+        unknownIDs,
+        previous.plan_id,
+      )
+    }
+    const updates = new Map(params.steps.map((step, index) => [suppliedIDs[index], step] as const))
+    return {
+      ...base,
+      goal: previous.goal,
+      assumptions: [...previous.assumptions],
+      active_step_id: params.active_step_id === undefined ? previous.active_step_id : params.active_step_id,
+      steps: previous.steps.map((step) => {
+        const update = updates.get(step.step_id)
+        return {
+          step_id: step.step_id,
+          title: step.title,
+          status: update?.status ?? step.status,
+          acceptance: step.acceptance ?? null,
+          assigned_agent: step.assigned_agent ?? null,
+          note: update?.note ?? step.note ?? null,
+        }
+      }),
+    }
+  }
+
+  const suppliedIDs = params.steps.map((step) => step.step_id?.trim() ?? "")
+  const duplicateIDs = suppliedIDs.filter((stepID, index) => suppliedIDs.indexOf(stepID) !== index)
+  const duplicateKnownIDs = duplicateIDs.filter(Boolean)
+  if (duplicateKnownIDs.length > 0) {
+    throw new AgentGateway.DeepAgentPlanController.PlanValidationError(
+      "duplicate_step_id",
+      [...new Set(duplicateKnownIDs)],
+      previous.plan_id,
+    )
+  }
+  const knownIDs = new Set(previous.steps.map((step) => step.step_id))
+  const unknownIDs = suppliedIDs.filter((stepID) => stepID !== "" && !knownIDs.has(stepID))
+  if (unknownIDs.length > 0) {
+    throw new AgentGateway.DeepAgentPlanController.PlanValidationError(
+      "unsafe_step_identity",
+      unknownIDs,
+      previous.plan_id,
+    )
+  }
+  return {
+    ...base,
+    goal: previous.goal,
+    assumptions: params.assumptions === undefined ? [...previous.assumptions] : params.assumptions,
+    active_step_id:
+      params.active_step_id === undefined
+        ? undefined
+        : params.active_step_id !== null &&
+            !params.steps.some((step) => step.step_id?.trim() === params.active_step_id?.trim()) &&
+            params.steps.every((step) => (step.step_id?.trim() ?? "") === "") &&
+            !knownIDs.has(params.active_step_id.trim()) &&
+            params.steps.filter(
+              (step) => AgentGateway.DeepAgentPlanController.normalizePlanStepStatus(step.status) === "active",
+            ).length === 1
+          ? undefined
+          : params.active_step_id,
+    steps: params.steps.map((update) => {
+      const stepID = update.step_id?.trim() ?? ""
+      const prior = stepID === "" ? undefined : previous.steps.find((step) => step.step_id === stepID)
+      return {
+        step_id: stepID === "" ? undefined : stepID,
+        title: update.title ?? prior?.title ?? "",
+        status: update.status,
+        acceptance: update.acceptance ?? prior?.acceptance ?? null,
+        assigned_agent: update.assigned_agent ?? prior?.assigned_agent ?? null,
+        note: update.note ?? prior?.note ?? null,
+      }
+    }),
+  }
+}
+
+export const renderModelPlanCorrection = (
+  operation: Schema.Schema.Type<typeof Parameters>["operation"],
+  code: AgentGateway.DeepAgentPlanController.PlanValidationCode,
+  previous: ReturnType<typeof AgentGateway.DeepAgentPlanStore.getPlanDoc>,
+  ref: ReturnType<typeof AgentGateway.DeepAgentPlanStore.planDocRef>,
+): string => {
+  if (operation === "advance") return renderPlanRetryBase(previous, ref)
+  if (code === "plan_already_exists") {
+    return (
+      "\n\nCorrection protocol: create cannot replace an existing plan. Use advance for status/note changes or replan for structural changes, with the exact authoritative precondition below." +
+      renderPlanRetryBase(previous, ref)
+    )
+  }
+  if (operation === "create") {
+    return (
+      "\n\nCorrection protocol for create: use " +
+      JSON.stringify({ expected_plan_id: null, expected_version: null }) +
+      ". Omit active_step_id; mark at most one step status=active and the server will allocate missing step_id values, then derive active_step_id. Do not invent a future server ID."
+    )
+  }
+  if (previous == null || ref == null) {
+    return "\n\nAuthoritative replan parameters are unavailable. Do not guess expected_plan_id, expected_version, step_id, or active_step_id. If no plan exists, use create with null expected values."
+  }
+  return (
+    "\n\nCorrection protocol for replan: copy the exact precondition below. For a retained step, copy its exact step_id, title, acceptance, and assigned_agent; the server also fills acceptance/assigned_agent when omitted. Omit step_id for every new step so the server allocates it. Omit active_step_id and mark at most one step status=active; the server derives its ID after allocation. Omit assumptions to retain the authoritative list, or send [] only when you intentionally clear it.\n" +
+    JSON.stringify({
+      expected_plan_id: previous.plan_id,
+      expected_version: ref.version,
+      assumptions: previous.assumptions,
+      existing_steps: previous.steps.map((step) => ({
+        step_id: step.step_id,
+        title: step.title,
+        acceptance: step.acceptance,
+        assigned_agent: step.assigned_agent,
+      })),
+    })
+  )
+}
+
+export const renderPlanRetryBase = (
+  previous: ReturnType<typeof AgentGateway.DeepAgentPlanStore.getPlanDoc>,
+  ref: ReturnType<typeof AgentGateway.DeepAgentPlanStore.planDocRef>,
+): string => {
+  if (previous == null) return ""
+  if (ref == null) {
+    return `\n\nAuthoritative plan parameters unavailable: expected_version is unavailable for expected_plan_id=${JSON.stringify(previous.plan_id)}. Do not guess or call advance/replan.`
+  }
+  return (
+    "\n\nAuthoritative plan parameters (copy expected_* and step_id values exactly; do not infer them):\n" +
+    JSON.stringify({
+      expected_plan_id: previous.plan_id,
+      expected_version: ref.version,
+      active_step_id: previous.active_step_id,
+      steps: previous.steps.map((step) => ({
+        step_id: step.step_id,
+        status: step.status,
+        ...(step.note != null ? { note: step.note } : {}),
+      })),
+    })
+  )
+}

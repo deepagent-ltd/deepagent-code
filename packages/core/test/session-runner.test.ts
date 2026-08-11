@@ -1488,6 +1488,13 @@ describe("SessionRunnerLLM", () => {
 
       expect(requests).toHaveLength(2)
       expect(userTexts(requests[0])[0]).toContain("## Goal")
+      const earlierQuestionCount =
+        requests
+          .flatMap(userTexts)
+          .join("\n")
+          .match(/Earlier question/g)?.length ?? 0
+      expect(earlierQuestionCount).toBeGreaterThanOrEqual(179)
+      expect(earlierQuestionCount).toBeLessThanOrEqual(180)
       expect(userTexts(requests[1])).toHaveLength(1)
       expect(userTexts(requests[1])[0]).toContain("<summary>\n## Goal\n- Preserve the task\n</summary>")
       expect(userTexts(requests[1])[0]).toContain(`[User]: ${"Recent exact request ".repeat(180)}`)
