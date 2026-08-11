@@ -447,7 +447,7 @@ describe("prompt submit worktree selection", () => {
     expect(enabledAutoAccept).toEqual([{ sessionID: "session-1", directory: "/repo/worktree-a" }])
   })
 
-  test("includes the selected variant on optimistic prompts", async () => {
+  test("keeps an optimistic steer visible after its durable receipt", async () => {
     params = { id: "session-1" }
     variant = "high"
 
@@ -480,7 +480,7 @@ describe("prompt submit worktree selection", () => {
         model: { providerID: "provider", modelID: "model", variant: "high" },
       },
     })
-    expect(optimisticRemoved).toHaveLength(1)
+    expect(optimisticRemoved).toHaveLength(0)
   })
 
   test("seeds new sessions before optimistic prompts are added", async () => {

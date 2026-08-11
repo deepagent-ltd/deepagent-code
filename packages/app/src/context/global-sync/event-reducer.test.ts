@@ -430,7 +430,7 @@ describe("applyDirectoryEvent", () => {
     expect(store.part.msg_2).toBeUndefined()
   })
 
-  test("reconciles a canonical steer event before its HTTP receipt", () => {
+  test("replaces a retained optimistic steer when its canonical event arrives", () => {
     const sessionID = "ses_1"
     const clientMessageID = "msg_client"
     const canonical = {
@@ -462,6 +462,7 @@ describe("applyDirectoryEvent", () => {
     })
 
     expect(store.message[sessionID]?.map((message) => message.id)).toEqual([canonical.id])
+    expect(store.message[sessionID]).toHaveLength(1)
     expect(store.part[clientMessageID]).toBeUndefined()
     expect(store.part_text_accum_delta[clientPart.id]).toBeUndefined()
   })
