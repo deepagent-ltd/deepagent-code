@@ -56,7 +56,10 @@ export default defineConfig(({ command }) => ({
         async writeBundle() {
           await mkdir("./out/main/chunks", { recursive: true })
           for (const file of await readdir(DEEPAGENT_CODE_SERVER_DIST)) {
-            if (!file.endsWith(".wasm") && (command !== "build" || (file !== "node.js" && file !== "node.js.map")))
+            if (
+              !file.endsWith(".wasm") &&
+              (command !== "build" || !["node.js", "node.js.map", "models-dev.build.json"].includes(file))
+            )
               continue
             await copyFile(`${DEEPAGENT_CODE_SERVER_DIST}/${file}`, `./out/main/chunks/${file}`)
           }

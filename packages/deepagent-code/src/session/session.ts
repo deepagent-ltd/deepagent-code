@@ -26,6 +26,7 @@ import { sql } from "drizzle-orm"
 import { inArray } from "drizzle-orm"
 import { lt } from "drizzle-orm"
 import { or } from "drizzle-orm"
+import { notLike } from "drizzle-orm"
 import type { SQL } from "drizzle-orm"
 import {
   MessageTable,
@@ -46,6 +47,7 @@ import { MessageV2 } from "./message-v2"
 import {
   collectSessionWorldStateBaseline,
   forwardLedgerOnForkRequired,
+  loadForkOrigin,
   persistForkOriginRequired,
 } from "./context-ledger"
 import { containsPath, type InstanceContext } from "../project/instance-context"
@@ -228,6 +230,111 @@ function getForkedTitle(title: string): string {
 // Fork lineage is capped at MAX_FORK_DEPTH levels (root → fork → fork-of-fork = 3), i.e. at most two
 // successive forks. The tree UI mirrors this cap when nesting sessions under their origin.
 export const MAX_FORK_DEPTH = 3
+const LEGACY_FOREGROUND_FORK_MIGRATION_VERSION = 1
+const LEGACY_FOREGROUND_FORK_MIGRATION_PREFIX = "legacy_foreground_fork_migration_"
+
+type LegacyForegroundForkOrigin = {
+  parentSessionID: SessionID
+  parentTitle?: string
+  cutoffMessageID?: MessageID
+  forkedAt: number
+  forkIntentID?: string
+  manifestState?: string
+  legacyMigrationVersion?: number
+}
+
+function legacyForegroundForkOrigin(metadata: Info["metadata"]): LegacyForegroundForkOrigin | undefined {
+  const value = metadata?.forkedFrom
+  if (!value || typeof value !== "object") return
+  const origin = value as Record<string, unknown>
+  if (typeof origin.parentSessionID !== "string") return
+  if (typeof origin.forkedAt !== "number" || !Number.isFinite(origin.forkedAt)) return
+  if (origin.cutoffMessageID !== undefined && typeof origin.cutoffMessageID !== "string") return
+  if (origin.parentTitle !== undefined && typeof origin.parentTitle !== "string") return
+  if (
+    (origin.manifestVersion !== undefined || origin.forkIntentID !== undefined) &&
+    !(
+      origin.legacyMigrationVersion === LEGACY_FOREGROUND_FORK_MIGRATION_VERSION &&
+      origin.manifestState === "prepared" &&
+      typeof origin.forkIntentID === "string"
+    )
+  )
+    return
+  return {
+    parentSessionID: SessionID.make(origin.parentSessionID),
+    ...(typeof origin.parentTitle === "string" ? { parentTitle: origin.parentTitle } : {}),
+    ...(typeof origin.cutoffMessageID === "string" ? { cutoffMessageID: MessageID.make(origin.cutoffMessageID) } : {}),
+    forkedAt: origin.forkedAt,
+    ...(typeof origin.forkIntentID === "string" ? { forkIntentID: origin.forkIntentID } : {}),
+    ...(typeof origin.manifestState === "string" ? { manifestState: origin.manifestState } : {}),
+    ...(typeof origin.legacyMigrationVersion === "number"
+      ? { legacyMigrationVersion: origin.legacyMigrationVersion }
+      : {}),
+  }
+}
+
+function legacyForkProjectionFingerprint(messages: readonly SessionV1.WithParts[]) {
+  const ordinals = new Map(messages.map((message, ordinal) => [message.info.id, ordinal]))
+  return `lfp${LEGACY_FOREGROUND_FORK_MIGRATION_VERSION}_${Hash.sha256(
+    CanonicalJson.stringify({
+      version: LEGACY_FOREGROUND_FORK_MIGRATION_VERSION,
+      messages: messages.map((message, messageOrdinal) => ({
+        created: message.info.time.created,
+        info:
+          message.info.role === "user"
+            ? {
+                id: messageOrdinal,
+                role: message.info.role,
+                format: message.info.format,
+                agent: message.info.agent,
+                model: message.info.model,
+                system: message.info.system,
+                tools: message.info.tools,
+                metadata: message.info.metadata,
+              }
+            : {
+                id: messageOrdinal,
+                role: message.info.role,
+                error: message.info.error,
+                parentID: ordinals.get(message.info.parentID) ?? `external:${message.info.parentID}`,
+                modelID: message.info.modelID,
+                providerID: message.info.providerID,
+                providerAttemptID: message.info.providerAttemptID,
+                mode: message.info.mode,
+                agent: message.info.agent,
+                path: message.info.path,
+                summary: message.info.summary,
+                structured: message.info.structured,
+                variant: message.info.variant,
+                finish: message.info.finish,
+              },
+        parts: message.parts.map((part, partOrdinal) => ({
+          ...Object.fromEntries(
+            Object.entries(part).filter(
+              ([key]) => key !== "id" && key !== "sessionID" && key !== "messageID" && key !== "time",
+            ),
+          ),
+          id: `${messageOrdinal}:${partOrdinal}`,
+          ...(part.type === "compaction" && part.tail_start_id
+            ? { tail_start_id: ordinals.get(part.tail_start_id) ?? `external:${part.tail_start_id}` }
+            : {}),
+        })),
+      })),
+    }),
+  )}`
+}
+
+function legacyForkSourcePrefix(
+  messages: readonly SessionV1.WithParts[],
+  origin: LegacyForegroundForkOrigin,
+): SessionV1.WithParts[] | undefined {
+  if (origin.cutoffMessageID) {
+    if (!messages.some((message) => message.info.id === origin.cutoffMessageID)) return
+    const cutoffIndex = messages.findIndex((message) => message.info.id >= origin.cutoffMessageID!)
+    return cutoffIndex < 0 ? [...messages] : messages.slice(0, cutoffIndex)
+  }
+  return messages.filter((message) => message.info.time.created <= origin.forkedAt)
+}
 
 function sessionPath(worktree: string, cwd: string) {
   return path.relative(path.resolve(worktree), cwd).replaceAll("\\", "/")
@@ -1230,6 +1337,505 @@ export const layer: Layer.Layer<
       )
     })
 
+    function migrateLegacyForegroundFork(
+      sessionID: SessionID,
+      lineage: readonly SessionID[] = [],
+    ): Effect.Effect<void, ForkConflict, never> {
+      return Effect.gen(function* () {
+        if (lineage.includes(sessionID) || lineage.length >= MAX_FORK_DEPTH) {
+          return yield* new ForkConflict({
+            intentID: `${LEGACY_FOREGROUND_FORK_MIGRATION_PREFIX}${sessionID}`,
+            reason: "legacy foreground fork lineage contains a cycle or exceeds the depth limit",
+          })
+        }
+        const target = yield* get(sessionID).pipe(
+          Effect.mapError(
+            (error) =>
+              new ForkConflict({
+                intentID: `${LEGACY_FOREGROUND_FORK_MIGRATION_PREFIX}${sessionID}`,
+                reason: `legacy fork child is unavailable: ${error.message}`,
+              }),
+          ),
+        )
+        const origin = legacyForegroundForkOrigin(target.metadata)
+        if (!origin) {
+          return yield* new ForkConflict({
+            intentID: `${LEGACY_FOREGROUND_FORK_MIGRATION_PREFIX}${sessionID}`,
+            reason: "legacy foreground fork manifest is not compatible with migration",
+          })
+        }
+        if (target.parentID) {
+          return yield* new ForkConflict({
+            intentID: `${LEGACY_FOREGROUND_FORK_MIGRATION_PREFIX}${sessionID}`,
+            reason: "legacy foreground fork has a task parent binding",
+          })
+        }
+        const intentID =
+          origin.forkIntentID ??
+          `${LEGACY_FOREGROUND_FORK_MIGRATION_PREFIX}${Hash.sha256(
+            CanonicalJson.stringify({
+              version: LEGACY_FOREGROUND_FORK_MIGRATION_VERSION,
+              sessionID,
+              parentSessionID: origin.parentSessionID,
+              cutoffMessageID: origin.cutoffMessageID,
+              forkedAt: origin.forkedAt,
+            }),
+          ).slice(0, 32)}`
+        const existingIntent = yield* db
+          .select()
+          .from(SessionForkIntentTable)
+          .where(eq(SessionForkIntentTable.intent_id, intentID))
+          .get()
+          .pipe(Effect.orDie)
+        if (existingIntent?.state === "complete" && existingIntent.side_effects_completed_at !== null) return
+        if (existingIntent) {
+          return yield* new ForkConflict({
+            intentID,
+            reason: existingIntent.recovery_reason ?? `legacy migration intent is ${existingIntent.state}`,
+          })
+        }
+
+        const parent = yield* get(origin.parentSessionID).pipe(
+          Effect.mapError(
+            (error) =>
+              new ForkConflict({
+                intentID,
+                reason: `legacy fork parent is unavailable: ${error.message}`,
+              }),
+          ),
+        )
+        if (parent.projectID !== target.projectID || parent.id === target.id) {
+          return yield* new ForkConflict({
+            intentID,
+            reason: "legacy fork parent and child are not in the same project",
+          })
+        }
+        const parentOrigin = legacyForegroundForkOrigin(parent.metadata)
+        if (parentOrigin) yield* migrateLegacyForegroundFork(parent.id, [...lineage, sessionID])
+
+        const quarantinedPart = yield* db
+          .select({ part_id: SessionPartIntegrityQuarantineTable.part_id })
+          .from(SessionPartIntegrityQuarantineTable)
+          .where(
+            or(
+              eq(SessionPartIntegrityQuarantineTable.part_session_id, target.id),
+              eq(SessionPartIntegrityQuarantineTable.message_session_id, target.id),
+              eq(SessionPartIntegrityQuarantineTable.part_session_id, parent.id),
+              eq(SessionPartIntegrityQuarantineTable.message_session_id, parent.id),
+            ),
+          )
+          .get()
+          .pipe(Effect.orDie)
+        if (quarantinedPart) {
+          return yield* new ForkConflict({
+            intentID,
+            reason: `legacy fork history contains quarantined Part ${quarantinedPart.part_id}`,
+          })
+        }
+
+        const sourceProjection = yield* MessageV2.promptHistoryProjectionEffect(parent.id).pipe(
+          Effect.provideService(Database.Service, database),
+          Effect.mapError(
+            (error) =>
+              new ForkConflict({
+                intentID,
+                reason: `legacy fork source history is unavailable: ${
+                  error instanceof MessageV2.HistoryAuthorityError ? error.reason : error.message
+                }`,
+              }),
+          ),
+        )
+        const sourceSession = yield* db
+          .select({ mutation_epoch: SessionTable.mutation_epoch })
+          .from(SessionTable)
+          .where(eq(SessionTable.id, parent.id))
+          .get()
+          .pipe(Effect.orDie)
+        if (!sourceSession) return yield* new ForkConflict({ intentID, reason: "legacy fork parent row disappeared" })
+
+        const sourcePhysical = yield* MessageV2.stream(parent.id).pipe(
+          Effect.provideService(Database.Service, database),
+          Effect.map((messages) => messages.reverse()),
+        )
+        const targetPhysical = yield* MessageV2.stream(target.id).pipe(
+          Effect.provideService(Database.Service, database),
+          Effect.map((messages) => messages.reverse()),
+        )
+        const sourcePrefix = legacyForkSourcePrefix(sourcePhysical, origin)
+        if (!sourcePrefix) {
+          return yield* new ForkConflict({
+            intentID,
+            reason: origin.cutoffMessageID
+              ? `legacy fork cutoff ${origin.cutoffMessageID} is absent from the parent history`
+              : "legacy fork parent history cannot be bounded at fork time",
+          })
+        }
+        if (target.time.created < origin.forkedAt) {
+          return yield* new ForkConflict({ intentID, reason: "legacy fork child predates its fork timestamp" })
+        }
+        const targetPrefix = targetPhysical.slice(0, sourcePrefix.length)
+        if (
+          targetPrefix.length !== sourcePrefix.length ||
+          legacyForkProjectionFingerprint(sourcePrefix) !== legacyForkProjectionFingerprint(targetPrefix)
+        ) {
+          return yield* new ForkConflict({
+            intentID,
+            reason: "legacy fork child prefix does not match the verified parent cutoff projection",
+          })
+        }
+        const sourcePrefixHash = legacyForkProjectionFingerprint(sourcePrefix)
+        const targetPrefixHash = legacyForkProjectionFingerprint(targetPrefix)
+        const targetPhysicalHash = HistoryAuthority.hash(targetPhysical)
+        const requestHash = Hash.sha256(
+          CanonicalJson.stringify({
+            version: LEGACY_FOREGROUND_FORK_MIGRATION_VERSION,
+            sourceSessionID: parent.id,
+            targetSessionID: target.id,
+            sourcePromptEpoch: sourceProjection.epoch,
+            sourceWindowID: sourceProjection.window.windowID,
+            sourceEffectiveHistoryHash: sourceProjection.effectiveHistoryHash,
+            sourceMutationEpoch: sourceSession.mutation_epoch,
+            sourceMessageCount: sourceProjection.messages.length,
+            sourceCutoffMessageID: origin.cutoffMessageID,
+            projectionVersion: sourceProjection.projectionVersion,
+            sourcePrefixHash,
+            targetPrefixHash,
+            targetPhysicalHash,
+            targetPhysicalMessageCount: targetPhysical.length,
+            clonedMessageCount: sourcePrefix.length,
+            clonedPartCount: targetPrefix.reduce((total, message) => total + message.parts.length, 0),
+          }),
+        )
+        const preparedMetadata = {
+          ...target.metadata,
+          forkedFrom: {
+            ...(target.metadata?.forkedFrom as Record<string, unknown>),
+            manifestVersion: 1,
+            manifestState: "prepared",
+            forkIntentID: intentID,
+            forkMode: "foreground",
+            parentSessionID: parent.id,
+            parentTitle: parent.title,
+            ...(origin.cutoffMessageID ? { cutoffMessageID: origin.cutoffMessageID } : {}),
+            sourcePromptEpoch: sourceProjection.epoch,
+            sourceWindowID: sourceProjection.window.windowID,
+            sourceEffectiveHistoryHash: sourceProjection.effectiveHistoryHash,
+            sourceMutationEpoch: sourceSession.mutation_epoch,
+            sourceMessageCount: sourceProjection.messages.length,
+            projectionVersion: sourceProjection.projectionVersion,
+            sanitationPolicyVersion: 1,
+            legacyMigrationVersion: LEGACY_FOREGROUND_FORK_MIGRATION_VERSION,
+            legacySourcePrefixHash: sourcePrefixHash,
+            legacyTargetPrefixHash: targetPrefixHash,
+            legacyTargetPhysicalHash: targetPhysicalHash,
+            legacyTargetPhysicalMessageCount: targetPhysical.length,
+            legacyClonedMessageCount: sourcePrefix.length,
+            legacyClonedPartCount: targetPrefix.reduce((total, message) => total + message.parts.length, 0),
+            legacyMigrationRequestHash: requestHash,
+            forkedAt: origin.forkedAt,
+          },
+        }
+
+        yield* db
+          .transaction(
+            (tx) =>
+              Effect.gen(function* () {
+                const currentIntent = yield* tx
+                  .select()
+                  .from(SessionForkIntentTable)
+                  .where(eq(SessionForkIntentTable.intent_id, intentID))
+                  .get()
+                if (currentIntent?.state === "complete" && currentIntent.side_effects_completed_at !== null) return
+                if (currentIntent)
+                  return yield* Effect.fail(
+                    new ForkConflict({
+                      intentID,
+                      reason: currentIntent.recovery_reason ?? `legacy migration intent is ${currentIntent.state}`,
+                    }),
+                  )
+                const currentAdmission = yield* tx
+                  .select()
+                  .from(SessionForkAdmissionTable)
+                  .where(eq(SessionForkAdmissionTable.intent_id, intentID))
+                  .get()
+                if (currentAdmission) {
+                  if (currentAdmission.request_hash !== requestHash || currentAdmission.state !== "ready")
+                    return yield* Effect.fail(
+                      new ForkConflict({
+                        intentID,
+                        reason:
+                          currentAdmission.recovery_reason ?? `legacy migration admission is ${currentAdmission.state}`,
+                      }),
+                    )
+                } else {
+                  yield* tx
+                    .insert(SessionForkAdmissionTable)
+                    .values({
+                      intent_id: intentID,
+                      request_hash: requestHash,
+                      fork_mode: "foreground",
+                      source_session_id: parent.id,
+                      source_prompt_epoch: sourceProjection.epoch,
+                      source_window_id: sourceProjection.window.windowID,
+                      source_effective_history_hash: sourceProjection.effectiveHistoryHash,
+                      source_mutation_epoch: sourceSession.mutation_epoch,
+                      source_message_count: sourceProjection.messages.length,
+                      source_cutoff_message_id: origin.cutoffMessageID ?? null,
+                      projection_version: sourceProjection.projectionVersion,
+                      sanitation_policy_version: 1,
+                      requested_directory: target.directory,
+                      isolation_mode: "none",
+                      requested_target_session_id: target.id,
+                      target_session_id: target.id,
+                      child_depth: null,
+                      task_request_hash: null,
+                      worktree_directory: null,
+                      worktree_branch: null,
+                      worktree_base_commit: null,
+                      state: "ready",
+                      recovery_reason: null,
+                      time_created: Date.now(),
+                      time_updated: Date.now(),
+                    })
+                    .run()
+                }
+                const history = yield* tx
+                  .select({ state: SessionHistoryStateTable.state, reason: SessionHistoryStateTable.reason })
+                  .from(SessionHistoryStateTable)
+                  .where(eq(SessionHistoryStateTable.session_id, target.id))
+                  .get()
+                if (history?.state === "recovery_required") {
+                  if (history.reason !== "legacy foreground fork has no verifiable source projection manifest")
+                    return yield* Effect.fail(
+                      new ForkConflict({ intentID, reason: history.reason ?? "legacy fork history requires recovery" }),
+                    )
+                  yield* tx
+                    .delete(SessionPromptEpochMessageTable)
+                    .where(eq(SessionPromptEpochMessageTable.session_id, target.id))
+                    .run()
+                  yield* tx
+                    .delete(SessionWorldStateBaselineTable)
+                    .where(eq(SessionWorldStateBaselineTable.session_id, target.id))
+                    .run()
+                  yield* tx
+                    .delete(SessionPromptEpochTable)
+                    .where(eq(SessionPromptEpochTable.session_id, target.id))
+                    .run()
+                  yield* tx
+                    .delete(SessionHistoryStateTable)
+                    .where(eq(SessionHistoryStateTable.session_id, target.id))
+                    .run()
+                }
+                yield* tx
+                  .update(SessionTable)
+                  .set({ metadata: preparedMetadata })
+                  .where(eq(SessionTable.id, target.id))
+                  .run()
+              }),
+            { behavior: "immediate" },
+          )
+          .pipe(
+            Effect.mapError((error) =>
+              error instanceof ForkConflict
+                ? error
+                : new ForkConflict({
+                    intentID,
+                    reason: `legacy migration admission transaction failed: ${
+                      error instanceof Error ? error.message : String(error)
+                    }`,
+                  }),
+            ),
+          )
+        const completed = yield* Effect.gen(function* () {
+          const targetProjection = yield* MessageV2.promptHistoryProjectionEffect(target.id).pipe(
+            Effect.provideService(Database.Service, database),
+            Effect.mapError(
+              (error) =>
+                new ForkConflict({
+                  intentID,
+                  reason: `legacy fork target history migration failed: ${
+                    error instanceof MessageV2.HistoryAuthorityError ? error.reason : error.message
+                  }`,
+                }),
+            ),
+          )
+          if (!targetProjection.worldStateBaselineHash) {
+            return yield* new ForkConflict({
+              intentID,
+              reason: "legacy fork target history has no World State baseline after migration",
+            })
+          }
+          const targetWorldState = yield* MessageV2.promptWorldStateProjectionEffect(target.id).pipe(
+            Effect.provideService(Database.Service, database),
+            Effect.mapError(
+              (error) =>
+                new ForkConflict({
+                  intentID,
+                  reason: `legacy fork target World State validation failed: ${
+                    error instanceof MessageV2.HistoryAuthorityError ? error.reason : error.message
+                  }`,
+                }),
+            ),
+          )
+          if (!targetWorldState || targetWorldState.hash !== targetProjection.worldStateBaselineHash) {
+            return yield* new ForkConflict({ intentID, reason: "legacy fork World State baseline hash mismatch" })
+          }
+          if (!loadForkOrigin(target.id)) {
+            yield* forwardLedgerOnForkRequired({ parentSessionID: parent.id, forkSessionID: target.id })
+          }
+          yield* persistForkOriginRequired({
+            forkSessionID: target.id,
+            origin: {
+              parentSessionID: parent.id,
+              ...(origin.cutoffMessageID ? { cutoffMessageID: origin.cutoffMessageID } : {}),
+              forkedAt: origin.forkedAt,
+            },
+          })
+          return yield* db
+            .transaction(
+              (tx) =>
+                Effect.gen(function* () {
+                  const admission = yield* tx
+                    .select()
+                    .from(SessionForkAdmissionTable)
+                    .where(eq(SessionForkAdmissionTable.intent_id, intentID))
+                    .get()
+                  if (!admission || admission.state !== "ready" || admission.request_hash !== requestHash)
+                    return yield* Effect.fail(
+                      new ForkConflict({ intentID, reason: "legacy migration admission changed during recovery" }),
+                    )
+                  const sourceMutation = yield* tx
+                    .select({ mutation_epoch: SessionTable.mutation_epoch })
+                    .from(SessionTable)
+                    .where(eq(SessionTable.id, parent.id))
+                    .get()
+                  if (!sourceMutation || sourceMutation.mutation_epoch !== sourceSession.mutation_epoch)
+                    return yield* Effect.fail(
+                      new ForkConflict({ intentID, reason: "legacy fork source changed during migration" }),
+                    )
+                  const currentTarget = yield* tx
+                    .select({ metadata: SessionTable.metadata })
+                    .from(SessionTable)
+                    .where(eq(SessionTable.id, target.id))
+                    .get()
+                  const currentManifest =
+                    currentTarget?.metadata?.forkedFrom && typeof currentTarget.metadata.forkedFrom === "object"
+                      ? (currentTarget.metadata.forkedFrom as Record<string, unknown>)
+                      : undefined
+                  if (
+                    currentManifest?.legacyMigrationRequestHash !== requestHash ||
+                    currentManifest.manifestState !== "prepared"
+                  )
+                    return yield* Effect.fail(
+                      new ForkConflict({ intentID, reason: "legacy migration manifest changed during recovery" }),
+                    )
+                  const now = Date.now()
+                  yield* tx
+                    .insert(SessionForkIntentTable)
+                    .values({
+                      intent_id: intentID,
+                      request_hash: requestHash,
+                      fork_mode: "foreground",
+                      source_session_id: parent.id,
+                      source_prompt_epoch: sourceProjection.epoch,
+                      source_window_id: sourceProjection.window.windowID,
+                      source_effective_history_hash: sourceProjection.effectiveHistoryHash,
+                      source_mutation_epoch: sourceSession.mutation_epoch,
+                      source_message_count: sourceProjection.messages.length,
+                      source_cutoff_message_id: origin.cutoffMessageID ?? null,
+                      projection_version: sourceProjection.projectionVersion,
+                      sanitation_policy_version: 1,
+                      target_session_id: target.id,
+                      target_prompt_epoch: targetProjection.epoch,
+                      target_window_id: targetProjection.window.windowID,
+                      target_effective_history_hash: targetProjection.effectiveHistoryHash,
+                      target_world_state_baseline_hash: targetWorldState.hash,
+                      cloned_message_count: sourcePrefix.length,
+                      cloned_part_count: targetPrefix.reduce((total, message) => total + message.parts.length, 0),
+                      state: "complete",
+                      event_cursor: 0,
+                      event_count: 0,
+                      delivery_owner: null,
+                      lease_expires_at: null,
+                      delivery_attempts: 0,
+                      recovery_reason: null,
+                      time_created: now,
+                      time_updated: now,
+                      time_committed: now,
+                      time_completed: now,
+                      side_effects_completed_at: null,
+                    })
+                    .run()
+                  yield* tx
+                    .update(SessionForkIntentTable)
+                    .set({ side_effects_completed_at: now, time_updated: now })
+                    .where(eq(SessionForkIntentTable.intent_id, intentID))
+                    .run()
+                  yield* tx
+                    .update(SessionForkAdmissionTable)
+                    .set({ state: "manifest_committed", recovery_reason: null, time_updated: now })
+                    .where(
+                      and(
+                        eq(SessionForkAdmissionTable.intent_id, intentID),
+                        eq(SessionForkAdmissionTable.state, "ready"),
+                      ),
+                    )
+                    .run()
+                  yield* tx
+                    .update(SessionTable)
+                    .set({
+                      metadata: {
+                        ...target.metadata,
+                        forkedFrom: {
+                          ...currentManifest,
+                          manifestState: "complete",
+                          targetPromptEpoch: targetProjection.epoch,
+                          targetWindowID: targetProjection.window.windowID,
+                          targetEffectiveHistoryHash: targetProjection.effectiveHistoryHash,
+                          targetWorldStateBaselineHash: targetWorldState.hash,
+                          legacyMigrationCompletedAt: now,
+                        },
+                      },
+                    })
+                    .where(eq(SessionTable.id, target.id))
+                    .run()
+                  return
+                }),
+              { behavior: "immediate" },
+            )
+            .pipe(
+              Effect.mapError((error) =>
+                error instanceof ForkConflict
+                  ? error
+                  : new ForkConflict({
+                      intentID,
+                      reason: `legacy migration completion transaction failed: ${
+                        error instanceof Error ? error.message : String(error)
+                      }`,
+                    }),
+              ),
+            )
+        }).pipe(
+          Effect.catch((error: unknown) =>
+            Effect.gen(function* () {
+              const reason =
+                error instanceof ForkConflict ? error.reason : error instanceof Error ? error.message : String(error)
+              yield* db
+                .update(SessionForkAdmissionTable)
+                .set({ state: "recovery_required", recovery_reason: reason, time_updated: Date.now() })
+                .where(
+                  and(eq(SessionForkAdmissionTable.intent_id, intentID), eq(SessionForkAdmissionTable.state, "ready")),
+                )
+                .run()
+                .pipe(Effect.orDie)
+              return yield* new ForkConflict({ intentID, reason })
+            }),
+          ),
+        )
+        if (completed) return
+      })
+    }
+
     const forkUnlocked = Effect.fn("Session.fork")(function* (input: {
       sessionID: SessionID
       intentID: string
@@ -2013,6 +2619,25 @@ export const layer: Layer.Layer<
     const recoverForks: Interface["recoverForks"] = Effect.fn("Session.recoverForks")(function* () {
       const now = Date.now()
       const ctx = yield* InstanceState.context
+      const legacyAdmissions = yield* db
+        .select({ target_session_id: SessionForkAdmissionTable.target_session_id })
+        .from(SessionForkAdmissionTable)
+        .innerJoin(SessionTable, eq(SessionTable.id, SessionForkAdmissionTable.source_session_id))
+        .where(
+          and(
+            eq(SessionTable.project_id, ctx.project.id),
+            like(SessionForkAdmissionTable.intent_id, `${LEGACY_FOREGROUND_FORK_MIGRATION_PREFIX}%`),
+            eq(SessionForkAdmissionTable.state, "ready"),
+          ),
+        )
+        .all()
+        .pipe(Effect.orDie)
+      yield* Effect.forEach(
+        legacyAdmissions,
+        ({ target_session_id }) =>
+          migrateLegacyForegroundFork(SessionID.make(target_session_id)).pipe(Effect.catchCause(() => Effect.void)),
+        { discard: true },
+      )
       const recoverableAdmissions = yield* db
         .select({ admission: SessionForkAdmissionTable })
         .from(SessionForkAdmissionTable)
@@ -2021,6 +2646,7 @@ export const layer: Layer.Layer<
           and(
             eq(SessionTable.project_id, ctx.project.id),
             inArray(SessionForkAdmissionTable.state, ["admitted", "provisioning", "ready"] as const),
+            notLike(SessionForkAdmissionTable.intent_id, `${LEGACY_FOREGROUND_FORK_MIGRATION_PREFIX}%`),
           ),
         )
         .all()
@@ -2146,7 +2772,22 @@ export const layer: Layer.Layer<
           .where(eq(SessionForkAdmissionTable.target_session_id, sessionID))
           .get()
           .pipe(Effect.orDie)
-        if (admission)
+        if (admission && admission.intent_id.startsWith(LEGACY_FOREGROUND_FORK_MIGRATION_PREFIX)) {
+          if (admission.state !== "ready")
+            return yield* new UnavailableError({
+              sessionID,
+              reason: `legacy fork migration admission ${admission.intent_id} is ${admission.state}`,
+            })
+          yield* migrateLegacyForegroundFork(sessionID).pipe(
+            Effect.mapError(
+              (error) =>
+                new UnavailableError({
+                  sessionID,
+                  reason: error.reason,
+                }),
+            ),
+          )
+        } else if (admission)
           return yield* new UnavailableError({
             sessionID,
             reason: `fork admission ${admission.intent_id} is ${admission.state}`,
@@ -2166,11 +2807,17 @@ export const layer: Layer.Layer<
             sessionID,
             reason: "legacy task fork has no verifiable sanitation manifest",
           })
-        if (session?.metadata?.forkedFrom)
-          return yield* new UnavailableError({
-            sessionID,
-            reason: "legacy foreground fork has no verifiable source projection manifest",
-          })
+        if (session?.metadata?.forkedFrom) {
+          yield* migrateLegacyForegroundFork(sessionID).pipe(
+            Effect.mapError(
+              (error) =>
+                new UnavailableError({
+                  sessionID,
+                  reason: error.reason,
+                }),
+            ),
+          )
+        }
       }
       const history = yield* db
         .select({
