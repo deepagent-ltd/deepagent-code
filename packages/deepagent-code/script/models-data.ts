@@ -1,7 +1,5 @@
 import { mkdir, rename, rm } from "node:fs/promises"
-import os from "node:os"
 import path from "node:path"
-import { resolveDataPath } from "@deepagent-code/core/global-path"
 
 const repositorySnapshotFile = path.resolve(import.meta.dir, "../test/tool/fixtures/models-api.json")
 
@@ -18,7 +16,7 @@ export async function loadModelsData(
   if (configuredFile) {
     const configured = await readCatalog(configuredFile)
     if (!configured) throw new Error(`Configured models.dev snapshot is invalid: ${configuredFile}`)
-    return { data: JSON.stringify(configured), source: configuredFile }
+    return result(configured, configuredFile)
   }
 
   const modelsURL = (environment.DEEPAGENT_CODE_MODELS_URL?.trim() || "https://models.dev").replace(/\/$/, "")
@@ -27,26 +25,34 @@ export async function loadModelsData(
   })
     .then(async (response) => (response.ok ? catalog(await response.json()) : undefined))
     .catch(() => undefined)
-  const cacheFile = options.cacheFile ?? path.join(resolveDataPath(), "cache", "models.json")
   if (remote) {
-    await persistCatalog(cacheFile, remote).catch((error) =>
-      console.warn(
-        `Unable to update models.dev build cache: ${error instanceof Error ? error.message : String(error)}`,
-      ),
-    )
-    return { data: JSON.stringify(remote), source: `${modelsURL}/api.json` }
+    if (options.cacheFile) {
+      await persistCatalog(options.cacheFile, remote).catch((error) =>
+        console.warn(
+          `Unable to update models.dev build cache: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      )
+    }
+    return result(remote, `${modelsURL}/api.json`)
   }
 
-  const fallbacks = options.fallbackFiles ?? [
-    cacheFile,
-    path.join(os.homedir(), ".cache", "opencode", "models.json"),
-    repositorySnapshotFile,
-  ]
+  // Build inputs must not depend on the builder's DeepAgent/OpenCode runtime caches. A caller may
+  // pass explicit fallback files for tests or controlled builds; the default is the committed copy.
+  const fallbacks = options.fallbackFiles ?? [repositorySnapshotFile]
   const cached = (await Promise.all(fallbacks.map(async (file) => ({ file, data: await readCatalog(file) })))).find(
     (item): item is { file: string; data: Record<string, unknown> } => item.data !== undefined,
   )
   if (!cached) throw new Error(`Unable to load a valid models.dev catalog from ${modelsURL} or local snapshots`)
-  return { data: JSON.stringify(cached.data), source: cached.file }
+  return result(cached.data, cached.file)
+}
+
+function result(data: Record<string, unknown>, source: string) {
+  const serialized = JSON.stringify(data)
+  return {
+    data: serialized,
+    source,
+    sha256: new Bun.CryptoHasher("sha256").update(serialized).digest("hex"),
+  }
 }
 
 function catalog(value: unknown): Record<string, unknown> | undefined {
