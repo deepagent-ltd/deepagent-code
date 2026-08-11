@@ -88,18 +88,18 @@ export const imWebSocketHandlers = HttpApiBuilder.group(IMWebSocketApi, "im-webs
             close,
           }
 
-          // Register connection
-          broadcaster.register(connection)
-
-          const registered = yield* WebSocketTracker.register(
+          const registration = yield* WebSocketTracker.register(
             Effect.sync(() => {
               close(1001, "server closing")
             }),
           )
-          if (!registered) {
+          if (!registration.accepted) {
             close(1001, "server closing")
             return HttpServerResponse.empty()
           }
+
+          // Register connection only after the listener accepts ownership.
+          broadcaster.register(connection)
 
           // Setup heartbeat check
           heartbeatTimer = setInterval(() => {
@@ -179,7 +179,7 @@ export const imWebSocketHandlers = HttpApiBuilder.group(IMWebSocketApi, "im-webs
             )
 
           // Run message handler
-          yield* messageHandler
+          yield* Effect.raceFirst(messageHandler, registration.shutdown)
 
           return HttpServerResponse.empty()
         }).pipe(

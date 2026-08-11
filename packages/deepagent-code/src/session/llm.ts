@@ -107,6 +107,58 @@ function stableReceiptJson(value: unknown, ancestors = new WeakSet<object>()): s
   return serialized
 }
 
+function finalRequestFingerprint(value: unknown) {
+  return Hash.sha256(stableReceiptJson(value))
+}
+
+function finalToolDefinitions(tools: Readonly<Record<string, Tool>>) {
+  return Object.entries(tools)
+    .toSorted(([a], [b]) => a.localeCompare(b))
+    .map(([name, definition]) => ({
+      name,
+      description: definition.description,
+      inputSchema: "inputSchema" in definition ? definition.inputSchema : undefined,
+    }))
+}
+
+function physicalToolDefinitions(value: unknown) {
+  const definitions = Array.isArray(value)
+    ? value.map((definition) => {
+        if (!isRecord(definition)) return definition
+        return Object.fromEntries(
+          Object.entries(definition)
+            .filter(([key]) => !["execute", "onInputStart", "onInputDelta", "onInputAvailable"].includes(key))
+            .toSorted(([a], [b]) => a.localeCompare(b)),
+        )
+      })
+    : []
+  return {
+    definitions,
+    ids: definitions.flatMap((definition) => {
+      if (!isRecord(definition)) return []
+      const name = definition.name ?? definition.toolName
+      return typeof name === "string" ? [name] : []
+    }),
+  }
+}
+
+function physicalPromptCacheKey(value: unknown) {
+  const keys = new Set<string>()
+  const visit = (current: unknown) => {
+    if (!isRecord(current)) return
+    for (const [key, child] of Object.entries(current)) {
+      if (["promptCacheKey", "prompt_cache_key", "cacheKey"].includes(key) && typeof child === "string") {
+        keys.add(child)
+        continue
+      }
+      visit(child)
+    }
+  }
+  visit(value)
+  if (keys.size > 1) throw new Error("Provider request contains conflicting prompt cache keys")
+  return keys.values().next().value
+}
+
 function adapterReceiptDetails(event: LLMEvent) {
   if (event.type === "tool-call") return { callID: event.id, toolName: event.name, payload: event.input }
   if (event.type === "tool-error") {
@@ -300,7 +352,16 @@ export type StreamInput = {
       readonly adapterLoweringOutcome: "ok" | "schema_rejected" | "omitted_no_support"
       readonly budget: RequestBudgetStatus
     }) => Effect.Effect<void>
+    readonly adapterPrepared: (input: {
+      readonly finalRequestHash: string
+      readonly promptCacheKey?: string
+      readonly finalOfferedToolIds: readonly string[]
+      readonly toolDefinitionHash: string
+    }) => Effect.Effect<void>
     readonly dispatched: () => Effect.Effect<void>
+    readonly streaming: () => Effect.Effect<void>
+    readonly settled: () => Effect.Effect<void>
+    readonly failed: (error: unknown) => Effect.Effect<void>
     readonly rejected: (input: { readonly budget: RequestBudgetStatus; readonly reason: string }) => Effect.Effect<void>
     readonly aiSdkInput: (input: {
       readonly ordinal: number
@@ -648,7 +709,8 @@ const live: Layer.Layer<
           Object.keys(input.tools).length > 0 && Object.keys(runtimeTools).length === 0 ? "omitted_no_support" : "ok",
         budget,
       }) ?? Effect.void
-      yield* input.requestReceipt?.dispatched() ?? Effect.void
+      const physicalProviderOptions = ProviderTransform.providerOptions(input.model, effectiveOptions ?? {})
+      const receiptBridge = yield* EffectBridge.make()
 
       const tracer = cfg.experimental?.openTelemetry
         ? Option.getOrUndefined(yield* Effect.serviceOption(OtelTracer.OtelTracer))
@@ -687,6 +749,26 @@ const live: Layer.Layer<
           metadata: prepared.metadata,
         })
         if (native.type === "supported") {
+          const physicalTools = finalToolDefinitions(runtimeTools)
+          yield* input.requestReceipt?.adapterPrepared({
+            finalRequestHash: finalRequestFingerprint({
+              runtime: "native",
+              model: { providerID: input.model.providerID, modelID: input.model.id },
+              messages: ProviderTransform.message(prepared.messages, input.model, effectiveOptions ?? {}),
+              tools: physicalTools,
+              toolChoice: effectiveToolChoice,
+              temperature: prepared.params.temperature,
+              topP: prepared.params.topP,
+              topK: prepared.params.topK,
+              maxOutputTokens: prepared.params.maxOutputTokens,
+              providerOptions: physicalProviderOptions,
+              headers: prepared.headers,
+            }),
+            promptCacheKey: physicalPromptCacheKey(physicalProviderOptions),
+            finalOfferedToolIds: physicalTools.map((tool) => tool.name),
+            toolDefinitionHash: Hash.sha256(stableReceiptJson(physicalTools)),
+          }) ?? Effect.void
+          yield* input.requestReceipt?.dispatched() ?? Effect.void
           yield* input.requestReceipt?.aiSdkInput({
             ordinal: 0,
             eventType: "native-runtime",
@@ -733,7 +815,7 @@ const live: Layer.Layer<
         result: streamText({
           // Copilot returns the authoritative billed amount only in provider-specific response fields.
           includeRawChunks: input.model.providerID.includes("github-copilot"),
-          onError(error) {
+          onError({ error }) {
             // AI SDK's APICallError carries `requestBodyValues` = the ENTIRE request body (system
             // prompt + every message). Logging the raw error JSON.stringifies that into a single
             // multi-hundred-KB line. Log only the salient fields (and a truncated responseBody) so a
@@ -814,7 +896,7 @@ const live: Layer.Layer<
           temperature: prepared.params.temperature,
           topP: prepared.params.topP,
           topK: prepared.params.topK,
-          providerOptions: ProviderTransform.providerOptions(input.model, effectiveOptions ?? {}),
+          providerOptions: physicalProviderOptions,
           activeTools: Object.keys(runtimeTools).filter((x) => x !== "invalid"),
           tools: runtimeTools,
           toolChoice: effectiveToolChoice,
@@ -836,6 +918,30 @@ const live: Layer.Layer<
                       input.model,
                       prepared.messageTransformOptions,
                     )
+                    if (input.requestReceipt) {
+                      const physicalTools = physicalToolDefinitions(args.params.tools)
+                      await receiptBridge.promise(
+                        input.requestReceipt.adapterPrepared({
+                          finalRequestHash: finalRequestFingerprint({
+                            runtime: "ai-sdk",
+                            model: { providerID: input.model.providerID, modelID: input.model.id },
+                            prompt: args.params.prompt,
+                            tools: args.params.tools,
+                            toolChoice: args.params.toolChoice,
+                            temperature: args.params.temperature,
+                            topP: args.params.topP,
+                            topK: args.params.topK,
+                            maxOutputTokens: args.params.maxOutputTokens,
+                            providerOptions: args.params.providerOptions,
+                            headers: prepared.headers,
+                          }),
+                          promptCacheKey: physicalPromptCacheKey(args.params.providerOptions),
+                          finalOfferedToolIds: physicalTools.ids,
+                          toolDefinitionHash: Hash.sha256(stableReceiptJson(physicalTools.definitions)),
+                        }),
+                      )
+                      await receiptBridge.promise(input.requestReceipt.dispatched())
+                    }
                   }
                   return args.params
                 },

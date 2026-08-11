@@ -65,7 +65,7 @@ const withDefaults = (model: ModelV2.Info, route: AnyRoute) => {
     generation: model.request.generation,
     providerOptions: namespace && Object.keys(options).length > 0 ? { [namespace]: options } : undefined,
     http: { body: httpBody },
-    limits: { context: model.limit.context, output: model.limit.output },
+    limits: { context: model.limit.context, input: model.limit.input, output: model.limit.output },
   })
 }
 

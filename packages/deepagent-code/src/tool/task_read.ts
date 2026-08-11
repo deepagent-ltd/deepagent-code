@@ -1,5 +1,6 @@
 import * as Tool from "./tool"
 import { Session } from "@/session/session"
+import { MessageV2 } from "@/session/message-v2"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { Database } from "@deepagent-code/core/database/database"
 import { TaskRunTable } from "@deepagent-code/core/session/sql"
@@ -13,6 +14,7 @@ const DESCRIPTION = [
   "Read the transcript of a subagent task you dispatched via the task tool.",
   "Parameters: task_id (the session ID from task_status output), limit (default 20, max 100), before (message ID cursor for pagination).",
   "Returns up to `limit` messages from the subagent's conversation, newest-first.",
+  "Also returns the durable structured, validated-text, or raw result in a separate task_result block when available.",
   "Use this to recover partial work when a subagent was interrupted or failed to produce structured output.",
   "IMPORTANT: Only reads sessions you directly spawned (child sessions of the current session).",
   "Never returns hidden reasoning content.",
@@ -30,6 +32,7 @@ const Parameters = Schema.Struct({
 
 const MAX_LIMIT = 100
 const DEFAULT_LIMIT = 20
+const MAX_RESULT_CHARS = 80_000
 
 /** Render a single tool part into the transcript. */
 function renderToolPart(part: SessionV1.ToolPart): string {
@@ -60,6 +63,19 @@ function renderTextPart(part: SessionV1.TextPart): string | undefined {
 function truncate(text: string, maxLen: number): string {
   if (text.length <= maxLen) return text
   return text.slice(0, maxLen - 1) + "…"
+}
+
+function durableResultText(message: SessionV1.WithParts | undefined) {
+  if (!message) return undefined
+  if (message.info.role === "assistant" && message.info.structured !== undefined) {
+    return JSON.stringify(message.info.structured)
+  }
+  const text = message.parts
+    .filter((part): part is SessionV1.TextPart => part.type === "text" && !part.synthetic && !part.ignored)
+    .map((part) => part.text)
+    .join("\n")
+    .trim()
+  return text || undefined
 }
 
 /**
@@ -119,7 +135,13 @@ export const TaskReadTool = Tool.define(
       const hasMore = result.more && nextCursor !== undefined
 
       const latestRun = yield* database.db
-        .select({ state: TaskRunTable.state, generation: TaskRunTable.generation })
+        .select({
+          state: TaskRunTable.state,
+          generation: TaskRunTable.generation,
+          output: TaskRunTable.output,
+          rawResultMessageID: TaskRunTable.raw_result_message_id,
+          structuredResultMessageID: TaskRunTable.structured_result_message_id,
+        })
         .from(TaskRunTable)
         .where(
           and(eq(TaskRunTable.child_session_id, childSessionID), eq(TaskRunTable.parent_session_id, ctx.sessionID)),
@@ -127,6 +149,25 @@ export const TaskReadTool = Tool.define(
         .orderBy(desc(TaskRunTable.generation))
         .get()
         .pipe(Effect.orDie)
+
+      const resultMessageID = latestRun?.structuredResultMessageID ?? latestRun?.rawResultMessageID
+      const resultMessage = resultMessageID
+        ? yield* MessageV2.get({ sessionID: childSessionID, messageID: resultMessageID }).pipe(
+            Effect.catchCause(() => Effect.succeed(undefined)),
+          )
+        : undefined
+      const durableResult = durableResultText(resultMessage) ?? latestRun?.output?.trim() ?? ""
+      const boundedResult = Array.from(durableResult).slice(0, MAX_RESULT_CHARS).join("")
+      const resultTruncated = boundedResult.length < durableResult.length
+      const resultSource = latestRun?.structuredResultMessageID
+        ? resultMessage?.info.role === "assistant" && resultMessage.info.structured !== undefined
+          ? "structured"
+          : "validated_text"
+        : latestRun?.rawResultMessageID
+          ? "raw"
+          : latestRun?.output
+            ? "task_run"
+            : undefined
 
       // Read durable state from task_run; metadata is only a legacy fallback.
       const deepagent = child.metadata?.["deepagent"] as Record<string, unknown> | undefined
@@ -179,6 +220,13 @@ export const TaskReadTool = Tool.define(
         ...lines.map((l) => `  ${l}`),
         `</task_transcript>`,
       ].join("\n")
+      const resultBlock = boundedResult
+        ? [
+            `<task_result source="${resultSource ?? "unknown"}"${resultMessageID ? ` message_id="${resultMessageID}"` : ""}${resultTruncated ? ` truncated="true"` : ""}>`,
+            boundedResult,
+            `</task_result>`,
+          ].join("\n")
+        : ""
 
       // Pagination instruction when truncated.
       const paginationHint =
@@ -197,9 +245,12 @@ export const TaskReadTool = Tool.define(
           state: durableState,
           messageCount: page.length,
           hasMore,
+          ...(resultSource ? { resultSource } : {}),
+          ...(resultMessageID ? { resultMessageID } : {}),
+          ...(boundedResult ? { resultTruncated } : {}),
           ...(nextCursor !== undefined ? { before: nextCursor } : {}),
         },
-        output: transcript + paginationHint + recoveryHint,
+        output: [resultBlock, transcript].filter(Boolean).join("\n") + paginationHint + recoveryHint,
       }
     })
 

@@ -5,6 +5,7 @@ import { SessionV1 } from "@deepagent-code/core/v1/session"
 import os from "os"
 import { SessionID, MessageID, PartID } from "./schema"
 import { MessageV2 } from "./message-v2"
+import { HistoryAuthority } from "./history-authority"
 import { Log } from "@deepagent-code/core/util/log"
 import { Global } from "@deepagent-code/core/global"
 import { SessionRevert } from "./revert"
@@ -95,6 +96,7 @@ import { archiveSessionOnCompletion } from "@/wiki/session-archive"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Database } from "@deepagent-code/core/database/database"
 import { SessionToolRequestReceiptTable } from "./tool-request-receipt.sql"
+import { CompactionArtifactTable, CompactionRunTable } from "./compaction-sql"
 import {
   SessionToolArgumentReceiptTable,
   type ToolArgumentReceiptLayer,
@@ -119,14 +121,14 @@ import {
 } from "@deepagent-code/core/session/prompt"
 import { Reference } from "@/reference/reference"
 import * as DateTime from "effect/DateTime"
-import { and, eq, max } from "drizzle-orm"
-import { SessionTable, TaskRunTable } from "@deepagent-code/core/session/sql"
+import { and, eq, inArray, isNull, max, ne, or } from "drizzle-orm"
+import { SessionHistoryStateTable, SessionTable, TaskRunTable } from "@deepagent-code/core/session/sql"
+import { SessionPromptEpochTable } from "./prompt-epoch.sql"
 import { referencePromptMetadata, referenceTextPart } from "./prompt/reference"
 import { SessionReminders } from "./reminders"
 import { SessionTools } from "./tools"
 import { LLMEvent } from "@deepagent-code/llm"
 import { ConversationLogWriter } from "./conversation-log-writer"
-import { collectVolatileFacts, refreshWorldState } from "./context-ledger"
 import { ToolSemanticFingerprint } from "@/tool/semantic-fingerprint"
 import { deliverTaskNotifications, recoverExpiredTaskRuns, classifyOnStartup, orderedShutdown } from "@/tool/task-run"
 // L10: durable control plane daemons
@@ -139,6 +141,7 @@ import { PRQueue } from "@/agent/pr-queue"
 import { registerDisposer, registerInitializer } from "@/effect/instance-registry"
 import { EventRouteRef, InstanceRef } from "@/effect/instance-ref"
 import { InstanceStore } from "@/project/instance-store"
+import type { InstanceContext } from "@/project/instance-context"
 import {
   acquireDurableExecutorLease,
   releaseDurableExecutorLease,
@@ -152,6 +155,268 @@ globalThis.AI_SDK_LOG_WARNINGS = false
 
 const decodeMessageInfo = Schema.decodeUnknownExit(SessionV1.Info)
 const decodeMessagePart = Schema.decodeUnknownExit(SessionV1.Part)
+const providerReceiptOwner = `${process.pid}:${randomUUID()}`
+
+export const recoverProviderReceiptsOnStartup = Effect.fn("SessionPrompt.recoverProviderReceiptsOnStartup")(
+  function* () {
+    const sessions = yield* Session.Service
+    const { db } = yield* Database.Service
+    const staleOwner = or(
+      isNull(SessionToolRequestReceiptTable.owner_token),
+      ne(SessionToolRequestReceiptTable.owner_token, providerReceiptOwner),
+    )
+    const lostUnadmittedContinuations = yield* db
+      .select({
+        sessionID: CompactionRunTable.session_id,
+        messageID: CompactionArtifactTable.message_id,
+      })
+      .from(CompactionRunTable)
+      .innerJoin(CompactionArtifactTable, eq(CompactionArtifactTable.run_id, CompactionRunTable.run_id))
+      .where(
+        and(
+          eq(CompactionRunTable.state, "committed"),
+          eq(CompactionRunTable.continuation_state, "pending"),
+          eq(CompactionArtifactTable.state, "committed"),
+          inArray(CompactionArtifactTable.kind, ["replay", "continue"] as const),
+        ),
+      )
+      .all()
+      .pipe(Effect.orDie)
+    const lostUndispatchedReceipts = yield* db
+      .select({
+        receiptID: SessionToolRequestReceiptTable.receipt_id,
+        sessionID: SessionToolRequestReceiptTable.session_id,
+        assistantMessageID: SessionToolRequestReceiptTable.assistant_message_id,
+      })
+      .from(SessionToolRequestReceiptTable)
+      .where(
+        and(inArray(SessionToolRequestReceiptTable.provider_state, ["preparing", "prepared"] as const), staleOwner),
+      )
+      .all()
+      .pipe(Effect.orDie)
+    const lostStartedReceipts = yield* db
+      .select({
+        receiptID: SessionToolRequestReceiptTable.receipt_id,
+        sessionID: SessionToolRequestReceiptTable.session_id,
+        assistantMessageID: SessionToolRequestReceiptTable.assistant_message_id,
+      })
+      .from(SessionToolRequestReceiptTable)
+      .where(
+        and(inArray(SessionToolRequestReceiptTable.provider_state, ["dispatching", "streaming"] as const), staleOwner),
+      )
+      .all()
+      .pipe(Effect.orDie)
+    const unresolvedContinuationReceipts = yield* db
+      .select({
+        receiptID: SessionToolRequestReceiptTable.receipt_id,
+        sessionID: SessionToolRequestReceiptTable.session_id,
+        assistantMessageID: SessionToolRequestReceiptTable.assistant_message_id,
+      })
+      .from(CompactionRunTable)
+      .innerJoin(
+        SessionToolRequestReceiptTable,
+        eq(SessionToolRequestReceiptTable.receipt_id, CompactionRunTable.continuation_receipt_id),
+      )
+      .where(
+        and(
+          eq(CompactionRunTable.state, "committed"),
+          eq(CompactionRunTable.continuation_state, "indeterminate"),
+          isNull(SessionToolRequestReceiptTable.response_fingerprint),
+        ),
+      )
+      .all()
+      .pipe(Effect.orDie)
+    const unresolvedContinuationSessions = yield* db
+      .select({ sessionID: CompactionRunTable.session_id })
+      .from(CompactionRunTable)
+      .where(and(eq(CompactionRunTable.state, "committed"), eq(CompactionRunTable.continuation_state, "indeterminate")))
+      .all()
+      .pipe(Effect.orDie)
+    yield* db
+      .transaction(
+        (tx) =>
+          Effect.gen(function* () {
+            const undispatched = tx
+              .select({ receipt_id: SessionToolRequestReceiptTable.receipt_id })
+              .from(SessionToolRequestReceiptTable)
+              .where(
+                and(
+                  inArray(SessionToolRequestReceiptTable.provider_state, ["preparing", "prepared"] as const),
+                  staleOwner,
+                ),
+              )
+            const started = tx
+              .select({ receipt_id: SessionToolRequestReceiptTable.receipt_id })
+              .from(SessionToolRequestReceiptTable)
+              .where(
+                and(
+                  inArray(SessionToolRequestReceiptTable.provider_state, ["dispatching", "streaming"] as const),
+                  staleOwner,
+                ),
+              )
+            const now = Date.now()
+            yield* tx
+              .update(CompactionRunTable)
+              .set({
+                continuation_state: "pending",
+                continuation_receipt_id: null,
+                continuation_admitted_at: null,
+                continuation_dispatching_at: null,
+                continuation_terminal_at: null,
+                continuation_error_code: "provider_not_dispatched_before_process_restart",
+                continuation_wakeup_at: null,
+              })
+              .where(
+                and(
+                  eq(CompactionRunTable.state, "committed"),
+                  eq(CompactionRunTable.continuation_state, "admitted"),
+                  inArray(CompactionRunTable.continuation_receipt_id, undispatched),
+                ),
+              )
+              .run()
+            yield* tx
+              .update(CompactionRunTable)
+              .set({
+                continuation_state: "indeterminate",
+                continuation_terminal_at: now,
+                continuation_error_code: "provider_started_outcome_unknown_after_process_restart",
+              })
+              .where(
+                and(
+                  eq(CompactionRunTable.state, "committed"),
+                  eq(CompactionRunTable.continuation_state, "dispatching"),
+                  inArray(CompactionRunTable.continuation_receipt_id, started),
+                ),
+              )
+              .run()
+            yield* tx
+              .update(SessionToolRequestReceiptTable)
+              .set({
+                provider_state: "indeterminate_after_crash",
+                terminal_at: now,
+                request_error_code: "provider_started_outcome_unknown_after_process_restart",
+              })
+              .where(
+                and(
+                  inArray(SessionToolRequestReceiptTable.provider_state, ["dispatching", "streaming"] as const),
+                  staleOwner,
+                ),
+              )
+              .run()
+            yield* tx
+              .update(SessionToolRequestReceiptTable)
+              .set({
+                provider_state: "failed",
+                terminal_at: now,
+                request_error_code: "provider_not_dispatched_before_process_restart",
+              })
+              .where(
+                and(
+                  inArray(SessionToolRequestReceiptTable.provider_state, ["preparing", "prepared"] as const),
+                  staleOwner,
+                ),
+              )
+              .run()
+            yield* Effect.forEach(
+              [
+                ...new Set([
+                  ...lostStartedReceipts.map((receipt) => receipt.sessionID),
+                  ...unresolvedContinuationSessions.map((continuation) => continuation.sessionID),
+                ]),
+              ],
+              (sessionID) =>
+                Effect.gen(function* () {
+                  const reason = "provider outcome is unknown after process restart"
+                  yield* tx
+                    .update(SessionPromptEpochTable)
+                    .set({ authority_state: "recovery_required", recovery_reason: reason })
+                    .where(
+                      and(
+                        eq(SessionPromptEpochTable.session_id, sessionID),
+                        eq(SessionPromptEpochTable.state, "active"),
+                      ),
+                    )
+                    .run()
+                  yield* tx
+                    .insert(SessionHistoryStateTable)
+                    .values([
+                      {
+                        session_id: SessionID.make(sessionID),
+                        state: "recovery_required",
+                        reason,
+                        time_created: now,
+                        time_updated: now,
+                      },
+                    ])
+                    .onConflictDoUpdate({
+                      target: SessionHistoryStateTable.session_id,
+                      set: { state: "recovery_required", reason, time_updated: now },
+                    })
+                    .run()
+                }),
+              { discard: true },
+            )
+          }),
+        { behavior: "immediate" },
+      )
+      .pipe(Effect.orDie)
+    yield* Effect.forEach(
+      [...lostUndispatchedReceipts, ...lostStartedReceipts, ...unresolvedContinuationReceipts],
+      (receipt) =>
+        Effect.gen(function* () {
+          if (!receipt.assistantMessageID) return
+          const messages = yield* sessions.messages({ sessionID: SessionID.make(receipt.sessionID) }).pipe(Effect.orDie)
+          const assistant = messages.find(
+            (message) => message.info.id === receipt.assistantMessageID && message.info.role === "assistant",
+          )
+          if (!assistant || assistant.info.role !== "assistant" || assistant.info.time.completed) return
+          yield* sessions.updateMessage({
+            ...assistant.info,
+            finish: "error",
+            error: new NamedError.Unknown({
+              message:
+                lostStartedReceipts.some((started) => started.receiptID === receipt.receiptID) ||
+                unresolvedContinuationReceipts.some((unresolved) => unresolved.receiptID === receipt.receiptID)
+                  ? `Provider request ${receipt.receiptID} may have been dispatched before restart; explicit recovery is required.`
+                  : `Provider request ${receipt.receiptID} was not dispatched before restart; the durable continuation will be retried.`,
+            }).toObject(),
+            time: { ...assistant.info.time, completed: Date.now() },
+          })
+        }),
+      { discard: true },
+    )
+    yield* Effect.forEach(
+      lostUnadmittedContinuations,
+      (continuation) =>
+        Effect.gen(function* () {
+          const messages = yield* sessions
+            .messages({ sessionID: SessionID.make(continuation.sessionID) })
+            .pipe(Effect.orDie)
+          yield* Effect.forEach(
+            messages.filter(
+              (message): message is SessionV1.WithParts & { info: SessionV1.Assistant } =>
+                message.info.role === "assistant" &&
+                message.info.parentID === continuation.messageID &&
+                !message.info.time.completed,
+            ),
+            (assistant) =>
+              sessions.updateMessage({
+                ...assistant.info,
+                finish: "error",
+                error: new NamedError.Unknown({
+                  message:
+                    "The continuation process stopped before durable provider admission; the pending continuation will be retried.",
+                }).toObject(),
+                time: { ...assistant.info.time, completed: Date.now() },
+              }),
+            { discard: true },
+          )
+        }),
+      { discard: true },
+    )
+  },
+)
+
 // Coerce a structurally-valid Format value into a Format INSTANCE (see the call site in prompt()).
 const decodeFormatSync = Schema.decodeUnknownSync(SessionV1.Format)
 
@@ -175,7 +440,14 @@ function buildStructuredOutputSystemPrompt(schema: Record<string, any>): string 
   return `IMPORTANT: The user has requested structured output. You MUST use the StructuredOutput tool to provide your final response. Do NOT respond with plain text - you MUST call the StructuredOutput tool with your answer formatted according to the schema.${fieldHint}`
 }
 
-function buildStructuredOutputRuntimeTail(format: SessionV1.OutputFormat, finalizerMode: boolean): string {
+function buildStructuredOutputRuntimeTail(
+  format: SessionV1.OutputFormat,
+  finalizerMode: boolean,
+  finalizerAllowsText = false,
+): string {
+  if (finalizerAllowsText) {
+    return "This is a bounded finalizer turn. Read the supplied research result and return exactly one JSON value. No research, Markdown, explanatory prose, or tool use is permitted."
+  }
   if (format.type !== "json_schema") return ""
   return [
     buildStructuredOutputSystemPrompt(format.schema),
@@ -207,6 +479,13 @@ function isStructuredFinalizer(metadata: unknown) {
   if (!isRecord(metadata)) return false
   if (!isRecord(metadata.deepagent)) return false
   return isRecord(metadata.deepagent.structured_finalizer)
+}
+
+function structuredFinalizerAllowsText(metadata: unknown) {
+  if (!isRecord(metadata)) return false
+  if (!isRecord(metadata.deepagent)) return false
+  if (!isRecord(metadata.deepagent.structured_finalizer)) return false
+  return metadata.deepagent.structured_finalizer.allow_text === true
 }
 
 function noninteractiveTaskActivity(metadata: unknown) {
@@ -282,7 +561,9 @@ const promptInputToPrompt = (parts: PromptInput["parts"]): Effect.Effect<Prompt,
 export interface Interface {
   readonly cancel: (sessionID: SessionID) => Effect.Effect<void>
   readonly prompt: (input: PromptInput) => Effect.Effect<SessionV1.WithParts, Image.Error | SessionPromptIntent.Error>
-  readonly promptAsync: (input: PromptInput) => Effect.Effect<void, Image.Error | SessionPromptIntent.Error>
+  readonly promptAsync: (
+    input: PromptInput,
+  ) => Effect.Effect<PromptAdmissionReceipt, Image.Error | SessionPromptIntent.Error>
   readonly prepareTaskInput: (
     input: PromptInput,
     timeCreated: number,
@@ -334,16 +615,18 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/SessionPrompt") {}
 
+export type PromptAdmissionReceipt = {
+  readonly messageID: MessageID
+  readonly delivery: SessionPromptIntent.Delivery
+}
+
 type PromptLifecycle = {
   readonly intent?: SessionPromptIntent.Receipt & {
     readonly state: "admitting"
     readonly ownerToken: string
     readonly messageID: MessageID
   }
-  readonly ready: (input: {
-    readonly messageID: MessageID
-    readonly delivery: SessionPromptIntent.Delivery
-  }) => Effect.Effect<void>
+  readonly ready: (input: PromptAdmissionReceipt) => Effect.Effect<void>
 }
 
 type ExecutePrompt = (
@@ -407,6 +690,7 @@ export const layer = Layer.effect(
     )
     const database = yield* Database.Service
     const { db } = database
+    yield* recoverProviderReceiptsOnStartup()
     const activeFederatedContexts = new Map<SessionID, SessionFederatedContext.Resolved>()
     const settleFederatedActivity = (sessionID: SessionID, state: "settled" | "failed" | "interrupted") =>
       Effect.gen(function* () {
@@ -794,6 +1078,10 @@ export const layer = Layer.effect(
         time: { created: Date.now() },
         agent: lastUser.agent,
         model: lastUser.model,
+        metadata: SessionProcessor.withPlanProtocolActivity(
+          undefined,
+          SessionProcessor.planProtocolActivityID(lastUser.metadata) ?? lastUser.id,
+        ),
       }
       yield* sessions.updateMessage(summaryUserMsg)
       yield* sessions.updatePart({
@@ -1367,8 +1655,9 @@ export const layer = Layer.effect(
           : undefined
       const variant = input.variant ?? (ag.variant && full?.variants?.[ag.variant] ? ag.variant : undefined)
 
+      const messageID = input.messageID ?? MessageID.ascending()
       const info: SessionV1.User = {
-        id: input.messageID ?? MessageID.ascending(),
+        id: messageID,
         role: "user",
         sessionID: input.sessionID,
         time: { created: options?.timeCreated ?? Date.now() },
@@ -1389,7 +1678,7 @@ export const layer = Layer.effect(
         // is idempotent for callers that already pass an instance. `withDecodingDefault` also fills
         // retryCount. `format` is validated on the way in (PromptInput), so this decode never fails.
         format: input.format === undefined ? undefined : decodeFormatSync(input.format),
-        metadata: input.metadata,
+        metadata: SessionProcessor.withPlanProtocolActivity(input.metadata, messageID),
       }
 
       if (persist) yield* Effect.addFinalizer(() => instruction.clear(info.id))
@@ -1876,6 +2165,8 @@ export const layer = Layer.effect(
       input: PromptInput,
       lifecycle?: PromptLifecycle,
     ) {
+      yield* sessions.recoverForks()
+      yield* sessions.assertRunnable(input.sessionID).pipe(Effect.orDie)
       const notification = taskNotification(input.metadata)
       if (notification && input.messageID) {
         const existing = yield* MessageV2.get({ sessionID: input.sessionID, messageID: input.messageID }).pipe(
@@ -2184,10 +2475,25 @@ export const layer = Layer.effect(
     // revert either follows the completed append or supersedes the steer before it can write anything.
     const steerPartID = (messageID: MessageID, suffix?: string) =>
       PartID.make("prt_" + messageID.slice("msg_".length) + (suffix ?? ""))
-    const drainSteers = Effect.fn("SessionPrompt.drainSteers")(function* (sessionID: SessionID) {
+    const drainSteers = Effect.fn("SessionPrompt.drainSteers")(function* (sessionID: SessionID, startActivity = false) {
       if (!flags.v4Steering) return [] as SessionMessage.ID[]
       const pending = yield* steerBuffer.pending(sessionID)
       if (pending.length === 0) return [] as SessionMessage.ID[]
+      const activityID =
+        (startActivity
+          ? undefined
+          : (yield* MessageV2.stream(sessionID).pipe(Effect.provideService(Database.Service, database), Effect.orDie))
+              .filter((message) => message.info.role === "user")
+              .toSorted(
+                (left, right) =>
+                  left.info.time.created - right.info.time.created || left.info.id.localeCompare(right.info.id),
+              )
+              .map((message) =>
+                SessionProcessor.planProtocolActivityID(
+                  message.info.role === "user" ? message.info.metadata : undefined,
+                ),
+              )
+              .findLast((value) => value !== undefined)) ?? pending[0]!.id
       const current = yield* db
         .select({ agent: SessionTable.agent, model: SessionTable.model })
         .from(SessionTable)
@@ -2205,18 +2511,34 @@ export const layer = Layer.effect(
       const variant = "variant" in resolved ? resolved.variant : undefined
       const persisted: SessionMessage.ID[] = []
       for (const admitted of pending) {
+        const materializedAt = yield* steerBuffer
+          .materializationTime(admitted)
+          .pipe(Effect.catchTag("SessionMutationEpoch.Stale", () => Effect.succeed(undefined)))
+        if (materializedAt === undefined) continue
         const agentName = admitted.prompt.agents?.[0]?.name ?? defaultAgent
         const info: SessionV1.User = {
           id: MessageID.make(admitted.id),
           role: "user",
           sessionID,
-          time: { created: admitted.timeCreated },
+          time: { created: materializedAt },
           agent: agentName,
           model: {
             providerID: resolved.providerID,
             modelID: resolved.modelID,
             ...(variant ? { variant } : {}),
           },
+          metadata: SessionProcessor.withPlanProtocolActivity(
+            admitted.correlationID
+              ? {
+                  deepagent: {
+                    promptAdmission: {
+                      clientMessageID: admitted.correlationID,
+                    },
+                  },
+                }
+              : undefined,
+            activityID,
+          ),
         }
         const parts: SessionV1.Part[] = []
         if (admitted.prompt.text.length > 0)
@@ -2305,8 +2627,9 @@ export const layer = Layer.effect(
       text: string,
       model: { providerID: ProviderV2.ID; modelID: ModelV2.ID },
       agentName: string,
+      activityID: string,
     ) => Effect.Effect<void> = Effect.fn("SessionPrompt.injectTailReminder")(
-      function* (sessionID, text, model, agentName) {
+      function* (sessionID, text, model, agentName, activityID) {
         const msg = yield* sessions.updateMessage({
           id: MessageID.ascending(),
           role: "user",
@@ -2314,6 +2637,7 @@ export const layer = Layer.effect(
           agent: agentName,
           model,
           time: { created: Date.now() },
+          metadata: SessionProcessor.withPlanProtocolActivity(undefined, activityID),
         })
         yield* sessions.updatePart({
           id: PartID.ascending(),
@@ -2365,26 +2689,6 @@ export const layer = Layer.effect(
       "</system-reminder>",
     ].join("\n")
 
-    // V4.0.1 P1 (§3.3) — post-hard-compaction World State re-injection. After a hard compaction the
-    // (now-narrowed) summary deliberately dropped file/env/diagnostics; this re-injects their LATEST
-    // values as a TAIL user block (reuses the SAME injectTailReminder primitive — never the static system
-    // prefix, so prompt cache is preserved) so the model sees current truth, not a stale summary value.
-    // Gated by worldStateReinjection (the same flag that narrowed the summary — no information hole).
-    // Bounded IO: git + env only, collected once per compaction. Default-safe: any defect ⇒ no-op.
-    const injectWorldStateTail: (
-      sessionID: SessionID,
-      workspacePath: string | undefined,
-      model: { providerID: ProviderV2.ID; modelID: ModelV2.ID },
-      agentName: string,
-    ) => Effect.Effect<void> = Effect.fn("SessionPrompt.injectWorldStateTail")(
-      function* (sessionID, workspacePath, model, agentName) {
-        if (!workspacePath) return
-        const facts = yield* collectVolatileFacts(workspacePath)
-        const rendered = yield* refreshWorldState({ workspacePath, facts })
-        if (rendered.trim().length > 0) yield* injectTailReminder(sessionID, rendered, model, agentName)
-      },
-    )
-
     const runLoop: (sessionID: SessionID, drainFirst?: boolean) => Effect.Effect<SessionV1.WithParts> = Effect.fn(
       "SessionPrompt.run",
     )(
@@ -2403,7 +2707,10 @@ export const layer = Layer.effect(
         // that occurs when the model repeatedly guesses wrong field names (e.g. "summary" instead
         // of "module" for ResearchResult) and the AI SDK silently rejects them before execute().
         let structuredFailedAttempts = 0
+        yield* sessions.recoverForks()
+        yield* sessions.assertRunnable(sessionID).pipe(Effect.orDie)
         const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
+        yield* compaction.recover(sessionID)
         const sessionFederationEligibility = ContextFederationRollout.resolveProject(
           federationRollout,
           session.projectID,
@@ -2427,12 +2734,23 @@ export const layer = Layer.effect(
 
         // F1: one tracker per durable user activity; shared by every provider step (processor
         // instance) created in this runLoop call so cross-message ABABAB/ABCABC/... patterns
-        // are detectable.  Reset implicitly on the next runLoop invocation (new variable).
+        // are detectable.
         const toolSequenceTracker = new SessionProcessor.ToolSequenceTracker()
-        const planProtocolTracker = new SessionProcessor.PlanProtocolTracker()
 
-        const initialMessages = yield* MessageV2.promptHistoryEffect(sessionID).pipe(
+        const initialMessages = yield* MessageV2.promptControlHistoryEffect(sessionID).pipe(
           Effect.provideService(Database.Service, database),
+          Effect.orDie,
+        )
+        // Plan failures are protocol state, not advisory loop state. Rebuild them from unfiltered
+        // durable parts so a committed compaction or process restart cannot restore the attempt budget.
+        const planProtocolTracker = new SessionProcessor.PlanProtocolTracker(
+          drainFirst
+            ? 0
+            : yield* MessageV2.stream(sessionID).pipe(
+                Effect.provideService(Database.Service, database),
+                Effect.map(SessionProcessor.restorePlanProtocolFailures),
+                Effect.orDie,
+              ),
         )
         const initialUser = MessageV2.latest(initialMessages).user
         const initialFinalizer = isStructuredFinalizer(initialUser?.metadata)
@@ -2480,12 +2798,15 @@ export const layer = Layer.effect(
           // top-of-loop finish check (`lastUser.id < lastAssistant.id`) to keep looping — so a steer that
           // arrived after the model said "done" is naturally absorbed on this next pass.
           if (step > 0 || drainFirst) {
-            const absorbed = yield* drainSteers(sessionID)
-            pendingContextInputIds = [...pendingContextInputIds, ...absorbed]
+            if (!(yield* compaction.hasPending(sessionID))) {
+              const absorbed = yield* drainSteers(sessionID, drainFirst && step === 0)
+              pendingContextInputIds = [...pendingContextInputIds, ...absorbed]
+            }
           }
 
-          let msgs = yield* MessageV2.promptHistoryEffect(sessionID).pipe(
+          let msgs = yield* MessageV2.promptControlHistoryEffect(sessionID).pipe(
             Effect.provideService(Database.Service, database),
+            Effect.orDie,
           )
 
           // Archive everything settled so far (user turn + any completed assistant/tool parts from the
@@ -2497,6 +2818,7 @@ export const layer = Layer.effect(
 
           if (!lastUser) throw new Error("No user message found in stream. This should never happen.")
           const finalizerMode = isStructuredFinalizer(lastUser.metadata)
+          const finalizerAllowsText = structuredFinalizerAllowsText(lastUser.metadata)
 
           const lastAssistantMsg = msgs.findLast(
             (msg) => msg.info.role === "assistant" && msg.info.id === lastAssistant?.id,
@@ -2542,6 +2864,7 @@ export const layer = Layer.effect(
                     : OUTPUT_CONTINUE_TAIL_TEXT,
                   lastUser.model,
                   lastUser.agent,
+                  SessionProcessor.planProtocolActivityID(lastUser.metadata) ?? lastUser.id,
                 )
                 yield* slog.info("output soft-landing: continuing after length cutoff", {
                   continuation: done + 1,
@@ -2602,18 +2925,12 @@ export const layer = Layer.effect(
           if (task?.type === "compaction") {
             const result = yield* compaction.process({
               messages: msgs,
-              parentID: lastUser.id,
+              parentID: MessageID.make(task.messageID),
               sessionID,
               auto: task.auto,
               overflow: task.overflow,
             })
             if (result === "stop") break
-            // Inject volatile state only after the compaction summary is durable. Injecting it when the
-            // compaction marker is created makes this synthetic user message the next iteration's lastUser,
-            // so compaction.process pairs the summary with the wrong parent and the marker never becomes a
-            // completed compaction boundary.
-            if (task.auto && flags.worldStateReinjection)
-              yield* injectWorldStateTail(sessionID, ctx.directory, lastUser.model, lastUser.agent)
             continue
           }
 
@@ -2634,7 +2951,13 @@ export const layer = Layer.effect(
                   outputTokenMax: flags.outputTokenMax,
                 })
               ) {
-                yield* compaction.create({ sessionID, agent: lastUser.agent, model: lastUser.model, auto: true })
+                yield* compaction.create({
+                  sessionID,
+                  agent: lastUser.agent,
+                  model: lastUser.model,
+                  auto: true,
+                  activityID: SessionProcessor.planProtocolActivityID(lastUser.metadata) ?? lastUser.id,
+                })
                 continue
               }
             } else {
@@ -2664,13 +2987,25 @@ export const layer = Layer.effect(
               const { action, nextState } = softLandingDecision({ status, state: slState, step })
               if (action === "reminder") {
                 yield* writeSoftLandingState(sessionID, nextState)
-                yield* injectTailReminder(sessionID, REMINDER_TAIL_TEXT, lastUser.model, lastUser.agent)
+                yield* injectTailReminder(
+                  sessionID,
+                  REMINDER_TAIL_TEXT,
+                  lastUser.model,
+                  lastUser.agent,
+                  SessionProcessor.planProtocolActivityID(lastUser.metadata) ?? lastUser.id,
+                )
                 yield* slog.info("soft-landing reminder injected", { used: status.used, softLine: status.softLine })
                 continue
               }
               if (action === "fallback") {
                 yield* writeSoftLandingState(sessionID, nextState)
-                yield* injectTailReminder(sessionID, fallbackTailText(sessionID), lastUser.model, lastUser.agent)
+                yield* injectTailReminder(
+                  sessionID,
+                  fallbackTailText(sessionID),
+                  lastUser.model,
+                  lastUser.agent,
+                  SessionProcessor.planProtocolActivityID(lastUser.metadata) ?? lastUser.id,
+                )
                 yield* slog.info("soft-landing fallback injected", {
                   used: status.used,
                   fallbackLine: status.fallbackLine,
@@ -2684,7 +3019,13 @@ export const layer = Layer.effect(
                 // history boundary marker — PromptEpoch is the sole history authority and is only
                 // activated by compaction.process() on confirmed successful summary (CompactionCommitted).
                 yield* writeSoftLandingState(sessionID, nextState)
-                yield* compaction.create({ sessionID, agent: lastUser.agent, model: lastUser.model, auto: true })
+                yield* compaction.create({
+                  sessionID,
+                  agent: lastUser.agent,
+                  model: lastUser.model,
+                  auto: true,
+                  activityID: SessionProcessor.planProtocolActivityID(lastUser.metadata) ?? lastUser.id,
+                })
                 continue
               }
               if (action === "guard") {
@@ -2708,6 +3049,39 @@ export const layer = Layer.effect(
           }
           const maxSteps = Math.min(agent.steps ?? Infinity, taskActivity?.maxSteps ?? Infinity)
           const isLastStep = step >= maxSteps
+          const promptAuthority = finalizerMode
+            ? undefined
+            : yield* MessageV2.promptHistoryProjectionEffect(sessionID).pipe(
+                Effect.provideService(Database.Service, database),
+                Effect.orDie,
+              )
+          const receiptAuthority =
+            promptAuthority ??
+            (yield* MessageV2.promptHistoryProjectionEffect(sessionID).pipe(
+              Effect.provideService(Database.Service, database),
+              Effect.orDie,
+            ))
+          yield* sessions.assertRunnable(sessionID).pipe(Effect.orDie)
+          if (promptAuthority && HistoryAuthority.hash(msgs) !== promptAuthority.effectiveHistoryHash) {
+            return yield* Effect.die(new Error(`Prompt history changed during provider request assembly: ${sessionID}`))
+          }
+          const worldState = finalizerMode
+            ? undefined
+            : yield* MessageV2.promptWorldStateProjectionEffect(sessionID).pipe(
+                Effect.provideService(Database.Service, database),
+                Effect.orDie,
+              )
+          if (
+            worldState &&
+            promptAuthority &&
+            (worldState.epoch !== promptAuthority.epoch ||
+              worldState.windowID !== promptAuthority.window.windowID ||
+              worldState.effectiveHistoryHash !== promptAuthority.effectiveHistoryHash)
+          ) {
+            return yield* Effect.die(
+              new Error(`World State authority changed during provider request assembly: ${sessionID}`),
+            )
+          }
           if (!finalizerMode) {
             msgs = yield* SessionReminders.apply({ messages: msgs, agent, session }).pipe(
               Effect.provideService(RuntimeFlags.Service, flags),
@@ -2715,7 +3089,6 @@ export const layer = Layer.effect(
               Effect.provideService(Session.Service, sessions),
             )
           }
-
           const msg: SessionV1.Assistant = {
             id: MessageID.ascending(),
             parentID: lastUser.id,
@@ -2733,7 +3106,7 @@ export const layer = Layer.effect(
           }
           yield* sessions.updateMessage(msg)
 
-          if (finalizerDecision?.capability === "unsupported") {
+          if (finalizerDecision?.capability === "unsupported" && !finalizerAllowsText) {
             msg.error = new NamedError.Unknown({
               message: `[${finalizerDecision.reason}] Structured finalization requires tool-call capability.`,
             }).toObject()
@@ -2757,6 +3130,18 @@ export const layer = Layer.effect(
             yield* sessions.updateMessage(msg)
           })
 
+          const receiptTerminal: {
+            value?: { state: "settled" } | { state: "failed"; errorCode: string }
+          } = {}
+          const receiptFinalizer: { value?: () => Effect.Effect<void> } = {}
+          const finalizeInterruptedTurn = Effect.uninterruptible(
+            Effect.gen(function* () {
+              yield* finalizeInterruptedAssistant
+              receiptTerminal.value ??= { state: "failed", errorCode: "AbortError" }
+              if (receiptFinalizer.value) yield* receiptFinalizer.value()
+            }),
+          )
+
           const handle = yield* processor
             .create({
               assistantMessage: msg,
@@ -2767,7 +3152,7 @@ export const layer = Layer.effect(
               loopPolicy: finalizerMode || taskActivity ? "error" : "ask",
               noProgressLimit: taskActivity?.maxNoProgress,
             })
-            .pipe(Effect.onInterrupt(() => finalizeInterruptedAssistant))
+            .pipe(Effect.onInterrupt(() => finalizeInterruptedTurn))
 
           const outcome: "break" | "continue" = yield* Effect.gen(function* () {
             sessionFederationRollout = yield* activateFederation()
@@ -2809,17 +3194,17 @@ export const layer = Layer.effect(
               ToolSemanticFingerprint.resolveResult(tools[toolName], result),
             )
 
-            if (step === 1 && !finalizerMode)
-              yield* summary.summarize({ sessionID, messageID: lastUser.id }).pipe(Effect.ignore, Effect.forkIn(scope))
-
-            if (!finalizerMode) yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
+            const providerHistory = finalizerMode
+              ? msgs
+              : (yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: structuredClone(msgs) }))
+                  .messages
 
             // PR-1: Compute the terminal boundary for cross-model reasoning projection.
             // The most recent settled assistant message (has finish, no pending tool calls)
             // defines the boundary. Same-model reasoning remains append-only because removing
             // signed thinking after settlement rewrites the provider prefix and busts its cache.
             let terminalBoundaryID: MessageID | undefined
-            for (const msg of msgs) {
+            for (const msg of providerHistory) {
               if (msg.info.role !== "assistant") continue
               if (!msg.info.finish) continue
               const hasPendingToolCalls = msg.parts.some(
@@ -2833,11 +3218,20 @@ export const layer = Layer.effect(
             }
 
             const format = lastUser.format ?? { type: "text" as const }
-            const modelMsgs = yield* MessageV2.toModelMessagesEffect(
-              finalizerMode ? msgs.filter((item) => item.info.id === lastUser.id) : msgs,
-              model,
-              { terminalBoundaryID },
-            )
+            const historyForProvider = finalizerMode
+              ? providerHistory.filter((item) => item.info.id === lastUser.id)
+              : worldState
+                ? MessageV2.appendPromptWorldState({
+                    messages: providerHistory,
+                    sessionID,
+                    epoch: worldState.epoch,
+                    baselineHash: worldState.hash,
+                    rendered: worldState.rendered,
+                    agent: lastUser.agent,
+                    model: lastUser.model,
+                  })
+                : providerHistory
+            const modelMsgs = yield* MessageV2.toModelMessagesEffect(historyForProvider, model, { terminalBoundaryID })
             const system = yield* Effect.all([
               sys.skills(agent),
               sys.environment(model),
@@ -2879,8 +3273,9 @@ export const layer = Layer.effect(
                 : ""
             // Schema/finalizer guidance changes per request and must not enter the provider-cached
             // system prefix. Keep it in the same ephemeral tail used for other volatile runtime
-            // context; the durable user prompt and the StructuredOutput tool remain the hard gates.
-            const structuredRuntimeTail = buildStructuredOutputRuntimeTail(format, finalizerMode)
+            // context; strict turns use StructuredOutput as the hard gate, while the bounded text
+            // fallback uses local JSON extraction plus the unchanged schema validator.
+            const structuredRuntimeTail = buildStructuredOutputRuntimeTail(format, finalizerMode, finalizerAllowsText)
             const baseStreamInput: LLM.StreamInput = {
               user: lastUser,
               agent,
@@ -2891,7 +3286,10 @@ export const layer = Layer.effect(
               messages: [...modelMsgs, ...(isLastStep ? [{ role: "assistant" as const, content: MAX_STEPS }] : [])],
               tools: isLastStep ? {} : tools,
               model,
-              toolChoice: finalizerDecision?.toolChoice ?? (format.type === "json_schema" ? "required" : undefined),
+              durableAttempt: true,
+              toolChoice: finalizerAllowsText
+                ? "none"
+                : (finalizerDecision?.toolChoice ?? (format.type === "json_schema" ? "required" : undefined)),
               reasoning: finalizerDecision?.reasoning,
               ...(structuredRuntimeTail ? { runtimeTail: structuredRuntimeTail } : {}),
               ...(!projectedContext && activeContext
@@ -2945,8 +3343,29 @@ export const layer = Layer.effect(
                 ? preparedProviderAttempt.value
                 : undefined
             const registryToolIds = yield* registry.ids()
-            const fallbackReceiptID = Hash.sha256(`${sessionID}:provider-request:${handle.message.id}:${randomUUID()}`)
-            const receiptAdmission = yield* db
+            if (promptAuthority) {
+              const dispatchProjection = yield* MessageV2.promptHistoryProjectionEffect(sessionID).pipe(
+                Effect.provideService(Database.Service, database),
+                Effect.orDie,
+              )
+              const boundaryError = MessageV2.validateProviderPromptBoundary({
+                authority: promptAuthority,
+                dispatch: dispatchProjection,
+                assistantMessageID: msg.id,
+                parentMessageID: lastUser.id,
+              })
+              if (boundaryError) {
+                const error = new NamedError.Unknown({
+                  message: `Prompt history changed before provider dispatch: ${sessionID}: ${boundaryError}`,
+                })
+                msg.error = error.toObject()
+                msg.finish = "error"
+                msg.time.completed = Date.now()
+                yield* sessions.updateMessage(msg)
+                return yield* Effect.die(error)
+              }
+            }
+            const receiptID = yield* db
               .transaction(
                 (tx) =>
                   Effect.gen(function* () {
@@ -2959,6 +3378,32 @@ export const layer = Layer.effect(
                     const receiptID = Hash.sha256(
                       `${sessionID}:provider-request:${requestOrdinal}:${handle.message.id}`,
                     )
+                    const continuation = yield* tx
+                      .select({
+                        runID: CompactionRunTable.run_id,
+                        state: CompactionRunTable.continuation_state,
+                      })
+                      .from(CompactionRunTable)
+                      .innerJoin(CompactionArtifactTable, eq(CompactionArtifactTable.run_id, CompactionRunTable.run_id))
+                      .where(
+                        and(
+                          eq(CompactionRunTable.session_id, sessionID),
+                          eq(CompactionRunTable.state, "committed"),
+                          eq(CompactionRunTable.continuation_state, "pending"),
+                          eq(CompactionArtifactTable.session_id, sessionID),
+                          eq(CompactionArtifactTable.message_id, lastUser.id),
+                          eq(CompactionArtifactTable.state, "committed"),
+                          inArray(CompactionArtifactTable.kind, ["replay", "continue"] as const),
+                        ),
+                      )
+                      .get()
+                    if (continuation && continuation.state !== "pending")
+                      return yield* Effect.die(
+                        new Error(
+                          `compaction continuation is not pending: ${continuation.runID}: ${continuation.state ?? "missing"}`,
+                        ),
+                      )
+                    const admittedAt = Date.now()
                     yield* tx.insert(SessionToolRequestReceiptTable).values({
                       receipt_id: receiptID,
                       request_ordinal: requestOrdinal,
@@ -2977,46 +3422,64 @@ export const layer = Layer.effect(
                       tool_choice_mode: streamInput.toolChoice,
                       adapter_tool_capability: "unknown",
                       adapter_lowering_outcome: null,
+                      prompt_epoch: receiptAuthority.epoch,
+                      prompt_window_id: receiptAuthority.window.windowID,
+                      effective_history_hash: receiptAuthority.effectiveHistoryHash,
+                      world_state_baseline_hash: worldState?.hash,
+                      request_input_hash: providerRequestHash(streamInput),
+                      response_chain_reuse_decision: "not_supported",
+                      response_chain_refusal_reason: "provider_path_not_stateful",
+                      provider_state: "preparing",
+                      owner_token: providerReceiptOwner,
                       request_state: "prepared",
-                      created_at: Date.now(),
+                      created_at: admittedAt,
                     })
-                    return { receiptID, admitted: true as const }
+                    if (continuation) {
+                      const admitted = yield* tx
+                        .update(CompactionRunTable)
+                        .set({
+                          continuation_state: "admitted",
+                          continuation_receipt_id: receiptID,
+                          continuation_admitted_at: admittedAt,
+                          continuation_dispatching_at: null,
+                          continuation_terminal_at: null,
+                          continuation_error_code: null,
+                          continuation_wakeup_at: admittedAt,
+                        })
+                        .where(
+                          and(
+                            eq(CompactionRunTable.run_id, continuation.runID),
+                            eq(CompactionRunTable.state, "committed"),
+                            eq(CompactionRunTable.continuation_state, "pending"),
+                          ),
+                        )
+                        .returning({ runID: CompactionRunTable.run_id })
+                        .get()
+                      if (!admitted)
+                        return yield* Effect.die(
+                          new Error(`compaction continuation admission CAS lost: ${continuation.runID}`),
+                        )
+                    }
+                    return receiptID
                   }),
                 { behavior: "immediate" },
               )
-              .pipe(
+              .pipe(Effect.orDie)
+            const bestEffortReceiptWrite = (operation: string, write: Effect.Effect<unknown, unknown>) =>
+              write.pipe(
+                Effect.asVoid,
                 Effect.catchCause((cause) =>
                   Effect.sync(() => {
-                    slog.warn("provider request receipt admission failed", {
+                    slog.warn("provider argument receipt write failed", {
+                      operation,
+                      receiptID,
                       cause: Cause.pretty(cause),
-                      metric: "provider_request_receipt_degraded_total",
+                      metric: "provider_argument_receipt_degraded_total",
                       increment: 1,
                     })
-                    return { receiptID: fallbackReceiptID, admitted: false as const }
                   }),
                 ),
               )
-            const receiptID = receiptAdmission.receiptID
-            const receiptWriteState = { available: receiptAdmission.admitted }
-            const bestEffortReceiptWrite = (operation: string, write: Effect.Effect<unknown, unknown>) =>
-              Effect.suspend(() => {
-                if (!receiptWriteState.available) return Effect.void
-                return write.pipe(
-                  Effect.asVoid,
-                  Effect.catchCause((cause) =>
-                    Effect.sync(() => {
-                      receiptWriteState.available = false
-                      slog.warn("provider request receipt write failed", {
-                        operation,
-                        receiptID,
-                        cause: Cause.pretty(cause),
-                        metric: "provider_request_receipt_degraded_total",
-                        increment: 1,
-                      })
-                    }),
-                  ),
-                )
-              })
             const writeArgumentReceipt = (input: {
               layer: ToolArgumentReceiptLayer
               ordinal: number
@@ -3049,125 +3512,351 @@ export const layer = Layer.effect(
                   })
                   .run(),
               )
-            const result = yield* handle.process(
-              {
-                ...streamInput,
-                requestReceipt: {
-                  prepared: (prepared) => {
-                    const finalOfferedToolIds = Object.keys(prepared.finalOfferedTools)
-                    const definitions = Object.entries(prepared.finalOfferedTools)
-                      .toSorted(([a], [b]) => a.localeCompare(b))
-                      .map(([name, definition]) => ({
-                        name,
-                        description: definition.description,
-                        inputSchema: "inputSchema" in definition ? definition.inputSchema : undefined,
-                      }))
-                    return bestEffortReceiptWrite(
-                      "prepared",
-                      db
-                        .update(SessionToolRequestReceiptTable)
-                        .set({
-                          permission_filtered_tool_ids: [...prepared.permissionFilteredToolIds],
-                          final_offered_tool_ids: finalOfferedToolIds,
-                          tool_definition_hash: Hash.sha256(stableJson(definitions)),
-                          adapter_tool_capability: prepared.adapterToolCapability,
-                          adapter_lowering_outcome: prepared.adapterLoweringOutcome,
-                          estimated_input_tokens: prepared.budget.estimatedFullRequestTokens,
-                          physical_input_budget: prepared.budget.physicalInputBudget,
-                          reserved_output_tokens: prepared.budget.reservedOutputTokens,
-                          safety_margin_tokens: prepared.budget.safetyMargin,
-                          context_limit_provenance: prepared.budget.provenance,
-                          request_state: "prepared",
-                        })
-                        .where(
-                          and(
-                            eq(SessionToolRequestReceiptTable.receipt_id, receiptID),
-                            eq(SessionToolRequestReceiptTable.request_state, "prepared"),
-                          ),
-                        )
-                        .run(),
-                    )
-                  },
-                  dispatched: () =>
-                    bestEffortReceiptWrite(
-                      "dispatched",
-                      db
-                        .update(SessionToolRequestReceiptTable)
-                        .set({ request_state: "dispatched" })
-                        .where(
-                          and(
-                            eq(SessionToolRequestReceiptTable.receipt_id, receiptID),
-                            eq(SessionToolRequestReceiptTable.request_state, "prepared"),
-                          ),
-                        )
-                        .run(),
-                    ),
-                  rejected: ({ budget, reason }) =>
-                    bestEffortReceiptWrite(
-                      "rejected",
-                      db
-                        .update(SessionToolRequestReceiptTable)
-                        .set({
-                          estimated_input_tokens: budget.estimatedFullRequestTokens,
-                          physical_input_budget: budget.physicalInputBudget,
-                          reserved_output_tokens: budget.reservedOutputTokens,
-                          safety_margin_tokens: budget.safetyMargin,
-                          context_limit_provenance: budget.provenance,
-                          request_state: "rejected",
-                          request_error_code: reason,
-                        })
-                        .where(
-                          and(
-                            eq(SessionToolRequestReceiptTable.receipt_id, receiptID),
-                            eq(SessionToolRequestReceiptTable.request_state, "prepared"),
-                          ),
-                        )
-                        .run(),
-                    ),
-                  aiSdkInput: (input) => writeArgumentReceipt({ layer: "ai_sdk_input", ...input }),
-                  rawFrame: (input) => writeArgumentReceipt({ layer: "raw_frame", ...input }),
-                  adapterAssembly: (input) => writeArgumentReceipt({ layer: "adapter_assembly", ...input }),
-                  processorDecoded: (input) => writeArgumentReceipt({ layer: "processor_decoded", ...input }),
-                  processorValidation: (input) =>
-                    bestEffortReceiptWrite(
-                      "argument:processor_decoded:validation",
-                      db
-                        .update(SessionToolArgumentReceiptTable)
-                        .set({ validation_outcome: input.validationOutcome })
-                        .where(
-                          and(
-                            eq(SessionToolArgumentReceiptTable.receipt_id, receiptID),
-                            eq(SessionToolArgumentReceiptTable.layer, "processor_decoded"),
-                            eq(SessionToolArgumentReceiptTable.call_id, input.callID),
-                          ),
-                        )
-                        .run(),
-                    ),
-                },
-              },
-              providerAttempt,
-            )
-            const observedCallIds =
-              (yield* sessions.messages({ sessionID }).pipe(Effect.orDie))
-                .find((message) => message.info.id === handle.message.id)
-                ?.parts.flatMap((part) => (part.type === "tool" ? [part.callID] : [])) ?? []
-            yield* bestEffortReceiptWrite(
-              "observed_call_ids",
+            const transitionReceipt = (input: {
+              from: readonly (typeof SessionToolRequestReceiptTable.$inferSelect.provider_state)[]
+              to: typeof SessionToolRequestReceiptTable.$inferSelect.provider_state
+              values?: Partial<typeof SessionToolRequestReceiptTable.$inferInsert>
+            }) =>
               db
-                .update(SessionToolRequestReceiptTable)
-                .set({ call_ids: observedCallIds })
-                .where(eq(SessionToolRequestReceiptTable.receipt_id, receiptID))
-                .run(),
+                .transaction(
+                  (tx) =>
+                    Effect.gen(function* () {
+                      const updated = yield* tx
+                        .update(SessionToolRequestReceiptTable)
+                        .set({ ...input.values, provider_state: input.to })
+                        .where(
+                          and(
+                            eq(SessionToolRequestReceiptTable.receipt_id, receiptID),
+                            inArray(SessionToolRequestReceiptTable.provider_state, [...input.from]),
+                          ),
+                        )
+                        .returning({ receiptID: SessionToolRequestReceiptTable.receipt_id })
+                        .get()
+                      if (!updated) {
+                        const current = yield* tx
+                          .select({ state: SessionToolRequestReceiptTable.provider_state })
+                          .from(SessionToolRequestReceiptTable)
+                          .where(eq(SessionToolRequestReceiptTable.receipt_id, receiptID))
+                          .get()
+                        if (current?.state === input.to) return false
+                        return yield* Effect.die(
+                          new Error(
+                            `provider receipt transition conflict: ${receiptID}: ${current?.state ?? "missing"} -> ${input.to}`,
+                          ),
+                        )
+                      }
+
+                      const continuation = yield* tx
+                        .select({
+                          runID: CompactionRunTable.run_id,
+                          state: CompactionRunTable.continuation_state,
+                        })
+                        .from(CompactionRunTable)
+                        .where(eq(CompactionRunTable.continuation_receipt_id, receiptID))
+                        .get()
+                      if (!continuation || input.to === "streaming") return true
+                      const target =
+                        input.to === "dispatching"
+                          ? "dispatching"
+                          : input.to === "settled"
+                            ? "settled"
+                            : input.to === "failed"
+                              ? "failed"
+                              : undefined
+                      if (!target) return true
+                      const expected: readonly ("admitted" | "dispatching")[] =
+                        target === "dispatching"
+                          ? ["admitted"]
+                          : target === "settled"
+                            ? ["dispatching"]
+                            : ["admitted", "dispatching"]
+                      if (continuation.state !== "admitted" && continuation.state !== "dispatching")
+                        return yield* Effect.die(
+                          new Error(
+                            `compaction continuation transition conflict: ${continuation.runID}: ${continuation.state ?? "missing"} -> ${target}`,
+                          ),
+                        )
+                      const transitionedAt = Date.now()
+                      const continuationUpdated = yield* tx
+                        .update(CompactionRunTable)
+                        .set({
+                          continuation_state: target,
+                          ...(target === "dispatching"
+                            ? {
+                                continuation_dispatching_at:
+                                  typeof input.values?.dispatching_at === "number"
+                                    ? input.values.dispatching_at
+                                    : transitionedAt,
+                              }
+                            : {
+                                continuation_terminal_at:
+                                  typeof input.values?.terminal_at === "number"
+                                    ? input.values.terminal_at
+                                    : transitionedAt,
+                                continuation_error_code:
+                                  target === "failed" ? (input.values?.request_error_code ?? "provider_error") : null,
+                              }),
+                        })
+                        .where(
+                          and(
+                            eq(CompactionRunTable.run_id, continuation.runID),
+                            inArray(CompactionRunTable.continuation_state, expected),
+                          ),
+                        )
+                        .returning({ runID: CompactionRunTable.run_id })
+                        .get()
+                      if (!continuationUpdated)
+                        return yield* Effect.die(
+                          new Error(`compaction continuation transition CAS lost: ${continuation.runID}`),
+                        )
+                      return true
+                    }),
+                  { behavior: "immediate" },
+                )
+                .pipe(Effect.orDie)
+            const finalizeReceipt = () =>
+              Effect.gen(function* () {
+                const terminal = receiptTerminal.value
+                if (!terminal)
+                  return yield* Effect.die(new Error(`provider response terminal intent is missing: ${receiptID}`))
+                const finalResponse = (yield* sessions.messages({ sessionID }).pipe(Effect.orDie)).find(
+                  (message) => message.info.id === handle.message.id,
+                )
+                if (!finalResponse)
+                  return yield* Effect.die(new Error(`provider response is missing: ${handle.message.id}`))
+                const responseFingerprint = providerResponseFingerprint(finalResponse)
+                const finalized = yield* transitionReceipt({
+                  from:
+                    terminal.state === "settled"
+                      ? (["dispatching", "streaming"] as const)
+                      : (["preparing", "prepared", "dispatching", "streaming"] as const),
+                  to: terminal.state,
+                  values: {
+                    call_ids: finalResponse.parts.flatMap((part) => (part.type === "tool" ? [part.callID] : [])),
+                    response_fingerprint: responseFingerprint,
+                    terminal_at: Date.now(),
+                    request_error_code: terminal.state === "failed" ? terminal.errorCode : null,
+                  },
+                })
+                if (!finalized) {
+                  const current = yield* db
+                    .select({
+                      state: SessionToolRequestReceiptTable.provider_state,
+                      responseFingerprint: SessionToolRequestReceiptTable.response_fingerprint,
+                    })
+                    .from(SessionToolRequestReceiptTable)
+                    .where(eq(SessionToolRequestReceiptTable.receipt_id, receiptID))
+                    .get()
+                    .pipe(Effect.orDie)
+                  if (current?.state !== terminal.state || current.responseFingerprint !== responseFingerprint)
+                    return yield* Effect.die(
+                      new Error(`provider response receipt terminal replay diverged: ${receiptID}`),
+                    )
+                }
+                receiptFinalizer.value = undefined
+              })
+            receiptFinalizer.value = finalizeReceipt
+            const turnSettled = { value: false }
+            const settleProviderTurn = () =>
+              Effect.gen(function* () {
+                if (turnSettled.value) return
+                yield* finalizeReceipt()
+                turnSettled.value = true
+                // Summary diffs mutate user-message metadata. Run them only after the Provider
+                // receipt is terminal so cancellation cannot strand an admitted request.
+                if (step === 1 && !finalizerMode)
+                  yield* summary.summarize({ sessionID, messageID: lastUser.id }).pipe(Effect.ignore)
+              })
+            const prepareAdapterReceipt = (input: {
+              finalRequestHash: string
+              promptCacheKey?: string
+              finalOfferedToolIds: readonly string[]
+              toolDefinitionHash: string
+            }) =>
+              db
+                .transaction(
+                  (tx) =>
+                    Effect.gen(function* () {
+                      const current = yield* tx
+                        .select()
+                        .from(SessionToolRequestReceiptTable)
+                        .where(eq(SessionToolRequestReceiptTable.receipt_id, receiptID))
+                        .get()
+                      if (!current) return yield* Effect.die(new Error(`provider receipt is missing: ${receiptID}`))
+                      if (current.provider_state === "prepared") {
+                        if (
+                          current.final_request_hash !== input.finalRequestHash ||
+                          (current.prompt_cache_key ?? undefined) !== input.promptCacheKey ||
+                          current.tool_definition_hash !== input.toolDefinitionHash ||
+                          stableJson(current.final_offered_tool_ids) !== stableJson(input.finalOfferedToolIds)
+                        )
+                          return yield* Effect.die(
+                            new Error(`provider adapter preparation diverged on retry: ${receiptID}`),
+                          )
+                        return
+                      }
+                      if (current.provider_state !== "preparing")
+                        return yield* Effect.die(
+                          new Error(
+                            `provider adapter preparation is too late: ${receiptID}: ${current.provider_state}`,
+                          ),
+                        )
+                      const updated = yield* tx
+                        .update(SessionToolRequestReceiptTable)
+                        .set({
+                          final_request_hash: input.finalRequestHash,
+                          provider_request_hash: input.finalRequestHash,
+                          prompt_cache_key: input.promptCacheKey ?? null,
+                          final_offered_tool_ids: [...input.finalOfferedToolIds],
+                          tool_definition_hash: input.toolDefinitionHash,
+                          provider_state: "prepared",
+                          adapter_prepared_at: Date.now(),
+                        })
+                        .where(
+                          and(
+                            eq(SessionToolRequestReceiptTable.receipt_id, receiptID),
+                            eq(SessionToolRequestReceiptTable.provider_state, "preparing"),
+                          ),
+                        )
+                        .returning({ receiptID: SessionToolRequestReceiptTable.receipt_id })
+                        .get()
+                      if (!updated)
+                        return yield* Effect.die(new Error(`provider adapter preparation CAS lost: ${receiptID}`))
+                    }),
+                  { behavior: "immediate" },
+                )
+                .pipe(Effect.orDie)
+            if (providerAttempt && handle.message.providerAttemptID !== providerAttempt.attemptId) {
+              handle.message.providerAttemptID = providerAttempt.attemptId
+              yield* sessions.updateMessage(handle.message)
+            }
+            const result = yield* handle.process({
+              ...streamInput,
+              requestReceipt: {
+                prepared: (prepared) => {
+                  return db
+                    .update(SessionToolRequestReceiptTable)
+                    .set({
+                      permission_filtered_tool_ids: [...prepared.permissionFilteredToolIds],
+                      adapter_tool_capability: prepared.adapterToolCapability,
+                      adapter_lowering_outcome: prepared.adapterLoweringOutcome,
+                      estimated_input_tokens: prepared.budget.estimatedFullRequestTokens,
+                      physical_input_budget: prepared.budget.physicalInputBudget,
+                      reserved_output_tokens: prepared.budget.reservedOutputTokens,
+                      safety_margin_tokens: prepared.budget.safetyMargin,
+                      context_limit_provenance: prepared.budget.provenance,
+                    })
+                    .where(
+                      and(
+                        eq(SessionToolRequestReceiptTable.receipt_id, receiptID),
+                        eq(SessionToolRequestReceiptTable.provider_state, "preparing"),
+                      ),
+                    )
+                    .run()
+                    .pipe(Effect.orDie, Effect.asVoid)
+                },
+                adapterPrepared: prepareAdapterReceipt,
+                dispatched: () =>
+                  Effect.gen(function* () {
+                    const transitioned = yield* transitionReceipt({
+                      from: ["prepared"],
+                      to: "dispatching",
+                      values: { request_state: "dispatched", dispatching_at: Date.now() },
+                    })
+                    if (transitioned && providerAttempt) yield* providerAttempt.dispatching.pipe(Effect.orDie)
+                  }),
+                streaming: () =>
+                  Effect.gen(function* () {
+                    const transitioned = yield* transitionReceipt({
+                      from: ["dispatching"],
+                      to: "streaming",
+                      values: { streaming_at: Date.now() },
+                    })
+                    if (transitioned && providerAttempt) yield* providerAttempt.streaming.pipe(Effect.orDie)
+                  }),
+                // Processor cleanup durably completes the assistant after these callbacks. Keep the
+                // terminal intent in memory until that cleanup and the response fingerprint are ready,
+                // then commit the receipt and continuation terminal states together below.
+                settled: () =>
+                  Effect.gen(function* () {
+                    receiptTerminal.value = { state: "settled" }
+                    if (providerAttempt) yield* providerAttempt.settled.pipe(Effect.orDie)
+                  }),
+                failed: (error) =>
+                  Effect.gen(function* () {
+                    receiptTerminal.value ??= {
+                      state: "failed",
+                      errorCode: error instanceof Error ? error.name : "provider_error",
+                    }
+                    if (providerAttempt) yield* providerAttempt.failed(error).pipe(Effect.orDie)
+                  }),
+                rejected: ({ budget, reason }) =>
+                  Effect.gen(function* () {
+                    receiptTerminal.value = { state: "failed", errorCode: reason }
+                    yield* db
+                      .update(SessionToolRequestReceiptTable)
+                      .set({
+                        estimated_input_tokens: budget.estimatedFullRequestTokens,
+                        physical_input_budget: budget.physicalInputBudget,
+                        reserved_output_tokens: budget.reservedOutputTokens,
+                        safety_margin_tokens: budget.safetyMargin,
+                        context_limit_provenance: budget.provenance,
+                        request_state: "rejected",
+                        request_error_code: reason,
+                      })
+                      .where(
+                        and(
+                          eq(SessionToolRequestReceiptTable.receipt_id, receiptID),
+                          eq(SessionToolRequestReceiptTable.provider_state, "preparing"),
+                        ),
+                      )
+                      .run()
+                      .pipe(Effect.orDie)
+                  }),
+                aiSdkInput: (input) => writeArgumentReceipt({ layer: "ai_sdk_input", ...input }),
+                rawFrame: (input) => writeArgumentReceipt({ layer: "raw_frame", ...input }),
+                adapterAssembly: (input) => writeArgumentReceipt({ layer: "adapter_assembly", ...input }),
+                processorDecoded: (input) => writeArgumentReceipt({ layer: "processor_decoded", ...input }),
+                processorValidation: (input) =>
+                  bestEffortReceiptWrite(
+                    "argument:processor_decoded:validation",
+                    db
+                      .update(SessionToolArgumentReceiptTable)
+                      .set({ validation_outcome: input.validationOutcome })
+                      .where(
+                        and(
+                          eq(SessionToolArgumentReceiptTable.receipt_id, receiptID),
+                          eq(SessionToolArgumentReceiptTable.layer, "processor_decoded"),
+                          eq(SessionToolArgumentReceiptTable.call_id, input.callID),
+                        ),
+                      )
+                      .run(),
+                  ),
+              },
+            })
+            const response = (yield* sessions.messages({ sessionID }).pipe(Effect.orDie)).find(
+              (message) => message.info.id === handle.message.id,
             )
+            if (!response) return yield* Effect.die(new Error(`provider response is missing: ${handle.message.id}`))
 
             if (structured !== undefined) {
               handle.message.structured = structured
               handle.message.finish = handle.message.finish ?? "stop"
               yield* sessions.updateMessage(handle.message)
+              yield* settleProviderTurn()
               return "break" as const
             }
 
             if (finalizerMode) {
+              const hasTextFallback =
+                finalizerAllowsText &&
+                response.parts.some(
+                  (part) => part.type === "text" && !part.synthetic && !part.ignored && part.text.trim() !== "",
+                )
+              if (hasTextFallback) {
+                yield* settleProviderTurn()
+                return "break" as const
+              }
               if (!handle.message.error) {
                 handle.message.error = new SessionV1.StructuredOutputError({
                   message: "Finalizer did not produce valid structured output",
@@ -3175,6 +3864,7 @@ export const layer = Layer.effect(
                 }).toObject()
                 yield* sessions.updateMessage(handle.message)
               }
+              yield* settleProviderTurn()
               return "break" as const
             }
 
@@ -3186,6 +3876,7 @@ export const layer = Layer.effect(
                   retries: 0,
                 }).toObject()
                 yield* sessions.updateMessage(handle.message)
+                yield* settleProviderTurn()
                 return "break" as const
               }
             }
@@ -3206,6 +3897,7 @@ export const layer = Layer.effect(
               // this step. We check the CURRENT assistant message's parts (by handle.message.id).
               const latestMsgs = yield* MessageV2.promptHistoryEffect(sessionID).pipe(
                 Effect.provideService(Database.Service, database),
+                Effect.orDie,
               )
               const currentAssistantMsg = latestMsgs.findLast(
                 (m) => m.info.role === "assistant" && m.info.id === handle.message.id,
@@ -3224,6 +3916,7 @@ export const layer = Layer.effect(
                     retries: structuredFailedAttempts,
                   }).toObject()
                   yield* sessions.updateMessage(handle.message)
+                  yield* settleProviderTurn()
                   yield* slog.warn("structured-output retry cap reached", {
                     attempts: structuredFailedAttempts,
                     retryMax,
@@ -3235,16 +3928,19 @@ export const layer = Layer.effect(
                 // correction text appears as a user instruction in the next model context —
                 // not as assistant output (which the model treats with lower compliance).
                 if (fields.length > 0) {
+                  yield* settleProviderTurn()
                   yield* injectTailReminder(
                     sessionID,
                     `[structured-output correction] Your StructuredOutput call did not match the required schema. Required top-level fields: ${fieldList}. Please call StructuredOutput again using EXACTLY these field names.`,
                     lastUser.model,
                     lastUser.agent,
+                    SessionProcessor.planProtocolActivityID(lastUser.metadata) ?? lastUser.id,
                   )
                 }
               }
             }
 
+            yield* settleProviderTurn()
             if (result === "stop") return "break" as const
             if (result === "compact") {
               // V4.0.1 P0 — a turn-internal hard compaction (the provider signalled overflow mid-stream).
@@ -3263,12 +3959,13 @@ export const layer = Layer.effect(
                 model: lastUser.model,
                 auto: true,
                 overflow: !handle.message.finish,
+                activityID: SessionProcessor.planProtocolActivityID(lastUser.metadata) ?? lastUser.id,
               })
             }
             return "continue" as const
           }).pipe(
             Effect.ensuring(instruction.clear(handle.message.id)),
-            Effect.onInterrupt(() => finalizeInterruptedAssistant),
+            Effect.onInterrupt(() => finalizeInterruptedTurn),
           )
           // V4.1 §S1.1 needsFollowUp: the model finished this step (outcome === "break"), but if a steer
           // arrived while it was running, do NOT exit — loop once more so the top-of-loop drain absorbs
@@ -3408,7 +4105,9 @@ export const layer = Layer.effect(
       return { kind: "steer" as const, delivery: "steer" as const, admitted }
     })
 
-    const promptAsync: (input: PromptInput) => Effect.Effect<void, Image.Error | SessionPromptIntent.Error> = Effect.fn(
+    const promptAsync: (
+      input: PromptInput,
+    ) => Effect.Effect<PromptAdmissionReceipt, Image.Error | SessionPromptIntent.Error> = Effect.fn(
       "SessionPrompt.promptAsync",
     )(function* (input: PromptInput) {
       const messageID = input.messageID ?? MessageID.ascending()
@@ -3424,7 +4123,11 @@ export const layer = Layer.effect(
             messageID,
           }).pipe(Effect.provideService(Database.Service, database))
         : undefined
-      if (claim?.kind === "admitted") return
+      if (claim?.kind === "admitted")
+        return {
+          messageID: claim.receipt.messageID,
+          delivery: claim.receipt.delivery ?? "turn",
+        }
       const claimed = claim?.receipt
       const admittedInput = claimed
         ? {
@@ -3433,7 +4136,7 @@ export const layer = Layer.effect(
             parts: stableIntentParts(input.parts, claimed.intentID),
           }
         : { ...input, messageID }
-      const admission = yield* Deferred.make<void, Image.Error | SessionPromptIntent.Error>()
+      const admission = yield* Deferred.make<PromptAdmissionReceipt, Image.Error | SessionPromptIntent.Error>()
       if (claimed) {
         yield* Effect.suspend(() =>
           SessionPromptIntent.renew({
@@ -3460,7 +4163,7 @@ export const layer = Layer.effect(
           ).pipe(
             Effect.matchCauseEffect({
               onFailure: (cause) => Deferred.failCause(admission, cause),
-              onSuccess: () => Deferred.succeed(admission, undefined),
+              onSuccess: () => Deferred.succeed(admission, receipt),
             }),
             Effect.asVoid,
           ),
@@ -3485,7 +4188,7 @@ export const layer = Layer.effect(
         ),
         Effect.forkIn(scope, { startImmediately: true }),
       )
-      yield* Deferred.await(admission)
+      return yield* Deferred.await(admission)
     })
 
     const loop: (input: LoopInput, onRunning?: Effect.Effect<void>) => Effect.Effect<SessionV1.WithParts> = Effect.fn(
@@ -3523,6 +4226,36 @@ export const layer = Layer.effect(
         onRunning,
       )
     })
+
+    const wakeCommittedContinuations = (ctx: InstanceContext) =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const pending = yield* compaction.recoverableContinuations(ctx.project.id)
+          yield* Effect.forEach(
+            pending,
+            (item) =>
+              loop({ sessionID: item.sessionID }).pipe(
+                Effect.catchCause((cause) =>
+                  Effect.logError("committed compaction continuation recovery failed").pipe(
+                    Effect.annotateLogs({
+                      runID: item.runID,
+                      sessionID: item.sessionID,
+                      messageID: item.messageID,
+                      cause,
+                    }),
+                  ),
+                ),
+                Effect.forkIn(scope),
+              ),
+            { discard: true },
+          )
+        }).pipe(Effect.provideService(InstanceRef, ctx)),
+      )
+    const unregisterCompactionRecovery = registerInitializer(wakeCommittedContinuations)
+    const currentInstance = yield* InstanceRef
+    if (currentInstance) {
+      yield* Effect.promise(() => wakeCommittedContinuations(currentInstance)).pipe(Effect.forkIn(scope))
+    }
 
     const shell: (input: ShellInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError> = Effect.fn(
       "SessionPrompt.shell",
@@ -3928,6 +4661,7 @@ export const layer = Layer.effect(
         notificationWorkers.clear()
         unregisterDurableInitializer()
         unregisterDurableDisposer()
+        unregisterCompactionRecovery()
         const directories = new Set([...durableWorkers.keys(), ...durableLeases.keys()])
         yield* Effect.promise(() => Promise.all([...directories].map(disposeDurableWorkers)))
       }),
@@ -4222,8 +4956,18 @@ function stableJson(value: unknown, seen = new WeakSet<object>()): string {
   return result
 }
 
+/** @internal Exported for deterministic receipt verification. */
+function providerResponseFingerprint(response: SessionV1.WithParts) {
+  return Hash.sha256(stableJson(response))
+}
+
 /** @internal Exported for testing */
-export { buildStructuredOutputRuntimeTail, buildStructuredOutputSystemPrompt, extractSchemaTopLevelFields }
+export {
+  buildStructuredOutputRuntimeTail,
+  buildStructuredOutputSystemPrompt,
+  extractSchemaTopLevelFields,
+  providerResponseFingerprint,
+}
 
 export function createStructuredOutputTool(input: {
   schema: Record<string, any>
