@@ -1,6 +1,8 @@
 import { mkdir, rename, rm } from "node:fs/promises"
 import path from "node:path"
 
+const repositorySnapshotFile = path.resolve(import.meta.dir, "../test/tool/fixtures/models-api.json")
+
 export async function loadModelsData(
   options: {
     environment?: Readonly<Record<string, string | undefined>>
@@ -34,9 +36,14 @@ export async function loadModelsData(
     return result(remote, `${modelsURL}/api.json`)
   }
 
-  // A fallback is deliberately opt-in. Production builds must use the models.dev response rather
-  // than silently embedding a stale test fixture when the network is unavailable.
-  const fallbacks = options.fallbackFiles
+  // Production builds must use models.dev and fail closed when it is unavailable. Only an explicit
+  // fallback or an unmarked local development run may use the repository snapshot.
+  const channel = environment.DEEPAGENT_CODE_CHANNEL?.trim()
+  const buildMarker =
+    (channel !== undefined && channel !== "" && channel !== "dev") ||
+    Boolean(environment.DEEPAGENT_CODE_VERSION?.trim()) ||
+    Boolean(environment.DEEPAGENT_CODE_RELEASE?.trim())
+  const fallbacks = options.fallbackFiles ?? (buildMarker ? undefined : [repositorySnapshotFile])
   if (!fallbacks) {
     throw new Error(`Unable to load models.dev catalog from ${modelsURL}; no explicit fallback was provided`)
   }

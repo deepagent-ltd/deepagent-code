@@ -95,11 +95,20 @@ describe("models.dev build data", () => {
 
     await expect(
       loadModelsData({
-        environment: { DEEPAGENT_CODE_MODELS_URL: "http://127.0.0.1:1" },
+        environment: { DEEPAGENT_CODE_MODELS_URL: "http://127.0.0.1:1", DEEPAGENT_CODE_CHANNEL: "prod" },
         cacheFile,
         requestTimeoutMs: 200,
       }),
     ).rejects.toThrow("no explicit fallback was provided")
     expect(await Bun.file(cacheFile).json()).toEqual(builderOnly)
+  })
+
+  test("keeps the repository fixture as an offline fallback for local development", async () => {
+    const result = await loadModelsData({
+      environment: { DEEPAGENT_CODE_MODELS_URL: "http://127.0.0.1:1", DEEPAGENT_CODE_CHANNEL: "dev" },
+      requestTimeoutMs: 200,
+    })
+
+    expect(result.source).toBe(path.resolve(import.meta.dir, "../tool/fixtures/models-api.json"))
   })
 })
