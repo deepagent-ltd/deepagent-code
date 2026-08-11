@@ -200,12 +200,28 @@ const modelCommands = new Map<string, DispatcherCommand>([
     command("packages/deepagent-code", "bun", "run", "test:llm-live:plan-advance"),
   ],
   [
+    "live:legacy-session:plan-create-replan-contract",
+    command("packages/deepagent-code", "bun", "run", "test:llm-live:plan-create-replan"),
+  ],
+  [
     "ext:legacy-session:subagent-finalizer-isolation",
     command("packages/deepagent-code", "bun", "run", "test:llm-ext:finalizer-isolation"),
   ],
   [
     "live:legacy-session:steer-boundary",
     command("packages/deepagent-code", "bun", "run", "test:llm-live:steer-boundary"),
+  ],
+  [
+    "live:legacy-session:activity-progress-lifecycle",
+    command("packages/deepagent-code", "bun", "run", "test:llm-live:activity-progress"),
+  ],
+  [
+    "live:packaged-sidecar:activity-progress-restart",
+    command("packages/desktop", "bun", "run", "test:llm-live:activity-progress-restart"),
+  ],
+  [
+    "ext:renderer-ui:activity-progress-package",
+    command("packages/desktop", "bun", "run", "test:llm-release:activity-progress-package"),
   ],
   [
     "ext:legacy-session:subagent-worktree-routing",

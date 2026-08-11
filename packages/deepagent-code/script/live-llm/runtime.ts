@@ -255,8 +255,16 @@ export async function runLegacyLiveCases(input: {
     const { Question } = await import("../../src/question")
     const { SessionCompaction } = await import("../../src/session/compaction")
     const { CompactionRunTable, CompactionSummaryAttemptTable } = await import("../../src/session/compaction-sql")
+    const {
+      SessionActivityAdmissionTable,
+      SessionActivityProgressTable,
+      SessionLegacyActivityAdmissionTable,
+      SessionLegacyActivityTable,
+    } = await import("../../src/session/activity-sql")
     const { SessionPromptEpochTable } = await import("../../src/session/prompt-epoch.sql")
-    const { SessionWorldStateBaselineTable } = await import("@deepagent-code/core/session/sql")
+    const { PartTable, SessionIntentTable, SessionWorldStateBaselineTable } = await import(
+      "@deepagent-code/core/session/sql"
+    )
     const { SessionPromptIntent } = await import("../../src/session/prompt-intent")
     const { SessionPrompt } = await import("../../src/session/prompt")
     const { SessionRevert } = await import("../../src/session/revert")
@@ -266,7 +274,6 @@ export async function runLegacyLiveCases(input: {
     const { Session } = await import("../../src/session/session")
     const { SessionToolArgumentReceiptTable } = await import("../../src/session/tool-argument-receipt.sql")
     const { SessionToolRequestReceiptTable } = await import("../../src/session/tool-request-receipt.sql")
-    const { SessionIntentTable } = await import("@deepagent-code/core/session/sql")
     const { EventDispatcher } = await import("../../src/session/event-dispatcher")
     const { MultiAgentRuntime } = await import("../../src/session/multi-agent-runtime")
     const { makeEventTurnRunner } = await import("../../src/session/v4-event-runtime")
@@ -516,25 +523,28 @@ export async function runLegacyLiveCases(input: {
               const refFiles = yield* Effect.promise(async () =>
                 Object.fromEntries(
                   await Promise.all(
-                    refs.map(async (ref) => [
-                      ref,
-                      Object.fromEntries(
-                        await Promise.all(
-                          (input.inspectFiles ?? []).map(async (file) => {
-                            const child = Bun.spawn(["git", "show", `${ref}:${file}`], {
-                              cwd: instance.directory,
-                              stdout: "pipe",
-                              stderr: "ignore",
-                            })
-                            const [content, exitCode] = await Promise.all([
-                              new Response(child.stdout).text(),
-                              child.exited,
-                            ])
-                            return [file, exitCode === 0 ? content : undefined] as const
-                          }),
-                        ),
-                      ),
-                    ] as const),
+                    refs.map(
+                      async (ref) =>
+                        [
+                          ref,
+                          Object.fromEntries(
+                            await Promise.all(
+                              (input.inspectFiles ?? []).map(async (file) => {
+                                const child = Bun.spawn(["git", "show", `${ref}:${file}`], {
+                                  cwd: instance.directory,
+                                  stdout: "pipe",
+                                  stderr: "ignore",
+                                })
+                                const [content, exitCode] = await Promise.all([
+                                  new Response(child.stdout).text(),
+                                  child.exited,
+                                ])
+                                return [file, exitCode === 0 ? content : undefined] as const
+                              }),
+                            ),
+                          ),
+                        ] as const,
+                    ),
                   ),
                 ),
               )
@@ -598,7 +608,9 @@ export async function runLegacyLiveCases(input: {
                   entries: collaborationEntries,
                   approvals,
                   branch: yield* gitService.branch(instance.directory),
-                  worktrees: (yield* gitService.run(["worktree", "list", "--porcelain"], { cwd: instance.directory })).text(),
+                  worktrees: (yield* gitService.run(["worktree", "list", "--porcelain"], {
+                    cwd: instance.directory,
+                  })).text(),
                 },
                 refFiles,
                 permissionRequests: permissionRequests.filter((request) => sessionIDs.includes(request.sessionID)),
@@ -649,17 +661,17 @@ export async function runLegacyLiveCases(input: {
                 yield* revert.revert({ sessionID: session.id, messageID: target.messageID })
                 const epochAfter = yield* sessions.mutationEpoch(session.id).pipe(Effect.orDie)
                 const retry = testCase.revertBefore!.retryTargetIntent
-                  ? yield* prompts
-                      .promptAsync({ ...target, messageID: MessageID.ascending() })
-                      .pipe(
-                        Effect.as({ accepted: true as const }),
-                        Effect.catch((error) =>
-                          Effect.succeed({ accepted: false as const, error: liveErrorName(error) }),
-                        ),
-                      )
+                  ? yield* prompts.promptAsync({ ...target, messageID: MessageID.ascending() }).pipe(
+                      Effect.as({ accepted: true as const }),
+                      Effect.catch((error) =>
+                        Effect.succeed({ accepted: false as const, error: liveErrorName(error) }),
+                      ),
+                    )
                   : undefined
                 if (retry?.accepted) {
-                  return yield* Effect.die(new Error("A pre-revert prompt intent was admitted in a newer mutation epoch"))
+                  return yield* Effect.die(
+                    new Error("A pre-revert prompt intent was admitted in a newer mutation epoch"),
+                  )
                 }
                 yield* revert.cleanup(yield* sessions.get(session.id).pipe(Effect.orDie), epochAfter)
                 return {
@@ -822,13 +834,17 @@ export async function runLegacyLiveCases(input: {
                         message.info.role === "assistant",
                     )
                     .slice(assistantCountBefore)
-                    .findLast((message) => message.info.time.completed !== undefined || message.info.error !== undefined)
+                    .findLast(
+                      (message) => message.info.time.completed !== undefined || message.info.error !== undefined,
+                    )
                   return !busy && assistant ? assistant : undefined
                 }).pipe(
                   Effect.repeat({ while: (result) => result === undefined, schedule: Schedule.spaced("50 millis") }),
                   Effect.timeout(config.timeoutMs),
                   Effect.flatMap((result) =>
-                    result ? Effect.succeed(result) : Effect.die(new Error("Admitted prompt produced no terminal assistant")),
+                    result
+                      ? Effect.succeed(result)
+                      : Effect.die(new Error("Admitted prompt produced no terminal assistant")),
                   ),
                 )
               })
@@ -894,7 +910,9 @@ export async function runLegacyLiveCases(input: {
               ? undefined
               : yield* Effect.gen(function* () {
                   if (result.info.role !== "assistant") {
-                    return yield* Effect.die(new Error(`Input-token override target ${testCase.name} was not assistant`))
+                    return yield* Effect.die(
+                      new Error(`Input-token override target ${testCase.name} was not assistant`),
+                    )
                   }
                   const override = {
                     originalInputTokens: result.info.tokens.input,
@@ -1141,7 +1159,37 @@ export async function runLegacyLiveCases(input: {
                   .all()
                   .pipe(Effect.orDie)
                 const receiptIDs = new Set(requestReceipts.map((receipt) => receipt.receipt_id))
+                const legacyActivities = yield* database.db
+                  .select()
+                  .from(SessionLegacyActivityTable)
+                  .where(eq(SessionLegacyActivityTable.session_id, session.id))
+                  .all()
+                  .pipe(Effect.orDie)
+                const activityIDs = new Set(legacyActivities.map((activity) => activity.activity_id))
                 return {
+                  activityAdmissions: yield* database.db
+                    .select()
+                    .from(SessionActivityAdmissionTable)
+                    .where(eq(SessionActivityAdmissionTable.session_id, session.id))
+                    .all()
+                    .pipe(Effect.orDie),
+                  legacyActivities,
+                  legacyActivityAdmissions: (yield* database.db
+                    .select()
+                    .from(SessionLegacyActivityAdmissionTable)
+                    .all()
+                    .pipe(Effect.orDie)).filter((admission) => activityIDs.has(admission.activity_id)),
+                  activityProgress: (yield* database.db
+                    .select()
+                    .from(SessionActivityProgressTable)
+                    .all()
+                    .pipe(Effect.orDie)).filter((progress) => activityIDs.has(progress.activity_id)),
+                  activityTextParts: (yield* database.db
+                    .select({ id: PartTable.id, message_id: PartTable.message_id, data: PartTable.data })
+                    .from(PartTable)
+                    .where(eq(PartTable.session_id, session.id))
+                    .all()
+                    .pipe(Effect.orDie)).filter((part) => part.data.type === "text"),
                   promptEpochs: yield* database.db
                     .select()
                     .from(SessionPromptEpochTable)

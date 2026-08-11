@@ -301,7 +301,7 @@ export const layer = Layer.effect(
           // they read and report, they do not delegate or change files. (deriveSubagentSessionPermission
           // already denies `task` by default; the explicit deny here is belt-and-suspenders.)
           //
-          // BUG-001-405 Fix-A: `bash` is intentionally absent here. subagentIsWriteType() treats
+          // BUG-405-001 Fix-A: `bash` is intentionally absent here. subagentIsWriteType() treats
           // any `bash: allow` as write-capable (unrestricted shell can write files), so including
           // it caused researcher to be classified as a writer → clean-workspace gate blocked every
           // researcher task in a dirty repo. researcher/reviewer are read-only roles and must not
@@ -317,7 +317,7 @@ export const layer = Layer.effect(
                 grep: "allow",
                 glob: "allow",
                 list: "allow",
-                // bash intentionally omitted — see BUG-001-405 Fix-A comment above
+                // bash intentionally omitted — see BUG-405-001 Fix-A comment above
                 git_read: "allow",
                 webfetch: "allow",
                 websearch: "allow",

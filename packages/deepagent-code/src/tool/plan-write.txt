@@ -17,7 +17,8 @@ Required protocol fields:
 - replan_reason: required and specific for replan; omit it for create/advance.
 
 Operation rules:
-- create is only for a session with no plan. Omit all step IDs; the server assigns them once.
+- create is only for a session with no plan. Omit all step IDs and active_step_id; the server rejects
+  either field when supplied, assigns every step ID once, and derives the active pointer from status.
 - advance is a status patch. Preserve the existing plan_id and exact version precondition. Step IDs
   must be copied exactly from the latest <plan-status> or plan result; never infer them from titles or
   array positions. Titles, acceptance criteria, assigned agents, goal, and assumptions are
@@ -26,8 +27,9 @@ Operation rules:
 - replan is an intentional structural revision and must explain why. Copy an existing step_id only
   when that step keeps the same title, acceptance, and assigned agent; the correction payload shows
   those authoritative values, and omitted acceptance/assigned_agent fields are filled from it. Omit
-  step_id for every new step so the server allocates it. Omit active_step_id and use one active status
-  for server-side derivation. Omit assumptions to retain the current list; send [] only to clear it.
+  step_id for every new step so the server allocates it. Unknown supplied IDs are rejected. Omit
+  active_step_id; supplying it is rejected, and one active status drives server-side derivation. Omit
+  assumptions to retain the current list; send [] only to clear it.
   Do not use replan to bypass the version precondition or erase unresolved work. Suspicious regressions
   are rejected.
 - status must be pending, active, done, cancelled, or blocked. A blocked step must include a note.
