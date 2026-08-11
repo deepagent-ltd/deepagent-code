@@ -322,7 +322,9 @@ export function MessageTimeline(props: {
     return sync.data.message[id] ?? emptyMessages
   })
   const messageByID = createMemo(() => new Map(sessionMessages().map((message) => [message.id, message] as const)))
-  const sessionByID = createMemo(() => new Map((sync.data.session ?? []).map((session) => [session.id, session] as const)))
+  const sessionByID = createMemo(
+    () => new Map((sync.data.session ?? []).map((session) => [session.id, session] as const)),
+  )
   const assistantMessagesByParent = createMemo(() => {
     const result = new Map<string, AssistantMessage[]>()
     for (const message of sessionMessages()) {
@@ -406,9 +408,7 @@ export function MessageTimeline(props: {
   // Fork lineage carried on the session's own metadata (set by backend fork()). Drives the
   // full-width "derived from ‹parent›" banner at the top of the forked transcript.
   const forkedFrom = createMemo(() => {
-    const value = info()?.metadata?.forkedFrom as
-      | { parentSessionID?: string; parentTitle?: string }
-      | undefined
+    const value = info()?.metadata?.forkedFrom as { parentSessionID?: string; parentTitle?: string } | undefined
     if (!value?.parentSessionID) return undefined
     return { parentSessionID: value.parentSessionID, parentTitle: value.parentTitle ?? "" }
   })
@@ -424,6 +424,12 @@ export function MessageTimeline(props: {
   })
   const parentTitle = createMemo(() => sessionTitle(parent()?.title) ?? language.t("command.session.new"))
   const getMsgParts = (msgId: string) => sync.data.part[msgId] ?? emptyParts
+  const activityProgressVisibility = createMemo(() =>
+    Timeline.activityProgressVisibility(
+      sessionMessages().filter((message): message is AssistantMessage => message.role === "assistant"),
+      getMsgParts,
+    ),
+  )
   const childTaskDescription = createMemo(() => {
     const id = sessionID()
     if (!id) return
@@ -454,6 +460,7 @@ export function MessageTimeline(props: {
             settings.general.showReasoningSummaries(),
             sessionStatus().type,
             activeMessageID() === userMessage.id,
+            activityProgressVisibility(),
           )
 
           return reuseTimelineRows(previous, rows)
