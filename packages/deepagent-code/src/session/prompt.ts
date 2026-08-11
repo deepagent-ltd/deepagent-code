@@ -90,6 +90,7 @@ import { projectDurableSettledRun, projectRecoveredSubagentRun, TaskTool, type T
 import { SessionRunState } from "./run-state"
 import { SessionSteer } from "./steer"
 import { SessionPromptIntent } from "./prompt-intent"
+import { pause as pauseAtActivityCrashPoint } from "./activity-crash-test"
 import { writeGovernanceAudit } from "./goal-governance-audit"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { archiveSessionOnCompletion } from "@/wiki/session-archive"
@@ -3775,7 +3776,9 @@ export const layer = Layer.effect(
               Effect.gen(function* () {
                 if (turnSettled.value) return
                 yield* finalizeReceipt()
+                yield* pauseAtActivityCrashPoint("after_provider_receipt_terminal")
                 if (activityProgressFinalizer.value) yield* activityProgressFinalizer.value()
+                yield* pauseAtActivityCrashPoint("after_progress_settled")
                 turnSettled.value = true
                 // Summary diffs mutate user-message metadata. Run them only after the Provider
                 // receipt is terminal so cancellation cannot strand an admitted request.
@@ -3887,7 +3890,9 @@ export const layer = Layer.effect(
                       to: "streaming",
                       values: { streaming_at: Date.now() },
                     })
-                    if (transitioned && providerAttempt) yield* providerAttempt.streaming.pipe(Effect.orDie)
+                    if (!transitioned) return
+                    if (providerAttempt) yield* providerAttempt.streaming.pipe(Effect.orDie)
+                    yield* pauseAtActivityCrashPoint("after_provider_streaming")
                   }),
                 // Processor cleanup durably completes the assistant after these callbacks. Keep the
                 // terminal intent in memory until that cleanup and the response fingerprint are ready,

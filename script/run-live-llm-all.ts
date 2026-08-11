@@ -231,6 +231,12 @@ export const suites: Suite[] = [
     realLLM: true,
   },
   {
+    id: "live:plan-create-replan",
+    package: "deepagent-code",
+    command: ["bun", "run", "test:llm-live:plan-create-replan"],
+    realLLM: true,
+  },
+  {
     id: "ext:finalizer-isolation",
     package: "deepagent-code",
     command: ["bun", "run", "test:llm-ext:finalizer-isolation"],
@@ -240,6 +246,12 @@ export const suites: Suite[] = [
     id: "live:steer-boundary",
     package: "deepagent-code",
     command: ["bun", "run", "test:llm-live:steer-boundary"],
+    realLLM: true,
+  },
+  {
+    id: "live:activity-progress",
+    package: "deepagent-code",
+    command: ["bun", "run", "test:llm-live:activity-progress"],
     realLLM: true,
   },
   {
@@ -378,6 +390,14 @@ export const suites: Suite[] = [
     desktop: true,
   },
   {
+    id: "live:desktop-activity-progress-restart",
+    package: "desktop",
+    command: ["node", "--experimental-strip-types", "./scripts/live-llm/activity-progress-restart.ts"],
+    realLLM: true,
+    desktop: true,
+    packageScript: "test:llm-live:activity-progress-restart",
+  },
+  {
     id: "ext:desktop-sidecar",
     package: "desktop",
     command: ["node", "--experimental-strip-types", "./scripts/live-llm/packaged-sidecar.ts"],
@@ -400,6 +420,14 @@ export const suites: Suite[] = [
     realLLM: true,
     desktop: true,
     packageScript: "test:llm-release:ui",
+  },
+  {
+    id: "release:desktop-activity-progress-package",
+    package: "desktop",
+    command: ["bun", "run", "test:llm-release:activity-progress-package"],
+    realLLM: true,
+    desktop: true,
+    packageScript: "test:llm-release:activity-progress-package",
   },
   {
     id: "release:desktop-long-session",

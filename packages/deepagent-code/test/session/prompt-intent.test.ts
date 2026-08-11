@@ -350,6 +350,113 @@ describe("SessionPromptIntent", () => {
     }),
   )
 
+  it.effect(
+    "terminal tool progress becomes recovery-required after restart instead of leaving an orphan active owner",
+    () =>
+      Effect.gen(function* () {
+        yield* setup
+        const first = yield* claim({
+          intentID: "intent_progress_tool",
+          messageID: MessageID.make("msg_progress_tool_user"),
+        })
+        expect(first.kind).toBe("claimed")
+        if (first.kind !== "claimed") return
+        yield* SessionPromptIntent.materializeTurn({
+          receipt: first.receipt,
+          message: message(first.receipt.messageID),
+        })
+        const activity = yield* SessionPromptIntent.activityForMessage({
+          sessionID,
+          messageID: first.receipt.messageID,
+        })
+        expect(activity?.state).toBe("active")
+        if (!activity) return
+        const { db } = yield* Database.Service
+        const assistantID = MessageID.make("msg_progress_tool_assistant")
+        yield* db
+          .insert(MessageTable)
+          .values({
+            id: assistantID,
+            session_id: sessionID,
+            time_created: 2,
+            data: {
+              role: "assistant",
+              parentID: first.receipt.messageID,
+              mode: "build",
+              agent: "build",
+              path: { cwd: "/project", root: "/project" },
+              cost: 0,
+              tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+              modelID: ModelV2.ID.make("test"),
+              providerID: ProviderV2.ID.make("test"),
+              time: { created: 2, completed: 3 },
+              finish: "tool-calls",
+            } as typeof MessageTable.$inferInsert.data,
+          })
+          .run()
+          .pipe(Effect.orDie)
+        yield* db
+          .insert(PartTable)
+          .values({
+            id: PartID.make("prt_progress_tool_text"),
+            message_id: assistantID,
+            session_id: sessionID,
+            time_created: 2,
+            data: { type: "text", text: "working" } as typeof PartTable.$inferInsert.data,
+          })
+          .run()
+          .pipe(Effect.orDie)
+        yield* db
+          .insert(SessionToolRequestReceiptTable)
+          .values({
+            receipt_id: "receipt-progress-tool",
+            request_ordinal: 1,
+            session_id: sessionID,
+            user_message_id: first.receipt.messageID,
+            assistant_message_id: assistantID,
+            provider_id: "test",
+            model_id: "test",
+            registry_tool_ids: ["read"],
+            permission_filtered_tool_ids: ["read"],
+            final_offered_tool_ids: ["read"],
+            call_ids: ["call-progress-tool"],
+            provider_state: "settled",
+            terminal_at: 3,
+            response_fingerprint: "response-progress-tool",
+            request_state: "dispatched",
+            created_at: 2,
+          })
+          .run()
+          .pipe(Effect.orDie)
+        yield* SessionPromptIntent.beginProgress({
+          activityID: activity.activityID,
+          assistantMessageID: assistantID,
+          providerReceiptID: "receipt-progress-tool",
+        })
+
+        expect(yield* SessionPromptIntent.recoverActiveActivities("next-process-owner")).toBe(1)
+        expect(
+          yield* db
+            .select()
+            .from(SessionActivityProgressTable)
+            .where(eq(SessionActivityProgressTable.assistant_message_id, assistantID))
+            .get()
+            .pipe(Effect.orDie),
+        ).toMatchObject({ state: "progress", finish_observed: "tool-calls" })
+        expect(
+          yield* db
+            .select()
+            .from(SessionLegacyActivityTable)
+            .where(eq(SessionLegacyActivityTable.activity_id, activity.activityID))
+            .get()
+            .pipe(Effect.orDie),
+        ).toMatchObject({
+          state: "recovery_required",
+          terminal_reason: "process restarted after settled activity progress",
+        })
+      }),
+  )
+
   it.effect("a revert epoch prevents an old direct request from materializing any message", () =>
     Effect.gen(function* () {
       yield* setup

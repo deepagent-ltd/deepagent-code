@@ -964,17 +964,22 @@ export const recoverActiveActivities = Effect.fn("SessionPromptIntent.recoverAct
               .get()
               .pipe(Effect.orDie)
           : undefined
-        if (
+        const settled =
           latest?.state === "provisional" &&
           receipt &&
           ["settled", "failed", "indeterminate_after_crash"].includes(receipt.state)
-        ) {
-          yield* settleProgress({
-            activityID: activity.activityID,
-            assistantMessageID: MessageID.make(latest.assistant_message_id),
-          })
-          return
-        }
+            ? yield* settleProgress({
+                activityID: activity.activityID,
+                assistantMessageID: MessageID.make(latest.assistant_message_id),
+              })
+            : undefined
+        if (settled && settled.state !== "progress") return
+        const recoveryProgressState = settled?.state ?? latest?.state
+        const recoveryReason = settled
+          ? "process restarted after settled activity progress"
+          : recoveryProgressState
+            ? `process restarted after activity progress ${recoveryProgressState}`
+            : "process restarted before provider progress admission"
         yield* db
           .transaction(
             (tx) =>
@@ -984,9 +989,7 @@ export const recoverActiveActivities = Effect.fn("SessionPromptIntent.recoverAct
                   .update(SessionLegacyActivityTable)
                   .set({
                     state: "recovery_required",
-                    terminal_reason: latest
-                      ? `process restarted after activity progress ${latest.state}`
-                      : "process restarted before provider progress admission",
+                    terminal_reason: recoveryReason,
                     settled_at: now,
                   })
                   .where(
@@ -996,7 +999,7 @@ export const recoverActiveActivities = Effect.fn("SessionPromptIntent.recoverAct
                     ),
                   )
                   .run()
-                if (latest?.state === "provisional")
+                if (!settled && latest?.state === "provisional")
                   yield* tx
                     .update(SessionActivityProgressTable)
                     .set({ state: "recovery_required", finish_observed: "process_restart", settled_at: now })
