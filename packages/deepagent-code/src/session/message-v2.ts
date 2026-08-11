@@ -37,6 +37,8 @@ import { sql } from "drizzle-orm"
 import {
   MessageTable,
   PartTable,
+  SessionForkAdmissionTable,
+  SessionForkIntentTable,
   SessionPromptEpochMessageTable,
   SessionTable,
   SessionWorldStateBaselineTable,
@@ -1252,7 +1254,52 @@ const migrateHistoryAuthority = Effect.fn("MessageV2.migrateHistoryAuthority")(f
       ? (deepagent as { task_fork_manifest?: unknown }).task_fork_manifest
       : session.metadata?.task_fork_manifest
   const foregroundManifest = session.metadata?.forkedFrom
-  if (taskManifest || foregroundManifest) {
+  const foregroundMigration =
+    foregroundManifest && typeof foregroundManifest === "object"
+      ? (foregroundManifest as Record<string, unknown>)
+      : undefined
+  const migrationAdmission =
+    foregroundMigration?.legacyMigrationVersion === 1 &&
+    (foregroundMigration.manifestState === "prepared" || foregroundMigration.manifestState === "complete") &&
+    typeof foregroundMigration.forkIntentID === "string" &&
+    typeof foregroundMigration.parentSessionID === "string"
+      ? yield* db
+          .select({
+            intent_id: SessionForkAdmissionTable.intent_id,
+            fork_mode: SessionForkAdmissionTable.fork_mode,
+            source_session_id: SessionForkAdmissionTable.source_session_id,
+            target_session_id: SessionForkAdmissionTable.target_session_id,
+            state: SessionForkAdmissionTable.state,
+          })
+          .from(SessionForkAdmissionTable)
+          .where(eq(SessionForkAdmissionTable.intent_id, foregroundMigration.forkIntentID))
+          .get()
+          .pipe(Effect.orDie)
+      : undefined
+  const migrationIntent =
+    foregroundMigration?.legacyMigrationVersion === 1 &&
+    foregroundMigration.manifestState === "complete" &&
+    typeof foregroundMigration.forkIntentID === "string"
+      ? yield* db
+          .select({
+            state: SessionForkIntentTable.state,
+            side_effects_completed_at: SessionForkIntentTable.side_effects_completed_at,
+          })
+          .from(SessionForkIntentTable)
+          .where(eq(SessionForkIntentTable.intent_id, foregroundMigration.forkIntentID))
+          .get()
+          .pipe(Effect.orDie)
+      : undefined
+  const verifiedForegroundMigration =
+    migrationAdmission?.fork_mode === "foreground" &&
+    migrationAdmission.source_session_id === foregroundMigration?.parentSessionID &&
+    migrationAdmission.target_session_id === input.sessionID &&
+    ((foregroundMigration?.manifestState === "prepared" && migrationAdmission.state === "ready") ||
+      (foregroundMigration?.manifestState === "complete" &&
+        migrationAdmission.state === "manifest_committed" &&
+        migrationIntent?.state === "complete" &&
+        migrationIntent.side_effects_completed_at !== null))
+  if (taskManifest || (foregroundManifest && !verifiedForegroundMigration)) {
     const reason = taskManifest
       ? "legacy task fork has no verifiable sanitation manifest"
       : "legacy foreground fork has no verifiable source projection manifest"
@@ -1264,6 +1311,7 @@ const migrateHistoryAuthority = Effect.fn("MessageV2.migrateHistoryAuthority")(f
   }
 
   const needsWorldStateBaseline =
+    verifiedForegroundMigration ||
     (input.existing?.epoch ?? 0) > 0 ||
     input.chronological.some(
       (message) => message.info.role === "user" && message.parts.some((part) => part.type === "compaction"),
@@ -1345,7 +1393,7 @@ const migrateHistoryAuthority = Effect.fn("MessageV2.migrateHistoryAuthority")(f
             first_window_id: windowID,
             previous_window_id: null,
             window_id: windowID,
-            world_state_baseline_hash: candidate.row.epoch > 0 ? baseline!.hash : null,
+            world_state_baseline_hash: candidate.row.epoch > 0 || verifiedForegroundMigration ? baseline!.hash : null,
             authority_state: "ready" as const,
             recovery_reason: null,
           }
@@ -1386,7 +1434,7 @@ const migrateHistoryAuthority = Effect.fn("MessageV2.migrateHistoryAuthority")(f
               )
               .run()
           }
-          if (candidate.row.epoch > 0) {
+          if (candidate.row.epoch > 0 || verifiedForegroundMigration) {
             yield* tx
               .delete(SessionWorldStateBaselineTable)
               .where(
