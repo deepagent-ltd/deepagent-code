@@ -67,6 +67,7 @@ import { MessageTable, SessionIntentTable, SessionSteerTable, SessionTable } fro
 import { eq } from "drizzle-orm"
 import { SessionMutationEpoch } from "../../src/session/mutation-epoch"
 import { SessionPromptIntent } from "../../src/session/prompt-intent"
+import { SessionActivityAdmissionTable, SessionLegacyActivityAdmissionTable } from "../../src/session/activity-sql"
 
 void Log.init({ print: false })
 
@@ -330,6 +331,42 @@ const deferredAsPromise = <A>(deferred: Deferred.Deferred<A>): PromiseLike<A> =>
 
 const mkPrompt = (text: string): Prompt => Prompt.fromUserMessage({ text })
 
+const seedLegacyActivity = (sessionID: SessionID, suffix: string) =>
+  Effect.gen(function* () {
+    const messageID = MessageID.make(`msg_${suffix}_trigger`)
+    const claim = yield* SessionPromptIntent.claim({
+      intentID: `intent_${suffix}_trigger`,
+      sessionID,
+      source: "composer",
+      variant: "original",
+      payloadHash: `payload-${suffix}-trigger`,
+      messageID,
+    })
+    if (claim.kind !== "claimed") return
+    yield* SessionPromptIntent.materializeTurn({
+      receipt: claim.receipt,
+      message: {
+        info: {
+          id: messageID,
+          sessionID,
+          role: "user",
+          time: { created: 1 },
+          agent: "build",
+          model: ref,
+        },
+        parts: [
+          {
+            id: PartID.make(`prt_${suffix}_trigger`),
+            messageID,
+            sessionID,
+            type: "text",
+            text: "trigger",
+          },
+        ],
+      },
+    })
+  })
+
 // ── Unit: admit → pending (ordered) → markConsumed (consume-once) ───────────────────────────────────
 
 off.instance(
@@ -463,6 +500,7 @@ off.instance(
       const sessions = yield* Session.Service
       const { db } = yield* Database.Service
       const chat = yield* sessions.create({ title: "Atomic steer intent" })
+      yield* seedLegacyActivity(chat.id, "atomic_steer")
       const messageID = MessageID.make("msg_atomic_steer_intent")
       const claim = yield* SessionPromptIntent.claim({
         intentID: "intent_atomic_steer",
@@ -491,6 +529,28 @@ off.instance(
       expect(intent?.state).toBe("admitted")
       expect(intent?.admitted_message_id).toBe(admitted.id)
       expect((yield* steer.pending(chat.id)).map((item) => item.id)).toEqual([admitted.id])
+      const owner = yield* SessionPromptIntent.activityForMessage({
+        sessionID: chat.id,
+        messageID: MessageID.make(admitted.id),
+      })
+      expect(owner?.state).toBe("active")
+      if (!owner) return
+      expect(
+        yield* db
+          .select({
+            activityID: SessionLegacyActivityAdmissionTable.activity_id,
+            role: SessionLegacyActivityAdmissionTable.role,
+            delivery: SessionActivityAdmissionTable.delivery,
+          })
+          .from(SessionLegacyActivityAdmissionTable)
+          .innerJoin(
+            SessionActivityAdmissionTable,
+            eq(SessionActivityAdmissionTable.admission_id, SessionLegacyActivityAdmissionTable.admission_id),
+          )
+          .where(eq(SessionActivityAdmissionTable.admitted_message_id, admitted.id))
+          .get()
+          .pipe(Effect.orDie),
+      ).toEqual({ activityID: owner.activityID, role: "steer", delivery: "steer" })
       yield* SessionPromptIntent.complete({
         intentID: claim.receipt.intentID,
         ownerToken: claim.receipt.ownerToken,
@@ -792,7 +852,8 @@ on.instance(
       expect((yield* steer.pending(chat.id)).map((item) => String(item.id))).toEqual([String(receipt.messageID)])
 
       yield* Deferred.succeed(gate, undefined)
-      expect(Exit.isSuccess(yield* Fiber.await(running))).toBe(true)
+      const runningExit = yield* Fiber.await(running)
+      expect(Exit.isSuccess(runningExit), Exit.isFailure(runningExit) ? Cause.pretty(runningExit.cause) : "").toBe(true)
       expect(yield* llm.calls).toBe(2)
 
       const messages = yield* sessions.messages({ sessionID: chat.id })
@@ -805,9 +866,9 @@ on.instance(
           },
         },
       })
-      expect(
-        persisted[0]?.parts.filter((part) => part.type === "text" && part.text === "STEERED-ASYNC"),
-      ).toHaveLength(1)
+      expect(persisted[0]?.parts.filter((part) => part.type === "text" && part.text === "STEERED-ASYNC")).toHaveLength(
+        1,
+      )
     }),
   15_000,
 )
@@ -1103,6 +1164,62 @@ on.instance(
       expect(yield* steer.hasPending(normal.id)).toBe(true)
       const normalMsgs = yield* sessions.messages({ sessionID: normal.id })
       expect(normalMsgs.some((m) => m.parts.some((p) => p.type === "text" && p.text === "NOT-DRAINED"))).toBe(false)
+    }),
+  20_000,
+)
+
+on.instance(
+  "promptOrSteer rechecks the durable buffer after joining a runner that cannot absorb the steer",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const steer = yield* SessionSteer.Service
+      const sessions = yield* Session.Service
+      const state = yield* SessionRunState.Service
+      const chat = yield* sessions.create({
+        title: "isBusy admission race",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      yield* llm.text("initial answer")
+      const initial = yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        model: ref,
+        parts: [{ type: "text", text: "initial" }],
+      })
+      const entered = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      const occupied = yield* state
+        .ensureRunning(
+          chat.id,
+          Effect.succeed(initial),
+          Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release)), Effect.as(initial)),
+        )
+        .pipe(Effect.forkChild)
+      yield* Deferred.await(entered)
+      expect(yield* state.isBusy(chat.id)).toBe(true)
+      yield* llm.text("raced steer answer")
+
+      const routed = yield* prompt.promptOrSteer({
+        sessionID: chat.id,
+        agent: "build",
+        model: ref,
+        parts: [{ type: "text", text: "RACED-STEER" }],
+      })
+      expect(routed.kind).toBe("steer")
+      expect(yield* steer.hasPending(chat.id, "steer")).toBe(true)
+
+      yield* Deferred.succeed(release, undefined)
+      yield* Fiber.await(occupied)
+      yield* llm.wait(2)
+
+      expect(yield* steer.hasPending(chat.id, "steer")).toBe(false)
+      expect(
+        (yield* sessions.messages({ sessionID: chat.id })).some((message) =>
+          message.parts.some((part) => part.type === "text" && part.text === "RACED-STEER"),
+        ),
+      ).toBe(true)
     }),
   20_000,
 )

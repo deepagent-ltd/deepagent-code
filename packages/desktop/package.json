@@ -26,6 +26,8 @@
     "test:llm-ext:sidecar": "bun run build && node --experimental-strip-types ./scripts/live-llm/packaged-sidecar.ts",
     "test:llm-release:subagents": "bun run build && node --experimental-strip-types ./scripts/live-llm/desktop-subagents.ts",
     "test:llm-release:ui": "bun run build && node --experimental-strip-types ./scripts/live-llm/desktop-ui.ts",
+    "test:llm-live:activity-progress-restart": "bun run build && node --experimental-strip-types ./scripts/live-llm/activity-progress-restart.ts",
+    "test:llm-release:activity-progress-package": "bun run build && DEEPAGENT_CODE_ALLOW_UNSIGNED=1 bun run package:mac && node --experimental-strip-types ./scripts/live-llm/activity-progress-package.ts",
     "test:llm-release:long-session": "bun run build && node --experimental-strip-types ./scripts/live-llm/long-session.ts",
     "test:llm-release:observed": "bun run build && node --experimental-strip-types ./scripts/live-llm/desktop-observed.ts",
     "package": "bun ./scripts/package.ts",

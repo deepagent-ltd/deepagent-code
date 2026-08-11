@@ -388,7 +388,7 @@ describe("subagentIsWriteType", () => {
     expect(subagentIsWriteType(a)).toBe(true)
   })
 
-  // BUG-001-405 Fix-A regression: researcher profile must be read-only
+  // BUG-405-001 Fix-A regression: researcher profile must be read-only
   it("researcher profile (star-deny + read/grep/glob/list/webfetch/websearch/code_intel, NO bash) is read-only", () => {
     const researcherPermissions: PermissionV1.Rule[] = [
       makeRule("*", "deny"),

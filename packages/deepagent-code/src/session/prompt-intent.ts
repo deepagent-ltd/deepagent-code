@@ -1,4 +1,5 @@
 import { Database } from "@deepagent-code/core/database/database"
+import { Hash } from "@deepagent-code/core/util/hash"
 import {
   MessageTable,
   PartTable,
@@ -7,11 +8,19 @@ import {
   SessionTable,
 } from "@deepagent-code/core/session/sql"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
-import { and, eq, sql } from "drizzle-orm"
+import { and, eq, max, sql } from "drizzle-orm"
 import { Data, Effect, Types } from "effect"
 import { randomUUID } from "node:crypto"
 import { MessageID, SessionID } from "./schema"
 import { SessionMutationEpoch } from "./mutation-epoch"
+import {
+  SessionActivityAdmissionTable,
+  SessionActivityProgressTable,
+  SessionLegacyActivityAdmissionTable,
+  SessionLegacyActivityTable,
+} from "./activity-sql"
+import { SessionToolRequestReceiptTable } from "./tool-request-receipt.sql"
+import { SessionActivityOwner } from "./activity-owner"
 
 export type Source = "composer" | "intelligence" | "followup" | "rewrite"
 export type Variant = "original" | "rewritten"
@@ -56,6 +65,21 @@ export type Claim =
       readonly kind: "admitted"
       readonly receipt: Receipt & { readonly state: "admitted"; readonly messageID: MessageID }
     }
+
+export type Activity = {
+  readonly activityID: string
+  readonly admissionID: string
+  readonly sessionID: SessionID
+  readonly state: "active" | "settled" | "failed" | "interrupted" | "recovery_required"
+}
+
+export type Progress = {
+  readonly activityID: string
+  readonly revision: number
+  readonly assistantMessageID: MessageID
+  readonly textPartID?: string
+  readonly state: "provisional" | "progress" | "final" | "interrupted" | "recovery_required"
+}
 
 const leaseDuration = 30_000
 
@@ -527,11 +551,531 @@ export const materializeTurn = Effect.fn("SessionPromptIntent.materializeTurn")(
             return yield* Effect.fail(
               new Conflict({ intentID: input.receipt.intentID, reason: "intent admission ownership was lost" }),
             )
+          if (!intent.selected_payload_hash)
+            return yield* Effect.fail(
+              new Conflict({ intentID: input.receipt.intentID, reason: "intent payload fingerprint is missing" }),
+            )
+          const admissionID = Hash.sha256(`session-activity-admission:v1:legacy:${intent.intent_id}`)
+          yield* tx
+            .insert(SessionActivityAdmissionTable)
+            .values({
+              admission_id: admissionID,
+              session_id: input.receipt.sessionID,
+              source_kind: "legacy_intent",
+              legacy_intent_id: intent.intent_id,
+              admitted_message_id: input.message.info.id,
+              delivery: "turn",
+              payload_fingerprint_kind: "payload_hash",
+              payload_fingerprint: intent.selected_payload_hash,
+              created_at: intent.time_created,
+            })
+            .onConflictDoNothing()
+            .run()
+            .pipe(Effect.orDie)
+          const admission = yield* tx
+            .select()
+            .from(SessionActivityAdmissionTable)
+            .where(eq(SessionActivityAdmissionTable.legacy_intent_id, intent.intent_id))
+            .get()
+            .pipe(Effect.orDie)
+          if (
+            !admission ||
+            admission.session_id !== input.receipt.sessionID ||
+            admission.admitted_message_id !== input.message.info.id ||
+            admission.delivery !== "turn" ||
+            admission.payload_fingerprint_kind !== "payload_hash" ||
+            admission.payload_fingerprint !== intent.selected_payload_hash
+          )
+            return yield* Effect.fail(
+              new Conflict({ intentID: input.receipt.intentID, reason: "activity admission identity conflicts" }),
+            )
+          const existingActivity = yield* tx
+            .select()
+            .from(SessionLegacyActivityTable)
+            .where(eq(SessionLegacyActivityTable.trigger_admission_id, admissionID))
+            .get()
+            .pipe(Effect.orDie)
+          const activityID = existingActivity?.activity_id ?? Hash.sha256(`session-legacy-activity:v1:${admissionID}`)
+          if (!existingActivity) {
+            const active = yield* tx
+              .select()
+              .from(SessionLegacyActivityTable)
+              .where(
+                and(
+                  eq(SessionLegacyActivityTable.session_id, input.receipt.sessionID),
+                  eq(SessionLegacyActivityTable.state, "active"),
+                ),
+              )
+              .get()
+              .pipe(Effect.orDie)
+            if (active)
+              return yield* Effect.fail(
+                new Conflict({
+                  intentID: input.receipt.intentID,
+                  reason: `legacy activity ${active.activity_id} requires recovery before a new turn`,
+                }),
+              )
+            const latest = yield* tx
+              .select({ ordinal: max(SessionLegacyActivityTable.ordinal) })
+              .from(SessionLegacyActivityTable)
+              .where(eq(SessionLegacyActivityTable.session_id, input.receipt.sessionID))
+              .get()
+              .pipe(Effect.orDie)
+            yield* tx
+              .insert(SessionLegacyActivityTable)
+              .values({
+                activity_id: activityID,
+                session_id: input.receipt.sessionID,
+                ordinal: (latest?.ordinal ?? -1) + 1,
+                trigger_admission_id: admissionID,
+                owner_token: SessionActivityOwner.processOwnerToken,
+                state: "active",
+                terminal_reason: null,
+                created_at: now,
+                settled_at: null,
+              })
+              .run()
+              .pipe(Effect.orDie)
+          }
+          yield* tx
+            .insert(SessionLegacyActivityAdmissionTable)
+            .values({
+              activity_id: activityID,
+              admission_id: admissionID,
+              ordinal: 0,
+              role: "trigger",
+              attached_at: now,
+            })
+            .onConflictDoNothing()
+            .run()
+            .pipe(Effect.orDie)
+          const membership = yield* tx
+            .select()
+            .from(SessionLegacyActivityAdmissionTable)
+            .where(eq(SessionLegacyActivityAdmissionTable.admission_id, admissionID))
+            .get()
+            .pipe(Effect.orDie)
+          if (membership?.activity_id !== activityID || membership.ordinal !== 0 || membership.role !== "trigger")
+            return yield* Effect.fail(
+              new Conflict({ intentID: input.receipt.intentID, reason: "activity trigger membership conflicts" }),
+            )
           return fromRow(admitted)
         }),
       { behavior: "immediate" },
     )
     .pipe(Effect.catchTag("SqlError", Effect.die))
+})
+
+export const activityForMessage = Effect.fn("SessionPromptIntent.activityForMessage")(function* (input: {
+  readonly sessionID: SessionID
+  readonly messageID: MessageID
+}) {
+  const { db } = yield* Database.Service
+  const row = yield* db
+    .select({
+      activityID: SessionLegacyActivityTable.activity_id,
+      admissionID: SessionLegacyActivityAdmissionTable.admission_id,
+      sessionID: SessionLegacyActivityTable.session_id,
+      state: SessionLegacyActivityTable.state,
+    })
+    .from(SessionLegacyActivityTable)
+    .innerJoin(
+      SessionLegacyActivityAdmissionTable,
+      eq(SessionLegacyActivityAdmissionTable.activity_id, SessionLegacyActivityTable.activity_id),
+    )
+    .innerJoin(
+      SessionActivityAdmissionTable,
+      eq(SessionActivityAdmissionTable.admission_id, SessionLegacyActivityAdmissionTable.admission_id),
+    )
+    .where(
+      and(
+        eq(SessionLegacyActivityTable.session_id, input.sessionID),
+        eq(SessionActivityAdmissionTable.admitted_message_id, input.messageID),
+      ),
+    )
+    .get()
+    .pipe(Effect.orDie)
+  if (!row) return undefined
+  return {
+    activityID: row.activityID,
+    admissionID: row.admissionID,
+    sessionID: SessionID.make(row.sessionID),
+    state: row.state,
+  } satisfies Activity
+})
+
+export const beginProgress = Effect.fn("SessionPromptIntent.beginProgress")(function* (input: {
+  readonly activityID: string
+  readonly assistantMessageID: MessageID
+  readonly providerReceiptID: string
+}) {
+  const { db } = yield* Database.Service
+  return yield* db
+    .transaction(
+      (tx) =>
+        Effect.gen(function* () {
+          const existing = yield* tx
+            .select()
+            .from(SessionActivityProgressTable)
+            .where(eq(SessionActivityProgressTable.assistant_message_id, input.assistantMessageID))
+            .get()
+          if (existing) {
+            if (existing.activity_id !== input.activityID || existing.provider_receipt_id !== input.providerReceiptID)
+              return yield* Effect.die(new Error(`activity progress identity conflicts: ${input.assistantMessageID}`))
+            return progress(existing)
+          }
+          const activity = yield* tx
+            .select()
+            .from(SessionLegacyActivityTable)
+            .where(eq(SessionLegacyActivityTable.activity_id, input.activityID))
+            .get()
+          if (!activity || activity.state !== "active")
+            return yield* Effect.die(new Error(`legacy activity is not active: ${input.activityID}`))
+          const latest = yield* tx
+            .select({ revision: max(SessionActivityProgressTable.revision) })
+            .from(SessionActivityProgressTable)
+            .where(eq(SessionActivityProgressTable.activity_id, input.activityID))
+            .get()
+          const row = {
+            activity_id: input.activityID,
+            revision: (latest?.revision ?? -1) + 1,
+            assistant_message_id: input.assistantMessageID,
+            text_part_id: null,
+            provider_receipt_id: input.providerReceiptID,
+            state: "provisional" as const,
+            finish_observed: null,
+            response_fingerprint: null,
+            created_at: Date.now(),
+            settled_at: null,
+          }
+          yield* tx.insert(SessionActivityProgressTable).values(row).run()
+          return progress(row)
+        }),
+      { behavior: "immediate" },
+    )
+    .pipe(Effect.orDie)
+})
+
+export const settleProgress = Effect.fn("SessionPromptIntent.settleProgress")(function* (input: {
+  readonly activityID: string
+  readonly assistantMessageID: MessageID
+}) {
+  const { db } = yield* Database.Service
+  return yield* db
+    .transaction(
+      (tx) =>
+        Effect.gen(function* () {
+          const current = yield* tx
+            .select()
+            .from(SessionActivityProgressTable)
+            .where(eq(SessionActivityProgressTable.assistant_message_id, input.assistantMessageID))
+            .get()
+          if (!current || current.activity_id !== input.activityID)
+            return yield* Effect.die(new Error(`activity progress is missing: ${input.assistantMessageID}`))
+          if (current.state !== "provisional") return progress(current)
+          const receipt = yield* tx
+            .select()
+            .from(SessionToolRequestReceiptTable)
+            .where(eq(SessionToolRequestReceiptTable.receipt_id, current.provider_receipt_id))
+            .get()
+          if (!receipt)
+            return yield* Effect.die(new Error(`provider receipt is missing: ${current.provider_receipt_id}`))
+          if (!["settled", "failed", "indeterminate_after_crash"].includes(receipt.provider_state))
+            return yield* Effect.die(
+              new Error(`provider receipt is not terminal: ${current.provider_receipt_id}: ${receipt.provider_state}`),
+            )
+          const assistant = yield* tx
+            .select()
+            .from(MessageTable)
+            .where(eq(MessageTable.id, input.assistantMessageID))
+            .get()
+          if (!assistant || assistant.session_id !== receipt.session_id || assistant.data.role !== "assistant")
+            return yield* Effect.die(new Error(`assistant response ownership mismatch: ${input.assistantMessageID}`))
+          const assistantData = assistant.data as Omit<SessionV1.Assistant, "id" | "sessionID">
+          const currentAdmission = yield* tx
+            .select({ ordinal: SessionLegacyActivityAdmissionTable.ordinal })
+            .from(SessionLegacyActivityAdmissionTable)
+            .innerJoin(
+              SessionActivityAdmissionTable,
+              eq(SessionActivityAdmissionTable.admission_id, SessionLegacyActivityAdmissionTable.admission_id),
+            )
+            .where(
+              and(
+                eq(SessionLegacyActivityAdmissionTable.activity_id, input.activityID),
+                eq(SessionActivityAdmissionTable.admitted_message_id, assistantData.parentID),
+              ),
+            )
+            .get()
+          const latestAdmission = yield* tx
+            .select({ ordinal: max(SessionLegacyActivityAdmissionTable.ordinal) })
+            .from(SessionLegacyActivityAdmissionTable)
+            .where(eq(SessionLegacyActivityAdmissionTable.activity_id, input.activityID))
+            .get()
+          const pendingAdmission =
+            currentAdmission && typeof latestAdmission?.ordinal === "number"
+              ? currentAdmission.ordinal < latestAdmission.ordinal
+              : false
+          const parts = yield* tx
+            .select()
+            .from(PartTable)
+            .where(
+              and(
+                eq(PartTable.message_id, input.assistantMessageID),
+                eq(PartTable.session_id, SessionID.make(receipt.session_id)),
+              ),
+            )
+            .all()
+          const textParts = parts.filter((part) => part.data.type === "text")
+          const text = textParts.findLast((part) => {
+            if (part.data.type !== "text") return false
+            return (part.data as Omit<SessionV1.TextPart, "id" | "sessionID" | "messageID">).text.trim() !== ""
+          })
+          const hasToolCalls = parts.some((part) => {
+            if (part.data.type !== "tool") return false
+            const data = part.data as Omit<SessionV1.ToolPart, "id" | "sessionID" | "messageID">
+            if (data.metadata?.providerExecuted) return false
+            return !(data.state.status === "error" && data.state.metadata?.interrupted === true)
+          })
+          const state =
+            receipt.provider_state === "indeterminate_after_crash"
+              ? "recovery_required"
+              : receipt.provider_state === "failed"
+                ? receipt.request_error_code === "AbortError"
+                  ? "interrupted"
+                  : "recovery_required"
+                : !assistantData.time.completed || !assistantData.finish
+                  ? "recovery_required"
+                  : assistantData.finish === "tool-calls" ||
+                      assistantData.finish === "length" ||
+                      hasToolCalls ||
+                      pendingAdmission
+                    ? "progress"
+                    : "final"
+          const now = Date.now()
+          const updated = yield* tx
+            .update(SessionActivityProgressTable)
+            .set({
+              text_part_id: text?.id ?? null,
+              state,
+              finish_observed: assistantData.finish ?? receipt.request_error_code ?? null,
+              response_fingerprint: receipt.response_fingerprint,
+              settled_at: now,
+            })
+            .where(
+              and(
+                eq(SessionActivityProgressTable.activity_id, input.activityID),
+                eq(SessionActivityProgressTable.revision, current.revision),
+                eq(SessionActivityProgressTable.state, "provisional"),
+              ),
+            )
+            .returning()
+            .get()
+          if (!updated)
+            return yield* Effect.die(new Error(`activity progress settlement CAS lost: ${input.activityID}`))
+          yield* Effect.forEach(
+            textParts,
+            (part) => {
+              const data = part.data as Omit<SessionV1.TextPart, "id" | "sessionID" | "messageID">
+              return tx
+                .update(PartTable)
+                .set({
+                  data: {
+                    ...data,
+                    metadata: {
+                      ...(data.metadata ?? {}),
+                      deepagent_activity_progress: {
+                        activity_id: input.activityID,
+                        revision: current.revision,
+                        state,
+                      },
+                    },
+                  } as typeof PartTable.$inferInsert.data,
+                })
+                .where(
+                  and(
+                    eq(PartTable.id, part.id),
+                    eq(PartTable.message_id, input.assistantMessageID),
+                    eq(PartTable.session_id, SessionID.make(receipt.session_id)),
+                  ),
+                )
+                .run()
+            },
+            { discard: true },
+          )
+          if (state !== "progress") {
+            const activityState =
+              state === "final" ? "settled" : state === "interrupted" ? "interrupted" : "recovery_required"
+            const terminal = yield* tx
+              .update(SessionLegacyActivityTable)
+              .set({
+                state: activityState,
+                terminal_reason: assistantData.finish ?? receipt.request_error_code ?? state,
+                settled_at: now,
+              })
+              .where(
+                and(
+                  eq(SessionLegacyActivityTable.activity_id, input.activityID),
+                  eq(SessionLegacyActivityTable.state, "active"),
+                ),
+              )
+              .returning({ activityID: SessionLegacyActivityTable.activity_id })
+              .get()
+            if (!terminal)
+              return yield* Effect.die(new Error(`legacy activity settlement CAS lost: ${input.activityID}`))
+          }
+          return progress(updated)
+        }),
+      { behavior: "immediate" },
+    )
+    .pipe(Effect.orDie)
+})
+
+export const recoverActiveActivities = Effect.fn("SessionPromptIntent.recoverActiveActivities")(function* (
+  ownerToken = SessionActivityOwner.processOwnerToken,
+) {
+  const { db } = yield* Database.Service
+  const active = yield* db
+    .select({ activityID: SessionLegacyActivityTable.activity_id })
+    .from(SessionLegacyActivityTable)
+    .where(
+      and(
+        eq(SessionLegacyActivityTable.state, "active"),
+        sql`${SessionLegacyActivityTable.owner_token} != ${ownerToken}`,
+      ),
+    )
+    .all()
+    .pipe(Effect.orDie)
+  yield* Effect.forEach(
+    active,
+    (activity) =>
+      Effect.gen(function* () {
+        const latest = yield* db
+          .select()
+          .from(SessionActivityProgressTable)
+          .where(eq(SessionActivityProgressTable.activity_id, activity.activityID))
+          .orderBy(sql`${SessionActivityProgressTable.revision} DESC`)
+          .get()
+          .pipe(Effect.orDie)
+        const receipt = latest
+          ? yield* db
+              .select({ state: SessionToolRequestReceiptTable.provider_state })
+              .from(SessionToolRequestReceiptTable)
+              .where(eq(SessionToolRequestReceiptTable.receipt_id, latest.provider_receipt_id))
+              .get()
+              .pipe(Effect.orDie)
+          : undefined
+        const settled =
+          latest?.state === "provisional" &&
+          receipt &&
+          ["settled", "failed", "indeterminate_after_crash"].includes(receipt.state)
+            ? yield* settleProgress({
+                activityID: activity.activityID,
+                assistantMessageID: MessageID.make(latest.assistant_message_id),
+              })
+            : undefined
+        if (settled && settled.state !== "progress") return
+        const recoveryProgressState = settled?.state ?? latest?.state
+        const recoveryReason = settled
+          ? "process restarted after settled activity progress"
+          : recoveryProgressState
+            ? `process restarted after activity progress ${recoveryProgressState}`
+            : "process restarted before provider progress admission"
+        yield* db
+          .transaction(
+            (tx) =>
+              Effect.gen(function* () {
+                const now = Date.now()
+                yield* tx
+                  .update(SessionLegacyActivityTable)
+                  .set({
+                    state: "recovery_required",
+                    terminal_reason: recoveryReason,
+                    settled_at: now,
+                  })
+                  .where(
+                    and(
+                      eq(SessionLegacyActivityTable.activity_id, activity.activityID),
+                      eq(SessionLegacyActivityTable.state, "active"),
+                    ),
+                  )
+                  .run()
+                if (!settled && latest?.state === "provisional")
+                  yield* tx
+                    .update(SessionActivityProgressTable)
+                    .set({ state: "recovery_required", finish_observed: "process_restart", settled_at: now })
+                    .where(
+                      and(
+                        eq(SessionActivityProgressTable.activity_id, activity.activityID),
+                        eq(SessionActivityProgressTable.revision, latest.revision),
+                        eq(SessionActivityProgressTable.state, "provisional"),
+                      ),
+                    )
+                    .run()
+              }),
+            { behavior: "immediate" },
+          )
+          .pipe(Effect.orDie)
+      }),
+    { discard: true },
+  )
+  return active.length
+})
+
+export const interruptActivity = Effect.fn("SessionPromptIntent.interruptActivity")(function* (activityID: string) {
+  const { db } = yield* Database.Service
+  yield* db
+    .update(SessionLegacyActivityTable)
+    .set({ state: "interrupted", terminal_reason: "aborted_before_provider_settlement", settled_at: Date.now() })
+    .where(and(eq(SessionLegacyActivityTable.activity_id, activityID), eq(SessionLegacyActivityTable.state, "active")))
+    .run()
+    .pipe(Effect.orDie)
+})
+
+export const retireDisabledSteerActivity = Effect.fn("SessionPromptIntent.retireDisabledSteerActivity")(function* (
+  sessionID: SessionID,
+) {
+  const { db } = yield* Database.Service
+  const activity = yield* db
+    .select({ activityID: SessionLegacyActivityTable.activity_id })
+    .from(SessionLegacyActivityTable)
+    .innerJoin(
+      SessionActivityAdmissionTable,
+      eq(SessionActivityAdmissionTable.admission_id, SessionLegacyActivityTable.trigger_admission_id),
+    )
+    .where(
+      and(
+        eq(SessionLegacyActivityTable.session_id, sessionID),
+        eq(SessionLegacyActivityTable.state, "active"),
+        eq(SessionActivityAdmissionTable.delivery, "steer"),
+      ),
+    )
+    .get()
+    .pipe(Effect.orDie)
+  if (!activity) return false
+  yield* db
+    .update(SessionLegacyActivityTable)
+    .set({
+      state: "interrupted",
+      terminal_reason: "steering_disabled_before_absorption",
+      settled_at: Date.now(),
+    })
+    .where(
+      and(
+        eq(SessionLegacyActivityTable.activity_id, activity.activityID),
+        eq(SessionLegacyActivityTable.state, "active"),
+      ),
+    )
+    .run()
+    .pipe(Effect.orDie)
+  return true
+})
+
+const progress = (row: typeof SessionActivityProgressTable.$inferSelect): Progress => ({
+  activityID: row.activity_id,
+  revision: row.revision,
+  assistantMessageID: MessageID.make(row.assistant_message_id),
+  ...(row.text_part_id ? { textPartID: row.text_part_id } : {}),
+  state: row.state,
 })
 
 export const renew = Effect.fn("SessionPromptIntent.renew")(function* (input: {

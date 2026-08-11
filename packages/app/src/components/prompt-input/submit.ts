@@ -437,10 +437,9 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
     input.onPromptInput?.({ promptInput, optimisticParts: submittedParts.optimisticParts })
     const admission = await input.client.session.promptAsync(promptInput)
     if (!admission.data?.messageID) throw new Error("Prompt admission returned no durable receipt")
-    // The server may mint a different canonical ID for a busy-session steer. The durable event is
-    // authoritative, so remove a mismatched client-keyed placeholder once admission succeeds instead of
-    // leaving it around to render beside the canonical server message.
-    if (admission.data.messageID !== messageID) remove()
+    // A chat steer is only projected into canonical history at the next provider boundary. Keep the
+    // client-keyed placeholder visible until that correlated message.updated event replaces it.
+    if (admission.data.messageID !== messageID && admission.data.delivery !== "steer") remove()
     return true
   } catch (err) {
     batch(() => {

@@ -6,7 +6,6 @@
   nodejs,
   sysctl,
   makeBinaryWrapper,
-  models-dev,
   ripgrep,
   installShellFiles,
   versionCheckHook,
@@ -28,7 +27,6 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     nodejs # for patchShebangs node_modules
     installShellFiles
     makeBinaryWrapper
-    models-dev
     writableTmpDirAsHomeHook
   ];
 
@@ -42,7 +40,6 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     runHook postConfigure
   '';
 
-  env.MODELS_DEV_API_JSON = "${models-dev}/dist/_api.json";
   env.DEEPAGENT_CODE_DISABLE_MODELS_FETCH = true;
   env.DEEPAGENT_CODE_VERSION = finalAttrs.version;
   env.DEEPAGENT_CODE_CHANNEL = "prod";
