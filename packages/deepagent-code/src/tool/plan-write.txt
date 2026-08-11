@@ -8,22 +8,35 @@ the committed document as the authority. A rejected payload is never partially a
 Required protocol fields:
 - operation: exactly one of create, advance, or replan.
 - expected_plan_id and expected_version: both null for create; for advance/replan, copy the exact
-  plan_id and plan_version from the latest plan snapshot/event.
-- goal, steps, and active_step_id: the complete proposed plan, not a patch. active_step_id is null
-  when no step is active.
+  expected_plan_id and expected_version values shown in the latest <plan-status>, successful plan
+  result, or authoritative correction result. Never infer either value from history.
+- goal and steps: goal is required for create/replan. For create/replan, omit active_step_id and mark
+  at most one step status=active; after allocating missing step IDs, the server derives the active
+  ID. Advance may omit goal and active_step_id when the current authoritative values should be
+  retained. Otherwise copy a visible active_step_id and send one or more status/note updates.
 - replan_reason: required and specific for replan; omit it for create/advance.
 
 Operation rules:
-- create is only for a session with no plan. Step IDs may be omitted and are assigned once.
-- advance must preserve the existing plan_id, goal, assumptions, ordered step IDs, titles,
-  acceptance criteria, and assigned agents. It is for status, note, active-step, and evidence
-  progress within the existing contract.
-- replan is an intentional structural revision and must explain why. Do not use it to bypass the
-  version precondition or to erase unresolved work. Suspicious quality regressions are rejected.
+- create is only for a session with no plan. Omit all step IDs; the server assigns them once.
+- advance is a status patch. Preserve the existing plan_id and exact version precondition. Step IDs
+  must be copied exactly from the latest <plan-status> or plan result; never infer them from titles or
+  array positions. Titles, acceptance criteria, assigned agents, goal, and assumptions are
+  server-owned and ignored from the advance payload. Send only status, note, and active-step changes.
+  The server keeps the authoritative step order and identity fields.
+- replan is an intentional structural revision and must explain why. Copy an existing step_id only
+  when that step keeps the same title, acceptance, and assigned agent; the correction payload shows
+  those authoritative values, and omitted acceptance/assigned_agent fields are filled from it. Omit
+  step_id for every new step so the server allocates it. Omit active_step_id and use one active status
+  for server-side derivation. Omit assumptions to retain the current list; send [] only to clear it.
+  Do not use replan to bypass the version precondition or erase unresolved work. Suspicious regressions
+  are rejected.
 - status must be pending, active, done, cancelled, or blocked. A blocked step must include a note.
-  There may be at most one active step, and active_step_id must agree with the statuses.
+  There may be at most one active step. For create/replan the server derives active_step_id; for
+  advance an explicitly supplied active_step_id must agree with the statuses.
 - Do not provide evidence. Validation and runtime integrations attach evidence only after admission.
 
 After a step is finished, call this tool immediately with the next active step and the exact latest
-plan identity/version. Keep the plan small and honest. If a write is rejected, inspect the current
-snapshot and retry once with a corrected complete payload.
+expected_plan_id, expected_version, and step_id values. If any required identity value is unavailable,
+do not guess or call advance/replan. Keep the plan small and honest. If a write is rejected, inspect
+the current snapshot or authoritative parameters in the tool error and retry once with corrected
+status/note fields. Do not repeat an unchanged invalid payload.

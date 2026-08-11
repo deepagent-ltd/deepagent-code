@@ -2,7 +2,7 @@ import { NodeFileSystem } from "@effect/platform-node"
 import { ConfigV1 } from "@deepagent-code/core/v1/config/config"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { Database } from "@deepagent-code/core/database/database"
-import { eq } from "drizzle-orm"
+import { and, eq } from "drizzle-orm"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { WorkspaceV2 } from "@deepagent-code/core/workspace"
 import { FetchHttpClient } from "effect/unstable/http"
@@ -28,7 +28,12 @@ import { Image } from "../../src/image/image"
 import { Question } from "../../src/question"
 import { Todo } from "../../src/session/todo"
 import { Session } from "@/session/session"
-import { SessionMessageTable } from "@deepagent-code/core/session/sql"
+import {
+  SessionHistoryStateTable,
+  MessageTable,
+  SessionMessageTable,
+  SessionPromptEpochMessageTable,
+} from "@deepagent-code/core/session/sql"
 import { LLM } from "../../src/session/llm"
 import { MessageV2 } from "../../src/session/message-v2"
 import { FSUtil } from "@deepagent-code/core/fs-util"
@@ -36,7 +41,7 @@ import { SessionCompaction } from "../../src/session/compaction"
 import { SessionSummary } from "../../src/session/summary"
 import { Instruction } from "../../src/session/instruction"
 import { SessionProcessor } from "../../src/session/processor"
-import { SessionPrompt } from "../../src/session/prompt"
+import { providerResponseFingerprint, recoverProviderReceiptsOnStartup, SessionPrompt } from "../../src/session/prompt"
 import { SessionRevert } from "../../src/session/revert"
 import { SessionRunState } from "../../src/session/run-state"
 import { SessionSteer } from "../../src/session/steer"
@@ -75,8 +80,10 @@ import { ContextFederationReadiness } from "../../src/context-federation/readine
 import { ContextFederationRollout } from "@deepagent-code/core/context-federation/rollout"
 import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
 import { PromptEpoch } from "@/session/prompt-epoch"
+import { SessionPromptEpochTable } from "@/session/prompt-epoch.sql"
 import { SessionToolRequestReceiptTable } from "@/session/tool-request-receipt.sql"
 import { SessionToolArgumentReceiptTable } from "@/session/tool-argument-receipt.sql"
+import { CompactionArtifactTable, CompactionRunTable } from "@/session/compaction-sql"
 
 void Log.init({ print: false })
 
@@ -242,10 +249,12 @@ type PromptLayerOptions = {
   processor?: "blocking"
   flags?: Partial<RuntimeFlags.Info>
   federation?: SessionFederatedContext.Interface
+  plugin?: Plugin.Interface
 }
 
 function makePrompt(input?: PromptLayerOptions) {
   const runtimeFlags = RuntimeFlags.layer({ experimentalEventSystem: true, ...input?.flags })
+  const pluginLayer = input?.plugin ? Layer.succeed(Plugin.Service, input.plugin) : Plugin.defaultLayer
   const deps = Layer.mergeAll(
     Session.defaultLayer,
     Snapshot.defaultLayer,
@@ -254,7 +263,7 @@ function makePrompt(input?: PromptLayerOptions) {
     AgentSvc.defaultLayer,
     Command.defaultLayer,
     Permission.defaultLayer,
-    Plugin.defaultLayer,
+    pluginLayer,
     Config.defaultLayer,
     Auth.defaultLayer,
     ProviderSvc.defaultLayer,
@@ -356,11 +365,45 @@ const it = testEffect(makeHttp())
 const worldStateCompaction = testEffect(
   makeHttp({ flags: { softLandingCompaction: false, worldStateReinjection: true } }),
 )
+const automaticContinuationTrigger: Plugin.Interface["trigger"] = (name, _input, output) =>
+  Effect.sync(() => {
+    if (name === "experimental.compaction.autocontinue") (output as { enabled: boolean }).enabled = true
+    return output
+  })
+const worldStateCompactionContinuation = testEffect(
+  makeHttp({
+    flags: { softLandingCompaction: false, worldStateReinjection: true },
+    plugin: Plugin.Service.of({
+      trigger: automaticContinuationTrigger,
+      list: () => Effect.succeed([]),
+      init: () => Effect.void,
+    }),
+  }),
+)
 const worldStateCompactionDisabled = testEffect(
   makeHttp({ flags: { softLandingCompaction: false, worldStateReinjection: false } }),
 )
 const noLLMServer = testEffect(makeHttpNoLLMServer())
 const raceNoLLMServer = testEffect(makeHttpNoLLMServer({ processor: "blocking" }))
+const mutatingProviderHistoryTrigger: Plugin.Interface["trigger"] = (name, _input, output) =>
+  Effect.sync(() => {
+    if (name !== "experimental.chat.messages.transform") return output
+    const messages = (output as { messages: SessionV1.WithParts[] }).messages
+    const user = messages.findLast((message) => message.info.role === "user")
+    const text = user?.parts.find((part) => part.type === "text")
+    if (user) user.info.id = MessageID.make("msg_plugin_projection_only")
+    if (text?.type === "text") text.text = "provider-only transformed text"
+    return output
+  })
+const providerHistoryTransform = testEffect(
+  makeHttp({
+    plugin: Plugin.Service.of({
+      trigger: mutatingProviderHistoryTrigger,
+      list: () => Effect.succeed([]),
+      init: () => Effect.void,
+    }),
+  }),
+)
 const federationTrace: string[] = []
 const federationAdapter = {
   recover: () =>
@@ -791,6 +834,12 @@ noLLMServer.instance("prepareTaskInput materializes a stable envelope without pe
     expect(prepared.info.role).toBe("user")
     expect(prepared.info.id).toBe(messageID)
     expect(prepared.info.time.created).toBe(123_456)
+    if (prepared.info.role === "user") {
+      expect(SessionProcessor.planProtocolActivityID(prepared.info.metadata)).toBe(messageID)
+      expect(prepared.info.metadata).toMatchObject({
+        deepagent: { task_admission: { run_id: "run_prepare_test" } },
+      })
+    }
     expect(prepared.parts).toHaveLength(2)
     expect(prepared.parts.every((part) => part.messageID === messageID)).toBe(true)
     expect(yield* sessions.messages({ sessionID: chat.id })).toEqual([])
@@ -870,6 +919,93 @@ it.instance("loop calls LLM and returns assistant message", () =>
   }),
 )
 
+it.instance("fingerprints the final persisted structured assistant", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({
+      title: "Structured response receipt",
+      permission: [{ permission: "*", pattern: "*", action: "allow" }],
+    })
+    yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      noReply: true,
+      format: {
+        type: "json_schema",
+        schema: {
+          type: "object",
+          properties: { answer: { type: "number" } },
+          required: ["answer"],
+        },
+        retryCount: 1,
+      },
+      parts: [{ type: "text", text: "Return the answer." }],
+    })
+    yield* llm.tool("StructuredOutput", { answer: 4 })
+
+    const result = yield* prompt.loop({ sessionID: chat.id })
+    const persisted = (yield* sessions.messages({ sessionID: chat.id })).find(
+      (message) => message.info.id === result.info.id,
+    )
+    const { db } = yield* Database.Service
+    const receipt = yield* db
+      .select()
+      .from(SessionToolRequestReceiptTable)
+      .where(eq(SessionToolRequestReceiptTable.session_id, chat.id))
+      .get()
+      .pipe(Effect.orDie)
+
+    expect(result.info.role).toBe("assistant")
+    if (result.info.role === "assistant") {
+      expect(result.info.structured).toEqual({ answer: 4 })
+      expect(result.info.finish).toBe("tool-calls")
+    }
+    expect(persisted).toBeDefined()
+    if (persisted) expect(receipt?.response_fingerprint).toBe(providerResponseFingerprint(persisted))
+  }),
+)
+
+providerHistoryTransform.instance("isolates provider message transforms from durable history authority", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({
+      title: "Provider transform isolation",
+      permission: [{ permission: "*", pattern: "*", action: "allow" }],
+    })
+    yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "durable original text" }],
+    })
+    const original = (yield* sessions.messages({ sessionID: chat.id })).findLast(
+      (message) => message.info.role === "user",
+    )
+    expect(original).toBeDefined()
+    if (!original) return
+    yield* llm.text("transformed")
+
+    const result = yield* prompt.loop({ sessionID: chat.id })
+    const persisted = yield* sessions.messages({ sessionID: chat.id })
+    const request = (yield* llm.hits)[0]
+
+    expect(JSON.stringify(request?.body)).toContain("provider-only transformed text")
+    expect(JSON.stringify(request?.body)).not.toContain("durable original text")
+    expect(persisted.some((message) => message.info.id === "msg_plugin_projection_only")).toBe(false)
+    expect(
+      persisted.some((message) =>
+        message.parts.some((part) => part.type === "text" && part.text === "durable original text"),
+      ),
+    ).toBe(true)
+    expect(result.info.role).toBe("assistant")
+    if (result.info.role === "assistant") expect(result.info.parentID).toBe(original.info.id)
+  }),
+)
+
 it.instance("rejects an oversized unknown-limit request before provider dispatch", () => {
   const previous = process.env["DEEPAGENT_CODE_UNKNOWN_CONTEXT_GUARD"]
   process.env["DEEPAGENT_CODE_UNKNOWN_CONTEXT_GUARD"] = "1000"
@@ -903,8 +1039,13 @@ it.instance("rejects an oversized unknown-limit request before provider dispatch
       .get()
       .pipe(Effect.orDie)
     expect(receipt?.request_state).toBe("rejected")
+    expect(receipt?.provider_state).toBe("failed")
     expect(receipt?.request_error_code).toBe("context_limit_unknown")
     expect(receipt?.context_limit_provenance).toBe("host_guard")
+    expect(receipt?.request_input_hash).toHaveLength(64)
+    expect(receipt?.final_request_hash).toBeNull()
+    expect(receipt?.response_fingerprint).toHaveLength(64)
+    expect(receipt?.terminal_at).toBeNumber()
   }).pipe(
     Effect.ensuring(
       Effect.sync(() => {
@@ -915,6 +1056,355 @@ it.instance("rejects an oversized unknown-limit request before provider dispatch
   )
 })
 
+it.instance("quarantines corrupt committed history before provider dispatch", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const parent = yield* sessions.create({ title: "History authority corruption" })
+    yield* prompt.prompt({
+      sessionID: parent.id,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "must never reach the provider after corruption" }],
+    })
+    const child = yield* sessions.fork({
+      sessionID: parent.id,
+      intentID: "prompt-history-corruption-fork",
+    })
+    const { db } = yield* Database.Service
+    yield* db
+      .delete(SessionPromptEpochMessageTable)
+      .where(eq(SessionPromptEpochMessageTable.session_id, child.id))
+      .run()
+      .pipe(Effect.orDie)
+
+    const result = yield* prompt.loop({ sessionID: child.id }).pipe(Effect.exit)
+    expect(Exit.isFailure(result)).toBe(true)
+    expect(yield* llm.calls).toBe(0)
+    expect(
+      yield* db
+        .select({ state: SessionHistoryStateTable.state, reason: SessionHistoryStateTable.reason })
+        .from(SessionHistoryStateTable)
+        .where(eq(SessionHistoryStateTable.session_id, child.id))
+        .get()
+        .pipe(Effect.orDie),
+    ).toMatchObject({ state: "recovery_required", reason: expect.stringContaining("membership is incomplete") })
+    expect(
+      yield* db
+        .select({
+          authority_state: SessionPromptEpochTable.authority_state,
+          recovery_reason: SessionPromptEpochTable.recovery_reason,
+        })
+        .from(SessionPromptEpochTable)
+        .where(eq(SessionPromptEpochTable.session_id, child.id))
+        .get()
+        .pipe(Effect.orDie),
+    ).toMatchObject({
+      authority_state: "recovery_required",
+      recovery_reason: expect.stringContaining("membership is incomplete"),
+    })
+  }),
+)
+
+it.instance("quarantines a missing committed replacement message before provider dispatch", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const parent = yield* sessions.create({ title: "Missing committed replacement message" })
+    yield* prompt.prompt({
+      sessionID: parent.id,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "replacement message fixture" }],
+    })
+    const child = yield* sessions.fork({
+      sessionID: parent.id,
+      intentID: "prompt-history-missing-message-fork",
+    })
+    const { db } = yield* Database.Service
+    const victim = yield* db
+      .select({ message_id: SessionPromptEpochMessageTable.message_id })
+      .from(SessionPromptEpochMessageTable)
+      .where(eq(SessionPromptEpochMessageTable.session_id, child.id))
+      .get()
+      .pipe(Effect.orDie)
+    expect(victim).toBeDefined()
+    if (!victim) return
+    yield* db
+      .delete(MessageTable)
+      .where(and(eq(MessageTable.session_id, child.id), eq(MessageTable.id, victim.message_id)))
+      .run()
+      .pipe(Effect.orDie)
+
+    const result = yield* prompt.loop({ sessionID: child.id }).pipe(Effect.exit)
+    expect(Exit.isFailure(result)).toBe(true)
+    expect(yield* llm.calls).toBe(0)
+    expect(
+      yield* db
+        .select({ state: SessionHistoryStateTable.state, reason: SessionHistoryStateTable.reason })
+        .from(SessionHistoryStateTable)
+        .where(eq(SessionHistoryStateTable.session_id, child.id))
+        .get()
+        .pipe(Effect.orDie),
+    ).toMatchObject({ state: "recovery_required", reason: expect.stringContaining("membership is incomplete") })
+    expect(
+      yield* db
+        .select({
+          authority_state: SessionPromptEpochTable.authority_state,
+          recovery_reason: SessionPromptEpochTable.recovery_reason,
+        })
+        .from(SessionPromptEpochTable)
+        .where(eq(SessionPromptEpochTable.session_id, child.id))
+        .get()
+        .pipe(Effect.orDie),
+    ).toMatchObject({
+      authority_state: "recovery_required",
+      recovery_reason: expect.stringContaining("membership is incomplete"),
+    })
+  }),
+)
+
+it.instance("recovers only compaction continuations that were durably not dispatched", () =>
+  Effect.gen(function* () {
+    const sessions = yield* Session.Service
+    const compaction = yield* SessionCompaction.Service
+    const { db } = yield* Database.Service
+
+    const seedContinuation = (input: { title: string; state: "admitted" | "dispatching" | "indeterminate" }) =>
+      Effect.gen(function* () {
+        const session = yield* sessions.create({ title: input.title })
+        const continuation = yield* user(session.id, `continuation-${input.state}`)
+        const assistant = yield* sessions.updateMessage({
+          id: MessageID.ascending(),
+          role: "assistant",
+          parentID: continuation.id,
+          sessionID: session.id,
+          mode: "build",
+          agent: "build",
+          cost: 0,
+          path: { cwd: "/tmp", root: "/tmp" },
+          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          modelID: ref.modelID,
+          providerID: ref.providerID,
+          time: { created: Date.now() },
+        })
+        const authority = yield* MessageV2.promptHistoryProjectionEffect(session.id)
+        const runID = `continuation-recovery-${input.state}`
+        const receiptID = `receipt-recovery-${input.state}`
+        const now = Date.now()
+        yield* db
+          .insert(CompactionRunTable)
+          .values({
+            run_id: runID,
+            session_id: session.id,
+            from_prompt_epoch: authority.epoch,
+            target_prompt_epoch: authority.epoch,
+            trigger: "manual",
+            state: "committed",
+            created_at: now,
+            committed_at: now,
+            source_window_id: authority.window.windowID,
+            source_effective_history_hash: authority.effectiveHistoryHash,
+            source_message_count: authority.messages.length,
+            source_projection_version: authority.projectionVersion,
+            continuation_wakeup_at: now,
+            continuation_state: input.state,
+            continuation_receipt_id: receiptID,
+            continuation_admitted_at: now,
+            continuation_dispatching_at: input.state === "admitted" ? null : now,
+            continuation_terminal_at: input.state === "indeterminate" ? now : null,
+            continuation_error_code:
+              input.state === "indeterminate" ? "legacy_terminal_without_response_fingerprint" : null,
+          })
+          .run()
+          .pipe(Effect.orDie)
+        yield* db
+          .insert(CompactionArtifactTable)
+          .values({
+            artifact_id: `artifact-recovery-${input.state}`,
+            run_id: runID,
+            session_id: session.id,
+            message_id: continuation.id,
+            kind: "continue",
+            state: "committed",
+            created_at: now,
+            committed_at: now,
+          })
+          .run()
+          .pipe(Effect.orDie)
+        yield* db
+          .insert(SessionToolRequestReceiptTable)
+          .values({
+            receipt_id: receiptID,
+            request_ordinal: 1,
+            session_id: session.id,
+            user_message_id: continuation.id,
+            assistant_message_id: assistant.id,
+            provider_id: "test",
+            model_id: "test-model",
+            protocol: "chat",
+            registry_tool_ids: [],
+            permission_filtered_tool_ids: [],
+            final_offered_tool_ids: [],
+            call_ids: [],
+            prompt_epoch: authority.epoch,
+            prompt_window_id: authority.window.windowID,
+            effective_history_hash: authority.effectiveHistoryHash,
+            request_input_hash: "request-input-hash",
+            final_request_hash: input.state === "admitted" ? null : "final-request-hash",
+            provider_state:
+              input.state === "indeterminate" ? "settled" : input.state === "dispatching" ? "dispatching" : "prepared",
+            adapter_prepared_at: now,
+            dispatching_at: input.state === "admitted" ? null : now,
+            terminal_at: input.state === "indeterminate" ? now : null,
+            owner_token: "stale-process-owner",
+            request_state: input.state === "admitted" ? "prepared" : "dispatched",
+            created_at: now,
+          })
+          .run()
+          .pipe(Effect.orDie)
+        return { session, runID, receiptID, assistant }
+      })
+
+    const safe = yield* seedContinuation({ title: "Safe continuation recovery", state: "admitted" })
+    const ambiguous = yield* seedContinuation({ title: "Ambiguous continuation recovery", state: "dispatching" })
+    const incomplete = yield* seedContinuation({
+      title: "Incomplete terminal continuation recovery",
+      state: "indeterminate",
+    })
+    const unadmittedSession = yield* sessions.create({ title: "Unadmitted continuation recovery" })
+    const unadmittedContinuation = yield* user(unadmittedSession.id, "continuation-pending")
+    const unadmittedAuthority = yield* MessageV2.promptHistoryProjectionEffect(unadmittedSession.id)
+    const unadmittedAssistant = yield* sessions.updateMessage({
+      id: MessageID.ascending(),
+      role: "assistant",
+      parentID: unadmittedContinuation.id,
+      sessionID: unadmittedSession.id,
+      mode: "build",
+      agent: "build",
+      cost: 0,
+      path: { cwd: "/tmp", root: "/tmp" },
+      tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      modelID: ref.modelID,
+      providerID: ref.providerID,
+      time: { created: Date.now() },
+    })
+    yield* db
+      .insert(CompactionRunTable)
+      .values({
+        run_id: "continuation-recovery-pending",
+        session_id: unadmittedSession.id,
+        from_prompt_epoch: unadmittedAuthority.epoch,
+        target_prompt_epoch: unadmittedAuthority.epoch,
+        trigger: "manual",
+        state: "committed",
+        created_at: Date.now(),
+        committed_at: Date.now(),
+        source_window_id: unadmittedAuthority.window.windowID,
+        source_effective_history_hash: unadmittedAuthority.effectiveHistoryHash,
+        source_message_count: unadmittedAuthority.messages.length,
+        source_projection_version: unadmittedAuthority.projectionVersion,
+        continuation_state: "pending",
+      })
+      .run()
+      .pipe(Effect.orDie)
+    yield* db
+      .insert(CompactionArtifactTable)
+      .values({
+        artifact_id: "artifact-recovery-pending",
+        run_id: "continuation-recovery-pending",
+        session_id: unadmittedSession.id,
+        message_id: unadmittedContinuation.id,
+        kind: "continue",
+        state: "committed",
+        created_at: Date.now(),
+        committed_at: Date.now(),
+      })
+      .run()
+      .pipe(Effect.orDie)
+    yield* recoverProviderReceiptsOnStartup()
+
+    const recoveredUnadmittedAssistant = (yield* sessions.messages({ sessionID: unadmittedSession.id })).find(
+      (message) => message.info.id === unadmittedAssistant.id,
+    )
+    expect(recoveredUnadmittedAssistant?.info).toMatchObject({
+      finish: "error",
+      time: { completed: expect.any(Number) },
+    })
+    expect(
+      (yield* compaction.recoverableContinuations(unadmittedSession.projectID)).map((item) => item.runID),
+    ).toContain("continuation-recovery-pending")
+
+    const safeRun = yield* db
+      .select()
+      .from(CompactionRunTable)
+      .where(eq(CompactionRunTable.run_id, safe.runID))
+      .get()
+      .pipe(Effect.orDie)
+    const safeReceipt = yield* db
+      .select()
+      .from(SessionToolRequestReceiptTable)
+      .where(eq(SessionToolRequestReceiptTable.receipt_id, safe.receiptID))
+      .get()
+      .pipe(Effect.orDie)
+    expect(safeRun?.continuation_state).toBe("pending")
+    expect(safeRun?.continuation_receipt_id).toBeNull()
+    expect(safeReceipt?.provider_state).toBe("failed")
+    expect(safeReceipt?.request_error_code).toBe("provider_not_dispatched_before_process_restart")
+    expect((yield* compaction.recoverableContinuations(safe.session.projectID)).map((item) => item.runID)).toContain(
+      safe.runID,
+    )
+    expect(Exit.isSuccess(yield* sessions.assertRunnable(safe.session.id).pipe(Effect.exit))).toBe(true)
+
+    const ambiguousRun = yield* db
+      .select()
+      .from(CompactionRunTable)
+      .where(eq(CompactionRunTable.run_id, ambiguous.runID))
+      .get()
+      .pipe(Effect.orDie)
+    const ambiguousReceipt = yield* db
+      .select()
+      .from(SessionToolRequestReceiptTable)
+      .where(eq(SessionToolRequestReceiptTable.receipt_id, ambiguous.receiptID))
+      .get()
+      .pipe(Effect.orDie)
+    const history = yield* db
+      .select()
+      .from(SessionHistoryStateTable)
+      .where(eq(SessionHistoryStateTable.session_id, ambiguous.session.id))
+      .get()
+      .pipe(Effect.orDie)
+    expect(ambiguousRun?.continuation_state).toBe("indeterminate")
+    expect(ambiguousReceipt?.provider_state).toBe("indeterminate_after_crash")
+    expect(history).toMatchObject({
+      state: "recovery_required",
+      reason: "provider outcome is unknown after process restart",
+    })
+    expect(
+      (yield* compaction.recoverableContinuations(ambiguous.session.projectID)).some(
+        (item) => item.runID === ambiguous.runID,
+      ),
+    ).toBe(false)
+    expect(Exit.isFailure(yield* sessions.assertRunnable(ambiguous.session.id).pipe(Effect.exit))).toBe(true)
+    expect(
+      yield* db
+        .select({ state: SessionHistoryStateTable.state })
+        .from(SessionHistoryStateTable)
+        .where(eq(SessionHistoryStateTable.session_id, incomplete.session.id))
+        .get()
+        .pipe(Effect.orDie),
+    ).toEqual({ state: "recovery_required" })
+    expect(
+      (yield* sessions.messages({ sessionID: incomplete.session.id })).find(
+        (message) => message.info.id === incomplete.assistant.id,
+      )?.info,
+    ).toMatchObject({ finish: "error", time: { completed: expect.any(Number) } })
+    expect(Exit.isFailure(yield* sessions.assertRunnable(incomplete.session.id).pipe(Effect.exit))).toBe(true)
+  }),
+)
+
 worldStateCompaction.instance(
   "injects World State only after an automatic compaction is durable",
   () =>
@@ -923,7 +1413,7 @@ worldStateCompaction.instance(
       const prompt = yield* SessionPrompt.Service
       const sessions = yield* Session.Service
       const chat = yield* sessions.create({ title: "World State compaction ordering" })
-      const marker = `world-state-${crypto.randomUUID()}.txt`
+      const marker = `world-state-${crypto.randomUUID()}.ts`
       const seeded = yield* seed(chat.id, { finish: "stop" })
       seeded.assistant.tokens.input = 95_000
       seeded.assistant.tokens.total = 95_000
@@ -943,20 +1433,184 @@ worldStateCompaction.instance(
         ),
       )
       const inputs = yield* llm.inputs
+      const projectedWorldState = yield* MessageV2.promptWorldStateProjectionEffect(chat.id)
+      const { db } = yield* Database.Service
+      const receipt = yield* db
+        .select()
+        .from(SessionToolRequestReceiptTable)
+        .where(eq(SessionToolRequestReceiptTable.session_id, chat.id))
+        .get()
+        .pipe(Effect.orDie)
+      const compactionRun = yield* db
+        .select()
+        .from(CompactionRunTable)
+        .where(eq(CompactionRunTable.session_id, chat.id))
+        .get()
+        .pipe(Effect.orDie)
 
       expect(result.info.role).toBe("assistant")
       expect(compaction?.parts.find((part) => part.type === "compaction")?.auto).toBe(true)
       expect(summary?.info.role === "assistant" ? summary.info.parentID : undefined).toBe(compaction?.info.id)
-      expect(worldState?.info.id && summary?.info.id ? worldState.info.id > summary.info.id : false).toBe(true)
-      expect(JSON.stringify(inputs[0]?.messages)).not.toContain(marker)
-      expect(JSON.stringify(inputs[1]?.messages)).toContain(marker)
+      expect(worldState).toBeUndefined()
+      expect(projectedWorldState?.rendered).toContain("<world-state>")
+      expect(inputs.some((input) => JSON.stringify(input.messages).includes("<world-state>"))).toBe(true)
+      expect(receipt?.prompt_epoch).toBe(1)
+      expect(receipt?.prompt_window_id).toStartWith("win_")
+      expect(receipt?.effective_history_hash).toStartWith("eh1_")
+      expect(receipt?.world_state_baseline_hash).toStartWith("wsb1_")
+      expect(receipt?.prompt_cache_key).toBeNull()
+      expect(receipt?.provider_state).toBe("settled")
+      expect(receipt?.request_input_hash).toHaveLength(64)
+      expect(receipt?.final_request_hash).toHaveLength(64)
+      expect(receipt?.provider_request_hash).toHaveLength(64)
+      expect(receipt?.provider_request_hash).toBe(receipt?.final_request_hash)
+      expect(receipt?.adapter_prepared_at).toBeNumber()
+      expect(receipt?.dispatching_at).toBeNumber()
+      expect(receipt?.streaming_at).toBeNumber()
+      expect(receipt?.terminal_at).toBeNumber()
+      expect(receipt?.response_fingerprint).toHaveLength(64)
+      expect(receipt?.owner_token).toStartWith(`${process.pid}:`)
+      expect(receipt?.response_chain_reuse_decision).toBe("not_supported")
+      expect(receipt?.response_chain_refusal_reason).toBe("provider_path_not_stateful")
+      expect(compactionRun?.continuation_state).toBe("settled")
+      expect(compactionRun?.continuation_receipt_id).toBe(receipt?.receipt_id)
+      expect(compactionRun?.continuation_admitted_at).toBeNumber()
+      expect(compactionRun?.continuation_dispatching_at).toBeNumber()
+      expect(compactionRun?.continuation_terminal_at).toBeNumber()
+      expect(compactionRun?.continuation_error_code).toBeNull()
+    }),
+  { git: true },
+  30_000,
+)
+
+worldStateCompactionContinuation.instance(
+  "does not readmit a settled compaction continuation on a later tool-result turn",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const { db } = yield* Database.Service
+      const chat = yield* sessions.create({
+        title: "Compaction continuation tool result",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      const seeded = yield* seed(chat.id, { finish: "stop" })
+      seeded.assistant.tokens.input = 95_000
+      seeded.assistant.tokens.total = 95_000
+      yield* sessions.updateMessage(seeded.assistant)
+      yield* user(chat.id, "Compact, inspect text files, then finish.")
+      yield* llm.text("## Progress\n- prior context compacted")
+      yield* llm.tool("glob", { pattern: "**/*.txt" })
+      yield* llm.text("continuation complete")
+
+      const result = yield* prompt.loop({ sessionID: chat.id })
+      const run = yield* db
+        .select()
+        .from(CompactionRunTable)
+        .where(eq(CompactionRunTable.session_id, chat.id))
+        .get()
+        .pipe(Effect.orDie)
+      const receipts = (yield* db
+        .select()
+        .from(SessionToolRequestReceiptTable)
+        .where(eq(SessionToolRequestReceiptTable.session_id, chat.id))
+        .all()
+        .pipe(Effect.orDie)).toSorted((left, right) => left.request_ordinal - right.request_ordinal)
+
+      expect(result.info.role).toBe("assistant")
+      expect(result.parts.some((part) => part.type === "text" && part.text === "continuation complete")).toBe(true)
+      expect(yield* llm.calls).toBe(3)
+      expect(receipts).toHaveLength(2)
+      expect(receipts.map((receipt) => receipt.provider_state)).toEqual(["settled", "settled"])
+      expect(run?.continuation_state).toBe("settled")
+      expect(run?.continuation_receipt_id).toBe(receipts[0]?.receipt_id)
+      expect(run?.continuation_receipt_id).not.toBe(receipts[1]?.receipt_id)
+    }),
+  { git: true },
+  30_000,
+)
+
+worldStateCompaction.instance(
+  "holds a concurrent steer until compaction commits and materializes it once in the new epoch",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const gate = yield* Deferred.make<void>()
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const steerBuffer = yield* SessionSteer.Service
+      const compaction = yield* SessionCompaction.Service
+      const epochs = yield* PromptEpoch.Service
+      const chat = yield* sessions.create({ title: "Compaction steer ordering" })
+      const seeded = yield* seed(chat.id, { finish: "stop" })
+      seeded.assistant.tokens.input = 95_000
+      seeded.assistant.tokens.total = 95_000
+      yield* sessions.updateMessage(seeded.assistant)
+      yield* user(chat.id, "Start an automatic compaction before continuing.")
+      yield* llm.hold("## Progress\n- durable summary", deferredAsPromise(gate))
+      yield* llm.text("steer handled once")
+
+      const running = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
+      yield* llm.wait(1)
+      const steerID = MessageID.ascending()
+      const admitted = yield* prompt.promptOrSteer({
+        sessionID: chat.id,
+        messageID: steerID,
+        agent: "build",
+        model: ref,
+        parts: [{ type: "text", text: "CONCURRENT_STEER_EXACTLY_ONCE" }],
+      })
+
+      expect(admitted.kind).toBe("steer")
+      if (admitted.kind !== "steer") return
+      const durableSteerID = MessageID.make(admitted.admitted.id)
+      expect(yield* compaction.hasPending(chat.id)).toBe(true)
+      expect(yield* steerBuffer.hasPending(chat.id)).toBe(true)
+      expect((yield* epochs.getActive(chat.id))?.epoch).toBe(0)
+      expect(
+        (yield* sessions.messages({ sessionID: chat.id })).some((message) => message.info.id === durableSteerID),
+      ).toBe(false)
+
+      yield* Deferred.succeed(gate, void 0)
+      yield* Fiber.join(running)
+
+      expect(yield* compaction.hasPending(chat.id)).toBe(false)
+      expect(yield* steerBuffer.hasPending(chat.id)).toBe(false)
+      expect((yield* epochs.getActive(chat.id))?.epoch).toBe(1)
+      const physical = yield* sessions.messages({ sessionID: chat.id })
+      expect(physical.filter((message) => message.info.id === durableSteerID)).toHaveLength(1)
+      const continuation = physical.find(
+        (message) =>
+          message.info.role === "user" &&
+          message.parts.some((part) => part.type === "text" && part.metadata?.compaction_continue === true),
+      )
+      const materializedSteer = physical.find((message) => message.info.id === durableSteerID)
+      expect(continuation?.info.role).toBe("user")
+      expect(materializedSteer?.info.role).toBe("user")
+      if (continuation?.info.role === "user" && materializedSteer?.info.role === "user") {
+        expect(SessionProcessor.planProtocolActivityID(materializedSteer.info.metadata)).toBe(
+          SessionProcessor.planProtocolActivityID(continuation.info.metadata),
+        )
+      }
+      const projection = yield* MessageV2.promptHistoryProjectionEffect(chat.id)
+      expect(projection.messages.filter((message) => message.info.id === durableSteerID)).toHaveLength(1)
+      const inputs = yield* llm.inputs
+      expect(inputs).toHaveLength(2)
+      expect(JSON.stringify(inputs[0]?.messages)).not.toContain("CONCURRENT_STEER_EXACTLY_ONCE")
+      const userMessages = (Array.isArray(inputs[1]?.messages) ? inputs[1].messages : []).filter((message: unknown) => {
+        if (!message || typeof message !== "object") return false
+        const value = message as Record<string, unknown>
+        return value.role === "user" && value.content === "CONCURRENT_STEER_EXACTLY_ONCE"
+      })
+      expect(userMessages).toHaveLength(1)
     }),
   { git: true },
   30_000,
 )
 
 worldStateCompactionDisabled.instance(
-  "does not recover World State when reinjection is disabled",
+  "keeps a durable compaction baseline when summary narrowing is disabled",
   () =>
     Effect.gen(function* () {
       const { dir, llm } = yield* useServerConfig(providerCfg)
@@ -976,6 +1630,8 @@ worldStateCompactionDisabled.instance(
       yield* prompt.loop({ sessionID: chat.id })
       const messages = yield* sessions.messages({ sessionID: chat.id })
       const inputs = yield* llm.inputs
+      const projection = yield* MessageV2.promptHistoryProjectionEffect(chat.id)
+      const worldState = yield* MessageV2.promptWorldStateProjectionEffect(chat.id)
 
       expect(messages.some((message) => message.parts.some((part) => part.type === "compaction"))).toBe(true)
       expect(
@@ -983,7 +1639,9 @@ worldStateCompactionDisabled.instance(
           message.parts.some((part) => part.type === "text" && part.synthetic && part.text.includes("<world-state>")),
         ),
       ).toBe(false)
-      expect(JSON.stringify(inputs)).not.toContain(marker)
+      expect(projection.worldStateBaselineHash).toBe(worldState?.hash)
+      expect(worldState?.windowID).toBe(projection.window.windowID)
+      expect(JSON.stringify(inputs)).toContain(marker)
     }),
   { git: true },
   30_000,
@@ -1275,6 +1933,7 @@ it.instance("loop continues when finish is tool-calls", () =>
     })
     yield* llm.tool("first", { value: "first" })
     yield* llm.text("second")
+    const initialAuthority = yield* MessageV2.promptHistoryProjectionEffect(session.id)
 
     const result = yield* prompt.loop({ sessionID: session.id })
     expect(yield* llm.calls).toBe(2)
@@ -1298,13 +1957,35 @@ it.instance("loop continues when finish is tool-calls", () =>
     expect(receipts[0]?.final_offered_tool_ids.every((toolID) => receipts[0]?.registry_tool_ids.includes(toolID))).toBe(
       true,
     )
-    expect(receipts[0]?.permission_filtered_tool_ids).toEqual(receipts[0]?.final_offered_tool_ids)
+    expect(
+      receipts[0]?.final_offered_tool_ids.every((toolID) => receipts[0]?.permission_filtered_tool_ids.includes(toolID)),
+    ).toBe(true)
+    expect(receipts[0]?.permission_filtered_tool_ids).toContain("invalid")
+    expect(receipts[0]?.final_offered_tool_ids).not.toContain("invalid")
     expect(receipts[0]?.final_offered_tool_ids).not.toContain("first")
     expect(receipts[0]?.tool_definition_hash).toHaveLength(64)
     expect(receipts[0]?.estimated_input_tokens).toBeGreaterThan(0)
     expect(receipts[0]?.physical_input_budget).toBeGreaterThan(receipts[0]?.estimated_input_tokens ?? 0)
     expect(receipts[0]?.reserved_output_tokens).toBeGreaterThan(0)
     expect(receipts[0]?.context_limit_provenance).toBe("model_limit")
+    expect(receipts[0]?.prompt_epoch).toBe(0)
+    expect(receipts[0]?.prompt_window_id).toStartWith("win_")
+    expect(receipts[0]?.effective_history_hash).toStartWith("eh1_")
+    expect(receipts[0]?.effective_history_hash).toBe(initialAuthority.effectiveHistoryHash)
+    expect(receipts[0]?.world_state_baseline_hash).toBeNull()
+    expect(receipts[0]?.prompt_cache_key).toBeNull()
+    expect(receipts.every((receipt) => receipt.provider_state === "settled")).toBe(true)
+    expect(receipts.every((receipt) => receipt.request_input_hash?.length === 64)).toBe(true)
+    expect(receipts.every((receipt) => receipt.final_request_hash?.length === 64)).toBe(true)
+    expect(receipts[0]?.provider_request_hash).toHaveLength(64)
+    expect(receipts[0]?.provider_request_hash).toBe(receipts[0]?.final_request_hash)
+    expect(receipts.every((receipt) => typeof receipt.adapter_prepared_at === "number")).toBe(true)
+    expect(receipts.every((receipt) => typeof receipt.dispatching_at === "number")).toBe(true)
+    expect(receipts.every((receipt) => typeof receipt.streaming_at === "number")).toBe(true)
+    expect(receipts.every((receipt) => typeof receipt.terminal_at === "number")).toBe(true)
+    expect(receipts.every((receipt) => receipt.response_fingerprint?.length === 64)).toBe(true)
+    expect(receipts[0]?.response_chain_reuse_decision).toBe("not_supported")
+    expect(receipts[0]?.response_chain_refusal_reason).toBe("provider_path_not_stateful")
     expect(receipts[0]?.call_ids).toHaveLength(1)
     expect(receipts[1]?.call_ids).toEqual([])
     const argumentReceipts = (yield* db
@@ -1396,7 +2077,7 @@ it.instance("loop continues (not exits) when finish is length: injects a continu
     // Seed an assistant that was cut off at the output ceiling (finish === "length"), then queue the
     // continuation the re-prompt will consume. Without output soft-landing this would exit immediately
     // like a "stop" finish (0 LLM calls); with it ON the loop injects a continue nudge and re-prompts.
-    yield* seed(session.id, { finish: "length" })
+    const seeded = yield* seed(session.id, { finish: "length" })
     yield* llm.text("...continued to the end.")
 
     const result = yield* prompt.loop({ sessionID: session.id })
@@ -1408,10 +2089,13 @@ it.instance("loop continues (not exits) when finish is length: injects a continu
 
     // A synthetic continue-nudge user message was injected before the re-prompt.
     const msgs = yield* sessions.messages({ sessionID: session.id })
-    const injected = msgs.some((m) =>
+    const injected = msgs.find((m) =>
       m.parts.some((p) => p.type === "text" && p.synthetic === true && p.text.includes("输出长度上限")),
     )
-    expect(injected).toBe(true)
+    expect(injected).toBeDefined()
+    expect(
+      SessionProcessor.planProtocolActivityID(injected?.info.role === "user" ? injected.info.metadata : undefined),
+    ).toBe(seeded.user.id)
   }),
 )
 
@@ -1814,6 +2498,20 @@ it.instance(
         if (info.role === "assistant") {
           expect(info.error?.name).toBe("MessageAbortedError")
         }
+        const persisted = (yield* sessions.messages({ sessionID: chat.id })).find(
+          (message) => message.info.id === info.id,
+        )
+        const { db } = yield* Database.Service
+        const receipt = yield* db
+          .select()
+          .from(SessionToolRequestReceiptTable)
+          .where(eq(SessionToolRequestReceiptTable.session_id, chat.id))
+          .get()
+          .pipe(Effect.orDie)
+        expect(receipt?.provider_state).toBe("failed")
+        expect(receipt?.terminal_at).toBeNumber()
+        expect(persisted).toBeDefined()
+        if (persisted) expect(receipt?.response_fingerprint).toBe(providerResponseFingerprint(persisted))
       }
     }),
   15_000,

@@ -161,6 +161,8 @@ function ok<T>(data: T) {
   })
 }
 
+const promptAdmission = { messageID: "msg-test-admitted", delivery: "turn" as const }
+
 function sse(stream: EventStream) {
   return Promise.resolve({ stream })
 }
@@ -432,7 +434,7 @@ function sdk(
   const subscribe: OpencodeClient["event"]["subscribe"] = input.subscribe ?? (() => sse(input.stream ?? emptyStream()))
   const globalEvent: OpencodeClient["global"]["event"] =
     input.globalEvent ?? (() => globalSse(input.globalStream ?? wrapGlobalStream(input.stream ?? emptyStream())))
-  const promptAsync: OpencodeClient["session"]["promptAsync"] = input.promptAsync ?? (() => ok(undefined))
+  const promptAsync: OpencodeClient["session"]["promptAsync"] = input.promptAsync ?? (() => ok(promptAdmission))
   const status: OpencodeClient["session"]["status"] = input.status ?? (() => ok({}))
   const messages: OpencodeClient["session"]["messages"] = input.messages ?? (() => ok([]))
   const children: OpencodeClient["session"]["children"] = input.children ?? (() => ok([]))
@@ -1805,7 +1807,7 @@ describe("run stream transport", () => {
               ),
             )
           })
-          return ok(undefined)
+          return ok(promptAdmission)
         },
       }),
       sessionID: "session-1",
@@ -1939,7 +1941,7 @@ describe("run stream transport", () => {
               ),
             )
           })
-          return ok(undefined)
+          return ok(promptAdmission)
         },
       }),
       sessionID: "session-1",
@@ -2026,7 +2028,7 @@ describe("run stream transport", () => {
             src.push(busy())
             src.push(idle())
           })
-          return ok(undefined)
+          return ok(promptAdmission)
         },
       }),
       sessionID: "session-1",
@@ -2080,7 +2082,7 @@ describe("run stream transport", () => {
             src.push(busy())
             src.push(idle())
           })
-          return ok(undefined)
+          return ok(promptAdmission)
         },
       }),
       sessionID: "session-1",
@@ -2134,7 +2136,7 @@ describe("run stream transport", () => {
             src.push(assistant("msg-1"))
             busy = false
           })
-          return ok(undefined)
+          return ok(promptAdmission)
         },
         status: async () => ok(statusMap(busy)),
       }),
@@ -2180,7 +2182,7 @@ describe("run stream transport", () => {
             src.push(textUpdated(textPart("txt-1", "msg-1", "")))
             src.push(textDelta("msg-1", "txt-1", "unfinished"))
           })
-          return ok(undefined)
+          return ok(promptAdmission)
         },
       }),
       sessionID: "session-1",
@@ -2251,7 +2253,7 @@ describe("run stream transport", () => {
 
             opt?.signal?.addEventListener("abort", onAbort, { once: true })
           })
-          return ok(undefined)
+          return ok(promptAdmission)
         },
       }),
       sessionID: "session-1",
@@ -2297,7 +2299,7 @@ describe("run stream transport", () => {
           ),
         promptAsync: async () => {
           ready.resolve()
-          return ok(undefined)
+          return ok(promptAdmission)
         },
         status: async () => ok({ "session-1": { type: "busy" } }),
       }),
@@ -2344,7 +2346,7 @@ describe("run stream transport", () => {
           ),
         promptAsync: async () => {
           ready.resolve()
-          return ok(undefined)
+          return ok(promptAdmission)
         },
         status: async () => ok({}),
       }),

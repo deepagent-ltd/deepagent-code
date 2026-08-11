@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import type { Message, Session } from "@deepagent-code/sdk/v2/client"
+import type { Message, Part, Session } from "@deepagent-code/sdk/v2/client"
 import {
   getConversationTokens,
   getSessionContextMetrics,
@@ -38,10 +38,24 @@ const assistant = (
 const user = (id: string) => {
   return {
     id,
+    sessionID: "ses_1",
     role: "user",
+    agent: "build",
+    model: { providerID: "openai", modelID: "gpt-4.1" },
     cost: 0,
     time: { created: 1 },
   } as unknown as Message
+}
+
+const compactionPart = (messageID: string, contextTokens?: number) => {
+  return {
+    id: `part-${messageID}`,
+    sessionID: "ses_1",
+    messageID,
+    type: "compaction",
+    auto: false,
+    context_tokens: contextTokens,
+  } as unknown as Part
 }
 
 describe("getSessionContextMetrics", () => {
@@ -105,6 +119,65 @@ describe("getSessionContextMetrics", () => {
 
     expect(metrics.totalCost).toBe(0)
     expect(metrics.context).toBeUndefined()
+  })
+
+  test("uses the committed compaction snapshot until a normal provider turn reports usage", () => {
+    const marker = user("u2")
+    const summary = {
+      ...assistant("a2", { input: 80_000, output: 1_200, reasoning: 0, read: 0, write: 0 }, 0.5),
+      parentID: "u2",
+      summary: true,
+      finish: "stop",
+    } as Message
+    const messages = [
+      user("u1"),
+      assistant("a1", { input: 75_000, output: 500, reasoning: 0, read: 5_000, write: 0 }, 1),
+      marker,
+      summary,
+    ]
+    const providers = [
+      {
+        id: "openai",
+        name: "OpenAI",
+        models: { "gpt-4.1": { name: "GPT-4.1", limit: { context: 100_000, input: 50_000 } } },
+      },
+    ]
+    const parts = { u2: [compactionPart("u2", 4_000)] }
+
+    const compacted = getSessionContextMetrics(messages, providers, parts)
+    expect(compacted.context?.source).toBe("compaction")
+    expect(compacted.context?.total).toBe(4_000)
+    expect(compacted.context?.limit).toBe(50_000)
+    expect(compacted.context?.usage).toBe(8)
+
+    messages.push(user("u3"))
+    messages.push(assistant("a3", { input: 4_500, output: 200, reasoning: 0, read: 500, write: 0 }, 0.25))
+    const measured = getSessionContextMetrics(messages, providers, parts)
+    expect(measured.context?.source).toBe("provider")
+    expect(measured.context?.message.id).toBe("a3")
+    expect(measured.context?.total).toBe(5_000)
+    expect(measured.context?.usage).toBe(10)
+  })
+
+  test("does not treat an uncommitted compaction marker as a refreshed context", () => {
+    const marker = user("u2")
+    const summary = {
+      ...assistant("a2", { input: 80_000, output: 1_200, reasoning: 0, read: 0, write: 0 }, 0.5),
+      parentID: "u2",
+      summary: true,
+      finish: "stop",
+    } as Message
+    const messages = [
+      user("u1"),
+      assistant("a1", { input: 75_000, output: 500, reasoning: 0, read: 5_000, write: 0 }, 1),
+      marker,
+      summary,
+    ]
+
+    const metrics = getSessionContextMetrics(messages, [], { u2: [compactionPart("u2")] })
+    expect(metrics.context?.source).toBe("provider")
+    expect(metrics.context?.message.id).toBe("a2")
+    expect(metrics.context?.total).toBe(80_000)
   })
 })
 

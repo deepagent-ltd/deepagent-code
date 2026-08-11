@@ -37,8 +37,9 @@ import { usePromptStash } from "../../prompt/stash"
 import { DialogStash } from "../dialog-stash"
 import { type AutocompleteRef, Autocomplete } from "./autocomplete"
 import { useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
-import type { AssistantMessage, FilePart, UserMessage } from "@deepagent-code/sdk/v2"
+import type { FilePart, UserMessage } from "@deepagent-code/sdk/v2"
 import { Locale } from "../../util/locale"
+import { contextUsage } from "../../util/session"
 import { errorMessage } from "../../util/error"
 import { formatDuration } from "../../util/format"
 import { createColors, createFrames } from "../../ui/spinner"
@@ -272,19 +273,15 @@ export function Prompt(props: PromptProps) {
   const usage = createMemo(() => {
     if (!props.sessionID) return
     const session = sync.session.get(props.sessionID)
-    const msg = sync.data.message[props.sessionID] ?? []
-    const last = msg.findLast((item): item is AssistantMessage => item.role === "assistant" && item.tokens.output > 0)
-    if (!last) return
+    const usage = contextUsage(sync.data.message[props.sessionID] ?? [], (messageID) => sync.data.part[messageID] ?? [])
+    if (!usage || usage.tokens <= 0) return
 
-    const tokens =
-      last.tokens.input + last.tokens.output + last.tokens.reasoning + last.tokens.cache.read + last.tokens.cache.write
-    if (tokens <= 0) return
-
-    const model = sync.data.provider.find((item) => item.id === last.providerID)?.models[last.modelID]
-    const pct = model?.limit.context ? `${Math.round((tokens / model.limit.context) * 100)}%` : undefined
+    const model = sync.data.provider.find((item) => item.id === usage.providerID)?.models[usage.modelID]
+    const limit = model?.limit.input ?? model?.limit.context
+    const pct = limit ? `${Math.round((usage.tokens / limit) * 100)}%` : undefined
     const cost = session?.cost ?? 0
     return {
-      context: pct ? `${Locale.number(tokens)} (${pct})` : Locale.number(tokens),
+      context: pct ? `${Locale.number(usage.tokens)} (${pct})` : Locale.number(usage.tokens),
       cost: cost > 0 ? money.format(cost) : undefined,
     }
   })
@@ -572,7 +569,9 @@ export function Prompt(props: PromptProps) {
             const v = res.data
             toast.show({
               variant: v?.decision === "block" ? "warning" : "success",
-              message: v ? `Panel verdict: ${v.decision} (${Math.round(v.confidence * 100)}%, ${v.rounds}r)` : "Panel returned no verdict",
+              message: v
+                ? `Panel verdict: ${v.decision} (${Math.round(v.confidence * 100)}%, ${v.rounds}r)`
+                : "Panel returned no verdict",
               duration: 6000,
             })
           } catch {

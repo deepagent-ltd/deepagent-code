@@ -222,7 +222,8 @@ export type PlanWriteInput = {
     readonly assigned_agent?: string | null
     readonly note?: string | null
   }[]
-  readonly active_step_id: string | null
+  /** Omit to derive from the single active step after missing step IDs are allocated. */
+  readonly active_step_id?: string | null
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -243,7 +244,10 @@ export const decodePlanWriteInput = (value: unknown): PlanWriteInput | null => {
   )
     return null
   if (typeof value.goal !== "string" || !Array.isArray(value.steps)) return null
-  if (!(value.active_step_id === null || typeof value.active_step_id === "string")) return null
+  if (
+    !(value.active_step_id === undefined || value.active_step_id === null || typeof value.active_step_id === "string")
+  )
+    return null
   if (value.replan_reason !== undefined && typeof value.replan_reason !== "string") return null
   if (
     value.assumptions !== undefined &&
@@ -276,7 +280,7 @@ export const decodePlanWriteInput = (value: unknown): PlanWriteInput | null => {
     goal: value.goal,
     ...(Array.isArray(value.assumptions) ? { assumptions: value.assumptions as string[] } : {}),
     steps: steps.filter((step): step is NonNullable<typeof step> => step != null),
-    active_step_id: value.active_step_id,
+    ...(value.active_step_id !== undefined ? { active_step_id: value.active_step_id } : {}),
   }
 }
 
@@ -330,7 +334,7 @@ export class PlanConflictError extends Error {
   }
 }
 
-const normalizeStatus = (status: string): PlanStepStatus | undefined => {
+export const normalizePlanStepStatus = (status: string): PlanStepStatus | undefined => {
   const normalized = status.trim().toLowerCase()
   if (STEP_STATUSES.has(normalized as PlanStepStatus)) return normalized as PlanStepStatus
   return STATUS_ALIASES[normalized]
@@ -419,7 +423,11 @@ export const planProgressFingerprint = (plan: PlanDoc): string =>
     })),
   })
 
-const requireExpected = (input: PlanWriteInput, previous: PlanDoc | null, ref: PlanExpected | null): void => {
+export const requirePlanWriteExpected = (
+  input: Pick<PlanWriteInput, "operation" | "expected_plan_id" | "expected_version">,
+  previous: PlanDoc | null,
+  ref: PlanExpected | null,
+): void => {
   if (input.operation === "create") {
     if (input.expected_plan_id !== null || input.expected_version !== null) {
       throw new PlanValidationError("invalid_precondition", [], previous?.plan_id ?? null, ref?.version ?? null)
@@ -456,7 +464,7 @@ export const buildPlanFromWriteInput = (
   if (!("create" === input.operation || "advance" === input.operation || "replan" === input.operation)) {
     throw new PlanValidationError("invalid_operation")
   }
-  requireExpected(input, previous, ref)
+  requirePlanWriteExpected(input, previous, ref)
   if (normalizedText(input.goal) === "")
     throw new PlanValidationError("empty_goal", [], previous?.plan_id ?? null, ref?.version ?? null)
   if (input.steps.length === 0)
@@ -493,7 +501,7 @@ export const buildPlanFromWriteInput = (
     if (normalizedText(step.title) === "") {
       throw new PlanValidationError("empty_title", [], previous?.plan_id ?? null, ref?.version ?? null)
     }
-    const status = normalizeStatus(step.status)
+    const status = normalizePlanStepStatus(step.status)
     if (!status) throw new PlanValidationError("invalid_status", [], previous?.plan_id ?? null, ref?.version ?? null)
     const suppliedID = normalizedText(step.step_id)
     if (input.operation === "advance" && suppliedID === "") {
@@ -543,16 +551,14 @@ export const buildPlanFromWriteInput = (
       "multiple_active_steps",
       active.map((step) => step.step_id),
     )
-  if (input.active_step_id !== null && !used.has(input.active_step_id)) {
-    throw new PlanValidationError("invalid_active_step", [input.active_step_id])
+  const activeStepID = input.active_step_id === undefined ? (active[0]?.step_id ?? null) : input.active_step_id
+  if (activeStepID !== null && !used.has(activeStepID)) {
+    throw new PlanValidationError("invalid_active_step", [activeStepID])
   }
-  if (
-    (input.active_step_id === null && active.length > 0) ||
-    (input.active_step_id !== null && active[0]?.step_id !== input.active_step_id)
-  ) {
+  if ((activeStepID === null && active.length > 0) || (activeStepID !== null && active[0]?.step_id !== activeStepID)) {
     throw new PlanValidationError(
       "invalid_active_step",
-      input.active_step_id ? [input.active_step_id] : active.map((step) => step.step_id),
+      activeStepID ? [activeStepID] : active.map((step) => step.step_id),
     )
   }
   const blocked = steps.filter((step) => step.status === "blocked" && normalizedText(step.note) === "")
@@ -570,7 +576,7 @@ export const buildPlanFromWriteInput = (
       (value) => value.trim(),
     ),
     steps,
-    active_step_id: input.active_step_id,
+    active_step_id: activeStepID,
     replan_reason:
       input.operation === "replan" ? normalizedText(input.replan_reason) : (previous?.replan_reason ?? null),
     last_write_activity_id: null,
@@ -761,21 +767,40 @@ export const planStatusesChanged = (previous: PlanDoc | null | undefined, next: 
 export const formatStepChange = (c: StepStatusChange): string =>
   c.from === null ? `${c.title}: →${c.to}` : `${c.title}: ${c.from}→${c.to}`
 
-// Compact, constant-size plan snapshot re-injected into context each turn (high+ only) so the model
-// can SEE its own checklist and report against it. One line per step; the full form includes goal +
-// progress, while tool continuations omit the already-adjacent goal. We deliberately omit
-// acceptance/assumptions/evidence so it cannot grow with history.
+// Compact, constant-size plan snapshot re-injected into context so the model can SEE its checklist
+// and copy every model-owned identity parameter without consulting history. One line per step; the
+// full form includes goal + progress, while tool continuations omit the already-adjacent goal. We
+// deliberately omit acceptance/assumptions/evidence so it cannot grow with history. The model-facing
+// plan tool treats advance as a server-merged status patch, so those omitted server-owned fields are
+// recovered from the authoritative document rather than reconstructed from this compact snapshot.
+const renderPlanContextValue = (value: string): string =>
+  JSON.stringify(value).replaceAll("<", "\\u003c").replaceAll(">", "\\u003e").replaceAll("&", "\\u0026")
+
 export const renderPlanSnapshot = (plan: PlanDoc, detail: "full" | "continuation" = "full"): string => {
   const { done, total } = planProgress(plan)
   const active = plan.steps.find((s) => s.step_id === plan.active_step_id) ?? null
-  const lines = plan.steps.map((s) => `[${STATUS_MARK[s.status]}] ${s.title}`)
+  const lines = plan.steps.map(
+    (s) =>
+      `[${STATUS_MARK[s.status]}] step_id=${renderPlanContextValue(s.step_id)} status=${renderPlanContextValue(s.status)} title=${renderPlanContextValue(s.title)}${s.status === "blocked" && s.note != null ? ` note=${renderPlanContextValue(s.note)}` : ""}`,
+  )
   const header =
     detail === "continuation"
       ? `Current plan (${done}/${total} done)`
-      : `Current plan (${done}/${total} done) — goal: ${plan.goal}`
-  const activeLine = active ? `Active step: ${active.title}` : "No step is marked active."
+      : `Current plan (${done}/${total} done) — goal: ${renderPlanContextValue(plan.goal)}`
+  const activeLine = active
+    ? `Active step: active_step_id=${renderPlanContextValue(active.step_id)} title=${renderPlanContextValue(active.title)}`
+    : "Active step: active_step_id=null"
   return `${header}\n${lines.join("\n")}\n${activeLine}`
 }
+
+export const renderPlanWritePrecondition = (planID: string, version: number): string =>
+  `Plan write precondition: expected_plan_id=${renderPlanContextValue(planID)} expected_version=${version}`
+
+export const renderPlanWriteContext = (
+  plan: PlanDoc,
+  version: number,
+  detail: "full" | "continuation" = "full",
+): string => `${renderPlanSnapshot(plan, detail)}\n${renderPlanWritePrecondition(plan.plan_id, version)}`
 
 // Progress-nudge budget (the COUNT BACKSTOP of the hybrid trigger). This is deliberately NOT the
 // primary signal: raw edit count conflates "the step is genuinely large" with "the model forgot to

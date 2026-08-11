@@ -38,7 +38,7 @@ const model = (api: Api, variants: ModelV2.Info["variants"] = []) =>
     cost: [],
     status: "active",
     enabled: true,
-    limit: { context: 100, output: 20 },
+    limit: { context: 100, input: 80, output: 20 },
   })
 
 const provider = (api: ProviderV2.Info["api"]) =>
@@ -64,7 +64,7 @@ describe("SessionRunnerModel", () => {
         endpoint: { baseURL: "https://openai.example/v1" },
         defaults: {
           headers: { "x-test": "header" },
-          limits: { context: 100, output: 20 },
+          limits: { context: 100, input: 80, output: 20 },
           generation: { temperature: 0.7 },
           providerOptions: { openai: { store: false, serviceTier: "priority" } },
           http: { body: { custom_extension: { enabled: true } } },

@@ -117,6 +117,7 @@ export function resolveOutputSchema(
 
 const FINALIZER_ATTEMPTS = 2
 const FINALIZER_RAW_RESULT_MAX_CHARS = 80_000
+const decodeJson = Schema.decodeUnknownOption(Schema.UnknownFromJsonString)
 // Token usage is provider- and cache-dependent, so it is deliberately not a hard task boundary. The
 // step, wall-time, no-progress, and output bounds remain the operational safety limits.
 export const DEFAULT_SUBAGENT_RESEARCH_BUDGET = {
@@ -140,6 +141,8 @@ export type SubagentPromptInput = {
   agent: string
   agentModeOverride: AgentMode | undefined
   outputSchema: Record<string, unknown> | undefined
+  /** Permit only the bounded second finalizer to return schema-validated JSON text. */
+  allowTextFallback?: boolean
   directStructuredOutput?: boolean
   finalizerInstructions?: readonly string[]
   runID?: string
@@ -510,6 +513,25 @@ function validateStructuredOutput(schema: Record<string, unknown>, value: unknow
   )
 }
 
+function extractStructuredText(text: string) {
+  const trimmed = text.trim()
+  if (!trimmed) return undefined
+  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1]?.trim()
+  const objectStart = trimmed.indexOf("{")
+  const objectEnd = trimmed.lastIndexOf("}")
+  const arrayStart = trimmed.indexOf("[")
+  const arrayEnd = trimmed.lastIndexOf("]")
+  return [
+    trimmed,
+    fenced,
+    objectStart !== -1 && objectEnd > objectStart ? trimmed.slice(objectStart, objectEnd + 1) : undefined,
+    arrayStart !== -1 && arrayEnd > arrayStart ? trimmed.slice(arrayStart, arrayEnd + 1) : undefined,
+  ]
+    .filter((candidate): candidate is string => candidate !== undefined)
+    .map((candidate) => Option.getOrUndefined(decodeJson(candidate)))
+    .find((candidate) => candidate !== undefined)
+}
+
 export function runSubagentPrompt(input: SubagentPromptInput): Effect.Effect<string, unknown> {
   return Effect.gen(function* () {
     const parts = yield* input.ops.resolvePromptParts(input.prompt)
@@ -734,6 +756,7 @@ export function runSubagentPrompt(input: SubagentPromptInput): Effect.Effect<str
       max_attempts: FINALIZER_ATTEMPTS,
     })
     for (let attempt = 1; attempt <= FINALIZER_ATTEMPTS; attempt++) {
+      const allowText = input.allowTextFallback === true && attempt === FINALIZER_ATTEMPTS
       taskLog.info("subagent.finalize.attempted", {
         run_id: input.runID,
         child_session_id: input.sessionID,
@@ -746,17 +769,22 @@ export function runSubagentPrompt(input: SubagentPromptInput): Effect.Effect<str
         model: input.model,
         variant: input.variant,
         agent: input.agent,
-        format: new SessionV1.OutputFormatJsonSchema({
-          type: "json_schema",
-          schema: input.outputSchema,
-          retryCount: 1,
-        }),
+        ...(allowText
+          ? {}
+          : {
+              format: new SessionV1.OutputFormatJsonSchema({
+                type: "json_schema",
+                schema: input.outputSchema,
+                retryCount: 1,
+              }),
+            }),
         metadata: {
           deepagent: {
             ...(input.agentModeOverride ? { agent_mode_override: input.agentModeOverride } : {}),
             structured_finalizer: {
               attempt,
               source_message_id: research.info.id,
+              allow_text: allowText,
             },
           },
         },
@@ -764,11 +792,14 @@ export function runSubagentPrompt(input: SubagentPromptInput): Effect.Effect<str
           {
             type: "text",
             text: [
-              "Convert the persisted research result below into the requested StructuredOutput schema.",
+              allowText
+                ? "Return exactly one JSON value matching the output schema below. Do not use Markdown or explanatory prose."
+                : "Convert the persisted research result below into the requested StructuredOutput schema.",
               "Do not continue research and do not add facts that are absent from the result.",
               "Preserve exact evidence identifiers, literals, paths, and values when the research result says they must appear in a schema field.",
               ...(input.finalizerInstructions ?? []),
               correction ? `Previous validation error: ${correction}` : "",
+              allowText ? `<output_schema>${JSON.stringify(input.outputSchema)}</output_schema>` : "",
               "<research_result>",
               boundedRaw,
               "</research_result>",
@@ -779,9 +810,8 @@ export function runSubagentPrompt(input: SubagentPromptInput): Effect.Effect<str
         ],
       })
       const error = assistantError(finalized)
-      if (error) {
+      if (error && error.name !== "StructuredOutputError") {
         correction = `${error.name}: ${error.message}`.slice(0, 1_000)
-        if (error.name === "StructuredOutputError" && attempt < FINALIZER_ATTEMPTS) continue
         taskLog.warn("subagent.finalize.failed", {
           run_id: input.runID,
           child_session_id: input.sessionID,
@@ -799,8 +829,16 @@ export function runSubagentPrompt(input: SubagentPromptInput): Effect.Effect<str
         )
       }
       const structured = finalized.info.role === "assistant" ? finalized.info.structured : undefined
-      if (structured === undefined) {
-        correction = "Model did not call StructuredOutput."
+      const candidate =
+        structured === undefined && input.allowTextFallback === true
+          ? extractStructuredText(assistantText(finalized))
+          : structured
+      if (candidate === undefined) {
+        correction = error
+          ? `${error.name}: ${error.message}`.slice(0, 1_000)
+          : allowText
+            ? "Model did not return a JSON value."
+            : "Model did not call StructuredOutput."
         if (attempt < FINALIZER_ATTEMPTS) continue
         taskLog.warn("subagent.finalize.failed", {
           run_id: input.runID,
@@ -818,7 +856,7 @@ export function runSubagentPrompt(input: SubagentPromptInput): Effect.Effect<str
           }),
         )
       }
-      const validationError = validateStructuredOutput(input.outputSchema, structured)
+      const validationError = validateStructuredOutput(input.outputSchema, candidate)
       if (!validationError) {
         if (input.onFinalized) yield* input.onFinalized(finalized.info.id)
         taskLog.info("subagent.finalize.completed", {
@@ -827,7 +865,7 @@ export function runSubagentPrompt(input: SubagentPromptInput): Effect.Effect<str
           attempt,
           result_message_id: finalized.info.id,
         })
-        return JSON.stringify(structured)
+        return JSON.stringify(candidate)
       }
       const boundedValidationError = validationError.slice(0, 1_000)
       correction = boundedValidationError
@@ -1136,6 +1174,7 @@ export const TaskTool = Tool.define(
       const ops = ctx.extra?.promptOps as TaskPromptOps
       if (!ops) return yield* Effect.fail(new Error("TaskTool requires promptOps in ctx.extra"))
       const resolvedOutputSchema = resolveOutputSchema(params.output_schema, params.subagent_type)
+      const allowTextFallback = params.output_schema === undefined && resolvedOutputSchema !== undefined
       const subagentIntensity =
         (cfg.provider?.deepagent?.options?.subagentIntensity as string | undefined) === "downgrade"
           ? "downgrade"
@@ -1928,6 +1967,7 @@ export const TaskTool = Tool.define(
               agent: next.name,
               agentModeOverride: childAgentModeOverride,
               outputSchema: resolvedOutputSchema,
+              allowTextFallback,
               runID: activeRunState.runID,
               budget: researchBudget,
               worktreeInfo: a.worktreeInfo,
@@ -2414,6 +2454,7 @@ export const TaskTool = Tool.define(
           agent: next.name,
           agentModeOverride: childAgentModeOverride,
           outputSchema: resolvedOutputSchema,
+          allowTextFallback,
           runID: runState.runID,
           budget: researchBudget,
           worktreeInfo,

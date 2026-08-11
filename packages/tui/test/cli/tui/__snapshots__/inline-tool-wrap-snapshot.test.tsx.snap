@@ -1,23 +1,27 @@
 // Bun Snapshot v1, https://bun.sh/docs/test/snapshots
 
 exports[`TUI inline tool wrapping snapshots consecutive grep, glob, and read rows at a narrow width 1`] = `
-"   ✱ Grep "OPENCODE.*DB|database|sqlite|drizzle|dev.*db|data.
+"   ✱ Grep "DEEPAGENT_CODE.*DB|database|sqlite|drizzle|dev.*db|data.
      *dir|xdg|APPDATA" in packages/deepagent-code/src (151 matches)
    ✱ Glob "**/*db*" in packages/deepagent-code (6 matches)
-   → Read packages/deepagent-code/src/storage/db.ts [offset=1, limit=130]
+   → Read packages/deepagent-code/src/storage/db.ts [offset=1,
+     limit=130]
    → Read packages/deepagent-code/src/index.ts [offset=1, limit=100]
-   ✱ Grep "export const DEEPAGENT_CODE_DB|DEEPAGENT_CODE_DB|DEEPAGENT_CODE_DEV|Global\\.
+   ✱ Grep "export const
+     DEEPAGENT_CODE_DB|DEEPAGENT_CODE_DB|DEEPAGENT_CODE_DEV|Global\\.
      Path\\.data|data =" in packages/deepagent-code/src (115 matches)"
 `;
 
 exports[`TUI inline tool wrapping snapshots expanded tool errors under the tool text 1`] = `
-"   ✱ Grep "OPENCODE.*DB|database|sqlite|drizzle|dev.*db|data.
+"   ✱ Grep "DEEPAGENT_CODE.*DB|database|sqlite|drizzle|dev.*db|data.
      *dir|xdg|APPDATA" in packages/deepagent-code/src (151 matches)
    ✱ Glob "**/*db*" in packages/deepagent-code (6 matches)
-   → Read packages/deepagent-code/src/storage/db.ts [offset=1, limit=130]
+   → Read packages/deepagent-code/src/storage/db.ts [offset=1,
+     limit=130]
    → Read packages/deepagent-code/src/index.ts [offset=1, limit=100]
      No LSP server available for this file type.
-   ✱ Grep "export const DEEPAGENT_CODE_DB|DEEPAGENT_CODE_DB|DEEPAGENT_CODE_DEV|Global\\.
+   ✱ Grep "export const
+     DEEPAGENT_CODE_DB|DEEPAGENT_CODE_DB|DEEPAGENT_CODE_DEV|Global\\.
      Path\\.data|data =" in packages/deepagent-code/src (115 matches)"
 `;
 
@@ -30,13 +34,14 @@ exports[`TUI inline tool wrapping keeps separation after a shell output block 1`
 
   file.ts
 
-   ✱ Grep "OPENCODE.*DB|database|sqlite|drizzle|dev.*db|data.
+   ✱ Grep "DEEPAGENT_CODE.*DB|database|sqlite|drizzle|dev.*db|data.
      *dir|xdg|APPDATA" in packages/deepagent-code/src (151 matches)
    ✱ Glob "**/*db*" in packages/deepagent-code (6 matches)
-   → Read packages/deepagent-code/src/storage/db.ts [offset=1, limit=130]
+   → Read packages/deepagent-code/src/storage/db.ts [offset=1,
+     limit=130]
    → Read packages/deepagent-code/src/index.ts [offset=1, limit=100]
-   ✱ Grep "export const DEEPAGENT_CODE_DB|DEEPAGENT_CODE_DB|DEEPAGENT_CODE_DEV|Global\\.
-     Path\\.data|data =" in packages/deepagent-code/src (115 matches)"
+   ✱ Grep "export const
+     DEEPAGENT_CODE_DB|DEEPAGENT_CODE_DB|DEEPAGENT_CODE_DEV|Global\\."
 `;
 
 exports[`TUI inline tool wrapping keeps separation after a padded user message 1`] = `
@@ -44,12 +49,14 @@ exports[`TUI inline tool wrapping keeps separation after a padded user message 1
   Check whether the next tool remains separated.
 
 
-   ✱ Grep "OPENCODE.*DB|database|sqlite|drizzle|dev.*db|data.
+   ✱ Grep "DEEPAGENT_CODE.*DB|database|sqlite|drizzle|dev.*db|data.
      *dir|xdg|APPDATA" in packages/deepagent-code/src (151 matches)
    ✱ Glob "**/*db*" in packages/deepagent-code (6 matches)
-   → Read packages/deepagent-code/src/storage/db.ts [offset=1, limit=130]
+   → Read packages/deepagent-code/src/storage/db.ts [offset=1,
+     limit=130]
    → Read packages/deepagent-code/src/index.ts [offset=1, limit=100]
-   ✱ Grep "export const DEEPAGENT_CODE_DB|DEEPAGENT_CODE_DB|DEEPAGENT_CODE_DEV|Global\\.
+   ✱ Grep "export const
+     DEEPAGENT_CODE_DB|DEEPAGENT_CODE_DB|DEEPAGENT_CODE_DEV|Global\\.
      Path\\.data|data =" in packages/deepagent-code/src (115 matches)"
 `;
 

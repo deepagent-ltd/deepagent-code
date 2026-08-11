@@ -142,6 +142,39 @@ describe("tool parameters", () => {
         }),
       ).toBe(true)
     })
+
+    test("accepts a status-only advance patch without step titles", () => {
+      expect(
+        accepts(PlanWriteParameters, {
+          operation: "advance",
+          expected_plan_id: "plan_fixture",
+          expected_version: 2,
+          steps: [{ step_id: "s1", status: "done" }],
+        }),
+      ).toBe(true)
+    })
+
+    test("accepts create/replan without active_step_id so the server can derive it", () => {
+      expect(
+        accepts(PlanWriteParameters, {
+          operation: "create",
+          expected_plan_id: null,
+          expected_version: null,
+          goal: "ship the change",
+          steps: [{ title: "implement", status: "active" }],
+        }),
+      ).toBe(true)
+      expect(
+        accepts(PlanWriteParameters, {
+          operation: "replan",
+          expected_plan_id: "plan_fixture",
+          expected_version: 2,
+          replan_reason: "the implementation boundary changed",
+          goal: "ship the change",
+          steps: [{ title: "implement the new boundary", status: "active" }],
+        }),
+      ).toBe(true)
+    })
   })
 
   describe("shell", () => {

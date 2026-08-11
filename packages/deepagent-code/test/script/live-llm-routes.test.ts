@@ -119,6 +119,10 @@ describe("live LLM route manifest", () => {
         runs: ["ext:cli-subprocess:goal-grader-cli-entry", "live:cli-subprocess:cli-headless"],
       },
       {
+        path: "packages/deepagent-code/src/session/history-authority.ts",
+        runs: ["ext:cli-subprocess:context-authority", "ext:legacy-session:compaction-retention"],
+      },
+      {
         path: "packages/deepagent-code/src/panel/panel-convene-consumer.ts",
         runs: ["ext:legacy-session:expert-panel"],
       },
@@ -129,6 +133,7 @@ describe("live LLM route manifest", () => {
       {
         path: "packages/deepagent-code/script/live-llm/lifecycle.ts",
         runs: [
+          "ext:cli-subprocess:context-authority",
           "ext:cli-subprocess:goal-grader-cli-entry",
           "ext:legacy-session:compaction-retention",
           "ext:legacy-session:expert-panel",
@@ -155,6 +160,7 @@ describe("live LLM route manifest", () => {
           "live:legacy-session:degeneration",
           "live:legacy-session:file-mutations",
           "live:legacy-session:file-read-search",
+          "live:legacy-session:plan-advance-contract",
           "live:legacy-session:shell-exit-contract",
           "live:legacy-session:stale-validation",
           "live:legacy-session:steer-boundary",
@@ -264,6 +270,27 @@ describe("live LLM route manifest", () => {
       expect(commandForModelRun(run!)).toEqual({
         cwd: "packages/deepagent-code",
         args: ["bun", "run", "test:llm-live:continuation-repetition"],
+      })
+    }
+  })
+
+  test("routes Plan parameter-contract changes to the dedicated real Provider suite", () => {
+    for (const path of [
+      "packages/core/src/deepagent/plan-controller.ts",
+      "packages/core/src/deepagent/prompt-policy.ts",
+      "packages/deepagent-code/src/session/llm/request.ts",
+      "packages/deepagent-code/src/session/reminders.ts",
+      "packages/deepagent-code/src/tool/plan-write.ts",
+      "packages/deepagent-code/script/live-llm/plan-advance-contract.ts",
+      "packages/deepagent-code/script/live-llm/plan-advance-oracle.ts",
+    ]) {
+      const run = selectRoutes([path]).runs.find(
+        (item) => modelRunKey(item) === "live:legacy-session:plan-advance-contract",
+      )
+      expect(run).toBeDefined()
+      expect(commandForModelRun(run!)).toEqual({
+        cwd: "packages/deepagent-code",
+        args: ["bun", "run", "test:llm-live:plan-advance"],
       })
     }
   })
@@ -684,9 +711,7 @@ describe("pre-push dispatcher", () => {
       "packages/deepagent-code/script/live-llm/prompt-intent-fencing.ts",
     ]) {
       const selected = selectRoutes([path])
-      const run = selected.runs.find(
-        (item) => modelRunKey(item) === "ext:legacy-session:prompt-intent-fencing",
-      )
+      const run = selected.runs.find((item) => modelRunKey(item) === "ext:legacy-session:prompt-intent-fencing")
       expect(run).toBeDefined()
       expect(selected.checks).toContain("prompt-intent")
       expect(run && commandForModelRun(run)).toEqual({

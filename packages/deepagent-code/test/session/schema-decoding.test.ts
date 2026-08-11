@@ -167,11 +167,13 @@ describe("Session input schemas", () => {
 
   test("ForkInput round-trips", () => {
     const decode = decodeUnknown(Session.ForkInput)
-    const input = { sessionID, messageID }
+    const input = { sessionID, intentID: "schema-fork", messageID }
     expect(decode(input)).toEqual(input)
     // messageID is optional
-    const bare = { sessionID }
+    const bare = { sessionID, intentID: "schema-fork-bare" }
     expect(decode(bare)).toEqual(bare)
+    expect(() => decode({ sessionID, intentID: "" })).toThrow()
+    expect(() => decode({ sessionID })).toThrow()
   })
 
   test("SetTitleInput rejects missing title", () => {

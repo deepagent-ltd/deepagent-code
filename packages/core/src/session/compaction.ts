@@ -111,6 +111,10 @@ type Input = {
 
 const estimate = (value: unknown) => Token.estimate(JSON.stringify(value))
 
+export const inputBudget = (context: number, buffer: number) => Math.max(0, context - buffer)
+
+const modelInputLimit = (model: Model) => model.route.defaults.limits?.input ?? model.route.defaults.limits?.context
+
 const truncate = (value: string) =>
   value.length <= TOOL_OUTPUT_MAX_CHARS ? value : `${value.slice(0, TOOL_OUTPUT_MAX_CHARS)}\n[truncated]`
 
@@ -173,26 +177,33 @@ const select = (
     .filter(Boolean)
   if (conversation.length === 0) return
   let total = 0
-  let split = conversation.length
-  let splitPrefix = ""
-  let splitSuffix = ""
   for (let index = conversation.length - 1; index >= 0; index--) {
     const next = total + Token.estimate(conversation[index])
     if (next > tokens) {
       const remaining = Math.max(0, tokens - total) * 4
-      if (remaining > 0) {
-        splitPrefix = conversation[index].slice(0, -remaining)
-        splitSuffix = conversation[index].slice(-remaining)
-        split = index + 1
+      if (remaining <= 0)
+        return {
+          head: conversation.slice(0, index + 1).join("\n\n"),
+          recent: conversation.slice(index + 1).join("\n\n"),
+        }
+      const boundary = conversation[index].length - remaining
+      const splitAt =
+        boundary > 0 &&
+        boundary < conversation[index].length &&
+        /[\uD800-\uDBFF]/.test(conversation[index][boundary - 1]) &&
+        /[\uDC00-\uDFFF]/.test(conversation[index][boundary])
+          ? boundary - 1
+          : boundary
+      return {
+        head: [...conversation.slice(0, index), conversation[index].slice(0, splitAt)].filter(Boolean).join("\n\n"),
+        recent: [conversation[index].slice(splitAt), ...conversation.slice(index + 1)].filter(Boolean).join("\n\n"),
       }
-      break
     }
     total = next
-    split = index
   }
   return {
-    head: [...conversation.slice(0, split), splitPrefix].filter(Boolean).join("\n\n"),
-    recent: [splitSuffix, ...conversation.slice(split)].filter(Boolean).join("\n\n"),
+    head: "",
+    recent: conversation.join("\n\n"),
   }
 }
 
@@ -214,7 +225,7 @@ export const buildPrompt = (input: {
 export const make = (dependencies: Dependencies) => {
   const config = settings(dependencies.config)
   const compactAfterOverflow = Effect.fn("SessionCompaction.compactAfterOverflow")(function* (input: Input) {
-    const context = input.model.route.defaults.limits?.context
+    const context = modelInputLimit(input.model)
     if (context === undefined || context <= 0) return false
     const output = input.request.generation?.maxTokens ?? input.model.route.defaults.limits?.output ?? 0
     const selected = select(input.entries, config.tokens)
@@ -225,7 +236,7 @@ export const make = (dependencies: Dependencies) => {
       context: [previousSummary?.type === "compaction" ? previousSummary.recent : "", selected.head].filter(Boolean),
     })
     const summaryOutput = Math.min(output || SUMMARY_OUTPUT_TOKENS, SUMMARY_OUTPUT_TOKENS)
-    if (Token.estimate(summaryPrompt) > context - summaryOutput) return false
+    if (Token.estimate(summaryPrompt) > Math.max(0, context - summaryOutput)) return false
     const messageID = SessionMessage.ID.create()
     yield* dependencies.events.publish(SessionEvent.Compaction.Started, {
       sessionID: input.sessionID,
@@ -268,12 +279,11 @@ export const make = (dependencies: Dependencies) => {
   })
   const compactIfNeeded = Effect.fn("SessionCompaction.compactIfNeeded")(function* (input: Input) {
     if (!config.auto) return false
-    const context = input.model.route.defaults.limits?.context
+    const context = modelInputLimit(input.model)
     if (context === undefined || context <= 0) return false
-    const output = input.request.generation?.maxTokens ?? input.model.route.defaults.limits?.output ?? 0
     if (
       estimate({ system: input.request.system, messages: input.request.messages, tools: input.request.tools }) <=
-      context - Math.max(output, config.buffer)
+      inputBudget(context, config.buffer)
     )
       return false
     return yield* compactAfterOverflow(input)
