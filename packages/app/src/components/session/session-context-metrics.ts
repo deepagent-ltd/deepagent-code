@@ -1,4 +1,4 @@
-import type { AssistantMessage, Message, Session } from "@deepagent-code/sdk/v2/client"
+import type { AssistantMessage, Message, Part, Session, UserMessage } from "@deepagent-code/sdk/v2/client"
 
 type Provider = {
   id: string
@@ -10,11 +10,13 @@ type Model = {
   name?: string
   limit: {
     context: number
+    input?: number
   }
 }
 
 type Context = {
   message: AssistantMessage
+  source: "provider" | "compaction"
   provider?: Provider
   model?: Model
   providerLabel: string
@@ -51,20 +53,72 @@ const lastAssistantWithTokens = (messages: Message[]) => {
   }
 }
 
-const build = (messages: Message[] = [], providers: Provider[] = []): Metrics => {
+const compactedContext = (messages: Message[], parts: Record<string, Part[] | undefined>) => {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i]
+    if (message.role !== "assistant") continue
+    if (!message.summary) {
+      if (tokenTotal(message) > 0) return
+      continue
+    }
+    if (!message.finish || message.error) continue
+    const marker = parts[message.parentID]?.find((part) => part.type === "compaction")
+    if (marker?.type !== "compaction" || marker.context_tokens === undefined) continue
+    const parent = messages.find((item): item is UserMessage => item.id === message.parentID && item.role === "user")
+    return {
+      message,
+      parent,
+      total: marker.context_tokens,
+    }
+  }
+}
+
+const build = (
+  messages: Message[] = [],
+  providers: Provider[] = [],
+  parts: Record<string, Part[] | undefined> = {},
+): Metrics => {
   const totalCost = messages.reduce((sum, msg) => sum + (msg.role === "assistant" ? msg.cost : 0), 0)
+  const compacted = compactedContext(messages, parts)
+  if (compacted) {
+    const providerID = compacted.parent?.model.providerID ?? compacted.message.providerID
+    const modelID = compacted.parent?.model.modelID ?? compacted.message.modelID
+    const provider = providers.find((item) => item.id === providerID)
+    const model = provider?.models[modelID]
+    const limit = model?.limit.input ?? model?.limit.context
+    return {
+      totalCost,
+      context: {
+        message: compacted.message,
+        source: "compaction",
+        provider,
+        model,
+        providerLabel: provider?.name ?? providerID,
+        modelLabel: model?.name ?? modelID,
+        limit,
+        input: compacted.total,
+        output: 0,
+        reasoning: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        total: compacted.total,
+        usage: limit ? Math.round((compacted.total / limit) * 100) : null,
+      },
+    }
+  }
   const message = lastAssistantWithTokens(messages)
   if (!message) return { totalCost, context: undefined }
 
   const provider = providers.find((item) => item.id === message.providerID)
   const model = provider?.models[message.modelID]
-  const limit = model?.limit.context
+  const limit = model?.limit.input ?? model?.limit.context
   const total = tokenTotal(message)
 
   return {
     totalCost,
     context: {
       message,
+      source: "provider",
       provider,
       model,
       providerLabel: provider?.name ?? message.providerID,
@@ -81,8 +135,12 @@ const build = (messages: Message[] = [], providers: Provider[] = []): Metrics =>
   }
 }
 
-export function getSessionContextMetrics(messages: Message[] = [], providers: Provider[] = []) {
-  return build(messages, providers)
+export function getSessionContextMetrics(
+  messages: Message[] = [],
+  providers: Provider[] = [],
+  parts: Record<string, Part[] | undefined> = {},
+) {
+  return build(messages, providers, parts)
 }
 
 // All tokens a session's persisted running total accounts for (input + output + reasoning + cache).

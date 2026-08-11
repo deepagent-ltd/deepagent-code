@@ -541,6 +541,15 @@ describe("structured-output.buildStructuredOutputRuntimeTail", () => {
   test("text turns add no volatile structured-output tail", () => {
     expect(SessionPrompt.buildStructuredOutputRuntimeTail({ type: "text" }, false)).toBe("")
   })
+
+  test("text-compatible finalizers remain bounded and forbid tool use", () => {
+    const result = SessionPrompt.buildStructuredOutputRuntimeTail({ type: "text" }, true, true)
+
+    expect(result).toContain("bounded finalizer turn")
+    expect(result).toContain("exactly one JSON value")
+    expect(result).toContain("No research")
+    expect(result).toContain("tool use")
+  })
 })
 
 // P0: extractSchemaTopLevelFields — utility that drives both the system-prompt injection

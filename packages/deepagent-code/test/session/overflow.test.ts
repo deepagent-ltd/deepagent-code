@@ -18,9 +18,8 @@ import {
   REMINDER_DEBOUNCE_TURNS,
 } from "@/session/overflow"
 
-// A model whose `input` limit is the direct usable budget knob. reserved defaults to
-// min(COMPACTION_BUFFER=20_000, maxOutputTokens); with output=10_000 → reserved=10_000, so
-// usable() = input - 10_000. We choose input=110_000 → usable=100_000 for round numbers.
+// A model whose `input` limit is the direct usable budget knob. Compaction keeps an independent
+// 20_000-token input buffer, so usable() = 110_000 - 20_000 = 90_000.
 function model(opts?: { context?: number; input?: number; output?: number }): Provider.Model {
   return {
     id: "test-model",
@@ -28,7 +27,7 @@ function model(opts?: { context?: number; input?: number; output?: number }): Pr
     name: "Test",
     limit: {
       context: opts?.context ?? 200_000,
-      input: opts?.input ?? 110_000,
+      input: opts && "input" in opts ? opts.input : 110_000,
       output: opts?.output ?? 10_000,
     },
     cost: { input: 0, output: 0, cache: { read: 0, write: 0 } },
@@ -59,9 +58,9 @@ const tokensFor = (total: number) => ({
 describe("overflowStatus lines", () => {
   const m = model()
   const c = cfg()
-  const hard = usable({ cfg: c, model: m }) // 100_000
-  const soft = hard * REMINDER_FRACTION // 80_000
-  const fallback = hard - AUTO_COMPACT_FALLBACK_BUFFER // 88_000
+  const hard = usable({ cfg: c, model: m }) // 90_000
+  const soft = hard * REMINDER_FRACTION // 72_000
+  const fallback = hard - AUTO_COMPACT_FALLBACK_BUFFER // 78_000
 
   test("computes the three monotonic lines", () => {
     const st = overflowStatus({ cfg: c, model: m, tokens: 0 })
@@ -119,7 +118,7 @@ describe("overflowStatus lines", () => {
   test("context===0 (unknown limit) returns unavailable, not ok", () => {
     // BUG-007 RC-3: context=0 is the fallback for an *unknown* limit — it must return a typed
     // "unavailable" phase with reason "context_limit_unknown", NOT the same "ok" as auto=false.
-    const zero = model({ context: 0 })
+    const zero = model({ context: 0, input: undefined })
     const st = overflowStatus({ cfg: c, model: zero, tokens: 1_000_000 })
     expect(st.phase).toBe("unavailable")
     expect(st.reason).toBe("context_limit_unknown")
@@ -153,19 +152,48 @@ describe("overflowStatus lines", () => {
 })
 
 describe("requestBudget complete-request preflight (BUG-007)", () => {
-  test("uses the smaller input/context physical budget and never deducts prefix", () => {
+  test("uses the explicit input limit and keeps an input-side safety margin", () => {
     const status = requestBudget({ model: model(), estimatedFullRequestTokens: 110_000 })
-    expect(status.physicalInputBudget).toBe(110_000)
+    expect(status.physicalInputBudget).toBe(108_976)
     expect(status.decision).toBe("unavailable")
     expect(status.provenance).toBe("model_limit")
+  })
+
+  test("uses the canonical DeepSeek 1M input / 384K output limits independently", () => {
+    const status = requestBudget({
+      model: model({ context: 1_000_000, input: 1_000_000, output: 384_000 }),
+      estimatedFullRequestTokens: 297_000,
+    })
+    expect(status.physicalInputBudget).toBe(998_976)
+    expect(status.reservedOutputTokens).toBe(384_000)
+    expect(status.decision).toBe("ok")
+  })
+
+  test("prefers an explicit input limit when context is unavailable", () => {
+    const status = requestBudget({
+      model: model({ context: 0, input: 200_000, output: 128_000 }),
+      estimatedFullRequestTokens: 100_000,
+    })
+    expect(status.physicalInputBudget).toBe(198_976)
+    expect(status.provenance).toBe("model_limit")
+    expect(status.decision).toBe("ok")
+  })
+
+  test("output limit does not change request or compaction input budgets", () => {
+    const smallOutput = model({ context: 200_000, input: undefined, output: 8_000 })
+    const largeOutput = model({ context: 200_000, input: undefined, output: 128_000 })
+    expect(requestBudget({ model: smallOutput, estimatedFullRequestTokens: 100_000 }).physicalInputBudget).toBe(
+      requestBudget({ model: largeOutput, estimatedFullRequestTokens: 100_000 }).physicalInputBudget,
+    )
+    expect(usable({ cfg: cfg(), model: smallOutput })).toBe(usable({ cfg: cfg(), model: largeOutput }))
   })
 
   test("allows a short unknown-limit request but fails closed past the host guard", () => {
     const previous = process.env["DEEPAGENT_CODE_UNKNOWN_CONTEXT_GUARD"]
     process.env["DEEPAGENT_CODE_UNKNOWN_CONTEXT_GUARD"] = "1000"
     try {
-      const short = requestBudget({ model: model({ context: 0 }), estimatedFullRequestTokens: 999 })
-      const long = requestBudget({ model: model({ context: 0 }), estimatedFullRequestTokens: 1000 })
+      const short = requestBudget({ model: model({ context: 0, input: undefined }), estimatedFullRequestTokens: 999 })
+      const long = requestBudget({ model: model({ context: 0, input: undefined }), estimatedFullRequestTokens: 1000 })
       expect(short.decision).toBe("ok")
       expect(short.provenance).toBe("host_guard")
       expect(long.decision).toBe("unavailable")
@@ -177,7 +205,7 @@ describe("requestBudget complete-request preflight (BUG-007)", () => {
   })
 
   test("fails closed for an invalid negative context limit", () => {
-    const status = requestBudget({ model: model({ context: -1 }), estimatedFullRequestTokens: 1 })
+    const status = requestBudget({ model: model({ context: -1, input: undefined }), estimatedFullRequestTokens: 1 })
     expect(status.decision).toBe("unavailable")
     expect(status.reason).toBe("context_limit_invalid")
     expect(status.provenance).toBe("model_limit")
@@ -200,7 +228,7 @@ describe("softLandingDecision state machine", () => {
   })
 
   test("unknown limit emits an explicit guard action", () => {
-    const unknown = overflowStatus({ cfg: c, model: model({ context: 0 }), tokens: 1 })
+    const unknown = overflowStatus({ cfg: c, model: model({ context: 0, input: undefined }), tokens: 1 })
     const state = initialSoftLandingState
     const decision = softLandingDecision({ status: unknown, state, step: 3 })
     expect(decision.action).toBe("guard")
@@ -326,14 +354,14 @@ describe("overflowStatus: raw tokens drive all phase thresholds (BUG-007 RC-5)",
   test("prefix=0 leaves raw==used, behaviour is unchanged", () => {
     // With no prefix, raw==used and the phase logic is unchanged.
     expect(overflowStatus({ cfg: c, model: m, tokens: 70_000, prefixTokens: 0 }).phase).toBe("ok")
-    expect(overflowStatus({ cfg: c, model: m, tokens: 85_000, prefixTokens: 0 }).phase).toBe("reminder")
+    expect(overflowStatus({ cfg: c, model: m, tokens: 75_000, prefixTokens: 0 }).phase).toBe("reminder")
   })
 
-  test("prefix does NOT de-escalate phase — raw 95k >= fallbackLine 88k → fallback", () => {
-    // BUG-007 fix: old code deducted prefix first → body=85k → 'reminder'. Correct: raw 95k
-    // already crosses fallbackLine 88k, so the phase must be 'fallback' regardless of prefix.
-    const st = overflowStatus({ cfg: c, model: m, tokens: 95_000, prefixTokens: 10_000 })
-    expect(st.used).toBe(85_000) // `used` kept for diagnostics (cache/cost)
+  test("prefix does NOT de-escalate phase — raw 85k >= fallbackLine 78k → fallback", () => {
+    // BUG-007 fix: old code deducted prefix first → body=75k → 'reminder'. Correct: raw 85k
+    // already crosses fallbackLine 78k, so the phase must be 'fallback' regardless of prefix.
+    const st = overflowStatus({ cfg: c, model: m, tokens: 85_000, prefixTokens: 10_000 })
+    expect(st.used).toBe(75_000) // `used` kept for diagnostics (cache/cost)
     expect(st.phase).toBe("fallback") // was "reminder" — that was the bug
   })
 })

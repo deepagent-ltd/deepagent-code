@@ -44,6 +44,8 @@ const KIND_LABEL: Record<WorldStateSlotKind, string> = {
   env: "Environment",
 }
 
+export const renderSlot = (slot: WorldStateSlot): string => `## ${KIND_LABEL[slot.kind]}\n${slot.value.trim()}`
+
 const orderOf = (kind: WorldStateSlotKind): number => {
   const i = KIND_ORDER.indexOf(kind)
   return i < 0 ? KIND_ORDER.length : i
@@ -103,7 +105,7 @@ export const collectSlots = (
 export const renderWorldState = (ws: WorldState): string => {
   const present = sortSlots(ws.slots).filter((s) => s.value.trim().length > 0)
   if (present.length === 0) return ""
-  const sections = present.map((s) => `## ${KIND_LABEL[s.kind]}\n${s.value.trim()}`)
+  const sections = present.map(renderSlot)
   return [
     "<world-state>",
     "Current environment / file / diagnostics facts (latest values, re-injected — trust these over any",
