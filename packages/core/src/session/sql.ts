@@ -106,6 +106,13 @@ export const PartTable = sqliteTable(
       .notNull()
       .references(() => MessageTable.id, { onDelete: "cascade" }),
     session_id: text().$type<SessionSchema.ID>().notNull(),
+    provenance: text({ mode: "json" }).$type<{
+      source: "compaction_marker" | "compaction_replay" | "compaction_continue"
+      owner_session_id: SessionSchema.ID
+      owner_prompt_epoch: number
+      owner_run_id: string
+      durable: true
+    }>(),
     ...Timestamps,
     data: text({ mode: "json" }).notNull().$type<V1PartData>(),
   },
@@ -114,6 +121,15 @@ export const PartTable = sqliteTable(
     index("part_session_idx").on(table.session_id),
   ],
 )
+
+export const SessionPartIntegrityQuarantineTable = sqliteTable("session_part_integrity_quarantine", {
+  part_id: text().$type<PartID>().primaryKey(),
+  message_id: text().$type<MessageID>().notNull(),
+  part_session_id: text().$type<SessionSchema.ID>().notNull(),
+  message_session_id: text().$type<SessionSchema.ID>().notNull(),
+  reason: text().notNull(),
+  quarantined_at: integer().notNull(),
+})
 
 // DEPRECATED (task-tracking unification): the `todowrite` tool that wrote this table was removed in
 // favor of the `plan` system. No LLM-facing tool writes here anymore. The table is retained (not
@@ -216,10 +232,53 @@ export const SessionSteerTable = sqliteTable(
     time_created: integer()
       .notNull()
       .$default(() => Date.now()),
+    materialized_at: integer(),
   },
   (table) => [
     index("session_steer_session_pending_seq_idx").on(table.session_id, table.consumed_seq, table.seq),
     uniqueIndex("session_steer_session_correlation_idx").on(table.session_id, table.correlation_id),
+  ],
+)
+
+// Durable admission for a fork operation. Unlike SessionForkIntentTable, this row is created before
+// any managed worktree or child Session exists, so retries can adopt the exact provisioned resources
+// after a crash instead of allocating replacements. SessionForkIntentTable remains the committed
+// child-history manifest and the only authority that makes the child runnable.
+export const SessionForkAdmissionTable = sqliteTable(
+  "session_fork_admission",
+  {
+    intent_id: text().primaryKey(),
+    request_hash: text().notNull(),
+    fork_mode: text().$type<"foreground" | "task">().notNull(),
+    source_session_id: text()
+      .$type<SessionSchema.ID>()
+      .notNull()
+      .references(() => SessionTable.id, { onDelete: "cascade" }),
+    source_prompt_epoch: integer().notNull(),
+    source_window_id: text().notNull(),
+    source_effective_history_hash: text().notNull(),
+    source_mutation_epoch: integer().notNull(),
+    source_message_count: integer().notNull(),
+    source_cutoff_message_id: text().$type<MessageID>(),
+    projection_version: integer().notNull(),
+    sanitation_policy_version: integer().notNull(),
+    requested_directory: text(),
+    isolation_mode: text().$type<"none" | "worktree">().notNull(),
+    requested_target_session_id: text().$type<SessionSchema.ID>(),
+    target_session_id: text().$type<SessionSchema.ID>().notNull().unique(),
+    child_depth: integer(),
+    task_request_hash: text(),
+    worktree_directory: text(),
+    worktree_branch: text(),
+    worktree_base_commit: text(),
+    state: text().$type<"admitted" | "provisioning" | "ready" | "manifest_committed" | "recovery_required">().notNull(),
+    recovery_reason: text(),
+    time_created: integer().notNull(),
+    time_updated: integer().notNull(),
+  },
+  (table) => [
+    index("session_fork_admission_source_idx").on(table.source_session_id, table.time_created),
+    index("session_fork_admission_recovery_idx").on(table.state, table.time_updated),
   ],
 )
 
@@ -250,6 +309,110 @@ export const SessionIntentTable = sqliteTable(
   (table) => [
     uniqueIndex("session_intent_session_intent_idx").on(table.session_id, table.intent_id),
     index("session_intent_session_state_idx").on(table.session_id, table.state, table.time_created),
+  ],
+)
+
+export const SessionHistoryStateTable = sqliteTable("session_history_state", {
+  session_id: text()
+    .$type<SessionSchema.ID>()
+    .primaryKey()
+    .references(() => SessionTable.id, { onDelete: "cascade" }),
+  state: text().$type<"ready" | "provisioning" | "recovery_required">().notNull(),
+  reason: text(),
+  time_created: integer().notNull(),
+  time_updated: integer().notNull(),
+})
+
+// Immutable ordered replacement membership for the legacy Session prompt authority.
+// The row is the durable model-visible base; physical messages added after the
+// epoch boundary are appended by the production projector.
+export const SessionPromptEpochMessageTable = sqliteTable(
+  "session_prompt_epoch_message",
+  {
+    session_id: text()
+      .$type<SessionSchema.ID>()
+      .notNull()
+      .references(() => SessionTable.id, { onDelete: "cascade" }),
+    prompt_epoch: integer().notNull(),
+    ordinal: integer().notNull(),
+    message_id: text()
+      .$type<MessageID>()
+      .notNull()
+      .references(() => MessageTable.id, { onDelete: "cascade" }),
+  },
+  (table) => [
+    primaryKey({ columns: [table.session_id, table.prompt_epoch, table.ordinal] }),
+    uniqueIndex("session_prompt_epoch_message_identity_idx").on(table.session_id, table.prompt_epoch, table.message_id),
+    index("session_prompt_epoch_message_lookup_idx").on(table.session_id, table.prompt_epoch, table.message_id),
+  ],
+)
+
+export const SessionForkIntentTable = sqliteTable(
+  "session_fork_intent",
+  {
+    intent_id: text().primaryKey(),
+    request_hash: text().notNull(),
+    fork_mode: text().$type<"foreground" | "task">().notNull(),
+    source_session_id: text()
+      .$type<SessionSchema.ID>()
+      .notNull()
+      .references(() => SessionTable.id, { onDelete: "cascade" }),
+    source_prompt_epoch: integer().notNull(),
+    source_window_id: text().notNull(),
+    source_effective_history_hash: text().notNull(),
+    source_mutation_epoch: integer().notNull(),
+    source_message_count: integer().notNull(),
+    source_cutoff_message_id: text().$type<MessageID>(),
+    projection_version: integer().notNull(),
+    sanitation_policy_version: integer().notNull(),
+    target_session_id: text()
+      .$type<SessionSchema.ID>()
+      .notNull()
+      .unique()
+      .references(() => SessionTable.id, { onDelete: "cascade" }),
+    target_prompt_epoch: integer().notNull(),
+    target_window_id: text().notNull(),
+    target_effective_history_hash: text().notNull(),
+    target_world_state_baseline_hash: text().notNull(),
+    cloned_message_count: integer().notNull(),
+    cloned_part_count: integer().notNull(),
+    state: text().$type<"prepared" | "committed" | "publishing" | "complete" | "recovery_required">().notNull(),
+    event_cursor: integer().notNull().default(0),
+    event_count: integer().notNull(),
+    delivery_owner: text(),
+    lease_expires_at: integer(),
+    delivery_attempts: integer().notNull().default(0),
+    recovery_reason: text(),
+    time_created: integer().notNull(),
+    time_updated: integer().notNull(),
+    time_committed: integer(),
+    time_completed: integer(),
+    side_effects_completed_at: integer(),
+  },
+  (table) => [
+    index("session_fork_intent_source_idx").on(table.source_session_id, table.time_created),
+    index("session_fork_intent_delivery_idx").on(table.state, table.time_updated),
+  ],
+)
+
+export const SessionWorldStateBaselineTable = sqliteTable(
+  "session_world_state_baseline",
+  {
+    session_id: text()
+      .$type<SessionSchema.ID>()
+      .notNull()
+      .references(() => SessionTable.id, { onDelete: "cascade" }),
+    prompt_epoch: integer().notNull(),
+    section_id: text().notNull(),
+    snapshot: text({ mode: "json" }).$type<unknown>().notNull(),
+    fragment: text().notNull(),
+    fragment_hash: text().notNull(),
+    provenance: text().$type<"native" | "fork_rebuilt" | "legacy_migration">().notNull(),
+    created_at: integer().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.session_id, table.prompt_epoch, table.section_id] }),
+    index("session_world_state_baseline_epoch_idx").on(table.session_id, table.prompt_epoch),
   ],
 )
 

@@ -230,6 +230,121 @@ export class ToolSequenceTracker {
 
 export type PlanProtocolOutcome = "success" | "progress" | "no_progress" | "invalid" | "conflict" | "schema"
 
+type PlanProtocolHistoryMessage = {
+  readonly info: {
+    readonly id: string
+    readonly role: string
+    readonly parentID?: string
+    readonly metadata?: unknown
+    readonly time?: unknown
+  }
+  readonly parts: readonly {
+    readonly id: string
+    readonly type: string
+    readonly tool?: string
+    readonly callID?: string
+    readonly state?: {
+      readonly status: string
+      readonly metadata?: unknown
+      readonly time?: unknown
+    }
+  }[]
+}
+
+export const planProtocolActivityID = (metadata: unknown): string | undefined => {
+  if (!isRecord(metadata) || !isRecord(metadata.deepagent)) return undefined
+  const activityID = metadata.deepagent.planProtocolActivityID
+  return typeof activityID === "string" && activityID.trim() !== "" ? activityID : undefined
+}
+
+export const withPlanProtocolActivity = (metadata: unknown, activityID: string) => ({
+  ...(isRecord(metadata) ? metadata : {}),
+  deepagent: {
+    ...(isRecord(metadata) && isRecord(metadata.deepagent) ? metadata.deepagent : {}),
+    planProtocolActivityID: activityID,
+  },
+})
+
+// Rebuild the activity-scoped counter from durable tool parts. Every root prompt gets a fresh
+// activity ID; steers and compaction continuations retain it. This keeps recovery independent of
+// filtered provider history and prevents a process restart from silently restoring the full budget.
+export const restorePlanProtocolFailures = (messages: readonly PlanProtocolHistoryMessage[]): number => {
+  const numericTime = (value: unknown, key: string) => {
+    if (!isRecord(value) || typeof value[key] !== "number") return 0
+    return value[key] as number
+  }
+  const declaredActivityIDs = new Set(
+    messages
+      .filter((message) => message.info.role === "user")
+      .map((message) => planProtocolActivityID(message.info.metadata))
+      .filter((activityID): activityID is string => activityID !== undefined),
+  )
+  const users = messages
+    .filter((message) => message.info.role === "user")
+    .map((message) => ({
+      messageID: message.info.id,
+      activityID:
+        planProtocolActivityID(message.info.metadata) ??
+        (declaredActivityIDs.has(message.info.id) ? message.info.id : undefined),
+      created: numericTime(message.info.time, "created"),
+    }))
+  const latest = users
+    .toSorted((left, right) => left.created - right.created || left.messageID.localeCompare(right.messageID))
+    .at(-1)
+  if (latest?.activityID === undefined) return 0
+  const activities = new Map(
+    users
+      .filter((user): user is typeof user & { activityID: string } => user.activityID !== undefined)
+      .map((user) => [user.messageID, user.activityID] as const),
+  )
+  const attempts = messages
+    .filter(
+      (message) =>
+        message.info.role === "assistant" &&
+        message.info.parentID !== undefined &&
+        activities.get(message.info.parentID) === latest.activityID,
+    )
+    .flatMap((message) =>
+      message.parts
+        .filter(
+          (part) =>
+            part.type === "tool" &&
+            part.tool === "plan" &&
+            (part.state?.status === "completed" || part.state?.status === "error"),
+        )
+        .map((part) => ({
+          messageID: message.info.id,
+          messageCreated: numericTime(message.info.time, "created"),
+          settled: numericTime(part.state?.time, "end") || numericTime(message.info.time, "created"),
+          part,
+        })),
+    )
+    .toSorted(
+      (left, right) =>
+        left.settled - right.settled ||
+        left.messageCreated - right.messageCreated ||
+        left.messageID.localeCompare(right.messageID) ||
+        left.part.id.localeCompare(right.part.id),
+    )
+  const uniqueAttempts = [
+    ...new Map(
+      attempts.map((attempt) => [attempt.messageID + "\x00" + (attempt.part.callID ?? attempt.part.id), attempt] as const),
+    ).values(),
+  ]
+  return uniqueAttempts
+    .reduce((consecutive, item) => {
+      const metadata = item.part.state && isRecord(item.part.state.metadata) ? item.part.state.metadata : undefined
+      const protocol = metadata?.plan_protocol
+      if (protocol === "success" || protocol === "progress") return 0
+      if (!(protocol === "invalid" || protocol === "conflict" || protocol === "schema" || protocol === "no_progress"))
+        return consecutive
+      const ordinal = metadata?.plan_attempt_ordinal
+      return typeof ordinal === "number" && Number.isSafeInteger(ordinal) && ordinal > 0
+        ? Math.max(consecutive + 1, ordinal)
+        : consecutive + 1
+    }, 0)
+}
+
 /**
  * Activity-scoped Plan Protocol budget. A malformed or stale model plan is
  * recoverable once; the second consecutive violation terminates the activity
@@ -239,7 +354,11 @@ export type PlanProtocolOutcome = "success" | "progress" | "no_progress" | "inva
 export class PlanProtocolTracker {
   private readonly pending = new Set<string>()
   private readonly settled = new Set<string>()
-  private consecutiveViolations = 0
+  private consecutiveViolations: number
+
+  constructor(consecutiveViolations = 0) {
+    this.consecutiveViolations = Math.max(0, Math.floor(consecutiveViolations))
+  }
 
   start(callID: string, toolName: string): void {
     if (toolName === "plan") this.pending.add(callID)
@@ -528,6 +647,33 @@ export const layer = Layer.effect(
           }),
         )
       }
+
+      const persistMissingPlanToolCall = Effect.fn("SessionProcessor.persistMissingPlanToolCall")(function* (
+        toolCallID: string,
+        protocol: { readonly consecutive: number } | undefined,
+        error: string,
+      ) {
+        if (protocol === undefined) return
+        const now = Date.now()
+        yield* session.updatePart({
+          id: PartID.ascending(),
+          messageID: ctx.assistantMessage.id,
+          sessionID: ctx.sessionID,
+          type: "tool",
+          tool: "plan",
+          callID: toolCallID,
+          state: {
+            status: "error",
+            input: {},
+            error,
+            metadata: {
+              plan_protocol: "schema",
+              plan_attempt_ordinal: protocol.consecutive,
+            },
+            time: { start: now, end: now },
+          },
+        } satisfies SessionV1.ToolPart)
+      })
 
       const recordProcessorInput = (
         toolCallID: string,
@@ -1192,12 +1338,21 @@ export const layer = Layer.effect(
               // tool-call part exists.  Both belong to the activity-level plan protocol budget;
               // otherwise a malformed plan response silently escapes the terminal rule.
               yield* recordProcessorInput(value.id, value.name, "tool-result", "schema_invalid")
-              yield* settlePlanProtocol(
-                value.id,
-                value.name,
-                value.name === "plan" ? "schema" : "invalid",
-                "missing_tool_call",
-              )
+              const protocol =
+                value.name === "plan" ? ctx.planTracker?.settle(planTrackerCallID(value.id), "schema") : undefined
+              if (protocol) {
+                yield* recordProcessorValidation(value.id, "schema_invalid")
+                yield* persistMissingPlanToolCall(value.id, protocol, "Plan result arrived without a durable tool call.")
+                if (protocol.terminal)
+                  yield* Effect.fail(
+                    new SessionV1.PlanProtocolViolationError({
+                      message: "Plan protocol violation budget exhausted after two consecutive model plan failures.",
+                      sessionID: ctx.sessionID,
+                      attemptOrdinal: protocol.consecutive,
+                      code: "missing_tool_call",
+                    }),
+                  )
+              }
               return
             }
             if (value.result.type === "error") {
@@ -1338,6 +1493,12 @@ export const layer = Layer.effect(
             const protocol =
               value.name === "plan" ? ctx.planTracker?.settle(planTrackerCallID(value.id), protocolOutcome) : undefined
             if (protocol && !schemaInvalid) yield* recordProcessorValidation(value.id, "semantic_invalid")
+            if (protocol)
+              yield* persistMissingPlanToolCall(
+                value.id,
+                toolCall ? undefined : protocol,
+                schemaInvalid ? "Plan tool input failed schema validation before a durable tool call was written." : value.message,
+              )
             // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
             if (mirrorAssistant) {
               const assistantMessageID = toolCall
@@ -1720,6 +1881,7 @@ export const layer = Layer.effect(
                   if (firstEvent) {
                     firstEvent = false
                     yield* providerAttempt?.streaming ?? Effect.void
+                    yield* streamInput.requestReceipt?.streaming() ?? Effect.void
                   }
                   yield* handleEvent(event)
                 }),
@@ -1728,47 +1890,49 @@ export const layer = Layer.effect(
               Stream.runDrain,
             )
           })
-          const dispatched = providerAttempt
-            ? streamed
-            : streamed.pipe(
-                Effect.retry(
-                  SessionRetry.policy({
-                    provider: input.model.providerID,
-                    parse,
-                    set: (info) => {
-                      // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
-                      const event = mirrorAssistant
-                        ? events.publish(SessionEvent.Retried, {
-                            sessionID: ctx.sessionID,
-                            attempt: info.attempt,
-                            error: {
+          const dispatched =
+            providerAttempt || streamInput.durableAttempt
+              ? streamed
+              : streamed.pipe(
+                  Effect.retry(
+                    SessionRetry.policy({
+                      provider: input.model.providerID,
+                      parse,
+                      set: (info) => {
+                        // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
+                        const event = mirrorAssistant
+                          ? events.publish(SessionEvent.Retried, {
+                              sessionID: ctx.sessionID,
+                              attempt: info.attempt,
+                              error: {
+                                message: info.message,
+                                isRetryable: true,
+                              },
+                              timestamp: DateTime.makeUnsafe(Date.now()),
+                            })
+                          : Effect.void
+                        return flushV2Fragments().pipe(
+                          Effect.andThen(event),
+                          Effect.andThen(
+                            status.set(ctx.sessionID, {
+                              type: "retry",
+                              attempt: info.attempt,
                               message: info.message,
-                              isRetryable: true,
-                            },
-                            timestamp: DateTime.makeUnsafe(Date.now()),
-                          })
-                        : Effect.void
-                      return flushV2Fragments().pipe(
-                        Effect.andThen(event),
-                        Effect.andThen(
-                          status.set(ctx.sessionID, {
-                            type: "retry",
-                            attempt: info.attempt,
-                            message: info.message,
-                            action: info.action,
-                            next: info.next,
-                          }),
-                        ),
-                      )
-                    },
-                  }),
-                ),
-              )
+                              action: info.action,
+                              next: info.next,
+                            }),
+                          ),
+                        )
+                      },
+                    }),
+                  ),
+                )
           const completed = dispatched.pipe(
             Effect.onInterrupt(() =>
               Effect.gen(function* () {
                 aborted = true
                 yield* providerAttempt?.failed(new DOMException("Aborted", "AbortError")) ?? Effect.void
+                yield* streamInput.requestReceipt?.failed(new DOMException("Aborted", "AbortError")) ?? Effect.void
                 if (!ctx.assistantMessage.error) {
                   yield* halt(new DOMException("Aborted", "AbortError"))
                 }
@@ -1789,8 +1953,20 @@ export const layer = Layer.effect(
                   )
                 : Effect.void,
             ),
-            Effect.tapError((error) => providerAttempt?.failed(error) ?? Effect.void),
-            Effect.tap(() => (providerAttempt && !ctx.assistantMessage.error ? providerAttempt.settled : Effect.void)),
+            Effect.tapError((error) =>
+              Effect.all([
+                providerAttempt?.failed(error) ?? Effect.void,
+                streamInput.requestReceipt?.failed(error) ?? Effect.void,
+              ]).pipe(Effect.asVoid),
+            ),
+            Effect.tap(() =>
+              ctx.assistantMessage.error
+                ? Effect.void
+                : Effect.all([
+                    providerAttempt?.settled ?? Effect.void,
+                    streamInput.requestReceipt?.settled() ?? Effect.void,
+                  ]).pipe(Effect.asVoid),
+            ),
           )
           yield* (
             propagateSummaryViolation

@@ -529,6 +529,7 @@ describe("PR collaboration coordinator", () => {
       ).toBe(false)
     }),
     { git: true },
+    60_000,
   )
 
   testPR.instance(

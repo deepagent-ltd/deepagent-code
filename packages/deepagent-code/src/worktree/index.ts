@@ -232,6 +232,13 @@ export interface Interface {
   // U3: merge the worktree branch back to the default branch (preflight + no auto-commit).
   readonly mergeBack: (input: RemoveInput) => Effect.Effect<MergeResult, Error>
   // L3c (subagent-control-plane-design.zh-CN.md §3.2.2)
+  // Resolve an exact worktree identity without creating files, branches, or registrations. Callers
+  // persist this plan before invoking ensureExact so crash recovery can adopt only the same resource.
+  readonly planExact: (input: {
+    readonly operationKey: string
+    readonly name: string
+    readonly startCommand?: string
+  }) => Effect.Effect<WorktreeExactInput, NotGitError | CreateFailedError>
   // Exact-match worktree creation with no random-suffix fallback.
   // If the target directory already exists as a registered git worktree with a matching
   // branch and HEAD == baseCommit, it is adopted.  Any mismatch returns WorktreeExactConflictError.
@@ -914,6 +921,26 @@ export const layer: Layer.Layer<
       } satisfies MergeResult
     })
 
+    const planExact: Interface["planExact"] = Effect.fn("Worktree.planExact")(function* (input) {
+      const ctx = yield* InstanceState.context
+      if (ctx.project.vcs !== "git")
+        return yield* new NotGitError({ message: "Worktrees are only supported for git projects" })
+      const name = slugify(input.name)
+      const head = yield* git(["-c", "core.hooksPath=/dev/null", "rev-parse", "HEAD"], { cwd: ctx.worktree })
+      if (head.code !== 0)
+        return yield* new CreateFailedError({
+          message: head.stderr || head.text || "Failed to resolve the worktree base commit",
+        })
+      return {
+        operationKey: input.operationKey,
+        name,
+        worktreeBranch: `deepagent-code/${name}`,
+        directory: pathSvc.join(Global.Path.data, "worktree", ctx.project.id, name),
+        baseCommit: head.text.trim(),
+        ...(input.startCommand ? { startCommand: input.startCommand } : {}),
+      }
+    })
+
     return Service.of({
       makeWorktreeInfo,
       createFromInfo,
@@ -927,6 +954,7 @@ export const layer: Layer.Layer<
       diff,
       branchSummary,
       mergeBack,
+      planExact,
       // L3c: exact-match creation — no random-suffix fallback, caller holds receipt in task_run
       ensureExact: Effect.fn("Worktree.ensureExact")(function* (input: WorktreeExactInput) {
         const ctx = yield* InstanceState.context
@@ -960,8 +988,13 @@ export const layer: Layer.Layer<
               reason: `existing worktree HEAD ${head} does not match expected baseCommit ${input.baseCommit}`,
             })
           }
-          // Exact match — adopt
-          return { name: input.name, branch: input.worktreeBranch, directory: targetDir } satisfies Info
+          // Exact match — re-run idempotent checkout/bootstrap before issuing a ready receipt. A crash
+          // may have registered the worktree but stopped before Instance initialization completed.
+          const info = { name: input.name, branch: input.worktreeBranch, directory: targetDir } satisfies Info
+          if (yield* boot(info, input.startCommand)) return info
+          return yield* new CreateFailedError({
+            message: `Worktree bootstrap failed; preserved for recovery at ${info.directory}`,
+          })
         }
 
         // 2. Check if the worktree branch already exists (but at a different path)

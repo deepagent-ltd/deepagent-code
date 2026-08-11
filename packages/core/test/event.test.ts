@@ -417,6 +417,59 @@ describe("EventV2", () => {
     }),
   )
 
+  it.effect("accepts only exact idempotent retries and replays their local commit hook", () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2.Service
+      const { db } = yield* Database.Service
+      const aggregateID = EventV2.ID.create()
+      const eventID = EventV2.ID.create()
+      const received = new Array<EventV2.Payload>()
+      let commitCount = 0
+      yield* events.listen((event) => Effect.sync(() => received.push(event)))
+
+      const first = yield* events.publish(
+        SyncMessage,
+        { id: aggregateID, text: "durable" },
+        {
+          id: eventID,
+          idempotent: true,
+          commit: () => Effect.sync(() => commitCount++),
+        },
+      )
+      const retry = yield* events.publish(
+        SyncMessage,
+        { id: aggregateID, text: "durable" },
+        {
+          id: eventID,
+          idempotent: true,
+          commit: () => Effect.sync(() => commitCount++),
+        },
+      )
+      const divergent = yield* events
+        .publish(SyncMessage, { id: aggregateID, text: "different" }, { id: eventID, idempotent: true })
+        .pipe(Effect.exit)
+      const rows = yield* db.select().from(EventTable).where(eq(EventTable.id, eventID)).all().pipe(Effect.orDie)
+
+      expect(first.seq).toBe(0)
+      expect(retry.seq).toBe(0)
+      expect(rows).toHaveLength(1)
+      expect(received).toHaveLength(1)
+      expect(commitCount).toBe(2)
+      expect(String(divergent)).toContain(`Event ${eventID} already exists`)
+    }),
+  )
+
+  it.effect("rejects idempotent publish for local events", () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2.Service
+      const exit = yield* events
+        .publish(Message, { text: "local" }, { id: EventV2.ID.create(), idempotent: true })
+        .pipe(Effect.exit)
+
+      expect(String(exit)).toContain("Idempotent publish requires a synchronized event")
+    }),
+  )
+
   it.effect("replays durable aggregate events after a cursor and tails new events", () =>
     Effect.gen(function* () {
       const events = yield* EventV2.Service

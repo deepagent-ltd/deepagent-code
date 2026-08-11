@@ -46,6 +46,7 @@ describe("normalizeModelID", () => {
 describe("stripDateSuffix", () => {
   test("removes trailing date/version stamps", () => {
     expect(stripDateSuffix("claude-3-5-sonnet-20241022")).toBe("claude-3-5-sonnet")
+    expect(stripDateSuffix("deepseek-v4-flash-0731")).toBe("deepseek-v4-flash")
     expect(stripDateSuffix("gpt-4o-latest")).toBe("gpt-4o")
     expect(stripDateSuffix("model-preview")).toBe("model")
     expect(stripDateSuffix("gpt-4o")).toBe("gpt-4o")
@@ -108,6 +109,21 @@ describe("collision disambiguation", () => {
     )
     const match = specMatchFor("llama-3", "llama-3", index)
     expect(match?.providerID).toBe("big")
+  })
+
+  test("prefers the official base spec over a third-party exact dated collision", () => {
+    const index = buildCatalogIndex(
+      catalog({
+        // Regression fixture: this bogus third-party limit must never override the official model.
+        ambient: [model("deepseek/deepseek-v4-flash-0731", { limit: { context: 1_048_576, output: 1_048_576 } })],
+        deepseek: [
+          model("deepseek-v4-flash", { limit: { context: 1_000_000, input: 1_000_000, output: 384_000 } }),
+        ],
+      }),
+    )
+    const match = specMatchFor("deepseek-v4-flash-0731", "deepseek-v4-flash-0731", index)
+    expect(match?.providerID).toBe("deepseek")
+    expect(match?.model.limit).toEqual({ context: 1_000_000, input: 1_000_000, output: 384_000 })
   })
 })
 

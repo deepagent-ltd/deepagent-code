@@ -176,7 +176,7 @@ for (const item of targets) {
   const bunfsRoot = item.os === "win32" ? "B:/~BUN/root/" : "/$bunfs/root/"
   const workerRelativePath = path.relative(dir, parserWorker).replaceAll("\\", "/")
 
-  await Bun.build({
+  const build = await Bun.build({
     conditions: ["node"],
     tsconfig: "./tsconfig.json",
     plugins: [plugin],
@@ -213,10 +213,21 @@ for (const item of targets) {
       ...(item.os === "linux" ? { "process.env.OPENTUI_LIBC": JSON.stringify(item.abi ?? "glibc") } : {}),
     },
   })
+  if (!build.success) {
+    const diagnostics = build.logs.map((log) => log.message).join("\n")
+    throw new Error(`build failed for ${name}${diagnostics ? `:\n${diagnostics}` : ""}`)
+  }
+
+  const binaryPath = `dist/${name}/bin/deepagent-code${item.os === "win32" ? ".exe" : ""}`
+  if (!(await Bun.file(binaryPath).exists())) {
+    const diagnostics = build.logs.map((log) => log.message).join("\n")
+    throw new Error(
+      `build reported success but produced no binary for ${name}${diagnostics ? `:\n${diagnostics}` : ""}`,
+    )
+  }
 
   // Smoke test: only run if binary is for current platform
   if (item.os === process.platform && item.arch === process.arch && !item.abi) {
-    const binaryPath = `dist/${name}/bin/deepagent-code`
     console.log(`Running smoke test: ${binaryPath} --version`)
     try {
       const versionOutput = await $`${binaryPath} --version`.text()
@@ -228,9 +239,7 @@ for (const item of targets) {
   }
 
   await $`rm -rf ./dist/${name}/bin/tui`
-  const binarySha256 = new Bun.CryptoHasher("sha256")
-    .update(await Bun.file(`dist/${name}/bin/deepagent-code`).bytes())
-    .digest("hex")
+  const binarySha256 = new Bun.CryptoHasher("sha256").update(await Bun.file(binaryPath).bytes()).digest("hex")
   await Bun.file(`dist/${name}/package.json`).write(
     JSON.stringify(
       {
