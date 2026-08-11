@@ -35,9 +35,10 @@ export const renderPlanStatus = (
   const plan = AgentGateway.DeepAgentSessionState.getPlan(sessionID)
   if (!plan) return null
 
-  const snapshot = AgentGateway.DeepAgentPlanController.renderPlanSnapshot(plan, detail)
   const ref = AgentGateway.DeepAgentPlanStore.planDocRef(sessionID)
-  const precondition = ref ? `\nPlan precondition: plan_id=${plan.plan_id} plan_version=${ref.version}` : ""
+  const snapshot = ref
+    ? AgentGateway.DeepAgentPlanController.renderPlanWriteContext(plan, ref.version, detail)
+    : `${AgentGateway.DeepAgentPlanController.renderPlanSnapshot(plan, detail)}\nPlan write unavailable: expected_version is unavailable for expected_plan_id=${JSON.stringify(plan.plan_id)}. Do not guess or call advance/replan.`
   const mutations = AgentGateway.DeepAgentSessionState.mutationsSinceReport(sessionID)
   const validationPassedSinceReport = AgentGateway.DeepAgentSessionState.validationPassedSinceReport(sessionID)
   // U10 hybrid trigger: semantic (a validation just passed) is primary, mode-scaled count is the
@@ -48,7 +49,7 @@ export const renderPlanStatus = (
     mode: agentMode,
   })
   const nudge = trigger ? `\n\n${AgentGateway.DeepAgentPlanController.PROGRESS_NUDGE(trigger, mutations)}` : ""
-  return `<plan-status>\n${snapshot}${precondition}${nudge}\n</plan-status>`
+  return `<plan-status>\n${snapshot}${nudge}\n</plan-status>`
 }
 
 export const apply = Effect.fn("SessionReminders.apply")(function* (input: {

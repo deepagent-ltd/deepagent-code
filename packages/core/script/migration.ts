@@ -28,10 +28,7 @@ await $`bun drizzle-kit generate ${args.values.name ? ["--name", args.values.nam
   path.join(root, "packages/core"),
 )
 
-const sqlMigrations = (await Array.fromAsync(new Bun.Glob("*/migration.sql").scan({ cwd: sqlDir })))
-  .map((file) => file.split("/")[0])
-  .filter((name) => name !== undefined)
-  .sort()
+const sqlMigrations = await sqlMigrationNames(sqlDir)
 
 for (const name of sqlMigrations) {
   if (await Bun.file(path.join(tsDir, `${name}.ts`)).exists()) continue
@@ -41,7 +38,7 @@ for (const name of sqlMigrations) {
   )
 }
 
-await Bun.write(registry, renderRegistry(sqlMigrations))
+await Bun.write(registry, renderRegistry(await typescriptMigrationNames()))
 
 async function check() {
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "deepagent-code-core-migration-check-"))
@@ -65,22 +62,30 @@ export default { ...config, out: ${JSON.stringify(output)} }
       )
     }
 
-    const migrations = before
-      .map((entry) => entry.path.split("/")[0])
-      .filter((name, index, all) => name !== undefined && all.indexOf(name) === index)
-      .sort()
-    for (const name of migrations) {
+    const sqlMigrations = await sqlMigrationNames(output)
+    for (const name of sqlMigrations) {
       if (await Bun.file(path.join(tsDir, `${name}.ts`)).exists()) continue
       throw new Error(
         `Database migration TypeScript wrapper is missing for ${name}. Run \`bun script/migration.ts\` from packages/core.`,
       )
     }
-    if ((await Bun.file(registry).text()) !== renderRegistry(migrations)) {
+    if ((await Bun.file(registry).text()) !== renderRegistry(await typescriptMigrationNames())) {
       throw new Error("Database migration registry is stale. Run `bun script/migration.ts` from packages/core.")
     }
   } finally {
     await fs.rm(temporary, { recursive: true, force: true })
   }
+}
+
+async function sqlMigrationNames(directory: string) {
+  return (await Array.fromAsync(new Bun.Glob("*/migration.sql").scan({ cwd: directory })))
+    .map((file) => file.split("/")[0])
+    .filter((name) => name !== undefined)
+    .sort()
+}
+
+async function typescriptMigrationNames() {
+  return (await Array.fromAsync(new Bun.Glob("*.ts").scan({ cwd: tsDir }))).map((file) => file.slice(0, -3)).sort()
 }
 
 async function snapshot(directory: string) {

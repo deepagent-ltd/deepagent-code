@@ -11,6 +11,7 @@ import { extractPromptFromParts } from "@/utils/prompt"
 import type { TextPart as SDKTextPart } from "@deepagent-code/sdk/v2/client"
 import { base64Encode } from "@deepagent-code/core/util/encode"
 import { useLanguage } from "@/context/language"
+import { Identifier } from "@/utils/id"
 
 interface ForkableMessage {
   id: string
@@ -30,6 +31,8 @@ export const DialogFork: Component = () => {
   const prompt = usePrompt()
   const dialog = useDialog()
   const language = useLanguage()
+  const pendingIntents = new Map<string, string>()
+  const pendingRequests = new Set<string>()
 
   const messages = createMemo((): ForkableMessage[] => {
     const sessionID = params.id
@@ -68,13 +71,19 @@ export const DialogFork: Component = () => {
     })
     const dir = base64Encode(sdk.directory)
 
+    const intentKey = `${sessionID}:${item.id}`
+    if (pendingRequests.has(intentKey)) return
+    const intentID = pendingIntents.get(intentKey) ?? Identifier.ascending("fork")
+    pendingIntents.set(intentKey, intentID)
+    pendingRequests.add(intentKey)
     sdk.client.session
-      .fork({ sessionID, messageID: item.id })
+      .fork({ sessionID, messageID: item.id, intentID })
       .then((forked) => {
         if (!forked.data) {
           showToast({ title: language.t("common.requestFailed") })
           return
         }
+        pendingIntents.delete(intentKey)
         dialog.close()
         prompt.set(restored, undefined, { dir, id: forked.data.id })
         navigate(`/${dir}/session/${forked.data.id}`)
@@ -83,6 +92,7 @@ export const DialogFork: Component = () => {
         const message = err instanceof Error ? err.message : String(err)
         showToast({ title: language.t("common.requestFailed"), description: message })
       })
+      .finally(() => pendingRequests.delete(intentKey))
   }
 
   return (

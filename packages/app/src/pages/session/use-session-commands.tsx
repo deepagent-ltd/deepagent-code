@@ -18,6 +18,7 @@ import { extractPromptFromParts } from "@/utils/prompt"
 import { UserMessage } from "@deepagent-code/sdk/v2"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import { errorMessage } from "@/pages/layout/helpers"
+import { Identifier } from "@/utils/id"
 
 export type SessionCommandContext = {
   navigateMessageByOffset: (offset: number) => void
@@ -46,6 +47,7 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
   const terminalHosts = useTerminalHosts()
   const layout = useLayout()
   const navigate = useNavigate()
+  const forkIntents = new Map<string, string>()
   const { params, tabs, view } = useSessionLayout()
 
   const info = () => {
@@ -362,9 +364,11 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
   const fork = async () => {
     const sessionID = params.id
     if (!sessionID) return
+    const intentID = forkIntents.get(sessionID) ?? Identifier.ascending("fork")
+    forkIntents.set(sessionID, intentID)
 
     const forked = await sdk.client.session
-      .fork({ sessionID })
+      .fork({ sessionID, intentID })
       .then((x) => x.data)
       .catch((err) => {
         showToast({
@@ -374,6 +378,7 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
         return undefined
       })
     if (!forked) return
+    forkIntents.delete(sessionID)
 
     local.session.promote(sdk.directory, forked.id)
     layout.handoff.setTabs(local.slug(), forked.id)
@@ -578,8 +583,7 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
 
   // Phase 3: terminal commands route to the bottom host. The side terminal is
   // opened from the right-panel rail (session-side-panel.tsx) rather than commands.
-  const bottomTerminalOpen = () =>
-    view().panel.bottom.opened() && view().panel.bottom.activeView() === "terminal"
+  const bottomTerminalOpen = () => view().panel.bottom.opened() && view().panel.bottom.activeView() === "terminal"
   const sideTerminalOpen = () => view().rightPanel.mode() === "terminal"
   const terminalOpen = () => bottomTerminalOpen() || sideTerminalOpen()
   // Keybind commands operate on the bottom terminal session.

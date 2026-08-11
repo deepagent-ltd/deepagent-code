@@ -31,7 +31,7 @@ export function normalizeModelID(id: string): string {
 // Strip a trailing date/version stamp so "claude-3-5-sonnet-20241022" can fall back to
 // "claude-3-5-sonnet". Only used as a secondary (loose) match after exact-normalized misses.
 export function stripDateSuffix(normalized: string): string {
-  return normalized.replace(/-(?:\d{6,8}|v\d+(?:-\d+)*|latest|preview)$/g, "")
+  return normalized.replace(/-(?:\d{4,8}|v\d+(?:-\d+)*|latest|preview)$/g, "")
 }
 
 export interface CatalogMatch {
@@ -82,17 +82,19 @@ export function buildCatalogIndex(catalog: Record<string, ModelsDev.Provider>): 
   return { exact, loose }
 }
 
-// Look up catalog specs for a discovered/custom model. Tries the api id then the config id against the
-// exact map, then the date-stripped loose map. Returns the matched catalog model or undefined.
-export function catalogSpecFor(apiID: string, modelID: string, index: CatalogIndex): ModelsDev.Model | undefined {
-  const apiKey = normalizeModelID(apiID)
-  const idKey = normalizeModelID(modelID)
-  return (
-    index.exact.get(apiKey)?.model ??
-    index.exact.get(idKey)?.model ??
-    index.loose.get(stripDateSuffix(apiKey))?.model ??
-    index.loose.get(stripDateSuffix(idKey))?.model
+function matchFor(apiID: string, modelID: string, index: CatalogIndex): CatalogMatch | undefined {
+  const keys = [normalizeModelID(apiID), normalizeModelID(modelID)]
+  const candidates = keys.flatMap((key) => [index.exact.get(key), index.loose.get(stripDateSuffix(key))])
+  return candidates.filter((match): match is CatalogMatch => match !== undefined).reduce<CatalogMatch | undefined>(
+    (best, candidate) => (best ? preferMatch(best, candidate) : candidate),
+    undefined,
   )
+}
+
+// Look up catalog specs for a discovered/custom model. Compare exact and date-stripped candidates
+// together so an exact third-party dated alias cannot outrank the canonical official base model.
+export function catalogSpecFor(apiID: string, modelID: string, index: CatalogIndex): ModelsDev.Model | undefined {
+  return matchFor(apiID, modelID, index)?.model
 }
 
 // Small projection of the fields the discover dialog surfaces so the user can preview (and then
@@ -118,12 +120,5 @@ export function projectSpec(match: CatalogMatch): ProjectedSpec {
 }
 
 export function specMatchFor(apiID: string, modelID: string, index: CatalogIndex): CatalogMatch | undefined {
-  const apiKey = normalizeModelID(apiID)
-  const idKey = normalizeModelID(modelID)
-  return (
-    index.exact.get(apiKey) ??
-    index.exact.get(idKey) ??
-    index.loose.get(stripDateSuffix(apiKey)) ??
-    index.loose.get(stripDateSuffix(idKey))
-  )
+  return matchFor(apiID, modelID, index)
 }

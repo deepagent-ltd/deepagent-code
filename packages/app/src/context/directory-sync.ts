@@ -13,6 +13,7 @@ import { SESSION_CACHE_LIMIT, dropSessionCaches, pickSessionCacheEvictions } fro
 import { diffs as list, message as clean } from "@/utils/diffs"
 import { createServerSdkContext, useServerSDK } from "./server-sdk"
 import { type createServerSyncContextInner } from "./server-sync"
+import { promptAdmissionClientMessageID } from "./global-sync/prompt-admission"
 
 const SKIP_PARTS = new Set(["patch", "step-start", "step-finish"])
 
@@ -67,6 +68,11 @@ type OptimisticItem = {
   parts: Part[]
 }
 
+type OptimisticResolution = {
+  pending: OptimisticItem[]
+  canonical: Message[]
+}
+
 type MessagePage = {
   session: Message[]
   part: { id: string; part: Part[] }[]
@@ -93,14 +99,27 @@ const mergeParts = (parts: Part[] | undefined, want: Part[]) => {
   return next
 }
 
+const hasCanonicalPromptAdmission = (messages: Message[] | undefined, clientMessageID: string) =>
+  messages?.some((message) => promptAdmissionClientMessageID(message) === clientMessageID) ?? false
+
 export function mergeOptimisticPage(page: MessagePage, items: OptimisticItem[]) {
   if (items.length === 0) return { ...page, confirmed: [] as string[] }
 
   const session = [...page.session]
   const part = new Map(page.part.map((item) => [item.id, sortParts(item.part)]))
   const confirmed: string[] = []
+  const correlated = new Set(
+    page.session
+      .map(promptAdmissionClientMessageID)
+      .filter((messageID): messageID is string => messageID !== undefined),
+  )
 
   for (const item of items) {
+    if (correlated.has(item.message.id)) {
+      confirmed.push(item.message.id)
+      part.delete(item.message.id)
+      continue
+    }
     const result = Binary.search(session, item.message.id, (message) => message.id)
     const found = result.found
     if (!found) session.splice(result.index, 0, item.message)
@@ -125,9 +144,14 @@ export function mergeOptimisticPage(page: MessagePage, items: OptimisticItem[]) 
 
 export function applyOptimisticAdd(draft: OptimisticStore, input: OptimisticAddInput) {
   const messages = draft.message[input.sessionID]
+  if (hasCanonicalPromptAdmission(messages, input.message.id)) {
+    delete draft.part[input.message.id]
+    return
+  }
   if (messages) {
     const result = Binary.search(messages, input.message.id, (m) => m.id)
-    messages.splice(result.index, 0, input.message)
+    if (result.found) messages[result.index] = input.message
+    else messages.splice(result.index, 0, input.message)
   } else {
     draft.message[input.sessionID] = [input.message]
   }
@@ -148,7 +172,8 @@ function setOptimisticAdd(setStore: (...args: unknown[]) => void, input: Optimis
     if (!messages) return [input.message]
     const result = Binary.search(messages, input.message.id, (m) => m.id)
     const next = [...messages]
-    next.splice(result.index, 0, input.message)
+    if (result.found) next[result.index] = input.message
+    else next.splice(result.index, 0, input.message)
     return next
   })
   setStore("part", input.message.id, sortParts(input.parts))
@@ -163,12 +188,7 @@ function setOptimisticRemove(setStore: (...args: unknown[]) => void, input: Opti
     next.splice(result.index, 1)
     return next
   })
-  setStore("part", (part: Record<string, Part[] | undefined>) => {
-    if (!(input.messageID in part)) return part
-    const next = { ...part }
-    delete next[input.messageID]
-    return next
-  })
+  setStore("part", input.messageID, undefined)
 }
 
 export const createDirSyncContext = (
@@ -182,9 +202,9 @@ export const createDirSyncContext = (
   type Setter = Child[1]
 
   const current = createMemo(() => serverSync.child(directory, { mcp: true }))
-  const target = (directory?: string) => {
-    if (!directory || directory === directory) return current()
-    return serverSync.child(directory)
+  const target = (targetDirectory?: string) => {
+    if (!targetDirectory || targetDirectory === directory) return current()
+    return serverSync.child(targetDirectory)
   }
   const absolute = (path: string) => (current()[0].path.directory + "/" + path).replace("//", "/")
   const initialMessagePageSize = 80
@@ -231,9 +251,23 @@ export const createDirSyncContext = (
     if (list.size === 0) optimistic.delete(key)
   }
 
-  const getOptimistic = (directory: string, sessionID: string) => [
-    ...(optimistic.get(keyFor(directory, sessionID))?.values() ?? []),
-  ]
+  const getOptimistic = (directory: string, sessionID: string): OptimisticResolution => {
+    const messages = serverSync.child(directory, { bootstrap: false })[0].message[sessionID]
+    const items = [...(optimistic.get(keyFor(directory, sessionID))?.values() ?? [])]
+    const clientMessageIDs = new Set(items.map((item) => item.message.id))
+    const canonical = (messages ?? []).filter((message) => {
+      const clientMessageID = promptAdmissionClientMessageID(message)
+      return clientMessageID !== undefined && clientMessageIDs.has(clientMessageID)
+    })
+    const confirmed = new Set(canonical.map((message) => promptAdmissionClientMessageID(message)))
+    for (const messageID of confirmed) {
+      if (messageID) clearOptimistic(directory, sessionID, messageID)
+    }
+    return {
+      pending: items.filter((item) => !confirmed.has(item.message.id)),
+      canonical,
+    }
+  }
 
   const seenFor = (directory: string) => {
     const existing = seen.get(directory)
@@ -327,13 +361,14 @@ export const createDirSyncContext = (
     await fetchMessages(input)
       .then((page) => {
         if (!tracked(input.directory, input.sessionID)) return
-        const next = mergeOptimisticPage(page, getOptimistic(input.directory, input.sessionID))
+        const optimistic = getOptimistic(input.directory, input.sessionID)
+        const next = mergeOptimisticPage(page, optimistic.pending)
         for (const messageID of next.confirmed) {
           clearOptimistic(input.directory, input.sessionID, messageID)
         }
         const [store] = serverSync.child(input.directory, { bootstrap: false })
-        const cached = input.mode === "prepend" ? (store.message[input.sessionID] ?? []) : []
-        const message = input.mode === "prepend" ? merge(cached, next.session) : next.session
+        const cached = input.mode === "prepend" ? (store.message[input.sessionID] ?? []) : optimistic.canonical
+        const message = merge(cached, next.session)
         batch(() => {
           input.setStore("message", input.sessionID, reconcile(message, { key: "id" }))
           for (const p of next.part) {
@@ -396,7 +431,15 @@ export const createDirSyncContext = (
       optimistic: {
         add(input: { directory?: string; sessionID: string; message: Message; parts: Part[] }) {
           const _directory = input.directory ?? directory
-          const [, setStore] = target(input.directory)
+          const [store, setStore] = target(input.directory)
+          if (hasCanonicalPromptAdmission(store.message[input.sessionID], input.message.id)) {
+            clearOptimistic(_directory, input.sessionID, input.message.id)
+            setOptimisticRemove(setStore as (...args: unknown[]) => void, {
+              sessionID: input.sessionID,
+              messageID: input.message.id,
+            })
+            return
+          }
           setOptimistic(_directory, input.sessionID, { message: input.message, parts: input.parts })
           setOptimisticAdd(setStore as (...args: unknown[]) => void, input)
         },
@@ -423,7 +466,15 @@ export const createDirSyncContext = (
           agent: input.agent,
           model: { ...input.model, variant: input.variant },
         }
-        const [, setStore] = target()
+        const [store, setStore] = target()
+        if (hasCanonicalPromptAdmission(store.message[input.sessionID], message.id)) {
+          clearOptimistic(directory, input.sessionID, message.id)
+          setOptimisticRemove(setStore as (...args: unknown[]) => void, {
+            sessionID: input.sessionID,
+            messageID: message.id,
+          })
+          return
+        }
         setOptimistic(directory, input.sessionID, { message, parts: input.parts })
         setOptimisticAdd(setStore as (...args: unknown[]) => void, {
           sessionID: input.sessionID,

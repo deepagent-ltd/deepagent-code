@@ -46,6 +46,7 @@ export interface RequestBudgetStatus {
   readonly reason?: "context_limit_unknown" | "context_limit_invalid" | "physical_budget_exceeded"
   readonly estimatedFullRequestTokens: number
   readonly physicalInputBudget: number
+  // Durable receipt compatibility: this is the independent generation ceiling, not an input deduction.
   readonly reservedOutputTokens: number
   readonly safetyMargin: number
   readonly provenance: "model_limit" | "host_guard"
@@ -104,47 +105,52 @@ function positiveEnv(name: string, fallback: number) {
   return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback
 }
 
+function physicalInputLimit(model: Provider.Model) {
+  return model.limit.input ?? model.limit.context
+}
+
 export function requestBudget(input: {
   model: Provider.Model
   estimatedFullRequestTokens: number
   outputTokenMax?: number
 }): RequestBudgetStatus {
-  const reservedOutputTokens = ProviderTransform.maxOutputTokens(input.model, input.outputTokenMax)
+  // Output capacity is an independent generation limit. Keep it in the receipt, but never
+  // subtract it from the provider's input window.
+  const maxOutputTokens = ProviderTransform.maxOutputTokens(input.model, input.outputTokenMax)
   const safetyMargin = positiveEnv("DEEPAGENT_CODE_CONTEXT_SAFETY_MARGIN", 1_024)
-  const context = input.model.limit.context
-  if (!Number.isFinite(context) || context < 0) {
+  const inputLimit = physicalInputLimit(input.model)
+  if (!Number.isFinite(inputLimit) || inputLimit < 0) {
     return {
       decision: "unavailable",
       reason: "context_limit_invalid",
       estimatedFullRequestTokens: input.estimatedFullRequestTokens,
       physicalInputBudget: 0,
-      reservedOutputTokens,
+      reservedOutputTokens: maxOutputTokens,
       safetyMargin,
       provenance: "model_limit",
     }
   }
-  if (context === 0) {
+  if (inputLimit === 0) {
     const hostGuard = positiveEnv("DEEPAGENT_CODE_UNKNOWN_CONTEXT_GUARD", 32_768)
     return {
       decision: input.estimatedFullRequestTokens < hostGuard ? "ok" : "unavailable",
       ...(input.estimatedFullRequestTokens >= hostGuard ? { reason: "context_limit_unknown" as const } : {}),
       estimatedFullRequestTokens: input.estimatedFullRequestTokens,
       physicalInputBudget: hostGuard,
-      reservedOutputTokens,
+      reservedOutputTokens: maxOutputTokens,
       safetyMargin,
       provenance: "host_guard",
     }
   }
 
-  const contextBudget = context - reservedOutputTokens - safetyMargin
-  const physicalInputBudget = input.model.limit.input ? Math.min(input.model.limit.input, contextBudget) : contextBudget
+  const physicalInputBudget = inputLimit - safetyMargin
   if (physicalInputBudget <= 0) {
     return {
       decision: "unavailable",
       reason: "context_limit_invalid",
       estimatedFullRequestTokens: input.estimatedFullRequestTokens,
       physicalInputBudget,
-      reservedOutputTokens,
+      reservedOutputTokens: maxOutputTokens,
       safetyMargin,
       provenance: "model_limit",
     }
@@ -154,25 +160,22 @@ export function requestBudget(input: {
     ...(input.estimatedFullRequestTokens >= physicalInputBudget ? { reason: "physical_budget_exceeded" as const } : {}),
     estimatedFullRequestTokens: input.estimatedFullRequestTokens,
     physicalInputBudget,
-    reservedOutputTokens,
+    reservedOutputTokens: maxOutputTokens,
     safetyMargin,
     provenance: "model_limit",
   }
 }
 
 export function usable(input: { cfg: ConfigV1.Info; model: Provider.Model; outputTokenMax?: number }) {
-  const context = input.model.limit.context
-  // BUG-007: context=0 means "unknown" (resolver fallback). Return 0 so callers that only need the
+  const inputLimit = physicalInputLimit(input.model)
+  // BUG-007: a zero input/context fallback means "unknown". Return 0 so callers that only need the
   // numeric budget get a safe zero, but overflowStatus() uses its own typed path for the "unavailable"
   // phase rather than treating 0 the same as auto=false.
-  if (!context) return 0
+  if (!inputLimit) return 0
 
-  const reserved =
-    input.cfg.compaction?.reserved ??
-    Math.min(COMPACTION_BUFFER, ProviderTransform.maxOutputTokens(input.model, input.outputTokenMax))
-  return input.model.limit.input
-    ? Math.max(0, input.model.limit.input - reserved)
-    : Math.max(0, context - ProviderTransform.maxOutputTokens(input.model, input.outputTokenMax))
+  // This is input-side room for one more turn and the compaction instruction. Output has its own
+  // provider limit and does not consume the input window.
+  return Math.max(0, inputLimit - (input.cfg.compaction?.reserved ?? COMPACTION_BUFFER))
 }
 
 // Collapse an assistant token record to a single "used" count, matching the historical isOverflow math
@@ -208,10 +211,10 @@ export function overflowStatus(input: {
   const softLine = hardLine * reminderFraction()
   const fallbackLine = Math.min(hardLine, Math.max(softLine, hardLine - fallbackBuffer()))
 
-  // BUG-007: context=0 is the resolver fallback for an *unknown* limit — it must NOT be treated the
+  // BUG-007: a zero input/context fallback is an *unknown* limit — it must NOT be treated the
   // same as the user explicitly disabling compaction (auto=false). Return a typed "unavailable" result
   // so the caller can show a meaningful degraded state / fail-closed guard.
-  if (!input.model.limit.context) {
+  if (!physicalInputLimit(input.model)) {
     return {
       phase: "unavailable",
       reason: "context_limit_unknown",

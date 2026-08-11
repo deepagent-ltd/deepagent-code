@@ -268,6 +268,14 @@ export const layer = Layer.effectDiscard(
         const id = event.data.info.id
         const sessionID = event.data.info.sessionID
         const data = messageData(event.data.info)
+        const existing = yield* db
+          .select({ session_id: MessageTable.session_id })
+          .from(MessageTable)
+          .where(eq(MessageTable.id, id))
+          .get()
+          .pipe(Effect.orDie)
+        if (existing && existing.session_id !== sessionID)
+          return yield* Effect.die(`SessionProjector: message ${id} cannot move between sessions`)
         yield* db
           .insert(MessageTable)
           .values({ id, session_id: sessionID, time_created, data })
@@ -300,14 +308,26 @@ export const layer = Layer.effectDiscard(
         const row = yield* db
           .select()
           .from(PartTable)
-          .where(and(eq(PartTable.id, event.data.partID), eq(PartTable.session_id, event.data.sessionID)))
+          .where(
+            and(
+              eq(PartTable.id, event.data.partID),
+              eq(PartTable.message_id, event.data.messageID),
+              eq(PartTable.session_id, event.data.sessionID),
+            ),
+          )
           .get()
           .pipe(Effect.orDie)
         const previous = row && usage(row.data)
         if (previous) yield* applyUsage(db, event.data.sessionID, previous, -1)
         yield* db
           .delete(PartTable)
-          .where(and(eq(PartTable.id, event.data.partID), eq(PartTable.session_id, event.data.sessionID)))
+          .where(
+            and(
+              eq(PartTable.id, event.data.partID),
+              eq(PartTable.message_id, event.data.messageID),
+              eq(PartTable.session_id, event.data.sessionID),
+            ),
+          )
           .run()
           .pipe(Effect.orDie)
       }),
@@ -318,7 +338,17 @@ export const layer = Layer.effectDiscard(
         const messageID = event.data.part.messageID
         const sessionID = event.data.part.sessionID
         const data = partData(event.data.part)
+        const parent = yield* db
+          .select({ session_id: MessageTable.session_id })
+          .from(MessageTable)
+          .where(eq(MessageTable.id, messageID))
+          .get()
+          .pipe(Effect.orDie)
+        if (!parent || parent.session_id !== sessionID)
+          return yield* Effect.die(`SessionProjector: part ${id} has a cross-session parent message`)
         const row = yield* db.select().from(PartTable).where(eq(PartTable.id, id)).get().pipe(Effect.orDie)
+        if (row && (row.message_id !== messageID || row.session_id !== sessionID))
+          return yield* Effect.die(`SessionProjector: part ${id} cannot move between messages or sessions`)
         yield* db
           .insert(PartTable)
           .values({ id, message_id: messageID, session_id: sessionID, time_created: event.data.time, data })
