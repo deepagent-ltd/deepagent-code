@@ -30,6 +30,8 @@ import { Todo } from "../../src/session/todo"
 import { Session } from "@/session/session"
 import {
   SessionHistoryStateTable,
+  SessionIntentTable,
+  SessionSteerTable,
   MessageTable,
   SessionMessageTable,
   SessionPromptEpochMessageTable,
@@ -49,6 +51,7 @@ import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { SessionStatus } from "../../src/session/status"
 import { SessionV2 } from "@deepagent-code/core/session"
 import { SessionExecution } from "@deepagent-code/core/session/execution"
+import { SessionMessage } from "@deepagent-code/core/session/message"
 import { Skill } from "../../src/skill"
 import { SystemPrompt } from "../../src/session/system"
 import { Shell } from "../../src/shell/shell"
@@ -69,7 +72,7 @@ import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { createHash } from "node:crypto"
 import { symlink } from "node:fs/promises"
 import { awaitWithTimeout, pollWithTimeout, testEffect } from "../lib/effect"
-import { reply, TestLLMServer } from "../lib/llm-server"
+import { raw, reply, TestLLMServer } from "../lib/llm-server"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { ModelV2 } from "@deepagent-code/core/model"
@@ -84,6 +87,11 @@ import { SessionPromptEpochTable } from "@/session/prompt-epoch.sql"
 import { SessionToolRequestReceiptTable } from "@/session/tool-request-receipt.sql"
 import { SessionToolArgumentReceiptTable } from "@/session/tool-argument-receipt.sql"
 import { CompactionArtifactTable, CompactionRunTable } from "@/session/compaction-sql"
+import {
+  SessionActivityAdmissionTable,
+  SessionActivityProgressTable,
+  SessionLegacyActivityTable,
+} from "@/session/activity-sql"
 
 void Log.init({ print: false })
 
@@ -2059,7 +2067,9 @@ it.instance("BUG-010 forward-compatible malformed plan stops before a third Prov
     },
     firstState: "completed",
     protocol: "invalid",
-    errorCode: "empty_title",
+    // Model create payloads now fail closed on supplied identity before the
+    // lower-priority empty-title check.
+    errorCode: "unsafe_step_identity",
     validationOutcome: "semantic_invalid",
   }),
 )
@@ -2096,6 +2106,60 @@ it.instance("loop continues (not exits) when finish is length: injects a continu
     expect(
       SessionProcessor.planProtocolActivityID(injected?.info.role === "user" ? injected.info.metadata : undefined),
     ).toBe(seeded.user.id)
+  }),
+)
+
+it.instance("synthetic output continuation preserves the durable legacy activity owner", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const { db } = yield* Database.Service
+    const session = yield* sessions.create({
+      title: "Pinned",
+      permission: [{ permission: "*", pattern: "*", action: "allow" }],
+    })
+    yield* llm.push(
+      raw({
+        chunks: [
+          {
+            id: "chatcmpl-test",
+            object: "chat.completion.chunk",
+            choices: [{ delta: { role: "assistant" } }],
+          },
+          {
+            id: "chatcmpl-test",
+            object: "chat.completion.chunk",
+            choices: [{ delta: { content: "partial" } }],
+          },
+          {
+            id: "chatcmpl-test",
+            object: "chat.completion.chunk",
+            choices: [{ delta: {}, finish_reason: "length" }],
+          },
+        ],
+      }),
+    )
+    yield* llm.text("complete")
+
+    yield* prompt.prompt({
+      sessionID: session.id,
+      agent: "build",
+      parts: [{ type: "text", text: "produce a long response" }],
+    })
+
+    expect(yield* llm.hits).toHaveLength(2)
+    expect(
+      yield* db
+        .select({ activityID: SessionActivityProgressTable.activity_id, state: SessionActivityProgressTable.state })
+        .from(SessionActivityProgressTable)
+        .orderBy(SessionActivityProgressTable.revision)
+        .all()
+        .pipe(Effect.orDie),
+    ).toEqual([expect.objectContaining({ state: "progress" }), expect.objectContaining({ state: "final" })])
+    expect(yield* db.select().from(SessionLegacyActivityTable).all().pipe(Effect.orDie)).toMatchObject([
+      { state: "settled", terminal_reason: "stop" },
+    ])
   }),
 )
 
@@ -2778,33 +2842,30 @@ it.instance(
 
       yield* llm.wait(1)
 
-      const id = MessageID.ascending()
-      const b = yield* prompt
-        .prompt({
-          sessionID: chat.id,
-          messageID: id,
-          agent: "build",
-          model: ref,
-          parts: [{ type: "text", text: "second" }],
-        })
-        .pipe(Effect.forkChild)
-
-      yield* pollWithTimeout(
-        sessions
-          .messages({ sessionID: chat.id })
-          .pipe(
-            Effect.map((msgs) =>
-              msgs.some((msg) => msg.info.role === "user" && msg.info.id === id) ? true : undefined,
-            ),
-          ),
-        "timed out waiting for second prompt to save",
-      )
+      const receipt = yield* prompt.promptAsync({
+        sessionID: chat.id,
+        messageID: MessageID.ascending(),
+        intentID: "intent_concurrent_prompt_steer",
+        agent: "build",
+        model: ref,
+        parts: [{ type: "text", text: "second" }],
+      })
+      expect(receipt.delivery).toBe("steer")
+      const { db } = yield* Database.Service
+      const durableMessageID = SessionMessage.ID.make(receipt.messageID)
+      expect(
+        yield* db
+          .select({ id: SessionSteerTable.id, consumedSeq: SessionSteerTable.consumed_seq })
+          .from(SessionSteerTable)
+          .where(eq(SessionSteerTable.id, durableMessageID))
+          .get()
+          .pipe(Effect.orDie),
+      ).toEqual({ id: durableMessageID, consumedSeq: null })
 
       yield* Deferred.succeed(gate, void 0)
 
-      const [ea, eb] = yield* Effect.all([Fiber.await(a), Fiber.await(b)])
+      const ea = yield* Fiber.await(a)
       expect(Exit.isSuccess(ea)).toBe(true)
-      expect(Exit.isSuccess(eb)).toBe(true)
       expect(yield* llm.calls).toBe(2)
 
       const msgs = yield* sessions.messages({ sessionID: chat.id })
@@ -2812,7 +2873,7 @@ it.instance(
       expect(assistants).toHaveLength(2)
       const last = assistants.at(-1)
       if (!last || last.info.role !== "assistant") throw new Error("expected second assistant")
-      expect(last.info.parentID).toBe(id)
+      expect(last.info.parentID).toBe(receipt.messageID)
       expect(last.parts.some((part) => part.type === "text" && part.text === "second")).toBe(true)
 
       const inputs = yield* llm.inputs
@@ -3458,6 +3519,50 @@ noLLMServer.instance(
 // Missing file handling
 
 noLLMServer.instance(
+  "direct prompts auto-claim one durable intent and reconcile exact retries",
+  () =>
+    Effect.gen(function* () {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const { db } = yield* Database.Service
+      const session = yield* sessions.create({})
+      const messageID = MessageID.make("msg_direct_intent_retry")
+      const input = {
+        sessionID: session.id,
+        messageID,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text" as const, text: "durable direct prompt" }],
+      }
+
+      const first = yield* prompt.prompt(input)
+      const retry = yield* prompt.prompt(input)
+      const conflict = yield* prompt
+        .prompt({
+          ...input,
+          parts: [{ type: "text", text: "conflicting retry" }],
+        })
+        .pipe(Effect.exit)
+
+      expect(retry).toEqual(first)
+      expect(Exit.isFailure(conflict)).toBe(true)
+      expect(
+        yield* db
+          .select()
+          .from(SessionIntentTable)
+          .where(eq(SessionIntentTable.admitted_message_id, messageID))
+          .all()
+          .pipe(Effect.orDie),
+      ).toHaveLength(1)
+      expect(yield* db.select().from(SessionActivityAdmissionTable).all().pipe(Effect.orDie)).toHaveLength(1)
+      expect(yield* db.select().from(SessionLegacyActivityTable).all().pipe(Effect.orDie)).toMatchObject([
+        { state: "active", terminal_reason: null },
+      ])
+    }),
+  { config: cfg },
+)
+
+noLLMServer.instance(
   "task notification prompt retries reuse the persisted user message",
   () =>
     Effect.gen(function* () {
@@ -3849,10 +3954,10 @@ noLLMServer.instance(
     Effect.gen(function* () {
       const prompt = yield* SessionPrompt.Service
       const sessions = yield* Session.Service
-      const session = yield* sessions.create({})
+      const otherSession = yield* sessions.create({})
 
       const other = yield* prompt.prompt({
-        sessionID: session.id,
+        sessionID: otherSession.id,
         agent: "build",
         model: { providerID: ProviderV2.ID.make("deepagent-code"), modelID: ModelV2.ID.make("kimi-k2.5-free") },
         noReply: true,
@@ -3861,8 +3966,9 @@ noLLMServer.instance(
       if (other.info.role !== "user") throw new Error("expected user message")
       expect(other.info.model.variant).toBeUndefined()
 
+      const matchingSession = yield* sessions.create({})
       const match = yield* prompt.prompt({
-        sessionID: session.id,
+        sessionID: matchingSession.id,
         agent: "build",
         noReply: true,
         parts: [{ type: "text", text: "hello again" }],
@@ -3875,8 +3981,9 @@ noLLMServer.instance(
       })
       expect(match.info.model.variant).toBe("xhigh")
 
+      const overrideSession = yield* sessions.create({})
       const override = yield* prompt.prompt({
-        sessionID: session.id,
+        sessionID: overrideSession.id,
         agent: "build",
         noReply: true,
         variant: "high",
@@ -3885,7 +3992,13 @@ noLLMServer.instance(
       if (override.info.role !== "user") throw new Error("expected user message")
       expect(override.info.model.variant).toBe("high")
 
-      yield* sessions.remove(session.id)
+      yield* Effect.forEach(
+        [otherSession, matchingSession, overrideSession],
+        (session) => sessions.remove(session.id),
+        {
+          discard: true,
+        },
+      )
     }),
   {
     config: {

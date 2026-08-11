@@ -31,6 +31,9 @@ export const modelSuites = [
   "stale-validation",
   "continuation-repetition",
   "degeneration",
+  "activity-progress-lifecycle",
+  "activity-progress-restart",
+  "activity-progress-package",
   "subagent-finalizer-isolation",
   "steer-boundary",
   "subagent-worktree-routing",
@@ -49,6 +52,7 @@ export const modelSuites = [
   "prompt-intent-fencing",
   "subagent-control-plane",
   "plan-advance-contract",
+  "plan-create-replan-contract",
 ] as const
 
 export type ExecutionStack = (typeof executionStacks)[number]
@@ -105,6 +109,9 @@ const shellExitContract = modelRun("live", "legacy-session", "shell-exit-contrac
 const staleValidation = modelRun("live", "legacy-session", "stale-validation")
 const continuationRepetition = modelRun("live", "legacy-session", "continuation-repetition")
 const degeneration = modelRun("live", "legacy-session", "degeneration")
+const activityProgressLifecycle = modelRun("live", "legacy-session", "activity-progress-lifecycle")
+const activityProgressRestart = modelRun("live", "packaged-sidecar", "activity-progress-restart")
+const activityProgressPackage = modelRun("ext", "renderer-ui", "activity-progress-package")
 const finalizerIsolation = modelRun("ext", "legacy-session", "subagent-finalizer-isolation")
 const steerBoundary = modelRun("live", "legacy-session", "steer-boundary")
 const worktreeRouting = modelRun("ext", "legacy-session", "subagent-worktree-routing")
@@ -123,6 +130,7 @@ const intelligenceDraft = modelRun("ext", "legacy-session", "intelligence-draft-
 const promptIntentFencing = modelRun("ext", "legacy-session", "prompt-intent-fencing")
 const subagentControlPlane = modelRun("live", "legacy-session", "subagent-control-plane")
 const planAdvanceContract = modelRun("live", "legacy-session", "plan-advance-contract")
+const planCreateReplanContract = modelRun("live", "legacy-session", "plan-create-replan-contract")
 const allHarnessRuns = [
   adapterProvider,
   cliHeadless,
@@ -140,6 +148,9 @@ const allHarnessRuns = [
   staleValidation,
   continuationRepetition,
   degeneration,
+  activityProgressLifecycle,
+  activityProgressRestart,
+  activityProgressPackage,
   finalizerIsolation,
   steerBoundary,
   worktreeRouting,
@@ -162,6 +173,7 @@ const allHarnessRuns = [
   promptIntentFencing,
   subagentControlPlane,
   planAdvanceContract,
+  planCreateReplanContract,
 ]
 
 export const routeManifest = [
@@ -285,6 +297,15 @@ export const routeManifest = [
     runs: [planAdvanceContract],
   },
   {
+    id: "live-llm-plan-create-replan-contract-harness",
+    paths: [
+      "packages/deepagent-code/script/live-llm/plan-create-replan-contract.ts",
+      "packages/deepagent-code/script/live-llm/plan-create-replan-oracle.ts",
+    ],
+    checks: ["live-llm-routes", "llm-adapter"],
+    runs: [planCreateReplanContract],
+  },
+  {
     id: "live-llm-degeneration-harness",
     paths: ["packages/deepagent-code/script/live-llm/degeneration.ts"],
     checks: ["tool-bash-sandbox"],
@@ -301,6 +322,35 @@ export const routeManifest = [
     paths: ["packages/deepagent-code/script/live-llm/steer-boundary.ts"],
     checks: ["session-continuation"],
     runs: [steerBoundary],
+  },
+  {
+    id: "live-llm-activity-progress-harness",
+    paths: [
+      "packages/deepagent-code/script/live-llm/activity-progress-lifecycle.ts",
+      "packages/deepagent-code/script/live-llm/activity-progress-oracle.ts",
+    ],
+    checks: ["live-llm-routes", "session-continuation"],
+    runs: [activityProgressLifecycle],
+  },
+  {
+    id: "live-llm-activity-progress-restart-harness",
+    paths: [
+      "packages/desktop/scripts/live-llm/activity-progress-restart.ts",
+      "packages/desktop/scripts/live-llm/runtime.ts",
+    ],
+    checks: ["desktop-runtime", "prompt-intent", "session-continuation"],
+    runs: [activityProgressRestart],
+  },
+  {
+    id: "live-llm-activity-progress-package-harness",
+    paths: [
+      "packages/desktop/electron-builder.config.ts",
+      "packages/desktop/scripts/live-llm/activity-progress-package.ts",
+      "packages/desktop/scripts/live-llm/runtime.ts",
+      "packages/desktop/scripts/package.ts",
+    ],
+    checks: ["desktop-runtime", "ui-runtime"],
+    runs: [activityProgressPackage],
   },
   {
     id: "live-llm-worktree-routing-harness",
@@ -600,7 +650,24 @@ export const routeManifest = [
       "packages/deepagent-code/src/tool/plan*.{ts,txt}",
     ],
     checks: ["live-llm-routes", "llm-adapter", "permission"],
-    runs: [planAdvanceContract],
+    runs: [planAdvanceContract, planCreateReplanContract],
+  },
+  {
+    id: "activity-progress-lifecycle-production",
+    paths: [
+      "packages/app/src/pages/session/message-timeline.data.ts",
+      "packages/core/src/database/migration/20260811090000_legacy_activity_progress.ts",
+      "packages/core/src/database/migration/20260811100000_legacy_activity_owner.ts",
+      "packages/deepagent-code/src/session/activity-crash-test.ts",
+      "packages/deepagent-code/src/session/activity-owner.ts",
+      "packages/deepagent-code/src/session/activity-sql.ts",
+      "packages/deepagent-code/src/session/message-v2.ts",
+      "packages/deepagent-code/src/session/prompt-intent.ts",
+      "packages/deepagent-code/src/session/prompt.ts",
+      "packages/deepagent-code/src/session/steer.ts",
+    ],
+    checks: ["live-llm-routes", "prompt-intent", "session-continuation", "ui-runtime"],
+    runs: [activityProgressLifecycle, activityProgressRestart, activityProgressPackage],
   },
   {
     id: "legacy-session-prompt",

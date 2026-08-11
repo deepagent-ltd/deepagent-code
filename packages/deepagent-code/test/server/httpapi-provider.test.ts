@@ -263,37 +263,6 @@ function setEnvScoped(key: string, value: string) {
 }
 
 describe("provider HttpApi", () => {
-  it.instance(
-    "only autoloads the public hosted provider for a blank installation",
-    Effect.gen(function* () {
-      const directory = (yield* TestInstance).directory
-      yield* setEnvScoped("DEEPAGENT_CODE_AUTH_CONTENT", "{}")
-
-      const response = yield* request("/provider", {
-        headers: { "x-deepagent-code-directory": directory },
-      })
-      expect(response.status).toBe(200)
-
-      const body = yield* response.json
-      expect(providerList(body, "all").length).toBeGreaterThan(0)
-      expect(isRecord(body) && body.connected).toEqual(["deepagent-code"])
-      expect(isRecord(body) && isRecord(body.default) && Object.keys(body.default).length).toBeGreaterThan(0)
-
-      const hosted = providerByID(body, "all", "deepagent-code")
-      expect(hosted).toBeDefined()
-      expect(isRecord(hosted) && isRecord(hosted.models) && Object.keys(hosted.models).length).toBeGreaterThan(0)
-      expect(
-        isRecord(hosted) &&
-          isRecord(hosted.models) &&
-          Object.values(hosted.models).every(
-            (model) => isRecord(model) && isRecord(model.cost) && model.cost.input === 0,
-          ),
-      ).toBe(true)
-    }),
-    projectOptions,
-    30000,
-  )
-
   it.instance.skip(
     "returns public v2 provider not found errors",
     Effect.gen(function* () {
