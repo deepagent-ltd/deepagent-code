@@ -42,11 +42,13 @@ export const modelSuites = [
   "subagent-resume",
   "subagent-takeover",
   "compaction-retention",
+  "context-authority",
   "expert-panel",
   "goal-grader-cli-entry",
   "intelligence-draft-confirmation",
   "prompt-intent-fencing",
   "subagent-control-plane",
+  "plan-advance-contract",
 ] as const
 
 export type ExecutionStack = (typeof executionStacks)[number]
@@ -114,11 +116,13 @@ const subagentIntensity = modelRun("ext", "legacy-session", "subagent-intensity"
 const subagentResume = modelRun("ext", "legacy-session", "subagent-resume")
 const subagentTakeover = modelRun("ext", "legacy-session", "subagent-takeover")
 const compactionRetention = modelRun("ext", "legacy-session", "compaction-retention")
+const contextAuthority = modelRun("ext", "cli-subprocess", "context-authority")
 const expertPanel = modelRun("ext", "legacy-session", "expert-panel")
 const goalGraderCliEntry = modelRun("ext", "cli-subprocess", "goal-grader-cli-entry")
 const intelligenceDraft = modelRun("ext", "legacy-session", "intelligence-draft-confirmation")
 const promptIntentFencing = modelRun("ext", "legacy-session", "prompt-intent-fencing")
 const subagentControlPlane = modelRun("live", "legacy-session", "subagent-control-plane")
+const planAdvanceContract = modelRun("live", "legacy-session", "plan-advance-contract")
 const allHarnessRuns = [
   adapterProvider,
   cliHeadless,
@@ -151,11 +155,13 @@ const allHarnessRuns = [
   permissionsDeny,
   mcpMarker,
   compactionRetention,
+  contextAuthority,
   expertPanel,
   goalGraderCliEntry,
   intelligenceDraft,
   promptIntentFencing,
   subagentControlPlane,
+  planAdvanceContract,
 ]
 
 export const routeManifest = [
@@ -268,6 +274,15 @@ export const routeManifest = [
     paths: ["packages/deepagent-code/script/live-llm/continuation-repetition.ts"],
     checks: ["session-continuation"],
     runs: [continuationRepetition],
+  },
+  {
+    id: "live-llm-plan-advance-contract-harness",
+    paths: [
+      "packages/deepagent-code/script/live-llm/plan-advance-contract.ts",
+      "packages/deepagent-code/script/live-llm/plan-advance-oracle.ts",
+    ],
+    checks: ["live-llm-routes", "llm-adapter"],
+    runs: [planAdvanceContract],
   },
   {
     id: "live-llm-degeneration-harness",
@@ -576,6 +591,18 @@ export const routeManifest = [
     runs: [continuationRepetition],
   },
   {
+    id: "plan-advance-contract-production",
+    paths: [
+      "packages/core/src/deepagent/plan-controller.ts",
+      "packages/core/src/deepagent/prompt-policy.ts",
+      "packages/deepagent-code/src/session/llm/request.ts",
+      "packages/deepagent-code/src/session/reminders.ts",
+      "packages/deepagent-code/src/tool/plan*.{ts,txt}",
+    ],
+    checks: ["live-llm-routes", "llm-adapter", "permission"],
+    runs: [planAdvanceContract],
+  },
+  {
     id: "legacy-session-prompt",
     paths: [
       "packages/deepagent-code/src/session/prompt.ts",
@@ -604,12 +631,14 @@ export const routeManifest = [
       "packages/deepagent-code/src/session/steer.ts",
       "packages/deepagent-code/src/session/compaction.ts",
       "packages/deepagent-code/src/session/compaction-sql.ts",
+      "packages/deepagent-code/src/session/context-ledger.ts",
       "packages/deepagent-code/src/session/prompt-epoch.ts",
       "packages/deepagent-code/src/session/prompt-epoch.sql.ts",
       "packages/deepagent-code/src/session/tool-argument-receipt.sql.ts",
       "packages/deepagent-code/src/session/tool-request-receipt.sql.ts",
       "packages/deepagent-code/src/session/message-v2.ts",
       "packages/deepagent-code/src/session/context-ledger.ts",
+      "packages/deepagent-code/src/session/history-authority.ts",
       "packages/deepagent-code/src/session/system.ts",
       "packages/core/src/system-context/**",
     ],
@@ -940,10 +969,48 @@ export const routeManifest = [
       "packages/deepagent-code/src/session/prompt-epoch.sql.ts",
       "packages/deepagent-code/src/session/tool-request-receipt.sql.ts",
       "packages/deepagent-code/src/session/message-v2.ts",
+      "packages/deepagent-code/src/session/history-authority.ts",
       "packages/deepagent-code/src/session/overflow.ts",
     ],
     checks: ["session-continuation"],
     runs: [compactionRetention],
+  },
+  {
+    id: "context-authority-suite",
+    paths: [
+      "packages/core/src/database/migration/20260809120000_session_history_authority.ts",
+      "packages/core/src/database/migration/20260810100000_prompt_authority_receipt.ts",
+      "packages/core/src/database/migration/20260810110000_fork_side_effect_receipt.ts",
+      "packages/core/src/database/migration/20260810120000_prompt_authority_quarantine.ts",
+      "packages/core/src/database/migration/20260810140000_bug_012_compaction_cas.ts",
+      "packages/core/src/database/migration/20260810150000_provider_receipt_authority.ts",
+      "packages/core/src/database/migration/20260810160000_compaction_continuation_admission.ts",
+      "packages/core/src/deepagent/context/world-state.ts",
+      "packages/core/src/session/sql.ts",
+      "packages/app/src/components/session/session-context-metrics.ts",
+      "packages/deepagent-code/script/live-llm/context-authority.ts",
+      "packages/deepagent-code/script/live-llm/routes.ts",
+      "packages/deepagent-code/script/build.ts",
+      "packages/deepagent-code/src/server/routes/instance/httpapi/groups/session.ts",
+      "packages/deepagent-code/src/server/routes/instance/httpapi/handlers/session.ts",
+      "packages/deepagent-code/src/session/compaction-sql.ts",
+      "packages/deepagent-code/src/session/compaction.ts",
+      "packages/deepagent-code/src/session/context-ledger.ts",
+      "packages/deepagent-code/src/session/history-authority.ts",
+      "packages/deepagent-code/src/session/message-v2.ts",
+      "packages/deepagent-code/src/session/prompt-epoch.sql.ts",
+      "packages/deepagent-code/src/session/prompt-epoch.ts",
+      "packages/deepagent-code/src/session/prompt.ts",
+      "packages/deepagent-code/src/session/session.ts",
+      "packages/deepagent-code/src/session/tool-request-receipt.sql.ts",
+      "packages/deepagent-code/test/cli/serve/live-context-authority.test.ts",
+      "packages/deepagent-code/test/cli/serve/packaged-fork.test.ts",
+      "packages/deepagent-code/test/lib/cli-process.ts",
+      "packages/llm/script/live-llm/config.ts",
+      "packages/tui/src/util/session.ts",
+    ],
+    checks: ["live-llm-routes", "session-continuation"],
+    runs: [contextAuthority],
   },
   {
     id: "goal-loop-production",

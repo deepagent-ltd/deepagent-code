@@ -210,6 +210,92 @@ describe("step-finish token propagation via event", () => {
   )
 })
 
+describe("message and part ownership", () => {
+  it.instance("rejects cross-session part insertion, rebinding, deltas, and removal", () =>
+    Effect.gen(function* () {
+      const sessions = yield* SessionNs.Service
+      const left = yield* sessions.create({ title: "part-owner-left" })
+      const right = yield* sessions.create({ title: "part-owner-right" })
+      const leftMessageID = MessageID.ascending()
+      const rightMessageID = MessageID.ascending()
+
+      yield* sessions.updateMessage({
+        id: leftMessageID,
+        sessionID: left.id,
+        role: "user",
+        time: { created: Date.now() },
+        agent: "test",
+        model: { providerID: "test", modelID: "test" },
+      } as unknown as SessionV1.Info)
+      yield* sessions.updateMessage({
+        id: rightMessageID,
+        sessionID: right.id,
+        role: "user",
+        time: { created: Date.now() },
+        agent: "test",
+        model: { providerID: "test", modelID: "test" },
+      } as unknown as SessionV1.Info)
+
+      const partID = PartID.ascending()
+      const crossSessionInsert = yield* sessions
+        .updatePart({
+          id: partID,
+          sessionID: right.id,
+          messageID: leftMessageID,
+          type: "text",
+          text: "cross-session",
+        })
+        .pipe(Effect.exit)
+      expect(Exit.isFailure(crossSessionInsert)).toBe(true)
+      expect(yield* sessions.getPart({ sessionID: left.id, messageID: leftMessageID, partID })).toBeUndefined()
+
+      yield* sessions.updatePart({
+        id: partID,
+        sessionID: left.id,
+        messageID: leftMessageID,
+        type: "text",
+        text: "owned",
+      })
+      const rebind = yield* sessions
+        .updatePart({
+          id: partID,
+          sessionID: right.id,
+          messageID: rightMessageID,
+          type: "text",
+          text: "rebound",
+        })
+        .pipe(Effect.exit)
+      expect(Exit.isFailure(rebind)).toBe(true)
+      expect(yield* sessions.getPart({ sessionID: left.id, messageID: leftMessageID, partID })).toMatchObject({
+        id: partID,
+        text: "owned",
+      })
+
+      const delta = yield* sessions
+        .updatePartDelta({
+          sessionID: right.id,
+          messageID: rightMessageID,
+          partID,
+          field: "text",
+          delta: "-foreign",
+        })
+        .pipe(Effect.exit)
+      expect(Exit.isFailure(delta)).toBe(true)
+      const removal = yield* sessions
+        .removePart({ sessionID: right.id, messageID: rightMessageID, partID })
+        .pipe(Effect.exit)
+      expect(Exit.isFailure(removal)).toBe(true)
+      expect(yield* sessions.getPart({ sessionID: left.id, messageID: leftMessageID, partID })).toMatchObject({
+        id: partID,
+        text: "owned",
+      })
+
+      yield* sessions.remove(right.id)
+      yield* sessions.remove(left.id)
+    }),
+  )
+})
+
 describe("Session", () => {
   it.live("remove works without an instance", () =>
     Effect.gen(function* () {
@@ -233,8 +319,9 @@ describe("Session", () => {
         session.remove(info.id).pipe(Effect.ignore),
       )
       const saved = yield* session.get(created.id)
-      const fork = yield* Effect.acquireRelease(session.fork({ sessionID: created.id }), (info) =>
-        session.remove(info.id).pipe(Effect.ignore),
+      const fork = yield* Effect.acquireRelease(
+        session.fork({ sessionID: created.id, intentID: "session-metadata-fork" }),
+        (info) => session.remove(info.id).pipe(Effect.ignore),
       )
 
       expect(saved.metadata).toEqual(meta)
@@ -382,8 +469,9 @@ describe("Session", () => {
       const created = yield* Effect.acquireRelease(session.create({ title: "fork-default-dir" }), (info) =>
         session.remove(info.id).pipe(Effect.ignore),
       )
-      const fork = yield* Effect.acquireRelease(session.fork({ sessionID: created.id }), (info) =>
-        session.remove(info.id).pipe(Effect.ignore),
+      const fork = yield* Effect.acquireRelease(
+        session.fork({ sessionID: created.id, intentID: "session-default-directory-fork" }),
+        (info) => session.remove(info.id).pipe(Effect.ignore),
       )
 
       expect(fork.directory).toBe(created.directory)
@@ -399,14 +487,18 @@ describe("Session", () => {
       const root = yield* Effect.acquireRelease(session.create({ title: "depth-root" }), (info) =>
         session.remove(info.id).pipe(Effect.ignore),
       )
-      const fork1 = yield* Effect.acquireRelease(session.fork({ sessionID: root.id }), (info) =>
-        session.remove(info.id).pipe(Effect.ignore),
+      const fork1 = yield* Effect.acquireRelease(
+        session.fork({ sessionID: root.id, intentID: "session-depth-fork-1" }),
+        (info) => session.remove(info.id).pipe(Effect.ignore),
       )
-      const fork2 = yield* Effect.acquireRelease(session.fork({ sessionID: fork1.id }), (info) =>
-        session.remove(info.id).pipe(Effect.ignore),
+      const fork2 = yield* Effect.acquireRelease(
+        session.fork({ sessionID: fork1.id, intentID: "session-depth-fork-2" }),
+        (info) => session.remove(info.id).pipe(Effect.ignore),
       )
       // root=depth0, fork1=depth1, fork2=depth2 — all allowed. A fork off fork2 would be depth3 → reject.
-      const tooDeep = yield* session.fork({ sessionID: fork2.id }).pipe(Effect.exit)
+      const tooDeep = yield* session
+        .fork({ sessionID: fork2.id, intentID: "session-depth-fork-rejected" })
+        .pipe(Effect.exit)
       expect(Exit.isFailure(tooDeep)).toBe(true)
     }),
   )
@@ -423,8 +515,9 @@ describe("Session", () => {
         const created = yield* Effect.acquireRelease(session.create({ title: "fork-explicit-dir" }), (info) =>
           session.remove(info.id).pipe(Effect.ignore),
         )
-        const fork = yield* Effect.acquireRelease(session.fork({ sessionID: created.id, directory: target }), (info) =>
-          session.remove(info.id).pipe(Effect.ignore),
+        const fork = yield* Effect.acquireRelease(
+          session.fork({ sessionID: created.id, intentID: "session-explicit-directory-fork", directory: target }),
+          (info) => session.remove(info.id).pipe(Effect.ignore),
         )
 
         expect(fork.directory).toBe(target)
@@ -449,7 +542,9 @@ describe("Session", () => {
         )
         // An absolute path well outside the instance directory / worktree root.
         const escape = path.resolve(path.sep, "definitely", "outside", "the", "boundary")
-        const exit = yield* session.fork({ sessionID: created.id, directory: escape }).pipe(Effect.exit)
+        const exit = yield* session
+          .fork({ sessionID: created.id, intentID: "session-directory-escape-fork", directory: escape })
+          .pipe(Effect.exit)
         expect(Exit.isFailure(exit)).toBe(true)
       }),
     { git: true },
@@ -489,7 +584,7 @@ describe("Session fork worktree isolation (附-D 阶段4)", () => {
           session.remove(info.id).pipe(Effect.ignore),
         )
         const fork = yield* Effect.acquireRelease(
-          session.fork({ sessionID: created.id, isolate: "worktree" }),
+          session.fork({ sessionID: created.id, intentID: "session-worktree-fork", isolate: "worktree" }),
           (info) => session.remove(info.id).pipe(Effect.ignore),
         )
 
@@ -516,7 +611,7 @@ describe("Session fork worktree isolation (附-D 阶段4)", () => {
         session.remove(info.id).pipe(Effect.ignore),
       )
       const fork = yield* Effect.acquireRelease(
-        session.fork({ sessionID: created.id, isolate: "worktree" }),
+        session.fork({ sessionID: created.id, intentID: "session-nongit-worktree-fork", isolate: "worktree" }),
         (info) => session.remove(info.id).pipe(Effect.ignore),
       )
 
@@ -556,8 +651,9 @@ describe("Session fork memory completeness (附-D)", () => {
         { kind: "decision", text: "reuse the DocumentStore" },
       ])
 
-      const fork = yield* Effect.acquireRelease(session.fork({ sessionID: created.id }), (info) =>
-        session.remove(info.id).pipe(Effect.ignore),
+      const fork = yield* Effect.acquireRelease(
+        session.fork({ sessionID: created.id, intentID: "session-message-copy-fork" }),
+        (info) => session.remove(info.id).pipe(Effect.ignore),
       )
 
       // The fork opens with the parent's structured facts, re-keyed to its own sessionID and stored
@@ -607,7 +703,7 @@ describe("Session fork memory completeness (附-D)", () => {
       } as unknown as SessionV1.Info)
 
       const fork = yield* Effect.acquireRelease(
-        session.fork({ sessionID: created.id, messageID: m2 }),
+        session.fork({ sessionID: created.id, intentID: "session-cutoff-fork", messageID: m2 }),
         (info) => session.remove(info.id).pipe(Effect.ignore),
       )
 
@@ -625,8 +721,9 @@ describe("Session fork memory completeness (附-D)", () => {
       const created = yield* Effect.acquireRelease(session.create({ title: "fork-full" }), (info) =>
         session.remove(info.id).pipe(Effect.ignore),
       )
-      const fork = yield* Effect.acquireRelease(session.fork({ sessionID: created.id }), (info) =>
-        session.remove(info.id).pipe(Effect.ignore),
+      const fork = yield* Effect.acquireRelease(
+        session.fork({ sessionID: created.id, intentID: "session-empty-fork" }),
+        (info) => session.remove(info.id).pipe(Effect.ignore),
       )
 
       const origin = loadForkOrigin(fork.id)
@@ -642,8 +739,9 @@ describe("Session fork memory completeness (附-D)", () => {
         session.remove(info.id).pipe(Effect.ignore),
       )
       // No ledger seeded for the parent.
-      const fork = yield* Effect.acquireRelease(session.fork({ sessionID: created.id }), (info) =>
-        session.remove(info.id).pipe(Effect.ignore),
+      const fork = yield* Effect.acquireRelease(
+        session.fork({ sessionID: created.id, intentID: "session-linked-parts-fork" }),
+        (info) => session.remove(info.id).pipe(Effect.ignore),
       )
 
       expect(fork.id).not.toBe(created.id)

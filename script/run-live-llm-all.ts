@@ -225,6 +225,12 @@ export const suites: Suite[] = [
     realLLM: true,
   },
   {
+    id: "live:plan-advance",
+    package: "deepagent-code",
+    command: ["bun", "run", "test:llm-live:plan-advance"],
+    realLLM: true,
+  },
+  {
     id: "ext:finalizer-isolation",
     package: "deepagent-code",
     command: ["bun", "run", "test:llm-ext:finalizer-isolation"],
@@ -324,6 +330,12 @@ export const suites: Suite[] = [
     id: "ext:compaction-retention",
     package: "deepagent-code",
     command: ["bun", "run", "test:llm-ext:compaction-retention"],
+    realLLM: true,
+  },
+  {
+    id: "ext:context-authority",
+    package: "deepagent-code",
+    command: ["bun", "run", "test:llm-ext:context-authority"],
     realLLM: true,
   },
   {

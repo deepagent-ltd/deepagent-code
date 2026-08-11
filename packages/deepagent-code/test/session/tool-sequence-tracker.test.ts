@@ -15,7 +15,12 @@
  */
 
 import { describe, expect, test } from "bun:test"
-import { PlanProtocolTracker, ToolSequenceTracker } from "@/session/processor"
+import {
+  PlanProtocolTracker,
+  restorePlanProtocolFailures,
+  ToolSequenceTracker,
+  withPlanProtocolActivity,
+} from "@/session/processor"
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -478,5 +483,157 @@ describe("activity-level plan protocol budget", () => {
     expect(tracker.settle("schema-1", "schema")).toEqual({ consecutive: 1, terminal: false })
     tracker.start("schema-2", "plan")
     expect(tracker.settle("schema-2", "schema")).toEqual({ consecutive: 2, terminal: true })
+  })
+
+  test("restores one durable failure across a compaction continuation", () => {
+    const activity = "msg_root"
+    const history = [
+      {
+        info: { id: activity, role: "user", metadata: withPlanProtocolActivity(undefined, activity) },
+        parts: [],
+      },
+      {
+        info: { id: "msg_plan_1", role: "assistant", parentID: activity },
+        parts: [
+          {
+            id: "prt_plan_1",
+            type: "tool",
+            tool: "plan",
+            callID: "plan-call-1",
+            state: {
+              status: "completed",
+              metadata: { plan_protocol: "invalid", plan_attempt_ordinal: 1 },
+            },
+          },
+          {
+            id: "prt_plan_1_duplicate",
+            type: "tool",
+            tool: "plan",
+            callID: "plan-call-1",
+            state: {
+              status: "completed",
+              metadata: { plan_protocol: "invalid", plan_attempt_ordinal: 1 },
+            },
+          },
+        ],
+      },
+      {
+        info: {
+          id: "msg_continue",
+          role: "user",
+          metadata: withPlanProtocolActivity(
+            { deepagent: { contextProvenance: { source: "compaction_continue" } } },
+            activity,
+          ),
+        },
+        parts: [],
+      },
+    ]
+
+    expect(restorePlanProtocolFailures(history)).toBe(1)
+    const tracker = new PlanProtocolTracker(restorePlanProtocolFailures(history))
+    tracker.start("plan-2", "plan")
+    expect(tracker.settle("plan-2", "invalid")).toEqual({ consecutive: 2, terminal: true })
+    expect(history[2]!.info.metadata).toMatchObject({
+      deepagent: {
+        planProtocolActivityID: activity,
+        contextProvenance: { source: "compaction_continue" },
+      },
+    })
+  })
+
+  test("does not collapse a reused provider call ID across assistant turns", () => {
+    const activity = "msg_root_reused_call"
+    const root = {
+      info: { id: activity, role: "user", time: { created: 1 }, metadata: withPlanProtocolActivity(undefined, activity) },
+      parts: [],
+    }
+    const failure = (id: string, end: number) => ({
+      info: { id, role: "assistant", parentID: activity, time: { created: end } },
+      parts: [
+        {
+          id: `${id}_part`,
+          type: "tool",
+          tool: "plan",
+          callID: "provider-reused-call",
+          state: {
+            status: "completed",
+            metadata: { plan_protocol: "invalid", plan_attempt_ordinal: 1 },
+            time: { end },
+          },
+        },
+      ],
+    })
+
+    expect(restorePlanProtocolFailures([root, failure("assistant_a", 2), failure("assistant_b", 3)])).toBe(2)
+  })
+
+  test("replays protocol outcomes by durable settlement time, not message ID", () => {
+    const activity = "msg_root_ordered"
+    const root = {
+      info: { id: activity, role: "user", time: { created: 1 }, metadata: withPlanProtocolActivity(undefined, activity) },
+      parts: [],
+    }
+    const outcome = (id: string, protocol: "invalid" | "success", end: number) => ({
+      info: { id, role: "assistant", parentID: activity, time: { created: end } },
+      parts: [
+        {
+          id: `${id}_part`,
+          type: "tool",
+          tool: "plan",
+          state: { status: "completed", metadata: { plan_protocol: protocol }, time: { end } },
+        },
+      ],
+    })
+
+    expect(restorePlanProtocolFailures([root, outcome("assistant_z", "invalid", 3), outcome("assistant_a", "success", 2)])).toBe(1)
+  })
+
+  test("resets when the latest durable user has no activity tag", () => {
+    const activity = "msg_root_tagged"
+    const tagged = {
+      info: { id: activity, role: "user", time: { created: 1 }, metadata: withPlanProtocolActivity(undefined, activity) },
+      parts: [],
+    }
+    const failure = {
+      info: { id: "assistant_old", role: "assistant", parentID: activity, time: { created: 2 } },
+      parts: [{ id: "old_part", type: "tool", tool: "plan", state: { status: "completed", metadata: { plan_protocol: "invalid" } } }],
+    }
+    const untagged = { info: { id: "msg_new_untagged", role: "user", time: { created: 3 } }, parts: [] }
+    expect(restorePlanProtocolFailures([tagged, failure, untagged])).toBe(0)
+  })
+
+  test("resets restored failures for a new root activity and after plan progress", () => {
+    const first = "msg_activity_1"
+    const second = "msg_activity_2"
+    const failure = {
+      info: { id: "msg_plan_1", role: "assistant", parentID: first },
+      parts: [
+        {
+          id: "prt_plan_1",
+          type: "tool",
+          tool: "plan",
+          state: { status: "completed", metadata: { plan_protocol: "invalid", plan_attempt_ordinal: 1 } },
+        },
+      ],
+    }
+    const success = {
+      info: { id: "msg_plan_2", role: "assistant", parentID: first },
+      parts: [
+        {
+          id: "prt_plan_2",
+          type: "tool",
+          tool: "plan",
+          state: { status: "completed", metadata: { plan_protocol: "success", plan_attempt_ordinal: 0 } },
+        },
+      ],
+    }
+    const root = (id: string) => ({
+      info: { id, role: "user", metadata: withPlanProtocolActivity(undefined, id) },
+      parts: [],
+    })
+
+    expect(restorePlanProtocolFailures([root(first), failure, success])).toBe(0)
+    expect(restorePlanProtocolFailures([root(first), failure, root(second)])).toBe(0)
   })
 })

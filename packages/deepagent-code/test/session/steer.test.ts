@@ -755,6 +755,63 @@ on.instance(
   15_000,
 )
 
+on.instance(
+  "promptAsync returns the canonical durable ID for a busy-session steer",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const steer = yield* SessionSteer.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({
+        title: "Prompt async canonical receipt",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      const gate = yield* Deferred.make<void>()
+      yield* llm.hold("first-answer", deferredAsPromise(gate))
+      yield* llm.text("second-answer")
+      const running = yield* prompt
+        .prompt({ sessionID: chat.id, agent: "build", model: ref, parts: [{ type: "text", text: "initial" }] })
+        .pipe(Effect.forkChild)
+      yield* llm.wait(1)
+
+      const clientMessageID = MessageID.make("msg_prompt_async_client")
+      const receipt = yield* prompt.promptAsync({
+        sessionID: chat.id,
+        messageID: clientMessageID,
+        intentID: "intent_prompt_async_canonical",
+        intentSource: "composer",
+        intentVariant: "original",
+        agent: "build",
+        model: ref,
+        parts: [{ type: "text", text: "STEERED-ASYNC" }],
+      })
+
+      expect(receipt.delivery).toBe("steer")
+      expect(receipt.messageID).not.toBe(clientMessageID)
+      expect((yield* steer.pending(chat.id)).map((item) => String(item.id))).toEqual([String(receipt.messageID)])
+
+      yield* Deferred.succeed(gate, undefined)
+      expect(Exit.isSuccess(yield* Fiber.await(running))).toBe(true)
+      expect(yield* llm.calls).toBe(2)
+
+      const messages = yield* sessions.messages({ sessionID: chat.id })
+      const persisted = messages.filter((message) => message.info.id === receipt.messageID)
+      expect(persisted).toHaveLength(1)
+      expect(persisted[0]?.info.role === "user" ? persisted[0].info.metadata : undefined).toMatchObject({
+        deepagent: {
+          promptAdmission: {
+            clientMessageID,
+          },
+        },
+      })
+      expect(
+        persisted[0]?.parts.filter((part) => part.type === "text" && part.text === "STEERED-ASYNC"),
+      ).toHaveLength(1)
+    }),
+  15_000,
+)
+
 // ── Cache-safety: the system prefix is byte-identical with vs without a steer; single volatile tail ─
 
 on.instance(

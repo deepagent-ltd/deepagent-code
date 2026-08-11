@@ -5,6 +5,7 @@ const prefixes = {
   user: "usr",
   part: "prt",
   pty: "pty",
+  fork: "fork",
 } as const
 
 const LENGTH = 26

@@ -672,6 +672,7 @@ export type CompactionPart = {
   auto: boolean
   overflow?: boolean
   tail_start_id?: string
+  context_tokens?: number
 }
 
 export type Part =
@@ -1694,6 +1695,7 @@ export type GlobalEvent = {
           plan_id: string
           goal: string
           plan_version: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          assumptions: Array<string>
           active_step_id: string
           steps: Array<{
             step_id: string
@@ -1842,6 +1844,7 @@ export type GlobalEvent = {
     | SyncEventSessionNextRetried
     | SyncEventSessionNextCompactionStarted
     | SyncEventSessionNextCompactionEnded
+    | SyncEventSessionCompacted
 }
 
 /**
@@ -2553,6 +2556,36 @@ export type ProfileHotspot = {
 }
 
 export type DeepAgentPromotionError = {
+  message: string
+}
+
+export type DeepAgentGoalPlanValidationError = {
+  message: string
+  code: string
+  offending_step_ids: Array<string>
+  previous_plan_id: string
+  previous_plan_version: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
+export type DeepAgentGoalPlanConflictError = {
+  message: string
+  expected_plan_id: string
+  expected_version: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  actual_plan_id: string
+  actual_version: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
+export type DeepAgentGoalPlanBusyError = {
+  message: string
+  activity_id: string
+}
+
+export type DeepAgentGoalPlanChallengeError = {
+  message: string
+  reason: string
+}
+
+export type DeepAgentGoalPlanUnavailableError = {
   message: string
 }
 
@@ -3301,6 +3334,12 @@ export type NotFoundError = {
   }
 }
 
+export type ConflictError = {
+  _tag: "ConflictError"
+  message: string
+  resource?: string
+}
+
 export type TextPartInput = {
   id?: string
   type: "text"
@@ -3347,12 +3386,6 @@ export type SubtaskPartInput = {
     modelID: string
   }
   command?: string
-}
-
-export type ConflictError = {
-  _tag: "ConflictError"
-  message: string
-  resource?: string
 }
 
 export type SessionBusyError = {
@@ -4519,6 +4552,20 @@ export type SyncEventSessionNextCompactionEnded = {
       reason: "auto" | "manual"
       text: string
       recent: string
+    }
+  }
+}
+
+export type SyncEventSessionCompacted = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.compacted.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      sessionID: string
     }
   }
 }
@@ -6014,6 +6061,7 @@ export type EventPlanUpdated = {
     plan_id: string
     goal: string
     plan_version: number | "NaN" | "Infinity" | "-Infinity"
+    assumptions: Array<string>
     active_step_id: string
     steps: Array<{
       step_id: string
@@ -7986,19 +8034,35 @@ export type DeepagentGoalStopResponse = DeepagentGoalStopResponses[keyof Deepage
 export type DeepagentGoalEditPlanData = {
   body?: {
     sessionID: string
-    plan: {
+    request_id: string
+    plan_write: {
+      operation: "create" | "advance" | "replan"
+      expected_plan_id: string
+      expected_version: number
       goal: string
       steps: Array<{
         step_id?: string
         title: string
-        status?: string
+        status:
+          | "pending"
+          | "active"
+          | "done"
+          | "cancelled"
+          | "blocked"
+          | "completed"
+          | "in_progress"
+          | "in_review"
+          | "skipped"
+          | "stuck"
         acceptance?: string
         assigned_agent?: string
         note?: string
       }>
-      assumptions?: Array<string>
-      active_step_id?: string
+      assumptions: Array<string>
+      active_step_id: string
+      replan_reason?: string
     }
+    quality_challenge_id?: string
   }
   path?: never
   query?: {
@@ -8010,19 +8074,71 @@ export type DeepagentGoalEditPlanData = {
 
 export type DeepagentGoalEditPlanErrors = {
   /**
-   * DeepAgentPromotionError | InvalidRequestError
+   * Bad request
    */
-  400: DeepAgentPromotionError | InvalidRequestError
+  400: BadRequestError
+  /**
+   * DeepAgentGoalPlanConflictError | DeepAgentGoalPlanBusyError | DeepAgentGoalPlanChallengeError
+   */
+  409: DeepAgentGoalPlanConflictError | DeepAgentGoalPlanBusyError | DeepAgentGoalPlanChallengeError
+  /**
+   * DeepAgentGoalPlanValidationError
+   */
+  422: DeepAgentGoalPlanValidationError
+  /**
+   * DeepAgentGoalPlanUnavailableError
+   */
+  503: DeepAgentGoalPlanUnavailableError
 }
 
 export type DeepagentGoalEditPlanError = DeepagentGoalEditPlanErrors[keyof DeepagentGoalEditPlanErrors]
 
 export type DeepagentGoalEditPlanResponses = {
   /**
-   * Whether the plan edit was enqueued for the goal
+   * The durable plan-edit activity receipt
    */
   200: {
-    ok: boolean
+    state: "challenged" | "queued" | "applied" | "rejected" | "conflict" | "runtime_error"
+    activity_id: string
+    request_id: string
+    candidate_hash: string
+    challenge?: {
+      challenge_id: string
+      candidate_hash: string
+      expected_plan_id: string
+      expected_version: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      issued_at: string
+      expires_at: string
+    }
+    result?: {
+      plan_id: string
+      doc_id: string
+      version: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      changed: boolean
+    }
+    failure?:
+      | {
+          kind: "validation"
+          code: string
+          offending_step_ids: Array<string>
+          previous_plan_id: string
+          previous_plan_version: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        }
+      | {
+          kind: "conflict"
+          expected_plan_id: string
+          expected_version: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          actual_plan_id: string
+          actual_version: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        }
+      | {
+          kind: "target_unavailable"
+          message: string
+        }
+      | {
+          kind: "runtime_error"
+          message: string
+        }
   }
 }
 
@@ -12744,6 +12860,7 @@ export type SessionMessageResponse = SessionMessageResponses[keyof SessionMessag
 
 export type SessionForkData = {
   body?: {
+    intentID: string
     messageID?: string
     directory?: string
     isolate?: "worktree"
@@ -12767,6 +12884,10 @@ export type SessionForkErrors = {
    * NotFoundError
    */
   404: NotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
 }
 
 export type SessionForkError = SessionForkErrors[keyof SessionForkErrors]
@@ -13149,9 +13270,12 @@ export type SessionPromptAsyncError = SessionPromptAsyncErrors[keyof SessionProm
 
 export type SessionPromptAsyncResponses = {
   /**
-   * Prompt accepted
+   * Prompt durably admitted
    */
-  204: void
+  200: {
+    messageID: string
+    delivery: "turn" | "steer" | "queue" | "goal_steer"
+  }
 }
 
 export type SessionPromptAsyncResponse = SessionPromptAsyncResponses[keyof SessionPromptAsyncResponses]

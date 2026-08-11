@@ -219,7 +219,7 @@ describe("acp usage", () => {
           sessionId: "ses_1",
           update: {
             sessionUpdate: "usage_update",
-            used: 15,
+            used: 22,
             size: 128_000,
             cost: { amount: 3, currency: "USD" },
           },
@@ -236,8 +236,48 @@ describe("acp usage", () => {
                 input: 10,
                 output: 20,
                 reasoning: 0,
-                cache: { read: 5, write: 0 },
+                cache: { read: 5, write: 7 },
               },
+            }),
+          ]),
+        }),
+      ),
+    )
+  })
+
+  it.effect("prefers committed compaction context over retired assistant usage", () => {
+    const updates: SessionNotification[] = []
+    return Effect.gen(function* () {
+      const usage = yield* UsageService.Service
+      yield* usage.sendUpdate({
+        connection: connection(updates),
+        sessionID: "ses_compacted",
+        directory: "/workspace",
+      })
+
+      expect(updates[0]).toMatchObject({
+        update: { sessionUpdate: "usage_update", used: 321, size: 128_000 },
+      })
+    }).pipe(
+      Effect.provide(
+        fakeLayer({
+          messages: Effect.succeed([
+            assistant({ cost: 1, id: "assistant_retired" }),
+            {
+              info: {
+                role: "user",
+                id: "compaction_marker",
+                model: { providerID: "anthropic", modelID: "claude-sonnet" },
+              },
+              parts: [{ type: "compaction", context_tokens: 321 }],
+            },
+            assistant({
+              cost: 2,
+              id: "compaction_summary",
+              parentID: "compaction_marker",
+              summary: true,
+              finish: "stop",
+              tokens: { input: 0, output: 20, reasoning: 0, cache: { read: 0, write: 0 } },
             }),
           ]),
         }),

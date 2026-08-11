@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import {
   buildSystemPrompt,
   buildVolatileContinuationContext,
+  buildVolatilePlanContext,
   buildVolatileRoundContext,
   type PromptContext,
 } from "../../src/deepagent/prompt-policy"
@@ -219,5 +220,25 @@ describe("buildVolatileRoundContext", () => {
     expect(vol).not.toContain("# Activation")
     expect(vol).not.toContain("# Previous Round Results")
     expect(vol).not.toContain("Token budget remaining")
+  })
+
+  test("keeps runtime control inside the round context marker", () => {
+    const vol = buildVolatileRoundContext(ctxAt(2, 80_000), "<plan-status>exact parameters</plan-status>")
+    expect(vol.indexOf("<plan-status>")).toBeGreaterThan(vol.indexOf("<deepagent-round-context>"))
+    expect(vol.indexOf("</plan-status>")).toBeLessThan(vol.indexOf("</deepagent-round-context>"))
+  })
+
+  test("keeps runtime control inside the tool continuation marker", () => {
+    const vol = buildVolatileContinuationContext("<plan-status>exact parameters</plan-status>")
+    expect(vol.indexOf("<plan-status>")).toBeGreaterThan(vol.indexOf("<deepagent-round-context>"))
+    expect(vol.indexOf("</plan-status>")).toBeLessThan(vol.indexOf("</deepagent-round-context>"))
+  })
+
+  test("wraps plan-only runtime control with explicit no-inference guidance", () => {
+    const vol = buildVolatilePlanContext("<plan-status>exact parameters</plan-status>")
+    expect(vol).toStartWith("<deepagent-round-context>")
+    expect(vol).toContain("Copy required plan tool parameters exactly as shown")
+    expect(vol).toContain("never infer identities or versions")
+    expect(vol).toEndWith("</deepagent-round-context>")
   })
 })

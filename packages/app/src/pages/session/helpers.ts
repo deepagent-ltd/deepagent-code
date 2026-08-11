@@ -3,6 +3,7 @@ import { createStore } from "solid-js/store"
 import { makeEventListener } from "@solid-primitives/event-listener"
 import type { Part, UserMessage } from "@deepagent-code/sdk/v2"
 import { same } from "@/utils/same"
+import { Identifier } from "@/utils/id"
 
 export type TurnPreview = { title?: string; body?: string }
 
@@ -54,32 +55,45 @@ export const forkCutoffMessageID = (messages: { id: string }[], messageID: strin
  * `messageID` as the first message NOT copied, so the UI passes the next
  * message as the cutoff; no next message means a full-history fork.
  */
-export const createForkAction =
-  (deps: {
-    open: (component: DialogForkComponent) => void
-    loadDialog?: () => Promise<{ DialogFork: DialogForkComponent }>
-    messages?: (sessionID: string) => { id: string }[]
-    fork?: (input: { sessionID: string; messageID?: string }) => Promise<{ id: string } | undefined>
-    navigate?: (sessionID: string) => void
-    onError?: (error: unknown) => void
-  }) =>
-  (input?: { sessionID: string; messageID: string }) => {
-    if (input && deps.messages && deps.fork && deps.navigate) {
-      const navigate = deps.navigate
-      return deps
-        .fork({
-          sessionID: input.sessionID,
-          messageID: forkCutoffMessageID(deps.messages(input.sessionID), input.messageID),
-        })
-        .then((session) => {
-          if (session) navigate(session.id)
-        })
-        .catch((error: unknown) => deps.onError?.(error))
-    }
+export const createForkAction = (deps: {
+  open: (component: DialogForkComponent) => void
+  loadDialog?: () => Promise<{ DialogFork: DialogForkComponent }>
+  messages?: (sessionID: string) => { id: string }[]
+  fork?: (input: { sessionID: string; messageID?: string; intentID: string }) => Promise<{ id: string } | undefined>
+  navigate?: (sessionID: string) => void
+  onError?: (error: unknown) => void
+}) =>
+  (() => {
+    const pendingIntents = new Map<string, string>()
+    const pendingRequests = new Map<string, Promise<void>>()
+    return (input?: { sessionID: string; messageID: string }) => {
+      if (input && deps.messages && deps.fork && deps.navigate) {
+        const intentKey = `${input.sessionID}:${input.messageID}`
+        const pending = pendingRequests.get(intentKey)
+        if (pending) return pending
+        const intentID = pendingIntents.get(intentKey) ?? Identifier.ascending("fork")
+        pendingIntents.set(intentKey, intentID)
+        const request = deps
+          .fork({
+            sessionID: input.sessionID,
+            messageID: forkCutoffMessageID(deps.messages(input.sessionID), input.messageID),
+            intentID,
+          })
+          .then((session) => {
+            if (!session) return
+            pendingIntents.delete(intentKey)
+            deps.navigate!(session.id)
+          })
+          .catch((error: unknown) => deps.onError?.(error))
+          .finally(() => pendingRequests.delete(intentKey))
+        pendingRequests.set(intentKey, request)
+        return request
+      }
 
-    const load = deps.loadDialog ?? (() => import("@/components/dialog-fork"))
-    return load().then((mod) => deps.open(mod.DialogFork))
-  }
+      const load = deps.loadDialog ?? (() => import("@/components/dialog-fork"))
+      return load().then((mod) => deps.open(mod.DialogFork))
+    }
+  })()
 
 type DialogForkComponent = Component
 

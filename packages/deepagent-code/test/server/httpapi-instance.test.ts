@@ -2,7 +2,7 @@ import { PermissionV1 } from "@deepagent-code/core/v1/permission"
 import { NodeHttpServer, NodeServices } from "@effect/platform-node"
 import { Flag } from "@deepagent-code/core/flag/flag"
 import { describe, expect } from "bun:test"
-import { Config, Context, Effect, FileSystem, Layer, Path } from "effect"
+import { Config, Context, Effect, FileSystem, Layer, Option, Path } from "effect"
 import { HttpClient, HttpClientRequest, HttpRouter, HttpServer } from "effect/unstable/http"
 import * as Socket from "effect/unstable/socket/Socket"
 import { WorkspaceV2 } from "@deepagent-code/core/workspace"
@@ -21,6 +21,7 @@ import { PlanConflictError, PlanValidationError } from "@deepagent-code/core/dee
 import { PlanEditBusyError, PlanEditTargetUnavailableError } from "@deepagent-code/core/deepagent/plan-edit-protocol"
 import { QuestionID } from "../../src/question/schema"
 import { HttpApiApp } from "../../src/server/routes/instance/httpapi/server"
+import { ServerAuth } from "../../src/server/auth"
 import { HEADER as FenceHeader } from "../../src/server/shared/fence"
 import { resetDatabase } from "../fixture/db"
 import { tmpdirScoped } from "../fixture/fixture"
@@ -57,6 +58,9 @@ const httpApiServerLayer = servedRoutes.pipe(
   Layer.provide(Socket.layerWebSocketConstructorGlobal),
   Layer.provideMerge(NodeHttpServer.layerTest),
   Layer.provideMerge(NodeServices.layer),
+  // Keep this route harness independent from other files that temporarily set
+  // the process-wide server password for listener/UI authentication tests.
+  Layer.provide(ServerAuth.Config.layer({ password: Option.none(), username: "deepagent-code" })),
 )
 
 const it = testEffect(Layer.mergeAll(testStateLayer, httpApiServerLayer))
