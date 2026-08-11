@@ -21,6 +21,8 @@ import {
   ToolSequenceTracker,
   withPlanProtocolActivity,
 } from "@/session/processor"
+import { ToolSemanticFingerprint } from "@/tool/semantic-fingerprint"
+import type { Tool } from "ai"
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -352,6 +354,29 @@ describe("canonical JSON fingerprint (key order independence)", () => {
 })
 
 describe("tool-defined semantic fingerprints", () => {
+  test("read-only tools provide bounded evidence while mutating tools require an explicit result contract", () => {
+    const tool = {} as Tool
+    const first = ToolSemanticFingerprint.resolveResult(tool, { output: "first" }, "read")
+    const retry = ToolSemanticFingerprint.resolveResult(tool, { output: "first" }, "read")
+    const changed = ToolSemanticFingerprint.resolveResult(tool, { output: "second" }, "read")
+
+    expect(first).toEqual(retry)
+    expect(first).not.toEqual(changed)
+    expect(ToolSemanticFingerprint.resolveResult(tool, { output: "first" }, "write")).toBeUndefined()
+  })
+
+  test("read-only evidence is canonical for key order and BigInt and fails safe on cycles", () => {
+    const tool = {} as Tool
+    const first = ToolSemanticFingerprint.resolveResult(tool, { count: 2n, nested: { b: 2, a: 1 } }, "read")
+    const reordered = ToolSemanticFingerprint.resolveResult(tool, { nested: { a: 1, b: 2 }, count: 2n }, "read")
+    const cyclic: { self?: unknown } = {}
+    cyclic.self = cyclic
+
+    expect(first).toEqual(reordered)
+    expect(first).toBeDefined()
+    expect(ToolSemanticFingerprint.resolveResult(tool, cyclic, "read")).toBeUndefined()
+  })
+
   test("display-only shell descriptions cannot evade period-1 detection", () => {
     const t = new ToolSequenceTracker()
     t.setFingerprintResolver((_tool, input) => {
@@ -370,7 +395,7 @@ describe("tool-defined semantic fingerprints", () => {
     expect(t.detect()?.period).toBe(1)
   })
 
-  test("equivalent result fingerprints ignore input changes and reset on observable progress", () => {
+  test("equivalent results from different inputs do not claim no-progress and progress resets exact retries", () => {
     const t = new ToolSequenceTracker()
     t.setResultFingerprintResolver((_tool, result) => result)
     const unchanged = { snapshot: "tree-a", plan: { active: "step-1" } }
@@ -378,8 +403,8 @@ describe("tool-defined semantic fingerprints", () => {
     t.push("1", t.fingerprint("bash", { command: "true" }))
     expect(t.markDone("1", "bash", { exit: 0, output: "same" }, unchanged)?.count).toBe(1)
     t.push("2", t.fingerprint("bash", { command: "printf ''" }))
-    expect(t.markDone("2", "bash", { exit: 0, output: "same" }, unchanged)?.count).toBe(2)
-    t.push("3", t.fingerprint("bash", { command: "touch artifact" }))
+    expect(t.markDone("2", "bash", { exit: 0, output: "same" }, unchanged)?.count).toBe(1)
+    t.push("3", t.fingerprint("bash", { command: "true" }))
     expect(
       t.markDone("3", "bash", { exit: 0, output: "same" }, { snapshot: "tree-b", plan: unchanged.plan })?.count,
     ).toBe(1)
@@ -388,7 +413,9 @@ describe("tool-defined semantic fingerprints", () => {
       t.markDone("4", "bash", { exit: 0, output: "same" }, { snapshot: "tree-b", plan: unchanged.plan })?.count,
     ).toBe(2)
     t.push("5", t.fingerprint("bash", { command: "true" }))
-    expect(t.markDone("5", "bash", { exit: 0, output: "changed" }, unchanged)?.count).toBe(1)
+    expect(
+      t.markDone("5", "bash", { exit: 0, output: "changed" }, { snapshot: "tree-b", plan: unchanged.plan })?.count,
+    ).toBe(1)
   })
 
   test("tools without a result hook do not claim no-progress evidence", () => {
@@ -545,7 +572,12 @@ describe("activity-level plan protocol budget", () => {
   test("does not collapse a reused provider call ID across assistant turns", () => {
     const activity = "msg_root_reused_call"
     const root = {
-      info: { id: activity, role: "user", time: { created: 1 }, metadata: withPlanProtocolActivity(undefined, activity) },
+      info: {
+        id: activity,
+        role: "user",
+        time: { created: 1 },
+        metadata: withPlanProtocolActivity(undefined, activity),
+      },
       parts: [],
     }
     const failure = (id: string, end: number) => ({
@@ -571,7 +603,12 @@ describe("activity-level plan protocol budget", () => {
   test("replays protocol outcomes by durable settlement time, not message ID", () => {
     const activity = "msg_root_ordered"
     const root = {
-      info: { id: activity, role: "user", time: { created: 1 }, metadata: withPlanProtocolActivity(undefined, activity) },
+      info: {
+        id: activity,
+        role: "user",
+        time: { created: 1 },
+        metadata: withPlanProtocolActivity(undefined, activity),
+      },
       parts: [],
     }
     const outcome = (id: string, protocol: "invalid" | "success", end: number) => ({
@@ -586,18 +623,32 @@ describe("activity-level plan protocol budget", () => {
       ],
     })
 
-    expect(restorePlanProtocolFailures([root, outcome("assistant_z", "invalid", 3), outcome("assistant_a", "success", 2)])).toBe(1)
+    expect(
+      restorePlanProtocolFailures([root, outcome("assistant_z", "invalid", 3), outcome("assistant_a", "success", 2)]),
+    ).toBe(1)
   })
 
   test("resets when the latest durable user has no activity tag", () => {
     const activity = "msg_root_tagged"
     const tagged = {
-      info: { id: activity, role: "user", time: { created: 1 }, metadata: withPlanProtocolActivity(undefined, activity) },
+      info: {
+        id: activity,
+        role: "user",
+        time: { created: 1 },
+        metadata: withPlanProtocolActivity(undefined, activity),
+      },
       parts: [],
     }
     const failure = {
       info: { id: "assistant_old", role: "assistant", parentID: activity, time: { created: 2 } },
-      parts: [{ id: "old_part", type: "tool", tool: "plan", state: { status: "completed", metadata: { plan_protocol: "invalid" } } }],
+      parts: [
+        {
+          id: "old_part",
+          type: "tool",
+          tool: "plan",
+          state: { status: "completed", metadata: { plan_protocol: "invalid" } },
+        },
+      ],
     }
     const untagged = { info: { id: "msg_new_untagged", role: "user", time: { created: 3 } }, parts: [] }
     expect(restorePlanProtocolFailures([tagged, failure, untagged])).toBe(0)

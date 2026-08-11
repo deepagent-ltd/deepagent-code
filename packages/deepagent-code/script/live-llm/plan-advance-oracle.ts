@@ -1,4 +1,4 @@
-type PlanStep = {
+export type PlanOracleStep = {
   step_id: string
   title: string
   status: string
@@ -7,15 +7,15 @@ type PlanStep = {
   note?: string | null
 }
 
-type PlanDocument = {
+export type PlanOracleDocument = {
   plan_id: string
   goal: string
   assumptions: readonly string[]
   active_step_id: string | null
-  steps: readonly PlanStep[]
+  steps: readonly PlanOracleStep[]
 }
 
-type ToolCall = {
+export type PlanToolCall = {
   messageID: string
   id: string
   name: string
@@ -24,7 +24,7 @@ type ToolCall = {
   metadata?: unknown
 }
 
-type RequestReceipt = {
+export type PlanRequestReceipt = {
   receipt_id: string
   assistant_message_id: string | null
   request_state: string
@@ -33,7 +33,7 @@ type RequestReceipt = {
   tool_definition_hash: string | null
 }
 
-type ArgumentReceipt = {
+export type PlanArgumentReceipt = {
   receipt_id: string
   layer: string
   call_id: string | null
@@ -49,14 +49,14 @@ type ArgumentReceipt = {
 export function assertPlanAdvanceObservation(input: {
   caseName: string
   observation: {
-    newTools: readonly ToolCall[]
-    plan?: { document: PlanDocument | null; ref: { id: string; version: number } | null }
+    newTools: readonly PlanToolCall[]
+    plan?: { document: PlanOracleDocument | null; ref: { id: string; version: number } | null }
     durability?: {
-      requestReceipts: readonly RequestReceipt[]
-      argumentReceipts: readonly ArgumentReceipt[]
+      requestReceipts: readonly PlanRequestReceipt[]
+      argumentReceipts: readonly PlanArgumentReceipt[]
     }
   }
-  immutable: PlanDocument
+  immutable: PlanOracleDocument
   expectedVersion: number
   expectedActiveStepID: string | null
   expectedStatuses: Readonly<Record<string, string>>
@@ -119,7 +119,7 @@ export function assertPlanAdvanceObservation(input: {
         `${input.caseName} plan call ${index + 1} expected ${expected.protocol}, received ${String(metadata.plan_protocol)}`,
       )
     }
-    assertArgumentReceipts(input.caseName, call, input.observation.durability, expected.protocol)
+    assertPlanArgumentReceipts(input.caseName, call, input.observation.durability, expected.protocol)
   })
 
   const plan = input.observation.plan?.document
@@ -159,13 +159,13 @@ export function assertPlanAdvanceObservation(input: {
   })
 }
 
-function assertArgumentReceipts(
+export function assertPlanArgumentReceipts(
   caseName: string,
-  call: ToolCall,
+  call: PlanToolCall,
   durability:
     | {
-        requestReceipts: readonly RequestReceipt[]
-        argumentReceipts: readonly ArgumentReceipt[]
+        requestReceipts: readonly PlanRequestReceipt[]
+        argumentReceipts: readonly PlanArgumentReceipt[]
       }
     | undefined,
   protocol: "success" | "conflict",

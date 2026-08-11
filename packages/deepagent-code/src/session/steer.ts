@@ -1,6 +1,7 @@
-import { and, asc, eq, inArray, isNull } from "drizzle-orm"
+import { and, asc, eq, inArray, isNull, max } from "drizzle-orm"
 import { Context, Data, DateTime, Effect, Layer, Schema, Types } from "effect"
 import { Database } from "@deepagent-code/core/database/database"
+import { Hash } from "@deepagent-code/core/util/hash"
 import { SessionInput } from "@deepagent-code/core/session/input"
 import { SessionMessage } from "@deepagent-code/core/session/message"
 import { Prompt } from "@deepagent-code/core/session/prompt"
@@ -16,6 +17,12 @@ import { MessageID, SessionID } from "./schema"
 import type { Receipt } from "./prompt-intent"
 import { SessionMutationEpoch } from "./mutation-epoch"
 import { SessionPromptEpochTable } from "./prompt-epoch.sql"
+import {
+  SessionActivityAdmissionTable,
+  SessionLegacyActivityAdmissionTable,
+  SessionLegacyActivityTable,
+} from "./activity-sql"
+import { SessionActivityOwner } from "./activity-owner"
 
 // V4.1 §S1.1 — the durable mid-turn STEER buffer.
 //
@@ -195,32 +202,165 @@ export const layer = Layer.effect(
                 return yield* Effect.fail(
                   new CorrelationConflict({ sessionID: input.sessionID, correlationID: input.correlationID! }),
                 )
-              if (input.intent) {
-                const intent = yield* tx
-                  .update(SessionIntentTable)
-                  .set({
-                    state: "admitted",
-                    delivery,
-                    admitted_message_id: admitted.id,
-                    owner_token: null,
-                    lease_expires_at: null,
-                    time_admitted: timeCreated,
-                    time_updated: timeCreated,
-                    version: input.intent.version + 1,
-                  })
+              const payloadHash = input.intent?.payloadHash ?? Hash.sha256(JSON.stringify(encodePrompt(input.prompt)))
+              if (!payloadHash) return yield* Effect.die("SessionSteer.admit: intent payload fingerprint is missing")
+              const intent = input.intent
+                ? yield* tx
+                    .update(SessionIntentTable)
+                    .set({
+                      state: "admitted",
+                      delivery,
+                      admitted_message_id: admitted.id,
+                      owner_token: null,
+                      lease_expires_at: null,
+                      time_admitted: timeCreated,
+                      time_updated: timeCreated,
+                      version: input.intent.version + 1,
+                    })
+                    .where(
+                      and(
+                        eq(SessionIntentTable.intent_id, input.intent.intentID),
+                        eq(SessionIntentTable.session_id, input.sessionID),
+                        eq(SessionIntentTable.state, "admitting"),
+                        eq(SessionIntentTable.owner_token, input.intent.ownerToken),
+                        eq(SessionIntentTable.mutation_epoch, session.mutationEpoch),
+                      ),
+                    )
+                    .returning()
+                    .get()
+                    .pipe(Effect.orDie)
+                : yield* tx
+                    .insert(SessionIntentTable)
+                    .values({
+                      intent_id: `legacy-steer:${input.sessionID}:${admitted.id}`,
+                      session_id: input.sessionID,
+                      source: "followup",
+                      state: "admitted",
+                      selected_variant: "original",
+                      selected_payload_hash: payloadHash,
+                      delivery,
+                      admitted_message_id: admitted.id,
+                      correlation_id: input.correlationID ?? admitted.id,
+                      mutation_epoch: session.mutationEpoch,
+                      version: 1,
+                      time_created: admitted.timeCreated,
+                      time_selected: admitted.timeCreated,
+                      time_admitted: timeCreated,
+                      time_updated: timeCreated,
+                    })
+                    .onConflictDoNothing()
+                    .returning()
+                    .get()
+                    .pipe(Effect.orDie)
+              const storedIntent =
+                intent ??
+                (yield* tx
+                  .select()
+                  .from(SessionIntentTable)
+                  .where(eq(SessionIntentTable.intent_id, `legacy-steer:${input.sessionID}:${admitted.id}`))
+                  .get()
+                  .pipe(Effect.orDie))
+              if (
+                !storedIntent ||
+                storedIntent.state !== "admitted" ||
+                storedIntent.session_id !== input.sessionID ||
+                storedIntent.admitted_message_id !== admitted.id ||
+                storedIntent.delivery !== delivery ||
+                storedIntent.selected_payload_hash !== payloadHash
+              )
+                return yield* Effect.die("SessionSteer.admit: intent admission identity conflicts")
+              const admissionID = Hash.sha256(`session-activity-admission:v1:legacy:${storedIntent.intent_id}`)
+              yield* tx
+                .insert(SessionActivityAdmissionTable)
+                .values({
+                  admission_id: admissionID,
+                  session_id: input.sessionID,
+                  source_kind: "legacy_intent",
+                  legacy_intent_id: storedIntent.intent_id,
+                  admitted_message_id: admitted.id,
+                  delivery,
+                  payload_fingerprint_kind: "payload_hash",
+                  payload_fingerprint: payloadHash,
+                  created_at: storedIntent.time_created,
+                })
+                .onConflictDoNothing()
+                .run()
+                .pipe(Effect.orDie)
+              const admission = yield* tx
+                .select()
+                .from(SessionActivityAdmissionTable)
+                .where(eq(SessionActivityAdmissionTable.legacy_intent_id, storedIntent.intent_id))
+                .get()
+                .pipe(Effect.orDie)
+              if (
+                admission?.session_id !== input.sessionID ||
+                admission.admitted_message_id !== admitted.id ||
+                admission.delivery !== delivery ||
+                admission.payload_fingerprint_kind !== "payload_hash" ||
+                admission.payload_fingerprint !== payloadHash
+              )
+                return yield* Effect.die("SessionSteer.admit: activity admission identity conflicts")
+              if (delivery === "steer") {
+                const active = yield* tx
+                  .select({ activityID: SessionLegacyActivityTable.activity_id })
+                  .from(SessionLegacyActivityTable)
                   .where(
                     and(
-                      eq(SessionIntentTable.intent_id, input.intent.intentID),
-                      eq(SessionIntentTable.session_id, input.sessionID),
-                      eq(SessionIntentTable.state, "admitting"),
-                      eq(SessionIntentTable.owner_token, input.intent.ownerToken),
-                      eq(SessionIntentTable.mutation_epoch, session.mutationEpoch),
+                      eq(SessionLegacyActivityTable.session_id, input.sessionID),
+                      eq(SessionLegacyActivityTable.state, "active"),
                     ),
                   )
-                  .returning({ intentID: SessionIntentTable.intent_id })
                   .get()
                   .pipe(Effect.orDie)
-                if (!intent) return yield* Effect.die("SessionSteer.admit: intent admission ownership was lost")
+                const activityID = active?.activityID ?? Hash.sha256(`session-legacy-activity:v1:${admissionID}`)
+                if (!active) {
+                  const latest = yield* tx
+                    .select({ ordinal: max(SessionLegacyActivityTable.ordinal) })
+                    .from(SessionLegacyActivityTable)
+                    .where(eq(SessionLegacyActivityTable.session_id, input.sessionID))
+                    .get()
+                    .pipe(Effect.orDie)
+                  yield* tx
+                    .insert(SessionLegacyActivityTable)
+                    .values({
+                      activity_id: activityID,
+                      session_id: input.sessionID,
+                      ordinal: (latest?.ordinal ?? -1) + 1,
+                      trigger_admission_id: admissionID,
+                      owner_token: SessionActivityOwner.processOwnerToken,
+                      state: "active",
+                      created_at: timeCreated,
+                    })
+                    .run()
+                    .pipe(Effect.orDie)
+                }
+                const existingMembership = yield* tx
+                  .select()
+                  .from(SessionLegacyActivityAdmissionTable)
+                  .where(eq(SessionLegacyActivityAdmissionTable.admission_id, admissionID))
+                  .get()
+                  .pipe(Effect.orDie)
+                if (existingMembership && existingMembership.activity_id !== activityID)
+                  return yield* Effect.die("SessionSteer.admit: steer activity membership conflicts")
+                if (!existingMembership) {
+                  const latest = yield* tx
+                    .select({ ordinal: max(SessionLegacyActivityAdmissionTable.ordinal) })
+                    .from(SessionLegacyActivityAdmissionTable)
+                    .where(eq(SessionLegacyActivityAdmissionTable.activity_id, activityID))
+                    .get()
+                    .pipe(Effect.orDie)
+                  yield* tx
+                    .insert(SessionLegacyActivityAdmissionTable)
+                    .values({
+                      activity_id: activityID,
+                      admission_id: admissionID,
+                      ordinal: active ? (latest?.ordinal ?? 0) + 1 : 0,
+                      role: active ? "steer" : "trigger",
+                      attached_at: timeCreated,
+                    })
+                    .run()
+                    .pipe(Effect.orDie)
+                }
               }
               return admitted
             }),

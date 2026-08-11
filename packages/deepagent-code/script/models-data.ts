@@ -1,19 +1,24 @@
 import { mkdir, rename, rm } from "node:fs/promises"
 import path from "node:path"
 
-const repositorySnapshotFile = path.resolve(import.meta.dir, "../test/tool/fixtures/models-api.json")
-
 export async function loadModelsData(
   options: {
     environment?: Readonly<Record<string, string | undefined>>
     cacheFile?: string
-    fallbackFiles?: readonly string[]
     requestTimeoutMs?: number
   } = {},
 ) {
   const environment = options.environment ?? process.env
+  const channel = environment.DEEPAGENT_CODE_CHANNEL?.trim()
+  const buildMarker =
+    (channel !== undefined && channel !== "" && channel !== "dev") ||
+    Boolean(environment.DEEPAGENT_CODE_VERSION?.trim()) ||
+    Boolean(environment.DEEPAGENT_CODE_RELEASE?.trim())
   const configuredFile = environment.MODELS_DEV_API_JSON?.trim()
   if (configuredFile) {
+    if (buildMarker) {
+      throw new Error("MODELS_DEV_API_JSON is not allowed for production builds; unset it to fetch models.dev")
+    }
     const configured = await readCatalog(configuredFile)
     if (!configured) throw new Error(`Configured models.dev snapshot is invalid: ${configuredFile}`)
     return result(configured, configuredFile)
@@ -36,14 +41,7 @@ export async function loadModelsData(
     return result(remote, `${modelsURL}/api.json`)
   }
 
-  // Build inputs must not depend on the builder's DeepAgent/OpenCode runtime caches. A caller may
-  // pass explicit fallback files for tests or controlled builds; the default is the committed copy.
-  const fallbacks = options.fallbackFiles ?? [repositorySnapshotFile]
-  const cached = (await Promise.all(fallbacks.map(async (file) => ({ file, data: await readCatalog(file) })))).find(
-    (item): item is { file: string; data: Record<string, unknown> } => item.data !== undefined,
-  )
-  if (!cached) throw new Error(`Unable to load a valid models.dev catalog from ${modelsURL} or local snapshots`)
-  return result(cached.data, cached.file)
+  throw new Error(`Unable to load models.dev catalog from ${modelsURL}; refusing to use a local snapshot`)
 }
 
 function result(data: Record<string, unknown>, source: string) {
