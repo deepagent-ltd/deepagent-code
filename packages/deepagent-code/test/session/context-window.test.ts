@@ -5,6 +5,8 @@ import { ModelV2 } from "@deepagent-code/core/model"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import {
   PartTable,
+  SessionForkAdmissionTable,
+  SessionForkIntentTable,
   SessionHistoryStateTable,
   SessionPromptEpochMessageTable,
   SessionWorldStateBaselineTable,
@@ -534,6 +536,121 @@ describe("Session context window authority", () => {
       expect(state?.reason).toContain("legacy foreground fork")
 
       yield* sessions.remove(legacy.id)
+    }),
+  )
+
+  it.instance("migrates a verifiable legacy foreground fork with post-fork child history", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const source = yield* sessions.create({})
+      const first = yield* addUser(source.id, "legacy copied prefix")
+      const cutoff = yield* addUser(source.id, "parent cutoff")
+      const child = yield* sessions.create({
+        metadata: {
+          forkedFrom: {
+            parentSessionID: source.id,
+            cutoffMessageID: cutoff.message.id,
+            forkedAt: Date.now() - 10,
+          },
+        },
+      })
+      const clonedMessage = yield* sessions.updateMessage({
+        ...first.message,
+        id: MessageID.ascending(),
+        sessionID: child.id,
+      })
+      yield* sessions.updatePart({
+        ...first.part,
+        id: PartID.ascending(),
+        messageID: clonedMessage.id,
+        sessionID: child.id,
+      })
+      yield* addUser(child.id, "child-only continuation")
+
+      yield* sessions.assertRunnable(child.id)
+
+      const { db } = yield* Database.Service
+      const intent = yield* db
+        .select()
+        .from(SessionForkIntentTable)
+        .where(eq(SessionForkIntentTable.target_session_id, child.id))
+        .get()
+        .pipe(Effect.orDie)
+      const admission = yield* db
+        .select()
+        .from(SessionForkAdmissionTable)
+        .where(eq(SessionForkAdmissionTable.target_session_id, child.id))
+        .get()
+        .pipe(Effect.orDie)
+      const projection = yield* MessageV2.promptHistoryProjectionEffect(child.id)
+      const metadata = (yield* sessions.get(child.id)).metadata?.forkedFrom as Record<string, unknown> | undefined
+
+      expect(intent?.state).toBe("complete")
+      expect(intent?.event_count).toBe(0)
+      expect(intent?.event_cursor).toBe(0)
+      expect(intent?.side_effects_completed_at).not.toBeNull()
+      expect(intent?.cloned_message_count).toBe(1)
+      expect(admission?.state).toBe("manifest_committed")
+      expect(metadata?.manifestState).toBe("complete")
+      expect(projection.messages.filter((message) => message.info.role === "user")).toHaveLength(2)
+      expect(
+        projection.messages.flatMap((message) =>
+          message.parts.filter((part) => part.type === "text").map((part) => part.text),
+        ),
+      ).toEqual(["legacy copied prefix", "child-only continuation"])
+
+      // A later process may need to rebuild the authority rows after the manifest is complete.
+      // The durable intent and side-effect receipt must be sufficient to authorize that rebuild.
+      yield* db
+        .delete(SessionPromptEpochMessageTable)
+        .where(eq(SessionPromptEpochMessageTable.session_id, child.id))
+        .run()
+      yield* db
+        .delete(SessionWorldStateBaselineTable)
+        .where(eq(SessionWorldStateBaselineTable.session_id, child.id))
+        .run()
+      yield* db.delete(SessionPromptEpochTable).where(eq(SessionPromptEpochTable.session_id, child.id)).run()
+      yield* db.delete(SessionHistoryStateTable).where(eq(SessionHistoryStateTable.session_id, child.id)).run()
+      const rebuilt = yield* MessageV2.promptHistoryProjectionEffect(child.id)
+      expect(rebuilt.worldStateBaselineHash).toBeDefined()
+
+      yield* sessions.remove(child.id)
+      yield* sessions.remove(source.id)
+    }),
+  )
+
+  it.instance("rejects a legacy foreground fork whose copied prefix changed", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const source = yield* sessions.create({})
+      yield* addUser(source.id, "authoritative source")
+      const cutoff = yield* addUser(source.id, "parent cutoff")
+      const child = yield* sessions.create({
+        metadata: {
+          forkedFrom: {
+            parentSessionID: source.id,
+            cutoffMessageID: cutoff.message.id,
+            forkedAt: Date.now() - 10,
+          },
+        },
+      })
+      yield* addUser(child.id, "tampered child prefix")
+
+      const error = yield* sessions.assertRunnable(child.id).pipe(Effect.flip)
+      const { db } = yield* Database.Service
+      const intent = yield* db
+        .select({ intent_id: SessionForkIntentTable.intent_id })
+        .from(SessionForkIntentTable)
+        .where(eq(SessionForkIntentTable.target_session_id, child.id))
+        .get()
+        .pipe(Effect.orDie)
+
+      expect(error).toBeInstanceOf(Session.UnavailableError)
+      expect(error.reason).toContain("prefix does not match")
+      expect(intent).toBeUndefined()
+
+      yield* sessions.remove(child.id)
+      yield* sessions.remove(source.id)
     }),
   )
 })
