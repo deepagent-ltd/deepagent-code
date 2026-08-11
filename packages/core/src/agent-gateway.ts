@@ -400,7 +400,9 @@ export const isDeepAgentProvider = (providerID: string) => providerID === "deepa
 
 // V3.1 global runtime: activation is strength-driven and provider-agnostic. The runtime is
 // active for high/max on every provider; general (and a disabled/killed runtime) is passthrough.
-export const isActiveDeepAgentRuntime = () => current.enabled && !current.killSwitch && current.agentMode !== "general"
+export const isDeepAgentRuntimeEnabled = () => current.enabled && !current.killSwitch
+
+export const isActiveDeepAgentRuntime = () => isDeepAgentRuntimeEnabled() && current.agentMode !== "general"
 
 const isManagedDeepAgentRuntimeWith = (config: CurrentConfig) =>
   config.enabled && !config.killSwitch && config.agentMode !== "general"
@@ -408,6 +410,7 @@ const isManagedDeepAgentRuntimeWith = (config: CurrentConfig) =>
 import {
   buildSystemPrompt,
   buildVolatileContinuationContext,
+  buildVolatilePlanContext,
   buildVolatileRoundContext,
   type KnowledgeRefProjection,
   type PromptContext,
@@ -486,11 +489,13 @@ export const systemPrompt = (_providerID: string, context?: PromptContext) =>
 // the cache breakpoint) so the model still sees round/stage/previous-results/budget without churning
 // the prefix. Returns "" when there is nothing round-specific (⇒ caller skips injection). Only emitted
 // when the DeepAgent runtime is active, matching systemPrompt().
-export const volatileRoundContext = (context: PromptContext): string =>
-  isActiveDeepAgentRuntime() ? buildVolatileRoundContext(context) : ""
+export const volatileRoundContext = (context: PromptContext, runtimeControl?: string): string =>
+  isActiveDeepAgentRuntime() ? buildVolatileRoundContext(context, runtimeControl) : ""
 
-export const volatileContinuationContext = (): string =>
-  isActiveDeepAgentRuntime() ? buildVolatileContinuationContext() : ""
+export const volatileContinuationContext = (runtimeControl?: string): string =>
+  isActiveDeepAgentRuntime() ? buildVolatileContinuationContext(runtimeControl) : ""
+
+export const volatilePlanContext = (runtimeControl: string): string => buildVolatilePlanContext(runtimeControl)
 
 export const preflight = (input: RunInput): Effect.Effect<void, LLMError> => preflightWith(input, current)
 

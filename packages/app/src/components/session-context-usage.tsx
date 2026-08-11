@@ -2,6 +2,7 @@ import { Match, Show, Switch, createMemo } from "solid-js"
 import { Tooltip, type TooltipProps } from "@deepagent-code/ui/tooltip"
 import { ProgressCircle } from "@deepagent-code/ui/progress-circle"
 import { Button } from "@deepagent-code/ui/button"
+import type { Part } from "@deepagent-code/sdk/v2/client"
 
 import { useFile } from "@/context/file"
 import { useLayout } from "@/context/layout"
@@ -44,7 +45,13 @@ export function SessionContextUsage(props: SessionContextUsageProps) {
   })
   const messages = createMemo(() => (params.id ? (sync.data.message[params.id] ?? []) : []))
 
-  const metrics = createMemo(() => getSessionContextMetrics(messages(), [...providers.all().values()]))
+  const metrics = createMemo(() =>
+    getSessionContextMetrics(
+      messages(),
+      [...providers.all().values()],
+      sync.data.part as Record<string, Part[] | undefined>,
+    ),
+  )
   const context = createMemo(() => metrics().context)
   // Cumulative tokens across the whole conversation (all turns + subagent child sessions). Distinct
   // from `context()` which is the current retained-window occupancy. Cost is intentionally not shown

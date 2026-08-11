@@ -1,9 +1,13 @@
 import { Effect } from "effect"
 import path from "node:path"
-import { mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs"
 import { Global } from "@deepagent-code/core/global"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
-import { DeepAgentDocumentStore, DeepAgentContext, DeepAgentDurableKnowledgeStore } from "@deepagent-code/core/deepagent/index"
+import {
+  DeepAgentDocumentStore,
+  DeepAgentContext,
+  DeepAgentDurableKnowledgeStore,
+} from "@deepagent-code/core/deepagent/index"
 import type { SessionID } from "./schema"
 
 // V3.8 Appendix-A Stage 1 seam — the ONE bridge between the existing V1 compaction path and the new
@@ -21,16 +25,17 @@ import type { SessionID } from "./schema"
 
 import os from "node:os"
 import { gitGroundTruth } from "../deepagent/git-groundtruth"
-import type { WorldStateSlotKind } from "@deepagent-code/core/deepagent/context/world-state"
+import { CanonicalJson } from "@deepagent-code/core/util/canonical-json"
+import { Hash } from "@deepagent-code/core/util/hash"
+import type { WorldStateSlot, WorldStateSlotKind } from "@deepagent-code/core/deepagent/context/world-state"
 
 const { SessionLedger, ProjectBridge, WorldState } = DeepAgentContext
-const { DocumentStore } = DeepAgentDocumentStore
+const { DocumentConflictError, DocumentStore } = DeepAgentDocumentStore
 
 // Run-scoped DocumentStore root for a session's context docs. Reuses the SAME storage base
 // (Global.Path.agent.data) all durable state uses; the ledger lives under state/context/<sessionId>
 // so it is co-located with session-state and never collides with durable knowledge roots.
-const contextStoreRoot = (sessionID: string): string =>
-  path.join(Global.Path.agent.data, "state", "context", sessionID)
+const contextStoreRoot = (sessionID: string): string => path.join(Global.Path.agent.data, "state", "context", sessionID)
 
 // Parse a compaction summary (the structured markdown the V1 compactor already emits — Goal /
 // Constraints / Progress / Key Decisions / Next Steps / ...) into ledger append entries. This is the
@@ -71,15 +76,29 @@ export const parseSummaryToEntries = (summary: string): DeepAgentContext.Session
 // session ledger and persist. Default-safe: any failure (store construction defect, parse, IO) is
 // recovered from the CAUSE to a no-op. Returns the number of entries in the ledger after the merge,
 // or 0 on any failure.
-export const updateLedgerFromSummary = (input: { sessionID: SessionID; summary: string }) =>
+export const updateLedgerFromSummaryRequired = (input: {
+  sessionID: SessionID
+  summary: string
+  operationID?: string
+}) =>
   Effect.sync(() => {
     const store = new DocumentStore(contextStoreRoot(input.sessionID))
     const current = SessionLedger.loadLedger(store, input.sessionID)
-    const appended = parseSummaryToEntries(input.summary)
+    const appended = parseSummaryToEntries(input.summary).map((entry, index) =>
+      input.operationID
+        ? {
+            ...entry,
+            id: `led_compaction_${Hash.sha256(`${input.operationID}:${index}:${entry.kind}:${entry.text}`).slice(0, 24)}`,
+          }
+        : entry,
+    )
     const next = SessionLedger.applyUpdate(current, { append: appended })
     SessionLedger.persistLedger(store, next)
     return next.entries.length
-  }).pipe(
+  })
+
+export const updateLedgerFromSummary = (input: { sessionID: SessionID; summary: string }) =>
+  updateLedgerFromSummaryRequired(input).pipe(
     Effect.matchCauseEffect({
       onFailure: () => Effect.succeed(0),
       onSuccess: (n) => Effect.succeed(n),
@@ -102,7 +121,7 @@ export const updateLedgerFromSummary = (input: { sessionID: SessionID; summary: 
 // miss the defect — recover the CAUSE via Effect.matchCauseEffect. Any failure (store defect, empty
 // ledger, IO) degrades to a no-op (returns 0) and never throws into the compaction loop. Returns the
 // number of bridge entries after the carry-over.
-export const carryOverToBridge = (input: { sessionID: SessionID; workspacePath: string }) =>
+export const carryOverToBridgeRequired = (input: { sessionID: SessionID; workspacePath: string }) =>
   Effect.sync(() => {
     const ledgerStore = new DocumentStore(contextStoreRoot(input.sessionID))
     const ledger = SessionLedger.loadLedger(ledgerStore, input.sessionID)
@@ -123,7 +142,10 @@ export const carryOverToBridge = (input: { sessionID: SessionID; workspacePath: 
     const projectId = DeepAgentDurableKnowledgeStore.projectIdForWorkspace(input.workspacePath)
     const bridge = ProjectBridge.carryOver(projectStore, projectId, ledger)
     return bridge.entries.length
-  }).pipe(
+  })
+
+export const carryOverToBridge = (input: { sessionID: SessionID; workspacePath: string }) =>
+  carryOverToBridgeRequired(input).pipe(
     Effect.matchCauseEffect({
       onFailure: () => Effect.succeed(0),
       onSuccess: (n) => Effect.succeed(n),
@@ -152,11 +174,10 @@ export const carryOverToBridge = (input: { sessionID: SessionID; workspacePath: 
 // sessionId to the fork and persists it under the fork's own store root — parent and fork ledgers
 // stay fully independent afterwards (edits to one never touch the other).
 //
-// Default-safe (Phase 3 lesson): DocumentStore construction throws SYNCHRONOUSLY, so a plain
-// Effect.catch would MISS the defect — we recover from the CAUSE via Effect.matchCauseEffect. Any
-// failure (store construction defect, IO) degrades to "fork has no forwarded ledger" (returns 0)
-// rather than failing the fork. Returns the number of entries copied.
-export const forwardLedgerOnFork = (input: { parentSessionID: SessionID; forkSessionID: SessionID }) =>
+// The required variant propagates store/IO defects so the fork side-effect receipt cannot be marked
+// complete while durable memory is missing. The compatibility wrapper below is the explicitly
+// best-effort API and converts defects to 0. Returns the number of entries copied.
+export const forwardLedgerOnForkRequired = (input: { parentSessionID: SessionID; forkSessionID: SessionID }) =>
   Effect.sync(() => {
     const parentStore = new DocumentStore(contextStoreRoot(input.parentSessionID))
     const parentLedger = SessionLedger.loadLedger(parentStore, input.parentSessionID)
@@ -165,7 +186,10 @@ export const forwardLedgerOnFork = (input: { parentSessionID: SessionID; forkSes
     const forkLedger = { ...parentLedger, sessionId: input.forkSessionID }
     const forkStore = new DocumentStore(contextStoreRoot(input.forkSessionID))
     return SessionLedger.persistLedger(forkStore, forkLedger)
-  }).pipe(
+  })
+
+export const forwardLedgerOnFork = (input: { parentSessionID: SessionID; forkSessionID: SessionID }) =>
+  forwardLedgerOnForkRequired(input).pipe(
     Effect.matchCauseEffect({
       onFailure: () => Effect.succeed(0),
       onSuccess: (n) => Effect.succeed(n),
@@ -191,15 +215,25 @@ export type ForkOrigin = {
 
 const forkOriginFile = (sessionID: string): string => path.join(contextStoreRoot(sessionID), "fork-origin.json")
 
-// Persist the fork divergence marker into the fork's context store. Default-safe: any IO failure is
-// recovered from the CAUSE to a no-op (returns false) rather than failing the fork.
-export const persistForkOrigin = (input: { forkSessionID: SessionID; origin: ForkOrigin }) =>
+// Persist the fork divergence marker into the fork's context store. The required variant propagates
+// IO defects so recovery keeps retrying the incomplete fork side-effect receipt. The compatibility
+// wrapper below remains best-effort and converts defects to false.
+export const persistForkOriginRequired = (input: { forkSessionID: SessionID; origin: ForkOrigin }) =>
   Effect.sync(() => {
     const file = forkOriginFile(input.forkSessionID)
     mkdirSync(path.dirname(file), { recursive: true })
-    writeFileSync(file, JSON.stringify(input.origin, null, 2), "utf8")
+    const temporary = `${file}.${process.pid}.${Date.now()}.tmp`
+    try {
+      writeFileSync(temporary, JSON.stringify(input.origin, null, 2), { encoding: "utf8", mode: 0o600 })
+      renameSync(temporary, file)
+    } finally {
+      if (existsSync(temporary)) unlinkSync(temporary)
+    }
     return true
-  }).pipe(
+  })
+
+export const persistForkOrigin = (input: { forkSessionID: SessionID; origin: ForkOrigin }) =>
+  persistForkOriginRequired(input).pipe(
     Effect.matchCauseEffect({
       onFailure: () => Effect.succeed(false),
       onSuccess: () => Effect.succeed(true),
@@ -241,7 +275,8 @@ const renderVcs = (git: { changed_files: readonly string[]; diff_stat: string | 
   return lines.join("\n")
 }
 
-const renderEnv = (): string => [`platform: ${process.platform}`, `node: ${process.version}`, `arch: ${os.arch()}`].join("\n")
+const renderEnv = (): string =>
+  [`platform: ${process.platform}`, `node: ${process.version}`, `arch: ${os.arch()}`].join("\n")
 
 // Collect the cheap volatile facts (git + env) as rendered slot values. Best-effort: a git failure just
 // omits the vcs slot (undefined ⇒ prior value preserved by collectSlots). NOT a heavy collector — plain
@@ -254,7 +289,22 @@ export const collectVolatileFacts = (
     const facts: Partial<Record<WorldStateSlotKind, string | undefined>> = { env: renderEnv() }
     if (git) facts.vcs = renderVcs(git)
     return facts
-  }).pipe(Effect.catchCause(() => Effect.succeed({ env: renderEnv() } as Partial<Record<WorldStateSlotKind, string | undefined>>)))
+  }).pipe(
+    Effect.catchCause(() =>
+      Effect.succeed({ env: renderEnv() } as Partial<Record<WorldStateSlotKind, string | undefined>>),
+    ),
+  )
+
+const collectVolatileFactsStrict = (
+  cwd: string,
+): Effect.Effect<Partial<Record<WorldStateSlotKind, string | undefined>>> =>
+  Effect.promise(async () => {
+    const git = await gitGroundTruth(cwd)
+    return {
+      env: renderEnv(),
+      vcs: renderVcs(git),
+    } satisfies Partial<Record<WorldStateSlotKind, string | undefined>>
+  })
 
 // Snapshot-diff the collected facts into the project's World State doc, persist, and render the tail
 // block. Returns "" when there is nothing to inject or on ANY defect (default-safe — never throws into
@@ -279,5 +329,115 @@ export const refreshWorldState = (input: {
       onSuccess: (s) => Effect.succeed(s),
     }),
   )
+
+export type SessionWorldStateBaselineSection = {
+  readonly sectionID: string
+  readonly snapshot: WorldStateSlot
+  readonly fragment: string
+  readonly fragmentHash: string
+}
+
+export type SessionWorldStateBaseline = {
+  readonly projectId: string
+  readonly snapshot: DeepAgentContext.WorldState.WorldState
+  readonly sections: readonly SessionWorldStateBaselineSection[]
+  readonly rendered: string
+  readonly hash: string
+}
+
+const WORLD_STATE_BASELINE_SECTION_ORDER = [
+  "world_state:open_files",
+  "world_state:vcs",
+  "world_state:diagnostics",
+  "world_state:env",
+] as const
+
+export const orderSessionWorldStateBaselineSections = <T extends { readonly sectionID: string }>(
+  sections: readonly T[],
+): T[] =>
+  [...sections].sort((a, b) => {
+    const aIndex = WORLD_STATE_BASELINE_SECTION_ORDER.indexOf(
+      a.sectionID as (typeof WORLD_STATE_BASELINE_SECTION_ORDER)[number],
+    )
+    const bIndex = WORLD_STATE_BASELINE_SECTION_ORDER.indexOf(
+      b.sectionID as (typeof WORLD_STATE_BASELINE_SECTION_ORDER)[number],
+    )
+    if (aIndex < 0 && bIndex < 0) return a.sectionID.localeCompare(b.sectionID)
+    if (aIndex < 0) return 1
+    if (bIndex < 0) return -1
+    return aIndex - bIndex
+  })
+
+export const sessionWorldStateBaselineHash = (input: {
+  readonly sections: readonly Pick<SessionWorldStateBaselineSection, "sectionID" | "snapshot" | "fragmentHash">[]
+  readonly rendered: string
+}): string =>
+  `wsb1_${Hash.sha256(
+    CanonicalJson.stringify({
+      version: 1,
+      sections: orderSessionWorldStateBaselineSections(input.sections).map((section) => ({
+        sectionID: section.sectionID,
+        snapshot: section.snapshot,
+        fragmentHash: section.fragmentHash,
+      })),
+      rendered: input.rendered,
+    }),
+  )}`
+
+// This is the strict Session/PromptEpoch boundary. Unlike refreshWorldState, defects are preserved so
+// compaction cannot activate an epoch whose model-visible World State baseline was not constructed.
+export const collectSessionWorldStateBaseline = (input: {
+  readonly workspacePath: string
+}): Effect.Effect<SessionWorldStateBaseline> =>
+  Effect.gen(function* () {
+    const facts = yield* collectVolatileFactsStrict(input.workspacePath)
+    const projectStore = AgentGateway.DeepAgentKnowledgeSource.isConfigured()
+      ? AgentGateway.DeepAgentKnowledgeSource.projectStoreFor(input.workspacePath).documentStore
+      : DeepAgentDurableKnowledgeStore.openProjectStore(Global.Path.agent.data, input.workspacePath).documentStore
+    const projectId = DeepAgentDurableKnowledgeStore.projectIdForWorkspace(input.workspacePath)
+    const next = yield* Effect.sync(() => {
+      const persist = (attemptsRemaining: number): DeepAgentContext.WorldState.WorldState => {
+        const current = ProjectBridge.loadWorldStateForGoalWorker(projectStore, projectId)
+        const candidate = WorldState.collectSlots(current, facts)
+        try {
+          ProjectBridge.persistWorldState(projectStore, candidate)
+          return candidate
+        } catch (error) {
+          if (!(error instanceof DocumentConflictError) || attemptsRemaining === 0) throw error
+          projectStore.rebuildIndex()
+          return persist(attemptsRemaining - 1)
+        }
+      }
+      return persist(4)
+    })
+    const sections = next.slots.map((slot) => {
+      const sectionID = `world_state:${slot.kind}`
+      const fragment = WorldState.renderSlot(slot)
+      return {
+        sectionID,
+        snapshot: slot,
+        fragment,
+        fragmentHash: Hash.sha256(CanonicalJson.stringify({ sectionID, slot, fragment })),
+      } satisfies SessionWorldStateBaselineSection
+    })
+    const rendered = renderSessionWorldStateBaseline(sections)
+    const hash = sessionWorldStateBaselineHash({ sections, rendered })
+    return { projectId, snapshot: next, sections, rendered, hash }
+  })
+
+export const renderSessionWorldStateBaseline = (
+  sections: readonly Pick<SessionWorldStateBaselineSection, "sectionID" | "fragment">[],
+): string => {
+  if (sections.length === 0) return ""
+  const ordered = orderSessionWorldStateBaselineSections(sections)
+  return [
+    "<world-state>",
+    "Current environment / file / diagnostics facts (latest values, re-injected — trust these over any",
+    "older values mentioned in the summary above):",
+    "",
+    ...ordered.map((section) => section.fragment),
+    "</world-state>",
+  ].join("\n")
+}
 
 export { contextStoreRoot }

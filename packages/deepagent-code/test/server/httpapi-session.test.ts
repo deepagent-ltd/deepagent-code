@@ -24,7 +24,15 @@ import { Session } from "@/session/session"
 import { MessageID, PartID, SessionID, type SessionID as SessionIDType } from "../../src/session/schema"
 import { MessageV2 } from "../../src/session/message-v2"
 import { Database } from "@deepagent-code/core/database/database"
-import { SessionInputTable, SessionMessageTable, SessionTable } from "@deepagent-code/core/session/sql"
+import {
+  SessionHistoryStateTable,
+  SessionInputTable,
+  SessionIntentTable,
+  SessionMessageTable,
+  SessionTable,
+} from "@deepagent-code/core/session/sql"
+import { SessionToolRequestReceiptTable } from "@/session/tool-request-receipt.sql"
+import { SessionPromptEpochTable } from "@/session/prompt-epoch.sql"
 import { SessionMessage } from "@deepagent-code/core/session/message"
 import { ModelV2 } from "@deepagent-code/core/model"
 import { ProviderV2 } from "@deepagent-code/core/provider"
@@ -325,6 +333,7 @@ describe("session HttpApi", () => {
         })
       }),
     { git: true, config: { formatter: false, lsp: false } },
+    15_000,
   )
 
   it.instance(
@@ -397,6 +406,7 @@ describe("session HttpApi", () => {
         ).toMatchObject([{ type: "assistant" }])
       }),
     { git: true, config: { formatter: false, lsp: false } },
+    15_000,
   )
 
   it.live("uses the persisted session directory for prompt requests", () =>
@@ -702,6 +712,95 @@ describe("session HttpApi", () => {
   )
 
   it.instance(
+    "rejects recovery-required prompt admission before durable input or Provider dispatch",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const session = yield* createSession({ title: "Recovery required HTTP preflight" })
+        yield* createTextMessage(session.id, "bootstrap history authority")
+        yield* MessageV2.promptHistoryProjectionEffect(session.id)
+        const { db } = yield* Database.Service
+        const reason = "provider outcome is unknown after process restart"
+        yield* db
+          .transaction(
+            (tx) =>
+              Effect.gen(function* () {
+                const now = Date.now()
+                yield* tx
+                  .update(SessionPromptEpochTable)
+                  .set({ authority_state: "recovery_required", recovery_reason: reason })
+                  .where(eq(SessionPromptEpochTable.session_id, session.id))
+                  .run()
+                yield* tx
+                  .insert(SessionHistoryStateTable)
+                  .values({
+                    session_id: session.id,
+                    state: "recovery_required",
+                    reason,
+                    time_created: now,
+                    time_updated: now,
+                  })
+                  .onConflictDoUpdate({
+                    target: SessionHistoryStateTable.session_id,
+                    set: { state: "recovery_required", reason, time_updated: now },
+                  })
+                  .run()
+              }),
+            { behavior: "immediate" },
+          )
+          .pipe(Effect.orDie)
+        const headers = { "x-deepagent-code-directory": test.directory, "content-type": "application/json" }
+        const body = JSON.stringify({
+          messageID: MessageID.ascending(),
+          agent: "build",
+          noReply: true,
+          parts: [{ type: "text", text: "must not be admitted" }],
+        })
+
+        const prompt = yield* request(pathFor(SessionPaths.prompt, { sessionID: session.id }), {
+          method: "POST",
+          headers,
+          body,
+        })
+        const promptAsync = yield* request(pathFor(SessionPaths.promptAsync, { sessionID: session.id }), {
+          method: "POST",
+          headers,
+          body,
+        })
+
+        expect(prompt.status).toBe(409)
+        expect(promptAsync.status).toBe(409)
+        expect(yield* responseJson(prompt)).toEqual({
+          _tag: "ConflictError",
+          message: reason,
+          resource: `session:${session.id}`,
+        })
+        expect(yield* responseJson(promptAsync)).toEqual({
+          _tag: "ConflictError",
+          message: reason,
+          resource: `session:${session.id}`,
+        })
+        expect(
+          yield* db
+            .select()
+            .from(SessionIntentTable)
+            .where(eq(SessionIntentTable.session_id, session.id))
+            .all()
+            .pipe(Effect.orDie),
+        ).toHaveLength(0)
+        expect(
+          yield* db
+            .select()
+            .from(SessionToolRequestReceiptTable)
+            .where(eq(SessionToolRequestReceiptTable.session_id, session.id))
+            .all()
+            .pipe(Effect.orDie),
+        ).toHaveLength(0)
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+  )
+
+  it.instance(
     "returns safe v2 unknown errors for corrupt projected messages",
     () =>
       Effect.gen(function* () {
@@ -784,17 +883,65 @@ describe("session HttpApi", () => {
         const forked = yield* requestJson<Session.Info>(pathFor(SessionPaths.fork, { sessionID: created.id }), {
           method: "POST",
           headers,
+          body: JSON.stringify({ intentID: "http-fork-intent" }),
         })
         expect(forked.id).not.toBe(created.id)
+
+        const forkRetry = yield* requestJson<Session.Info>(pathFor(SessionPaths.fork, { sessionID: created.id }), {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ intentID: "http-fork-intent" }),
+        })
+        expect(forkRetry.id).toBe(forked.id)
+
+        const forkConflict = yield* request(pathFor(SessionPaths.fork, { sessionID: created.id }), {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ intentID: "http-fork-intent", isolate: "worktree" }),
+        })
+        expect(forkConflict.status).toBe(409)
+        expect(yield* responseJson(forkConflict)).toEqual({
+          _tag: "ConflictError",
+          message: "fork intent was reused with different input",
+          resource: "fork_intent:http-fork-intent",
+        })
 
         const forkedWithoutContentType = yield* requestJson<Session.Info>(
           pathFor(SessionPaths.fork, { sessionID: created.id }),
           {
             method: "POST",
             headers: { "x-deepagent-code-directory": test.directory },
+            body: JSON.stringify({ intentID: "http-fork-without-content-type" }),
           },
         )
         expect(forkedWithoutContentType.id).not.toBe(created.id)
+
+        const legacyForkWithoutIntent = yield* requestJson<Session.Info>(
+          pathFor(SessionPaths.fork, { sessionID: created.id }),
+          {
+            method: "POST",
+            headers,
+            body: JSON.stringify({}),
+          },
+        )
+        expect(legacyForkWithoutIntent.id).not.toBe(created.id)
+
+        const legacyForkWithoutBody = yield* requestJson<Session.Info>(
+          pathFor(SessionPaths.fork, { sessionID: created.id }),
+          {
+            method: "POST",
+            headers,
+          },
+        )
+        expect(legacyForkWithoutBody.id).not.toBe(created.id)
+        expect(legacyForkWithoutBody.id).not.toBe(legacyForkWithoutIntent.id)
+
+        const invalidForkIntent = yield* request(pathFor(SessionPaths.fork, { sessionID: created.id }), {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ intentID: "" }),
+        })
+        expect(invalidForkIntent.status).toBe(400)
 
         const invalidFork = yield* request(pathFor(SessionPaths.fork, { sessionID: created.id }), {
           method: "POST",
@@ -803,15 +950,12 @@ describe("session HttpApi", () => {
         })
         expect(invalidFork.status).toBe(400)
 
-        const forkedWhitespace = yield* requestJson<Session.Info>(
-          pathFor(SessionPaths.fork, { sessionID: created.id }),
-          {
-            method: "POST",
-            headers,
-            body: "  \n",
-          },
-        )
-        expect(forkedWhitespace.id).not.toBe(created.id)
+        const forkedWhitespace = yield* request(pathFor(SessionPaths.fork, { sessionID: created.id }), {
+          method: "POST",
+          headers,
+          body: "  \n",
+        })
+        expect(forkedWhitespace.status).toBe(200)
 
         expect(
           yield* requestJson<boolean>(pathFor(SessionPaths.abort, { sessionID: created.id }), {

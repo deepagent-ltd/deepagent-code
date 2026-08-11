@@ -16,8 +16,10 @@ const goalEnvironment = {
   DEEPAGENT_CODE_V4_GOAL_TICK_EVENT_DRIVEN: "false",
 }
 
-const completeCurrentPlan = (objective: string) => (hit: { body: Record<string, unknown> }) => {
-  const precondition = JSON.stringify(hit.body).match(/Plan precondition: plan_id=(\S+) plan_version=(\d+)/)
+const completeCurrentPlan = (hit: { body: Record<string, unknown> }) => {
+  const precondition = JSON.stringify(hit.body).match(
+    /Plan write precondition: expected_plan_id=\\"([^\"]+)\\" expected_version=(\d+)/,
+  )
   if (!precondition) throw new Error("goal-worker prompt omitted the plan precondition")
   return {
     name: "plan",
@@ -25,8 +27,7 @@ const completeCurrentPlan = (objective: string) => (hit: { body: Record<string, 
       operation: "advance",
       expected_plan_id: precondition[1],
       expected_version: Number(precondition[2]),
-      goal: objective,
-      steps: [{ step_id: "step_1", title: objective, status: "done" }],
+      steps: [{ step_id: "step_1", status: "done" }],
       active_step_id: null,
     },
   }
@@ -187,7 +188,7 @@ describe("deepagentCode run (non-interactive subprocess)", () => {
     ({ llm, deepagentCode }) =>
       Effect.gen(function* () {
         const objective = "Complete the deterministic CLI goal"
-        yield* llm.toolFrom(completeCurrentPlan(objective))
+        yield* llm.toolFrom(completeCurrentPlan)
         yield* llm.text("Goal step completed")
 
         const result = yield* deepagentCode.run(objective, {
@@ -244,7 +245,7 @@ describe("deepagentCode run (non-interactive subprocess)", () => {
             ),
           ),
         )
-        yield* llm.toolFrom(completeCurrentPlan(objective))
+        yield* llm.toolFrom(completeCurrentPlan)
         yield* llm.text("Plan-file goal completed")
 
         const result = yield* deepagentCode.spawn(

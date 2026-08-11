@@ -37,7 +37,7 @@ export function websocket(
         concurrency: "unbounded",
         discard: true,
       })
-      const registered = yield* WebSocketTracker.register(
+      const registration = yield* WebSocketTracker.register(
         Effect.all(
           [
             writeInbound(WebSocketTracker.SERVER_CLOSING_EVENT()),
@@ -46,7 +46,7 @@ export function websocket(
           { concurrency: "unbounded", discard: true },
         ),
       )
-      if (!registered) {
+      if (!registration.accepted) {
         yield* closeAccepted
         return HttpServerResponse.empty()
       }
@@ -63,14 +63,15 @@ export function websocket(
           Effect.forkScoped,
         )
 
-      yield* inbound
-        .runRaw((message) => {
+      yield* Effect.raceFirst(
+        inbound.runRaw((message) => {
           return writeOutbound(typeof message === "string" ? message : message.slice())
-        })
-        .pipe(
-          Effect.catch(() => Effect.void),
-          Effect.ensuring(writeOutbound(new Socket.CloseEvent()).pipe(Effect.catch(() => Effect.void))),
-        )
+        }),
+        registration.shutdown,
+      ).pipe(
+        Effect.catch(() => Effect.void),
+        Effect.ensuring(writeOutbound(new Socket.CloseEvent()).pipe(Effect.catch(() => Effect.void))),
+      )
       return HttpServerResponse.empty()
     }).pipe(Effect.orDie),
   )

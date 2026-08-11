@@ -9,6 +9,7 @@ import { Session } from "@/session/session"
 import { SessionRunState } from "@/session/run-state"
 import { SessionStatus } from "@/session/status"
 import { Database } from "@deepagent-code/core/database/database"
+import { TaskRunTable } from "@deepagent-code/core/session/sql"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { ModelV2 } from "@deepagent-code/core/model"
 import { ProviderV2 } from "@deepagent-code/core/provider"
@@ -72,7 +73,8 @@ const addTextMessage = (sessionID: SessionID, text: string, created = Date.now()
     })
   })
 
-const readTexts = (output: string) => [...output.matchAll(/<message[^>]*>\s*([^<]+?)\s*<\/message>/g)].map((match) => match[1])
+const readTexts = (output: string) =>
+  [...output.matchAll(/<message[^>]*>\s*([^<]+?)\s*<\/message>/g)].map((match) => match[1])
 
 describe("tool.task_read", () => {
   it.instance("preserves completed child tool output", () =>
@@ -156,6 +158,86 @@ describe("tool.task_read", () => {
       expect(readTexts(second.output)).toEqual(expected.slice(3, 103))
       expect(readTexts(third.output)).toEqual(expected.slice(0, 3))
       expect([...readTexts(third.output), ...readTexts(second.output), ...readTexts(first.output)]).toEqual(expected)
+    }),
+  )
+
+  it.instance("returns the complete durable raw result even when it is outside the transcript page", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const { db } = yield* Database.Service
+      const parent = yield* sessions.create({ title: "Parent" })
+      const child = yield* sessions.create({ parentID: parent.id, agent: "reviewer", title: "Review" })
+      const user = yield* sessions.updateMessage({
+        id: MessageID.ascending(),
+        role: "user",
+        sessionID: child.id,
+        agent: "reviewer",
+        model: { providerID: ProviderV2.ID.make("test"), modelID: ModelV2.ID.make("test") },
+        time: { created: 1_700_000_000_000 },
+      })
+      const rawResultMessageID = MessageID.ascending()
+      yield* sessions.updateMessage({
+        id: rawResultMessageID,
+        role: "assistant",
+        parentID: user.id,
+        sessionID: child.id,
+        mode: "reviewer",
+        agent: "reviewer",
+        path: { cwd: "/tmp", root: "/tmp" },
+        cost: 0,
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        modelID: ModelV2.ID.make("test"),
+        providerID: ProviderV2.ID.make("test"),
+        time: { created: 1_700_000_000_001 },
+        finish: "stop",
+      })
+      const result = `${"finding ".repeat(150)}TAIL-${crypto.randomUUID()}`
+      yield* sessions.updatePart({
+        id: PartID.ascending(),
+        sessionID: child.id,
+        messageID: rawResultMessageID,
+        type: "text",
+        text: result,
+      })
+      yield* db
+        .insert(TaskRunTable)
+        .values({
+          run_id: `run_task_read_${crypto.randomUUID()}`,
+          request_hash: "request",
+          parent_session_id: parent.id,
+          parent_message_id: MessageID.ascending(),
+          tool_call_id: "call-task-read-result",
+          child_session_id: child.id,
+          generation: 1,
+          delivery_mode: "foreground",
+          phase: "settled",
+          state: "error",
+          reason: "structured_output_missing",
+          raw_result_message_id: rawResultMessageID,
+          version: 1,
+          control_state: "closed",
+          input_state: "ready",
+          time_created: 1_700_000_000_000,
+          time_updated: 1_700_000_000_100,
+          time_settled: 1_700_000_000_100,
+        })
+        .run()
+        .pipe(Effect.orDie)
+      for (let index = 0; index < 10; index++) {
+        yield* addTextMessage(child.id, `newer-${index}`, 1_700_000_000_010 + index)
+      }
+
+      const tool = yield* TaskReadTool
+      const output = yield* (yield* tool.init()).execute({ task_id: child.id, limit: 5 }, execCtx(parent.id))
+
+      expect(output.output).toContain(`<task_result source="raw" message_id="${rawResultMessageID}">`)
+      expect(output.output).toContain(result)
+      expect(output.metadata).toMatchObject({
+        resultSource: "raw",
+        resultMessageID: rawResultMessageID,
+        resultTruncated: false,
+      })
+      expect(readTexts(output.output)).toEqual(["newer-5", "newer-6", "newer-7", "newer-8", "newer-9"])
     }),
   )
 })

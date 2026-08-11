@@ -2,10 +2,11 @@ import "./init-projectors"
 
 import { NodeHttpServer } from "@effect/platform-node"
 import * as Log from "@deepagent-code/core/util/log"
-import { ConfigProvider, Context, Effect, Exit, Layer, Scope } from "effect"
+import { Cause, ConfigProvider, Context, Effect, Exit, Layer, Option, Scope } from "effect"
 import { HttpRouter, HttpServer } from "effect/unstable/http"
 import { OpenApi } from "effect/unstable/httpapi"
 import { createServer } from "node:http"
+import type { Duplex } from "node:stream"
 import { MDNS } from "./mdns"
 import { HttpApiApp } from "./routes/instance/httpapi/server"
 import { disposeMiddleware } from "./routes/instance/httpapi/lifecycle"
@@ -47,12 +48,9 @@ type ListenerState = {
   http: ListenerServer
   websockets: WebSocketTracker.Interface
 }
-type EffectListener = Omit<Listener, "stop"> & {
-  stop: (close?: boolean) => Effect.Effect<void>
-}
-
 interface ListenerServer {
   readonly closeAll: Effect.Effect<void>
+  readonly close: Effect.Effect<void>
 }
 
 class ListenerServerService extends Context.Service<ListenerServerService, ListenerServer>()(
@@ -77,42 +75,36 @@ export async function openapi() {
 export let url: URL
 
 export async function listen(opts: ListenOptions): Promise<Listener> {
-  const listener = await Effect.runPromise(listenEffect(opts))
-  return {
-    hostname: listener.hostname,
-    port: listener.port,
-    url: listener.url,
-    stop: (close?: boolean) => Effect.runPromiseExit(listener.stop(close)).then(() => undefined),
-  }
+  return Effect.runPromise(listenEffect(opts))
 }
 
-const listenEffect: (opts: ListenOptions) => Effect.Effect<EffectListener, unknown> = Effect.fn("Server.listen")(
-  function* (opts: ListenOptions) {
-    const cold = !serverHasListened
-    const layerBuildT0 = yield* Effect.sync(() => Date.now())
-    const state = yield* startWithPortFallback(opts)
-    yield* Effect.sync(() => {
-      log.info("startup", {
-        event: "server.layer_build",
-        durationMs: Date.now() - layerBuildT0,
-        cold,
-      })
-      serverHasListened = true
+const listenEffect: (opts: ListenOptions) => Effect.Effect<Listener, unknown> = Effect.fn("Server.listen")(function* (
+  opts: ListenOptions,
+) {
+  const cold = !serverHasListened
+  const layerBuildT0 = yield* Effect.sync(() => Date.now())
+  const state = yield* startWithPortFallback(opts)
+  yield* Effect.sync(() => {
+    log.info("startup", {
+      event: "server.layer_build",
+      durationMs: Date.now() - layerBuildT0,
+      cold,
     })
-    const address = yield* tcpAddress(state)
-    const listenerUrl = makeURL(opts.hostname, address.port)
-    url = listenerUrl
+    serverHasListened = true
+  })
+  const address = yield* tcpAddress(state)
+  const listenerUrl = makeURL(opts.hostname, address.port)
+  url = listenerUrl
 
-    const unpublishMdns = yield* setupMdns(opts, address.port, state.scope)
+  const unpublishMdns = yield* setupMdns(opts, address.port, state.scope)
 
-    return {
-      hostname: opts.hostname,
-      port: address.port,
-      url: listenerUrl,
-      stop: yield* makeStop(state, unpublishMdns),
-    }
-  },
-)
+  return {
+    hostname: opts.hostname,
+    port: address.port,
+    url: listenerUrl,
+    stop: makeStop(state, unpublishMdns),
+  }
+})
 
 function listenerLayer(opts: ListenOptions, port: number) {
   return HttpRouter.serve(HttpApiApp.createRoutes(opts), {
@@ -174,8 +166,8 @@ function setupMdns(opts: ListenOptions, port: number, scope: Scope.Scope) {
     const publish =
       opts.mdns && port && opts.hostname !== "127.0.0.1" && opts.hostname !== "localhost" && opts.hostname !== "::1"
     if (publish) {
-      const unpublish = yield* Effect.cached(Effect.sync(() => MDNS.unpublish()))
-      yield* Effect.sync(() => MDNS.publish(port, opts.mdnsDomain))
+      const advertisement = yield* Effect.sync(() => MDNS.publish(port, opts.mdnsDomain))
+      const unpublish = Effect.sync(() => advertisement.unpublish())
       yield* Scope.addFinalizer(scope, unpublish)
       return unpublish
     }
@@ -185,34 +177,73 @@ function setupMdns(opts: ListenOptions, port: number, scope: Scope.Scope) {
 }
 
 function makeStop(state: ListenerState, unpublishMdns: Effect.Effect<void>) {
-  return Effect.gen(function* () {
-    const forceCloseOnce = yield* Effect.cached(forceClose(state).pipe(Effect.ignore))
-    const closeScopeOnce = yield* Effect.cached(Scope.close(state.scope, Exit.void).pipe(Effect.ignore))
+  const run = <A>(effect: Effect.Effect<A>) => Effect.runPromise(effect)
+  let unpublishPromise: Promise<void> | undefined
+  let closeWebsocketsPromise: Promise<void> | undefined
+  let forceClosePromise: Promise<void> | undefined
+  let closeServerPromise: Promise<void> | undefined
+  let closeScopePromise: Promise<void> | undefined
+  let forceRequested = false
 
-    return (close?: boolean) =>
-      Effect.gen(function* () {
-        yield* unpublishMdns
-        if (close) yield* forceCloseOnce
-        yield* closeScopeOnce
-      })
-  })
+  return (close?: boolean) => {
+    if (close) forceRequested = true
+    unpublishPromise ??= run(unpublishMdns)
+    closeWebsocketsPromise ??= unpublishPromise.then(() => run(state.websockets.closeAll))
+    if (close) forceClosePromise ??= closeWebsocketsPromise.then(() => run(forceClose(state)))
+    closeServerPromise ??= closeWebsocketsPromise.then(() => {
+      if (forceRequested) {
+        forceClosePromise ??= run(forceClose(state))
+        return forceClosePromise.then(() => run(state.http.close))
+      }
+      return run(state.http.close)
+    })
+    closeScopePromise ??= closeServerPromise.then(() =>
+      run(
+        Scope.close(state.scope, Exit.void).pipe(
+          Effect.timeoutOption("2 seconds"),
+          Effect.tap((result) =>
+            Option.isNone(result)
+              ? Effect.sync(() => log.warn("listener scope close exceeded shutdown budget", { budgetMs: 2_000 }))
+              : Effect.void,
+          ),
+          Effect.asVoid,
+          Effect.catchCause((cause) => (Cause.hasInterruptsOnly(cause) ? Effect.void : Effect.failCause(cause))),
+        ),
+      ),
+    )
+
+    return Promise.all([closeScopePromise, close ? forceClosePromise : undefined]).then(() => undefined)
+  }
 }
 
 function forceClose(state: ListenerState) {
-  return Effect.all([state.http.closeAll, state.websockets.closeAll], { concurrency: "unbounded", discard: true })
+  return state.http.closeAll
 }
 
 function serverLayer(opts: { port: number; hostname: string }) {
   const server = createServer()
-  const serverRef = { closeStarted: false, forceStop: false }
+  const upgradedSockets = new Set<Duplex>()
+  const serverRef = { forceStop: false }
+  let closePromise: Promise<void> | undefined
   const close = server.close.bind(server)
-  // Keep shutdown owned by NodeHttpServer, but honor listener.stop(true) by
-  // force-closing active HTTP sockets when its finalizer calls server.close().
+  // Node's closeAllConnections() deliberately excludes upgraded sockets.
+  // Keep explicit ownership so forced shutdown cannot wait on a peer's
+  // WebSocket close-handshake timeout.
+  const destroyConnections = () => {
+    server.closeAllConnections()
+    upgradedSockets.forEach((socket) => socket.destroy())
+    upgradedSockets.clear()
+  }
+  server.on("upgrade", (_request, socket) => {
+    upgradedSockets.add(socket)
+    socket.once("close", () => upgradedSockets.delete(socket))
+  })
+  // Keep shutdown owned by NodeHttpServer. The wrapper covers a graceful stop
+  // that entered its finalizer immediately before a concurrent forced stop.
   // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- Node's overloads don't preserve a monkey-patched method assignment.
   server.close = ((callback?: Parameters<typeof server.close>[0]) => {
-    serverRef.closeStarted = true
     const result = close(callback)
-    if (serverRef.forceStop) server.closeAllConnections()
+    if (serverRef.forceStop) destroyConnections()
     return result
   }) as typeof server.close
 
@@ -222,7 +253,20 @@ function serverLayer(opts: { port: number; hostname: string }) {
       ListenerServerService.of({
         closeAll: Effect.sync(() => {
           serverRef.forceStop = true
-          if (serverRef.closeStarted) server.closeAllConnections()
+          destroyConnections()
+        }),
+        close: Effect.promise(() => {
+          closePromise ??= new Promise<void>((resolve, reject) => {
+            if (!server.listening) {
+              resolve()
+              return
+            }
+            server.close((error) => {
+              if (error) reject(error)
+              else resolve()
+            })
+          })
+          return closePromise
         }),
       }),
     ),

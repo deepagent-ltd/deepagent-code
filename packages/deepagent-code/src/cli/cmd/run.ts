@@ -25,6 +25,7 @@ import { createOpencodeClient, type OpencodeClient, type ToolPart } from "@deepa
 import { FormatError, FormatUnknownError } from "../error"
 import { INTERACTIVE_INPUT_ERROR, resolveInteractiveStdin } from "./run/runtime.stdin"
 import { backgroundTask, createBackgroundSessions, createSessionTree, questionAnswers } from "./run/noninteractive"
+import { Identifier } from "@deepagent-code/core/util/identifier"
 
 type ModelInput = Parameters<OpencodeClient["session"]["prompt"]>[0]["model"]
 
@@ -383,6 +384,7 @@ export const RunCommand = effectCmd({
       const piped = process.stdin.isTTY ? undefined : await Bun.stdin.text()
       message = resolveRunInput(message, piped) ?? ""
       const initialInput = resolveRunInput(rawMessage, piped)
+      const forkIntentID = `fork_${Identifier.ascending()}`
 
       if (message.trim().length === 0 && !args.command && !args.interactive && !args.goal) {
         UI.error("You must provide a message or a command")
@@ -436,6 +438,7 @@ export const RunCommand = effectCmd({
           if (args.fork) {
             const forked = await sdk.session.fork({
               sessionID: args.session,
+              intentID: forkIntentID,
             })
             const id = forked.data?.id
             if (!id) {
@@ -461,6 +464,7 @@ export const RunCommand = effectCmd({
         if (base && args.fork) {
           const forked = await sdk.session.fork({
             sessionID: base.id,
+            intentID: forkIntentID,
           })
           const id = forked.data?.id
           if (!id) {
