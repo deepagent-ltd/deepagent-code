@@ -94,6 +94,7 @@ jobs:
         env:
           DEEPAGENT_CODE_VERSION: ${{ needs.version.outputs.version }}
           DEEPAGENT_CODE_RELEASE: ${{ needs.version.outputs.release }}
+          MODELS_DEV_API_JSON: ${{ github.workspace }}/packages/deepagent-code/test/tool/fixtures/models-api.json
           GH_REPO: ${{ needs.version.outputs.repo }}
           GH_TOKEN: ${{ steps.committer.outputs.token }}
 
@@ -326,6 +327,7 @@ jobs:
         working-directory: packages/desktop
         env:
           DEEPAGENT_CODE_CHANNEL: ${{ (github.ref_name == 'beta' && 'beta') || 'prod' }}
+          MODELS_DEV_API_JSON: ${{ github.workspace }}/packages/deepagent-code/test/tool/fixtures/models-api.json
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
           SENTRY_ORG: ${{ vars.SENTRY_ORG }}
           SENTRY_PROJECT: ${{ vars.WEB_SENTRY_PROJECT }}
