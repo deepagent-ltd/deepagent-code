@@ -3389,6 +3389,7 @@ export const layer = Layer.effect(
                         and(
                           eq(CompactionRunTable.session_id, sessionID),
                           eq(CompactionRunTable.state, "committed"),
+                          eq(CompactionRunTable.continuation_state, "pending"),
                           eq(CompactionArtifactTable.session_id, sessionID),
                           eq(CompactionArtifactTable.message_id, lastUser.id),
                           eq(CompactionArtifactTable.state, "committed"),

@@ -365,6 +365,21 @@ const it = testEffect(makeHttp())
 const worldStateCompaction = testEffect(
   makeHttp({ flags: { softLandingCompaction: false, worldStateReinjection: true } }),
 )
+const automaticContinuationTrigger: Plugin.Interface["trigger"] = (name, _input, output) =>
+  Effect.sync(() => {
+    if (name === "experimental.compaction.autocontinue") (output as { enabled: boolean }).enabled = true
+    return output
+  })
+const worldStateCompactionContinuation = testEffect(
+  makeHttp({
+    flags: { softLandingCompaction: false, worldStateReinjection: true },
+    plugin: Plugin.Service.of({
+      trigger: automaticContinuationTrigger,
+      list: () => Effect.succeed([]),
+      init: () => Effect.void,
+    }),
+  }),
+)
 const worldStateCompactionDisabled = testEffect(
   makeHttp({ flags: { softLandingCompaction: false, worldStateReinjection: false } }),
 )
@@ -1463,6 +1478,54 @@ worldStateCompaction.instance(
       expect(compactionRun?.continuation_dispatching_at).toBeNumber()
       expect(compactionRun?.continuation_terminal_at).toBeNumber()
       expect(compactionRun?.continuation_error_code).toBeNull()
+    }),
+  { git: true },
+  30_000,
+)
+
+worldStateCompactionContinuation.instance(
+  "does not readmit a settled compaction continuation on a later tool-result turn",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const { db } = yield* Database.Service
+      const chat = yield* sessions.create({
+        title: "Compaction continuation tool result",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      const seeded = yield* seed(chat.id, { finish: "stop" })
+      seeded.assistant.tokens.input = 95_000
+      seeded.assistant.tokens.total = 95_000
+      yield* sessions.updateMessage(seeded.assistant)
+      yield* user(chat.id, "Compact, inspect text files, then finish.")
+      yield* llm.text("## Progress\n- prior context compacted")
+      yield* llm.tool("glob", { pattern: "**/*.txt" })
+      yield* llm.text("continuation complete")
+
+      const result = yield* prompt.loop({ sessionID: chat.id })
+      const run = yield* db
+        .select()
+        .from(CompactionRunTable)
+        .where(eq(CompactionRunTable.session_id, chat.id))
+        .get()
+        .pipe(Effect.orDie)
+      const receipts = (yield* db
+        .select()
+        .from(SessionToolRequestReceiptTable)
+        .where(eq(SessionToolRequestReceiptTable.session_id, chat.id))
+        .all()
+        .pipe(Effect.orDie)).toSorted((left, right) => left.request_ordinal - right.request_ordinal)
+
+      expect(result.info.role).toBe("assistant")
+      expect(result.parts.some((part) => part.type === "text" && part.text === "continuation complete")).toBe(true)
+      expect(yield* llm.calls).toBe(3)
+      expect(receipts).toHaveLength(2)
+      expect(receipts.map((receipt) => receipt.provider_state)).toEqual(["settled", "settled"])
+      expect(run?.continuation_state).toBe("settled")
+      expect(run?.continuation_receipt_id).toBe(receipts[0]?.receipt_id)
+      expect(run?.continuation_receipt_id).not.toBe(receipts[1]?.receipt_id)
     }),
   { git: true },
   30_000,
