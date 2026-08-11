@@ -14,6 +14,8 @@ import { Effect, Layer, Context } from "effect"
 import { SessionID, MessageID } from "./schema"
 import { and, eq } from "drizzle-orm"
 import { SessionPromptEpochTable, type PromptEpochReason } from "./prompt-epoch.sql"
+import { HistoryAuthority } from "./history-authority"
+import { MessageTable, SessionPromptEpochMessageTable } from "@deepagent-code/core/session/sql"
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -26,6 +28,16 @@ export interface PromptEpochRow {
   retained_tail_start_id: string | null
   source_end_message_id: string | null
   checkpoint_hash: string | null
+  projection_version: number | null
+  canonicalization_version: number | null
+  base_message_count: number | null
+  effective_history_hash: string | null
+  first_window_id: string | null
+  previous_window_id: string | null
+  window_id: string | null
+  world_state_baseline_hash: string | null
+  authority_state: "legacy_pending" | "ready" | "recovery_required" | null
+  recovery_reason: string | null
   reason: PromptEpochReason
   created_at: number
   retired_at: number | null
@@ -59,8 +71,12 @@ export interface PromptEpochInterface {
     checkpointUserID: MessageID
     checkpointAssistantID: MessageID
     checkpointHash: string
+    baseMessageCount: number
+    effectiveHistoryHash: string
     retainedTailStartID?: MessageID
     sourceEndMessageID?: MessageID
+    worldStateBaselineHash?: string
+    replacementMessageIDs: readonly MessageID[]
   }) => Effect.Effect<PromptEpochRow | undefined>
 }
 
@@ -81,6 +97,12 @@ function getActiveInTransaction(tx: Pick<Transaction, "select">, sessionID: Sess
 
 export function activateInTransaction(tx: Transaction, input: Parameters<PromptEpochInterface["activate"]>[0]) {
   return Effect.gen(function* () {
+    if (
+      input.replacementMessageIDs.length !== input.baseMessageCount ||
+      new Set(input.replacementMessageIDs).size !== input.replacementMessageIDs.length
+    ) {
+      return yield* Effect.die(new Error(`invalid replacement membership for ${input.sessionID}`))
+    }
     const current = yield* getActiveInTransaction(tx, input.sessionID)
     if (!current || current.epoch !== input.fromEpoch) return undefined
 
@@ -108,11 +130,34 @@ export function activateInTransaction(tx: Transaction, input: Parameters<PromptE
       retained_tail_start_id: input.retainedTailStartID ?? null,
       source_end_message_id: input.sourceEndMessageID ?? null,
       checkpoint_hash: input.checkpointHash,
+      projection_version: HistoryAuthority.PROJECTION_VERSION,
+      canonicalization_version: HistoryAuthority.CANONICALIZATION_VERSION,
+      base_message_count: input.baseMessageCount,
+      effective_history_hash: input.effectiveHistoryHash,
+      first_window_id: current.first_window_id ?? current.window_id ?? HistoryAuthority.windowID(),
+      previous_window_id: current.window_id,
+      window_id: HistoryAuthority.windowID(),
+      world_state_baseline_hash: input.worldStateBaselineHash ?? null,
+      authority_state: "ready",
+      recovery_reason: null,
       reason: "compaction",
       created_at: now,
       retired_at: null,
     }
     yield* tx.insert(SessionPromptEpochTable).values(next).run()
+    if (input.replacementMessageIDs.length > 0) {
+      yield* tx
+        .insert(SessionPromptEpochMessageTable)
+        .values(
+          input.replacementMessageIDs.map((messageID, ordinal) => ({
+            session_id: input.sessionID,
+            prompt_epoch: next.epoch,
+            ordinal,
+            message_id: messageID,
+          })),
+        )
+        .run()
+    }
     return next
   })
 }
@@ -134,6 +179,21 @@ const layer = Layer.effect(
               const existing = yield* getActiveInTransaction(tx, sessionID)
               if (existing) return existing
 
+              const physicalMessage = yield* tx
+                .select({ id: MessageTable.id })
+                .from(MessageTable)
+                .where(eq(MessageTable.session_id, sessionID))
+                .limit(1)
+                .get()
+              if (physicalMessage) {
+                return yield* Effect.die(
+                  new Error(
+                    `PromptEpoch bootstrap cannot authorize non-empty session ${sessionID}; use prompt history migration`,
+                  ),
+                )
+              }
+
+              const windowID = HistoryAuthority.windowID()
               const row: PromptEpochRow = {
                 session_id: sessionID,
                 epoch: 0,
@@ -143,6 +203,16 @@ const layer = Layer.effect(
                 retained_tail_start_id: null,
                 source_end_message_id: null,
                 checkpoint_hash: null,
+                projection_version: HistoryAuthority.PROJECTION_VERSION,
+                canonicalization_version: HistoryAuthority.CANONICALIZATION_VERSION,
+                base_message_count: 0,
+                effective_history_hash: HistoryAuthority.hash([]),
+                first_window_id: windowID,
+                previous_window_id: null,
+                window_id: windowID,
+                world_state_baseline_hash: null,
+                authority_state: "ready",
+                recovery_reason: null,
                 reason: "bootstrap",
                 created_at: Date.now(),
                 retired_at: null,
@@ -156,15 +226,8 @@ const layer = Layer.effect(
         )
         .pipe(Effect.orDie)
 
-    const activate = (input: {
-      sessionID: SessionID
-      fromEpoch: number
-      checkpointUserID: MessageID
-      checkpointAssistantID: MessageID
-      checkpointHash: string
-      retainedTailStartID?: MessageID
-      sourceEndMessageID?: MessageID
-    }) => db.transaction((tx) => activateInTransaction(tx, input), { behavior: "immediate" }).pipe(Effect.orDie)
+    const activate = (input: Parameters<PromptEpochInterface["activate"]>[0]) =>
+      db.transaction((tx) => activateInTransaction(tx, input), { behavior: "immediate" }).pipe(Effect.orDie)
 
     return Service.of({ getActive, bootstrap, activate })
   }),

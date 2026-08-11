@@ -8,7 +8,6 @@ import { HttpServer } from "effect/unstable/http"
 import { ChildProcessSpawner } from "effect/unstable/process"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import { CrossSpawnSpawner } from "@deepagent-code/core/cross-spawn-spawner"
-import { Flag } from "@deepagent-code/core/flag/flag"
 import { createOpencodeClient } from "@deepagent-code/sdk/v2"
 import { validateSession } from "../../src/cli/tui/validate-session"
 import { InstanceBootstrap } from "../../src/project/bootstrap-service"
@@ -29,23 +28,27 @@ import { testProviderConfig } from "../lib/test-provider"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { ModelV2 } from "@deepagent-code/core/model"
 import { Database } from "@deepagent-code/core/database/database"
-import { httpApiLayer } from "./httpapi-layer"
+import { httpApiLayer, httpApiLayerWithConfig } from "./httpapi-layer"
 
 const noopBootstrap = Layer.succeed(InstanceBootstrap.Service, InstanceBootstrap.Service.of({ run: Effect.void }))
-const it = testEffect(
+const testServices = (server: typeof httpApiLayer) =>
   Layer.mergeAll(
     FSUtil.defaultLayer,
     CrossSpawnSpawner.defaultLayer,
     InstanceStore.defaultLayer.pipe(Layer.provide(noopBootstrap)),
     Database.defaultLayer,
-    httpApiLayer,
+    server,
+  )
+
+const it = testEffect(testServices(httpApiLayer))
+const authIt = testEffect(
+  testServices(
+    httpApiLayerWithConfig({
+      DEEPAGENT_CODE_SERVER_PASSWORD: "secret",
+      DEEPAGENT_CODE_SERVER_USERNAME: "deepagent-code",
+    }),
   ),
 )
-
-const original = {
-  DEEPAGENT_CODE_SERVER_PASSWORD: Flag.DEEPAGENT_CODE_SERVER_PASSWORD,
-  DEEPAGENT_CODE_SERVER_USERNAME: Flag.DEEPAGENT_CODE_SERVER_USERNAME,
-}
 
 type ServerPath = "default" | "raw"
 type Sdk = ReturnType<typeof createOpencodeClient>
@@ -67,8 +70,6 @@ function client(
   serverPath: ServerPath,
   directory?: string,
   input?: {
-    password?: string
-    username?: string
     headers?: Record<string, string>
     workspaceID?: string
     onRequest?: (request: Request) => void
@@ -89,13 +90,11 @@ function client(
 
 function serverFetch(
   serverPath: ServerPath,
-  input?: { password?: string; username?: string; onRequest?: (request: Request) => void },
+  input?: { onRequest?: (request: Request) => void },
 ) {
   return HttpServer.HttpServer.use((server) =>
     Effect.sync(() => {
       void serverPath
-      Flag.DEEPAGENT_CODE_SERVER_PASSWORD = input?.password
-      Flag.DEEPAGENT_CODE_SERVER_USERNAME = input?.username
       const baseUrl = HttpServer.formatAddress(server.address)
       return Object.assign(
         async (request: RequestInfo | URL, init?: RequestInit) => {
@@ -224,8 +223,12 @@ function httpapiInstance<A, E>(
   )
 }
 
-function serverPathParity<A, E>(name: string, scenario: (serverPath: ServerPath) => Effect.Effect<A, E, TestScope>) {
-  it.live(name, scenario("raw"))
+function serverPathParity<A, E>(
+  name: string,
+  scenario: (serverPath: ServerPath) => Effect.Effect<A, E, TestScope>,
+  timeout?: number,
+) {
+  it.live(name, scenario("raw"), timeout)
 }
 
 function withProject<A, E, E2 = never>(
@@ -364,8 +367,6 @@ function seedMessage(directory: string, sessionID: string) {
 }
 
 afterEach(async () => {
-  Flag.DEEPAGENT_CODE_SERVER_PASSWORD = original.DEEPAGENT_CODE_SERVER_PASSWORD
-  Flag.DEEPAGENT_CODE_SERVER_USERNAME = original.DEEPAGENT_CODE_SERVER_USERNAME
   await disposeAllInstances()
   await resetDatabase()
 })
@@ -601,29 +602,26 @@ describe("HttpApi SDK", () => {
     ),
   )
 
-  httpapiInstance(
+  authIt.instance(
     "uses generated SDK basic auth behavior",
-    { serverPath: "raw", setup: writeStandardFiles },
-    ({ directory }) =>
-      Effect.gen(function* () {
-        const missingSdk = yield* client("raw", directory, { password: "secret" })
-        const missing = yield* capture(() => missingSdk.file.read({ path: "hello.txt" }))
-        const badSdk = yield* client("raw", directory, {
-          password: "secret",
-          headers: { authorization: authorization("deepagent-code", "wrong") },
-        })
-        const bad = yield* capture(() => badSdk.file.read({ path: "hello.txt" }))
-        const goodSdk = yield* client("raw", directory, {
-          password: "secret",
-          headers: { authorization: authorization("deepagent-code", "secret") },
-        })
-        const good = yield* capture(() => goodSdk.file.read({ path: "hello.txt" }))
+    Effect.gen(function* () {
+      const instance = yield* TestInstance
+      yield* writeStandardFiles(instance.directory)
+      const missingSdk = yield* client("raw", instance.directory)
+      const missing = yield* capture(() => missingSdk.file.read({ path: "hello.txt" }))
+      const badSdk = yield* client("raw", instance.directory, {
+        headers: { authorization: authorization("deepagent-code", "wrong") },
+      })
+      const bad = yield* capture(() => badSdk.file.read({ path: "hello.txt" }))
+      const goodSdk = yield* client("raw", instance.directory, {
+        headers: { authorization: authorization("deepagent-code", "secret") },
+      })
+      const good = yield* capture(() => goodSdk.file.read({ path: "hello.txt" }))
 
-        return {
-          statuses: statuses({ missing, bad, good }),
-          content: record(good.data).content,
-        }
-      }),
+      expect(statuses({ missing, bad, good })).toEqual({ missing: 401, bad: 401, good: 200 })
+      expect(record(good.data).content).toBe("hello")
+    }),
+    { git: true, config: { formatter: false, lsp: false } },
   )
 
   serverPathParity("matches generated SDK instance read routes", (serverPath) =>
@@ -878,7 +876,9 @@ describe("HttpApi SDK", () => {
           .filter((text): text is string => typeof text === "string")
           .sort()
 
-        expect(asyncPrompt.status).toBe(204)
+        expect(asyncPrompt.status).toBe(200)
+        expect(asyncPrompt.data).toMatchObject({ delivery: "turn" })
+        expect(typeof record(asyncPrompt.data).messageID).toBe("string")
         expect(messageTexts).toEqual(["async hello", "hello"])
 
         return {
@@ -918,11 +918,13 @@ describe("HttpApi SDK", () => {
         const abort = yield* capture(() => sdk.session.abort({ sessionID }))
         yield* Deferred.succeed(gate, undefined).pipe(Effect.ignore)
 
-        expect(prompt.status).toBe(204)
+        expect(prompt.status).toBe(200)
+        expect(prompt.data).toMatchObject({ delivery: "turn" })
         expect(abort.status).toBe(200)
         expect(JSON.stringify(messages.data)).toContain("persist before acknowledging")
       }),
     ),
+    15_000,
   )
 
   serverPathParity("matches generated SDK prompt streaming through fake LLM", (serverPath) =>

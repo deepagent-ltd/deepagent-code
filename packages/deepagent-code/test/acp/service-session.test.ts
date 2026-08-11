@@ -150,6 +150,7 @@ describe("ACP service sessions", () => {
     const mcpAdds: string[] = []
     const aborts: string[] = []
     const forks: string[] = []
+    const forkIntents: string[] = []
     const prompts: unknown[] = []
     const commands: unknown[] = []
     const summarizes: unknown[] = []
@@ -229,8 +230,9 @@ describe("ACP service sessions", () => {
             aborts.push(input.sessionID)
             return Promise.resolve({ data: true })
           }),
-        fork: (input: { sessionID: string }) => {
+        fork: (input: { sessionID: string; intentID: string }) => {
           forks.push(input.sessionID)
+          forkIntents.push(input.intentID)
           return Promise.resolve({ data: { id: `fork_${input.sessionID}` } })
         },
       },
@@ -264,6 +266,7 @@ describe("ACP service sessions", () => {
       mcpAdds,
       aborts,
       forks,
+      forkIntents,
       prompts,
       commands,
       summarizes,
@@ -452,7 +455,7 @@ describe("ACP service sessions", () => {
   })
 
   it("forks a session, loads fork state, and returns config options", async () => {
-    const { service, forks } = makeService([
+    const { service, forks, forkIntents } = makeService([
       {
         info: {
           role: "assistant",
@@ -476,6 +479,8 @@ describe("ACP service sessions", () => {
     expect(select(forked, "effort")?.currentValue).toBe("medium")
     expect(select(updated, "effort")?.currentValue).toBe("low")
     expect(forks).toEqual(["ses_parent"])
+    expect(forkIntents).toHaveLength(1)
+    expect(forkIntents[0]).toStartWith("acp-fork:")
   })
 
   it("restores model variant and mode from the latest user message", async () => {

@@ -138,9 +138,15 @@ export function definitions() {
 
 export interface PublishOptions {
   readonly id?: ID
+  /** Accept an exact retry of a synchronized event with the same explicit ID without re-projecting or re-publishing it. */
+  readonly idempotent?: boolean
   readonly metadata?: Record<string, unknown>
   readonly location?: Location.Ref
-  /** Local operational projection committed atomically with a new synchronized event. Not replayed or serialized. */
+  /**
+   * Local operational projection committed atomically with a synchronized event. Exact idempotent
+   * publish retries run this hook again so a caller can repair a missing local receipt; the hook must
+   * therefore use an idempotent write or CAS. It is not replayed from the serialized event log.
+   */
   readonly commit?: (seq: number) => Effect.Effect<void>
 }
 
@@ -221,6 +227,7 @@ export const layerWith = (options?: LayerOptions) =>
           readonly strictOwner?: boolean
         },
         commit?: (seq: number) => Effect.Effect<void>,
+        idempotent = false,
       ) {
         return Effect.gen(function* () {
           const definition = registry.get(event.type)
@@ -318,11 +325,26 @@ export const layerWith = (options?: LayerOptions) =>
                             )
                           }
                           const stored = yield* db
-                            .select({ aggregateID: EventTable.aggregate_id, seq: EventTable.seq })
+                            .select({
+                              aggregateID: EventTable.aggregate_id,
+                              seq: EventTable.seq,
+                              type: EventTable.type,
+                              data: EventTable.data,
+                            })
                             .from(EventTable)
                             .where(eq(EventTable.id, event.id))
                             .get()
                             .pipe(Effect.orDie)
+                          if (
+                            stored &&
+                            idempotent &&
+                            stored.aggregateID === aggregateID &&
+                            stored.type === versionedType(definition.type, sync.version) &&
+                            isDeepStrictEqual(stored.data, encoded)
+                          ) {
+                            if (commit) yield* commit(stored.seq)
+                            return { aggregateID, seq: stored.seq, inserted: false }
+                          }
                           if (stored)
                             yield* Effect.die(
                               new InvalidSyncEventError({
@@ -362,12 +384,12 @@ export const layerWith = (options?: LayerOptions) =>
                             ])
                             .run()
                             .pipe(Effect.orDie)
-                          return { aggregateID, seq }
+                          return { aggregateID, seq, inserted: true }
                         }),
                       { behavior: "immediate" },
                     )
                     .pipe(Effect.orDie)
-                  if (committed) {
+                  if (committed?.inserted) {
                     yield* Effect.forEach(
                       synchronized.get(committed.aggregateID) ?? [],
                       (pubsub) => PubSub.publish(pubsub, undefined),
@@ -382,7 +404,11 @@ export const layerWith = (options?: LayerOptions) =>
         })
       }
 
-      function publishEvent<D extends Definition>(event: Payload<D>, commit?: PublishOptions["commit"]) {
+      function publishEvent<D extends Definition>(
+        event: Payload<D>,
+        commit?: PublishOptions["commit"],
+        idempotent = false,
+      ) {
         return Effect.gen(function* () {
           const durable = registry.get(event.type)?.sync !== undefined
           if (!durable && commit)
@@ -393,11 +419,15 @@ export const layerWith = (options?: LayerOptions) =>
               }),
             )
           if (durable) {
-            const committed = yield* commitSyncEvent(event as Payload, undefined, commit)
+            const committed = yield* commitSyncEvent(event as Payload, undefined, commit, idempotent)
             if (committed) {
               event = { ...event, seq: committed.seq }
-              yield* Effect.forEach(syncHandlers, (sync) => observe(event as Payload, "sync", sync), { discard: true })
-              yield* notify(event as Payload, true)
+              if (committed.inserted) {
+                yield* Effect.forEach(syncHandlers, (sync) => observe(event as Payload, "sync", sync), {
+                  discard: true,
+                })
+                yield* notify(event as Payload, true)
+              }
               return event
             }
           }
@@ -432,6 +462,14 @@ export const layerWith = (options?: LayerOptions) =>
 
       function publish<D extends Definition>(definition: D, data: Data<D>, options?: PublishOptions) {
         return Effect.gen(function* () {
+          if (options?.idempotent && (!options.id || definition.sync === undefined)) {
+            return yield* Effect.die(
+              new InvalidSyncEventError({
+                type: definition.type,
+                message: "Idempotent publish requires a synchronized event and an explicit event ID",
+              }),
+            )
+          }
           const serviceLocation = Option.getOrUndefined(yield* Effect.serviceOption(Location.Service))
           const location =
             options?.location ??
@@ -448,6 +486,7 @@ export const layerWith = (options?: LayerOptions) =>
               data,
             } as Payload<D>,
             options?.commit,
+            options?.idempotent,
           )
         })
       }

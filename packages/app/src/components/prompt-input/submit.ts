@@ -1,4 +1,4 @@
-import type { Message, Session } from "@deepagent-code/sdk/v2/client"
+import type { Message, Part, Session } from "@deepagent-code/sdk/v2/client"
 import { showToast } from "@/utils/toast"
 import { base64Encode } from "@deepagent-code/core/util/encode"
 import { Binary } from "@deepagent-code/core/util/binary"
@@ -70,6 +70,18 @@ type SessionPromptAsyncInput = Parameters<ReturnType<typeof useSDK>["client"]["s
   metadata?: FollowupDraft["metadata"]
 }
 
+type AdmissionRetry = {
+  promptInput: SessionPromptAsyncInput & { messageID: string; intentID: string }
+  optimisticParts: Part[]
+}
+
+type SubmissionIdentity = {
+  fingerprint: string
+  messageID: string
+  intentID: string
+  request?: AdmissionRetry
+}
+
 type RawSdkClient = {
   client: {
     request<TData>(options: {
@@ -96,10 +108,12 @@ type FollowupSendInput = {
   draft: FollowupDraft
   messageID?: string
   intentID?: string
+  retry?: AdmissionRetry
   intentSource?: "composer" | "intelligence" | "followup" | "rewrite"
   optimisticBusy?: boolean
   before?: () => Promise<boolean> | boolean
   onBeforeSubmit?: () => void
+  onPromptInput?: (request: AdmissionRetry) => void
   onPromptPrepareStart?: () => void
   onPromptPrepareProgress?: (preview: string) => void
   onPromptPrepareEnd?: () => void
@@ -112,6 +126,28 @@ type FollowupSendInput = {
 const draftText = (prompt: Prompt) => prompt.map((part) => ("content" in part ? part.content : "")).join("")
 
 const draftImages = (prompt: Prompt) => prompt.filter((part): part is ImageAttachmentPart => part.type === "image")
+
+const submissionFingerprint = (draft: FollowupDraft) =>
+  JSON.stringify({
+    sessionID: draft.sessionID,
+    sessionDirectory: draft.sessionDirectory,
+    prompt: draft.prompt,
+    context: draft.context
+      .map((item) => ({
+        type: item.type,
+        path: item.path,
+        selection: item.selection,
+        comment: item.comment,
+        commentID: item.commentID,
+        commentOrigin: item.commentOrigin,
+        preview: item.preview,
+      }))
+      .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))),
+    agent: draft.agent,
+    model: draft.model,
+    variant: draft.variant,
+    metadata: draft.metadata,
+  })
 
 const promptPipelineMode = (metadata: FollowupDraft["metadata"]): DeepAgentPromptModeForConfirmation | undefined => {
   const mode = metadata?.deepagent?.prompt_pipeline?.mode
@@ -259,8 +295,8 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
     }
   }
 
-  const messageID = input.messageID ?? Identifier.ascending("message")
-  const intentID = input.intentID ?? Identifier.ascending("message")
+  const messageID = input.retry?.promptInput.messageID ?? input.messageID ?? Identifier.ascending("message")
+  const intentID = input.retry?.promptInput.intentID ?? input.intentID ?? Identifier.ascending("message")
   const buildParts = (promptText: string) =>
     buildRequestParts({
       prompt: input.draft.prompt,
@@ -271,13 +307,13 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
       messageID,
       sessionDirectory: input.draft.sessionDirectory,
     })
-  const preparedParts = buildParts(text)
+  const preparedParts = input.retry ? undefined : buildParts(text)
 
-  const mode = promptPipelineMode(input.draft.metadata)
+  const mode = input.retry ? undefined : promptPipelineMode(input.draft.metadata)
   let waited = false
   let metadata = input.draft.metadata
   let confirmedDraft: DeepAgentPromptConfirmResult | undefined
-  if (mode) {
+  if (mode && preparedParts) {
     const ok = await wait()
     waited = true
     if (!ok) return false
@@ -340,7 +376,15 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
     }
   }
 
-  const submittedParts = confirmedDraft ? buildParts(confirmedDraft.editedGoal) : preparedParts
+  const submittedParts = input.retry
+    ? {
+        requestParts: input.retry.promptInput.parts,
+        optimisticParts: input.retry.optimisticParts,
+      }
+    : confirmedDraft
+      ? buildParts(confirmedDraft.editedGoal)
+      : preparedParts
+  if (!submittedParts) throw new Error("Prompt submission has no request parts")
 
   const message: Message = {
     id: messageID,
@@ -378,7 +422,7 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
       add()
     })
 
-    const promptInput: SessionPromptAsyncInput = {
+    const promptInput: AdmissionRetry["promptInput"] = input.retry?.promptInput ?? {
       sessionID: input.draft.sessionID,
       agent: input.draft.agent,
       model: input.draft.model,
@@ -390,7 +434,13 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
       variant: input.draft.variant,
       metadata,
     }
-    await input.client.session.promptAsync(promptInput)
+    input.onPromptInput?.({ promptInput, optimisticParts: submittedParts.optimisticParts })
+    const admission = await input.client.session.promptAsync(promptInput)
+    if (!admission.data?.messageID) throw new Error("Prompt admission returned no durable receipt")
+    // The server may mint a different canonical ID for a busy-session steer. The durable event is
+    // authoritative, so remove a mismatched client-keyed placeholder once admission succeeds instead of
+    // leaving it around to render beside the canonical server message.
+    if (admission.data.messageID !== messageID) remove()
     return true
   } catch (err) {
     batch(() => {
@@ -452,10 +502,12 @@ export function createPromptSubmit(input: PromptSubmitInput) {
   const params = useParams()
   const pendingKey = (sessionID: string) => ScopedKey.from(sdk.scope, sessionID)
   let submissionSequence = 0
+  let retryIdentity: SubmissionIdentity | undefined
   let activeSubmission:
     | {
         id: number
         sessionID: string
+        fingerprint: string
         controller: AbortController
         preparing: boolean
         admissionStarted: boolean
@@ -481,6 +533,9 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       else input.onPromptPrepareDiscard?.()
     }
     await submission.promise
+    if (submission.admissionStarted && retryIdentity?.fingerprint === submission.fingerprint) {
+      retryIdentity = undefined
+    }
     return submission
   }
 
@@ -778,8 +833,17 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     }
 
     const commentItems = context.filter((item) => item.type === "file" && !!item.comment?.trim())
-    const messageID = Identifier.ascending("message")
-    const intentID = Identifier.ascending("message")
+    const fingerprint = submissionFingerprint(draft)
+    const identity =
+      retryIdentity?.fingerprint === fingerprint
+        ? retryIdentity
+        : {
+            fingerprint,
+            messageID: Identifier.ascending("message"),
+            intentID: Identifier.ascending("message"),
+          }
+    const messageID = identity.messageID
+    const intentID = identity.intentID
     const preparesPromptDraft = promptPipelineMode(draft.metadata) === "intelligence"
     const controller = new AbortController()
 
@@ -855,8 +919,9 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     const operation = {
       id: ++submissionSequence,
       sessionID: session.id,
+      fingerprint,
       controller,
-      preparing: preparesPromptDraft,
+      preparing: preparesPromptDraft && !identity.request,
       admissionStarted: false,
       promise: Promise.resolve(),
     }
@@ -869,12 +934,18 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       draft,
       messageID,
       intentID,
+      retry: identity.request,
       intentSource: preparesPromptDraft ? "intelligence" : "composer",
       optimisticBusy: sessionDirectory === projectDirectory,
       before: waitForWorktree,
       onBeforeSubmit: () => {
         operation.admissionStarted = true
+        retryIdentity = identity
         input.onSubmit?.()
+      },
+      onPromptInput: (request) => {
+        identity.request = request
+        retryIdentity = identity
       },
       onPromptPrepareStart: () => {
         if (ownsOperation()) input.onPromptPrepareStart?.()
@@ -898,6 +969,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
         pending.delete(pendingKey(session.id))
         if (controller.signal.aborted) return
         if (sent) {
+          if (retryIdentity?.fingerprint === fingerprint) retryIdentity = undefined
           if (preparesPromptDraft) {
             clearContext()
             clearInput()

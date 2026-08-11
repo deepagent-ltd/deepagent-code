@@ -6,9 +6,9 @@ import { Server } from "../../src/server/server"
 import { PtyPaths } from "../../src/server/routes/instance/httpapi/groups/pty"
 import { withTimeout } from "../../src/util/timeout"
 import { resetDatabase } from "../fixture/db"
-import { disposeAllInstances, tmpdir } from "../fixture/fixture"
+import { tmpdir } from "../fixture/fixture"
 
-void Log.init({ print: false })
+await Log.init({ print: false })
 
 const original = {
   DEEPAGENT_CODE_SERVER_PASSWORD: Flag.DEEPAGENT_CODE_SERVER_PASSWORD,
@@ -26,7 +26,6 @@ afterEach(async () => {
   else process.env.DEEPAGENT_CODE_SERVER_PASSWORD = original.envPassword
   if (original.envUsername === undefined) delete process.env.DEEPAGENT_CODE_SERVER_USERNAME
   else process.env.DEEPAGENT_CODE_SERVER_USERNAME = original.envUsername
-  await disposeAllInstances()
   await resetDatabase()
 })
 
@@ -210,7 +209,11 @@ describe("HttpApi Server.listen", () => {
         const nextMessage = waitForMessage(nextWs, (message) => message.includes("ping-restarted"))
         nextWs.send("ping-restarted\n")
         expect(await nextMessage).toContain("ping-restarted")
+        const nextClosed = new Promise<void>((resolve) =>
+          nextWs.addEventListener("close", () => resolve(), { once: true }),
+        )
         nextWs.close(1000)
+        await withTimeout(nextClosed, 5_000, "timed out waiting for restarted websocket close")
       } finally {
         await stop(restarted, "timed out waiting for restarted listener.stop(true)")
       }
@@ -228,7 +231,7 @@ describe("HttpApi Server.listen", () => {
 
       await withTimeout(
         Promise.all([listener.stop(true), listener.stop(true)]).then(() => undefined),
-        10_000,
+        5_000,
         "timed out waiting for concurrent listener.stop(true)",
       )
       await withTimeout(socket.closed, 5_000, "timed out waiting for websocket close after concurrent stop")

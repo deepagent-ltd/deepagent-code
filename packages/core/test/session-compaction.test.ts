@@ -38,3 +38,8 @@ test("buildPrompt narrow omitted ⇒ legacy template (unchanged)", () => {
   expect(legacy).toContain("## Critical Context")
   expect(legacy).not.toContain("## Data References")
 })
+
+test("inputBudget subtracts only the input-side compaction buffer", () => {
+  expect(SessionCompaction.inputBudget(1_048_576, 20_000)).toBe(1_028_576)
+  expect(SessionCompaction.inputBudget(200_000, 20_000)).toBe(180_000)
+})

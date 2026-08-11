@@ -84,6 +84,54 @@ describe("createForkAction", () => {
 
     expect(opened).toBe(Sentinel)
   })
+
+  test("reuses the fork intent after a failed request and rotates it after success", async () => {
+    const intents: string[] = []
+    let attempt = 0
+    const fork = createForkAction({
+      open: () => {},
+      messages: () => [{ id: "msg_1" }, { id: "msg_2" }],
+      fork: (input) => {
+        intents.push(input.intentID ?? "")
+        attempt++
+        if (attempt === 1) return Promise.reject(new Error("response lost"))
+        return Promise.resolve({ id: `ses_fork_${attempt}` })
+      },
+      navigate: () => {},
+      onError: () => {},
+    })
+
+    await fork({ sessionID: "ses_1", messageID: "msg_1" })
+    await fork({ sessionID: "ses_1", messageID: "msg_1" })
+    await fork({ sessionID: "ses_1", messageID: "msg_1" })
+
+    expect(intents[0]).toBeTruthy()
+    expect(intents[1]).toBe(intents[0])
+    expect(intents[2]).not.toBe(intents[1])
+  })
+
+  test("coalesces duplicate clicks while a fork request is in flight", async () => {
+    let calls = 0
+    let complete: ((session: { id: string }) => void) | undefined
+    const fork = createForkAction({
+      open: () => {},
+      messages: () => [{ id: "msg_1" }],
+      fork: () => {
+        calls++
+        return new Promise<{ id: string }>((resolve) => {
+          complete = resolve
+        })
+      },
+      navigate: () => {},
+    })
+
+    const first = fork({ sessionID: "ses_1", messageID: "msg_1" })
+    const second = fork({ sessionID: "ses_1", messageID: "msg_1" })
+    expect(calls).toBe(1)
+    expect(second).toBe(first)
+    complete!({ id: "ses_fork" })
+    await Promise.all([first, second])
+  })
 })
 
 describe("forkCutoffMessageID", () => {

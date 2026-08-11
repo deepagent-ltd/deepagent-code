@@ -14,6 +14,7 @@
 //   4. runs the prompt queue until the footer closes.
 import { createOpencodeClient } from "@deepagent-code/sdk/v2"
 import { Flag } from "@deepagent-code/core/flag/flag"
+import { Identifier } from "@deepagent-code/core/util/identifier"
 import { MessageID } from "@/session/schema"
 import { createRunDemo } from "./demo"
 import { resolveModelInfo, resolveRunTuiConfig, resolveSessionInfo } from "./runtime.boot"
@@ -219,6 +220,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
         sessionTitle: ctx.sessionTitle,
         agent: ctx.agent,
       }
+      let forkIntentID: string | undefined
       setRunSpanAttributes(span, {
         "deepagent-code.directory": ctx.directory,
         "deepagent-code.resume": ctx.resume === true,
@@ -621,8 +623,11 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
               return result.error ? "session unshare failed" : "session unshared"
             }
             if (command === "fork") {
-              const result = await ctx.sdk.session.fork({ sessionID: state.sessionID })
+              const intentID = forkIntentID ?? `fork_${Identifier.ascending()}`
+              forkIntentID = intentID
+              const result = await ctx.sdk.session.fork({ sessionID: state.sessionID, intentID })
               if (!result.data?.id) return "session fork failed"
+              forkIntentID = undefined
               await footer.idle().catch(() => {})
               await state.stream?.then((item) => item.handle.close()).catch(() => {})
               state.stream = undefined
@@ -652,8 +657,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
               ctx.sdk.session.messages({ sessionID: state.sessionID }),
             ])
             const users = (history.data ?? []).filter(
-              (message) =>
-                message.info.role === "user" && !message.parts.some((part) => part.type === "compaction"),
+              (message) => message.info.role === "user" && !message.parts.some((part) => part.type === "compaction"),
             )
             const revert = current.data?.revert?.messageID
             if (command === "undo") {

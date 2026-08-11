@@ -31,6 +31,12 @@ import { it } from "./effect"
 const deepagentCodeRoot = path.resolve(import.meta.dir, "../../")
 const cliEntry = path.join(deepagentCodeRoot, "src/index.ts")
 
+function cliCommand(args: string[]) {
+  const packagedBinary = process.env.DEEPAGENT_CODE_TEST_BINARY
+  if (packagedBinary) return [packagedBinary, ...args]
+  return ["bun", "run", "--conditions=browser", cliEntry, ...args]
+}
+
 export const testModelID = "test/test-model"
 
 // Wrap a Bun subprocess pipe (or any ReadableStream<Uint8Array>) as a Stream.
@@ -200,7 +206,7 @@ export function withCliFixture<A, E>(
       // on `Bun.stdin.text()` (see src/cli/cmd/run.ts — non-TTY stdin is
       // consumed as the prompt). The old Process.run wrapper defaulted to
       // ignore; ChildProcess.make defaults to pipe, so we set it explicitly.
-      const command = ChildProcess.make("bun", ["run", "--conditions=browser", cliEntry, ...args], {
+      const command = ChildProcess.make(cliCommand(args)[0]!, cliCommand(args).slice(1), {
         cwd: home,
         env: { ...env, ...opts?.env },
         extendEnv: true,
@@ -262,7 +268,7 @@ export function withCliFixture<A, E>(
       // as a finalizer error during test teardown.
       const proc = yield* Effect.acquireRelease(
         Effect.sync(() =>
-          Bun.spawn(["bun", "run", "--conditions=browser", cliEntry, ...argv], {
+          Bun.spawn(cliCommand(argv), {
             cwd: home,
             env: { ...process.env, ...env, ...opts?.env },
             stdout: "pipe",
@@ -333,7 +339,7 @@ export function withCliFixture<A, E>(
       // Either way we await proc.exited so the test scope doesn't leak.
       const proc = yield* Effect.acquireRelease(
         Effect.sync(() =>
-          Bun.spawn(["bun", "run", "--conditions=browser", cliEntry, ...argv], {
+          Bun.spawn(cliCommand(argv), {
             cwd: opts?.cwd ?? home,
             env: { ...process.env, ...env, ...opts?.env },
             stdin: "pipe",

@@ -66,6 +66,7 @@ function input(ops: TaskPromptOps, outputSchema: Record<string, unknown> | undef
     agent: "researcher",
     agentModeOverride: undefined,
     outputSchema,
+    allowTextFallback: true,
     tools: { task: false },
     worktreeInfo: undefined,
   }
@@ -182,6 +183,81 @@ describe("task structured finalizer", () => {
     await expect(Effect.runPromise(effect)).rejects.toThrow("[structured_output_missing]")
     expect(calls).toHaveLength(3)
     expect(calls.slice(1).map((call) => call.metadata?.deepagent?.structured_finalizer?.attempt)).toEqual([1, 2])
+    expect(calls[1]?.format?.type).toBe("json_schema")
+    expect(calls[1]?.metadata?.deepagent?.structured_finalizer?.allow_text).toBe(false)
+    expect(calls[2]?.format).toBeUndefined()
+    expect(calls[2]?.metadata?.deepagent?.structured_finalizer?.allow_text).toBe(true)
+  })
+
+  test("accepts schema-valid JSON text when a forced-tool finalizer degrades", async () => {
+    const calls: SessionPrompt.PromptInput[] = []
+    const result = await Effect.runPromise(
+      runSubagentPrompt(
+        input(
+          ops((request) =>
+            Effect.sync(() => {
+              calls.push(request)
+              if (calls.length === 1) return response(request, { text: "persisted research" })
+              return response(request, {
+                text: 'The result is:\n```json\n{"result":"recovered"}\n```',
+                error: new SessionV1.StructuredOutputError({
+                  message: "Finalizer did not produce valid structured output",
+                  retries: 1,
+                }).toObject(),
+              })
+            }),
+          ),
+        ),
+      ),
+    )
+
+    expect(result).toBe('{"result":"recovered"}')
+    expect(calls).toHaveLength(2)
+  })
+
+  test("uses a text-only finalizer for the bounded second attempt", async () => {
+    const calls: SessionPrompt.PromptInput[] = []
+    const result = await Effect.runPromise(
+      runSubagentPrompt(
+        input(
+          ops((request) =>
+            Effect.sync(() => {
+              calls.push(request)
+              if (calls.length === 1) return response(request, { text: "persisted research" })
+              if (calls.length === 2) return response(request, { text: "not json" })
+              return response(request, { text: '{"result":"text fallback"}' })
+            }),
+          ),
+        ),
+      ),
+    )
+
+    expect(result).toBe('{"result":"text fallback"}')
+    expect(calls).toHaveLength(3)
+    expect(calls[2]?.format).toBeUndefined()
+    expect(calls[2]?.metadata?.deepagent?.structured_finalizer).toMatchObject({ attempt: 2, allow_text: true })
+    expect(calls[2]?.parts[0]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining('<output_schema>{"type":"object"'),
+    })
+  })
+
+  test("keeps explicit schema callers on the strict transport contract", async () => {
+    const calls: SessionPrompt.PromptInput[] = []
+    const request = input(
+      ops((prompt) =>
+        Effect.sync(() => {
+          calls.push(prompt)
+          return response(prompt, { text: calls.length === 1 ? "persisted research" : '{"result":"text"}' })
+        }),
+      ),
+    )
+    request.allowTextFallback = false
+
+    await expect(Effect.runPromise(runSubagentPrompt(request))).rejects.toThrow("[structured_output_missing]")
+    expect(calls).toHaveLength(3)
+    expect(calls[2]?.format?.type).toBe("json_schema")
+    expect(calls[2]?.metadata?.deepagent?.structured_finalizer?.allow_text).toBe(false)
   })
 
   test("assistant errors are propagated before any output fallback", async () => {
@@ -216,9 +292,9 @@ describe("task structured finalizer", () => {
         ops((request) =>
           Effect.sync(() => {
             calls.push(request)
-            return calls.length === 1
-              ? response(request, { text: "persisted research" })
-              : response(request, { structured: { wrong: "field" } })
+            if (calls.length === 1) return response(request, { text: "persisted research" })
+            if (calls.length === 2) return response(request, { structured: { wrong: "field" } })
+            return response(request, { text: '{"wrong":"field"}' })
           }),
         ),
       ),

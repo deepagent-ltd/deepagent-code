@@ -196,6 +196,10 @@ const modelCommands = new Map<string, DispatcherCommand>([
   ],
   ["live:legacy-session:degeneration", command("packages/deepagent-code", "bun", "run", "test:llm-live:degeneration")],
   [
+    "live:legacy-session:plan-advance-contract",
+    command("packages/deepagent-code", "bun", "run", "test:llm-live:plan-advance"),
+  ],
+  [
     "ext:legacy-session:subagent-finalizer-isolation",
     command("packages/deepagent-code", "bun", "run", "test:llm-ext:finalizer-isolation"),
   ],
@@ -260,6 +264,10 @@ const modelCommands = new Map<string, DispatcherCommand>([
   [
     "ext:legacy-session:compaction-retention",
     command("packages/deepagent-code", "bun", "run", "test:llm-ext:compaction-retention"),
+  ],
+  [
+    "ext:cli-subprocess:context-authority",
+    command("packages/deepagent-code", "bun", "run", "test:llm-ext:context-authority"),
   ],
   ["ext:legacy-session:expert-panel", command("packages/deepagent-code", "bun", "run", "test:llm-ext:expert-panel")],
   [

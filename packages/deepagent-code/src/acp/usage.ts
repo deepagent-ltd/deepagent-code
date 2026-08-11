@@ -14,10 +14,19 @@ export type AssistantTokenCost = Pick<DeepAgentCodeAssistantMessage, "cost" | "t
 
 export type AssistantMessage = AssistantTokenCost &
   Pick<DeepAgentCodeAssistantMessage, "role"> &
-  Partial<Pick<DeepAgentCodeAssistantMessage, "providerID" | "modelID">>
+  Partial<
+    Pick<DeepAgentCodeAssistantMessage, "id" | "parentID" | "providerID" | "modelID" | "summary" | "finish" | "error">
+  >
+
+type UserMessage = {
+  readonly role: "user"
+  readonly id?: string
+  readonly model?: { readonly providerID: string; readonly modelID: string }
+}
 
 export type SessionMessage = {
-  readonly info: { readonly role: Message["role"] } | AssistantMessage
+  readonly info: { readonly role: Message["role"] } | AssistantMessage | UserMessage
+  readonly parts?: readonly { readonly type: string; readonly context_tokens?: number }[]
 }
 
 export type MessagesInput = {
@@ -102,6 +111,30 @@ export function latestAssistantMessage(messages: readonly SessionMessage[]): Ass
   return messages
     .filter((message): message is { readonly info: AssistantMessage } => message.info.role === "assistant")
     .at(-1)?.info
+}
+
+export function retainedContext(messages: readonly SessionMessage[]) {
+  const reversed = messages.toReversed()
+  for (const item of reversed) {
+    if (item.info.role !== "assistant") continue
+    const message = item.info as AssistantMessage
+    if (message.summary && message.finish && !message.error && message.parentID) {
+      const parent = messages.find((candidate) => "id" in candidate.info && candidate.info.id === message.parentID)
+      const marker = parent?.parts?.find((part) => part.type === "compaction" && part.context_tokens !== undefined)
+      if (marker?.context_tokens !== undefined) {
+        const parentInfo = parent?.info.role === "user" ? (parent.info as UserMessage) : undefined
+        return {
+          message,
+          used: marker.context_tokens,
+          providerID: parentInfo?.model?.providerID ?? message.providerID,
+          modelID: parentInfo?.model?.modelID ?? message.modelID,
+        }
+      }
+    }
+    const used = message.tokens.input + message.tokens.cache.read + message.tokens.cache.write
+    if (used <= 0) continue
+    return { message, used, providerID: message.providerID, modelID: message.modelID }
+  }
 }
 
 export function totalSessionCost(messages: readonly SessionMessage[]): number {
@@ -192,14 +225,13 @@ export const layer = Layer.effect(
       )
       if (!messages) return
 
-      const message = latestAssistantMessage(messages)
-      if (!message) return
-      if (!message.providerID || !message.modelID) return
+      const context = retainedContext(messages)
+      if (!context?.providerID || !context.modelID) return
 
       const size = yield* contextLimit({
         directory: input.directory,
-        providerID: ProviderV2.ID.make(message.providerID),
-        modelID: ModelV2.ID.make(message.modelID),
+        providerID: ProviderV2.ID.make(context.providerID),
+        modelID: ModelV2.ID.make(context.modelID),
       })
       if (!size) return
 
@@ -209,7 +241,7 @@ export const layer = Layer.effect(
             sessionId: input.sessionID,
             update: {
               sessionUpdate: "usage_update",
-              used: message.tokens.input + message.tokens.cache.read,
+              used: context.used,
               size,
               cost: { amount: totalSessionCost(messages), currency: "USD" },
             },
