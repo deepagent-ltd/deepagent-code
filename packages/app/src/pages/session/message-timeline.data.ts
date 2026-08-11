@@ -139,6 +139,7 @@ export namespace Timeline {
     showReasoning: boolean,
     status: SessionStatus["type"],
     isActive: boolean,
+    activityProgressVisibility?: ReadonlySet<string>,
   ) {
     const rows: TimelineRow.TimelineRow[] = []
 
@@ -150,10 +151,13 @@ export namespace Timeline {
     const interrupted = interruptedMessageIndex !== -1
     const error = assistantMessages.find((m) => m.error && m.error.name !== "MessageAbortedError")?.error
 
-    const assistantPartRefs = assistantMessages.flatMap((message, messageIndex) =>
-      getMessageParts(message.id)
-        .filter((part) => renderable(part, showReasoning))
-        .map((part) => ({ messageID: message.id, messageIndex, part })),
+    const assistantPartRefs = latestActivityProgress(
+      assistantMessages.flatMap((message, messageIndex) =>
+        getMessageParts(message.id)
+          .filter((part) => renderable(part, showReasoning))
+          .map((part) => ({ messageID: message.id, messageIndex, part })),
+      ),
+      activityProgressVisibility,
     )
     const assistantItems =
       interrupted && !compaction
@@ -274,6 +278,68 @@ export namespace Timeline {
     }
 
     return rows
+  }
+
+  export function activityProgressVisibility(
+    assistantMessages: AssistantMessage[],
+    getMessageParts: (messageID: string) => Part[],
+  ) {
+    const refs = assistantMessages.flatMap((message, messageIndex) =>
+      getMessageParts(message.id).map((part) => ({ messageID: message.id, messageIndex, part })),
+    )
+    return new Set(latestActivityProgress(refs).map((ref) => `${ref.messageID}:${ref.part.id}`))
+  }
+
+  function latestActivityProgress<T extends { messageID: string; part: Part }>(
+    refs: T[],
+    visibility?: ReadonlySet<string>,
+  ) {
+    const progressByMessage = new Map<string, NonNullable<ReturnType<typeof activityProgress>>>()
+    refs.forEach((ref) => {
+      const marker = activityProgress(ref.part)
+      if (marker) progressByMessage.set(ref.messageID, marker)
+    })
+    const markerFor = (ref: T) =>
+      activityProgress(ref.part) ?? (ref.part.type === "text" ? progressByMessage.get(ref.messageID) : undefined)
+    if (visibility)
+      return refs.filter((ref) => {
+        if (!markerFor(ref)) return true
+        return visibility.has(`${ref.messageID}:${ref.part.id}`)
+      })
+    const selected = new Map<string, { revision: number; terminal: boolean }>()
+    refs.forEach((ref) => {
+      const marker = markerFor(ref)
+      if (!marker) return
+      const terminal = marker.state !== "progress"
+      const current = selected.get(marker.activityID)
+      if (
+        current &&
+        ((current.terminal && !terminal) || (current.terminal === terminal && current.revision > marker.revision))
+      )
+        return
+      selected.set(marker.activityID, { revision: marker.revision, terminal })
+    })
+    return refs.filter((ref) => {
+      const marker = markerFor(ref)
+      if (!marker) return true
+      const current = selected.get(marker.activityID)
+      return current?.revision === marker.revision && current.terminal === (marker.state !== "progress")
+    })
+  }
+
+  function activityProgress(part: Part) {
+    if (part.type !== "text") return
+    const value = part.metadata?.deepagent_activity_progress
+    if (!value || typeof value !== "object") return
+    const marker = value as Record<string, unknown>
+    if (typeof marker.activity_id !== "string" || marker.activity_id.length === 0) return
+    if (typeof marker.revision !== "number" || !Number.isInteger(marker.revision) || marker.revision < 0) return
+    if (!["progress", "final", "interrupted", "recovery_required"].includes(String(marker.state))) return
+    return {
+      activityID: marker.activity_id,
+      revision: marker.revision,
+      state: marker.state as "progress" | "final" | "interrupted" | "recovery_required",
+    }
   }
 
   function isSummaryDiff(value: SnapshotFileDiff): value is SummaryDiff {

@@ -121,7 +121,6 @@ jobs:
         working-directory: packages/desktop
         env:
           DEEPAGENT_CODE_CHANNEL: ${{ github.event_name == 'push' && 'prod' || (github.event.inputs.channel || 'prod') }}
-          MODELS_DEV_API_JSON: ${{ github.workspace }}/packages/deepagent-code/test/tool/fixtures/models-api.json
           NODE_OPTIONS: --max-old-space-size=4096
         run: bun run build
 
