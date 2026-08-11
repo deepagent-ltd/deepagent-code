@@ -14,6 +14,7 @@ import type { State, VcsCache, SessionPlan, SessionGoal, SessionPlanUpdateOption
 import { trimSessions } from "./session-trim"
 import { dropSessionCaches } from "./session-cache"
 import { diffs as list, message as clean } from "@/utils/diffs"
+import { promptAdmissionClientMessageID } from "./prompt-admission"
 
 const SKIP_PARTS = new Set(["patch", "step-start", "step-finish"])
 
@@ -226,6 +227,23 @@ export function applyDirectoryEvent(input: {
     }
     case "message.updated": {
       const info = clean((event.properties as { info: Message }).info)
+      const clientMessageID = promptAdmissionClientMessageID(info)
+      if (clientMessageID && clientMessageID !== info.id) {
+        input.setStore(
+          produce((draft) => {
+            const messages = draft.message[info.sessionID]
+            if (messages) {
+              const result = Binary.search(messages, clientMessageID, (message) => message.id)
+              if (result.found) messages.splice(result.index, 1)
+            }
+            const parts = draft.part[clientMessageID]
+            if (parts) {
+              for (const part of parts) delete draft.part_text_accum_delta[part.id]
+            }
+            delete draft.part[clientMessageID]
+          }),
+        )
+      }
       const messages = input.store.message[info.sessionID]
       if (!messages) {
         input.setStore("message", info.sessionID, [info])

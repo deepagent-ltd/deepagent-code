@@ -12,6 +12,7 @@ import {
 export { exerciseConfigDirectory, exerciseDataDirectory, exerciseDatabasePath, exerciseGlobalRoot }
 
 Flag.DEEPAGENT_CODE_DB = exerciseDatabasePath
+Flag.DEEPAGENT_CODE_DISABLE_MODELS_FETCH = true
 
 export const original = {
   DEEPAGENT_CODE_SERVER_PASSWORD: Flag.DEEPAGENT_CODE_SERVER_PASSWORD,

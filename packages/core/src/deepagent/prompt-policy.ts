@@ -159,7 +159,7 @@ export const buildSystemPrompt = (ctx: PromptContext): string => {
 // Volatile per-turn state that must NOT enter the cached base system prompt. Rendered into a single
 // `<deepagent-round-context>` block that the caller appends after durable history. The stable system
 // prompt establishes this tag as trusted runtime control. Only buildSystemPrompt must stay stable.
-export const buildVolatileRoundContext = (ctx: PromptContext): string => {
+export const buildVolatileRoundContext = (ctx: PromptContext, runtimeControl?: string): string => {
   const sections: string[] = []
 
   // Round + activation stage: the model's sense of "where am I in the loop". Was previously baked
@@ -210,25 +210,41 @@ export const buildVolatileRoundContext = (ctx: PromptContext): string => {
     )
   }
 
-  const body = sections.filter(Boolean).join("\n\n")
-  if (!body) return ""
-  return ["<deepagent-round-context>", body, "</deepagent-round-context>"].join("\n")
+  if (runtimeControl) sections.push(runtimeControl)
+  return wrapVolatileRoundContext(sections)
 }
 
 // Tool continuations already have the current user request, assistant decision, tool call, and tool
 // result in adjacent durable history. Repeating the full activation/task/previous-results block after
 // every tool result makes that control block look like a fresh user request and can induce semantic
 // restatement loops. Keep only an explicit, constant-size continuation directive in the volatile tail;
-// live plan state is appended separately by the request layer.
-export const buildVolatileContinuationContext = (): string =>
-  [
-    "<deepagent-round-context>",
-    "# Tool continuation",
-    "",
-    "Continue directly from the immediately preceding tool result.",
-    "Apply runtime and plan control state silently. Do not restate or re-summarize the user request, the current phase, or conclusions already established unless the tool result materially changes them.",
-    "</deepagent-round-context>",
-  ].join("\n")
+// live plan state is included in the same trusted control block by the request layer.
+export const buildVolatileContinuationContext = (runtimeControl?: string): string =>
+  wrapVolatileRoundContext([
+    [
+      "# Tool continuation",
+      "",
+      "Continue directly from the immediately preceding tool result.",
+      "Apply runtime and plan control state silently. Do not restate or re-summarize the user request, the current phase, or conclusions already established unless the tool result materially changes them.",
+    ].join("\n"),
+    ...(runtimeControl ? [runtimeControl] : []),
+  ])
+
+export const buildVolatilePlanContext = (runtimeControl: string): string =>
+  wrapVolatileRoundContext([
+    [
+      "# Plan control",
+      "",
+      "Apply this runtime plan state silently. Copy required plan tool parameters exactly as shown; never infer identities or versions from conversation history, titles, or positions.",
+    ].join("\n"),
+    runtimeControl,
+  ])
+
+const wrapVolatileRoundContext = (sections: string[]): string => {
+  const body = sections.filter(Boolean).join("\n\n")
+  if (!body) return ""
+  return ["<deepagent-round-context>", body, "</deepagent-round-context>"].join("\n")
+}
 
 const identitySection = (mode: AgentMode): string => {
   // P2-1: ultra must not fall through to the High label. Each strength has its own label.

@@ -12,10 +12,15 @@ import { Plugin } from "@/plugin"
 import { Config } from "@/config/config"
 import { NotFoundError } from "@/storage/storage"
 import { Database } from "@deepagent-code/core/database/database"
-import { MessageTable, PartTable } from "@deepagent-code/core/session/sql"
+import { MessageTable, PartTable, SessionTable, SessionWorldStateBaselineTable } from "@deepagent-code/core/session/sql"
 import { PromptEpoch } from "./prompt-epoch"
-import { CompactionRunTable, CompactionSummaryAttemptTable, type SummaryAttemptState } from "./compaction-sql"
-import { eq, and, inArray } from "drizzle-orm"
+import {
+  CompactionArtifactTable,
+  CompactionRunTable,
+  CompactionSummaryAttemptTable,
+  type SummaryAttemptState,
+} from "./compaction-sql"
+import { eq, and, inArray, isNull } from "drizzle-orm"
 
 import { Cause, Effect, Exit, Layer, Context, Option } from "effect"
 import * as DateTime from "effect/DateTime"
@@ -30,15 +35,24 @@ import { ProviderV2 } from "@deepagent-code/core/provider"
 import { ModelV2 } from "@deepagent-code/core/model"
 import { EventV2 } from "@deepagent-code/core/event"
 import { buildPrompt } from "@deepagent-code/core/session/compaction"
-import { updateLedgerFromSummary, carryOverToBridge } from "./context-ledger"
+import {
+  updateLedgerFromSummaryRequired,
+  carryOverToBridgeRequired,
+  collectSessionWorldStateBaseline,
+  type SessionWorldStateBaseline,
+} from "./context-ledger"
 import { Hash } from "@deepagent-code/core/util/hash"
 import { LLM } from "./llm"
+import { HistoryAuthority } from "./history-authority"
+import { Identifier } from "@/id/id"
+import { Project } from "@deepagent-code/core/project"
 
 const log = Log.create({ service: "session.compaction" })
 
 export const Event = {
   Compacted: EventV2.define({
     type: "session.compacted",
+    sync: { aggregate: "sessionID", version: 1 },
     schema: {
       sessionID: SessionID,
     },
@@ -122,31 +136,6 @@ function turns(messages: SessionV1.WithParts[]) {
   return result
 }
 
-function splitTurn(input: {
-  messages: SessionV1.WithParts[]
-  turn: Turn
-  model: Provider.Model
-  budget: number
-  estimate: (input: { messages: SessionV1.WithParts[]; model: Provider.Model }) => Effect.Effect<number>
-}) {
-  return Effect.gen(function* () {
-    if (input.budget <= 0) return undefined
-    if (input.turn.end - input.turn.start <= 1) return undefined
-    for (let start = input.turn.start + 1; start < input.turn.end; start++) {
-      const size = yield* input.estimate({
-        messages: input.messages.slice(start, input.turn.end),
-        model: input.model,
-      })
-      if (size > input.budget) continue
-      return {
-        start,
-        id: input.messages[start]!.info.id,
-      } satisfies Tail
-    }
-    return undefined
-  })
-}
-
 export interface Interface {
   readonly isOverflow: (input: {
     tokens: SessionV1.Assistant["tokens"]
@@ -166,8 +155,72 @@ export interface Interface {
     model: { providerID: ProviderV2.ID; modelID: ModelV2.ID }
     auto: boolean
     overflow?: boolean
+    activityID?: string
   }) => Effect.Effect<void>
+  readonly recover: (sessionID: SessionID) => Effect.Effect<void>
+  readonly recoverableContinuations: (projectID: Project.ID) => Effect.Effect<
+    readonly {
+      runID: string
+      sessionID: SessionID
+      messageID: MessageID
+    }[]
+  >
+  readonly hasPending: (sessionID: SessionID) => Effect.Effect<boolean>
 }
+
+export const validateReplacementTargetInTransaction = Effect.fn(
+  "SessionCompaction.validateReplacementTargetInTransaction",
+)(function* (input: {
+  tx: Database.Interface["db"]
+  sessionID: SessionID
+  replacementMessageIDs: readonly MessageID[]
+  checkpointUserID: MessageID
+  checkpointAssistantID: MessageID
+  markerMessageID: MessageID
+  markerPartID: PartID
+  retainedTailStartID?: MessageID
+  contextTokens: number
+  checkpointHash: string
+  effectiveHistoryHash: string
+}) {
+  const replacement = yield* MessageV2.messagesInTransaction(input.tx, input.sessionID, input.replacementMessageIDs)
+  if (!replacement) return false
+  const checkpointUser = replacement.find((message) => message.info.id === input.checkpointUserID)
+  const checkpointAssistant = replacement.find((message) => message.info.id === input.checkpointAssistantID)
+  if (
+    checkpointUser?.info.role !== "user" ||
+    checkpointAssistant?.info.role !== "assistant" ||
+    checkpointAssistant.info.parentID !== checkpointUser.info.id ||
+    !checkpointAssistant.info.summary ||
+    !checkpointAssistant.info.finish ||
+    checkpointAssistant.info.error
+  )
+    return false
+  const target = replacement.map((message) => {
+    if (message.info.id !== input.markerMessageID) return message
+    const markerPart = message.parts.find(
+      (part): part is SessionV1.CompactionPart => part.id === input.markerPartID && part.type === "compaction",
+    )
+    if (!markerPart) return message
+    return {
+      info: message.info,
+      parts: message.parts.map((part) =>
+        part.id === markerPart.id
+          ? {
+              ...markerPart,
+              tail_start_id: input.retainedTailStartID,
+              context_tokens: input.contextTokens,
+            }
+          : part,
+      ),
+    }
+  })
+  return (
+    target.some((message) => message.parts.some((part) => part.id === input.markerPartID)) &&
+    HistoryAuthority.hash(target) === input.effectiveHistoryHash &&
+    input.checkpointHash === input.effectiveHistoryHash
+  )
+})
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/SessionCompaction") {}
 
@@ -186,8 +239,218 @@ export const layer = Layer.effect(
     const flags = yield* RuntimeFlags.Service
     const { db } = yield* Database.Service
     const promptEpoch = yield* PromptEpoch.Service
+    const activeCompactions = new Set<SessionID>()
+
+    const registerArtifact = (input: {
+      runID: string
+      sessionID: SessionID
+      messageID: MessageID
+      partID?: PartID
+      kind: typeof CompactionArtifactTable.$inferInsert.kind
+    }) =>
+      db
+        .insert(CompactionArtifactTable)
+        .values({
+          artifact_id: Hash.sha256(
+            `compaction-artifact:v1:${input.runID}:${input.kind}:${input.messageID}:${input.partID ?? "message"}`,
+          ),
+          run_id: input.runID,
+          session_id: input.sessionID,
+          message_id: input.messageID,
+          part_id: input.partID ?? null,
+          kind: input.kind,
+          state: "pending",
+          created_at: Date.now(),
+          committed_at: null,
+          published_at: null,
+        })
+        .onConflictDoNothing()
+        .run()
+        .pipe(Effect.orDie)
+
+    const publishCommittedRun = Effect.fn("SessionCompaction.publishCommittedRun")(function* (runID: string) {
+      const run = yield* db
+        .select()
+        .from(CompactionRunTable)
+        .where(eq(CompactionRunTable.run_id, runID))
+        .get()
+        .pipe(Effect.orDie)
+      if (!run || run.state !== "committed") return
+
+      const artifacts = yield* db
+        .select()
+        .from(CompactionArtifactTable)
+        // Older builds may have committed replay artifacts. They remain publishable for recovery,
+        // but current compaction runs only create synthetic continuation artifacts.
+        .where(
+          and(
+            eq(CompactionArtifactTable.run_id, runID),
+            eq(CompactionArtifactTable.state, "committed"),
+            inArray(CompactionArtifactTable.kind, ["marker", "replay", "continue"] as const),
+          ),
+        )
+        .all()
+        .pipe(Effect.orDie)
+      for (const artifact of artifacts) {
+        if (artifact.published_at) continue
+        const message = yield* MessageV2.get({
+          sessionID: SessionID.make(run.session_id),
+          messageID: MessageID.make(artifact.message_id),
+        }).pipe(Effect.provideService(Database.Service, { db }), Effect.orDie)
+        const parts = message.parts.filter((part) => !artifact.part_id || artifact.part_id === part.id)
+        if (artifact.kind === "replay" || artifact.kind === "continue") {
+          const messageEventID = EventV2.ID.make(
+            `evt_${Hash.sha256(`compaction-artifact-event:v1:${runID}:message:${message.info.id}`).slice(0, 26)}`,
+          )
+          yield* events.publish(
+            SessionV1.Event.MessageUpdated,
+            { sessionID: message.info.sessionID, info: message.info },
+            {
+              id: messageEventID,
+              idempotent: true,
+              ...(parts.length === 0
+                ? {
+                    commit: () =>
+                      db
+                        .update(CompactionArtifactTable)
+                        .set({ published_at: Date.now() })
+                        .where(
+                          and(
+                            eq(CompactionArtifactTable.artifact_id, artifact.artifact_id),
+                            isNull(CompactionArtifactTable.published_at),
+                          ),
+                        )
+                        .run()
+                        .pipe(Effect.orDie, Effect.asVoid),
+                  }
+                : {}),
+            },
+          )
+        }
+        for (const [index, part] of parts.entries()) {
+          const partEventID = EventV2.ID.make(
+            `evt_${Hash.sha256(`compaction-artifact-event:v1:${runID}:part:${part.id}`).slice(0, 26)}`,
+          )
+          yield* events.publish(
+            SessionV1.Event.PartUpdated,
+            {
+              sessionID: part.sessionID,
+              part,
+              time: part.type === "text" ? (part.time?.start ?? message.info.time.created) : message.info.time.created,
+            },
+            {
+              id: partEventID,
+              idempotent: true,
+              ...(index === parts.length - 1
+                ? {
+                    commit: () =>
+                      db
+                        .update(CompactionArtifactTable)
+                        .set({ published_at: Date.now() })
+                        .where(
+                          and(
+                            eq(CompactionArtifactTable.artifact_id, artifact.artifact_id),
+                            isNull(CompactionArtifactTable.published_at),
+                          ),
+                        )
+                        .run()
+                        .pipe(Effect.orDie, Effect.asVoid),
+                  }
+                : {}),
+            },
+          )
+        }
+        if (artifact.kind === "marker" && parts.length === 0)
+          return yield* Effect.die(new Error(`compaction marker artifact is incomplete: ${artifact.artifact_id}`))
+      }
+      yield* db
+        .update(CompactionRunTable)
+        .set({ continuation_published_at: Date.now() })
+        .where(eq(CompactionRunTable.run_id, runID))
+        .run()
+        .pipe(Effect.orDie)
+
+      if (run.context_ledger_required && run.summary_text) {
+        if (!run.ledger_mirrored_at) {
+          yield* updateLedgerFromSummaryRequired({
+            sessionID: SessionID.make(run.session_id),
+            summary: run.summary_text,
+            operationID: run.run_id,
+          })
+          yield* db
+            .update(CompactionRunTable)
+            .set({ ledger_mirrored_at: Date.now() })
+            .where(and(eq(CompactionRunTable.run_id, runID), isNull(CompactionRunTable.ledger_mirrored_at)))
+            .run()
+            .pipe(Effect.orDie)
+        }
+        if (!run.bridge_carried_at) {
+          const owner = yield* db
+            .select({ directory: SessionTable.directory })
+            .from(SessionTable)
+            .where(eq(SessionTable.id, SessionID.make(run.session_id)))
+            .get()
+            .pipe(Effect.orDie)
+          if (!owner) return yield* Effect.die(new Error(`compaction session is missing: ${run.session_id}`))
+          yield* carryOverToBridgeRequired({
+            sessionID: SessionID.make(run.session_id),
+            workspacePath: owner.directory,
+          })
+          yield* db
+            .update(CompactionRunTable)
+            .set({ bridge_carried_at: Date.now() })
+            .where(and(eq(CompactionRunTable.run_id, runID), isNull(CompactionRunTable.bridge_carried_at)))
+            .run()
+            .pipe(Effect.orDie)
+        }
+      }
+
+      if (!run.terminal_events_published_at && run.summary_text && run.marker_message_id && run.completion_reason) {
+        if (flags.experimentalEventSystem) {
+          const endedID = EventV2.ID.make(`evt_${Hash.sha256(`compaction-ended:v1:${runID}`).slice(0, 26)}`)
+          yield* events.publish(
+            SessionEvent.Compaction.Ended,
+            {
+              sessionID: SessionID.make(run.session_id),
+              messageID: SessionMessage.ID.make(run.marker_message_id),
+              timestamp: DateTime.makeUnsafe(run.committed_at ?? Date.now()),
+              reason: run.completion_reason,
+              text: run.summary_text,
+              recent: run.recent_context ?? "",
+            },
+            { id: endedID, idempotent: true },
+          )
+        }
+        const compactedID = EventV2.ID.make(`evt_${Hash.sha256(`compaction-completed:v1:${runID}`).slice(0, 26)}`)
+        yield* events.publish(
+          Event.Compacted,
+          { sessionID: SessionID.make(run.session_id) },
+          {
+            id: compactedID,
+            idempotent: true,
+            commit: () =>
+              db
+                .update(CompactionRunTable)
+                .set({ terminal_events_published_at: Date.now() })
+                .where(
+                  and(eq(CompactionRunTable.run_id, runID), isNull(CompactionRunTable.terminal_events_published_at)),
+                )
+                .run()
+                .pipe(Effect.orDie, Effect.asVoid),
+          },
+        )
+      }
+    })
 
     const recover = Effect.fn("SessionCompaction.recover")(function* (sessionID: SessionID) {
+      const committed = yield* db
+        .select({ run_id: CompactionRunTable.run_id })
+        .from(CompactionRunTable)
+        .where(and(eq(CompactionRunTable.session_id, sessionID), eq(CompactionRunTable.state, "committed")))
+        .all()
+        .pipe(Effect.orDie)
+      yield* Effect.forEach(committed, (run) => publishCommittedRun(run.run_id), { discard: true })
+      if (activeCompactions.has(sessionID)) return
       const requested = yield* db
         .select({
           run_id: CompactionRunTable.run_id,
@@ -229,36 +492,61 @@ export const layer = Layer.effect(
                   .pipe(Effect.orDie)
               : undefined
           if (markerPart?.data.type === "compaction") return
-          yield* db
-            .update(CompactionRunTable)
-            .set({ state: "failed", terminal_failure_kind: "marker_write_incomplete" })
-            .where(and(eq(CompactionRunTable.run_id, run.run_id), eq(CompactionRunTable.state, "requested")))
-            .run()
-            .pipe(Effect.orDie)
+          yield* failRun(run.run_id, "marker_write_incomplete")
         }),
       )
       yield* db
-        .update(CompactionSummaryAttemptTable)
-        .set({ state: "indeterminate_after_crash", failure_kind: "process_restart", completed_at: Date.now() })
-        .where(
-          and(
-            inArray(
-              CompactionSummaryAttemptTable.run_id,
-              db
+        .transaction(
+          (tx) =>
+            Effect.gen(function* () {
+              const sessionRuns = tx
                 .select({ run_id: CompactionRunTable.run_id })
                 .from(CompactionRunTable)
-                .where(eq(CompactionRunTable.session_id, sessionID)),
-            ),
-            inArray(CompactionSummaryAttemptTable.state, ["dispatching", "streaming"] as const),
-          ),
+                .where(eq(CompactionRunTable.session_id, sessionID))
+              yield* tx
+                .update(CompactionSummaryAttemptTable)
+                .set({
+                  state: "indeterminate_after_crash",
+                  failure_kind: "process_restart",
+                  completed_at: Date.now(),
+                })
+                .where(
+                  and(
+                    inArray(CompactionSummaryAttemptTable.run_id, sessionRuns),
+                    inArray(CompactionSummaryAttemptTable.state, ["dispatching", "streaming"] as const),
+                  ),
+                )
+                .run()
+              yield* tx
+                .update(CompactionRunTable)
+                .set({ state: "indeterminate", terminal_failure_kind: "process_restart" })
+                .where(and(eq(CompactionRunTable.session_id, sessionID), eq(CompactionRunTable.state, "summarizing")))
+                .run()
+              yield* tx
+                .update(CompactionArtifactTable)
+                .set({ state: "orphaned" })
+                .where(
+                  and(
+                    eq(CompactionArtifactTable.session_id, sessionID),
+                    eq(CompactionArtifactTable.state, "pending"),
+                    inArray(
+                      CompactionArtifactTable.run_id,
+                      tx
+                        .select({ run_id: CompactionRunTable.run_id })
+                        .from(CompactionRunTable)
+                        .where(
+                          and(
+                            eq(CompactionRunTable.session_id, sessionID),
+                            inArray(CompactionRunTable.state, ["failed", "indeterminate"] as const),
+                          ),
+                        ),
+                    ),
+                  ),
+                )
+                .run()
+            }),
+          { behavior: "immediate" },
         )
-        .run()
-        .pipe(Effect.orDie)
-      yield* db
-        .update(CompactionRunTable)
-        .set({ state: "indeterminate", terminal_failure_kind: "process_restart" })
-        .where(and(eq(CompactionRunTable.session_id, sessionID), eq(CompactionRunTable.state, "summarizing")))
-        .run()
         .pipe(Effect.orDie)
     })
 
@@ -268,6 +556,10 @@ export const layer = Layer.effect(
       markerPartID?: PartID
       fromEpoch: number
       trigger: "turn_start" | "provider_overflow" | "manual"
+      sourceWindowID: string
+      sourceEffectiveHistoryHash: string
+      sourceMessageCount: number
+      sourceProjectionVersion: number
     }) {
       const existing = yield* db
         .select()
@@ -275,22 +567,37 @@ export const layer = Layer.effect(
         .where(
           and(
             eq(CompactionRunTable.session_id, input.sessionID),
-            inArray(CompactionRunTable.state, ["requested", "summarizing", "indeterminate"] as const),
+            inArray(CompactionRunTable.state, ["requested", "summarizing"] as const),
           ),
         )
         .get()
         .pipe(Effect.orDie)
       if (existing) {
         if (existing.marker_message_id !== input.markerMessageID) return undefined
+        if (
+          existing.from_prompt_epoch !== input.fromEpoch ||
+          existing.source_window_id !== input.sourceWindowID ||
+          existing.source_effective_history_hash !== input.sourceEffectiveHistoryHash ||
+          existing.source_message_count !== input.sourceMessageCount ||
+          existing.source_projection_version !== input.sourceProjectionVersion
+        )
+          return undefined
         return existing
       }
       const row = {
-        run_id: Hash.sha256(`compaction-run:${input.sessionID}:${input.markerMessageID}`),
+        run_id: Hash.sha256(
+          `compaction-run:v2:${input.sessionID}:${input.markerMessageID}:${Identifier.ascending("job")}`,
+        ),
         session_id: input.sessionID,
         from_prompt_epoch: input.fromEpoch,
         trigger: input.trigger,
         marker_message_id: input.markerMessageID,
         marker_part_id: input.markerPartID,
+        source_window_id: input.sourceWindowID,
+        source_effective_history_hash: input.sourceEffectiveHistoryHash,
+        source_message_count: input.sourceMessageCount,
+        source_projection_version: input.sourceProjectionVersion,
+        context_ledger_required: flags.experimentalContextLedger,
         state: "requested" as const,
         created_at: Date.now(),
       }
@@ -405,31 +712,87 @@ export const layer = Layer.effect(
 
     const failRun = (runID: string, kind: string) =>
       db
-        .update(CompactionRunTable)
-        .set({ state: "failed", terminal_failure_kind: kind })
-        .where(
-          and(
-            eq(CompactionRunTable.run_id, runID),
-            inArray(CompactionRunTable.state, ["requested", "summarizing"] as const),
-          ),
+        .transaction(
+          (tx) =>
+            Effect.gen(function* () {
+              yield* tx
+                .update(CompactionRunTable)
+                .set({ state: "failed", terminal_failure_kind: kind })
+                .where(
+                  and(
+                    eq(CompactionRunTable.run_id, runID),
+                    inArray(CompactionRunTable.state, ["requested", "summarizing"] as const),
+                  ),
+                )
+                .run()
+              yield* tx
+                .update(CompactionArtifactTable)
+                .set({ state: "orphaned" })
+                .where(and(eq(CompactionArtifactTable.run_id, runID), eq(CompactionArtifactTable.state, "pending")))
+                .run()
+            }),
+          { behavior: "immediate" },
         )
-        .run()
         .pipe(Effect.orDie)
 
     const commitRun = Effect.fn("SessionCompaction.commitRun")(function* (input: {
       runID: string
       sessionID: SessionID
       fromEpoch: number
+      markerMessageID: MessageID
+      markerPartID: PartID
       checkpointUserID: MessageID
       checkpointAssistantID: MessageID
       retainedTailStartID?: MessageID
       sourceEndMessageID?: MessageID
       checkpointHash: string
+      baseMessageCount: number
+      effectiveHistoryHash: string
+      replacementMessageIDs: readonly MessageID[]
+      contextTokens: number
+      summary: string
+      recent: string
+      reason: "auto" | "manual"
+      worldStateBaseline: SessionWorldStateBaseline
+      continuation?: {
+        readonly message: SessionV1.WithParts
+        readonly kind: "continue"
+      }
     }) {
       return yield* db
         .transaction(
           (tx) =>
             Effect.gen(function* () {
+              const run = yield* tx
+                .select()
+                .from(CompactionRunTable)
+                .where(eq(CompactionRunTable.run_id, input.runID))
+                .get()
+              if (!run || run.state !== "summarizing") return false
+              const currentSource = yield* MessageV2.promptHistoryProjectionInTransaction(
+                tx as unknown as Database.Interface["db"],
+                input.sessionID,
+                input.markerMessageID,
+              )
+              if (
+                !currentSource ||
+                currentSource.epoch !== run.from_prompt_epoch ||
+                currentSource.window.windowID !== run.source_window_id ||
+                currentSource.effectiveHistoryHash !== run.source_effective_history_hash ||
+                currentSource.messages.length !== run.source_message_count ||
+                currentSource.projectionVersion !== run.source_projection_version
+              )
+                return false
+              // The summary/checkpoint is assembled outside this transaction because it may require
+              // provider and filesystem work. Re-hydrate and hash the durable target under the commit
+              // lock so a concurrent Part mutation cannot legalize a stale PromptEpoch.
+              if (
+                !(yield* validateReplacementTargetInTransaction({
+                  tx: tx as unknown as Database.Interface["db"],
+                  ...input,
+                }))
+              )
+                return false
               const settled = yield* tx
                 .select({ id: CompactionSummaryAttemptTable.summary_attempt_id })
                 .from(CompactionSummaryAttemptTable)
@@ -441,8 +804,58 @@ export const layer = Layer.effect(
                 )
                 .get()
               if (!settled) return false
-              const epoch = yield* PromptEpoch.activateInTransaction(tx, input)
+              const epoch = yield* PromptEpoch.activateInTransaction(tx, {
+                ...input,
+                worldStateBaselineHash: input.worldStateBaseline.hash,
+              })
               if (!epoch) return false
+              yield* tx
+                .insert(SessionWorldStateBaselineTable)
+                .values(
+                  input.worldStateBaseline.sections.map((section) => ({
+                    session_id: input.sessionID,
+                    prompt_epoch: epoch.epoch,
+                    section_id: section.sectionID,
+                    snapshot: section.snapshot,
+                    fragment: section.fragment,
+                    fragment_hash: section.fragmentHash,
+                    provenance: "native" as const,
+                    created_at: epoch.created_at,
+                  })),
+                )
+                .run()
+              const marker = yield* tx
+                .select({ data: PartTable.data })
+                .from(PartTable)
+                .where(
+                  and(
+                    eq(PartTable.id, input.markerPartID),
+                    eq(PartTable.message_id, input.markerMessageID),
+                    eq(PartTable.session_id, input.sessionID),
+                  ),
+                )
+                .get()
+              if (!marker || marker.data.type !== "compaction") {
+                return yield* Effect.die(new Error(`compaction marker missing during commit: ${input.runID}`))
+              }
+              yield* tx
+                .update(PartTable)
+                .set({
+                  data: {
+                    ...marker.data,
+                    tail_start_id: input.retainedTailStartID,
+                    context_tokens: input.contextTokens,
+                  } as typeof PartTable.$inferInsert.data,
+                  provenance: {
+                    source: "compaction_marker",
+                    owner_session_id: input.sessionID,
+                    owner_prompt_epoch: epoch.epoch,
+                    owner_run_id: input.runID,
+                    durable: true,
+                  },
+                })
+                .where(eq(PartTable.id, input.markerPartID))
+                .run()
               const committed = yield* tx
                 .update(CompactionRunTable)
                 .set({
@@ -450,12 +863,80 @@ export const layer = Layer.effect(
                   committed_summary_message_id: input.checkpointAssistantID,
                   checkpoint_hash: input.checkpointHash,
                   target_prompt_epoch: epoch.epoch,
+                  summary_text: input.summary,
+                  recent_context: input.recent,
+                  completion_reason: input.reason,
                   committed_at: Date.now(),
+                  continuation_state: input.continuation ? "pending" : null,
                 })
                 .where(and(eq(CompactionRunTable.run_id, input.runID), eq(CompactionRunTable.state, "summarizing")))
                 .returning({ run_id: CompactionRunTable.run_id })
                 .get()
               if (!committed) return yield* Effect.die(new Error(`compaction commit CAS lost: ${input.runID}`))
+              const continuation = input.continuation
+              if (continuation) {
+                const committedAt = Date.now()
+                yield* tx
+                  .insert(MessageTable)
+                  .values({
+                    id: continuation.message.info.id,
+                    session_id: continuation.message.info.sessionID,
+                    time_created: continuation.message.info.time.created,
+                    time_updated: continuation.message.info.time.created,
+                    data: Object.fromEntries(
+                      Object.entries(continuation.message.info).filter(([key]) => key !== "id" && key !== "sessionID"),
+                    ) as typeof MessageTable.$inferInsert.data,
+                  })
+                  .run()
+                yield* tx
+                  .insert(PartTable)
+                  .values(
+                    continuation.message.parts.map((part) => ({
+                      id: part.id,
+                      message_id: continuation.message.info.id,
+                      session_id: continuation.message.info.sessionID,
+                      provenance: {
+                        source: "compaction_continue" as const,
+                        owner_session_id: input.sessionID,
+                        owner_prompt_epoch: epoch.epoch,
+                        owner_run_id: input.runID,
+                        durable: true as const,
+                      },
+                      time_created: continuation.message.info.time.created,
+                      time_updated: continuation.message.info.time.created,
+                      data: Object.fromEntries(
+                        Object.entries(part).filter(
+                          ([key]) => key !== "id" && key !== "messageID" && key !== "sessionID",
+                        ),
+                      ) as typeof PartTable.$inferInsert.data,
+                    })),
+                  )
+                  .run()
+                yield* tx
+                  .insert(CompactionArtifactTable)
+                  .values({
+                    artifact_id: Hash.sha256(
+                      `compaction-artifact:v1:${input.runID}:${continuation.kind}:${continuation.message.info.id}:message`,
+                    ),
+                    run_id: input.runID,
+                    session_id: continuation.message.info.sessionID,
+                    message_id: continuation.message.info.id,
+                    part_id: null,
+                    kind: continuation.kind,
+                    state: "committed",
+                    created_at: committedAt,
+                    committed_at: committedAt,
+                    published_at: null,
+                  })
+                  .run()
+              }
+              yield* tx
+                .update(CompactionArtifactTable)
+                .set({ state: "committed", committed_at: Date.now() })
+                .where(
+                  and(eq(CompactionArtifactTable.run_id, input.runID), eq(CompactionArtifactTable.state, "pending")),
+                )
+                .run()
               return true
             }),
           { behavior: "immediate" },
@@ -514,16 +995,7 @@ export const layer = Layer.effect(
           keep = { start: turn.start, id: turn.id }
           continue
         }
-        const remaining = budget - total
-        const split = yield* splitTurn({
-          messages: input.messages,
-          turn,
-          model: input.model,
-          budget: remaining,
-          estimate,
-        })
-        if (split) keep = split
-        else if (!keep) log.info("tail fallback", { budget, size, total })
+        if (!keep) log.info("tail fallback", { budget, size, total })
         break
       }
 
@@ -582,7 +1054,7 @@ export const layer = Layer.effect(
       }
     })
 
-    const processCompaction = Effect.fn("SessionCompaction.process")(function* (input: {
+    const processCompactionAttempt = Effect.fn("SessionCompaction.processAttempt")(function* (input: {
       parentID: MessageID
       messages: SessionV1.WithParts[]
       sessionID: SessionID
@@ -593,10 +1065,22 @@ export const layer = Layer.effect(
       if (!parent || parent.info.role !== "user") {
         throw new Error(`Compaction parent must be a user message: ${input.parentID}`)
       }
-      const userMessage = parent.info
       const existingCompactionPart = parent.parts.find(
         (part): part is SessionV1.CompactionPart => part.type === "compaction",
       )
+      const projection = yield* (
+        existingCompactionPart
+          ? MessageV2.promptHistoryBeforeCompactionEffect({
+              sessionID: input.sessionID,
+              markerMessageID: input.parentID,
+            })
+          : MessageV2.promptHistoryProjectionEffect(input.sessionID)
+      ).pipe(Effect.provideService(Database.Service, { db }), Effect.orDie)
+      const activeEpoch = yield* promptEpoch.getActive(input.sessionID)
+      if (!activeEpoch || activeEpoch.authority_state !== "ready" || activeEpoch.epoch !== projection.epoch) {
+        return yield* Effect.die(new Error(`compaction history authority is unavailable for ${input.sessionID}`))
+      }
+      const userMessage = parent.info
       const compactionPart =
         existingCompactionPart ??
         ({
@@ -607,42 +1091,59 @@ export const layer = Layer.effect(
           auto: input.auto,
           overflow: input.overflow,
         } satisfies SessionV1.CompactionPart)
-      if (!existingCompactionPart) yield* session.updatePart(compactionPart)
-      yield* recover(input.sessionID)
-      const activeEpoch = yield* promptEpoch.bootstrap(input.sessionID)
+      const authorityInput = existingCompactionPart
+        ? input.messages.flatMap((message) => {
+            if (message.info.id !== input.parentID) return [message]
+            const parts = message.parts.filter((part) => part.type !== "compaction")
+            return parts.length === 0 ? [] : [{ info: message.info, parts }]
+          })
+        : input.messages
+      if (HistoryAuthority.hash(authorityInput) !== projection.effectiveHistoryHash) {
+        return yield* Effect.die(new Error(`compaction input does not match active history for ${input.sessionID}`))
+      }
       const run = yield* ensureRun({
         sessionID: input.sessionID,
         markerMessageID: input.parentID,
         markerPartID: compactionPart.id,
         fromEpoch: activeEpoch.epoch,
         trigger: input.overflow ? "provider_overflow" : input.auto ? "turn_start" : "manual",
+        sourceWindowID: projection.window.windowID,
+        sourceEffectiveHistoryHash: projection.effectiveHistoryHash,
+        sourceMessageCount: projection.messages.length,
+        sourceProjectionVersion: projection.projectionVersion,
       })
-      if (!run || run.state === "indeterminate") return "stop"
-
-      let messages = input.messages
-      let replay:
-        | {
-            info: SessionV1.User
-            parts: SessionV1.Part[]
-          }
-        | undefined
-      if (input.overflow) {
-        const idx = input.messages.findIndex((m) => m.info.id === input.parentID)
-        for (let i = idx - 1; i >= 0; i--) {
-          const msg = input.messages[i]
-          if (msg.info.role === "user" && !msg.parts.some((p) => p.type === "compaction")) {
-            replay = { info: msg.info, parts: msg.parts }
-            messages = input.messages.slice(0, i)
-            break
-          }
-        }
-        const hasContent =
-          replay && messages.some((m) => m.info.role === "user" && !m.parts.some((p) => p.type === "compaction"))
-        if (!hasContent) {
-          replay = undefined
-          messages = input.messages
-        }
+      if (!run) return "stop"
+      if (existingCompactionPart) {
+        yield* registerArtifact({
+          runID: run.run_id,
+          sessionID: input.sessionID,
+          messageID: input.parentID,
+          partID: compactionPart.id,
+          kind: "marker",
+        })
       }
+      if (!existingCompactionPart) {
+        yield* events.publish(
+          SessionV1.Event.PartUpdated,
+          { sessionID: compactionPart.sessionID, part: compactionPart, time: Date.now() },
+          {
+            commit: () =>
+              registerArtifact({
+                runID: run.run_id,
+                sessionID: input.sessionID,
+                messageID: input.parentID,
+                partID: compactionPart.id,
+                kind: "marker",
+              }),
+          },
+        )
+      }
+
+      // Compaction is a history projection boundary, not a second user submission.
+      // Keep the original history for summarization and use the synthetic continuation below when
+      // the provider overflow was caused by media. This avoids durable `compaction_replay` user
+      // messages, which are indistinguishable from a real repeated prompt in the UI and history.
+      const messages = input.messages
 
       const agent = yield* agents.get("compaction")
       const model = agent.model
@@ -715,7 +1216,19 @@ export const layer = Layer.effect(
           created: Date.now(),
         },
       }
-      yield* session.updateMessage(msg)
+      yield* events.publish(
+        SessionV1.Event.MessageUpdated,
+        { sessionID: input.sessionID, info: msg },
+        {
+          commit: () =>
+            registerArtifact({
+              runID: run.run_id,
+              sessionID: input.sessionID,
+              messageID: msg.id,
+              kind: "summary_attempt",
+            }),
+        },
+      )
 
       // BUG-006 §5.1: establish the explicit summary request contract.
       // toolChoice:"none" tells the adapter the model must produce text only.
@@ -778,15 +1291,25 @@ export const layer = Layer.effect(
           return "stop"
         }
         const retryMsg: SessionV1.Assistant = { ...msg, id: MessageID.ascending(), error: undefined, finish: undefined }
-        yield* session.updateMessage(retryMsg)
+        yield* events.publish(
+          SessionV1.Event.MessageUpdated,
+          { sessionID: input.sessionID, info: retryMsg },
+          {
+            commit: () =>
+              registerArtifact({
+                runID: run.run_id,
+                sessionID: input.sessionID,
+                messageID: retryMsg.id,
+                kind: "summary_attempt",
+              }),
+          },
+        )
         currentProcessor = yield* processors.create({ assistantMessage: retryMsg, sessionID: input.sessionID, model })
       }
 
       if (result === "compact") {
         currentProcessor.message.error = new SessionV1.ContextOverflowError({
-          message: replay
-            ? "Conversation history too large to compact - exceeds model context limit"
-            : "Session too large to compact - context exceeds model limit even after stripping media",
+          message: "Session too large to compact - context exceeds model limit even after stripping media",
         }).toObject()
         currentProcessor.message.finish = "error"
         yield* session.updateMessage(currentProcessor.message)
@@ -794,156 +1317,198 @@ export const layer = Layer.effect(
         return "stop"
       }
 
-      if (compactionPart && selected.tail_start_id && compactionPart.tail_start_id !== selected.tail_start_id) {
-        yield* session.updatePart({
-          ...compactionPart,
-          tail_start_id: selected.tail_start_id,
-        })
-      }
-
-      if (result === "continue" && input.auto) {
-        if (replay) {
-          const original = replay.info
-          const replayMsg = yield* session.updateMessage({
-            id: MessageID.ascending(),
+      const continuation = yield* Effect.gen(function* () {
+        if (result !== "continue" || !input.auto) return
+        const info = yield* provider.getProvider(userMessage.model.providerID)
+        if (
+          (yield* plugin.trigger(
+            "experimental.compaction.autocontinue",
+            {
+              sessionID: input.sessionID,
+              agent: userMessage.agent,
+              model: yield* provider
+                .getModel(userMessage.model.providerID, userMessage.model.modelID)
+                .pipe(Effect.orDie),
+              provider: {
+                source: info.source,
+                info,
+                options: info.options,
+              },
+              message: userMessage,
+              overflow: input.overflow === true,
+            },
+            { enabled: true },
+          )).enabled
+        ) {
+          const continueMsg: SessionV1.User = {
+            id: MessageID.make(
+              `${currentProcessor.message.id}_continue_${Hash.sha256(`compaction-continue:v2:${run.run_id}`).slice(0, 12)}`,
+            ),
             role: "user",
             sessionID: input.sessionID,
             time: { created: Date.now() },
-            agent: original.agent,
-            model: original.model,
-            format: original.format,
-            tools: original.tools,
-            system: original.system,
-          })
-          for (const part of replay.parts) {
-            if (part.type === "compaction") continue
-            const replayPart =
-              part.type === "file" && MessageV2.isMedia(part.mime)
-                ? { type: "text" as const, text: `[Attached ${part.mime}: ${part.filename ?? "file"}]` }
-                : part
-            yield* session.updatePart({
-              ...replayPart,
-              id: PartID.ascending(),
-              messageID: replayMsg.id,
-              sessionID: input.sessionID,
-            })
-          }
-        }
-
-        if (!replay) {
-          const info = yield* provider.getProvider(userMessage.model.providerID)
-          if (
-            (yield* plugin.trigger(
-              "experimental.compaction.autocontinue",
+            agent: userMessage.agent,
+            model: userMessage.model,
+            metadata: SessionProcessor.withPlanProtocolActivity(
               {
-                sessionID: input.sessionID,
-                agent: userMessage.agent,
-                model: yield* provider
-                  .getModel(userMessage.model.providerID, userMessage.model.modelID)
-                  .pipe(Effect.orDie),
-                provider: {
-                  source: info.source,
-                  info,
-                  options: info.options,
+                deepagent: {
+                  contextProvenance: {
+                    source: "compaction_continue",
+                    ownerSessionID: input.sessionID,
+                    ownerPromptEpoch: activeEpoch.epoch + 1,
+                    ownerRunID: run.run_id,
+                    durable: true,
+                  },
                 },
-                message: userMessage,
-                overflow: input.overflow === true,
               },
-              { enabled: true },
-            )).enabled
-          ) {
-            const continueMsg = yield* session.updateMessage({
-              id: MessageID.ascending(),
-              role: "user",
-              sessionID: input.sessionID,
-              time: { created: Date.now() },
-              agent: userMessage.agent,
-              model: userMessage.model,
-            })
-            const text =
-              (input.overflow
-                ? "The previous request exceeded the provider's size limit due to large media attachments. The conversation was compacted and media files were removed from context. If the user was asking about attached images or files, explain that the attachments were too large to process and suggest they try again with smaller or fewer files.\n\n"
-                : "") +
-              "Continue if you have next steps, or stop and ask for clarification if you are unsure how to proceed."
-            yield* session.updatePart({
-              id: PartID.ascending(),
-              messageID: continueMsg.id,
-              sessionID: input.sessionID,
-              type: "text",
-              // Internal marker for auto-compaction followups so provider plugins
-              // can distinguish them from manual post-compaction user prompts.
-              // This is not a stable plugin contract and may change or disappear.
-              metadata: { compaction_continue: true },
-              synthetic: true,
-              text,
-              time: {
-                start: Date.now(),
-                end: Date.now(),
-              },
-            })
+              SessionProcessor.planProtocolActivityID(userMessage.metadata) ?? userMessage.id,
+            ),
           }
+          const text =
+            (input.overflow
+              ? "The previous request exceeded the provider's size limit due to large media attachments. The conversation was compacted and media files were removed from context. If the user was asking about attached images or files, explain that the attachments were too large to process and suggest they try again with smaller or fewer files.\n\n"
+              : "") +
+            "Continue if you have next steps, or stop and ask for clarification if you are unsure how to proceed."
+          const continueMessage: SessionV1.WithParts = {
+            info: continueMsg,
+            parts: [
+              {
+                id: PartID.make(`prt_${Hash.sha256(`compaction-continue-part:v1:${run.run_id}`).slice(0, 26)}`),
+                messageID: continueMsg.id,
+                sessionID: input.sessionID,
+                type: "text",
+                // Internal marker for auto-compaction followups so provider plugins
+                // can distinguish them from manual post-compaction user prompts.
+                // This is not a stable plugin contract and may change or disappear.
+                metadata: { compaction_continue: true },
+                synthetic: true,
+                text,
+                time: {
+                  start: Date.now(),
+                  end: Date.now(),
+                },
+              },
+            ],
+          }
+          return { message: continueMessage, kind: "continue" as const }
         }
-      }
+      })
 
       if (currentProcessor.message.error) {
         yield* failRun(run.run_id, "summary_provider_error")
         return "stop"
       }
       if (result === "continue") {
-        const summary = summaryText(
-          (yield* session.messages({ sessionID: input.sessionID }).pipe(Effect.orDie)).find(
-            (item) => item.info.id === currentProcessor.message.id,
-          ) ?? {
-            info: msg,
-            parts: [],
-          },
-        )
-        if (flags.experimentalEventSystem) {
-          if (summary)
-            yield* events.publish(SessionEvent.Compaction.Ended, {
-              sessionID: input.sessionID,
-              messageID: SessionMessage.ID.make(input.parentID),
-              timestamp: DateTime.makeUnsafe(Date.now()),
-              reason: input.auto ? "auto" : "manual",
-              text: summary ?? "",
-              recent,
-            })
+        const persisted = yield* session.messages({ sessionID: input.sessionID }).pipe(Effect.orDie)
+        const checkpointIndex = persisted.findIndex((item) => item.info.id === currentProcessor.message.id)
+        const checkpoint = persisted[checkpointIndex] ?? {
+          info: msg,
+          parts: [],
         }
-
+        const summary = summaryText(checkpoint)
+        if (!summary) {
+          yield* failRun(run.run_id, "summary_text_missing")
+          return "stop"
+        }
         if (summary) {
+          const contextModel = yield* provider
+            .getModel(userMessage.model.providerID, userMessage.model.modelID)
+            .pipe(Effect.orDie)
+          const baselineExit = yield* Effect.exit(collectSessionWorldStateBaseline({ workspacePath: ctx.directory }))
+          if (Exit.isFailure(baselineExit)) {
+            yield* failRun(run.run_id, "world_state_baseline_failed")
+            return "stop"
+          }
+          const worldStateBaseline = baselineExit.value
+          const replacementParent = {
+            info: parent.info,
+            parts: [
+              ...parent.parts.filter((part) => part.type !== "compaction"),
+              { ...compactionPart, tail_start_id: selected.tail_start_id },
+            ],
+          }
+          const projected = yield* MessageV2.toModelMessagesEffect(
+            MessageV2.appendPromptWorldState({
+              messages: [
+                replacementParent,
+                checkpoint,
+                ...(tailIndex < 0 ? [] : history.slice(tailIndex)),
+                ...(checkpointIndex < 0 ? [] : persisted.slice(checkpointIndex + 1)),
+                ...(continuation ? [continuation.message] : []),
+              ],
+              sessionID: input.sessionID,
+              epoch: activeEpoch.epoch + 1,
+              baselineHash: worldStateBaseline.hash,
+              rendered: worldStateBaseline.rendered,
+              agent: userMessage.agent,
+              model: userMessage.model,
+            }),
+            contextModel,
+          )
+          const estimated = Token.estimate(JSON.stringify(projected))
+          const estimatedSummary = Token.estimate(summary)
+          const reportedSummary = currentProcessor.message.tokens.output
+          const contextTokens = Math.max(
+            0,
+            estimated - estimatedSummary + (reportedSummary > 0 ? reportedSummary : estimatedSummary),
+          )
+          const replacement = [
+            {
+              info: replacementParent.info,
+              parts: [
+                ...replacementParent.parts.filter((part) => part.type !== "compaction"),
+                {
+                  ...compactionPart,
+                  tail_start_id: selected.tail_start_id,
+                  context_tokens: contextTokens,
+                },
+              ],
+            },
+            checkpoint,
+            ...(tailIndex < 0 ? [] : history.slice(tailIndex)),
+          ]
+          const effectiveHistoryHash = HistoryAuthority.hash(replacement)
           const committed = yield* commitRun({
             runID: run.run_id,
             sessionID: input.sessionID,
             fromEpoch: run.from_prompt_epoch,
+            markerMessageID: input.parentID,
+            markerPartID: compactionPart.id,
             checkpointUserID: input.parentID,
             checkpointAssistantID: currentProcessor.message.id,
-            checkpointHash: Hash.sha256(`${run.run_id}:${msg.id}:${summary.slice(0, 256)}`),
+            checkpointHash: effectiveHistoryHash,
+            baseMessageCount: replacement.length,
+            effectiveHistoryHash,
+            replacementMessageIDs: replacement.map((message) => message.info.id),
             retainedTailStartID: selected.tail_start_id as MessageID | undefined,
-            sourceEndMessageID: selected.head.at(-1)?.info.id,
+            sourceEndMessageID: currentProcessor.message.id,
+            contextTokens,
+            summary,
+            recent,
+            reason: input.auto ? "auto" : "manual",
+            worldStateBaseline,
+            continuation,
           })
           if (!committed) {
             yield* failRun(run.run_id, "compaction_commit_conflict")
             return "stop"
           }
+          yield* publishCommittedRun(run.run_id)
         }
-
-        // V3.8 App-A Stage 1 (coexist, gated, default-safe): mirror the compaction summary into the
-        // structured Session Ledger. This does NOT change compaction behavior — it maintains the
-        // ledger as a structured-summary candidate for the Stage 2 Curator. updateLedgerFromSummary
-        // recovers the CAUSE internally and can never throw into this loop.
-        if (flags.experimentalContextLedger && summary) {
-          yield* updateLedgerFromSummary({ sessionID: input.sessionID, summary })
-          // V3.8 App-A C3 (Stage 3): project the freshly-updated ledger into the project-level bridge
-          // so a future session in this workspace opens with the cross-session handoff. Same gate as
-          // the ledger mirror; carryOverToBridge recovers the CAUSE internally (never throws into this
-          // loop). ctx.directory is this session's workspace dir (the project-store key).
-          if (ctx.directory) {
-            yield* carryOverToBridge({ sessionID: input.sessionID, workspacePath: ctx.directory })
-          }
-        }
-        yield* events.publish(Event.Compacted, { sessionID: input.sessionID })
       }
       return result
+    })
+
+    const processCompaction = Effect.fn("SessionCompaction.process")(function* (
+      input: Parameters<Interface["process"]>[0],
+    ) {
+      if (activeCompactions.has(input.sessionID)) return "stop" as const
+      yield* recover(input.sessionID)
+      if (activeCompactions.has(input.sessionID)) return "stop" as const
+      activeCompactions.add(input.sessionID)
+      return yield* processCompactionAttempt(input).pipe(
+        Effect.ensuring(Effect.sync(() => activeCompactions.delete(input.sessionID))),
+      )
     })
 
     const create = Effect.fn("SessionCompaction.create")(function* (input: {
@@ -953,11 +1518,17 @@ export const layer = Layer.effect(
       auto: boolean
       overflow?: boolean
       trigger?: "turn_start" | "provider_overflow" | "manual"
+      activityID?: string
     }) {
       yield* recover(input.sessionID)
-      // BUG-005: ensure Epoch 0 exists before the first compaction so PromptEpoch is always
-      // the history authority even for sessions that were created before this migration.
-      const activeEpoch = yield* promptEpoch.bootstrap(input.sessionID)
+      const projection = yield* MessageV2.promptHistoryProjectionEffect(input.sessionID).pipe(
+        Effect.provideService(Database.Service, { db }),
+        Effect.orDie,
+      )
+      const activeEpoch = yield* promptEpoch.getActive(input.sessionID)
+      if (!activeEpoch || activeEpoch.authority_state !== "ready" || activeEpoch.epoch !== projection.epoch) {
+        return yield* Effect.die(new Error(`compaction history authority is unavailable for ${input.sessionID}`))
+      }
 
       const markerMessageID = MessageID.ascending()
       const markerPartID = PartID.ascending()
@@ -967,19 +1538,37 @@ export const layer = Layer.effect(
         markerPartID,
         fromEpoch: activeEpoch.epoch,
         trigger: input.trigger ?? (input.overflow ? "provider_overflow" : input.auto ? "turn_start" : "manual"),
+        sourceWindowID: projection.window.windowID,
+        sourceEffectiveHistoryHash: projection.effectiveHistoryHash,
+        sourceMessageCount: projection.messages.length,
+        sourceProjectionVersion: projection.projectionVersion,
       })
-      if (!run || run.state === "indeterminate") return
+      if (!run) return
 
       const marker = yield* Effect.exit(
         Effect.gen(function* () {
-          const msg = yield* session.updateMessage({
+          const msg = {
             id: markerMessageID,
             role: "user",
             model: input.model,
             sessionID: input.sessionID,
             agent: input.agent,
             time: { created: Date.now() },
-          })
+            metadata: SessionProcessor.withPlanProtocolActivity(undefined, input.activityID ?? markerMessageID),
+          } satisfies SessionV1.User
+          yield* events.publish(
+            SessionV1.Event.MessageUpdated,
+            { sessionID: input.sessionID, info: msg },
+            {
+              commit: () =>
+                registerArtifact({
+                  runID: run.run_id,
+                  sessionID: input.sessionID,
+                  messageID: msg.id,
+                  kind: "marker",
+                }),
+            },
+          )
           yield* session.updatePart({
             id: markerPartID,
             messageID: msg.id,
@@ -1006,11 +1595,59 @@ export const layer = Layer.effect(
       }
     })
 
+    const hasPending = Effect.fn("SessionCompaction.hasPending")(function* (sessionID: SessionID) {
+      const row = yield* db
+        .select({ run_id: CompactionRunTable.run_id })
+        .from(CompactionRunTable)
+        .where(
+          and(
+            eq(CompactionRunTable.session_id, sessionID),
+            inArray(CompactionRunTable.state, ["requested", "summarizing"] as const),
+          ),
+        )
+        .get()
+        .pipe(Effect.orDie)
+      return row !== undefined
+    })
+
+    const recoverableContinuations = Effect.fn("SessionCompaction.recoverableContinuations")(function* (
+      projectID: Project.ID,
+    ) {
+      const rows = yield* db
+        .select({
+          runID: CompactionRunTable.run_id,
+          sessionID: CompactionRunTable.session_id,
+          messageID: CompactionArtifactTable.message_id,
+        })
+        .from(CompactionRunTable)
+        .innerJoin(CompactionArtifactTable, eq(CompactionArtifactTable.run_id, CompactionRunTable.run_id))
+        .innerJoin(SessionTable, eq(SessionTable.id, CompactionRunTable.session_id))
+        .where(
+          and(
+            eq(SessionTable.project_id, projectID),
+            eq(CompactionRunTable.state, "committed"),
+            eq(CompactionRunTable.continuation_state, "pending"),
+            eq(CompactionArtifactTable.state, "committed"),
+            inArray(CompactionArtifactTable.kind, ["replay", "continue"] as const),
+          ),
+        )
+        .all()
+        .pipe(Effect.orDie)
+      return rows.map((row) => ({
+        runID: row.runID,
+        sessionID: SessionID.make(row.sessionID),
+        messageID: MessageID.make(row.messageID),
+      }))
+    })
+
     return Service.of({
       isOverflow,
       prune,
       process: processCompaction,
       create,
+      recover,
+      recoverableContinuations,
+      hasPending,
     })
   }),
 )

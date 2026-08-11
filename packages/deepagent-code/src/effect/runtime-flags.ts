@@ -75,7 +75,7 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
     Config.map((value): "legacy" | "shadow" | "durable" => {
       if (value === "legacy" || value === "shadow" || value === "durable") return value
       throw new Error(
-        `Invalid DEEPAGENT_CODE_SUBAGENT_CONTROL_PLANE="${value}". Must be one of: legacy, shadow, durable. Refusing to start with unknown mode.`
+        `Invalid DEEPAGENT_CODE_SUBAGENT_CONTROL_PLANE="${value}". Must be one of: legacy, shadow, durable. Refusing to start with unknown mode.`,
       )
     }),
   ),
@@ -214,14 +214,14 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   // V4.0.1 P1: World State / summary responsibility separation. When on, the compaction summary is narrowed
   // to four buckets (progress+decisions / constraints+prefs / next steps / data references) and files /
   // env / diagnostics are carried by a snapshot-diff World State layer re-injected as a TAIL user block at
-  // tick start + after each hard compaction (never the static prefix). Also opens a "always load World
+  // tick start (never the static prefix). Every committed compaction window persists and projects its own
+  // full World State baseline regardless of this compatibility flag; allowing a baseline-free window would
+  // make PromptEpoch incomplete and reopen the manual-compaction information gap. Also opens an "always load World
   // State" path for the goal-worker (P3(d)), bypassing shouldLoadBridge's general short-circuit. Because it
   // alters context assembly. Promoted ON (V4.0.1): it is a pure tail-only re-injection (never the static
   // prefix) and the summary narrowing keeps the LLM summary focused, so it is safe as a default; with
-  // `=false` the summary keeps the legacy "record everything" template and nothing is re-injected (逐字节
-  // equivalent to V4.1). The summary
-  // narrowing and the re-injection MUST be gated by this single flag together (splitting them would create a
-  // "summary drops files, nothing re-injects" information hole).
+  // `=false` the summary keeps the legacy "record everything" template and goal-loop tick injection remains
+  // disabled. The compaction baseline is an authority invariant rather than optional feature behavior.
   worldStateReinjection: stableOn("DEEPAGENT_CODE_WORLD_STATE_REINJECTION"),
   // T3 (S1-v3.4): how many narrowing attempts a 🟡 stall is given before it escalates to 🔴.
   // Default 1 (one focused retry, then hand off). `positiveInteger` → undefined when unset/invalid,
