@@ -691,6 +691,14 @@ export const layer = Layer.effect(
     const database = yield* Database.Service
     const { db } = database
     yield* recoverProviderReceiptsOnStartup()
+    yield* SessionPromptIntent.recoverActiveActivities().pipe(
+      Effect.provideService(Database.Service, database),
+      Effect.tap((count) =>
+        count > 0
+          ? Effect.logWarning(`marked ${count} legacy activities recovery_required after restart`)
+          : Effect.void,
+      ),
+    )
     const activeFederatedContexts = new Map<SessionID, SessionFederatedContext.Resolved>()
     const settleFederatedActivity = (sessionID: SessionID, state: "settled" | "failed" | "interrupted") =>
       Effect.gen(function* () {
@@ -2210,6 +2218,63 @@ export const layer = Layer.effect(
       if (FSUtil.resolve(session.directory) !== FSUtil.resolve(current.directory)) {
         return yield* instances.provide({ directory: session.directory }, prompt(input, lifecycle))
       }
+      if (!lifecycle?.intent) {
+        if (!flags.v4Steering)
+          yield* SessionPromptIntent.retireDisabledSteerActivity(input.sessionID).pipe(
+            Effect.provideService(Database.Service, database),
+          )
+        const messageID = input.messageID ?? MessageID.ascending()
+        const intentID = input.intentID ?? `legacy-prompt:${input.sessionID}:${messageID}`
+        const claimed = yield* SessionPromptIntent.claim({
+          intentID,
+          sessionID: input.sessionID,
+          source: input.intentSource ?? "composer",
+          variant: input.intentVariant ?? "original",
+          payloadHash: promptIntentPayloadHash(input),
+          messageID,
+        }).pipe(Effect.provideService(Database.Service, database))
+        if (claimed.kind === "admitted") {
+          if (claimed.receipt.delivery !== "turn")
+            return yield* Effect.die(
+              new Error(`direct prompt intent ${claimed.receipt.intentID} was admitted as ${claimed.receipt.delivery}`),
+            )
+          const existing = yield* MessageV2.get({
+            sessionID: input.sessionID,
+            messageID: claimed.receipt.messageID,
+          }).pipe(Effect.provideService(Database.Service, database), Effect.orDie)
+          if (!existing) return yield* Effect.die(`admitted prompt message is missing: ${claimed.receipt.messageID}`)
+          return existing
+        }
+        const admittedInput = {
+          ...input,
+          messageID: claimed.receipt.messageID,
+          parts: stableIntentParts(input.parts, claimed.receipt.intentID),
+        }
+        const lifecycleWithIntent: PromptLifecycle = {
+          intent: claimed.receipt,
+          ready: (receipt) =>
+            SessionPromptIntent.complete({
+              intentID: claimed.receipt.intentID,
+              ownerToken: claimed.receipt.ownerToken,
+              messageID: receipt.messageID,
+              delivery: receipt.delivery,
+            }).pipe(Effect.provideService(Database.Service, database), Effect.asVoid, Effect.orDie),
+        }
+        return yield* prompt(admittedInput, lifecycleWithIntent).pipe(
+          Effect.tapError(() =>
+            SessionPromptIntent.fail({
+              intentID: claimed.receipt.intentID,
+              ownerToken: claimed.receipt.ownerToken,
+            }).pipe(Effect.provideService(Database.Service, database)),
+          ),
+          Effect.onInterrupt(() =>
+            SessionPromptIntent.fail({
+              intentID: claimed.receipt.intentID,
+              ownerToken: claimed.receipt.ownerToken,
+            }).pipe(Effect.provideService(Database.Service, database)),
+          ),
+        )
+      }
       const mutationEpoch =
         lifecycle?.intent?.mutationEpoch ?? (yield* sessions.mutationEpoch(session.id).pipe(Effect.orDie))
       yield* revert.cleanup(session, mutationEpoch)
@@ -2753,6 +2818,35 @@ export const layer = Layer.effect(
               ),
         )
         const initialUser = MessageV2.latest(initialMessages).user
+        let legacyActivity = initialUser
+          ? yield* SessionPromptIntent.activityForMessage({ sessionID, messageID: initialUser.id }).pipe(
+              Effect.provideService(Database.Service, database),
+              Effect.map((activity) => (activity?.state === "active" ? activity : undefined)),
+            )
+          : undefined
+        const publishActivityProgress = (progress: SessionPromptIntent.Progress) =>
+          Effect.gen(function* () {
+            if (!progress.textPartID) return
+            const messages = yield* sessions.messages({ sessionID }).pipe(Effect.orDie)
+            const part = messages
+              .find((message) => message.info.id === progress.assistantMessageID)
+              ?.parts.find(
+                (candidate): candidate is SessionV1.TextPart =>
+                  candidate.id === progress.textPartID && candidate.type === "text",
+              )
+            if (!part) return
+            yield* sessions.updatePart({
+              ...part,
+              metadata: {
+                ...(part.metadata ?? {}),
+                deepagent_activity_progress: {
+                  activity_id: progress.activityID,
+                  revision: progress.revision,
+                  state: progress.state,
+                },
+              },
+            })
+          })
         const initialFinalizer = isStructuredFinalizer(initialUser?.metadata)
         let activeContext: SessionFederatedContext.Resolved | undefined
         let pendingContextInputIds: string[] = drainFirst || !initialUser ? [] : [initialUser.id]
@@ -2817,6 +2911,11 @@ export const layer = Layer.effect(
           const { user: lastUser, assistant: lastAssistant, finished: lastFinished, tasks } = MessageV2.latest(msgs)
 
           if (!lastUser) throw new Error("No user message found in stream. This should never happen.")
+          const currentLegacyActivity = yield* SessionPromptIntent.activityForMessage({
+            sessionID,
+            messageID: lastUser.id,
+          }).pipe(Effect.provideService(Database.Service, database))
+          if (currentLegacyActivity?.state === "active") legacyActivity = currentLegacyActivity
           const finalizerMode = isStructuredFinalizer(lastUser.metadata)
           const finalizerAllowsText = structuredFinalizerAllowsText(lastUser.metadata)
 
@@ -3134,11 +3233,17 @@ export const layer = Layer.effect(
             value?: { state: "settled" } | { state: "failed"; errorCode: string }
           } = {}
           const receiptFinalizer: { value?: () => Effect.Effect<void> } = {}
+          const activityProgressFinalizer: { value?: () => Effect.Effect<void> } = {}
           const finalizeInterruptedTurn = Effect.uninterruptible(
             Effect.gen(function* () {
               yield* finalizeInterruptedAssistant
               receiptTerminal.value ??= { state: "failed", errorCode: "AbortError" }
               if (receiptFinalizer.value) yield* receiptFinalizer.value()
+              if (activityProgressFinalizer.value) yield* activityProgressFinalizer.value()
+              if (legacyActivity && !activityProgressFinalizer.value)
+                yield* SessionPromptIntent.interruptActivity(legacyActivity.activityID).pipe(
+                  Effect.provideService(Database.Service, database),
+                )
             }),
           )
 
@@ -3191,7 +3296,7 @@ export const layer = Layer.effect(
               ToolSemanticFingerprint.resolve(tools[toolName], args),
             )
             toolSequenceTracker.setResultFingerprintResolver((toolName, result) =>
-              ToolSemanticFingerprint.resolveResult(tools[toolName], result),
+              ToolSemanticFingerprint.resolveResult(tools[toolName], result, toolName),
             )
 
             const providerHistory = finalizerMode
@@ -3199,10 +3304,9 @@ export const layer = Layer.effect(
               : (yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: structuredClone(msgs) }))
                   .messages
 
-            // PR-1: Compute the terminal boundary for cross-model reasoning projection.
-            // The most recent settled assistant message (has finish, no pending tool calls)
-            // defines the boundary. Same-model reasoning remains append-only because removing
-            // signed thinking after settlement rewrites the provider prefix and busts its cache.
+            // The most recent settled assistant message defines where provider reasoning stops
+            // being an active tool continuation. Projection still preserves signed/encrypted
+            // provider prefixes when the selected protocol declares that replay capability.
             let terminalBoundaryID: MessageID | undefined
             for (const msg of providerHistory) {
               if (msg.info.role !== "assistant") continue
@@ -3465,6 +3569,23 @@ export const layer = Layer.effect(
                 { behavior: "immediate" },
               )
               .pipe(Effect.orDie)
+            const progressActivity = legacyActivity
+            if (progressActivity)
+              yield* SessionPromptIntent.beginProgress({
+                activityID: progressActivity.activityID,
+                assistantMessageID: handle.message.id,
+                providerReceiptID: receiptID,
+              }).pipe(Effect.provideService(Database.Service, database))
+            if (progressActivity)
+              activityProgressFinalizer.value = () =>
+                SessionPromptIntent.settleProgress({
+                  activityID: progressActivity.activityID,
+                  assistantMessageID: handle.message.id,
+                }).pipe(
+                  Effect.provideService(Database.Service, database),
+                  Effect.tap(publishActivityProgress),
+                  Effect.asVoid,
+                )
             const bestEffortReceiptWrite = (operation: string, write: Effect.Effect<unknown, unknown>) =>
               write.pipe(
                 Effect.asVoid,
@@ -3661,6 +3782,7 @@ export const layer = Layer.effect(
               Effect.gen(function* () {
                 if (turnSettled.value) return
                 yield* finalizeReceipt()
+                if (activityProgressFinalizer.value) yield* activityProgressFinalizer.value()
                 turnSettled.value = true
                 // Summary diffs mutate user-message metadata. Run them only after the Provider
                 // receipt is terminal so cancellation cannot strand an admitted request.

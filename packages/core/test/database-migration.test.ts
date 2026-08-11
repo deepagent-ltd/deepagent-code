@@ -26,6 +26,7 @@ import { SessionTable } from "@deepagent-code/core/session/sql"
 import sessionMetadataMigration from "@deepagent-code/core/database/migration/20260511173437_session-metadata"
 import compactionContinuationAdmissionMigration from "@deepagent-code/core/database/migration/20260810160000_compaction_continuation_admission"
 import partIntegrityBackfillMigration from "@deepagent-code/core/database/migration/20260810170000_part_integrity_backfill"
+import legacyActivityProgressMigration from "@deepagent-code/core/database/migration/20260811090000_legacy_activity_progress"
 import type { SqlClient as SqlClientService } from "effect/unstable/sql/SqlClient"
 import { Database } from "@deepagent-code/core/database/database"
 import { tmpdir } from "./fixture/tmpdir"
@@ -193,6 +194,89 @@ describe("DatabaseMigration", () => {
           { name: "session_message_session_time_created_id_idx" },
           { name: "session_message_session_type_seq_idx" },
         ])
+      }),
+    )
+  })
+
+  test("reapplying tracked migrations is a no-op", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* DatabaseMigration.apply(db)
+        const before = yield* db.get(sql`SELECT count(*) as count FROM migration`)
+        yield* DatabaseMigration.apply(db)
+        expect(yield* db.get(sql`SELECT count(*) as count FROM migration`)).toEqual(before)
+      }),
+    )
+  })
+
+  test("legacy activity migration backfills V2 source identity and rejects mismatched legacy admissions", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(sql`PRAGMA foreign_keys = ON`)
+        yield* db.run(sql`CREATE TABLE session (id TEXT PRIMARY KEY)`)
+        yield* db.run(sql`CREATE TABLE session_intent (
+          intent_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, admitted_message_id TEXT,
+          delivery TEXT, selected_payload_hash TEXT, state TEXT NOT NULL
+        )`)
+        yield* db.run(sql`CREATE TABLE session_input (
+          id TEXT PRIMARY KEY, session_id TEXT NOT NULL, prompt TEXT NOT NULL,
+          delivery TEXT NOT NULL, admitted_seq INTEGER NOT NULL, promoted_seq INTEGER,
+          time_created INTEGER NOT NULL
+        )`)
+        yield* db.run(sql`CREATE TABLE session_activity (
+          activity_id TEXT PRIMARY KEY, trigger_input_id TEXT NOT NULL
+        )`)
+        yield* db.run(sql`CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, data TEXT NOT NULL)`)
+        yield* db.run(sql`CREATE TABLE part (id TEXT PRIMARY KEY)`)
+        yield* db.run(sql`CREATE TABLE session_tool_request_receipt (receipt_id TEXT PRIMARY KEY)`)
+        yield* db.run(sql`INSERT INTO session VALUES ('ses_migration')`)
+        yield* db.run(sql`INSERT INTO session_input VALUES
+          ('input-v2', 'ses_migration', '{"text":"v2"}', 'turn', 1, 7, 11)`)
+        yield* db.run(sql`INSERT INTO session_activity VALUES ('activity-v2', 'input-v2')`)
+
+        yield* DatabaseMigration.applyOnly(db, [legacyActivityProgressMigration])
+        expect(
+          yield* db.get(sql`
+            SELECT source_kind, payload_fingerprint_kind, payload_fingerprint
+            FROM session_activity_admission WHERE admission_id = 'v2:input-v2'
+          `),
+        ).toEqual({
+          source_kind: "session_input",
+          payload_fingerprint_kind: "source_identity",
+          payload_fingerprint: "session-input:input-v2",
+        })
+
+        yield* db.run(sql`INSERT INTO session_intent VALUES
+          ('legacy-intent', 'ses_migration', 'legacy-message', 'turn', 'payload-hash', 'admitted')`)
+        yield* db.run(sql`
+          INSERT INTO session_activity_admission (
+            admission_id, session_id, source_kind, legacy_intent_id, admitted_message_id,
+            delivery, payload_fingerprint_kind, payload_fingerprint, created_at
+          ) VALUES ('legacy-admission', 'ses_migration', 'legacy_intent', 'legacy-intent',
+            'legacy-message', 'turn', 'payload_hash', 'payload-hash', 12)
+        `)
+        yield* db.run(sql`INSERT INTO session_legacy_activity VALUES
+          ('legacy-activity', 'ses_migration', 0, 'legacy-admission', 'active', NULL, 12, NULL)`)
+        yield* db.run(sql`INSERT INTO session_legacy_activity_admission
+          (activity_id, admission_id, ordinal, role, attached_at)
+          VALUES ('legacy-activity', 'legacy-admission', 0, 'trigger', 12)`)
+        expect(
+          Exit.isFailure(
+            yield* db
+              .run(
+                sql`
+                INSERT INTO session_activity_admission (
+                  admission_id, session_id, source_kind, legacy_intent_id, admitted_message_id,
+                  delivery, payload_fingerprint_kind, payload_fingerprint, created_at
+                ) VALUES ('invalid-admission', 'ses_migration', 'legacy_intent', 'legacy-intent',
+                  'legacy-message', 'turn', 'source_identity', 'session-input:legacy-message', 12)
+              `,
+              )
+              .pipe(Effect.exit),
+          ),
+        ).toBe(true)
       }),
     )
   })

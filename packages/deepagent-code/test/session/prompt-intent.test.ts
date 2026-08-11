@@ -5,13 +5,26 @@ import { ProjectTable } from "@deepagent-code/core/project/sql"
 import { ModelV2 } from "@deepagent-code/core/model"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { AbsolutePath } from "@deepagent-code/core/schema"
-import { MessageTable, PartTable, SessionIntentTable, SessionTable } from "@deepagent-code/core/session/sql"
+import {
+  MessageTable,
+  PartTable,
+  SessionInputTable,
+  SessionIntentTable,
+  SessionTable,
+} from "@deepagent-code/core/session/sql"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { eq } from "drizzle-orm"
 import { Effect } from "effect"
 import { SessionMutationEpoch } from "../../src/session/mutation-epoch"
 import { SessionPromptIntent } from "../../src/session/prompt-intent"
+import {
+  SessionActivityAdmissionTable,
+  SessionActivityProgressTable,
+  SessionLegacyActivityAdmissionTable,
+  SessionLegacyActivityTable,
+} from "../../src/session/activity-sql"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
+import { SessionToolRequestReceiptTable } from "../../src/session/tool-request-receipt.sql"
 import { testEffect } from "../lib/effect"
 
 const database = Database.layerFromPath(":memory:")
@@ -180,6 +193,119 @@ describe("SessionPromptIntent", () => {
       const retry = yield* claim({ intentID: "intent_atomic", messageID: MessageID.make("msg_atomic_retry") })
       expect(retry.kind).toBe("admitted")
       expect(retry.receipt.messageID).toBe(first.receipt.messageID)
+      expect(yield* db.select().from(SessionActivityAdmissionTable).all().pipe(Effect.orDie)).toHaveLength(1)
+      expect(yield* db.select().from(SessionLegacyActivityTable).all().pipe(Effect.orDie)).toHaveLength(1)
+      expect(yield* db.select().from(SessionLegacyActivityAdmissionTable).all().pipe(Effect.orDie)).toMatchObject([
+        { ordinal: 0, role: "trigger" },
+      ])
+      expect(
+        (yield* db.select().from(SessionInputTable).all().pipe(Effect.orDie)).filter(
+          (row) => String(row.id) === String(first.receipt.messageID),
+        ),
+      ).toHaveLength(0)
+    }),
+  )
+
+  it.effect("terminal provider receipts settle provisional progress deterministically after restart", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const first = yield* claim({ intentID: "intent_progress", messageID: MessageID.make("msg_progress_user") })
+      expect(first.kind).toBe("claimed")
+      if (first.kind !== "claimed") return
+      yield* SessionPromptIntent.materializeTurn({
+        receipt: first.receipt,
+        message: message(first.receipt.messageID),
+      })
+      const activity = yield* SessionPromptIntent.activityForMessage({
+        sessionID,
+        messageID: first.receipt.messageID,
+      })
+      expect(activity?.state).toBe("active")
+      if (!activity) return
+      const { db } = yield* Database.Service
+      const assistantID = MessageID.make("msg_progress_assistant")
+      yield* db
+        .insert(MessageTable)
+        .values({
+          id: assistantID,
+          session_id: sessionID,
+          time_created: 2,
+          data: {
+            role: "assistant",
+            parentID: first.receipt.messageID,
+            mode: "build",
+            agent: "build",
+            path: { cwd: "/project", root: "/project" },
+            cost: 0,
+            tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+            modelID: ModelV2.ID.make("test"),
+            providerID: ProviderV2.ID.make("test"),
+            time: { created: 2, completed: 3 },
+            finish: "stop",
+          } as typeof MessageTable.$inferInsert.data,
+        })
+        .run()
+        .pipe(Effect.orDie)
+      yield* db
+        .insert(PartTable)
+        .values({
+          id: PartID.make("prt_progress_final"),
+          message_id: assistantID,
+          session_id: sessionID,
+          time_created: 2,
+          data: { type: "text", text: "final answer" } as typeof PartTable.$inferInsert.data,
+        })
+        .run()
+        .pipe(Effect.orDie)
+      yield* db
+        .insert(SessionToolRequestReceiptTable)
+        .values({
+          receipt_id: "receipt-progress-final",
+          request_ordinal: 1,
+          session_id: sessionID,
+          user_message_id: first.receipt.messageID,
+          assistant_message_id: assistantID,
+          provider_id: "test",
+          model_id: "test",
+          registry_tool_ids: [],
+          permission_filtered_tool_ids: [],
+          final_offered_tool_ids: [],
+          call_ids: [],
+          provider_state: "settled",
+          terminal_at: 3,
+          response_fingerprint: "response-final",
+          request_state: "dispatched",
+          created_at: 2,
+        })
+        .run()
+        .pipe(Effect.orDie)
+      yield* SessionPromptIntent.beginProgress({
+        activityID: activity.activityID,
+        assistantMessageID: assistantID,
+        providerReceiptID: "receipt-progress-final",
+      })
+
+      expect(yield* SessionPromptIntent.recoverActiveActivities()).toBe(1)
+      expect(
+        yield* db
+          .select()
+          .from(SessionActivityProgressTable)
+          .where(eq(SessionActivityProgressTable.assistant_message_id, assistantID))
+          .get()
+          .pipe(Effect.orDie),
+      ).toMatchObject({
+        state: "final",
+        text_part_id: "prt_progress_final",
+        response_fingerprint: "response-final",
+      })
+      expect(
+        yield* db
+          .select()
+          .from(SessionLegacyActivityTable)
+          .where(eq(SessionLegacyActivityTable.activity_id, activity.activityID))
+          .get()
+          .pipe(Effect.orDie),
+      ).toMatchObject({ state: "settled", terminal_reason: "stop" })
     }),
   )
 

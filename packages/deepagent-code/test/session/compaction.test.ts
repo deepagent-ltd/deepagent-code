@@ -3,7 +3,7 @@ import { ConfigV1 } from "@deepagent-code/core/v1/config/config"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { Database } from "@deepagent-code/core/database/database"
 import { EventTable } from "@deepagent-code/core/event/sql"
-import { PartTable, SessionWorldStateBaselineTable } from "@deepagent-code/core/session/sql"
+import { PartTable, SessionHistoryStateTable, SessionWorldStateBaselineTable } from "@deepagent-code/core/session/sql"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { APICallError } from "ai"
 import { Cause, Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect"
@@ -38,6 +38,7 @@ import { TestConfig } from "../fixture/config"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { PromptEpoch } from "@/session/prompt-epoch"
 import { CompactionArtifactTable, CompactionRunTable, CompactionSummaryAttemptTable } from "@/session/compaction-sql"
+import { SessionPromptEpochTable } from "@/session/prompt-epoch.sql"
 import { LLMEvent, Usage } from "@deepagent-code/llm"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { ModelV2 } from "@deepagent-code/core/model"
@@ -609,7 +610,9 @@ describe("session.compaction.create", () => {
         expect(msgs).toHaveLength(1)
         expect(msgs[0].info.role).toBe("user")
         expect(
-          SessionProcessorModule.planProtocolActivityID(msgs[0].info.role === "user" ? msgs[0].info.metadata : undefined),
+          SessionProcessorModule.planProtocolActivityID(
+            msgs[0].info.role === "user" ? msgs[0].info.metadata : undefined,
+          ),
         ).toBe(activityID)
         expect(msgs[0].parts).toHaveLength(1)
         expect(msgs[0].parts[0]).toMatchObject({
@@ -977,6 +980,32 @@ describe("session.compaction.process", () => {
         expect(summary.info.finish).toBe("error")
         expect(JSON.stringify(summary.info.error)).toContain("Session too large to compact")
       }
+      const { db } = yield* Database.Service
+      expect(
+        yield* db
+          .select({ state: CompactionRunTable.state, failure: CompactionRunTable.terminal_failure_kind })
+          .from(CompactionRunTable)
+          .where(eq(CompactionRunTable.session_id, session.id))
+          .get()
+          .pipe(Effect.orDie),
+      ).toEqual({ state: "failed", failure: "summary_context_overflow" })
+      expect(
+        yield* db
+          .select({ state: SessionHistoryStateTable.state })
+          .from(SessionHistoryStateTable)
+          .where(eq(SessionHistoryStateTable.session_id, session.id))
+          .get()
+          .pipe(Effect.orDie),
+      ).toEqual({ state: "recovery_required" })
+      expect(
+        yield* db
+          .select({ authority: SessionPromptEpochTable.authority_state })
+          .from(SessionPromptEpochTable)
+          .where(and(eq(SessionPromptEpochTable.session_id, session.id), eq(SessionPromptEpochTable.state, "active")))
+          .get()
+          .pipe(Effect.orDie),
+      ).toEqual({ authority: "recovery_required" })
+      expect(Exit.isFailure(yield* ssn.assertRunnable(session.id).pipe(Effect.exit))).toBe(true)
     }).pipe(withCompaction({ result: "compact" })),
   )
 

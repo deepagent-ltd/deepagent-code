@@ -336,7 +336,7 @@ export function messagesInTransaction(
 
 function providerMeta(metadata: Record<string, any> | undefined) {
   if (!metadata) return undefined
-  const { providerExecuted: _, ...rest } = metadata
+  const { providerExecuted: _, deepagent_activity_progress: __, ...rest } = metadata
   return Object.keys(rest).length > 0 ? rest : undefined
 }
 
@@ -347,6 +347,57 @@ function toolCallProviderMeta(metadata: Record<string, any> | undefined, differe
   return { deepagent: { toolType: type } }
 }
 
+type ReasoningReplay =
+  | { readonly mode: "none" }
+  | { readonly mode: "active-continuation" }
+  | { readonly mode: "signed-prefix"; readonly metadataKey: "anthropic" | "bedrock" }
+  | { readonly mode: "encrypted-prefix" }
+
+function reasoningReplayCapability(model: Provider.Model): ReasoningReplay {
+  if (model.api.npm === "@ai-sdk/anthropic" || model.api.npm === "@ai-sdk/google-vertex/anthropic") {
+    return { mode: "signed-prefix", metadataKey: "anthropic" }
+  }
+  if (model.api.npm === "@ai-sdk/amazon-bedrock") {
+    return { mode: "signed-prefix", metadataKey: "bedrock" }
+  }
+  if (
+    model.api.npm === "@ai-sdk/openai" ||
+    model.api.npm === "@ai-sdk/azure" ||
+    model.api.npm === "@ai-sdk/github-copilot" ||
+    model.api.npm === "@ai-sdk/amazon-bedrock/mantle"
+  ) {
+    return { mode: "encrypted-prefix" }
+  }
+  if (model.capabilities.interleaved !== false) return { mode: "active-continuation" }
+  return { mode: "none" }
+}
+
+function hasReasoningState(part: SessionV1.ReasoningPart, replay: ReasoningReplay) {
+  if (replay.mode === "active-continuation") return true
+  if (replay.mode === "signed-prefix") {
+    const state = part.metadata?.[replay.metadataKey]
+    return [state?.signature, state?.redactedData].some((value) => typeof value === "string" && value.trim().length > 0)
+  }
+  if (replay.mode === "encrypted-prefix") {
+    const state = part.metadata?.openai
+    return [state?.reasoningEncryptedContent, state?.encryptedContent].some(
+      (value) => typeof value === "string" && value.trim().length > 0,
+    )
+  }
+  return false
+}
+
+function isActivityProgress(part: SessionV1.TextPart) {
+  const progress = part.metadata?.deepagent_activity_progress
+  return (
+    progress?.state === "progress" &&
+    typeof progress.activity_id === "string" &&
+    progress.activity_id.length > 0 &&
+    Number.isInteger(progress.revision) &&
+    progress.revision >= 0
+  )
+}
+
 export const toModelMessagesEffect = Effect.fnUntraced(function* (
   input: WithParts[],
   model: Provider.Model,
@@ -354,6 +405,7 @@ export const toModelMessagesEffect = Effect.fnUntraced(function* (
 ) {
   const result: UIMessage[] = []
   const toolNames = new Set<string>()
+  const reasoningReplay = reasoningReplayCapability(model)
   // Track media from tool results that need to be injected as user messages
   // for providers that don't support that media type in tool results.
   //
@@ -462,6 +514,7 @@ export const toModelMessagesEffect = Effect.fnUntraced(function* (
 
     if (msg.info.role === "assistant") {
       const differentModel = `${model.providerID}/${model.id}` !== `${msg.info.providerID}/${msg.info.modelID}`
+      const isActive = !options?.terminalBoundaryID || msg.info.id > options.terminalBoundaryID
       const media: Array<{ mime: string; url: string; filename?: string }> = []
 
       if (
@@ -489,17 +542,24 @@ export const toModelMessagesEffect = Effect.fnUntraced(function* (
       // here is the only safe replay point we have.
       // Use a single space so the separator survives replay without changing
       // the neighboring signed reasoning blocks.
-      const hasSignedReasoning = msg.parts.some((part) => {
-        if (part.type !== "reasoning") return false
-        return part.metadata?.anthropic?.signature != null
-      })
+      const hasSignedReasoning =
+        !differentModel &&
+        msg.parts.some((part) => {
+          if (part.type !== "reasoning") return false
+          return (
+            reasoningReplay.mode === "signed-prefix" &&
+            reasoningReplay.metadataKey === "anthropic" &&
+            hasReasoningState(part, reasoningReplay)
+          )
+        })
       for (const part of msg.parts) {
         if (part.type === "text") {
+          if (!isActive && isActivityProgress(part)) continue
           const text = part.text === "" && hasSignedReasoning ? " " : part.text
           assistantMessage.parts.push({
             type: "text",
             text,
-            ...(differentModel ? {} : { providerMetadata: part.metadata }),
+            ...(differentModel ? {} : { providerMetadata: providerMeta(part.metadata) }),
           })
         }
         if (part.type === "step-start")
@@ -587,11 +647,6 @@ export const toModelMessagesEffect = Effect.fnUntraced(function* (
             })
         }
         if (part.type === "reasoning") {
-          // Same-model reasoning is part of the append-only provider prefix. Removing it when a
-          // later terminal message settles rewrites history and invalidates the prompt cache.
-          // Cross-model projection has no reusable provider cache and can still drop settled
-          // reasoning to avoid feeding another model's chain of thought back as ordinary text.
-          const isActive = !options?.terminalBoundaryID || msg.info.id > options.terminalBoundaryID
           if (differentModel) {
             if (!isActive) continue
             if (part.text.trim().length > 0)
@@ -601,6 +656,11 @@ export const toModelMessagesEffect = Effect.fnUntraced(function* (
               })
             continue
           }
+          // Replay only protocol state the selected provider can consume. Plain same-model
+          // reasoning is audit history, not an append-only provider prefix; after settlement it
+          // must not become input to a new user activity.
+          if (!hasReasoningState(part, reasoningReplay)) continue
+          if (reasoningReplay.mode === "active-continuation" && !isActive) continue
           assistantMessage.parts.push({
             type: "reasoning",
             text: part.text,
