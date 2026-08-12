@@ -241,7 +241,9 @@ it.instance(
         reason: expect.stringContaining("fork cutoff is outside the recoverable history prefix"),
       })
 
-      const [descriptor] = yield* recovery.describe(source.id)
+      const descriptors = yield* recovery.describe(source.id)
+      expect(descriptors).toHaveLength(1)
+      const [descriptor] = descriptors
       expect(descriptor).toMatchObject({
         receiptID,
         sessionID: source.id,
@@ -255,6 +257,8 @@ it.instance(
         worldStateBaselineHash: baselineHash,
       })
       if (!descriptor) return
+      if (!descriptor.worldStateBaselineHash)
+        return yield* Effect.die("expected a resolvable provider recovery descriptor")
       const command = {
         sessionID: source.id,
         commandID: "resolve-ambiguous-provider-turn",
@@ -266,7 +270,7 @@ it.instance(
           sessionMutationEpoch: descriptor.sessionMutationEpoch,
           requestHash: descriptor.requestHash,
           historyHash: descriptor.historyHash,
-          worldStateBaselineHash: descriptor.worldStateBaselineHash!,
+          worldStateBaselineHash: descriptor.worldStateBaselineHash,
         },
         actorID: "test-user",
       }
