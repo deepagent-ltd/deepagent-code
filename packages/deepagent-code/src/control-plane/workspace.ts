@@ -879,9 +879,9 @@ export const layer = Layer.effect(
             .all()
             .pipe(Effect.orDie)
           const encoded = encodeReplayRequestPrefix(space.directory ?? "", events)
-          if (encoded.events.length === 0)
+          if (!encoded.valid || encoded.events.length === 0)
             return yield* new SessionWarpHistoryLimitError({
-              message: `Sync event ${events[0]!.id} cannot fit the bounded replay request`,
+              message: `Sync event ${events[0]!.id} cannot fit the bounded replay protocol`,
               sessionID: input.sessionID,
               eventID: events[0]!.id,
               bytes: Buffer.byteLength(

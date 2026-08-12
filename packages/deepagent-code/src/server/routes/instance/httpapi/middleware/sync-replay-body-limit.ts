@@ -19,7 +19,9 @@ export const syncReplayBodyLimitLayer = HttpRouter.middleware<{ handles: unknown
         : request.text.pipe(
             Effect.provideService(HttpServerRequest.MaxBodySize, FileSystem.Size(SyncReplayLimits.requestBytes)),
             Effect.map((body) => new TextEncoder().encode(body)),
-            Effect.catch(() => Effect.succeed(undefined)),
+            Effect.catch((error) =>
+              isBodyLimitError(error) ? Effect.succeed(undefined) : Effect.fail(error),
+            ),
           )
     )
     if (!buffered) return HttpServerResponse.empty({ status: 413 })
@@ -43,6 +45,12 @@ function pathOf(url: string) {
   const hashIndex = url.indexOf("#")
   const end = queryIndex === -1 ? hashIndex : hashIndex === -1 ? queryIndex : Math.min(queryIndex, hashIndex)
   return end === -1 ? url : url.slice(0, end)
+}
+
+function isBodyLimitError(error: unknown): boolean {
+  if (error instanceof Error && error.message === "maxBytes exceeded") return true
+  if (!error || typeof error !== "object" || !("cause" in error)) return false
+  return isBodyLimitError(error.cause)
 }
 
 function bufferWebBody(request: Request) {

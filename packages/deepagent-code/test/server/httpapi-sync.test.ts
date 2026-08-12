@@ -373,7 +373,20 @@ describe("sync HttpApi", () => {
         })
         expect(tooMany.status).toBe(400)
 
-        const oversized = yield* requestInDirectory(SyncPaths.replay, tmp.directory, {
+        const before = yield* Database.Service.use(({ db }) =>
+          db.select().from(EventTable).where(eq(EventTable.aggregate_id, "aggregate-sync-replay-limit")).all(),
+        )
+        const semanticOversized = yield* requestInDirectory(SyncPaths.replay, tmp.directory, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            directory: tmp.directory,
+            events: [event(0, { value: "x".repeat(SyncReplayLimits.eventDataBytes) })],
+          }),
+        })
+        expect(semanticOversized.status).toBe(400)
+
+        const rawOversized = yield* requestInDirectory(SyncPaths.replay, tmp.directory, {
           method: "POST",
           headers,
           body: JSON.stringify({
@@ -381,7 +394,12 @@ describe("sync HttpApi", () => {
             events: [event(0, { value: "x".repeat(SyncReplayLimits.requestBytes) })],
           }),
         })
-        expect(oversized.status).toBe(413)
+        expect(rawOversized.status).toBe(413)
+        expect(
+          yield* Database.Service.use(({ db }) =>
+            db.select().from(EventTable).where(eq(EventTable.aggregate_id, "aggregate-sync-replay-limit")).all(),
+          ),
+        ).toEqual(before)
       }),
     { git: true, config: { formatter: false, lsp: false } },
     15_000,
