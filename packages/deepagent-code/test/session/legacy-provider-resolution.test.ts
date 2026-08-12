@@ -1,6 +1,7 @@
 import { expect } from "bun:test"
 import { Database } from "@deepagent-code/core/database/database"
 import { ModelV2 } from "@deepagent-code/core/model"
+import { NamedError } from "@deepagent-code/core/util/error"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import {
   SessionHistoryStateTable,
@@ -97,6 +98,13 @@ it.instance(
       })
       const safeUser = yield* addUser(source.id, "completed before provider crash")
       const safeAssistant = yield* addAssistant(source.id, safeUser.id, true)
+      const failedUser = yield* addUser(source.id, "failed safely before provider crash")
+      const failedAssistant = yield* addAssistant(source.id, failedUser.id)
+      yield* sessions.updateMessage({
+        ...failedAssistant,
+        time: { ...failedAssistant.time, completed: Date.now() },
+        error: new NamedError.Unknown({ message: "known terminal provider failure" }).toObject(),
+      })
       const user = yield* addUser(source.id, "dispatch then crash")
       const assistant = yield* addAssistant(source.id, user.id)
       const unsafeTail = yield* addUser(source.id, "physical tail after ambiguous provider turn")
@@ -140,6 +148,30 @@ it.instance(
         .run()
         .pipe(Effect.orDie)
       yield* db
+        .insert(SessionToolRequestReceiptTable)
+        .values({
+          receipt_id: "legacy-stale-indeterminate-without-prompt-authority",
+          request_ordinal: 2,
+          session_id: source.id,
+          user_message_id: safeUser.id,
+          assistant_message_id: safeAssistant.id,
+          provider_attempt_id: null,
+          provider_id: model.providerID,
+          model_id: model.modelID,
+          protocol: "chat",
+          registry_tool_ids: [],
+          permission_filtered_tool_ids: [],
+          final_offered_tool_ids: [],
+          call_ids: [],
+          provider_state: "indeterminate_after_crash",
+          terminal_at: now,
+          request_state: "dispatched",
+          request_error_code: "legacy_migration_without_prompt_authority",
+          created_at: now - 1,
+        })
+        .run()
+        .pipe(Effect.orDie)
+      yield* db
         .update(SessionPromptEpochTable)
         .set({ authority_state: "recovery_required", recovery_reason: "provider outcome is unknown after restart" })
         .where(
@@ -171,6 +203,8 @@ it.instance(
       ).toEqual([
         [safeUser.id, "user", undefined],
         [safeAssistant.id, "assistant", safeUser.id],
+        [failedUser.id, "user", undefined],
+        [failedAssistant.id, "assistant", failedUser.id],
       ])
 
       const fork = yield* sessions.fork({
@@ -179,6 +213,8 @@ it.instance(
         intentID: "fork-before-ambiguous-provider-turn",
       })
       expect((yield* sessions.messages({ sessionID: fork.id })).map((message) => message.info.role)).toEqual([
+        "user",
+        "assistant",
         "user",
         "assistant",
       ])
@@ -376,7 +412,12 @@ it.instance(
 
       const projection = yield* MessageV2.promptHistoryProjectionEffect(source.id)
       expect(projection.epoch).toBe(authority.epoch + 1)
-      expect(projection.messages.map((message) => message.info.id)).toEqual([safeUser.id, safeAssistant.id])
+      expect(projection.messages.map((message) => message.info.id)).toEqual([
+        safeUser.id,
+        safeAssistant.id,
+        failedUser.id,
+        failedAssistant.id,
+      ])
       expect(projection.recoveryResolutionID).toBe(first.resolutionID)
       expect(
         yield* db
@@ -409,7 +450,12 @@ it.instance(
           .orderBy(SessionPromptEpochMessageTable.ordinal)
           .all()
           .pipe(Effect.orDie),
-      ).toEqual([{ messageID: safeUser.id }, { messageID: safeAssistant.id }])
+      ).toEqual([
+        { messageID: safeUser.id },
+        { messageID: safeAssistant.id },
+        { messageID: failedUser.id },
+        { messageID: failedAssistant.id },
+      ])
       const successor = yield* db
         .select({ baselineHash: SessionPromptEpochTable.world_state_baseline_hash })
         .from(SessionPromptEpochTable)
@@ -473,7 +519,7 @@ it.instance(
       const continued = yield* addUser(source.id, "continue after explicit abandon")
       expect(
         (yield* MessageV2.promptHistoryProjectionEffect(source.id)).messages.map((message) => message.info.id),
-      ).toEqual([safeUser.id, safeAssistant.id])
+      ).toEqual([safeUser.id, safeAssistant.id, failedUser.id, failedAssistant.id])
       const admittedAt = Date.now()
       yield* db
         .insert(SessionIntentTable)
@@ -501,6 +547,8 @@ it.instance(
       expect(continuedProjection.messages.map((message) => message.info.id)).toEqual([
         safeUser.id,
         safeAssistant.id,
+        failedUser.id,
+        failedAssistant.id,
         continued.id,
       ])
       yield* sessions.remove(source.id)

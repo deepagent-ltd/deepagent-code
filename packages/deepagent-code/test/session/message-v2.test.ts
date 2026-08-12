@@ -112,6 +112,17 @@ function basePart(messageID: string, id: string) {
   }
 }
 
+describe("session.message-v2.clientProjection", () => {
+  test("canonicalizes a bounded legacy summary without inline diffs", () => {
+    const message = {
+      ...userInfo("msg_manifest_only"),
+      summary: {},
+    } as SessionV1.User
+
+    expect(MessageV2.clientProjection(message).summary?.diffs).toEqual([])
+  })
+})
+
 describe("session.message-v2.toModelMessage", () => {
   test("does not expose computed activity progress to the provider projection", async () => {
     const assistantID = "msg_activity_projection"
