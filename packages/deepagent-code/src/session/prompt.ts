@@ -4531,60 +4531,52 @@ export const layer = Layer.effect(
       "SessionPrompt.promptAsync",
     )(function* (input: PromptInput) {
       const messageID = input.messageID ?? MessageID.ascending()
-      const claim = input.intentID
-        ? yield* SessionPromptIntent.claim({
-            intentID: input.intentID,
-            sessionID: input.sessionID,
-            source: input.intentSource ?? "composer",
-            variant:
-              input.intentVariant ??
-              (promptPipelineRequest(input.metadata).confirmedDraftID ? "rewritten" : "original"),
-            payloadHash: promptIntentPayloadHash(input),
-            messageID,
-            executionMode: input.noReply === true ? "deferred" : "run_now",
-          }).pipe(Effect.provideService(Database.Service, database))
-        : undefined
-      if (claim?.kind === "admitted")
+      const claim = yield* SessionPromptIntent.claim({
+        intentID: input.intentID ?? `legacy-prompt:${input.sessionID}:${messageID}`,
+        sessionID: input.sessionID,
+        source: input.intentSource ?? "composer",
+        variant:
+          input.intentVariant ?? (promptPipelineRequest(input.metadata).confirmedDraftID ? "rewritten" : "original"),
+        payloadHash: promptIntentPayloadHash(input),
+        messageID,
+        executionMode: input.noReply === true ? "deferred" : "run_now",
+      }).pipe(Effect.provideService(Database.Service, database))
+      if (claim.kind === "admitted")
         return {
           messageID: claim.receipt.messageID,
           delivery: claim.receipt.delivery ?? "turn",
         }
-      const claimed = claim?.receipt
-      const admittedInput = claimed
-        ? {
-            ...input,
-            messageID: claimed.messageID,
-            parts: stableIntentParts(input.parts, claimed.intentID),
-          }
-        : { ...input, messageID }
+      const claimed = claim.receipt
+      const admittedInput = {
+        ...input,
+        messageID: claimed.messageID,
+        parts: stableIntentParts(input.parts, claimed.intentID),
+      }
       const admission = yield* Deferred.make<
         PromptAdmissionReceipt,
         Image.Error | SessionPromptIntent.Error | Session.BusyError
       >()
-      if (claimed) {
-        yield* Effect.suspend(() =>
-          SessionPromptIntent.renew({
-            intentID: claimed.intentID,
-            ownerToken: claimed.ownerToken,
-          }).pipe(
-            Effect.provideService(Database.Service, database),
-            Effect.delay(Duration.seconds(10)),
-            Effect.flatMap((renewed) => (renewed ? Effect.void : Effect.interrupt)),
-          ),
-        ).pipe(Effect.forever, Effect.forkIn(scope))
-      }
+      yield* Effect.suspend(() =>
+        SessionPromptIntent.renew({
+          intentID: claimed.intentID,
+          ownerToken: claimed.ownerToken,
+        }).pipe(
+          Effect.provideService(Database.Service, database),
+          Effect.delay(Duration.seconds(10)),
+          Effect.flatMap((renewed) => (renewed ? Effect.void : Effect.interrupt)),
+        ),
+      ).pipe(Effect.forever, Effect.forkIn(scope))
       yield* promptOrSteer(admittedInput, {
         intent: claimed,
         ready: (receipt) =>
-          (claimed
-            ? SessionPromptIntent.complete({
-                intentID: claimed.intentID,
-                ownerToken: claimed.ownerToken,
-                messageID: receipt.messageID,
-                delivery: receipt.delivery,
-              }).pipe(Effect.provideService(Database.Service, database), Effect.asVoid)
-            : Effect.void
-          ).pipe(
+          SessionPromptIntent.complete({
+            intentID: claimed.intentID,
+            ownerToken: claimed.ownerToken,
+            messageID: receipt.messageID,
+            delivery: receipt.delivery,
+          }).pipe(
+            Effect.provideService(Database.Service, database),
+            Effect.asVoid,
             Effect.matchCauseEffect({
               onFailure: (cause) => Deferred.failCause(admission, cause),
               onSuccess: () => Deferred.succeed(admission, receipt),
@@ -4594,12 +4586,10 @@ export const layer = Layer.effect(
       }).pipe(
         Effect.catchCause((cause) =>
           Effect.gen(function* () {
-            if (claimed) {
-              yield* SessionPromptIntent.fail({
-                intentID: claimed.intentID,
-                ownerToken: claimed.ownerToken,
-              }).pipe(Effect.provideService(Database.Service, database))
-            }
+            yield* SessionPromptIntent.fail({
+              intentID: claimed.intentID,
+              ownerToken: claimed.ownerToken,
+            }).pipe(Effect.provideService(Database.Service, database))
             yield* Effect.logError("prompt_async failed").pipe(
               Effect.annotateLogs({ sessionID: input.sessionID, cause }),
             )

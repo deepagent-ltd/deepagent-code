@@ -3203,6 +3203,57 @@ it.instance(
 )
 
 it.instance(
+  "promptAsync without an explicit intent acknowledges durable admission before the provider settles",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const gate = yield* Deferred.make<void>()
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({ title: "Implicit prompt intent" })
+      const messageID = MessageID.ascending()
+
+      yield* llm.hold("eventual answer", deferredAsPromise(gate))
+      const receipt = yield* prompt.promptAsync({
+        sessionID: chat.id,
+        messageID,
+        agent: "build",
+        model: ref,
+        parts: [{ type: "text", text: "hello" }],
+      })
+
+      expect(receipt).toEqual({ messageID, delivery: "turn" })
+      yield* llm.wait(1)
+      const { db } = yield* Database.Service
+      expect(
+        yield* db
+          .select({
+            state: SessionIntentTable.state,
+            executionState: SessionIntentTable.execution_state,
+            delivery: SessionIntentTable.delivery,
+          })
+          .from(SessionIntentTable)
+          .where(eq(SessionIntentTable.intent_id, `legacy-prompt:${chat.id}:${messageID}`))
+          .get()
+          .pipe(Effect.orDie),
+      ).toEqual({ state: "admitted", executionState: "claimed", delivery: "turn" })
+
+      yield* Deferred.succeed(gate, undefined)
+      yield* pollWithTimeout(
+        sessions.messages({ sessionID: chat.id }).pipe(
+          Effect.map((messages) =>
+            messages.some((message) => message.info.role === "assistant" && message.info.time.completed)
+              ? messages
+              : undefined,
+          ),
+        ),
+        "provider turn did not settle after admission",
+      )
+    }),
+  15_000,
+)
+
+it.instance(
   "assertNotBusy fails with BusyError when loop running",
   () =>
     Effect.gen(function* () {
