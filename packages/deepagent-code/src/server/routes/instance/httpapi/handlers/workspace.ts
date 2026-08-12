@@ -8,6 +8,7 @@ import { InstanceHttpApi } from "../api"
 import { notFound } from "../errors"
 import { ApiVcsApplyError, ApiVcsRawDiffError } from "../groups/instance"
 import { ApiWorkspaceCreateError, ApiWorkspaceWarpError, CreatePayload, WarpPayload } from "../groups/workspace"
+import { ConflictError } from "../errors"
 
 export const workspaceHandlers = HttpApiBuilder.group(InstanceHttpApi, "workspace", (handlers) =>
   Effect.gen(function* () {
@@ -71,6 +72,9 @@ export const workspaceHandlers = HttpApiBuilder.group(InstanceHttpApi, "workspac
         .pipe(
           Effect.mapError((error) => {
             if (error instanceof Workspace.WorkspaceNotFoundError) return notFound(error.message)
+            if (error instanceof Workspace.SessionWarpTransferUnsupportedError) {
+              return new ConflictError({ message: error.message, resource: `session:${error.sessionID}` })
+            }
             if (error instanceof Vcs.PatchApplyError) {
               return new ApiVcsApplyError({
                 name: "VcsApplyError",
