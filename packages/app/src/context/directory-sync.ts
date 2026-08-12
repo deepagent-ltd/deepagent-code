@@ -14,6 +14,7 @@ import { diffs as list, message as clean } from "@/utils/diffs"
 import { createServerSdkContext, useServerSDK } from "./server-sdk"
 import { type createServerSyncContextInner } from "./server-sync"
 import { promptAdmissionClientMessageID } from "./global-sync/prompt-admission"
+import { mergeMessage } from "./global-sync/event-reducer"
 
 const SKIP_PARTS = new Set(["patch", "step-start", "step-finish"])
 
@@ -53,10 +54,28 @@ const isNotFound = (error: unknown) =>
   error.cause !== null &&
   (error.cause as { status?: unknown }).status === 404
 
-function merge<T extends { id: string }>(a: readonly T[], b: readonly T[]) {
-  const map = new Map(a.map((item) => [item.id, item] as const))
-  for (const item of b) map.set(item.id, item)
-  return [...map.values()].sort((x, y) => cmp(x.id, y.id))
+function mergePageMessages(
+  base: readonly Message[],
+  incoming: readonly Message[],
+  previous: readonly Message[],
+) {
+  const messages = new Map(base.map((item) => [item.id, item] as const))
+  const previousByID = new Map(previous.map((item) => [item.id, item] as const))
+  let conflict = false
+  for (const item of incoming) {
+    const current = previousByID.get(item.id) ?? messages.get(item.id)
+    if (!current) {
+      messages.set(item.id, item)
+      continue
+    }
+    const result = mergeMessage(current, item)
+    messages.set(item.id, result.message)
+    conflict ||= result.conflict
+  }
+  return {
+    messages: [...messages.values()].sort((a, b) => cmp(a.id, b.id)),
+    conflict,
+  }
 }
 
 type OptimisticStore = {
@@ -228,6 +247,7 @@ export const createDirSyncContext = (
   const optimistic = new Map<string, Map<string, OptimisticItem>>()
   const maxDirs = 30
   const seen = new Map<string, Set<string>>()
+  let requestSessionSync: ((sessionID: string) => void) | undefined
   const [meta, setMeta] = createStore({
     limit: {} as Record<string, number>,
     cursor: {} as Record<string, string | undefined>,
@@ -381,8 +401,11 @@ export const createDirSyncContext = (
           clearOptimistic(input.directory, input.sessionID, messageID)
         }
         const [store] = serverSync.child(input.directory, { bootstrap: false })
-        const cached = input.mode === "prepend" ? (store.message[input.sessionID] ?? []) : optimistic.canonical
-        const message = merge(cached, next.session)
+        const previous = store.message[input.sessionID] ?? []
+        const cached = input.mode === "prepend" ? previous : optimistic.canonical
+        const merged = mergePageMessages(cached, next.session, previous)
+        if (merged.conflict) requestSessionSync?.(input.sessionID)
+        const message = merged.messages
         batch(() => {
           input.setStore("message", input.sessionID, reconcile(message, { key: "id" }))
           for (const p of next.part) {
@@ -664,6 +687,12 @@ export const createDirSyncContext = (
     get directory() {
       return current()[0].path.directory
     },
+  }
+
+  requestSessionSync = (sessionID) => {
+    void result.session.sync(sessionID, { force: true }).catch((error) => {
+      console.error("Failed to reload session after an activity progress conflict", error)
+    })
   }
   serverSync.registerSessionReloader?.(directory, (sessionID) =>
     result.session.sync(sessionID, { force: true }),
