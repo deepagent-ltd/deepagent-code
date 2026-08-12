@@ -2,7 +2,11 @@ import { realpath, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { Effect } from "effect"
 
-export type Point = "after_provider_streaming" | "after_provider_receipt_terminal" | "after_progress_settled"
+export type Point =
+  | "after_admit_and_bind"
+  | "after_provider_streaming"
+  | "after_provider_receipt_terminal"
+  | "after_progress_settled"
 
 export function pause(point: Point) {
   if (process.env.DEEPAGENT_CODE_TEST_ACTIVITY_CRASH_POINT !== point) return Effect.void

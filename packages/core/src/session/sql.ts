@@ -299,6 +299,13 @@ export const SessionIntentTable = sqliteTable(
     correlation_id: text(),
     owner_token: text(),
     lease_expires_at: integer(),
+    execution_mode: text().$type<"legacy" | "run_now" | "deferred">().notNull().default("legacy"),
+    execution_state: text()
+      .$type<"legacy" | "pending" | "claimed" | "absorbed" | "canceled">()
+      .notNull()
+      .default("legacy"),
+    execution_claim_id: text(),
+    execution_claimed_at: integer(),
     mutation_epoch: integer().notNull().default(0),
     version: integer().notNull().default(0),
     time_created: integer().notNull(),

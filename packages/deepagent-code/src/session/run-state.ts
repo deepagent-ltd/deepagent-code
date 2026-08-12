@@ -6,6 +6,10 @@ import { Effect, Latch, Layer, Scope, Context } from "effect"
 import { Session } from "./session"
 import { SessionID } from "./schema"
 import { SessionStatus } from "./status"
+import type { Image } from "@/image/image"
+import type { SessionPromptIntent } from "./prompt-intent"
+
+type RunError = Image.Error | SessionPromptIntent.Error
 
 export interface Interface {
   readonly assertNotBusy: (sessionID: SessionID) => Effect.Effect<void, Session.BusyError>
@@ -18,9 +22,14 @@ export interface Interface {
   readonly ensureRunning: (
     sessionID: SessionID,
     onInterrupt: Effect.Effect<SessionV1.WithParts>,
-    work: Effect.Effect<SessionV1.WithParts>,
+    work: Effect.Effect<SessionV1.WithParts, RunError>,
     onRunning?: Effect.Effect<void>,
   ) => Effect.Effect<SessionV1.WithParts>
+  readonly startRunning: (
+    sessionID: SessionID,
+    onInterrupt: Effect.Effect<SessionV1.WithParts>,
+    work: Effect.Effect<SessionV1.WithParts, RunError>,
+  ) => Effect.Effect<SessionV1.WithParts, RunError | Session.BusyError>
   readonly startShell: (
     sessionID: SessionID,
     onInterrupt: Effect.Effect<SessionV1.WithParts>,
@@ -40,7 +49,7 @@ export const layer = Layer.effect(
     const state = yield* InstanceState.make(
       Effect.fn("SessionRunState.state")(function* () {
         const scope = yield* Scope.Scope
-        const runners = new Map<SessionID, Runner.Runner<SessionV1.WithParts>>()
+        const runners = new Map<SessionID, Runner.Runner<SessionV1.WithParts, RunError>>()
         yield* Effect.addFinalizer(
           Effect.fnUntraced(function* () {
             yield* Effect.forEach(runners.values(), (runner) => runner.cancel, {
@@ -61,7 +70,7 @@ export const layer = Layer.effect(
       const data = yield* InstanceState.get(state)
       const existing = data.runners.get(sessionID)
       if (existing) return existing
-      const next = Runner.make<SessionV1.WithParts>(data.scope, {
+      const next = Runner.make<SessionV1.WithParts, RunError>(data.scope, {
         onIdle: Effect.gen(function* () {
           data.runners.delete(sessionID)
           yield* status.set(sessionID, { type: "idle" })
@@ -98,10 +107,12 @@ export const layer = Layer.effect(
     const ensureRunning = Effect.fn("SessionRunState.ensureRunning")(function* (
       sessionID: SessionID,
       onInterrupt: Effect.Effect<SessionV1.WithParts>,
-      work: Effect.Effect<SessionV1.WithParts>,
+      work: Effect.Effect<SessionV1.WithParts, RunError>,
       onRunning?: Effect.Effect<void>,
     ) {
-      return yield* (yield* runner(sessionID, onInterrupt)).ensureRunning(work, onRunning)
+      return yield* (yield* runner(sessionID, onInterrupt))
+        .ensureRunning(work, onRunning)
+        .pipe(Effect.catch(Effect.die))
     })
 
     const startShell = Effect.fn("SessionRunState.startShell")(function* (
@@ -112,10 +123,24 @@ export const layer = Layer.effect(
     ) {
       return yield* (yield* runner(sessionID, onInterrupt))
         .startShell(work, ready)
+        .pipe(
+          Effect.catch((error) =>
+            error instanceof Runner.Busy ? Effect.fail(busyError(sessionID)) : Effect.die(error),
+          ),
+        )
+    })
+
+    const startRunning = Effect.fn("SessionRunState.startRunning")(function* (
+      sessionID: SessionID,
+      onInterrupt: Effect.Effect<SessionV1.WithParts>,
+      work: Effect.Effect<SessionV1.WithParts, RunError>,
+    ) {
+      return yield* (yield* runner(sessionID, onInterrupt))
+        .startRunning(work)
         .pipe(Effect.catchTag("RunnerBusy", () => Effect.fail(busyError(sessionID))))
     })
 
-    return Service.of({ assertNotBusy, isBusy, cancel, ensureRunning, startShell })
+    return Service.of({ assertNotBusy, isBusy, cancel, ensureRunning, startRunning, startShell })
   }),
 )
 

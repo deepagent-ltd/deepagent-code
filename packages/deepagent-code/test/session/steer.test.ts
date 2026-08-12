@@ -67,7 +67,14 @@ import { MessageTable, SessionIntentTable, SessionSteerTable, SessionTable } fro
 import { eq } from "drizzle-orm"
 import { SessionMutationEpoch } from "../../src/session/mutation-epoch"
 import { SessionPromptIntent } from "../../src/session/prompt-intent"
-import { SessionActivityAdmissionTable, SessionLegacyActivityAdmissionTable } from "../../src/session/activity-sql"
+import {
+  SessionActivityAdmissionTable,
+  SessionActivityProgressTable,
+  SessionLegacyActivityAdmissionTable,
+  SessionLegacyActivityRunTable,
+  SessionLegacyActivityTable,
+  SessionLegacyActivityTerminalTable,
+} from "../../src/session/activity-sql"
 
 void Log.init({ print: false })
 
@@ -786,6 +793,66 @@ on.instance(
 
       // Two model calls: the original + the follow-up that absorbed the steer.
       expect(yield* llm.calls).toBe(2)
+
+      const { db } = yield* Database.Service
+      const activities = yield* db
+        .select()
+        .from(SessionLegacyActivityTable)
+        .where(eq(SessionLegacyActivityTable.session_id, chat.id))
+        .all()
+        .pipe(Effect.orDie)
+      expect(activities).toMatchObject([{ state: "settled", terminal_reason: "assistant_completed" }])
+      const activity = activities[0]
+      expect(activity).toBeDefined()
+      if (!activity) return
+      expect(
+        yield* db
+          .select()
+          .from(SessionLegacyActivityAdmissionTable)
+          .where(eq(SessionLegacyActivityAdmissionTable.activity_id, activity.activity_id))
+          .orderBy(SessionLegacyActivityAdmissionTable.ordinal)
+          .all()
+          .pipe(Effect.orDie),
+      ).toMatchObject([
+        { ordinal: 0, role: "trigger" },
+        { ordinal: 1, role: "steer" },
+      ])
+      expect(
+        yield* db
+          .select()
+          .from(SessionActivityProgressTable)
+          .where(eq(SessionActivityProgressTable.activity_id, activity.activity_id))
+          .orderBy(SessionActivityProgressTable.revision)
+          .all()
+          .pipe(Effect.orDie),
+      ).toMatchObject([
+        { revision: 0, input_membership_ordinal: 0, state: "progress" },
+        { revision: 1, input_membership_ordinal: 1, state: "final" },
+      ])
+      const runs = yield* db
+        .select()
+        .from(SessionLegacyActivityRunTable)
+        .where(eq(SessionLegacyActivityRunTable.session_id, chat.id))
+        .all()
+        .pipe(Effect.orDie)
+      expect(runs).toMatchObject([
+        { activity_id: activity.activity_id, state: "completed", terminal_reason: "assistant_completed" },
+      ])
+      expect(
+        yield* db
+          .select()
+          .from(SessionLegacyActivityTerminalTable)
+          .where(eq(SessionLegacyActivityTerminalTable.activity_id, activity.activity_id))
+          .all()
+          .pipe(Effect.orDie),
+      ).toMatchObject([
+        {
+          run_id: runs[0]?.run_id,
+          state: "settled",
+          reason_code: "assistant_completed",
+          membership_ordinal: 1,
+        },
+      ])
 
       // The steered message is persisted as an ordinary user message in history.
       const msgs = yield* sessions.messages({ sessionID: chat.id })
