@@ -13,22 +13,24 @@ export const syncReplayBodyLimitLayer = HttpRouter.middleware<{ handles: unknown
     if (Number.isFinite(contentLength) && contentLength > SyncReplayLimits.requestBytes)
       return HttpServerResponse.empty({ status: 413 })
 
-    if (!(request.source instanceof Request))
-      return yield* effect.pipe(
-        Effect.provideService(HttpServerRequest.MaxBodySize, FileSystem.Size(SyncReplayLimits.requestBytes)),
-      )
-
-    const buffered = yield* bufferWebBody(request.source)
+    const buffered = yield* (
+      request.source instanceof Request
+        ? bufferWebBody(request.source)
+        : request.text.pipe(
+            Effect.provideService(HttpServerRequest.MaxBodySize, FileSystem.Size(SyncReplayLimits.requestBytes)),
+            Effect.map((body) => new TextEncoder().encode(body)),
+            Effect.catch(() => Effect.succeed(undefined)),
+          )
+    )
     if (!buffered) return HttpServerResponse.empty({ status: 413 })
     return yield* effect.pipe(
       Effect.provideService(
         HttpServerRequest.HttpServerRequest,
         HttpServerRequest.fromWeb(
-          new Request(request.source.url, {
-            method: request.source.method,
-            headers: request.source.headers,
+          new Request(new URL(request.url, "http://localhost"), {
+            method: request.method,
+            headers: request.headers,
             body: buffered,
-            signal: request.source.signal,
           }),
         ),
       ),
