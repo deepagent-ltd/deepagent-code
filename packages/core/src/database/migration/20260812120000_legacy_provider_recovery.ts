@@ -7,7 +7,10 @@ export default {
     return Effect.gen(function* () {
       // The original receipt table predated Session FK ownership. Rebuild it with its two FK
       // children detached so SQLite cannot cascade evidence away or retain references to a renamed
-      // old table. Historical orphan receipts are intentionally omitted from the rebuilt authority.
+      // old table. The compaction trigger also references the receipt table from a different table;
+      // detach it so Node SQLite can validate the schema while the receipt table is being renamed.
+      // Historical orphan receipts are intentionally omitted from the rebuilt authority.
+      yield* tx.run("DROP TRIGGER IF EXISTS compaction_run_continuation_response_validate")
       yield* tx.run(`
         CREATE TEMP TABLE legacy_provider_recovery_argument_receipt AS
         SELECT * FROM session_tool_argument_receipt
@@ -154,6 +157,19 @@ export default {
         END
       `)
       yield* tx.run(`
+        CREATE TRIGGER compaction_run_continuation_response_validate
+        BEFORE UPDATE OF continuation_state ON compaction_run
+        WHEN NEW.continuation_state IN ('settled', 'failed') AND NOT EXISTS (
+          SELECT 1
+          FROM session_tool_request_receipt receipt
+          WHERE receipt.receipt_id = NEW.continuation_receipt_id
+            AND receipt.response_fingerprint IS NOT NULL
+        )
+        BEGIN
+          SELECT RAISE(ABORT, 'compaction continuation response is not durable');
+        END
+      `)
+      yield* tx.run(`
         CREATE TABLE session_tool_argument_receipt (
           receipt_id TEXT NOT NULL,
           layer TEXT NOT NULL CHECK (layer IN ('raw_frame','ai_sdk_input','adapter_assembly','processor_decoded')),
@@ -262,6 +278,10 @@ export default {
       yield* tx.run("DROP TRIGGER IF EXISTS session_prompt_epoch_message_validate_insert")
       yield* tx.run("DROP TRIGGER IF EXISTS session_prompt_epoch_message_validate_update")
       yield* tx.run("DROP TRIGGER IF EXISTS session_prompt_epoch_message_owner_immutable")
+      yield* tx.run("DROP TRIGGER IF EXISTS session_history_state_ready_validate_insert")
+      yield* tx.run("DROP TRIGGER IF EXISTS session_history_state_ready_validate_update")
+      yield* tx.run("DROP TRIGGER IF EXISTS session_history_state_recovery_validate_insert")
+      yield* tx.run("DROP TRIGGER IF EXISTS session_history_state_recovery_validate_update")
       yield* tx.run(`
         CREATE TEMP TABLE legacy_provider_recovery_epoch_message AS
         SELECT * FROM session_prompt_epoch_message
@@ -412,6 +432,55 @@ export default {
         )
         BEGIN
           SELECT RAISE(ABORT, 'prompt_epoch_referenced_message_owner_immutable');
+        END
+      `)
+
+      yield* tx.run(`
+        CREATE TRIGGER session_history_state_ready_validate_insert
+        BEFORE INSERT ON session_history_state
+        WHEN NEW.state = 'ready'
+        BEGIN
+          SELECT CASE WHEN NOT EXISTS (
+            SELECT 1 FROM session_prompt_epoch
+            WHERE session_id = NEW.session_id AND state = 'active' AND authority_state = 'ready'
+          ) THEN RAISE(ABORT, 'session_history_ready_without_authority') END;
+        END
+      `)
+      yield* tx.run(`
+        CREATE TRIGGER session_history_state_ready_validate_update
+        BEFORE UPDATE ON session_history_state
+        WHEN NEW.state = 'ready'
+        BEGIN
+          SELECT CASE WHEN NOT EXISTS (
+            SELECT 1 FROM session_prompt_epoch
+            WHERE session_id = NEW.session_id AND state = 'active' AND authority_state = 'ready'
+          ) THEN RAISE(ABORT, 'session_history_ready_without_authority') END;
+        END
+      `)
+      yield* tx.run(`
+        CREATE TRIGGER session_history_state_recovery_validate_insert
+        BEFORE INSERT ON session_history_state
+        WHEN NEW.state = 'recovery_required'
+        BEGIN
+          SELECT CASE WHEN NEW.reason IS NULL
+            THEN RAISE(ABORT, 'session_history_recovery_without_reason') END;
+          SELECT CASE WHEN EXISTS (
+            SELECT 1 FROM session_prompt_epoch
+            WHERE session_id = NEW.session_id AND state = 'active' AND authority_state != 'recovery_required'
+          ) THEN RAISE(ABORT, 'session_history_recovery_without_quarantined_authority') END;
+        END
+      `)
+      yield* tx.run(`
+        CREATE TRIGGER session_history_state_recovery_validate_update
+        BEFORE UPDATE ON session_history_state
+        WHEN NEW.state = 'recovery_required'
+        BEGIN
+          SELECT CASE WHEN NEW.reason IS NULL
+            THEN RAISE(ABORT, 'session_history_recovery_without_reason') END;
+          SELECT CASE WHEN EXISTS (
+            SELECT 1 FROM session_prompt_epoch
+            WHERE session_id = NEW.session_id AND state = 'active' AND authority_state != 'recovery_required'
+          ) THEN RAISE(ABORT, 'session_history_recovery_without_quarantined_authority') END;
         END
       `)
 
