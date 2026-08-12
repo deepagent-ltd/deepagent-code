@@ -5,6 +5,8 @@ import { ProjectTable } from "@deepagent-code/core/project/sql"
 import { ModelV2 } from "@deepagent-code/core/model"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { AbsolutePath } from "@deepagent-code/core/schema"
+import { SessionMessage } from "@deepagent-code/core/session/message"
+import { Prompt } from "@deepagent-code/core/session/prompt"
 import {
   MessageTable,
   PartTable,
@@ -125,6 +127,36 @@ describe("SessionPromptIntent", () => {
         messageID: MessageID.make("msg_other_transport"),
       }).pipe(Effect.flip)
       expect(error).toBeInstanceOf(SessionPromptIntent.InProgress)
+    }),
+  )
+
+  it.effect("an exact retry takes over an unexpired claim owned by a dead process", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const first = yield* claim({
+        intentID: "intent_process_restart",
+        messageID: MessageID.make("msg_process_restart"),
+      })
+      expect(first.kind).toBe("claimed")
+      const { db } = yield* Database.Service
+      yield* db
+        .update(SessionIntentTable)
+        .set({
+          owner_token: "2147483647:00000000-0000-4000-8000-000000000001:00000000-0000-4000-8000-000000000002",
+          lease_expires_at: Date.now() + 30_000,
+        })
+        .where(eq(SessionIntentTable.intent_id, "intent_process_restart"))
+        .run()
+        .pipe(Effect.orDie)
+
+      const retry = yield* claim({
+        intentID: "intent_process_restart",
+        messageID: MessageID.make("msg_process_restart_retry"),
+      })
+      expect(retry.kind).toBe("claimed")
+      if (retry.kind !== "claimed") return
+      expect(retry.receipt.messageID).toBe(MessageID.make("msg_process_restart"))
+      expect(retry.receipt.ownerToken).not.toBe(first.kind === "claimed" ? first.receipt.ownerToken : undefined)
     }),
   )
 
@@ -561,6 +593,173 @@ describe("SessionPromptIntent", () => {
           }).pipe(Effect.exit),
         ),
       ).toBeTrue()
+    }),
+  )
+
+  it.effect("a follow-up arriving after the provider boundary resumes the same finalizing run", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const trigger = yield* claim({
+        intentID: "intent_finalizing_followup",
+        messageID: MessageID.make("msg_finalizing_followup_user"),
+      })
+      if (trigger.kind !== "claimed") return
+      const materialized = yield* SessionPromptIntent.materializeTurn({
+        receipt: trigger.receipt,
+        message: message(trigger.receipt.messageID),
+      })
+      if (!("run" in materialized) || !materialized.run) return
+      const boundary = yield* SessionPromptIntent.freezeProviderInputBoundary(materialized.run)
+      if (boundary.kind !== "ready") return
+
+      const { db } = yield* Database.Service
+      const assistantID = MessageID.make("msg_finalizing_followup_assistant")
+      yield* db
+        .insert(MessageTable)
+        .values({
+          id: assistantID,
+          session_id: sessionID,
+          time_created: 2,
+          data: {
+            role: "assistant",
+            parentID: trigger.receipt.messageID,
+            mode: "build",
+            agent: "build",
+            path: { cwd: "/project", root: "/project" },
+            cost: 0,
+            tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+            modelID: ModelV2.ID.make("test"),
+            providerID: ProviderV2.ID.make("test"),
+            time: { created: 2, completed: 3 },
+            finish: "stop",
+          } as typeof MessageTable.$inferInsert.data,
+        })
+        .run()
+        .pipe(Effect.orDie)
+      yield* db
+        .insert(SessionToolRequestReceiptTable)
+        .values({
+          receipt_id: "receipt-finalizing-followup",
+          request_ordinal: 1,
+          session_id: sessionID,
+          user_message_id: trigger.receipt.messageID,
+          assistant_message_id: assistantID,
+          provider_id: "test",
+          model_id: "test",
+          registry_tool_ids: [],
+          permission_filtered_tool_ids: [],
+          final_offered_tool_ids: [],
+          call_ids: [],
+          provider_state: "settled",
+          terminal_at: 3,
+          response_fingerprint: "response-finalizing-followup",
+          request_state: "dispatched",
+          created_at: 2,
+        })
+        .run()
+        .pipe(Effect.orDie)
+      yield* SessionPromptIntent.beginProgress({
+        activityID: materialized.run.activityID,
+        assistantMessageID: assistantID,
+        providerReceiptID: "receipt-finalizing-followup",
+        membershipOrdinal: boundary.boundary.membershipOrdinal,
+      })
+
+      const steerID = SessionMessage.ID.make("msg_finalizing_followup_steer")
+      const admissionID = "admission-finalizing-followup-steer"
+      const steerClaim = yield* claim({
+        intentID: "intent_finalizing_followup_steer",
+        messageID: MessageID.make(steerID),
+        source: "followup",
+      })
+      if (steerClaim.kind !== "claimed") return
+      yield* db
+        .insert(SessionSteerTable)
+        .values({
+          id: steerID,
+          session_id: sessionID,
+          correlation_id: steerID,
+          prompt: Prompt.fromUserMessage({ text: "follow up" }),
+          delivery: "steer",
+          mutation_epoch: materialized.run.mutationEpoch,
+          time_created: 3,
+        })
+        .run()
+        .pipe(Effect.orDie)
+      yield* SessionPromptIntent.complete({
+        intentID: steerClaim.receipt.intentID,
+        ownerToken: steerClaim.receipt.ownerToken,
+        messageID: MessageID.make(steerID),
+        delivery: "steer",
+      })
+      yield* db
+        .insert(SessionActivityAdmissionTable)
+        .values({
+          admission_id: admissionID,
+          session_id: sessionID,
+          source_kind: "legacy_intent",
+          legacy_intent_id: steerClaim.receipt.intentID,
+          admitted_message_id: steerID,
+          delivery: "steer",
+          payload_fingerprint_kind: "payload_hash",
+          payload_fingerprint: "payload-a",
+          execution_mode: "run_now",
+          created_at: 3,
+        })
+        .run()
+        .pipe(Effect.orDie)
+      yield* db
+        .insert(SessionLegacyActivityAdmissionTable)
+        .values({
+          activity_id: materialized.run.activityID,
+          admission_id: admissionID,
+          ordinal: boundary.boundary.membershipOrdinal + 1,
+          role: "steer",
+          attached_at: 3,
+        })
+        .run()
+        .pipe(Effect.orDie)
+
+      yield* SessionPromptIntent.markRunFinalizing(materialized.run)
+      expect(
+        yield* SessionPromptIntent.finalizeActivityWithRevision({
+          run: materialized.run,
+          assistantMessageID: assistantID,
+          decision: {
+            state: "settled",
+            reasonCode: "provider_final",
+            source: "provider_final",
+            operationID: `${materialized.run.runID}:terminal`,
+            ownerToken: materialized.run.ownerToken,
+          },
+        }),
+      ).toEqual({ kind: "follow_up_required", membershipOrdinal: boundary.boundary.membershipOrdinal + 1 })
+      expect(
+        yield* db
+          .select()
+          .from(SessionLegacyActivityRunTable)
+          .where(eq(SessionLegacyActivityRunTable.run_id, materialized.run.runID))
+          .get()
+          .pipe(Effect.orDie),
+      ).toMatchObject({ state: "finalizing", activity_id: materialized.run.activityID })
+      expect(
+        yield* db
+          .select()
+          .from(SessionLegacyActivityTerminalTable)
+          .where(eq(SessionLegacyActivityTerminalTable.activity_id, materialized.run.activityID))
+          .all()
+          .pipe(Effect.orDie),
+      ).toEqual([])
+
+      yield* SessionPromptIntent.markRunRunning(materialized.run)
+      expect(
+        yield* db
+          .select()
+          .from(SessionLegacyActivityRunTable)
+          .where(eq(SessionLegacyActivityRunTable.run_id, materialized.run.runID))
+          .get()
+          .pipe(Effect.orDie),
+      ).toMatchObject({ state: "running", activity_id: materialized.run.activityID })
     }),
   )
 
