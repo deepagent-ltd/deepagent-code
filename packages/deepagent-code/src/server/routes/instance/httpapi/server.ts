@@ -49,6 +49,7 @@ import { SessionSteer } from "@/session/steer"
 import { SessionRunState } from "@/session/run-state"
 import { SessionStatus } from "@/session/status"
 import { SessionSummary } from "@/session/summary"
+import { SessionLegacyProviderResolution } from "@/session/legacy-provider-resolution"
 import { Todo } from "@/session/todo"
 import { SessionShare } from "@/share/session"
 import { ShareNext } from "@/share/share-next"
@@ -135,6 +136,7 @@ import { corsVaryFix } from "./middleware/cors-vary"
 import { errorLayer } from "./middleware/error"
 import { fenceLayer } from "./middleware/fence"
 import { schemaErrorLayer } from "./middleware/schema-error"
+import { syncReplayBodyLimitLayer } from "./middleware/sync-replay-body-limit"
 
 export const context = Context.makeUnsafe<unknown>(new Map())
 
@@ -330,6 +332,7 @@ export function createRoutes(
     Layer.provide([
       errorLayer,
       compressionLayer,
+      syncReplayBodyLimitLayer,
       corsVaryFix,
       fenceLayer.pipe(Layer.provide(Database.defaultLayer)),
       cors(corsOptions),
@@ -373,6 +376,7 @@ export function createRoutes(
       SessionRunState.defaultLayer,
       SessionStatus.defaultLayer,
       SessionSummary.defaultLayer,
+      SessionLegacyProviderResolution.defaultLayer,
       ShareNext.defaultLayer,
       Snapshot.defaultLayer,
       EventV2Bridge.defaultLayer,

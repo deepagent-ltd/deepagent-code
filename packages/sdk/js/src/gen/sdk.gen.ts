@@ -413,6 +413,10 @@ import type {
   SessionPromptResponses,
   SessionPromptSuggestionErrors,
   SessionPromptSuggestionResponses,
+  SessionProviderResolutionListErrors,
+  SessionProviderResolutionListResponses,
+  SessionProviderResolutionResolveErrors,
+  SessionProviderResolutionResolveResponses,
   SessionRevertErrors,
   SessionRevertResponses,
   SessionShareErrors,
@@ -8283,6 +8287,102 @@ export class Session2 extends HeyApiClient {
       },
     })
   }
+
+  /**
+   * List provider recovery decisions
+   *
+   * List unresolved legacy provider outcomes that require explicit recovery.
+   */
+  public providerResolutionList<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      SessionProviderResolutionListResponses,
+      SessionProviderResolutionListErrors,
+      ThrowOnError
+    >({
+      url: "/session/{sessionID}/provider-resolution",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Resolve a provider outcome
+   *
+   * Append an audited abandoned resolution and activate a safe successor history epoch.
+   */
+  public providerResolutionResolve<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+      commandID: string
+      receiptID: string
+      decision: "abandoned"
+      expected: {
+        providerState: "indeterminate_after_crash"
+        promptEpoch: number
+        sessionMutationEpoch: number
+        requestHash: string
+        historyHash: string
+        worldStateBaselineHash: string
+      }
+      reason?: string
+      riskAcknowledged?: boolean
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "commandID" },
+            { in: "body", key: "receiptID" },
+            { in: "body", key: "decision" },
+            { in: "body", key: "expected" },
+            { in: "body", key: "reason" },
+            { in: "body", key: "riskAcknowledged" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      SessionProviderResolutionResolveResponses,
+      SessionProviderResolutionResolveErrors,
+      ThrowOnError
+    >({
+      url: "/session/{sessionID}/provider-resolution",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
 }
 
 export class Part extends HeyApiClient {
@@ -8366,7 +8466,7 @@ export class History extends HeyApiClient {
   /**
    * List sync events
    *
-   * List sync events for all aggregates. Keys are aggregate IDs the client already knows about, values are the last known sequence ID. Events with seq > value are returned for those aggregates. Aggregates not listed in the input get their full history.
+   * List a bounded page of sync events. Keys are aggregate IDs the client already knows about, values are the last known sequence ID. Oversized legacy events fail closed until maintenance migration externalizes their inline payload.
    */
   public list<ThrowOnError extends boolean = false>(
     parameters?: {

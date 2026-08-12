@@ -3,10 +3,16 @@ import type { Message } from "@deepagent-code/sdk/v2/client"
 
 type Diff = SnapshotFileDiff | VcsFileDiff
 
+export const DIFF_PROJECTION_LIMITS = {
+  files: 200,
+  patchCharsPerFile: 256 * 1024,
+  patchCharsTotal: 1024 * 1024,
+} as const
+
 function diff(value: unknown): value is Diff {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false
   if (!("file" in value) || typeof value.file !== "string") return false
-  if (!("patch" in value) || typeof value.patch !== "string") return false
+  if ("patch" in value && value.patch !== undefined && typeof value.patch !== "string") return false
   if (!("additions" in value) || typeof value.additions !== "number") return false
   if (!("deletions" in value) || typeof value.deletions !== "number") return false
   if (!("status" in value) || value.status === undefined) return true
@@ -18,11 +24,25 @@ function object(value: unknown): value is Record<string, unknown> {
 }
 
 export function diffs(value: unknown): Diff[] {
-  if (Array.isArray(value) && value.every(diff)) return value
-  if (Array.isArray(value)) return value.filter(diff)
-  if (diff(value)) return [value]
-  if (!object(value)) return []
-  return Object.values(value).filter(diff)
+  const items = Array.isArray(value)
+    ? value.filter(diff)
+    : diff(value)
+      ? [value]
+      : object(value)
+        ? Object.values(value).filter(diff)
+        : []
+  let patchChars = 0
+  return items.slice(0, DIFF_PROJECTION_LIMITS.files).map((item) => {
+    const patch = item.patch ?? ""
+    if (
+      patch.length > DIFF_PROJECTION_LIMITS.patchCharsPerFile ||
+      patchChars + patch.length > DIFF_PROJECTION_LIMITS.patchCharsTotal
+    ) {
+      return { ...item, patch: "" }
+    }
+    patchChars += patch.length
+    return { ...item, patch }
+  })
 }
 
 export function message(value: Message): Message {

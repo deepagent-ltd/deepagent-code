@@ -4,7 +4,7 @@ import fs from "node:fs/promises"
 import Http from "node:http"
 import path from "node:path"
 import { NodeHttpServer } from "@effect/platform-node"
-import { Effect, Exit, Fiber, Layer, Schema } from "effect"
+import { Cause, Effect, Exit, Fiber, Layer, Schema, Stream } from "effect"
 import { FetchHttpClient, HttpServer, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { eq } from "drizzle-orm"
 import { FSUtil } from "@deepagent-code/core/fs-util"
@@ -18,6 +18,7 @@ import { Session as SessionNs } from "@/session/session"
 import { SessionID } from "@/session/schema"
 import { SessionTable } from "@deepagent-code/core/session/sql"
 import { EventSequenceTable } from "@deepagent-code/core/event/sql"
+import { SessionToolRequestReceiptTable } from "@/session/tool-request-receipt.sql"
 import { resetDatabase } from "../fixture/db"
 import { disposeAllInstances, provideTmpdirInstance, requireInstance, TestInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
@@ -868,6 +869,72 @@ describe("workspace CRUD", () => {
   )
 
   it.instance(
+    "sessionWarp rejects unresolved provider recovery before ownership or workspace changes",
+    () => {
+      return Effect.gen(function* () {
+        const { directory: dir } = yield* TestInstance
+        const instance = yield* requireInstance
+        const workspace = yield* Workspace.Service
+        const sessionSvc = yield* SessionNs.Service
+        const previousType = unique("warp-recovery-prev")
+        const targetType = unique("warp-recovery-target")
+        const previous = workspaceInfo(instance.project.id, previousType)
+        const target = workspaceInfo(instance.project.id, targetType)
+        yield* insertWorkspace(previous)
+        yield* insertWorkspace(target)
+        const previousAdapter = localAdapter(path.join(dir, "warp-recovery-prev"))
+        const targetAdapter = localAdapter(path.join(dir, "warp-recovery-target"))
+        registerAdapter(instance.project.id, previousType, previousAdapter.adapter)
+        registerAdapter(instance.project.id, targetType, targetAdapter.adapter)
+        const session = yield* sessionSvc.create({})
+        yield* attachSessionToWorkspace(session.id, previous.id)
+        const { db } = yield* Database.Service
+        yield* db
+          .insert(SessionToolRequestReceiptTable)
+          .values({
+            receipt_id: "receipt-warp-recovery-required",
+            request_ordinal: 1,
+            session_id: session.id,
+            user_message_id: "message-user",
+            assistant_message_id: "message-assistant",
+            provider_attempt_id: null,
+            provider_id: "test",
+            model_id: "test",
+            registry_tool_ids: [],
+            permission_filtered_tool_ids: [],
+            final_offered_tool_ids: [],
+            call_ids: [],
+            provider_state: "indeterminate_after_crash",
+            terminal_at: Date.now(),
+            request_state: "dispatched",
+            created_at: Date.now(),
+          })
+          .run()
+          .pipe(Effect.orDie)
+        const owner = yield* sessionSequenceOwner(session.id)
+
+        const error = yield* workspace
+          .sessionWarp({ workspaceID: target.id, sessionID: session.id, copyChanges: true })
+          .pipe(Effect.flip)
+
+        expect(error).toBeInstanceOf(Workspace.SessionWarpRecoveryProjectionError)
+        expect(
+          (yield* db
+            .select({ workspaceID: SessionTable.workspace_id })
+            .from(SessionTable)
+            .where(eq(SessionTable.id, session.id))
+            .get()
+            .pipe(Effect.orDie))?.workspaceID,
+        ).toBe(previous.id)
+        expect(yield* sessionSequenceOwner(session.id)).toBe(owner)
+        expect(previousAdapter.calls.target).toEqual([])
+        expect(targetAdapter.calls.target).toEqual([])
+      })
+    },
+    { git: true },
+  )
+
+  it.instance(
     "sessionWarp applies source workspace patch to local target workspace",
     () => {
       return Effect.gen(function* () {
@@ -995,6 +1062,8 @@ describe("workspace CRUD", () => {
           }
           calls.push(call)
           if (call.url.pathname === "/warp-source/sync/history") {
+            if ((call.json as Record<string, number>)[historySessionID!] >= historyNextSeq)
+              return yield* HttpServerResponse.json([])
             return yield* HttpServerResponse.json([
               {
                 id: `evt_${unique("warp-source-history")}`,
@@ -1038,15 +1107,17 @@ describe("workspace CRUD", () => {
             yield* workspace.sessionWarp({ workspaceID: target.id, sessionID: session.id, copyChanges: true })
 
             expect(calls.map((call) => `${call.method} ${call.url.pathname}`)).toEqual([
-              "POST /warp-source/sync/history",
               "GET /warp-source/vcs/diff/raw",
               "POST /warp-target/vcs/apply",
+              "POST /warp-source/sync/history",
+              "POST /warp-source/sync/history",
               "POST /warp-target/sync/replay",
               "POST /warp-target/sync/steal",
             ])
-            expect(calls[0].json).toEqual({ [session.id]: historyNextSeq - 1 })
-            expect(calls[2].json).toEqual({ patch: "remote patch" })
-            expect(calls[3].json).toMatchObject({
+            expect(calls[1].json).toEqual({ patch: "remote patch" })
+            expect(calls[2].json).toEqual({ [session.id]: historyNextSeq - 1 })
+            expect(calls[3].json).toEqual({ [session.id]: historyNextSeq })
+            expect(calls[4].json).toMatchObject({
               directory: "remote-target-dir",
               events: [
                 {
@@ -1061,9 +1132,76 @@ describe("workspace CRUD", () => {
                 },
               ],
             })
-            expect(calls[4].json).toEqual({ sessionID: session.id })
+            expect(calls[5].json).toEqual({ sessionID: session.id })
             expect((yield* sessionSvc.get(session.id)).title).toBe("from source history")
             expect(yield* sessionSequenceOwner(session.id)).toBe(target.id)
+          }),
+        { git: true },
+      )
+    })
+  })
+
+  it.live("sessionWarp rejects an oversized chunked source patch before side effects or ownership changes", () => {
+    const calls: FetchCall[] = []
+    return Effect.gen(function* () {
+      yield* HttpServer.serveEffect()(
+        Effect.gen(function* () {
+          const req = yield* HttpServerRequest.HttpServerRequest
+          const bodyText = yield* req.text
+          const call = {
+            url: new URL(req.url, "http://localhost"),
+            method: req.method,
+            headers: new Headers(req.headers),
+            bodyText,
+            json: bodyText ? JSON.parse(bodyText) : undefined,
+          }
+          calls.push(call)
+          if (call.url.pathname === "/raw-limit-source/vcs/diff/raw")
+            return HttpServerResponse.stream(
+              Stream.make(
+                new Uint8Array(Vcs.RawDiffLimits.patchBytes),
+                new Uint8Array([120]),
+              ),
+              { contentType: "text/x-diff" },
+            )
+          return HttpServerResponse.text("unexpected", { status: 500 })
+        }),
+      )
+      const url = yield* serverUrl()
+      yield* provideTmpdirInstance(
+        () =>
+          Effect.gen(function* () {
+            const workspace = yield* Workspace.Service
+            const sessionSvc = yield* SessionNs.Service
+            const instance = yield* requireInstance
+            const previousType = unique("raw-limit-remote-source")
+            const targetType = unique("raw-limit-remote-target")
+            const previous = workspaceInfo(instance.project.id, previousType)
+            const target = workspaceInfo(instance.project.id, targetType, { directory: "remote-target-dir" })
+            yield* insertWorkspace(previous)
+            yield* insertWorkspace(target)
+            registerAdapter(instance.project.id, previousType, remoteAdapter(`${url}/raw-limit-source`).adapter)
+            registerAdapter(instance.project.id, targetType, remoteAdapter(`${url}/raw-limit-target`).adapter)
+            const session = yield* sessionSvc.create({})
+            yield* attachSessionToWorkspace(session.id, previous.id)
+            const owner = yield* sessionSequenceOwner(session.id)
+
+            const exit = yield* workspace
+              .sessionWarp({ workspaceID: target.id, sessionID: session.id, copyChanges: true })
+              .pipe(Effect.exit)
+
+            expect(exit._tag).toBe("Failure")
+            if (exit._tag === "Failure")
+              expect(Cause.squash(exit.cause)).toMatchObject({
+                _tag: "VcsRawDiffError",
+                reason: "remote-output",
+                limit: Vcs.RawDiffLimits.patchBytes,
+              })
+            expect(calls.map((call) => `${call.method} ${call.url.pathname}`)).toEqual([
+              "GET /raw-limit-source/vcs/diff/raw",
+            ])
+            expect((yield* sessionSvc.get(session.id)).workspaceID).toBe(previous.id)
+            expect(yield* sessionSequenceOwner(session.id)).toBe(owner)
           }),
         { git: true },
       )
@@ -1357,7 +1495,10 @@ describe("workspace sync state", () => {
           const url = new URL(req.url, "http://localhost")
           if (url.pathname === "/history/global/event") return HttpServerResponse.fromWeb(eventStreamResponse())
           if (url.pathname === "/history/sync/history") {
-            historyBodies.push(bodyText ? JSON.parse(bodyText) : undefined)
+            const body = bodyText ? JSON.parse(bodyText) : undefined
+            historyBodies.push(body)
+            if (body?.[historySessionID!] === historyNextSeq)
+              return HttpServerResponse.fromWeb(Response.json([]))
             return HttpServerResponse.fromWeb(
               Response.json([
                 {
@@ -1399,7 +1540,10 @@ describe("workspace sync state", () => {
                   expect((yield* sessionSvc.get(session.id).pipe(Effect.orDie)).title).toBe("from history")
                 }),
               )
-              expect(historyBodies).toEqual([{ [session.id]: historyNextSeq - 1 }])
+              expect(historyBodies).toEqual([
+                { [session.id]: historyNextSeq - 1 },
+                { [session.id]: historyNextSeq },
+              ])
               expect(
                 captured.events.some(
                   (event) =>

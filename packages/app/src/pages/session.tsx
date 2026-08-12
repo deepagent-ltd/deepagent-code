@@ -344,6 +344,7 @@ export default function Page() {
   }
 
   const info = createMemo(() => (params.id ? sync.session.get(params.id) : undefined))
+  const diffManifest = createMemo(() => info()?.summary?.diffManifest)
   const isChildSession = createMemo(() => !!info()?.parentID)
   const diffs = createMemo(() => (params.id ? list(sync.data.session_diff[params.id]) : []))
   const canReview = createMemo(() => !!sync.project)
@@ -991,15 +992,25 @@ export default function Page() {
     }
 
     return (
-      <Select
-        options={changesOptions()}
-        current={store.changes}
-        label={label}
-        onSelect={(option) => option && setStore("changes", option)}
-        variant="ghost"
-        size="small"
-        valueClass="text-14-medium"
-      />
+      <div class="flex min-w-0 items-center gap-2">
+        <Select
+          options={changesOptions()}
+          current={store.changes}
+          label={label}
+          onSelect={(option) => option && setStore("changes", option)}
+          variant="ghost"
+          size="small"
+          valueClass="text-14-medium"
+        />
+        <Show when={store.changes === "turn" && diffManifest()?.completeness === "truncated"}>
+          <span
+            class="shrink-0 text-11-medium text-text-warning"
+            title={diffManifest()?.truncationReasons.join(", ")}
+          >
+            {language.t("session.context.summary.partial")}
+          </span>
+        </Show>
+      </div>
     )
   }
 
