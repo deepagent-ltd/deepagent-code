@@ -782,7 +782,7 @@ export class ControlPlane extends HeyApiClient {
   /**
    * Move session
    *
-   * Move a session to another project directory, optionally transferring local changes.
+   * Move a session when a durable transfer implementation is available.
    */
   public moveSession<ThrowOnError extends boolean = false>(
     parameters: {
@@ -1403,7 +1403,7 @@ export class Workspace extends HeyApiClient {
   /**
    * Warp session into workspace
    *
-   * Move a session's sync history into the target workspace, or detach it to the local project.
+   * Move a session when a durable workspace transfer implementation is available.
    */
   public warp<ThrowOnError extends boolean = false>(
     parameters: {
