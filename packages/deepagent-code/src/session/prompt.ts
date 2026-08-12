@@ -2391,6 +2391,7 @@ export const layer = Layer.effect(
         input.sessionID,
         lastAssistant(input.sessionID),
         Effect.gen(function* () {
+          yield* pauseAtActivityCrashPoint("after_coordinator_reserve")
           yield* reconcileInactiveActivity(input.sessionID)
           const admitted = yield* admit
           if (!admitted.materialized || !("run" in admitted.materialized))
@@ -2945,6 +2946,31 @@ export const layer = Layer.effect(
             : undefined
         let providerBoundary: SessionPromptIntent.ProviderInputBoundary | undefined
         let activityTerminalCommitted = false
+        const enterFinalizing = (run: SessionPromptIntent.RunIdentity) =>
+          SessionPromptIntent.markRunFinalizing(run).pipe(
+            Effect.provideService(Database.Service, database),
+            Effect.andThen(state.markFinalizing(sessionID)),
+          )
+        const resumeRunning = (run: SessionPromptIntent.RunIdentity) =>
+          SessionPromptIntent.markRunRunning(run).pipe(
+            Effect.provideService(Database.Service, database),
+            Effect.andThen(state.markRunning(sessionID)),
+          )
+        const finishFinalization = (
+          run: SessionPromptIntent.RunIdentity,
+          result: SessionPromptIntent.FinalizeResult,
+        ) =>
+          Effect.gen(function* () {
+            if (result.kind === "follow_up_required") {
+              yield* pauseAtActivityCrashPoint("while_finalizing_before_follow_up_drain")
+              yield* resumeRunning(run)
+              return result
+            }
+            activityTerminalCommitted = true
+            yield* pauseAtActivityCrashPoint("after_terminal_commit_before_publish")
+            yield* publishActivityProjection(result.invalidation)
+            return result
+          })
         const terminalDecision = (
           state: SessionPromptIntent.ActivityTerminalState,
           reasonCode: string,
@@ -2967,27 +2993,19 @@ export const layer = Layer.effect(
         ) => {
           const decision = terminalDecision(state, reasonCode, source === "provider_final" ? source : "host_stop")
           if (!currentActivityRun || !providerBoundary || !decision) return Effect.succeed(undefined)
-          const finalized = assistantMessageID
-            ? SessionPromptIntent.finalizeActivityWithRevision({
-                run: currentActivityRun,
-                assistantMessageID,
-                decision,
-              })
-            : SessionPromptIntent.finalizeActivityWithoutRevision({
-                run: currentActivityRun,
-                membershipOrdinal: providerBoundary.membershipOrdinal,
-                decision: { ...decision, source },
-              })
-          return finalized.pipe(
+          const run = currentActivityRun
+          return enterFinalizing(run).pipe(
+            Effect.andThen(
+              assistantMessageID
+                ? SessionPromptIntent.finalizeActivityWithRevision({ run, assistantMessageID, decision })
+                : SessionPromptIntent.finalizeActivityWithoutRevision({
+                    run,
+                    membershipOrdinal: providerBoundary.membershipOrdinal,
+                    decision: { ...decision, source },
+                  }),
+            ),
             Effect.provideService(Database.Service, database),
-            Effect.tap((result) =>
-              Effect.sync(() => {
-                activityTerminalCommitted = result.kind !== "follow_up_required"
-              }),
-            ),
-            Effect.tap((result) =>
-              result.kind === "follow_up_required" ? Effect.void : publishActivityProjection(result.invalidation),
-            ),
+            Effect.flatMap((result) => finishFinalization(run, result)),
           )
         }
         const publishActivityProgress = (progress: SessionPromptIntent.Progress) =>
@@ -4019,22 +4037,20 @@ export const layer = Layer.effect(
                 yield* pauseAtActivityCrashPoint("after_provider_receipt_terminal")
                 const finalized =
                   decision && currentActivityRun && progressActivity
-                    ? yield* SessionPromptIntent.finalizeActivityWithRevision({
-                        run: currentActivityRun,
-                        assistantMessageID: handle.message.id,
-                        decision,
-                      }).pipe(
-                        Effect.provideService(Database.Service, database),
-                        Effect.tap((result) =>
-                          result.kind === "follow_up_required"
-                            ? Effect.void
-                            : publishActivityProjection(result.invalidation),
+                    ? yield* enterFinalizing(currentActivityRun).pipe(
+                        Effect.andThen(
+                          SessionPromptIntent.finalizeActivityWithRevision({
+                            run: currentActivityRun,
+                            assistantMessageID: handle.message.id,
+                            decision,
+                          }),
                         ),
+                        Effect.provideService(Database.Service, database),
+                        Effect.flatMap((result) => finishFinalization(currentActivityRun!, result)),
                       )
                     : undefined
                 if (!finalized && activityProgressFinalizer.value) yield* activityProgressFinalizer.value()
                 activityProgressFinalizer.value = undefined
-                yield* pauseAtActivityCrashPoint("after_progress_settled")
                 turnSettled.value = true
                 // Summary diffs mutate user-message metadata. Run them only after the Provider
                 // receipt is terminal so cancellation cannot strand an admitted request.
@@ -4130,7 +4146,10 @@ export const layer = Layer.effect(
                     .run()
                     .pipe(Effect.orDie, Effect.asVoid)
                 },
-                adapterPrepared: prepareAdapterReceipt,
+                adapterPrepared: (input) =>
+                  prepareAdapterReceipt(input).pipe(
+                    Effect.tap(() => pauseAtActivityCrashPoint("after_provider_prepared")),
+                  ),
                 dispatched: () =>
                   Effect.gen(function* () {
                     const transitioned = yield* transitionReceipt({
@@ -4636,6 +4655,7 @@ export const layer = Layer.effect(
         input.sessionID,
         lastAssistant(input.sessionID),
         Effect.gen(function* () {
+          yield* pauseAtActivityCrashPoint("after_coordinator_reserve")
           yield* reconcileInactiveActivity(input.sessionID)
           const deferredRun = yield* SessionPromptIntent.claimDeferredActivity({ sessionID: input.sessionID }).pipe(
             Effect.provideService(Database.Service, database),

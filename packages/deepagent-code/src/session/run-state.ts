@@ -30,6 +30,8 @@ export interface Interface {
     onInterrupt: Effect.Effect<SessionV1.WithParts>,
     work: Effect.Effect<SessionV1.WithParts, RunError>,
   ) => Effect.Effect<SessionV1.WithParts, RunError | Session.BusyError>
+  readonly markFinalizing: (sessionID: SessionID) => Effect.Effect<void>
+  readonly markRunning: (sessionID: SessionID) => Effect.Effect<void>
   readonly startShell: (
     sessionID: SessionID,
     onInterrupt: Effect.Effect<SessionV1.WithParts>,
@@ -140,7 +142,28 @@ export const layer = Layer.effect(
         .pipe(Effect.catchTag("RunnerBusy", () => Effect.fail(busyError(sessionID))))
     })
 
-    return Service.of({ assertNotBusy, isBusy, cancel, ensureRunning, startRunning, startShell })
+    const markFinalizing = Effect.fn("SessionRunState.markFinalizing")(function* (sessionID: SessionID) {
+      const data = yield* InstanceState.get(state)
+      const existing = data.runners.get(sessionID)
+      if (existing) yield* existing.markFinalizing
+    })
+
+    const markRunning = Effect.fn("SessionRunState.markRunning")(function* (sessionID: SessionID) {
+      const data = yield* InstanceState.get(state)
+      const existing = data.runners.get(sessionID)
+      if (existing) yield* existing.markRunning
+    })
+
+    return Service.of({
+      assertNotBusy,
+      isBusy,
+      cancel,
+      ensureRunning,
+      startRunning,
+      markFinalizing,
+      markRunning,
+      startShell,
+    })
   }),
 )
 

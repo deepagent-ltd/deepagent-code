@@ -23,6 +23,7 @@ import {
 } from "./activity-sql"
 import { SessionToolRequestReceiptTable } from "./tool-request-receipt.sql"
 import { SessionActivityOwner } from "./activity-owner"
+import { pause as pauseAtActivityCrashPoint } from "./activity-crash-test"
 
 export type Source = "composer" | "intelligence" | "followup" | "rewrite"
 export type Variant = "original" | "rewritten"
@@ -230,7 +231,7 @@ export const claim = Effect.fn("SessionPromptIntent.claim")(function* (input: {
 }) {
   const { db } = yield* Database.Service
   const now = Date.now()
-  const ownerToken = randomUUID()
+  const ownerToken = `${SessionActivityOwner.processOwnerToken}:${randomUUID()}`
   const executionMode = input.executionMode ?? "run_now"
   return yield* db
     .transaction(
@@ -356,7 +357,12 @@ export const claim = Effect.fn("SessionPromptIntent.claim")(function* (input: {
             const receipt = fromRow(admitted)
             return { kind: "admitted" as const, receipt: { ...receipt, state: "admitted" as const, messageID } }
           }
-          if (existing.state === "admitting" && existing.lease_expires_at !== null && existing.lease_expires_at > now) {
+          if (
+            existing.state === "admitting" &&
+            existing.lease_expires_at !== null &&
+            existing.lease_expires_at > now &&
+            claimOwnerMayStillBeAlive(existing.owner_token)
+          ) {
             return yield* Effect.fail(new InProgress({ intentID: input.intentID }))
           }
 
@@ -394,6 +400,25 @@ export const claim = Effect.fn("SessionPromptIntent.claim")(function* (input: {
     )
     .pipe(Effect.catchTag("SqlError", Effect.die))
 })
+
+function claimOwnerMayStillBeAlive(ownerToken: string | null) {
+  if (!ownerToken) return true
+  const [pid, processToken, claimToken, ...rest] = ownerToken.split(":")
+  if (
+    rest.length > 0 ||
+    !/^\d+$/.test(pid) ||
+    !/^[0-9a-f-]{36}$/.test(processToken) ||
+    !/^[0-9a-f-]{36}$/.test(claimToken)
+  )
+    return true
+  if (`${pid}:${processToken}` === SessionActivityOwner.processOwnerToken) return true
+  try {
+    process.kill(Number(pid), 0)
+    return true
+  } catch (error) {
+    return !(error instanceof Error && "code" in error && error.code === "ESRCH")
+  }
+}
 
 export const complete = Effect.fn("SessionPromptIntent.complete")(function* (input: {
   readonly intentID: string
@@ -1197,6 +1222,102 @@ export const claimActiveActivityRun = Effect.fn("SessionPromptIntent.claimActive
     .pipe(Effect.catchTag("SqlError", Effect.die))
 })
 
+export const markRunFinalizing = Effect.fn("SessionPromptIntent.markRunFinalizing")(function* (run: RunIdentity) {
+  const { db } = yield* Database.Service
+  return yield* db
+    .transaction(
+      (tx) =>
+        Effect.gen(function* () {
+          const current = yield* tx
+            .select()
+            .from(SessionLegacyActivityRunTable)
+            .where(eq(SessionLegacyActivityRunTable.run_id, run.runID))
+            .get()
+          if (
+            !current ||
+            current.activity_id !== run.activityID ||
+            current.session_id !== run.sessionID ||
+            current.mutation_epoch !== run.mutationEpoch ||
+            current.generation !== run.generation ||
+            current.owner_token !== run.ownerToken ||
+            !["running", "finalizing"].includes(current.state)
+          )
+            return yield* Effect.fail(
+              new Conflict({ intentID: run.runID, reason: "activity run cannot enter finalizing" }),
+            )
+          if (current.state === "finalizing") return
+          const updated = yield* tx
+            .update(SessionLegacyActivityRunTable)
+            .set({ state: "finalizing" })
+            .where(
+              and(
+                eq(SessionLegacyActivityRunTable.run_id, run.runID),
+                eq(SessionLegacyActivityRunTable.owner_token, run.ownerToken),
+                eq(SessionLegacyActivityRunTable.state, "running"),
+              ),
+            )
+            .returning({ runID: SessionLegacyActivityRunTable.run_id })
+            .get()
+          if (!updated)
+            return yield* Effect.fail(
+              new Conflict({ intentID: run.runID, reason: "activity run finalizing CAS lost" }),
+            )
+        }),
+      { behavior: "immediate" },
+    )
+    .pipe(
+      Effect.catchTag("EffectDrizzleQueryError", Effect.die),
+      Effect.catchTag("SqlError", Effect.die),
+    )
+})
+
+export const markRunRunning = Effect.fn("SessionPromptIntent.markRunRunning")(function* (run: RunIdentity) {
+  const { db } = yield* Database.Service
+  return yield* db
+    .transaction(
+      (tx) =>
+        Effect.gen(function* () {
+          const current = yield* tx
+            .select()
+            .from(SessionLegacyActivityRunTable)
+            .where(eq(SessionLegacyActivityRunTable.run_id, run.runID))
+            .get()
+          if (
+            !current ||
+            current.activity_id !== run.activityID ||
+            current.session_id !== run.sessionID ||
+            current.mutation_epoch !== run.mutationEpoch ||
+            current.generation !== run.generation ||
+            current.owner_token !== run.ownerToken ||
+            !["running", "finalizing"].includes(current.state)
+          )
+            return yield* Effect.fail(
+              new Conflict({ intentID: run.runID, reason: "activity run cannot resume running" }),
+            )
+          if (current.state === "running") return
+          const updated = yield* tx
+            .update(SessionLegacyActivityRunTable)
+            .set({ state: "running" })
+            .where(
+              and(
+                eq(SessionLegacyActivityRunTable.run_id, run.runID),
+                eq(SessionLegacyActivityRunTable.owner_token, run.ownerToken),
+                eq(SessionLegacyActivityRunTable.state, "finalizing"),
+              ),
+            )
+            .returning({ runID: SessionLegacyActivityRunTable.run_id })
+            .get()
+          if (!updated)
+            return yield* Effect.fail(new Conflict({ intentID: run.runID, reason: "activity run resume CAS lost" }))
+        }),
+      { behavior: "immediate" },
+    )
+    .pipe(
+      Effect.catchTag("EffectDrizzleQueryError", Effect.die),
+      Effect.catchTag("SqlError", Effect.die),
+    )
+})
+
 export const activityForMessage = Effect.fn("SessionPromptIntent.activityForMessage")(function* (input: {
   readonly sessionID: SessionID
   readonly messageID: MessageID
@@ -1662,6 +1783,7 @@ export const finalizeActivityWithRevision = Effect.fn("SessionPromptIntent.final
                 kind: "follow_up_required" as const,
                 membershipOrdinal: latestMembership,
               } satisfies FinalizeResult
+            yield* pauseAtActivityCrashPoint("inside_revision_terminal_transaction")
             const runState =
               decision.state === "settled"
                 ? "completed"
@@ -1843,6 +1965,7 @@ export const finalizeActivityWithoutRevision = Effect.fn("SessionPromptIntent.fi
               .get()
             if (input.decision.source !== "cancel" && (membershipOrdinal > input.membershipOrdinal || pendingSteer))
               return { kind: "follow_up_required" as const, membershipOrdinal } satisfies FinalizeResult
+            yield* pauseAtActivityCrashPoint("inside_revision_terminal_transaction")
             const runState = terminalRunState(input.decision.state)
             const terminalRun = yield* tx
               .update(SessionLegacyActivityRunTable)

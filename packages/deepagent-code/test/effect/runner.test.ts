@@ -64,10 +64,7 @@ describe("Runner", () => {
       const runner = Runner.make<string>(s)
       const ready = yield* Deferred.make<void>()
       const fiber = yield* runner
-        .ensureRunning(
-          Effect.never.pipe(Effect.as("never")),
-          Deferred.succeed(ready, undefined).pipe(Effect.asVoid),
-        )
+        .ensureRunning(Effect.never.pipe(Effect.as("never")), Deferred.succeed(ready, undefined).pipe(Effect.asVoid))
         .pipe(Effect.forkChild)
 
       yield* Deferred.await(ready).pipe(Effect.timeout("250 millis"))
@@ -75,6 +72,33 @@ describe("Runner", () => {
       yield* runner.cancel
       expect(runner.state._tag).toBe("Idle")
       yield* Fiber.await(fiber)
+    }),
+  )
+
+  it.live(
+    "keeps one busy owner while a run moves through finalizing and back to running",
+    Effect.gen(function* () {
+      const s = yield* Scope.Scope
+      const runner = Runner.make<string>(s)
+      const started = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      const fiber = yield* runner
+        .startRunning(
+          Deferred.succeed(started, undefined).pipe(Effect.andThen(Deferred.await(release)), Effect.as("done")),
+        )
+        .pipe(Effect.forkChild)
+
+      yield* Deferred.await(started)
+      yield* runner.markFinalizing
+      expect(runner.state._tag).toBe("Finalizing")
+      expect(runner.busy).toBe(true)
+      yield* runner.markRunning
+      expect(runner.state._tag).toBe("Running")
+      expect(runner.busy).toBe(true)
+
+      yield* Deferred.succeed(release, undefined)
+      expect(yield* Fiber.join(fiber)).toBe("done")
+      expect(runner.state._tag).toBe("Idle")
     }),
   )
 
