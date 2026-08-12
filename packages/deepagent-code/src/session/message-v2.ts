@@ -1350,7 +1350,6 @@ export function promptHistoryCutoffAuthorityInTransaction(
       .select({
         userMessageID: SessionToolRequestReceiptTable.user_message_id,
         assistantMessageID: SessionToolRequestReceiptTable.assistant_message_id,
-        providerAttemptID: SessionToolRequestReceiptTable.provider_attempt_id,
         promptEpoch: SessionToolRequestReceiptTable.prompt_epoch,
         promptWindowID: SessionToolRequestReceiptTable.prompt_window_id,
         effectiveHistoryHash: SessionToolRequestReceiptTable.effective_history_hash,
@@ -1367,6 +1366,7 @@ export function promptHistoryCutoffAuthorityInTransaction(
         and(
           eq(SessionToolRequestReceiptTable.session_id, input.sessionID),
           eq(SessionToolRequestReceiptTable.provider_state, "indeterminate_after_crash"),
+          isNull(SessionToolRequestReceiptTable.provider_attempt_id),
           isNull(SessionToolRequestResolutionTable.resolution_id),
         ),
       )
@@ -1376,7 +1376,6 @@ export function promptHistoryCutoffAuthorityInTransaction(
       const userIndex = selected.messages.findIndex((message) => message.info.id === receipt.userMessageID)
       const assistantIndex = selected.messages.findIndex((message) => message.info.id === receipt.assistantMessageID)
       return (
-        receipt.providerAttemptID === null &&
         receipt.promptEpoch === epoch.epoch &&
         receipt.promptWindowID === epoch.window_id &&
         !!receipt.effectiveHistoryHash &&

@@ -204,9 +204,14 @@ const service = Effect.gen(function* () {
       Effect.gen(function* () {
         const receipt = item.receipt
         const request = receipt.final_request_hash ?? receipt.provider_request_hash ?? receipt.request_input_hash
+        const assistantMessageID = Option.getOrUndefined(
+          Schema.decodeUnknownOption(MessageID)(receipt.assistant_message_id),
+        )
+        const promptEpoch =
+          receipt.prompt_epoch !== null && receipt.prompt_epoch >= 0 ? receipt.prompt_epoch : undefined
         if (
-          !receipt.assistant_message_id ||
-          receipt.prompt_epoch === null ||
+          !assistantMessageID ||
+          promptEpoch === undefined ||
           !receipt.prompt_window_id ||
           !receipt.effective_history_hash ||
           !request
@@ -229,7 +234,7 @@ const service = Effect.gen(function* () {
           .where(
             and(
               eq(SessionPromptEpochTable.session_id, sessionID),
-              eq(SessionPromptEpochTable.epoch, receipt.prompt_epoch),
+              eq(SessionPromptEpochTable.epoch, promptEpoch),
             ),
           )
           .get()
@@ -240,7 +245,7 @@ const service = Effect.gen(function* () {
           .where(
             and(
               eq(SessionWorldStateBaselineTable.session_id, sessionID),
-              eq(SessionWorldStateBaselineTable.prompt_epoch, receipt.prompt_epoch),
+              eq(SessionWorldStateBaselineTable.prompt_epoch, promptEpoch),
             ),
           )
           .all()
@@ -263,11 +268,11 @@ const service = Effect.gen(function* () {
         return {
           receiptID: receipt.receipt_id,
           sessionID,
-          assistantMessageID: MessageID.make(receipt.assistant_message_id),
+          assistantMessageID,
           providerID: receipt.provider_id,
           modelID: receipt.model_id,
           providerState: "indeterminate_after_crash" as const,
-          promptEpoch: receipt.prompt_epoch,
+          promptEpoch,
           promptWindowID: receipt.prompt_window_id,
           historyHash: receipt.effective_history_hash,
           requestHash: request,
