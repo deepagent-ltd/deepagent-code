@@ -387,10 +387,12 @@ export const createDirSyncContext = (
     limit: number
     before?: string
     mode?: "replace" | "prepend"
+    refetchOnConflict?: boolean
   }) => {
     const key = keyFor(input.directory, input.sessionID)
     if (meta.loading[key]) return
 
+    let conflict = false
     setMeta("loading", key, true)
     await fetchMessages(input)
       .then((page) => {
@@ -404,7 +406,13 @@ export const createDirSyncContext = (
         const previous = store.message[input.sessionID] ?? []
         const cached = input.mode === "prepend" ? previous : optimistic.canonical
         const merged = mergePageMessages(cached, next.session, previous)
-        if (merged.conflict) requestSessionSync?.(input.sessionID)
+        conflict = merged.conflict
+        if (conflict)
+          console.error("Conflicting activity progress page", {
+            sessionID: input.sessionID,
+            mode: input.mode ?? "replace",
+            refetchOnConflict: input.refetchOnConflict !== false,
+          })
         const message = merged.messages
         batch(() => {
           input.setStore("message", input.sessionID, reconcile(message, { key: "id" }))
@@ -439,6 +447,7 @@ export const createDirSyncContext = (
             draft.loading[key] = false
           }),
         )
+        if (conflict && input.refetchOnConflict !== false) requestSessionSync?.(input.sessionID)
       })
   }
 
@@ -594,6 +603,7 @@ export const createDirSyncContext = (
                   setStore,
                   sessionID,
                   limit,
+                  refetchOnConflict: opts?.force !== true,
                 })
 
           await Promise.all([sessionReq, messagesReq, planReq])

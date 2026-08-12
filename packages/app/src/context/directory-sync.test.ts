@@ -296,6 +296,112 @@ describe("directory optimistic targeting", () => {
     expect(result?.role).toBe("assistant")
     if (result?.role === "assistant") expect(result.activityProgress).toEqual(marker)
   })
+
+  test("does not recursively refetch when a forced page keeps returning a conflicting marker", async () => {
+    let calls = 0
+    const current = state()
+    const serverSync = {
+      child() {
+        return current
+      },
+      plan: {
+        async sync() {},
+      },
+    } as unknown as Parameters<typeof createDirSyncContext>[1]
+    const sync = createDirSyncContext("/repo/main", serverSync, {
+      scope: ServerScope.local,
+      createClient() {
+        return {
+          session: {
+            async get() {
+              return { data: { id: "ses_1" } }
+            },
+            async messages() {
+              calls += 1
+              return {
+                data: [
+                  {
+                    info: assistantMessage("msg_assistant", "ses_1", {
+                      activityID: "activity-conflict",
+                      revision: 0,
+                      state: "progress",
+                    }),
+                    parts: [],
+                  },
+                ],
+                response: { headers: new Headers() },
+              }
+            },
+          },
+        }
+      },
+    } as unknown as Parameters<typeof createDirSyncContext>[2])
+    const sessionID = "ses_1"
+    const marker = { activityID: "activity-1", revision: 2, state: "final" as const }
+    current[1]("session", [current[0].session.length], { id: sessionID })
+    current[1]("message", sessionID, [assistantMessage("msg_assistant", sessionID, marker)])
+
+    await sync.session.sync(sessionID, { force: true })
+    await Promise.resolve()
+
+    expect(calls).toBe(1)
+    const result = current[0].message[sessionID]?.[0]
+    expect(result?.role).toBe("assistant")
+    if (result?.role === "assistant") expect(result.activityProgress).toEqual(marker)
+  })
+
+  test("runs a forced message fetch after a history page conflicts", async () => {
+    let calls = 0
+    let forcedStarted: (() => void) | undefined
+    const current = state()
+    const canonical = { activityID: "activity-1", revision: 2, state: "final" as const }
+    const serverSync = {
+      child() {
+        return current
+      },
+      plan: {
+        async sync() {},
+      },
+    } as unknown as Parameters<typeof createDirSyncContext>[1]
+    const sync = createDirSyncContext("/repo/main", serverSync, {
+      scope: ServerScope.local,
+      createClient() {
+        return {
+          session: {
+            async get() {
+              return { data: { id: "ses_1" } }
+            },
+            async messages() {
+              calls += 1
+              if (calls === 3) forcedStarted?.()
+              const marker =
+                calls === 2
+                  ? { activityID: "activity-conflict", revision: 0, state: "progress" as const }
+                  : canonical
+              return {
+                data: [{ info: assistantMessage("msg_assistant", "ses_1", marker), parts: [] }],
+                response: { headers: new Headers(calls === 1 ? { "x-next-cursor": "older" } : {}) },
+              }
+            },
+          },
+        }
+      },
+    } as unknown as Parameters<typeof createDirSyncContext>[2])
+    const sessionID = "ses_1"
+    current[1]("session", [current[0].session.length], { id: sessionID })
+    await sync.session.sync(sessionID, { force: true })
+
+    const forced = new Promise<void>((resolve) => {
+      forcedStarted = resolve
+    })
+    await sync.session.history.loadMore(sessionID)
+    await forced
+
+    expect(calls).toBe(3)
+    const result = current[0].message[sessionID]?.[0]
+    expect(result?.role).toBe("assistant")
+    if (result?.role === "assistant") expect(result.activityProgress).toEqual(canonical)
+  })
 })
 
 describe("directory forced session synchronization", () => {
