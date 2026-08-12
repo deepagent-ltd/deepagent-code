@@ -83,6 +83,26 @@ const SyncTimestamp = EventV2.define({
   },
 })
 
+const SyncPayload = EventV2.define({
+  type: "test.payload",
+  sync: {
+    version: 1,
+    aggregate: "sessionID",
+  },
+  schema: {
+    sessionID: Schema.String,
+    kind: Schema.Literals(["session", "message"]),
+    body: Schema.String,
+  },
+})
+
+function payloadAtEncodedBytes(sessionID: string, kind: "session" | "message", bytes: number, suffix = "") {
+  const input = { sessionID, kind, body: suffix }
+  const remaining = bytes - Buffer.byteLength(JSON.stringify(input))
+  if (remaining < 0) throw new Error(`Payload envelope exceeds requested size ${bytes}`)
+  return { ...input, body: "x".repeat(remaining) + suffix }
+}
+
 describe("EventV2", () => {
   it.effect("derives stable namespaced external IDs", () =>
     Effect.sync(() => {
@@ -204,6 +224,156 @@ describe("EventV2", () => {
       )
 
       expect(received).toEqual(["projector", "commit:0"])
+    }),
+  )
+
+  it.effect("rejects oversized session-like publishes before every durable side effect", () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2.Service
+      const { db } = yield* Database.Service
+      const aggregateID = EventV2.ID.create()
+      const observed: string[] = []
+      yield* events.beforeCommit(() => Effect.sync(() => observed.push("guard")))
+      yield* events.project(SyncPayload, () => Effect.sync(() => observed.push("projector")))
+
+      yield* events.publish(SyncPayload, { sessionID: aggregateID, kind: "session", body: "baseline" })
+      observed.length = 0
+      const sequenceBefore = yield* db
+        .select()
+        .from(EventSequenceTable)
+        .where(eq(EventSequenceTable.aggregate_id, aggregateID))
+        .all()
+      const eventsBefore = yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, aggregateID)).all()
+
+      const defect = yield* events
+        .publish(
+          SyncPayload,
+          payloadAtEncodedBytes(aggregateID, "session", EventV2.MAX_ENCODED_PAYLOAD_BYTES + 1),
+          { commit: () => Effect.sync(() => observed.push("commit")) },
+        )
+        .pipe(Effect.catchDefect(Effect.succeed))
+
+      expect(defect).toBeInstanceOf(EventV2.EncodedPayloadTooLargeError)
+      expect(defect).toMatchObject({
+        _tag: "EventV2.EncodedPayloadTooLarge",
+        type: SyncPayload.type,
+        encodedBytes: EventV2.MAX_ENCODED_PAYLOAD_BYTES + 1,
+        limitBytes: EventV2.MAX_ENCODED_PAYLOAD_BYTES,
+      })
+      expect(observed).toEqual([])
+      expect(
+        yield* db.select().from(EventSequenceTable).where(eq(EventSequenceTable.aggregate_id, aggregateID)).all(),
+      ).toEqual(sequenceBefore)
+      expect(yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, aggregateID)).all()).toEqual(
+        eventsBefore,
+      )
+    }),
+  )
+
+  it.effect("rejects oversized message-like replay before every durable side effect", () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2.Service
+      const { db } = yield* Database.Service
+      const aggregateID = EventV2.ID.create()
+      const observed: string[] = []
+      yield* events.beforeCommit(() => Effect.sync(() => observed.push("guard")))
+      yield* events.project(SyncPayload, () => Effect.sync(() => observed.push("projector")))
+
+      const defect = yield* events
+        .replay({
+          id: EventV2.ID.create(),
+          type: EventV2.versionedType(SyncPayload.type, 1),
+          seq: 0,
+          aggregateID,
+          data: payloadAtEncodedBytes(aggregateID, "message", EventV2.MAX_ENCODED_PAYLOAD_BYTES + 1),
+        })
+        .pipe(Effect.catchDefect(Effect.succeed))
+
+      expect(defect).toBeInstanceOf(EventV2.EncodedPayloadTooLargeError)
+      expect(defect).toMatchObject({
+        _tag: "EventV2.EncodedPayloadTooLarge",
+        type: SyncPayload.type,
+        encodedBytes: EventV2.MAX_ENCODED_PAYLOAD_BYTES + 1,
+      })
+      expect(observed).toEqual([])
+      expect(
+        yield* db.select().from(EventSequenceTable).where(eq(EventSequenceTable.aggregate_id, aggregateID)).all(),
+      ).toEqual([])
+      expect(yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, aggregateID)).all()).toEqual([])
+    }),
+  )
+
+  it.effect("admits an exact UTF-8 byte boundary and preserves idempotent publish and replay", () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2.Service
+      const { db } = yield* Database.Service
+      const aggregateID = EventV2.ID.create()
+      const eventID = EventV2.ID.create()
+      const data = payloadAtEncodedBytes(aggregateID, "message", EventV2.MAX_ENCODED_PAYLOAD_BYTES, "\u{1F680}")
+      expect(Buffer.byteLength(JSON.stringify(data))).toBe(EventV2.MAX_ENCODED_PAYLOAD_BYTES)
+      let commits = 0
+
+      const first = yield* events.publish(SyncPayload, data, {
+        id: eventID,
+        idempotent: true,
+        commit: () => Effect.sync(() => commits++),
+      })
+      const retry = yield* events.publish(SyncPayload, data, {
+        id: eventID,
+        idempotent: true,
+        commit: () => Effect.sync(() => commits++),
+      })
+      yield* events.replay({
+        id: eventID,
+        type: EventV2.versionedType(SyncPayload.type, 1),
+        seq: first.seq!,
+        aggregateID,
+        data,
+      })
+
+      const rows = yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, aggregateID)).all()
+      expect(first.seq).toBe(0)
+      expect(retry.seq).toBe(0)
+      expect(commits).toBe(2)
+      expect(rows).toHaveLength(1)
+      expect(rows[0]?.data).toEqual(data)
+    }),
+  )
+
+  it.effect("preflights a replay batch before committing a valid prefix", () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2.Service
+      const { db } = yield* Database.Service
+      const aggregateID = EventV2.ID.create()
+      const observed: string[] = []
+      yield* events.beforeCommit(() => Effect.sync(() => observed.push("guard")))
+      yield* events.project(SyncPayload, () => Effect.sync(() => observed.push("projector")))
+
+      const error = yield* events
+        .replayAll([
+          {
+            id: EventV2.ID.create(),
+            type: EventV2.versionedType(SyncPayload.type, 1),
+            seq: 0,
+            aggregateID,
+            data: { sessionID: aggregateID, kind: "message", body: "valid prefix" },
+          },
+          {
+            id: EventV2.ID.create(),
+            type: EventV2.versionedType(SyncPayload.type, 1),
+            seq: 1,
+            aggregateID,
+            data: payloadAtEncodedBytes(aggregateID, "message", EventV2.MAX_ENCODED_PAYLOAD_BYTES + 1),
+          },
+        ])
+        .pipe(Effect.catchDefect(Effect.succeed))
+
+      expect(error).toBeInstanceOf(EventV2.EncodedPayloadTooLargeError)
+      expect(observed).toEqual([])
+      expect(
+        yield* db.select().from(EventSequenceTable).where(eq(EventSequenceTable.aggregate_id, aggregateID)).all(),
+      ).toEqual([])
+      expect(yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, aggregateID)).all()).toEqual([])
     }),
   )
 
@@ -566,6 +736,124 @@ describe("EventV2", () => {
         ]),
       )
     }),
+  )
+
+  it.effect(
+    "pages aggregate history without gaps beyond the read batch limit",
+    () =>
+      Effect.gen(function* () {
+        const events = yield* EventV2.Service
+        const aggregateID = EventV2.ID.create()
+        const count = EventV2.AGGREGATE_READ_BATCH_EVENTS + 28
+        for (let index = 0; index < count; index++) {
+          yield* events.publish(SyncMessage, { id: aggregateID, text: String(index) })
+        }
+
+        expect(
+          Array.from(
+            yield* events.aggregateEvents({ aggregateID }).pipe(Stream.take(count), Stream.runCollect),
+          ).map((event) => event.cursor),
+        ).toEqual(Array.from({ length: count }, (_, index) => EventV2.Cursor.make(index)))
+      }),
+    15_000,
+  )
+
+  it.effect(
+    "drains aggregate history across byte-bounded pages without a live wake",
+    () =>
+      Effect.gen(function* () {
+        const events = yield* EventV2.Service
+        const aggregateID = EventV2.ID.create()
+        const bytes = Math.floor(EventV2.AGGREGATE_READ_BATCH_BYTES * 0.625)
+        yield* events.publish(SyncPayload, payloadAtEncodedBytes(aggregateID, "message", bytes, "first"))
+        yield* events.publish(SyncPayload, payloadAtEncodedBytes(aggregateID, "message", bytes, "second"))
+
+        const received = Array.from(
+          yield* events.aggregateEvents({ aggregateID }).pipe(Stream.take(2), Stream.runCollect),
+        )
+        expect(received.map((event) => event.cursor)).toEqual([
+          EventV2.Cursor.make(0),
+          EventV2.Cursor.make(1),
+        ])
+        expect(received.map((event) => (event.event.data as { body: string }).body.slice(-6))).toEqual([
+          "xfirst",
+          "second",
+        ])
+      }),
+    15_000,
+  )
+
+  it.effect(
+    "keeps byte-bounded cursors contiguous when an event commits before the next page read",
+    () =>
+      Effect.gen(function* () {
+        const secondReadStarted = yield* Deferred.make<void>()
+        const continueSecondRead = yield* Deferred.make<void>()
+        let reads = 0
+        const database = Database.layerFromPath(":memory:")
+        const eventLayer = EventV2.layerWith({
+          beforeAggregateRead: () => {
+            reads++
+            if (reads !== 2) return Effect.void
+            return Deferred.succeed(secondReadStarted, undefined).pipe(
+              Effect.andThen(Deferred.await(continueSecondRead)),
+            )
+          },
+        }).pipe(Layer.provide(database))
+
+        yield* Effect.gen(function* () {
+          const events = yield* EventV2.Service
+          const aggregateID = EventV2.ID.create()
+          const bytes = Math.floor(EventV2.AGGREGATE_READ_BATCH_BYTES * 0.625)
+          yield* events.publish(SyncPayload, payloadAtEncodedBytes(aggregateID, "message", bytes, "first"))
+          yield* events.publish(SyncPayload, payloadAtEncodedBytes(aggregateID, "message", bytes, "second"))
+          const fiber = yield* events
+            .aggregateEvents({ aggregateID })
+            .pipe(Stream.take(3), Stream.runCollect, Effect.forkScoped)
+          yield* Deferred.await(secondReadStarted)
+
+          yield* events.publish(SyncPayload, {
+            sessionID: aggregateID,
+            kind: "message",
+            body: "committed-before-second-read",
+          })
+          yield* Deferred.succeed(continueSecondRead, undefined)
+
+          expect(Array.from(yield* Fiber.join(fiber)).map((event) => event.cursor)).toEqual([
+            EventV2.Cursor.make(0),
+            EventV2.Cursor.make(1),
+            EventV2.Cursor.make(2),
+          ])
+        }).pipe(Effect.provide(Layer.mergeAll(database, eventLayer)))
+      }),
+    15_000,
+  )
+
+  it.effect(
+    "fails with a typed defect when aggregate history is removed between metadata and body reads",
+    () => {
+      let events: EventV2.Interface
+      const database = Database.layerFromPath(":memory:")
+      const eventLayer = EventV2.layerWith({
+        afterAggregateReadMetadata: (aggregateID) => events.remove(aggregateID),
+      }).pipe(Layer.provide(database))
+
+      return Effect.gen(function* () {
+        events = yield* EventV2.Service
+        const aggregateID = EventV2.ID.create()
+        yield* events.publish(SyncMessage, { id: aggregateID, text: "removed during read" })
+        const defect = yield* events.aggregateEvents({ aggregateID }).pipe(
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.catchDefect(Effect.succeed),
+        )
+        expect(defect).toBeInstanceOf(EventV2.InvalidSyncEventError)
+        expect(defect).toMatchObject({
+          _tag: "EventV2.InvalidSyncEvent",
+          type: EventV2.versionedType(SyncMessage.type, 1),
+        })
+      }).pipe(Effect.provide(Layer.mergeAll(database, eventLayer)))
+    },
   )
 
   it.effect("omits live-only events from durable aggregate streams", () =>

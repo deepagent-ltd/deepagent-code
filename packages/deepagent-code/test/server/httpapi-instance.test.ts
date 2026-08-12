@@ -9,6 +9,7 @@ import { WorkspaceV2 } from "@deepagent-code/core/workspace"
 import { ControlPaths } from "../../src/server/routes/instance/httpapi/groups/control"
 import { InstancePaths } from "../../src/server/routes/instance/httpapi/groups/instance"
 import { SessionPaths } from "../../src/server/routes/instance/httpapi/groups/session"
+import { Vcs } from "../../src/project/vcs"
 import {
   DeepAgentGoalPlanBusyError,
   DeepAgentGoalPlanConflictError,
@@ -448,6 +449,28 @@ describe("instance HttpApi", () => {
       expect(yield* diff.json).toContainEqual(
         expect.objectContaining({ file: "changed.txt", additions: 1, status: "added" }),
       )
+    }),
+  )
+
+  it.live("maps an oversized raw VCS patch to the typed 503 response", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped({ git: true })
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      yield* fs.writeFileString(path.join(dir, "oversized.txt"), "x".repeat(Vcs.RawDiffLimits.patchBytes + 1))
+
+      const response = yield* HttpClientRequest.get(InstancePaths.vcsDiffRaw).pipe(
+        directoryHeader(dir),
+        HttpClient.execute,
+      )
+
+      expect(response.status).toBe(503)
+      expect(yield* response.json).toMatchObject({
+        name: "VcsRawDiffError",
+        data: {
+          reason: "untracked-output",
+        },
+      })
     }),
   )
 })

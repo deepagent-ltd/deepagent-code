@@ -25,6 +25,7 @@ import {
   ConflictError,
   InvalidRequestError,
   PermissionNotFoundError,
+  ServiceUnavailableError,
   SessionBusyError,
 } from "../errors"
 import { described } from "./metadata"
@@ -34,6 +35,7 @@ import { ModelV2 } from "@deepagent-code/core/model"
 import { GraphKind } from "@deepagent-code/core/context-federation/contract"
 import { GraphQueryStatus } from "@deepagent-code/core/context-federation/federation"
 import { Sensitivity } from "@deepagent-code/core/context-federation/authorization"
+import { SessionLegacyProviderResolution } from "@/session/legacy-provider-resolution"
 
 const root = "/session"
 export const ListQuery = Schema.Struct({
@@ -51,7 +53,13 @@ export const DiffQuery = Schema.Struct({
 })
 export const MessagesQuery = Schema.Struct({
   ...WorkspaceRoutingQueryFields,
-  limit: Schema.optional(Schema.NumberFromString.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0))),
+  limit: Schema.optional(
+    Schema.NumberFromString.check(
+      Schema.isInt(),
+      Schema.isGreaterThanOrEqualTo(1),
+      Schema.isLessThanOrEqualTo(MessageV2.ClientMessageLimits.page),
+    ),
+  ),
   before: Schema.optional(Schema.String),
 })
 export const StatusMap = Schema.Record(Schema.String, SessionStatus.Info)
@@ -273,6 +281,9 @@ export const ContextAttemptResolvePayload = Schema.Struct({
   reason: Schema.String,
   riskAcknowledged: Schema.optional(Schema.Boolean),
 })
+export const ProviderResolutionPayload = Schema.Struct(
+  Struct.omit(SessionLegacyProviderResolution.ResolveInput.fields, ["sessionID"]),
+)
 
 export const SessionPaths = {
   list: root,
@@ -307,6 +318,7 @@ export const SessionPaths = {
   updatePart: `${root}/:sessionID/message/:messageID/part/:partID`,
   contextDiagnostics: `${root}/:sessionID/context`,
   contextAttemptResolve: `${root}/:sessionID/context/attempt/:attemptID/resolve`,
+  providerResolution: `${root}/:sessionID/provider-resolution`,
 } as const
 
 export const SessionApi = HttpApi.make("session")
@@ -630,7 +642,7 @@ export const SessionApi = HttpApi.make("session")
           query: WorkspaceRoutingQuery,
           payload: RevertPayload,
           success: described(Session.Info, "Updated session"),
-          error: [HttpApiError.BadRequest, ApiNotFoundError, SessionBusyError],
+          error: [HttpApiError.BadRequest, ApiNotFoundError, SessionBusyError, ServiceUnavailableError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "session.revert",
@@ -724,6 +736,34 @@ export const SessionApi = HttpApi.make("session")
             identifier: "session.contextAttemptResolve",
             summary: "Resolve an indeterminate provider attempt",
             description: "Apply an audited abandon, verified-settle, or risk-acknowledged replay decision.",
+          }),
+        ),
+        HttpApiEndpoint.get("providerResolutionList", SessionPaths.providerResolution, {
+          params: { sessionID: SessionID },
+          query: WorkspaceRoutingQuery,
+          success: described(
+            Schema.Array(SessionLegacyProviderResolution.Descriptor),
+            "Pending provider recovery decisions",
+          ),
+          error: [HttpApiError.BadRequest, ApiNotFoundError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.providerResolutionList",
+            summary: "List provider recovery decisions",
+            description: "List unresolved legacy provider outcomes that require explicit recovery.",
+          }),
+        ),
+        HttpApiEndpoint.post("providerResolutionResolve", SessionPaths.providerResolution, {
+          params: { sessionID: SessionID },
+          query: WorkspaceRoutingQuery,
+          payload: ProviderResolutionPayload,
+          success: described(SessionLegacyProviderResolution.Resolution, "Resolved provider outcome"),
+          error: [HttpApiError.BadRequest, ApiNotFoundError, ConflictError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.providerResolutionResolve",
+            summary: "Resolve a provider outcome",
+            description: "Append an audited abandoned resolution and activate a safe successor history epoch.",
           }),
         ),
       )

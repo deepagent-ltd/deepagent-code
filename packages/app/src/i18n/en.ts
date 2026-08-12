@@ -1624,4 +1624,28 @@ export const dict = {
   "session.context.state.denied": "Denied",
   "session.context.state.disabled": "Disabled",
   "session.context.state.broken": "Broken reference",
+  "session.providerRecovery.title": "Provider outcome is unknown",
+  "session.providerRecovery.description":
+    "The previous request may have reached the provider before the app restarted. Abandoning it preserves the incident record, excludes partial output, and does not undo provider-side effects.",
+  "session.providerRecovery.abandon": "Abandon and continue",
+  "session.providerRecovery.confirmTitle": "Abandon unknown provider outcome?",
+  "session.providerRecovery.confirmDescription":
+    "This does not cancel or undo work that may already have run at the provider. The partial assistant response will remain as incident evidence and will not be used as future model history.",
+  "session.providerRecovery.resolving": "Resolving...",
+  "session.providerRecovery.resolved": "Session recovery completed",
+  "session.providerRecovery.failed": "Session recovery failed",
+  "session.providerRecovery.conflict": "Recovery state changed",
+  "session.providerRecovery.conflictDescription":
+    "The recovery state changed before this action completed. The latest server state has been loaded.",
+  "session.providerRecovery.refreshFailed": "Recovery completed, but the conversation could not be refreshed",
+  "session.providerRecovery.refreshFailedDescription":
+    "Sending remains disabled until the recovered conversation and messages can be loaded from the server.",
+  "session.providerRecovery.loadFailed": "Could not verify provider recovery state",
+  "session.providerRecovery.loadFailedDescription":
+    "Message sending remains disabled until the server can confirm whether this session requires recovery.",
+  "session.providerRecovery.unsupported": "This continuation requires maintenance recovery and cannot be abandoned here.",
+  "session.providerRecovery.workspaceUnsupported":
+    "This shared workspace requires coordinated recovery and cannot be resolved from this app instance.",
+  "session.providerRecovery.baselineUnsupported":
+    "The source World State baseline is missing or invalid. Sending remains locked until maintenance recovery verifies it.",
 }

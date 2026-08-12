@@ -48,6 +48,7 @@ export const SessionTable = sqliteTable(
     summary_deletions: integer(),
     summary_files: integer(),
     summary_diffs: text({ mode: "json" }).$type<Snapshot.FileDiff[]>(),
+    summary_diff_manifest: text({ mode: "json" }).$type<Snapshot.DiffManifestDescriptor>(),
     metadata: text({ mode: "json" }).$type<Record<string, unknown>>(),
     cost: real().notNull().default(0),
     tokens_input: integer().notNull().default(0),
@@ -414,13 +415,77 @@ export const SessionWorldStateBaselineTable = sqliteTable(
     snapshot: text({ mode: "json" }).$type<unknown>().notNull(),
     fragment: text().notNull(),
     fragment_hash: text().notNull(),
-    provenance: text().$type<"native" | "fork_rebuilt" | "legacy_migration">().notNull(),
+    provenance: text()
+      .$type<"native" | "fork_rebuilt" | "legacy_migration" | "recovery_copied" | "recovery_recollected">()
+      .notNull(),
     created_at: integer().notNull(),
   },
   (table) => [
     primaryKey({ columns: [table.session_id, table.prompt_epoch, table.section_id] }),
     index("session_world_state_baseline_epoch_idx").on(table.session_id, table.prompt_epoch),
   ],
+)
+
+export const SessionToolRequestResolutionCommandTable = sqliteTable(
+  "session_tool_request_resolution_command",
+  {
+    command_id: text().primaryKey(),
+    request_hash: text().notNull(),
+    session_id: text().$type<SessionSchema.ID>().notNull(),
+    receipt_id: text().notNull(),
+    result_resolution_id: text(),
+    created_at: integer().notNull(),
+  },
+  (table) => [index("session_tool_request_resolution_command_session_idx").on(table.session_id, table.created_at)],
+)
+
+export const SessionToolRequestResolutionTable = sqliteTable(
+  "session_tool_request_resolution",
+  {
+    resolution_id: text().primaryKey(),
+    receipt_id: text().notNull().unique(),
+    session_id: text().$type<SessionSchema.ID>().notNull(),
+    legacy_activity_id: text(),
+    assistant_message_id: text().$type<MessageID>().notNull(),
+    source_prompt_epoch: integer().notNull(),
+    source_window_id: text().notNull(),
+    source_effective_history_hash: text().notNull(),
+    source_request_hash: text().notNull(),
+    source_mutation_epoch: integer().notNull(),
+    expected_provider_state: text().$type<"indeterminate_after_crash">().notNull(),
+    decision: text().$type<"abandoned">().notNull(),
+    actor_type: text().$type<"user" | "administrator" | "system-verifier">().notNull(),
+    actor_id: text().notNull(),
+    reason: text().notNull(),
+    risk_acknowledged: integer({ mode: "boolean" }).notNull(),
+    safe_end_message_id: text().$type<MessageID>(),
+    safe_history_hash: text().notNull(),
+    safe_message_ids: text({ mode: "json" }).$type<MessageID[]>().notNull(),
+    ambiguity_message_id: text().$type<MessageID>().notNull(),
+    physical_message_high_water: text().$type<MessageID>().notNull(),
+    successor_prompt_epoch: integer().notNull(),
+    successor_window_id: text().notNull(),
+    successor_history_hash: text().notNull(),
+    successor_mutation_epoch: integer().notNull(),
+    created_at: integer().notNull(),
+  },
+  (table) => [index("session_tool_request_resolution_session_idx").on(table.session_id, table.created_at)],
+)
+
+export const SessionPromptEpochRecoveryTable = sqliteTable(
+  "session_prompt_epoch_recovery",
+  {
+    session_id: text().$type<SessionSchema.ID>().notNull(),
+    prompt_epoch: integer().notNull(),
+    resolution_id: text().notNull().unique(),
+    source_prompt_epoch: integer().notNull(),
+    source_mutation_epoch: integer().notNull(),
+    successor_mutation_epoch: integer().notNull(),
+    ambiguity_message_id: text().$type<MessageID>().notNull(),
+    physical_message_high_water: text().$type<MessageID>().notNull(),
+    created_at: integer().notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.session_id, table.prompt_epoch] })],
 )
 
 export const SessionContextEpochTable = sqliteTable("session_context_epoch", {

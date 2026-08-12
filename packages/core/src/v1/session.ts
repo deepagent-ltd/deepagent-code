@@ -355,6 +355,30 @@ const FileDiff = Schema.Struct({
   status: Schema.optional(Schema.Literals(["added", "deleted", "modified"])),
 }).annotate({ identifier: "SnapshotFileDiff" })
 
+const DiffManifestDescriptor = Schema.Struct({
+  completeness: Schema.Literals(["complete", "truncated"]),
+  truncationReasons: Schema.Array(
+    Schema.Literals([
+      "candidate_file_limit",
+      "discovery_output_limit",
+      "discovery_failed",
+      "manifest_bytes_limit",
+      "source_file_limit",
+      "source_total_limit",
+      "patch_file_limit",
+      "patch_total_limit",
+      "materialization_failed",
+      "time_limit",
+    ]),
+  ),
+  manifestHash: Schema.String,
+  totalFiles: NonNegativeInt,
+  totalFilesExact: Schema.Boolean,
+  statisticsExact: optionalOmitUndefined(Schema.Boolean),
+  includedFiles: NonNegativeInt,
+  truncatedFiles: NonNegativeInt,
+}).annotate({ identifier: "SnapshotDiffManifestDescriptor" })
+
 export const User = Schema.Struct({
   ...messageBase,
   role: Schema.Literal("user"),
@@ -367,6 +391,7 @@ export const User = Schema.Struct({
       title: Schema.optional(Schema.String),
       body: Schema.optional(Schema.String),
       diffs: Schema.Array(FileDiff),
+      diffManifest: optionalOmitUndefined(DiffManifestDescriptor),
     }),
   ),
   agent: Schema.String,
@@ -558,6 +583,7 @@ const SessionSummary = Schema.Struct({
   deletions: Schema.Finite,
   files: Schema.Finite,
   diffs: optionalOmitUndefined(Schema.Array(FileDiff)),
+  diffManifest: optionalOmitUndefined(DiffManifestDescriptor),
 })
 
 const SessionTokens = Schema.Struct({

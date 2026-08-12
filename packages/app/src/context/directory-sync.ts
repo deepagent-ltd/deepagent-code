@@ -6,6 +6,7 @@ import {
   clearSessionPrefetch,
   getSessionPrefetch,
   getSessionPrefetchPromise,
+  SESSION_MESSAGE_PAGE_LIMIT,
   setSessionPrefetch,
 } from "./global-sync/session-prefetch"
 import type { Message, Part } from "@deepagent-code/sdk/v2/client"
@@ -267,7 +268,7 @@ export const createDirSyncContext = (
   }
   const absolute = (path: string) => (current()[0].path.directory + "/" + path).replace("//", "/")
   const initialMessagePageSize = 80
-  const historyMessagePageSize = 200
+  const historyMessagePageSize = SESSION_MESSAGE_PAGE_LIMIT
   const inflight = new Map<string, Promise<void>>()
   const trailing = new Set<string>()
   const inflightMessages = new Map<string, Promise<void>>()
@@ -679,7 +680,7 @@ export const createDirSyncContext = (
           const [, setStore] = serverSync.child(directory)
           touch(directory, setStore, sessionID)
           const key = keyFor(directory, sessionID)
-          const step = count ?? historyMessagePageSize
+          const step = Math.min(count ?? historyMessagePageSize, SESSION_MESSAGE_PAGE_LIMIT)
           if (meta.loading[key]) return
           if (meta.complete[key]) return
           const before = meta.cursor[key]

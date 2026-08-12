@@ -101,6 +101,7 @@ export type Event =
   | EventWorkspaceReady
   | EventWorkspaceFailed
   | EventWorkspaceStatus
+  | EventSessionProviderResolutionCompleted
   | EventServerConnected
   | EventGlobalDisposed
   | EventServerInstanceDisposed
@@ -167,6 +168,28 @@ export type SnapshotFileDiff = {
   status?: "added" | "deleted" | "modified"
 }
 
+export type SnapshotDiffManifestDescriptor = {
+  completeness: "complete" | "truncated"
+  truncationReasons: Array<
+    | "candidate_file_limit"
+    | "discovery_output_limit"
+    | "discovery_failed"
+    | "manifest_bytes_limit"
+    | "source_file_limit"
+    | "source_total_limit"
+    | "patch_file_limit"
+    | "patch_total_limit"
+    | "materialization_failed"
+    | "time_limit"
+  >
+  manifestHash: string
+  totalFiles: number
+  totalFilesExact: boolean
+  statisticsExact?: boolean
+  includedFiles: number
+  truncatedFiles: number
+}
+
 export type PermissionAction = "allow" | "deny" | "ask"
 
 export type PermissionRule = {
@@ -190,6 +213,7 @@ export type Session = {
     deletions: number
     files: number
     diffs?: Array<SnapshotFileDiff>
+    diffManifest?: SnapshotDiffManifestDescriptor
   }
   cost?: number
   tokens?: {
@@ -259,6 +283,7 @@ export type UserMessage = {
     title?: string
     body?: string
     diffs: Array<SnapshotFileDiff>
+    diffManifest?: SnapshotDiffManifestDescriptor
   }
   agent: string
   model: {
@@ -1489,6 +1514,27 @@ export type GlobalEvent = {
         properties: {
           sessionID: string
           diff: Array<SnapshotFileDiff>
+          manifest?: {
+            completeness: "complete" | "truncated"
+            truncationReasons: Array<
+              | "candidate_file_limit"
+              | "discovery_output_limit"
+              | "discovery_failed"
+              | "manifest_bytes_limit"
+              | "source_file_limit"
+              | "source_total_limit"
+              | "patch_file_limit"
+              | "patch_total_limit"
+              | "materialization_failed"
+              | "time_limit"
+            >
+            manifestHash: string
+            totalFiles: number
+            totalFilesExact: boolean
+            statisticsExact?: boolean
+            includedFiles: number
+            truncatedFiles: number
+          }
         }
       }
     | {
@@ -1797,6 +1843,22 @@ export type GlobalEvent = {
         properties: {
           workspaceID: string
           status: "connected" | "connecting" | "disconnected" | "error"
+        }
+      }
+    | {
+        id: string
+        type: "session.provider-resolution.completed"
+        properties: {
+          sessionID: string
+          resolutionID: string
+          commandID: string
+          receiptID: string
+          decision: "abandoned"
+          sourcePromptEpoch: number
+          successorPromptEpoch: number
+          sourceMutationEpoch: number
+          successorMutationEpoch: number
+          createdAt: number
         }
       }
     | {
@@ -2711,6 +2773,27 @@ export type GlobalSession = {
     deletions: number
     files: number
     diffs?: Array<SnapshotFileDiff>
+    diffManifest?: {
+      completeness: "complete" | "truncated"
+      truncationReasons: Array<
+        | "candidate_file_limit"
+        | "discovery_output_limit"
+        | "discovery_failed"
+        | "manifest_bytes_limit"
+        | "source_file_limit"
+        | "source_total_limit"
+        | "patch_file_limit"
+        | "patch_total_limit"
+        | "materialization_failed"
+        | "time_limit"
+      >
+      manifestHash: string
+      totalFiles: number
+      totalFilesExact: boolean
+      statisticsExact?: boolean
+      includedFiles: number
+      truncatedFiles: number
+    }
   }
   cost?: number
   tokens?: {
@@ -3045,6 +3128,29 @@ export type VcsFileDiff = {
   status?: "added" | "deleted" | "modified"
 }
 
+export type VcsRawDiffError = {
+  name: "VcsRawDiffError"
+  data: {
+    message: string
+    reason:
+      | "candidate-files"
+      | "status-output"
+      | "status-failed"
+      | "tracked-output"
+      | "tracked-failed"
+      | "untracked-output"
+      | "untracked-failed"
+      | "total-output"
+      | "time-limit"
+      | "remote-status"
+      | "remote-output"
+      | "remote-decode"
+    limit?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    actual?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    file?: string
+  }
+}
+
 export type VcsApplyError = {
   name: "VcsApplyError"
   data: {
@@ -3335,6 +3441,156 @@ export type ReferenceDescriptor =
       message: string
     }
 
+export type Session1 = {
+  id: string
+  slug: string
+  projectID: string
+  workspaceID?: string
+  directory: string
+  path?: string
+  parentID?: string
+  summary?: {
+    additions: number
+    deletions: number
+    files: number
+    diffs?: Array<SnapshotFileDiff>
+    diffManifest?: {
+      completeness: "complete" | "truncated"
+      truncationReasons: Array<
+        | "candidate_file_limit"
+        | "discovery_output_limit"
+        | "discovery_failed"
+        | "manifest_bytes_limit"
+        | "source_file_limit"
+        | "source_total_limit"
+        | "patch_file_limit"
+        | "patch_total_limit"
+        | "materialization_failed"
+        | "time_limit"
+      >
+      manifestHash: string
+      totalFiles: number
+      totalFilesExact: boolean
+      statisticsExact?: boolean
+      includedFiles: number
+      truncatedFiles: number
+    }
+  }
+  cost?: number
+  tokens?: {
+    input: number
+    output: number
+    reasoning: number
+    cache: {
+      read: number
+      write: number
+    }
+  }
+  share?: {
+    url: string
+  }
+  title: string
+  agent?: string
+  model?: {
+    id: string
+    providerID: string
+    variant?: string
+  }
+  version: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  time: {
+    created: number
+    updated: number
+    compacting?: number
+    archived?: number
+  }
+  permission?: PermissionRuleset
+  revert?: {
+    messageID: string
+    partID?: string
+    snapshot?: string
+    diff?: string
+  }
+  preview?: string
+}
+
+export type Session2 = {
+  id: string
+  slug: string
+  projectID: string
+  workspaceID?: string
+  directory: string
+  path?: string
+  parentID?: string
+  summary?: {
+    additions: number
+    deletions: number
+    files: number
+    diffs?: Array<SnapshotFileDiff>
+    diffManifest?: {
+      completeness: "complete" | "truncated"
+      truncationReasons: Array<
+        | "candidate_file_limit"
+        | "discovery_output_limit"
+        | "discovery_failed"
+        | "manifest_bytes_limit"
+        | "source_file_limit"
+        | "source_total_limit"
+        | "patch_file_limit"
+        | "patch_total_limit"
+        | "materialization_failed"
+        | "time_limit"
+      >
+      manifestHash: string
+      totalFiles: number
+      totalFilesExact: boolean
+      statisticsExact?: boolean
+      includedFiles: number
+      truncatedFiles: number
+    }
+  }
+  cost?: number
+  tokens?: {
+    input: number
+    output: number
+    reasoning: number
+    cache: {
+      read: number
+      write: number
+    }
+  }
+  share?: {
+    url: string
+  }
+  title: string
+  agent?: string
+  model?: {
+    id: string
+    providerID: string
+    variant?: string
+  }
+  version: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  time: {
+    created: number
+    updated: number
+    compacting?: number
+    archived?: number
+  }
+  permission?: PermissionRuleset
+  revert?: {
+    messageID: string
+    partID?: string
+    snapshot?: string
+    diff?: string
+  }
+  preview?: string
+}
+
 export type NotFoundError = {
   name: "NotFoundError"
   data: {
@@ -3342,10 +3598,385 @@ export type NotFoundError = {
   }
 }
 
+export type Session3 = {
+  id: string
+  slug: string
+  projectID: string
+  workspaceID?: string
+  directory: string
+  path?: string
+  parentID?: string
+  summary?: {
+    additions: number
+    deletions: number
+    files: number
+    diffs?: Array<SnapshotFileDiff>
+    diffManifest?: {
+      completeness: "complete" | "truncated"
+      truncationReasons: Array<
+        | "candidate_file_limit"
+        | "discovery_output_limit"
+        | "discovery_failed"
+        | "manifest_bytes_limit"
+        | "source_file_limit"
+        | "source_total_limit"
+        | "patch_file_limit"
+        | "patch_total_limit"
+        | "materialization_failed"
+        | "time_limit"
+      >
+      manifestHash: string
+      totalFiles: number
+      totalFilesExact: boolean
+      statisticsExact?: boolean
+      includedFiles: number
+      truncatedFiles: number
+    }
+  }
+  cost?: number
+  tokens?: {
+    input: number
+    output: number
+    reasoning: number
+    cache: {
+      read: number
+      write: number
+    }
+  }
+  share?: {
+    url: string
+  }
+  title: string
+  agent?: string
+  model?: {
+    id: string
+    providerID: string
+    variant?: string
+  }
+  version: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  time: {
+    created: number
+    updated: number
+    compacting?: number
+    archived?: number
+  }
+  permission?: PermissionRuleset
+  revert?: {
+    messageID: string
+    partID?: string
+    snapshot?: string
+    diff?: string
+  }
+  preview?: string
+}
+
+export type Session4 = {
+  id: string
+  slug: string
+  projectID: string
+  workspaceID?: string
+  directory: string
+  path?: string
+  parentID?: string
+  summary?: {
+    additions: number
+    deletions: number
+    files: number
+    diffs?: Array<SnapshotFileDiff>
+    diffManifest?: {
+      completeness: "complete" | "truncated"
+      truncationReasons: Array<
+        | "candidate_file_limit"
+        | "discovery_output_limit"
+        | "discovery_failed"
+        | "manifest_bytes_limit"
+        | "source_file_limit"
+        | "source_total_limit"
+        | "patch_file_limit"
+        | "patch_total_limit"
+        | "materialization_failed"
+        | "time_limit"
+      >
+      manifestHash: string
+      totalFiles: number
+      totalFilesExact: boolean
+      statisticsExact?: boolean
+      includedFiles: number
+      truncatedFiles: number
+    }
+  }
+  cost?: number
+  tokens?: {
+    input: number
+    output: number
+    reasoning: number
+    cache: {
+      read: number
+      write: number
+    }
+  }
+  share?: {
+    url: string
+  }
+  title: string
+  agent?: string
+  model?: {
+    id: string
+    providerID: string
+    variant?: string
+  }
+  version: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  time: {
+    created: number
+    updated: number
+    compacting?: number
+    archived?: number
+  }
+  permission?: PermissionRuleset
+  revert?: {
+    messageID: string
+    partID?: string
+    snapshot?: string
+    diff?: string
+  }
+  preview?: string
+}
+
+export type Session5 = {
+  id: string
+  slug: string
+  projectID: string
+  workspaceID?: string
+  directory: string
+  path?: string
+  parentID?: string
+  summary?: {
+    additions: number
+    deletions: number
+    files: number
+    diffs?: Array<SnapshotFileDiff>
+    diffManifest?: {
+      completeness: "complete" | "truncated"
+      truncationReasons: Array<
+        | "candidate_file_limit"
+        | "discovery_output_limit"
+        | "discovery_failed"
+        | "manifest_bytes_limit"
+        | "source_file_limit"
+        | "source_total_limit"
+        | "patch_file_limit"
+        | "patch_total_limit"
+        | "materialization_failed"
+        | "time_limit"
+      >
+      manifestHash: string
+      totalFiles: number
+      totalFilesExact: boolean
+      statisticsExact?: boolean
+      includedFiles: number
+      truncatedFiles: number
+    }
+  }
+  cost?: number
+  tokens?: {
+    input: number
+    output: number
+    reasoning: number
+    cache: {
+      read: number
+      write: number
+    }
+  }
+  share?: {
+    url: string
+  }
+  title: string
+  agent?: string
+  model?: {
+    id: string
+    providerID: string
+    variant?: string
+  }
+  version: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  time: {
+    created: number
+    updated: number
+    compacting?: number
+    archived?: number
+  }
+  permission?: PermissionRuleset
+  revert?: {
+    messageID: string
+    partID?: string
+    snapshot?: string
+    diff?: string
+  }
+  preview?: string
+}
+
 export type ConflictError = {
   _tag: "ConflictError"
   message: string
   resource?: string
+}
+
+export type Session6 = {
+  id: string
+  slug: string
+  projectID: string
+  workspaceID?: string
+  directory: string
+  path?: string
+  parentID?: string
+  summary?: {
+    additions: number
+    deletions: number
+    files: number
+    diffs?: Array<SnapshotFileDiff>
+    diffManifest?: {
+      completeness: "complete" | "truncated"
+      truncationReasons: Array<
+        | "candidate_file_limit"
+        | "discovery_output_limit"
+        | "discovery_failed"
+        | "manifest_bytes_limit"
+        | "source_file_limit"
+        | "source_total_limit"
+        | "patch_file_limit"
+        | "patch_total_limit"
+        | "materialization_failed"
+        | "time_limit"
+      >
+      manifestHash: string
+      totalFiles: number
+      totalFilesExact: boolean
+      statisticsExact?: boolean
+      includedFiles: number
+      truncatedFiles: number
+    }
+  }
+  cost?: number
+  tokens?: {
+    input: number
+    output: number
+    reasoning: number
+    cache: {
+      read: number
+      write: number
+    }
+  }
+  share?: {
+    url: string
+  }
+  title: string
+  agent?: string
+  model?: {
+    id: string
+    providerID: string
+    variant?: string
+  }
+  version: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  time: {
+    created: number
+    updated: number
+    compacting?: number
+    archived?: number
+  }
+  permission?: PermissionRuleset
+  revert?: {
+    messageID: string
+    partID?: string
+    snapshot?: string
+    diff?: string
+  }
+  preview?: string
+}
+
+export type Session7 = {
+  id: string
+  slug: string
+  projectID: string
+  workspaceID?: string
+  directory: string
+  path?: string
+  parentID?: string
+  summary?: {
+    additions: number
+    deletions: number
+    files: number
+    diffs?: Array<SnapshotFileDiff>
+    diffManifest?: {
+      completeness: "complete" | "truncated"
+      truncationReasons: Array<
+        | "candidate_file_limit"
+        | "discovery_output_limit"
+        | "discovery_failed"
+        | "manifest_bytes_limit"
+        | "source_file_limit"
+        | "source_total_limit"
+        | "patch_file_limit"
+        | "patch_total_limit"
+        | "materialization_failed"
+        | "time_limit"
+      >
+      manifestHash: string
+      totalFiles: number
+      totalFilesExact: boolean
+      statisticsExact?: boolean
+      includedFiles: number
+      truncatedFiles: number
+    }
+  }
+  cost?: number
+  tokens?: {
+    input: number
+    output: number
+    reasoning: number
+    cache: {
+      read: number
+      write: number
+    }
+  }
+  share?: {
+    url: string
+  }
+  title: string
+  agent?: string
+  model?: {
+    id: string
+    providerID: string
+    variant?: string
+  }
+  version: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  time: {
+    created: number
+    updated: number
+    compacting?: number
+    archived?: number
+  }
+  permission?: PermissionRuleset
+  revert?: {
+    messageID: string
+    partID?: string
+    snapshot?: string
+    diff?: string
+  }
+  preview?: string
 }
 
 export type TextPartInput = {
@@ -3400,6 +4031,162 @@ export type SessionBusyError = {
   _tag: "SessionBusyError"
   sessionID: string
   message: string
+}
+
+export type Session8 = {
+  id: string
+  slug: string
+  projectID: string
+  workspaceID?: string
+  directory: string
+  path?: string
+  parentID?: string
+  summary?: {
+    additions: number
+    deletions: number
+    files: number
+    diffs?: Array<SnapshotFileDiff>
+    diffManifest?: {
+      completeness: "complete" | "truncated"
+      truncationReasons: Array<
+        | "candidate_file_limit"
+        | "discovery_output_limit"
+        | "discovery_failed"
+        | "manifest_bytes_limit"
+        | "source_file_limit"
+        | "source_total_limit"
+        | "patch_file_limit"
+        | "patch_total_limit"
+        | "materialization_failed"
+        | "time_limit"
+      >
+      manifestHash: string
+      totalFiles: number
+      totalFilesExact: boolean
+      statisticsExact?: boolean
+      includedFiles: number
+      truncatedFiles: number
+    }
+  }
+  cost?: number
+  tokens?: {
+    input: number
+    output: number
+    reasoning: number
+    cache: {
+      read: number
+      write: number
+    }
+  }
+  share?: {
+    url: string
+  }
+  title: string
+  agent?: string
+  model?: {
+    id: string
+    providerID: string
+    variant?: string
+  }
+  version: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  time: {
+    created: number
+    updated: number
+    compacting?: number
+    archived?: number
+  }
+  permission?: PermissionRuleset
+  revert?: {
+    messageID: string
+    partID?: string
+    snapshot?: string
+    diff?: string
+  }
+  preview?: string
+}
+
+export type ServiceUnavailableError = {
+  _tag: "ServiceUnavailableError"
+  message: string
+  service?: string
+}
+
+export type Session9 = {
+  id: string
+  slug: string
+  projectID: string
+  workspaceID?: string
+  directory: string
+  path?: string
+  parentID?: string
+  summary?: {
+    additions: number
+    deletions: number
+    files: number
+    diffs?: Array<SnapshotFileDiff>
+    diffManifest?: {
+      completeness: "complete" | "truncated"
+      truncationReasons: Array<
+        | "candidate_file_limit"
+        | "discovery_output_limit"
+        | "discovery_failed"
+        | "manifest_bytes_limit"
+        | "source_file_limit"
+        | "source_total_limit"
+        | "patch_file_limit"
+        | "patch_total_limit"
+        | "materialization_failed"
+        | "time_limit"
+      >
+      manifestHash: string
+      totalFiles: number
+      totalFilesExact: boolean
+      statisticsExact?: boolean
+      includedFiles: number
+      truncatedFiles: number
+    }
+  }
+  cost?: number
+  tokens?: {
+    input: number
+    output: number
+    reasoning: number
+    cache: {
+      read: number
+      write: number
+    }
+  }
+  share?: {
+    url: string
+  }
+  title: string
+  agent?: string
+  model?: {
+    id: string
+    providerID: string
+    variant?: string
+  }
+  version: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  time: {
+    created: number
+    updated: number
+    compacting?: number
+    archived?: number
+  }
+  permission?: PermissionRuleset
+  revert?: {
+    messageID: string
+    partID?: string
+    snapshot?: string
+    diff?: string
+  }
+  preview?: string
 }
 
 export type EventTuiPromptAppend = {
@@ -3502,12 +4289,6 @@ export type SessionsResponse = {
 export type InvalidCursorError = {
   _tag: "InvalidCursorError"
   message: string
-}
-
-export type ServiceUnavailableError = {
-  _tag: "ServiceUnavailableError"
-  message: string
-  service?: string
 }
 
 export type SessionNotFoundError = {
@@ -5830,6 +6611,27 @@ export type EventSessionDiff = {
   properties: {
     sessionID: string
     diff: Array<SnapshotFileDiff>
+    manifest?: {
+      completeness: "complete" | "truncated"
+      truncationReasons: Array<
+        | "candidate_file_limit"
+        | "discovery_output_limit"
+        | "discovery_failed"
+        | "manifest_bytes_limit"
+        | "source_file_limit"
+        | "source_total_limit"
+        | "patch_file_limit"
+        | "patch_total_limit"
+        | "materialization_failed"
+        | "time_limit"
+      >
+      manifestHash: string
+      totalFiles: number
+      totalFilesExact: boolean
+      statisticsExact?: boolean
+      includedFiles: number
+      truncatedFiles: number
+    }
   }
 }
 
@@ -6172,6 +6974,23 @@ export type EventWorkspaceStatus = {
   properties: {
     workspaceID: string
     status: "connected" | "connecting" | "disconnected" | "error"
+  }
+}
+
+export type EventSessionProviderResolutionCompleted = {
+  id: string
+  type: "session.provider-resolution.completed"
+  properties: {
+    sessionID: string
+    resolutionID: string
+    commandID: string
+    receiptID: string
+    decision: "abandoned"
+    sourcePromptEpoch: number
+    successorPromptEpoch: number
+    sourceMutationEpoch: number
+    successorMutationEpoch: number
+    createdAt: number
   }
 }
 
@@ -10818,6 +11637,10 @@ export type VcsDiffRawErrors = {
    * Bad request
    */
   400: BadRequestError
+  /**
+   * VcsRawDiffError
+   */
+  503: VcsRawDiffError
 }
 
 export type VcsDiffRawError = VcsDiffRawErrors[keyof VcsDiffRawErrors]
@@ -12346,7 +13169,7 @@ export type SessionListResponses = {
   /**
    * List of sessions
    */
-  200: Array<Session>
+  200: Array<Session1>
 }
 
 export type SessionListResponse = SessionListResponses[keyof SessionListResponses]
@@ -12388,7 +13211,7 @@ export type SessionCreateResponses = {
   /**
    * Successfully created session
    */
-  200: Session
+  200: Session3
 }
 
 export type SessionCreateResponse = SessionCreateResponses[keyof SessionCreateResponses]
@@ -12486,7 +13309,7 @@ export type SessionGetResponses = {
   /**
    * Get session
    */
-  200: Session
+  200: Session2
 }
 
 export type SessionGetResponse = SessionGetResponses[keyof SessionGetResponses]
@@ -12529,7 +13352,7 @@ export type SessionUpdateResponses = {
   /**
    * Successfully updated session
    */
-  200: Session
+  200: Session4
 }
 
 export type SessionUpdateResponse = SessionUpdateResponses[keyof SessionUpdateResponses]
@@ -12563,7 +13386,7 @@ export type SessionChildrenResponses = {
   /**
    * List of children
    */
-  200: Array<Session>
+  200: Array<Session1>
 }
 
 export type SessionChildrenResponse = SessionChildrenResponses[keyof SessionChildrenResponses]
@@ -12904,7 +13727,7 @@ export type SessionForkResponses = {
   /**
    * 200
    */
-  200: Session
+  200: Session5
 }
 
 export type SessionForkResponse = SessionForkResponses[keyof SessionForkResponses]
@@ -13010,7 +13833,7 @@ export type SessionUnshareResponses = {
   /**
    * Successfully unshared session
    */
-  200: Session
+  200: Session7
 }
 
 export type SessionUnshareResponse = SessionUnshareResponses[keyof SessionUnshareResponses]
@@ -13048,7 +13871,7 @@ export type SessionShareResponses = {
   /**
    * Successfully shared session
    */
-  200: Session
+  200: Session6
 }
 
 export type SessionShareResponse = SessionShareResponses[keyof SessionShareResponses]
@@ -13417,6 +14240,10 @@ export type SessionRevertErrors = {
    * SessionBusyError
    */
   409: SessionBusyError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
 }
 
 export type SessionRevertError = SessionRevertErrors[keyof SessionRevertErrors]
@@ -13425,7 +14252,7 @@ export type SessionRevertResponses = {
   /**
    * Updated session
    */
-  200: Session
+  200: Session8
 }
 
 export type SessionRevertResponse = SessionRevertResponses[keyof SessionRevertResponses]
@@ -13463,7 +14290,7 @@ export type SessionUnrevertResponses = {
   /**
    * Updated session
    */
-  200: Session
+  200: Session9
 }
 
 export type SessionUnrevertResponse = SessionUnrevertResponses[keyof SessionUnrevertResponses]
@@ -14169,6 +14996,127 @@ export type SessionContextAttemptResolveResponses = {
 export type SessionContextAttemptResolveResponse =
   SessionContextAttemptResolveResponses[keyof SessionContextAttemptResolveResponses]
 
+export type SessionProviderResolutionListData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/provider-resolution"
+}
+
+export type SessionProviderResolutionListErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionProviderResolutionListError =
+  SessionProviderResolutionListErrors[keyof SessionProviderResolutionListErrors]
+
+export type SessionProviderResolutionListResponses = {
+  /**
+   * Pending provider recovery decisions
+   */
+  200: Array<{
+    receiptID: string
+    sessionID: string
+    assistantMessageID: string
+    providerID: string
+    modelID: string
+    providerState: "indeterminate_after_crash"
+    promptEpoch: number
+    promptWindowID: string
+    historyHash: string
+    requestHash: string
+    sessionMutationEpoch: number
+    continuationRecoverySupported: boolean
+    workspaceRecoverySupported: boolean
+    sourceWorldStateBaselineStatus: "available" | "missing" | "invalid"
+    worldStateBaselineHash?: string
+  }>
+}
+
+export type SessionProviderResolutionListResponse =
+  SessionProviderResolutionListResponses[keyof SessionProviderResolutionListResponses]
+
+export type SessionProviderResolutionResolveData = {
+  body?: {
+    commandID: string
+    receiptID: string
+    decision: "abandoned"
+    expected: {
+      providerState: "indeterminate_after_crash"
+      promptEpoch: number
+      sessionMutationEpoch: number
+      requestHash: string
+      historyHash: string
+      worldStateBaselineHash: string
+    }
+    reason?: string
+    riskAcknowledged?: boolean
+  }
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/provider-resolution"
+}
+
+export type SessionProviderResolutionResolveErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
+}
+
+export type SessionProviderResolutionResolveError =
+  SessionProviderResolutionResolveErrors[keyof SessionProviderResolutionResolveErrors]
+
+export type SessionProviderResolutionResolveResponses = {
+  /**
+   * Resolved provider outcome
+   */
+  200: {
+    resolutionID: string
+    commandID: string
+    receiptID: string
+    sessionID: string
+    decision: "abandoned"
+    sourcePromptEpoch: number
+    successorPromptEpoch: number
+    sourceMutationEpoch: number
+    successorMutationEpoch: number
+    safeEndMessageID?: string
+    safeHistoryHash: string
+    successorWindowID: string
+    successorHistoryHash: string
+    createdAt: number
+  }
+}
+
+export type SessionProviderResolutionResolveResponse =
+  SessionProviderResolutionResolveResponses[keyof SessionProviderResolutionResolveResponses]
+
 export type SyncStartData = {
   body?: never
   path?: never
@@ -14255,6 +15203,10 @@ export type SyncStealErrors = {
    * BadRequest | InvalidRequestError
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
 }
 
 export type SyncStealError = SyncStealErrors[keyof SyncStealErrors]
@@ -14287,6 +15239,10 @@ export type SyncHistoryListErrors = {
    * BadRequest | InvalidRequestError
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
 }
 
 export type SyncHistoryListError = SyncHistoryListErrors[keyof SyncHistoryListErrors]
@@ -14909,6 +15865,10 @@ export type ExperimentalWorkspaceWarpErrors = {
    * NotFoundError
    */
   404: NotFoundError
+  /**
+   * VcsRawDiffError
+   */
+  503: VcsRawDiffError
 }
 
 export type ExperimentalWorkspaceWarpError = ExperimentalWorkspaceWarpErrors[keyof ExperimentalWorkspaceWarpErrors]

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect } from "bun:test"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import { parsePatch } from "diff"
-import { Deferred, Effect, Layer } from "effect"
+import { Cause, Deferred, Effect, Layer } from "effect"
 import { CrossSpawnSpawner } from "@deepagent-code/core/cross-spawn-spawner"
 import fs from "fs/promises"
 import path from "path"
@@ -332,5 +332,111 @@ describe("Vcs diff", () => {
         )
       }),
     { git: true },
+  )
+
+  it.instance(
+    "diffRaw returns a complete patch for tracked and untracked files",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        yield* write(path.join(test.directory, "tracked.txt"), "before\n")
+        yield* git(test.directory, ["add", "tracked.txt"])
+        yield* git(test.directory, ["commit", "--no-gpg-sign", "-m", "add tracked"])
+        yield* write(path.join(test.directory, "tracked.txt"), "after\n")
+        yield* write(path.join(test.directory, "untracked.txt"), "new\n")
+
+        const patch = yield* (yield* init()).diffRaw()
+
+        expect(patch).toContain("diff --git a/tracked.txt b/tracked.txt")
+        expect(patch).toContain("diff --git a/untracked.txt b/untracked.txt")
+        expect(Buffer.byteLength(patch)).toBeLessThanOrEqual(Vcs.RawDiffLimits.patchBytes)
+      }),
+    { git: true },
+  )
+
+  it.instance(
+    "diffRaw includes staged files before the repository has its first commit",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        yield* write(path.join(test.directory, "staged.txt"), "staged\n")
+        yield* git(test.directory, ["add", "staged.txt"])
+
+        const patch = yield* (yield* init()).diffRaw()
+
+        expect(patch).toContain("diff --git a/staged.txt b/staged.txt")
+        expect(patch).toContain("+staged")
+      }),
+    { git: true },
+  )
+
+  it.instance(
+    "diffRaw fails closed when a tracked patch exceeds the UTF-8 budget",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        yield* write(path.join(test.directory, "tracked.txt"), "before\n")
+        yield* git(test.directory, ["add", "tracked.txt"])
+        yield* git(test.directory, ["commit", "--no-gpg-sign", "-m", "add tracked"])
+        yield* write(path.join(test.directory, "tracked.txt"), "x".repeat(Vcs.RawDiffLimits.patchBytes + 1))
+
+        const exit = yield* (yield* init()).diffRaw().pipe(Effect.exit)
+
+        expect(exit._tag).toBe("Failure")
+        if (exit._tag === "Failure")
+          expect(Cause.squash(exit.cause)).toMatchObject({
+            _tag: "VcsRawDiffError",
+            reason: "tracked-output",
+            limit: Vcs.RawDiffLimits.patchBytes,
+          })
+      }),
+    { git: true },
+    20_000,
+  )
+
+  it.instance(
+    "diffRaw fails closed when an untracked patch exceeds the UTF-8 budget",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        yield* write(path.join(test.directory, "untracked.txt"), "x".repeat(Vcs.RawDiffLimits.patchBytes + 1))
+
+        const exit = yield* (yield* init()).diffRaw().pipe(Effect.exit)
+
+        expect(exit._tag).toBe("Failure")
+        if (exit._tag === "Failure")
+          expect(Cause.squash(exit.cause)).toMatchObject({
+            _tag: "VcsRawDiffError",
+            reason: "untracked-output",
+          })
+      }),
+    { git: true },
+    20_000,
+  )
+
+  it.instance(
+    "diffRaw fails closed before patch generation when candidate files exceed the limit",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        yield* Effect.forEach(
+          Array.from({ length: Vcs.RawDiffLimits.candidateFiles + 1 }, (_, index) => index),
+          (index) => write(path.join(test.directory, `candidate-${index}.txt`), "x\n"),
+          { concurrency: 32, discard: true },
+        )
+
+        const exit = yield* (yield* init()).diffRaw().pipe(Effect.exit)
+
+        expect(exit._tag).toBe("Failure")
+        if (exit._tag === "Failure")
+          expect(Cause.squash(exit.cause)).toMatchObject({
+            _tag: "VcsRawDiffError",
+            reason: "candidate-files",
+            limit: Vcs.RawDiffLimits.candidateFiles,
+            actual: Vcs.RawDiffLimits.candidateFiles + 1,
+          })
+      }),
+    { git: true },
+    20_000,
   )
 })

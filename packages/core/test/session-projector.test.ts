@@ -45,6 +45,33 @@ const assistantRow = (
 }
 
 describe("SessionProjector", () => {
+  it.effect("decodes legacy diff manifest descriptors without statisticsExact", () =>
+    Effect.sync(() => {
+      const decoded = Schema.decodeUnknownSync(SessionV1.User)({
+        id: SessionV1.MessageID.make("msg_legacy_diff_manifest"),
+        sessionID,
+        role: "user",
+        time: { created: 1 },
+        agent: "build",
+        model: { providerID: ProviderV2.ID.make("provider"), modelID: ModelV2.ID.make("model") },
+        summary: {
+          diffs: [],
+          diffManifest: {
+            completeness: "complete",
+            truncationReasons: [],
+            manifestHash: "sha256:legacy",
+            totalFiles: 0,
+            totalFilesExact: true,
+            includedFiles: 0,
+            truncatedFiles: 0,
+          },
+        },
+      })
+
+      expect(decoded.summary?.diffManifest?.statisticsExact).toBeUndefined()
+    }),
+  )
+
   it.effect("never persists computed V1 activity progress from a full message update", () =>
     Effect.gen(function* () {
       const { db } = yield* Database.Service

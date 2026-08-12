@@ -1,10 +1,13 @@
-import { Context, Effect, FiberMap, Iterable, Layer, Schema, Stream } from "effect"
+import { Context, Effect, FiberMap, Layer, Schema, Stream } from "effect"
 import { serviceUse } from "@deepagent-code/core/effect/service-use"
 import { FetchHttpClient, HttpBody, HttpClient, HttpClientError, HttpClientRequest } from "effect/unstable/http"
 import { Database } from "@deepagent-code/core/database/database"
 import { asc } from "drizzle-orm"
+import { and } from "drizzle-orm"
 import { eq } from "drizzle-orm"
+import { gt } from "drizzle-orm"
 import { inArray } from "drizzle-orm"
+import { sql } from "drizzle-orm"
 import { Project } from "@/project/project"
 import { GlobalBus } from "@/bus/global"
 import { Auth } from "@/auth"
@@ -32,6 +35,8 @@ import { Vcs } from "@/project/vcs"
 import { InstanceStore } from "@/project/instance-store"
 import { InstanceBootstrap } from "@/project/bootstrap"
 import { WorkspaceAdapterRuntime } from "./workspace-adapter-runtime"
+import { SessionRecoveryTransferGuard } from "@/session/recovery-transfer-guard"
+import { encodeReplayRequestPrefix, SyncReplayLimits } from "@/sync/replay-protocol"
 
 export const Info = Schema.Struct({
   ...WorkspaceInfoSchema.fields,
@@ -125,6 +130,25 @@ export class SessionWarpHttpError extends Schema.TaggedErrorClass<SessionWarpHtt
   },
 ) {}
 
+export class SessionWarpRecoveryProjectionError extends Schema.TaggedErrorClass<SessionWarpRecoveryProjectionError>()(
+  "WorkspaceSessionWarpRecoveryProjectionError",
+  {
+    message: Schema.String,
+    sessionID: SessionID,
+    recoveryAuthorityID: Schema.String,
+  },
+) {}
+
+export class SessionWarpHistoryLimitError extends Schema.TaggedErrorClass<SessionWarpHistoryLimitError>()(
+  "WorkspaceSessionWarpHistoryLimitError",
+  {
+    message: Schema.String,
+    sessionID: SessionID,
+    eventID: EventV2.ID,
+    bytes: Schema.Number,
+  },
+) {}
+
 export class SyncTimeoutError extends Schema.TaggedErrorClass<SyncTimeoutError>()("WorkspaceSyncTimeoutError", {
   message: Schema.String,
   state: Schema.Record(Schema.String, Schema.Number),
@@ -140,6 +164,9 @@ type SessionWarpError =
   | WorkspaceNotFoundError
   | SessionEventsNotFoundError
   | SessionWarpHttpError
+  | SessionWarpRecoveryProjectionError
+  | SessionWarpHistoryLimitError
+  | Vcs.RawDiffError
   | Vcs.PatchApplyError
   | HttpClientError.HttpClientError
 type WaitForSyncError = SyncTimeoutError | SyncAbortedError
@@ -326,6 +353,89 @@ export const layer = Layer.effect(
         )
       })
 
+    const loadRawPatch = Effect.fn("Workspace.loadRawPatch")(function* (workspaceID: WorkspaceV2.ID) {
+      const workspace = yield* get(workspaceID)
+      if (!workspace)
+        return yield* new Vcs.RawDiffError({
+          message: `Raw patch source workspace not found: ${workspaceID}`,
+          reason: "remote-status",
+        })
+
+      const target = yield* WorkspaceAdapterRuntime.target(workspace)
+      if (target.type === "local") {
+        const store = yield* InstanceStore.Service
+        return yield* store.provide({ directory: target.directory }, vcs.diffRaw())
+      }
+
+      const response = yield* http
+        .execute(
+          HttpClientRequest.get(route(target.url, "/vcs/diff/raw"), {
+            headers: new Headers(target.headers),
+          }),
+        )
+        .pipe(
+          Effect.mapError(
+            () =>
+              new Vcs.RawDiffError({
+                message: `Raw patch source request failed: ${workspaceID}`,
+                reason: "remote-status",
+              }),
+          ),
+        )
+      if (response.status < 200 || response.status >= 300)
+        return yield* new Vcs.RawDiffError({
+          message: `Raw patch source returned HTTP ${response.status}`,
+          reason: "remote-status",
+          actual: response.status,
+        })
+
+      const contentLength = Number(response.headers["content-length"])
+      if (Number.isFinite(contentLength) && contentLength > Vcs.RawDiffLimits.patchBytes)
+        return yield* new Vcs.RawDiffError({
+          message: "Remote raw patch exceeded the declared response budget",
+          reason: "remote-output",
+          limit: Vcs.RawDiffLimits.patchBytes,
+          actual: contentLength,
+        })
+
+      const result = yield* Stream.runFoldEffect(
+        response.stream,
+        () => ({ chunks: [] as Uint8Array[], bytes: 0 }),
+        (acc, chunk) => {
+          const bytes = acc.bytes + chunk.byteLength
+          if (bytes <= Vcs.RawDiffLimits.patchBytes) {
+            acc.chunks.push(chunk)
+            return Effect.succeed({ chunks: acc.chunks, bytes })
+          }
+          return Effect.fail(
+            new Vcs.RawDiffError({
+              message: "Remote raw patch exceeded the streamed response budget",
+              reason: "remote-output",
+              limit: Vcs.RawDiffLimits.patchBytes,
+              actual: bytes,
+            }),
+          )
+        },
+      ).pipe(
+        Effect.mapError((error) =>
+          error instanceof Vcs.RawDiffError
+            ? error
+            : new Vcs.RawDiffError({
+                message: "Remote raw patch response failed while streaming",
+                reason: "remote-output",
+              }),
+        ),
+      )
+      return yield* Effect.try({
+        try: () => new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(result.chunks, result.bytes)),
+        catch: () =>
+          new Vcs.RawDiffError({
+            message: "Remote raw patch response is not valid UTF-8",
+            reason: "remote-decode",
+          }),
+      })
+    })
+
     const syncHistory = Effect.fn("Workspace.syncHistory")(function* (
       space: Info,
       url: URL | string,
@@ -354,46 +464,53 @@ export const layer = Layer.effect(
         known: Object.keys(state).length,
       })
 
-      const response = yield* http.execute(
-        HttpClientRequest.post(route(url, "/sync/history"), {
-          headers: new Headers(headers),
-          body: HttpBody.jsonUnsafe(state),
-        }),
-      )
+      let total = 0
+      while (true) {
+        const response = yield* http.execute(
+          HttpClientRequest.post(route(url, "/sync/history"), {
+            headers: new Headers(headers),
+            body: HttpBody.jsonUnsafe(state),
+          }),
+        )
 
-      if (response.status < 200 || response.status >= 300) {
-        const body = yield* response.text
-        return yield* new SyncHttpError({
-          message: `Workspace history HTTP failure: ${response.status} ${body}`,
-          status: response.status,
-          body,
-        })
+        if (response.status < 200 || response.status >= 300) {
+          const body = yield* response.text
+          return yield* new SyncHttpError({
+            message: `Workspace history HTTP failure: ${response.status} ${body}`,
+            status: response.status,
+            body,
+          })
+        }
+
+        const history = (yield* response.json) as HistoryEvent[]
+        if (history.length === 0) break
+        yield* Effect.forEach(
+          history,
+          (event) =>
+            events
+              .replay(
+                {
+                  id: EventV2.ID.make(event.id),
+                  aggregateID: event.aggregate_id,
+                  seq: event.seq,
+                  type: event.type,
+                  data: event.data,
+                },
+                { publish: true, ownerID: space.id },
+              )
+              .pipe(
+                Effect.provideService(WorkspaceRef, space.id),
+                Effect.tap(() => Effect.sync(() => (state[event.aggregate_id] = event.seq))),
+              ),
+          { discard: true },
+        )
+        total += history.length
       }
-
-      const history = (yield* response.json) as HistoryEvent[]
 
       log.info("workspace history synced", {
         workspaceID: space.id,
-        events: history.length,
+        events: total,
       })
-
-      yield* Effect.forEach(
-        history,
-        (event) =>
-          events
-            .replay(
-              {
-                id: EventV2.ID.make(event.id),
-                aggregateID: event.aggregate_id,
-                seq: event.seq,
-                type: event.type,
-                data: event.data,
-              },
-              { publish: true, ownerID: space.id },
-            )
-            .pipe(Effect.provideService(WorkspaceRef, space.id)),
-        { discard: true },
-      )
     })
 
     const syncWorkspaceLoop = Effect.fn("Workspace.syncWorkspaceLoop")(function* (space: Info) {
@@ -609,6 +726,43 @@ export const layer = Layer.effect(
           .get()
           .pipe(Effect.orDie)
 
+        const recoveryAuthorityID = yield* SessionRecoveryTransferGuard.authorityID(db, input.sessionID)
+        if (
+          recoveryAuthorityID &&
+          (input.workspaceID ?? undefined) !== (current?.workspaceID ?? undefined)
+        )
+          return yield* new SessionWarpRecoveryProjectionError({
+            message:
+              "Provider recovery projection cannot move between workspaces until canonical recovery snapshot import is available",
+            sessionID: input.sessionID,
+            recoveryAuthorityID,
+          })
+
+        const sourcePatch =
+          input.copyChanges && current?.workspaceID
+            ? yield* loadRawPatch(current.workspaceID).pipe(
+                Effect.provide(InstanceStore.defaultLayer.pipe(Layer.provide(InstanceBootstrap.defaultLayer))),
+              )
+            : ""
+
+        if (sourcePatch) {
+          const applied = yield* runInWorkspace({
+            workspaceID: input.workspaceID ?? undefined,
+            local: () => vcs.apply({ patch: sourcePatch }),
+            remote: ({ target }) =>
+              HttpClientRequest.post(route(target.url, "/vcs/apply"), {
+                headers: new Headers(target.headers),
+                body: HttpBody.jsonUnsafe({ patch: sourcePatch }),
+              }),
+            fallback: { applied: false },
+          }).pipe(Effect.provide(InstanceStore.defaultLayer.pipe(Layer.provide(InstanceBootstrap.defaultLayer))))
+          if (!applied.applied)
+            return yield* new Vcs.PatchApplyError({
+              message: "Patch can't be applied because the target workspace was unavailable",
+              reason: "not-clean",
+            })
+        }
+
         if (current?.workspaceID) {
           const previous = yield* get(current.workspaceID)
           if (previous) {
@@ -634,36 +788,6 @@ export const layer = Layer.effect(
             // the old workspace are ignored
             yield* events.claim(input.sessionID, input.workspaceID ?? previous.projectID)
           }
-        }
-
-        const sourcePatch =
-          input.copyChanges && current?.workspaceID
-            ? yield* runInWorkspace({
-                workspaceID: current?.workspaceID ?? undefined,
-                local: () => vcs.diffRaw(),
-                remote: ({ target }) =>
-                  HttpClientRequest.get(route(target.url, "/vcs/diff/raw"), {
-                    headers: new Headers(target.headers),
-                  }),
-                fallback: "",
-                response: "text",
-              }).pipe(Effect.provide(InstanceStore.defaultLayer.pipe(Layer.provide(InstanceBootstrap.defaultLayer))))
-            : ""
-
-        if (sourcePatch) {
-          // Attempt to apply the file changes to the new workspace.
-          // We intentionally do first so if it fails we don't warp
-          // the session.
-          yield* runInWorkspace({
-            workspaceID: input.workspaceID ?? undefined,
-            local: () => vcs.apply({ patch: sourcePatch }),
-            remote: ({ target }) =>
-              HttpClientRequest.post(route(target.url, "/vcs/apply"), {
-                headers: new Headers(target.headers),
-                body: HttpBody.jsonUnsafe({ patch: sourcePatch }),
-              }),
-            fallback: { applied: false },
-          }).pipe(Effect.provide(InstanceStore.defaultLayer.pipe(Layer.provide(InstanceBootstrap.defaultLayer))))
         }
 
         if (input.workspaceID === null) {
@@ -698,81 +822,100 @@ export const layer = Layer.effect(
           return
         }
 
-        const rows = yield* db
-          .select({
-            id: EventTable.id,
-            aggregateID: EventTable.aggregate_id,
-            seq: EventTable.seq,
-            type: EventTable.type,
-            data: EventTable.data,
-          })
-          .from(EventTable)
-          .where(eq(EventTable.aggregate_id, input.sessionID))
-          .orderBy(asc(EventTable.seq))
-          .all()
-          .pipe(Effect.orDie)
-        if (rows.length === 0)
+        const pageEvents = Math.min(10, SyncReplayLimits.events)
+        const pageBytes = SyncReplayLimits.eventDataBytes
+        let cursor = -1
+        let total = 0
+        while (true) {
+          const candidates = yield* db
+            .select({
+              id: EventTable.id,
+              seq: EventTable.seq,
+              bytes: sql<number>`length(CAST(${EventTable.data} AS BLOB))`,
+            })
+            .from(EventTable)
+            .where(and(eq(EventTable.aggregate_id, input.sessionID), gt(EventTable.seq, cursor)))
+            .orderBy(asc(EventTable.seq))
+            .limit(pageEvents)
+            .all()
+            .pipe(Effect.orDie)
+          if (candidates.length === 0) break
+          const page = candidates.reduce<{
+            ids: EventV2.ID[]
+            bytes: number
+            closed: boolean
+            oversized?: (typeof candidates)[number]
+          }>(
+            (result, row) => {
+              if (result.closed) return result
+              if (row.bytes > pageBytes)
+                return result.ids.length === 0
+                  ? { ...result, closed: true, oversized: row }
+                  : { ...result, closed: true }
+              if (result.bytes > 0 && result.bytes + row.bytes > pageBytes) return { ...result, closed: true }
+              return { ids: [...result.ids, row.id], bytes: result.bytes + row.bytes, closed: false }
+            },
+            { ids: [], bytes: 0, closed: false },
+          )
+          if (page.oversized)
+            return yield* new SessionWarpHistoryLimitError({
+              message: `Legacy sync event ${page.oversized.id} exceeds the bounded warp page and requires artifact migration`,
+              sessionID: input.sessionID,
+              eventID: page.oversized.id,
+              bytes: page.oversized.bytes,
+            })
+          if (page.ids.length === 0) break
+          const events = yield* db
+            .select({
+              id: EventTable.id,
+              aggregateID: EventTable.aggregate_id,
+              seq: EventTable.seq,
+              type: EventTable.type,
+              data: EventTable.data,
+            })
+            .from(EventTable)
+            .where(inArray(EventTable.id, page.ids))
+            .orderBy(asc(EventTable.seq))
+            .all()
+            .pipe(Effect.orDie)
+          const encoded = encodeReplayRequestPrefix(space.directory ?? "", events)
+          if (encoded.events.length === 0)
+            return yield* new SessionWarpHistoryLimitError({
+              message: `Sync event ${events[0]!.id} cannot fit the bounded replay request`,
+              sessionID: input.sessionID,
+              eventID: events[0]!.id,
+              bytes: Buffer.byteLength(
+                JSON.stringify({
+                  directory: space.directory ?? "",
+                  events: [events[0]],
+                }),
+              ),
+            })
+          const response = yield* http.execute(
+            HttpClientRequest.post(route(target.url, "/sync/replay"), {
+              headers: new Headers(target.headers),
+              body: HttpBody.text(encoded.json, "application/json"),
+            }),
+          )
+          if (response.status < 200 || response.status >= 300) {
+            const body = yield* response.text
+            return yield* new SessionWarpHttpError({
+              message: `Failed to warp session ${input.sessionID} into workspace ${workspaceID}: HTTP ${response.status} ${body}`,
+              workspaceID,
+              sessionID: input.sessionID,
+              status: response.status,
+              body,
+            })
+          }
+          cursor = encoded.events.at(-1)!.seq
+          total += encoded.events.length
+          if (encoded.complete && page.ids.length === candidates.length && candidates.length < pageEvents) break
+        }
+        if (total === 0)
           return yield* new SessionEventsNotFoundError({
             message: `No events found for session: ${input.sessionID}`,
             sessionID: input.sessionID,
           })
-
-        const batches = Iterable.chunksOf(rows, 10)
-        const total = Iterable.size(batches)
-
-        log.info("session warp prepared", {
-          workspaceID: input.workspaceID,
-          sessionID: input.sessionID,
-          target: String(route(target.url, "/sync/replay")),
-          events: rows.length,
-          batches: total,
-          first: rows[0]?.seq,
-          last: rows.at(-1)?.seq,
-        })
-
-        yield* Effect.forEach(
-          batches,
-          (events, i) =>
-            Effect.gen(function* () {
-              const response = yield* http.execute(
-                HttpClientRequest.post(route(target.url, "/sync/replay"), {
-                  headers: new Headers(target.headers),
-                  body: HttpBody.jsonUnsafe({
-                    directory: space.directory ?? "",
-                    events,
-                  }),
-                }),
-              )
-
-              if (response.status < 200 || response.status >= 300) {
-                const body = yield* response.text
-                log.error("session warp batch failed", {
-                  workspaceID: input.workspaceID,
-                  sessionID: input.sessionID,
-                  step: i + 1,
-                  total,
-                  status: response.status,
-                  body,
-                })
-                return yield* new SessionWarpHttpError({
-                  message: `Failed to warp session ${input.sessionID} into workspace ${workspaceID}: HTTP ${response.status} ${body}`,
-                  workspaceID,
-                  sessionID: input.sessionID,
-                  status: response.status,
-                  body,
-                })
-              }
-
-              log.info("session warp batch posted", {
-                workspaceID: input.workspaceID,
-                sessionID: input.sessionID,
-                step: i + 1,
-                total,
-                status: response.status,
-              })
-            }),
-          { discard: true },
-        )
 
         const response = yield* http.execute(
           HttpClientRequest.post(route(target.url, "/sync/steal"), {
@@ -802,7 +945,7 @@ export const layer = Layer.effect(
         log.info("session warp complete", {
           workspaceID: input.workspaceID,
           sessionID: input.sessionID,
-          batches: total,
+          events: total,
         })
       }).pipe(
         Effect.tapError((err) =>
