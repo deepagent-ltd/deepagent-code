@@ -319,7 +319,7 @@ END`
 
 export function clientProjection<T extends Info>(message: T): T {
   if (message.role !== "user" || !message.summary) return message
-  const diffs = message.summary.diffs.slice(0, ClientDiffLimits.files).map((item) => ({
+  const diffs = (message.summary.diffs ?? []).slice(0, ClientDiffLimits.files).map((item) => ({
     ...(item.file === undefined ? {} : { file: item.file }),
     additions: item.additions,
     deletions: item.deletions,
@@ -1338,10 +1338,25 @@ export function promptHistoryCutoffAuthorityInTransaction(
     if (!projection) return
     if (snapshotExit.value.epoch?.authority_state !== "recovery_required")
       return { projection, physical: snapshotExit.value.physical }
+    const epoch = snapshotExit.value.epoch
+    const selected = selectEpochHistory(
+      snapshotExit.value.chronological,
+      epoch,
+      snapshotExit.value.replacementMessageIDs,
+      snapshotExit.value.recoveryAdmittedMessageIDs,
+    )
+    if (!selected.ok) return
     const unresolved = yield* tx
       .select({
         userMessageID: SessionToolRequestReceiptTable.user_message_id,
         assistantMessageID: SessionToolRequestReceiptTable.assistant_message_id,
+        providerAttemptID: SessionToolRequestReceiptTable.provider_attempt_id,
+        promptEpoch: SessionToolRequestReceiptTable.prompt_epoch,
+        promptWindowID: SessionToolRequestReceiptTable.prompt_window_id,
+        effectiveHistoryHash: SessionToolRequestReceiptTable.effective_history_hash,
+        requestInputHash: SessionToolRequestReceiptTable.request_input_hash,
+        providerRequestHash: SessionToolRequestReceiptTable.provider_request_hash,
+        finalRequestHash: SessionToolRequestReceiptTable.final_request_hash,
       })
       .from(SessionToolRequestReceiptTable)
       .leftJoin(
@@ -1356,14 +1371,20 @@ export function promptHistoryCutoffAuthorityInTransaction(
         ),
       )
       .all()
-    const cutoffIndex = snapshotExit.value.chronological.findIndex(
-      (message) => message.info.id === input.cutoffMessageID,
-    )
+    const cutoffIndex = selected.messages.findIndex((message) => message.info.id === input.cutoffMessageID)
     const unsafe = unresolved.some((receipt) => {
-      const userIndex = snapshotExit.value.chronological.findIndex(
-        (message) => message.info.id === receipt.userMessageID,
+      const userIndex = selected.messages.findIndex((message) => message.info.id === receipt.userMessageID)
+      const assistantIndex = selected.messages.findIndex((message) => message.info.id === receipt.assistantMessageID)
+      return (
+        receipt.providerAttemptID === null &&
+        receipt.promptEpoch === epoch.epoch &&
+        receipt.promptWindowID === epoch.window_id &&
+        !!receipt.effectiveHistoryHash &&
+        !!(receipt.finalRequestHash ?? receipt.providerRequestHash ?? receipt.requestInputHash) &&
+        userIndex >= 0 &&
+        assistantIndex > userIndex &&
+        cutoffIndex > userIndex
       )
-      return userIndex >= 0 && cutoffIndex > userIndex
     })
     if (unsafe) return
     return { projection, physical: snapshotExit.value.physical }
@@ -1382,6 +1403,28 @@ export function promptHistoryCutoffProjectionInTransaction(
 export const promptHistoryCutoffProjectionEffect = Effect.fn("MessageV2.promptHistoryCutoffProjection")(
   function* (input: { sessionID: SessionID; cutoffMessageID: MessageID }) {
     const { db } = yield* Database.Service
+    const authority = yield* db
+      .select({ state: SessionPromptEpochTable.authority_state })
+      .from(SessionPromptEpochTable)
+      .where(
+        and(
+          eq(SessionPromptEpochTable.session_id, input.sessionID),
+          eq(SessionPromptEpochTable.state, "active"),
+        ),
+      )
+      .get()
+      .pipe(Effect.orDie)
+    const history = yield* db
+      .select({ state: SessionHistoryStateTable.state })
+      .from(SessionHistoryStateTable)
+      .where(eq(SessionHistoryStateTable.session_id, input.sessionID))
+      .get()
+      .pipe(Effect.orDie)
+    if (
+      (!authority || authority.state === "legacy_pending") &&
+      history?.state !== "recovery_required"
+    )
+      yield* promptHistoryProjectionEffect(input.sessionID)
     const projection = yield* db
       .transaction((tx) => promptHistoryCutoffProjectionInTransaction(tx as unknown as Database.Interface["db"], input))
       .pipe(Effect.orDie)

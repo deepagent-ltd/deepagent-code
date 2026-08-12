@@ -476,7 +476,11 @@ const service = Effect.gen(function* () {
                 reason: "ambiguous provider turn is not contiguous",
               })
             const safeMessages = cutoffAuthority.projection.messages
-            if (safeMessages.some((message) => message.info.role === "assistant" && !message.info.finish))
+            if (
+              safeMessages.some(
+                (message) => message.info.role === "assistant" && !message.info.finish && !message.info.error,
+              )
+            )
               return yield* new Conflict({
                 code: "unsafe_history_boundary",
                 reason: "safe prefix contains unfinished assistant output",

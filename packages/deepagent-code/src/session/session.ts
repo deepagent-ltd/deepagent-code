@@ -2359,7 +2359,7 @@ export const layer: Layer.Layer<
       )
       const cloned = sourceMessages.map((message) => {
         const id = messageIDMap.get(message.info.id)!
-        const info: SessionV1.Info =
+        const info = MessageV2.stripActivityProgress<SessionV1.Info>(
           message.info.role === "assistant"
             ? {
                 ...message.info,
@@ -2367,7 +2367,8 @@ export const layer: Layer.Layer<
                 sessionID: targetSessionID,
                 parentID: messageIDMap.get(message.info.parentID)!,
               }
-            : { ...message.info, id, sessionID: targetSessionID }
+            : { ...message.info, id, sessionID: targetSessionID },
+        )
         if (info.role === "assistant" && !info.parentID) {
           throw new ForkConflict({
             intentID,
@@ -2376,17 +2377,19 @@ export const layer: Layer.Layer<
         }
         return {
           info,
-          parts: message.parts.map((part) => ({
-            ...part,
-            id: PartID.make(
-              `prt_${part.id.replace(/^prt_?/, "")}_${Hash.sha256(`fork-map:v1:${intentID}:${part.id}`).slice(0, 12)}`,
-            ),
-            messageID: id,
-            sessionID: targetSessionID,
-            ...(part.type === "compaction"
-              ? { tail_start_id: part.tail_start_id ? messageIDMap.get(part.tail_start_id) : undefined }
-              : {}),
-          })) as SessionV1.Part[],
+          parts: message.parts.map((part) =>
+            MessageV2.stripActivityProgressPart({
+              ...part,
+              id: PartID.make(
+                `prt_${part.id.replace(/^prt_?/, "")}_${Hash.sha256(`fork-map:v1:${intentID}:${part.id}`).slice(0, 12)}`,
+              ),
+              messageID: id,
+              sessionID: targetSessionID,
+              ...(part.type === "compaction"
+                ? { tail_start_id: part.tail_start_id ? messageIDMap.get(part.tail_start_id) : undefined }
+                : {}),
+            }),
+          ) as SessionV1.Part[],
         }
       })
       const targetEffectiveHistoryHash = HistoryAuthority.hash(cloned)
@@ -2513,24 +2516,21 @@ export const layer: Layer.Layer<
                       time_created: message.info.time.created,
                       time_updated: message.info.time.created,
                       data: Object.fromEntries(
-                        Object.entries(MessageV2.stripActivityProgress(message.info)).filter(
-                          ([key]) => key !== "id" && key !== "sessionID",
-                        ),
+                        Object.entries(message.info).filter(([key]) => key !== "id" && key !== "sessionID"),
                       ) as typeof MessageTable.$inferInsert.data,
                     })
                     .run()
                   for (const part of message.parts) {
-                    const clonedPart = MessageV2.stripActivityProgressPart(part)
                     yield* db
                       .insert(PartTable)
                       .values({
-                        id: clonedPart.id,
+                        id: part.id,
                         message_id: message.info.id,
                         session_id: session.id,
                         time_created: message.info.time.created,
                         time_updated: message.info.time.created,
                         data: Object.fromEntries(
-                          Object.entries(clonedPart).filter(
+                          Object.entries(part).filter(
                             ([key]) => key !== "id" && key !== "messageID" && key !== "sessionID",
                           ),
                         ) as typeof PartTable.$inferInsert.data,
