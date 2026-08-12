@@ -7,7 +7,7 @@ export const SyncReplayLimits = {
   requestBytes: EventV2.AGGREGATE_READ_BATCH_BYTES + 1024 * 1024 + 64 * 1024,
   directoryCharacters: 4_096,
   eventIDCharacters: 200,
-  aggregateIDCharacters: 4_096,
+  aggregateIDCharacters: 200,
   typeCharacters: 256,
 } as const
 
@@ -50,22 +50,23 @@ export function encodeReplayRequestPrefix(directory: string, events: readonly Re
   )
   const eventsBytes = selected.contentBytes + 2
   const requestBytes = prefixBytes + selected.contentBytes + suffixBytes
+  const valid =
+    directory.length <= SyncReplayLimits.directoryCharacters &&
+    selected.events.every(
+      (event) =>
+        event.id.length <= SyncReplayLimits.eventIDCharacters &&
+        event.aggregateID.length > 0 &&
+        event.aggregateID.length <= SyncReplayLimits.aggregateIDCharacters &&
+        event.type.length > 0 &&
+        event.type.length <= SyncReplayLimits.typeCharacters,
+    )
   return {
     events: selected.events,
     json: prefix + selected.encoded.join(",") + suffix,
     dataBytes: selected.dataBytes,
     eventsBytes,
     requestBytes,
-    complete:
-      selected.events.length === events.length &&
-      directory.length <= SyncReplayLimits.directoryCharacters &&
-      selected.events.every(
-        (event) =>
-          event.id.length <= SyncReplayLimits.eventIDCharacters &&
-          event.aggregateID.length > 0 &&
-          event.aggregateID.length <= SyncReplayLimits.aggregateIDCharacters &&
-          event.type.length > 0 &&
-          event.type.length <= SyncReplayLimits.typeCharacters,
-      ),
+    valid,
+    complete: selected.events.length === events.length && valid,
   }
 }
