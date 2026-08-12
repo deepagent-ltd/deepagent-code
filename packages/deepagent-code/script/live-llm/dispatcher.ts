@@ -224,7 +224,7 @@ const modelCommands = new Map<string, DispatcherCommand>([
     command("packages/desktop", "bun", "run", "test:llm-release:activity-progress-package"),
   ],
   [
-    "ext:packaged-sidecar:long-session",
+    "ext:renderer-ui:long-session",
     command("packages/desktop", "bun", "run", "test:llm-release:long-session"),
   ],
   [

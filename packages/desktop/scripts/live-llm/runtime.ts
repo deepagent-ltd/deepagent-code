@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert"
-import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -403,6 +403,28 @@ export async function closeAll() {
     }),
   )
   activeApps.clear()
+}
+
+export async function findPackagedExecutable(directory = path.join(packageRoot, "dist")) {
+  const candidates: Array<{ path: string; modified: number }> = []
+  async function visit(current: string) {
+    for (const entry of await readdir(current, { withFileTypes: true })) {
+      const target = path.join(current, entry.name)
+      if (entry.isDirectory()) {
+        await visit(target)
+        continue
+      }
+      const segments = path.relative(directory, target).split(path.sep)
+      const app = segments.findIndex((segment) => segment.endsWith(".app"))
+      if (app === -1 || segments[app + 1] !== "Contents" || segments[app + 2] !== "MacOS") continue
+      const info = await stat(target)
+      if ((info.mode & 0o111) !== 0) candidates.push({ path: target, modified: info.mtimeMs })
+    }
+  }
+  await visit(directory)
+  const executable = candidates.sort((left, right) => right.modified - left.modified)[0]?.path
+  if (!executable) throw new Error(`No packaged macOS executable found under ${directory}`)
+  return executable
 }
 
 export async function request<T>(runtime: Runtime, pathname: string, init?: RequestInit) {

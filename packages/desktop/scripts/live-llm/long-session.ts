@@ -1,14 +1,17 @@
 import { strict as assert } from "node:assert"
 import { createHash, randomUUID } from "node:crypto"
-import { writeFile } from "node:fs/promises"
+import { mkdir, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { DatabaseSync } from "node:sqlite"
+import { fileURLToPath } from "node:url"
 import {
   assertModel,
   assertNoPermissionRequests,
   close,
   closeAll,
   createSession,
+  findPackagedExecutable,
+  focusSession,
   launch,
   loadLiveConfig,
   messages,
@@ -28,10 +31,14 @@ const suite = "long-session"
 const config = await loadLiveConfig()
 const preflightResult = await preflight(config)
 const startedAt = Date.now()
+const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
+const executablePath = await findPackagedExecutable(path.join(packageRoot, "dist"))
 
 try {
-  const runtime = await launch(suite, config)
+  const runtime = await launch(suite, config, { executablePath })
   try {
+    const packaged = await runtime.app.evaluate(({ app }) => ({ packaged: app.isPackaged, version: app.getVersion() }))
+    assert.equal(packaged.packaged, true)
     const marker = `long-session-${randomUUID()}`
     await writeFile(path.join(runtime.workspace, "memory.txt"), `${marker}\n`)
     const session = await createSession(runtime, "DeepSeek V4 Flash long Session", "live-long")
@@ -71,21 +78,26 @@ try {
       .find((message) => message.info.role === "assistant" && message.info.time.completed !== undefined)
     assert.ok(summary)
     assert.match(visibleText([summary]), new RegExp(marker))
+    await focusSession(runtime, session)
+    const pageErrors: string[] = []
+    runtime.page.on("pageerror", (error) => pageErrors.push(error.stack ?? error.message))
+    await runtime.page.reload({ waitUntil: "domcontentloaded" })
+    await runtime.page
+      .getByRole("heading", { name: "DeepSeek V4 Flash long Session" })
+      .waitFor({ state: "visible", timeout: 60_000 })
 
     const questionPrompt =
       "Call question exactly once to ask whether the retained release proof should be reported, with one Continue option. Wait for the answer and do not call other tools."
-    const interruptedBefore = await startPrompt(
-      runtime,
-      session.id,
-      questionPrompt,
-      "live-long",
-    )
+    const interruptedBefore = await submitThroughRenderer(runtime, session.id, questionPrompt)
     const question = await waitFor(
       async () => (await request<QuestionRequest[]>(runtime, "/question")).find((item) => item.sessionID === session.id),
       "long-session Question latch",
       config.timeoutMs,
     )
-    await request<boolean>(runtime, `/question/${question.id}/reject`, { method: "POST" })
+    await runtime.page.locator('[data-slot="question-text"]').waitFor({ state: "visible", timeout: 30_000 })
+    const reject = runtime.page.locator('[data-action="question-reject"]')
+    assert.equal(await reject.count(), 1)
+    await reject.click()
     await waitFor(
       async () => {
         const [all, statuses, pending] = await Promise.all([
@@ -122,12 +134,7 @@ try {
 
     const continuationPrompt =
       "Continue after the rejected question. Without calling any tool, report the exact release proof retained from before compaction."
-    const finalBefore = await startPrompt(
-      runtime,
-      session.id,
-      continuationPrompt,
-      "live-long",
-    )
+    const finalBefore = await submitThroughRenderer(runtime, session.id, continuationPrompt)
     const finalMessages = await waitForPrompt(runtime, session.id, finalBefore, "post-interruption continuation")
     const finalTurn = finalMessages.filter((message) => !finalBefore.has(message.info.id))
     assertModel(finalMessages, config.modelID)
@@ -154,11 +161,16 @@ try {
       allMessages.filter((message) => message.info.role === "user" && visibleText([message]) === continuationPrompt).length,
       1,
     )
+    assert.deepEqual(pageErrors, [])
+    const artifactDirectory = path.join(packageRoot, ".artifacts/live-llm")
+    await mkdir(artifactDirectory, { recursive: true })
+    const screenshot = path.join(artifactDirectory, `${suite}.png`)
+    await runtime.page.screenshot({ path: screenshot, fullPage: false })
 
     await writeArtifact(suite, {
       suite,
-      mode: "ext",
-      stack: "packaged-sidecar",
+      mode: "release",
+      stack: "packaged-renderer-ui",
       status: "passed",
       fingerprint: {
         providerID: "deepseek",
@@ -168,18 +180,27 @@ try {
         baseURL: config.baseURL,
       },
       preflight: preflightResult,
+      package: {
+        version: packaged.version,
+        executable: path.relative(packageRoot, executablePath),
+        isPackaged: packaged.packaged,
+      },
       evidence: {
         markerHash: createHash("sha256").update(marker).digest("hex"),
         manualCompactionPersisted: true,
         summaryRetainedMarker: true,
         questionCount: question.questions.length,
         questionRejectedThroughProductionRoute: true,
+        questionRejectedThroughRenderer: true,
         rejectedActivity: lifecycleEvidence(rejected),
         continuationActivity: lifecycleEvidence(completed),
         continuationUsedNoTools: true,
+        rendererPromptSubmissions: 2,
+        rendererQuestionRejectClicks: 1,
         pendingPermissions: 0,
         pendingQuestions: 0,
-        humanReplies: 0,
+        pageErrors,
+        screenshot: path.basename(screenshot),
       },
       durationMs: Date.now() - startedAt,
       completedAt: new Date().toISOString(),
@@ -285,4 +306,18 @@ function lifecycleEvidence(lifecycle: Lifecycle) {
     progressStates: lifecycle.progress.map((item) => `${item.revision}:${item.state}`),
     providerDispatches: new Set(lifecycle.progress.map((item) => item.provider_receipt_id)).size,
   }
+}
+
+async function submitThroughRenderer(runtime: Parameters<typeof messages>[0], sessionID: string, text: string) {
+  const before = new Set((await messages(runtime, sessionID)).map((message) => message.info.id))
+  const editor = runtime.page.locator('[data-component="prompt-input"]')
+  await editor.waitFor({ state: "visible", timeout: 60_000 })
+  const direct = runtime.page.locator('[data-action="prompt-scenario-direct"]')
+  if ((await direct.getAttribute("data-active")) !== "true") await direct.click()
+  await editor.fill(text)
+  assert.equal(await editor.textContent(), text)
+  const submit = runtime.page.locator('[data-action="prompt-submit"]')
+  assert.equal(await submit.isEnabled(), true)
+  await submit.click()
+  return before
 }

@@ -113,7 +113,7 @@ const degeneration = modelRun("live", "legacy-session", "degeneration")
 const activityProgressLifecycle = modelRun("live", "legacy-session", "activity-progress-lifecycle")
 const activityProgressRestart = modelRun("live", "packaged-sidecar", "activity-progress-restart")
 const activityProgressPackage = modelRun("ext", "renderer-ui", "activity-progress-package")
-const longSession = modelRun("ext", "packaged-sidecar", "long-session")
+const longSession = modelRun("ext", "renderer-ui", "long-session")
 const finalizerIsolation = modelRun("ext", "legacy-session", "subagent-finalizer-isolation")
 const steerBoundary = modelRun("live", "legacy-session", "steer-boundary")
 const worktreeRouting = modelRun("ext", "legacy-session", "subagent-worktree-routing")
@@ -660,6 +660,7 @@ export const routeManifest = [
     id: "activity-progress-lifecycle-production",
     paths: [
       "packages/app/src/pages/session/message-timeline.data.ts",
+      "packages/app/src/pages/session/composer/session-question-dock.tsx",
       "packages/core/src/database/migration/20260811090000_legacy_activity_progress.ts",
       "packages/core/src/database/migration/20260811100000_legacy_activity_owner.ts",
       "packages/core/src/database/migration/20260812130000_legacy_activity_lifecycle_expand.ts",
