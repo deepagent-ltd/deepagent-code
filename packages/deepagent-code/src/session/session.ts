@@ -726,6 +726,10 @@ export interface Interface {
   readonly children: (parentID: SessionID) => Effect.Effect<Info[]>
   readonly remove: (sessionID: SessionID) => Effect.Effect<void, NotFound>
   readonly updateMessage: <T extends SessionV1.Info>(msg: T) => Effect.Effect<T>
+  readonly publishMessageProjection: (input: {
+    sessionID: SessionID
+    messageID: MessageID
+  }) => Effect.Effect<SessionV1.Info | undefined>
   readonly removeMessage: (input: { sessionID: SessionID; messageID: MessageID }) => Effect.Effect<MessageID>
   readonly removePart: (input: { sessionID: SessionID; messageID: MessageID; partID: PartID }) => Effect.Effect<PartID>
   readonly getPart: (input: {
@@ -925,9 +929,29 @@ export const layer: Layer.Layer<
           .pipe(Effect.orDie)
         if (existing && existing.session_id !== msg.sessionID)
           return yield* Effect.die(`Session.updateMessage: message ${msg.id} belongs to another Session`)
-        yield* events.publish(SessionV1.Event.MessageUpdated, { sessionID: msg.sessionID, info: msg })
+        yield* events.publish(SessionV1.Event.MessageUpdated, {
+          sessionID: msg.sessionID,
+          info: MessageV2.stripActivityProgress(msg),
+        })
         return msg
       }).pipe(Effect.withSpan("Session.updateMessage"))
+
+    const publishMessageProjection: Interface["publishMessageProjection"] = Effect.fn(
+      "Session.publishMessageProjection",
+    )(function* (input) {
+      const message = yield* MessageV2.get(input).pipe(
+        Effect.provideService(Database.Service, database),
+        Effect.catchIf(NotFoundError.isInstance, () =>
+          Effect.logWarning("cannot publish activity progress for a missing assistant message").pipe(
+            Effect.annotateLogs(input),
+            Effect.as(undefined),
+          ),
+        ),
+      )
+      if (!message) return
+      yield* events.publish(SessionV1.Event.MessageUpdated, { sessionID: input.sessionID, info: message.info })
+      return message.info
+    })
 
     const updatePart = <T extends SessionV1.Part>(part: T): Effect.Effect<T> =>
       Effect.gen(function* () {
@@ -1185,17 +1209,19 @@ export const layer: Layer.Layer<
         })
 
         for (const row of rows) {
+          const message = MessageV2.stripActivityProgress(row.info)
           const messageEventID = EventV2.ID.make(
             `evt_${Hash.sha256(`fork-event:v1:${intentID}:message:${row.info.id}`).slice(0, 26)}`,
           )
           yield* publishOnce((commit) =>
             events.publish(
               SessionV1.Event.MessageUpdated,
-              { sessionID: target.id, info: row.info },
+              { sessionID: target.id, info: message },
               { id: messageEventID, idempotent: true, commit },
             ),
           )
           for (const part of row.parts) {
+            const projectedPart = MessageV2.stripActivityProgressPart(part)
             const partEventID = EventV2.ID.make(
               `evt_${Hash.sha256(`fork-event:v1:${intentID}:part:${part.id}`).slice(0, 26)}`,
             )
@@ -1204,8 +1230,11 @@ export const layer: Layer.Layer<
                 SessionV1.Event.PartUpdated,
                 {
                   sessionID: target.id,
-                  part,
-                  time: part.type === "text" ? (part.time?.start ?? row.info.time.created) : row.info.time.created,
+                  part: projectedPart,
+                  time:
+                    projectedPart.type === "text"
+                      ? (projectedPart.time?.start ?? row.info.time.created)
+                      : row.info.time.created,
                 },
                 { id: partEventID, idempotent: true, commit },
               ),
@@ -2361,21 +2390,24 @@ export const layer: Layer.Layer<
                       time_created: message.info.time.created,
                       time_updated: message.info.time.created,
                       data: Object.fromEntries(
-                        Object.entries(message.info).filter(([key]) => key !== "id" && key !== "sessionID"),
+                        Object.entries(MessageV2.stripActivityProgress(message.info)).filter(
+                          ([key]) => key !== "id" && key !== "sessionID",
+                        ),
                       ) as typeof MessageTable.$inferInsert.data,
                     })
                     .run()
                   for (const part of message.parts) {
+                    const clonedPart = MessageV2.stripActivityProgressPart(part)
                     yield* db
                       .insert(PartTable)
                       .values({
-                        id: part.id,
+                        id: clonedPart.id,
                         message_id: message.info.id,
                         session_id: session.id,
                         time_created: message.info.time.created,
                         time_updated: message.info.time.created,
                         data: Object.fromEntries(
-                          Object.entries(part).filter(
+                          Object.entries(clonedPart).filter(
                             ([key]) => key !== "id" && key !== "messageID" && key !== "sessionID",
                           ),
                         ) as typeof PartTable.$inferInsert.data,
@@ -3159,6 +3191,7 @@ export const layer: Layer.Layer<
       children,
       remove,
       updateMessage,
+      publishMessageProjection,
       removeMessage,
       removePart,
       updatePart,

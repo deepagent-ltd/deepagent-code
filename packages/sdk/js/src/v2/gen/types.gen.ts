@@ -376,6 +376,13 @@ export type PlanProtocolViolation = {
   }
 }
 
+export type ActivityProgress = {
+  activityID: string
+  revision: number
+  state: "provisional" | "progress" | "final" | "interrupted" | "recovery_required" | "failed"
+  terminalReason?: string
+}
+
 export type AssistantMessage = {
   id: string
   sessionID: string
@@ -421,6 +428,7 @@ export type AssistantMessage = {
   structured?: unknown
   variant?: string
   finish?: string
+  activityProgress?: ActivityProgress
 }
 
 export type Message = UserMessage | AssistantMessage

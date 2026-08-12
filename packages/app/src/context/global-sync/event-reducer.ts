@@ -18,6 +18,46 @@ import { promptAdmissionClientMessageID } from "./prompt-admission"
 
 const SKIP_PARTS = new Set(["patch", "step-start", "step-finish"])
 
+type AssistantMessage = Extract<Message, { role: "assistant" }>
+type ActivityProgress = NonNullable<AssistantMessage["activityProgress"]>
+
+function activityProgress(value: unknown): ActivityProgress | undefined {
+  if (!value || typeof value !== "object") return
+  const marker = value as Record<string, unknown>
+  if (typeof marker.activityID !== "string" || marker.activityID.length === 0) return
+  if (typeof marker.revision !== "number" || !Number.isInteger(marker.revision) || marker.revision < 0) return
+  if (
+    !["provisional", "progress", "final", "interrupted", "recovery_required", "failed"].includes(
+      String(marker.state),
+    )
+  )
+    return
+  if (marker.terminalReason !== undefined && typeof marker.terminalReason !== "string") return
+  return value as ActivityProgress
+}
+
+function mergeMessage(current: Message, incoming: Message) {
+  if (current.role !== "assistant" || incoming.role !== "assistant") return { message: incoming, conflict: false }
+  const existing = activityProgress(current.activityProgress)
+  const next = activityProgress(incoming.activityProgress)
+  if (incoming.activityProgress && !next)
+    return {
+      message: { ...incoming, activityProgress: existing },
+      conflict: true,
+    }
+  if (!existing) return { message: incoming, conflict: false }
+  if (!next) return { message: { ...incoming, activityProgress: existing }, conflict: false }
+  if (existing.activityID !== next.activityID || existing.revision !== next.revision)
+    return { message: { ...incoming, activityProgress: existing }, conflict: true }
+  if (existing.state === next.state) return { message: incoming, conflict: false }
+  const rank = (progress: ActivityProgress) =>
+    progress.state === "provisional" ? 0 : progress.state === "progress" ? 1 : 2
+  if (rank(next) > rank(existing)) return { message: incoming, conflict: false }
+  if (rank(next) < rank(existing))
+    return { message: { ...incoming, activityProgress: existing }, conflict: false }
+  return { message: { ...incoming, activityProgress: existing }, conflict: true }
+}
+
 export function applyGlobalEvent(input: {
   event: { type: string; properties?: unknown }
   project: Project[]
@@ -91,6 +131,7 @@ export function applyDirectoryEvent(input: {
     options?: SessionPlanUpdateOptions,
   ) => void
   setSessionGoal?: (sessionID: string, goal: SessionGoal | undefined) => void
+  refetchSession?: (sessionID: string) => void
   retainedLimit?: number
 }) {
   const event = input.event
@@ -251,7 +292,18 @@ export function applyDirectoryEvent(input: {
       }
       const result = Binary.search(messages, info.id, (m) => m.id)
       if (result.found) {
-        input.setStore("message", info.sessionID, result.index, reconcile(info))
+        const existing = messages[result.index]!
+        const merged = mergeMessage(existing, info)
+        input.setStore("message", info.sessionID, result.index, reconcile(merged.message))
+        if (merged.conflict) {
+          console.error("Conflicting activity progress update", {
+            sessionID: info.sessionID,
+            messageID: info.id,
+            existing: existing.role === "assistant" ? existing.activityProgress : undefined,
+            incoming: info.role === "assistant" ? info.activityProgress : undefined,
+          })
+          input.refetchSession?.(info.sessionID)
+        }
         break
       }
       input.setStore(

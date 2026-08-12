@@ -480,6 +480,21 @@ export const SubtaskPartInput = Schema.Struct({
 }).annotate({ identifier: "SubtaskPartInput" })
 export type SubtaskPartInput = Types.DeepMutable<Schema.Schema.Type<typeof SubtaskPartInput>>
 
+export const ActivityProgress = Schema.Struct({
+  activityID: Schema.NonEmptyString,
+  revision: NonNegativeInt,
+  state: Schema.Literals([
+    "provisional",
+    "progress",
+    "final",
+    "interrupted",
+    "recovery_required",
+    "failed",
+  ]),
+  terminalReason: Schema.optional(Schema.String),
+}).annotate({ identifier: "ActivityProgress" })
+export type ActivityProgress = Types.DeepMutable<Schema.Schema.Type<typeof ActivityProgress>>
+
 export const Assistant = Schema.Struct({
   ...messageBase,
   role: Schema.Literal("assistant"),
@@ -513,6 +528,7 @@ export const Assistant = Schema.Struct({
   structured: Schema.optional(Schema.Any),
   variant: Schema.optional(Schema.String),
   finish: Schema.optional(Schema.String),
+  activityProgress: Schema.optional(ActivityProgress),
 }).annotate({ identifier: "AssistantMessage" })
 export type Assistant = Omit<Types.DeepMutable<Schema.Schema.Type<typeof Assistant>>, "error"> & {
   error?: AssistantError

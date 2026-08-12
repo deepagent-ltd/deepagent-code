@@ -3,7 +3,7 @@ import { createRoot } from "solid-js"
 import { createStore } from "solid-js/store"
 import type { Message, Part } from "@deepagent-code/sdk/v2/client"
 import { ServerScope } from "@/utils/server-scope"
-import { createDirSyncContext } from "./directory-sync"
+import { createDirSyncContext, runInflight } from "./directory-sync"
 
 const state = () =>
   createStore({
@@ -217,5 +217,85 @@ describe("directory optimistic targeting", () => {
     await stale
 
     expect(current[0].message[sessionID]?.map((message) => message.id)).toEqual([canonical.id])
+  })
+})
+
+describe("directory forced session synchronization", () => {
+  test("runs one trailing forced refresh after an ordinary refresh completes", async () => {
+    const inflight = new Map<string, Promise<void>>()
+    const trailing = new Set<string>()
+    let release: (() => void) | undefined
+    let calls = 0
+    const task = async () => {
+      calls += 1
+      if (calls !== 1) return
+      await new Promise<void>((resolve) => {
+        release = resolve
+      })
+    }
+
+    const first = runInflight(inflight, trailing, "session", false, task)
+    const forced = runInflight(inflight, trailing, "session", true, task)
+    await Promise.resolve()
+    expect(calls).toBe(1)
+    release?.()
+    await Promise.all([first, forced])
+
+    expect(calls).toBe(2)
+    expect(trailing.size).toBe(0)
+  })
+
+  test("coalesces concurrent forced refreshes into one trailing refresh", async () => {
+    const inflight = new Map<string, Promise<void>>()
+    const trailing = new Set<string>()
+    let release: (() => void) | undefined
+    let calls = 0
+    const task = async () => {
+      calls += 1
+      if (calls !== 1) return
+      await new Promise<void>((resolve) => {
+        release = resolve
+      })
+    }
+
+    const first = runInflight(inflight, trailing, "session", false, task)
+    const forced = [
+      runInflight(inflight, trailing, "session", true, task),
+      runInflight(inflight, trailing, "session", true, task),
+    ]
+    await Promise.resolve()
+    release?.()
+    await Promise.all([first, ...forced])
+
+    expect(calls).toBe(2)
+  })
+
+  test("still runs the trailing forced refresh after the ordinary refresh fails", async () => {
+    const inflight = new Map<string, Promise<void>>()
+    const trailing = new Set<string>()
+    let release: (() => void) | undefined
+    let calls = 0
+    const task = async () => {
+      calls += 1
+      if (calls !== 1) return
+      await new Promise<void>((resolve) => {
+        release = resolve
+      })
+      throw new Error("ordinary sync failed")
+    }
+
+    const first = runInflight(inflight, trailing, "session", false, task)
+    const forced = runInflight(inflight, trailing, "session", true, task)
+    const outcomes = [first, forced].map((promise) =>
+      promise.then(
+        () => "resolved",
+        (error: unknown) => (error instanceof Error ? error.message : String(error)),
+      ),
+    )
+    await Promise.resolve()
+    release?.()
+
+    expect(await Promise.all(outcomes)).toEqual(["ordinary sync failed", "resolved"])
+    expect(calls).toBe(2)
   })
 })

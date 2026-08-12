@@ -15,6 +15,7 @@ import {
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { eq } from "drizzle-orm"
 import { Effect } from "effect"
+import { MessageV2 } from "../../src/session/message-v2"
 import { SessionMutationEpoch } from "../../src/session/mutation-epoch"
 import { SessionPromptIntent } from "../../src/session/prompt-intent"
 import {
@@ -294,8 +295,10 @@ describe("SessionPromptIntent", () => {
         providerReceiptID: "receipt-progress-final",
       })
 
-      expect(yield* SessionPromptIntent.recoverActiveActivities()).toBe(0)
-      expect(yield* SessionPromptIntent.recoverActiveActivities("next-process-owner")).toBe(1)
+      expect(yield* SessionPromptIntent.recoverActiveActivities()).toEqual([])
+      expect(yield* SessionPromptIntent.recoverActiveActivities("next-process-owner")).toEqual([
+        { activityID: activity.activityID, sessionID, assistantMessageID: assistantID },
+      ])
       expect(
         yield* db
           .select()
@@ -434,7 +437,9 @@ describe("SessionPromptIntent", () => {
           providerReceiptID: "receipt-progress-tool",
         })
 
-        expect(yield* SessionPromptIntent.recoverActiveActivities("next-process-owner")).toBe(1)
+        expect(yield* SessionPromptIntent.recoverActiveActivities("next-process-owner")).toEqual([
+          { activityID: activity.activityID, sessionID, assistantMessageID: assistantID },
+        ])
         expect(
           yield* db
             .select()
@@ -455,6 +460,108 @@ describe("SessionPromptIntent", () => {
           terminal_reason: "process restarted after settled activity progress",
         })
       }),
+  )
+
+  it.effect("projects reasoning-only progress from durable authority without persisting it in message JSON", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const first = yield* claim({
+        intentID: "intent_reasoning_projection",
+        messageID: MessageID.make("msg_reasoning_projection_user"),
+      })
+      if (first.kind !== "claimed") return
+      yield* SessionPromptIntent.complete({
+        intentID: first.receipt.intentID,
+        ownerToken: first.receipt.ownerToken,
+        messageID: first.receipt.messageID,
+        delivery: "turn",
+      })
+      const activity = yield* SessionPromptIntent.activityForMessage({
+        sessionID,
+        messageID: first.receipt.messageID,
+      })
+      if (!activity) return
+      const assistantID = MessageID.make("msg_reasoning_projection_assistant")
+      const { db } = yield* Database.Service
+      yield* db
+        .insert(MessageTable)
+        .values({
+          id: assistantID,
+          session_id: sessionID,
+          time_created: 20,
+          data: {
+            role: "assistant",
+            parentID: first.receipt.messageID,
+            mode: "build",
+            agent: "build",
+            path: { cwd: "/project", root: "/project" },
+            cost: 0,
+            tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+            modelID: ModelV2.ID.make("test"),
+            providerID: ProviderV2.ID.make("test"),
+            time: { created: 20 },
+          } as typeof MessageTable.$inferInsert.data,
+        })
+        .run()
+        .pipe(Effect.orDie)
+      yield* db
+        .insert(PartTable)
+        .values({
+          id: PartID.make("prt_reasoning_projection"),
+          message_id: assistantID,
+          session_id: sessionID,
+          time_created: 20,
+          data: { type: "reasoning", text: "checking remote state" } as typeof PartTable.$inferInsert.data,
+        })
+        .run()
+        .pipe(Effect.orDie)
+      yield* db
+        .insert(SessionToolRequestReceiptTable)
+        .values({
+          receipt_id: "receipt-reasoning-projection",
+          request_ordinal: 1,
+          session_id: sessionID,
+          user_message_id: first.receipt.messageID,
+          assistant_message_id: assistantID,
+          provider_id: "test",
+          model_id: "test",
+          registry_tool_ids: [],
+          permission_filtered_tool_ids: [],
+          final_offered_tool_ids: [],
+          call_ids: [],
+          provider_state: "preparing",
+          request_state: "prepared",
+          created_at: 20,
+        })
+        .run()
+        .pipe(Effect.orDie)
+      yield* SessionPromptIntent.beginProgress({
+        activityID: activity.activityID,
+        assistantMessageID: assistantID,
+        providerReceiptID: "receipt-reasoning-projection",
+      })
+
+      expect((yield* MessageV2.get({ sessionID, messageID: assistantID })).info).toMatchObject({
+        activityProgress: { activityID: activity.activityID, revision: 0, state: "provisional" },
+      })
+      expect(
+        (yield* MessageV2.page({ sessionID, limit: 10 })).items.find((item) => item.info.id === assistantID)?.info,
+      ).toMatchObject({ activityProgress: { activityID: activity.activityID, revision: 0, state: "provisional" } })
+
+      yield* SessionPromptIntent.interruptActivity(activity.activityID)
+      expect((yield* MessageV2.get({ sessionID, messageID: assistantID })).info).toMatchObject({
+        activityProgress: {
+          activityID: activity.activityID,
+          revision: 0,
+          state: "interrupted",
+          terminalReason: "aborted_before_provider_settlement",
+        },
+      })
+      expect(
+        (yield* db.select({ data: MessageTable.data }).from(MessageTable).where(eq(MessageTable.id, assistantID)).get())
+          ?.data,
+      ).not.toHaveProperty("activityProgress")
+    }),
   )
 
   it.effect("a revert epoch prevents an old direct request from materializing any message", () =>
