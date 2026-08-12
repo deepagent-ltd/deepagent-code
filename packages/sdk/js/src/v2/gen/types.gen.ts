@@ -160,6 +160,12 @@ export type MoveSessionError = {
   }
 }
 
+export type ConflictError = {
+  _tag: "ConflictError"
+  message: string
+  resource?: string
+}
+
 export type SnapshotFileDiff = {
   file?: string
   patch?: string
@@ -3823,12 +3829,6 @@ export type Session5 = {
   preview?: string
 }
 
-export type ConflictError = {
-  _tag: "ConflictError"
-  message: string
-  resource?: string
-}
-
 export type Session6 = {
   id: string
   slug: string
@@ -7132,6 +7132,10 @@ export type ExperimentalControlPlaneMoveSessionErrors = {
    * MoveSessionError | InvalidRequestError
    */
   400: MoveSessionError | InvalidRequestError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
 }
 
 export type ExperimentalControlPlaneMoveSessionError =
@@ -15865,6 +15869,10 @@ export type ExperimentalWorkspaceWarpErrors = {
    * NotFoundError
    */
   404: NotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
   /**
    * VcsRawDiffError
    */
