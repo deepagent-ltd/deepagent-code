@@ -58,6 +58,8 @@ function mergePageMessages(
   base: readonly Message[],
   incoming: readonly Message[],
   previous: readonly Message[],
+  baseline: ReadonlyMap<string, string>,
+  authoritative: boolean,
 ) {
   const messages = new Map(base.map((item) => [item.id, item] as const))
   const previousByID = new Map(previous.map((item) => [item.id, item] as const))
@@ -65,6 +67,10 @@ function mergePageMessages(
   for (const item of incoming) {
     const current = previousByID.get(item.id) ?? messages.get(item.id)
     if (!current) {
+      messages.set(item.id, item)
+      continue
+    }
+    if (authoritative && activityProgressKey(current) === baseline.get(item.id)) {
       messages.set(item.id, item)
       continue
     }
@@ -76,6 +82,11 @@ function mergePageMessages(
     messages: [...messages.values()].sort((a, b) => cmp(a.id, b.id)),
     conflict,
   }
+}
+
+function activityProgressKey(message: Message) {
+  if (message.role !== "assistant" || !message.activityProgress) return ""
+  return JSON.stringify(message.activityProgress)
 }
 
 type OptimisticStore = {
@@ -242,6 +253,8 @@ export const createDirSyncContext = (
   const historyMessagePageSize = 200
   const inflight = new Map<string, Promise<void>>()
   const trailing = new Set<string>()
+  const inflightMessages = new Map<string, Promise<void>>()
+  const trailingMessages = new Set<string>()
   const inflightDiff = new Map<string, Promise<void>>()
   const trailingDiff = new Set<string>()
   const optimistic = new Map<string, Map<string, OptimisticItem>>()
@@ -387,68 +400,76 @@ export const createDirSyncContext = (
     limit: number
     before?: string
     mode?: "replace" | "prepend"
+    force?: boolean
+    authoritative?: boolean
     refetchOnConflict?: boolean
   }) => {
     const key = keyFor(input.directory, input.sessionID)
-    if (meta.loading[key]) return
-
-    let conflict = false
-    setMeta("loading", key, true)
-    await fetchMessages(input)
-      .then((page) => {
-        if (!tracked(input.directory, input.sessionID)) return
-        const optimistic = getOptimistic(input.directory, input.sessionID)
-        const next = mergeOptimisticPage(page, optimistic.pending)
-        for (const messageID of next.confirmed) {
-          clearOptimistic(input.directory, input.sessionID, messageID)
-        }
-        const [store] = serverSync.child(input.directory, { bootstrap: false })
-        const previous = store.message[input.sessionID] ?? []
-        const cached = input.mode === "prepend" ? previous : optimistic.canonical
-        const merged = mergePageMessages(cached, next.session, previous)
-        conflict = merged.conflict
-        if (conflict)
-          console.error("Conflicting activity progress page", {
-            sessionID: input.sessionID,
-            mode: input.mode ?? "replace",
-            refetchOnConflict: input.refetchOnConflict !== false,
-          })
-        const message = merged.messages
-        batch(() => {
-          input.setStore("message", input.sessionID, reconcile(message, { key: "id" }))
-          for (const p of next.part) {
-            const filtered = p.part.filter((x) => !SKIP_PARTS.has(x.type))
-            if (filtered.length) input.setStore("part", p.id, filtered)
+    return runInflight(inflightMessages, trailingMessages, key, input.force === true, async () => {
+      const baseline = new Map(
+        (serverSync.child(input.directory, { bootstrap: false })[0].message[input.sessionID] ?? []).map((message) => [
+          message.id,
+          activityProgressKey(message),
+        ]),
+      )
+      let conflict = false
+      setMeta("loading", key, true)
+      await fetchMessages(input)
+        .then((page) => {
+          if (!tracked(input.directory, input.sessionID)) return
+          const optimistic = getOptimistic(input.directory, input.sessionID)
+          const next = mergeOptimisticPage(page, optimistic.pending)
+          for (const messageID of next.confirmed) {
+            clearOptimistic(input.directory, input.sessionID, messageID)
           }
-          setMeta("limit", key, message.length)
-          setMeta("cursor", key, next.cursor)
-          setMeta("complete", key, next.complete)
-          setSessionPrefetch({
-            scope: serverSDK.scope,
-            directory: input.directory,
-            sessionID: input.sessionID,
-            limit: message.length,
-            cursor: next.cursor,
-            complete: next.complete,
+          const [store] = serverSync.child(input.directory, { bootstrap: false })
+          const previous = store.message[input.sessionID] ?? []
+          const cached = input.mode === "prepend" ? previous : optimistic.canonical
+          const merged = mergePageMessages(cached, next.session, previous, baseline, input.authoritative === true)
+          conflict = merged.conflict
+          if (conflict)
+            console.error("Conflicting activity progress page", {
+              sessionID: input.sessionID,
+              mode: input.mode ?? "replace",
+              refetchOnConflict: input.refetchOnConflict !== false,
+            })
+          const message = merged.messages
+          batch(() => {
+            input.setStore("message", input.sessionID, reconcile(message, { key: "id" }))
+            for (const p of next.part) {
+              const filtered = p.part.filter((x) => !SKIP_PARTS.has(x.type))
+              if (filtered.length) input.setStore("part", p.id, filtered)
+            }
+            setMeta("limit", key, message.length)
+            setMeta("cursor", key, next.cursor)
+            setMeta("complete", key, next.complete)
+            setSessionPrefetch({
+              scope: serverSDK.scope,
+              directory: input.directory,
+              sessionID: input.sessionID,
+              limit: message.length,
+              cursor: next.cursor,
+              complete: next.complete,
+            })
           })
         })
-      })
-      .catch((error) => {
-        if (isNotFound(error) && !tracked(input.directory, input.sessionID)) return
-        throw error
-      })
-      .finally(() => {
-        setMeta(
-          produce((draft) => {
-            if (!tracked(input.directory, input.sessionID)) {
-              delete draft.loading[key]
-              return
-            }
-            draft.loading[key] = false
-          }),
-        )
-        if (conflict && input.refetchOnConflict !== false) requestSessionSync?.(input.sessionID)
-      })
+        .catch((error) => {
+          if (isNotFound(error) && !tracked(input.directory, input.sessionID)) return
+          throw error
+        })
+        .finally(() => {
+          setMeta(
+            produce((draft) => {
+              if (!tracked(input.directory, input.sessionID)) {
+                delete draft.loading[key]
+                return
+              }
+              draft.loading[key] = false
+            }),
+          )
+          if (conflict && input.refetchOnConflict !== false) requestSessionSync?.(input.sessionID)
+        })
+    })
   }
 
   const loadPlan = (sessionID: string) => serverSync.plan.sync(directory, sessionID)
@@ -603,6 +624,8 @@ export const createDirSyncContext = (
                   setStore,
                   sessionID,
                   limit,
+                  force: opts?.force === true,
+                  authoritative: opts?.force === true,
                   refetchOnConflict: opts?.force !== true,
                 })
 
