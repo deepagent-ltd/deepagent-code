@@ -23,6 +23,27 @@ const userMessage = (id: string, sessionID: string): Message => ({
   model: { providerID: "openai", modelID: "gpt" },
 })
 
+const assistantMessage = (
+  id: string,
+  sessionID: string,
+  activityProgress?: Extract<Message, { role: "assistant" }>["activityProgress"],
+): Extract<Message, { role: "assistant" }> =>
+  ({
+    id,
+    sessionID,
+    role: "assistant",
+    parentID: "msg_user",
+    time: { created: 1 },
+    modelID: "gpt",
+    providerID: "openai",
+    mode: "build",
+    agent: "assistant",
+    path: { cwd: "/tmp", root: "/tmp" },
+    cost: 0,
+    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+    activityProgress,
+  }) as Extract<Message, { role: "assistant" }>
+
 describe("directory optimistic targeting", () => {
   test("writes and removes an explicit worktree optimistic message in that child store", () =>
     createRoot((dispose) => {
@@ -217,6 +238,63 @@ describe("directory optimistic targeting", () => {
     await stale
 
     expect(current[0].message[sessionID]?.map((message) => message.id)).toEqual([canonical.id])
+  })
+
+  test("preserves an activity marker when a stale page returns without the computed projection", async () => {
+    let releaseStalePage: (() => void) | undefined
+    const current = state()
+    const serverSync = {
+      child() {
+        return current
+      },
+      plan: {
+        async sync() {},
+      },
+    } as unknown as Parameters<typeof createDirSyncContext>[1]
+    const sync = createDirSyncContext("/repo/main", serverSync, {
+      scope: ServerScope.local,
+      createClient() {
+        return {
+          session: {
+            async get() {
+              return { data: { id: "ses_1" } }
+            },
+            async messages() {
+              await new Promise<void>((resolve) => {
+                releaseStalePage = resolve
+              })
+              return {
+                data: [
+                  {
+                    info: assistantMessage("msg_assistant", "ses_1"),
+                    parts: [],
+                  },
+                ],
+                response: { headers: new Headers() },
+              }
+            },
+          },
+        }
+      },
+    } as unknown as Parameters<typeof createDirSyncContext>[2])
+    const sessionID = "ses_1"
+    const marker = {
+      activityID: "activity-1",
+      revision: 2,
+      state: "interrupted" as const,
+      terminalReason: "AbortError",
+    }
+    current[1]("session", [current[0].session.length], { id: sessionID })
+    const stale = sync.session.sync(sessionID, { force: true })
+    await Promise.resolve()
+    expect(releaseStalePage).toBeDefined()
+    current[1]("message", sessionID, [assistantMessage("msg_assistant", sessionID, marker)])
+    releaseStalePage?.()
+    await stale
+
+    const result = current[0].message[sessionID]?.[0]
+    expect(result?.role).toBe("assistant")
+    if (result?.role === "assistant") expect(result.activityProgress).toEqual(marker)
   })
 })
 

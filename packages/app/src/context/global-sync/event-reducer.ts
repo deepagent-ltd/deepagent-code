@@ -36,7 +36,7 @@ function activityProgress(value: unknown): ActivityProgress | undefined {
   return value as ActivityProgress
 }
 
-function mergeMessage(current: Message, incoming: Message) {
+export function mergeMessage(current: Message, incoming: Message) {
   if (current.role !== "assistant" || incoming.role !== "assistant") return { message: incoming, conflict: false }
   const existing = activityProgress(current.activityProgress)
   const next = activityProgress(incoming.activityProgress)
