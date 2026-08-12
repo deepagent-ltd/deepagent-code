@@ -5,6 +5,8 @@ export interface Runner<A, E = never> {
   readonly busy: boolean
   readonly ensureRunning: (work: Effect.Effect<A, E>, onRunning?: Effect.Effect<void>) => Effect.Effect<A, E>
   readonly startRunning: (work: Effect.Effect<A, E>) => Effect.Effect<A, E | Busy>
+  readonly markFinalizing: Effect.Effect<void>
+  readonly markRunning: Effect.Effect<void>
   readonly startShell: (work: Effect.Effect<A, E>, ready?: Latch.Latch) => Effect.Effect<A, E | Busy>
   readonly cancel: Effect.Effect<void>
 }
@@ -34,6 +36,7 @@ interface PendingHandle<A, E> {
 export type State<A, E> =
   | { readonly _tag: "Idle" }
   | { readonly _tag: "Running"; readonly run: RunHandle<A, E> }
+  | { readonly _tag: "Finalizing"; readonly run: RunHandle<A, E> }
   | { readonly _tag: "Shell"; readonly shell: ShellHandle<A, E> }
   | { readonly _tag: "ShellThenRun"; readonly shell: ShellHandle<A, E>; readonly run: PendingHandle<A, E> }
 
@@ -74,10 +77,10 @@ export const make = <A, E = never>(
       (st) =>
         [
           Effect.gen(function* () {
-            if (st._tag === "Running" && st.run.id === id) yield* idle
+            if ((st._tag === "Running" || st._tag === "Finalizing") && st.run.id === id) yield* idle
             yield* complete(done, exit)
           }),
-          st._tag === "Running" && st.run.id === id ? ({ _tag: "Idle" } as const) : st,
+          (st._tag === "Running" || st._tag === "Finalizing") && st.run.id === id ? ({ _tag: "Idle" } as const) : st,
         ] as const,
     ).pipe(Effect.flatten)
 
@@ -121,6 +124,7 @@ export const make = <A, E = never>(
           onRunning ? onRunning.pipe(Effect.andThen(awaitDone(done))) : awaitDone(done)
         switch (st._tag) {
           case "Running":
+          case "Finalizing":
           case "ShellThenRun":
             return [awaitRunning(st.run.done), st] as const
           case "Shell": {
@@ -139,6 +143,14 @@ export const make = <A, E = never>(
         }
       }),
     ).pipe(Effect.flatten)
+
+  const markFinalizing = SynchronizedRef.update(ref, (st) =>
+    st._tag === "Running" ? ({ _tag: "Finalizing", run: st.run } as const) : st,
+  )
+
+  const markRunning = SynchronizedRef.update(ref, (st) =>
+    st._tag === "Finalizing" ? ({ _tag: "Running", run: st.run } as const) : st,
+  )
 
   const startRunning = (work: Effect.Effect<A, E>): Effect.Effect<A, E | Busy> =>
     SynchronizedRef.modifyEffect(
@@ -191,6 +203,7 @@ export const make = <A, E = never>(
       case "Idle":
         return [Effect.void, st] as const
       case "Running":
+      case "Finalizing":
         return [
           Effect.gen(function* () {
             yield* Fiber.interrupt(st.run.fiber)
@@ -228,6 +241,8 @@ export const make = <A, E = never>(
     },
     ensureRunning,
     startRunning,
+    markFinalizing,
+    markRunning,
     startShell,
     cancel,
   }

@@ -3,10 +3,14 @@ import path from "node:path"
 import { Effect } from "effect"
 
 export type Point =
+  | "after_coordinator_reserve"
   | "after_admit_and_bind"
+  | "after_provider_prepared"
   | "after_provider_streaming"
   | "after_provider_receipt_terminal"
-  | "after_progress_settled"
+  | "inside_revision_terminal_transaction"
+  | "after_terminal_commit_before_publish"
+  | "while_finalizing_before_follow_up_drain"
 
 export function pause(point: Point) {
   if (process.env.DEEPAGENT_CODE_TEST_ACTIVITY_CRASH_POINT !== point) return Effect.void
