@@ -297,7 +297,7 @@ describe("directory optimistic targeting", () => {
     if (result?.role === "assistant") expect(result.activityProgress).toEqual(marker)
   })
 
-  test("does not recursively refetch when a forced page keeps returning a conflicting marker", async () => {
+  test("uses a forced page as authority without recursively refetching", async () => {
     let calls = 0
     const current = state()
     const serverSync = {
@@ -337,9 +337,10 @@ describe("directory optimistic targeting", () => {
       },
     } as unknown as Parameters<typeof createDirSyncContext>[2])
     const sessionID = "ses_1"
-    const marker = { activityID: "activity-1", revision: 2, state: "final" as const }
+    const existing = { activityID: "activity-existing", revision: 2, state: "final" as const }
+    const canonical = { activityID: "activity-conflict", revision: 0, state: "progress" as const }
     current[1]("session", [current[0].session.length], { id: sessionID })
-    current[1]("message", sessionID, [assistantMessage("msg_assistant", sessionID, marker)])
+    current[1]("message", sessionID, [assistantMessage("msg_assistant", sessionID, existing)])
 
     await sync.session.sync(sessionID, { force: true })
     await Promise.resolve()
@@ -347,7 +348,7 @@ describe("directory optimistic targeting", () => {
     expect(calls).toBe(1)
     const result = current[0].message[sessionID]?.[0]
     expect(result?.role).toBe("assistant")
-    if (result?.role === "assistant") expect(result.activityProgress).toEqual(marker)
+    if (result?.role === "assistant") expect(result.activityProgress).toEqual(canonical)
   })
 
   test("runs a forced message fetch after a history page conflicts", async () => {
@@ -401,6 +402,64 @@ describe("directory optimistic targeting", () => {
     const result = current[0].message[sessionID]?.[0]
     expect(result?.role).toBe("assistant")
     if (result?.role === "assistant") expect(result.activityProgress).toEqual(canonical)
+  })
+
+  test("does not let an older forced response overwrite a marker received during the request", async () => {
+    let release: (() => void) | undefined
+    const current = state()
+    const serverSync = {
+      child() {
+        return current
+      },
+      plan: {
+        async sync() {},
+      },
+    } as unknown as Parameters<typeof createDirSyncContext>[1]
+    const sync = createDirSyncContext("/repo/main", serverSync, {
+      scope: ServerScope.local,
+      createClient() {
+        return {
+          session: {
+            async get() {
+              return { data: { id: "ses_1" } }
+            },
+            async messages() {
+              await new Promise<void>((resolve) => {
+                release = resolve
+              })
+              return {
+                data: [
+                  {
+                    info: assistantMessage("msg_assistant", "ses_1", {
+                      activityID: "activity-http",
+                      revision: 1,
+                      state: "progress",
+                    }),
+                    parts: [],
+                  },
+                ],
+                response: { headers: new Headers() },
+              }
+            },
+          },
+        }
+      },
+    } as unknown as Parameters<typeof createDirSyncContext>[2])
+    const sessionID = "ses_1"
+    const initial = { activityID: "activity-initial", revision: 0, state: "progress" as const }
+    const event = { activityID: "activity-event", revision: 2, state: "final" as const }
+    current[1]("session", [current[0].session.length], { id: sessionID })
+    current[1]("message", sessionID, [assistantMessage("msg_assistant", sessionID, initial)])
+
+    const forced = sync.session.sync(sessionID, { force: true })
+    await Promise.resolve()
+    current[1]("message", sessionID, 0, assistantMessage("msg_assistant", sessionID, event))
+    release?.()
+    await forced
+
+    const result = current[0].message[sessionID]?.[0]
+    expect(result?.role).toBe("assistant")
+    if (result?.role === "assistant") expect(result.activityProgress).toEqual(event)
   })
 })
 
