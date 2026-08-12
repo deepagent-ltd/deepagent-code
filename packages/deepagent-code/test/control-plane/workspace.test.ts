@@ -17,7 +17,7 @@ import { AbsolutePath } from "@deepagent-code/core/schema"
 import { Session as SessionNs } from "@/session/session"
 import { SessionID } from "@/session/schema"
 import { SessionTable } from "@deepagent-code/core/session/sql"
-import { EventSequenceTable } from "@deepagent-code/core/event/sql"
+import { EventSequenceTable, EventTable } from "@deepagent-code/core/event/sql"
 import { SessionToolRequestReceiptTable } from "@/session/tool-request-receipt.sql"
 import { resetDatabase } from "../fixture/db"
 import { disposeAllInstances, provideTmpdirInstance, requireInstance, TestInstance } from "../fixture/fixture"
@@ -35,6 +35,9 @@ import { Project } from "@/project/project"
 import { Vcs } from "@/project/vcs"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
+import { EventV2 } from "@deepagent-code/core/event"
+import { SessionV1 } from "@deepagent-code/core/v1/session"
+import { SyncReplayLimits } from "@/sync/replay-protocol"
 
 void Log.init({ print: false })
 
@@ -1140,6 +1143,95 @@ describe("workspace CRUD", () => {
       )
     })
   })
+
+  it.live("sessionWarp replays a maximum admitted event within the final request budget before steal", () => {
+    const calls: FetchCall[] = []
+    return Effect.gen(function* () {
+      yield* HttpServer.serveEffect()(
+        Effect.gen(function* () {
+          const req = yield* HttpServerRequest.HttpServerRequest
+          const bodyText = yield* req.text
+          calls.push({
+            url: new URL(req.url, "http://localhost"),
+            method: req.method,
+            headers: new Headers(req.headers),
+            bodyText,
+            json: bodyText ? JSON.parse(bodyText) : undefined,
+          })
+          if (req.url.endsWith("/sync/replay")) return yield* HttpServerResponse.json({ sessionID: "ok" })
+          if (req.url.endsWith("/sync/steal")) return yield* HttpServerResponse.json({ sessionID: "ok" })
+          return HttpServerResponse.text("unexpected", { status: 500 })
+        }),
+      )
+      const url = yield* serverUrl()
+      yield* provideTmpdirInstance(
+        () =>
+          Effect.gen(function* () {
+            const workspace = yield* Workspace.Service
+            const sessionSvc = yield* SessionNs.Service
+            const instance = yield* requireInstance
+            const type = unique("warp-max-event")
+            const target = workspaceInfo(instance.project.id, type, { directory: "remote-target-dir" })
+            yield* insertWorkspace(target)
+            registerAdapter(instance.project.id, type, remoteAdapter(`${url}/warp-target`).adapter)
+            const session = yield* sessionSvc.create({})
+            const { db } = yield* Database.Service
+            const sequence = (yield* sessionSequence(session.id))!
+            const base = {
+              sessionID: session.id,
+              info: {
+                id: SessionV1.MessageID.ascending(),
+                sessionID: session.id,
+                role: "user" as const,
+                time: { created: Date.now() },
+                agent: "build",
+                model: { providerID: "test", modelID: "model" },
+                system: "",
+              },
+            }
+            const data = {
+              ...base,
+              info: {
+                ...base.info,
+                system: "x".repeat(EventV2.MAX_ENCODED_PAYLOAD_BYTES - Buffer.byteLength(JSON.stringify(base))),
+              },
+            }
+            expect(Buffer.byteLength(JSON.stringify(data))).toBe(EventV2.MAX_ENCODED_PAYLOAD_BYTES)
+            yield* db
+              .insert(EventTable)
+              .values({
+                id: EventV2.ID.make("evt_warp_max_admitted"),
+                aggregate_id: session.id,
+                seq: sequence + 1,
+                type: EventV2.versionedType(SessionV1.Event.MessageUpdated.type, 1),
+                data,
+              })
+              .run()
+              .pipe(Effect.orDie)
+            yield* db
+              .update(EventSequenceTable)
+              .set({ seq: sequence + 1 })
+              .where(eq(EventSequenceTable.aggregate_id, session.id))
+              .run()
+              .pipe(Effect.orDie)
+
+            yield* workspace.sessionWarp({ workspaceID: target.id, sessionID: session.id })
+
+            const replay = calls.filter((call) => call.url.pathname.endsWith("/sync/replay"))
+            expect(replay).toHaveLength(2)
+            expect(replay.flatMap((call) => (call.json as { events: Array<{ id: string }> }).events.map((e) => e.id))).toEqual([
+              expect.stringMatching(/^evt_/),
+              "evt_warp_max_admitted",
+            ])
+            expect(Buffer.byteLength(replay[1]!.bodyText!)).toBeGreaterThan(SyncReplayLimits.eventDataBytes)
+            expect(Buffer.byteLength(replay[1]!.bodyText!)).toBeLessThanOrEqual(SyncReplayLimits.requestBytes)
+            expect(calls.at(-1)?.url.pathname).toBe("/warp-target/sync/steal")
+            expect((yield* sessionSvc.get(session.id)).workspaceID).toBe(target.id)
+          }),
+        { git: true },
+      )
+    })
+  }, 30_000)
 
   it.live("sessionWarp rejects an oversized chunked source patch before side effects or ownership changes", () => {
     const calls: FetchCall[] = []
