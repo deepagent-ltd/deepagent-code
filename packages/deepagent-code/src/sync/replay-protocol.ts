@@ -18,7 +18,7 @@ export function encodeReplayRequestPrefix(directory: string, events: readonly Re
   const suffix = "]}"
   const prefixBytes = Buffer.byteLength(prefix)
   const suffixBytes = Buffer.byteLength(suffix)
-  const selected = events.reduce<{
+  const selected = events.slice(0, SyncReplayLimits.events).reduce<{
     events: ReplayEvent[]
     encoded: string[]
     dataBytes: number
@@ -56,6 +56,16 @@ export function encodeReplayRequestPrefix(directory: string, events: readonly Re
     dataBytes: selected.dataBytes,
     eventsBytes,
     requestBytes,
-    complete: selected.events.length === events.length,
+    complete:
+      selected.events.length === events.length &&
+      directory.length <= SyncReplayLimits.directoryCharacters &&
+      selected.events.every(
+        (event) =>
+          event.id.length <= SyncReplayLimits.eventIDCharacters &&
+          event.aggregateID.length > 0 &&
+          event.aggregateID.length <= SyncReplayLimits.aggregateIDCharacters &&
+          event.type.length > 0 &&
+          event.type.length <= SyncReplayLimits.typeCharacters,
+      ),
   }
 }
