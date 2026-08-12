@@ -17,6 +17,7 @@ import { promptAdmissionClientMessageID } from "./global-sync/prompt-admission"
 import { mergeMessage } from "./global-sync/event-reducer"
 
 const SKIP_PARTS = new Set(["patch", "step-start", "step-finish"])
+type ActivityProgress = NonNullable<Extract<Message, { role: "assistant" }>["activityProgress"]>
 
 function sortParts(parts: Part[]) {
   return parts.filter((part) => !!part?.id).sort((a, b) => cmp(a.id, b.id))
@@ -58,19 +59,25 @@ function mergePageMessages(
   base: readonly Message[],
   incoming: readonly Message[],
   previous: readonly Message[],
-  baseline: ReadonlyMap<string, string>,
+  baseline: ReadonlyMap<string, ActivityProgress | undefined>,
   authoritative: boolean,
 ) {
   const messages = new Map(base.map((item) => [item.id, item] as const))
   const previousByID = new Map(previous.map((item) => [item.id, item] as const))
+  if (authoritative) {
+    for (const item of previous) {
+      if (!baseline.has(item.id) || !sameActivityProgress(item, baseline.get(item.id))) messages.set(item.id, item)
+    }
+  }
   let conflict = false
   for (const item of incoming) {
+    if (authoritative && baseline.has(item.id) && !previousByID.has(item.id)) continue
     const current = previousByID.get(item.id) ?? messages.get(item.id)
     if (!current) {
       messages.set(item.id, item)
       continue
     }
-    if (authoritative && activityProgressKey(current) === baseline.get(item.id)) {
+    if (authoritative && sameActivityProgress(current, baseline.get(item.id))) {
       messages.set(item.id, item)
       continue
     }
@@ -84,9 +91,19 @@ function mergePageMessages(
   }
 }
 
-function activityProgressKey(message: Message) {
-  if (message.role !== "assistant" || !message.activityProgress) return ""
-  return JSON.stringify(message.activityProgress)
+function activityProgress(message: Message): ActivityProgress | undefined {
+  if (message.role !== "assistant" || !message.activityProgress) return
+  return { ...message.activityProgress }
+}
+
+function sameActivityProgress(message: Message, baseline: ActivityProgress | undefined) {
+  const marker = activityProgress(message)
+  return (
+    marker?.activityID === baseline?.activityID &&
+    marker?.revision === baseline?.revision &&
+    marker?.state === baseline?.state &&
+    marker?.terminalReason === baseline?.terminalReason
+  )
 }
 
 type OptimisticStore = {
@@ -409,7 +426,7 @@ export const createDirSyncContext = (
       const baseline = new Map(
         (serverSync.child(input.directory, { bootstrap: false })[0].message[input.sessionID] ?? []).map((message) => [
           message.id,
-          activityProgressKey(message),
+          activityProgress(message),
         ]),
       )
       let conflict = false

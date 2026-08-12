@@ -355,6 +355,7 @@ describe("directory optimistic targeting", () => {
     let calls = 0
     let forcedStarted: (() => void) | undefined
     const current = state()
+    const initial = { activityID: "activity-1", revision: 1, state: "progress" as const }
     const canonical = { activityID: "activity-1", revision: 2, state: "final" as const }
     const serverSync = {
       child() {
@@ -378,7 +379,9 @@ describe("directory optimistic targeting", () => {
               const marker =
                 calls === 2
                   ? { activityID: "activity-conflict", revision: 0, state: "progress" as const }
-                  : canonical
+                  : calls === 3
+                    ? canonical
+                    : initial
               return {
                 data: [{ info: assistantMessage("msg_assistant", "ses_1", marker), parts: [] }],
                 response: { headers: new Headers(calls === 1 ? { "x-next-cursor": "older" } : {}) },
@@ -399,6 +402,11 @@ describe("directory optimistic targeting", () => {
     await forced
 
     expect(calls).toBe(3)
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const message = current[0].message[sessionID]?.[0]
+      if (message?.role === "assistant" && message.activityProgress?.revision === canonical.revision) break
+      await Promise.resolve()
+    }
     const result = current[0].message[sessionID]?.[0]
     expect(result?.role).toBe("assistant")
     if (result?.role === "assistant") expect(result.activityProgress).toEqual(canonical)
@@ -460,6 +468,130 @@ describe("directory optimistic targeting", () => {
     const result = current[0].message[sessionID]?.[0]
     expect(result?.role).toBe("assistant")
     if (result?.role === "assistant") expect(result.activityProgress).toEqual(event)
+  })
+
+  test("does not let an older forced page remove a new revision received during the request", async () => {
+    let release: (() => void) | undefined
+    const current = state()
+    const serverSync = {
+      child() {
+        return current
+      },
+      plan: {
+        async sync() {},
+      },
+    } as unknown as Parameters<typeof createDirSyncContext>[1]
+    const sync = createDirSyncContext("/repo/main", serverSync, {
+      scope: ServerScope.local,
+      createClient() {
+        return {
+          session: {
+            async get() {
+              return { data: { id: "ses_1" } }
+            },
+            async messages() {
+              await new Promise<void>((resolve) => {
+                release = resolve
+              })
+              return {
+                data: [
+                  {
+                    info: assistantMessage("msg_revision_1", "ses_1", {
+                      activityID: "activity-1",
+                      revision: 1,
+                      state: "progress",
+                    }),
+                    parts: [],
+                  },
+                ],
+                response: { headers: new Headers() },
+              }
+            },
+          },
+        }
+      },
+    } as unknown as Parameters<typeof createDirSyncContext>[2])
+    const sessionID = "ses_1"
+    current[1]("session", [current[0].session.length], { id: sessionID })
+    current[1]("message", sessionID, [
+      assistantMessage("msg_revision_1", sessionID, {
+        activityID: "activity-1",
+        revision: 1,
+        state: "progress",
+      }),
+    ])
+
+    const forced = sync.session.sync(sessionID, { force: true })
+    await Promise.resolve()
+    current[1]("message", sessionID, 1, assistantMessage("msg_revision_2", sessionID, {
+      activityID: "activity-1",
+      revision: 2,
+      state: "final",
+    }))
+    release?.()
+    await forced
+
+    expect(current[0].message[sessionID]?.map((message) => message.id)).toEqual(["msg_revision_1", "msg_revision_2"])
+  })
+
+  test("does not let an older forced page restore a message removed during the request", async () => {
+    let release: (() => void) | undefined
+    const current = state()
+    const serverSync = {
+      child() {
+        return current
+      },
+      plan: {
+        async sync() {},
+      },
+    } as unknown as Parameters<typeof createDirSyncContext>[1]
+    const sync = createDirSyncContext("/repo/main", serverSync, {
+      scope: ServerScope.local,
+      createClient() {
+        return {
+          session: {
+            async get() {
+              return { data: { id: "ses_1" } }
+            },
+            async messages() {
+              await new Promise<void>((resolve) => {
+                release = resolve
+              })
+              return {
+                data: [
+                  {
+                    info: assistantMessage("msg_removed", "ses_1", {
+                      activityID: "activity-1",
+                      revision: 1,
+                      state: "progress",
+                    }),
+                    parts: [],
+                  },
+                ],
+                response: { headers: new Headers() },
+              }
+            },
+          },
+        }
+      },
+    } as unknown as Parameters<typeof createDirSyncContext>[2])
+    const sessionID = "ses_1"
+    current[1]("session", [current[0].session.length], { id: sessionID })
+    current[1]("message", sessionID, [
+      assistantMessage("msg_removed", sessionID, {
+        activityID: "activity-1",
+        revision: 1,
+        state: "progress",
+      }),
+    ])
+
+    const forced = sync.session.sync(sessionID, { force: true })
+    await Promise.resolve()
+    current[1]("message", sessionID, [])
+    release?.()
+    await forced
+
+    expect(current[0].message[sessionID]).toEqual([])
   })
 })
 
