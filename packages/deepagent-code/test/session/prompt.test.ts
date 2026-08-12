@@ -106,6 +106,7 @@ const summary = Layer.succeed(
     summarize: () => Effect.void,
     diff: () => Effect.succeed([]),
     computeDiff: () => Effect.succeed([]),
+    computeManifest: () => Effect.succeed(SessionSummary.emptyManifest()),
   }),
 )
 
@@ -882,6 +883,7 @@ it.instance("loop exits without an LLM request for interrupted orphan tool calls
   Effect.gen(function* () {
     const { llm } = yield* useServerConfig(providerCfg)
     const prompt = yield* SessionPrompt.Service
+    const steer = yield* SessionSteer.Service
     const sessions = yield* Session.Service
     const chat = yield* sessions.create({ title: "Pinned" })
     const seeded = yield* seed(chat.id, { finish: "stop" })

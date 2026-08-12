@@ -49,6 +49,7 @@ const summary = Layer.succeed(
     summarize: () => Effect.void,
     diff: () => Effect.succeed([]),
     computeDiff: () => Effect.succeed([]),
+    computeManifest: () => Effect.succeed(SessionSummary.emptyManifest()),
   }),
 )
 

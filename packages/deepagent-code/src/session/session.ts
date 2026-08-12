@@ -18,9 +18,11 @@ import { NotFoundError } from "@/storage/storage"
 import { eq } from "drizzle-orm"
 import { and } from "drizzle-orm"
 import { gte } from "drizzle-orm"
+import { gt } from "drizzle-orm"
 import { isNull } from "drizzle-orm"
 import { isNotNull } from "drizzle-orm"
 import { desc } from "drizzle-orm"
+import { asc } from "drizzle-orm"
 import { like } from "drizzle-orm"
 import { sql } from "drizzle-orm"
 import { inArray } from "drizzle-orm"
@@ -28,6 +30,7 @@ import { lt } from "drizzle-orm"
 import { or } from "drizzle-orm"
 import { notLike } from "drizzle-orm"
 import type { SQL } from "drizzle-orm"
+import { getTableColumns } from "drizzle-orm"
 import {
   MessageTable,
   PartTable,
@@ -125,7 +128,10 @@ export function isDefaultTitle(title: string) {
   ).test(title)
 }
 
-type SessionRow = typeof SessionTable.$inferSelect
+const { summary_diffs: _, ...sessionClientColumns } = getTableColumns(SessionTable)
+type SessionRow = Omit<typeof SessionTable.$inferSelect, "summary_diffs"> & {
+  summary_diffs?: typeof SessionTable.$inferSelect.summary_diffs
+}
 
 export function fromRow(row: SessionRow): Info {
   const summary =
@@ -135,6 +141,7 @@ export function fromRow(row: SessionRow): Info {
           deletions: row.summary_deletions ?? 0,
           files: row.summary_files ?? 0,
           diffs: row.summary_diffs ?? undefined,
+          diffManifest: row.summary_diff_manifest ?? undefined,
         }
       : undefined
   const share = row.share_url ? { url: row.share_url } : undefined
@@ -200,6 +207,7 @@ export function toRow(info: Info) {
     summary_deletions: info.summary?.deletions,
     summary_files: info.summary?.files,
     summary_diffs: info.summary?.diffs,
+    summary_diff_manifest: info.summary?.diffManifest,
     metadata: info.metadata,
     cost: info.cost ?? 0,
     tokens_input: (info.tokens ?? EmptyTokens).input,
@@ -345,6 +353,18 @@ const Summary = Schema.Struct({
   deletions: Schema.Finite,
   files: Schema.Finite,
   diffs: optionalOmitUndefined(Schema.Array(Snapshot.FileDiff)),
+  diffManifest: optionalOmitUndefined(
+    Schema.Struct({
+      completeness: Snapshot.DiffManifest.fields.completeness,
+      truncationReasons: Snapshot.DiffManifest.fields.truncationReasons,
+      manifestHash: Snapshot.DiffManifest.fields.manifestHash,
+      totalFiles: Snapshot.DiffManifest.fields.totalFiles,
+      totalFilesExact: Snapshot.DiffManifest.fields.totalFilesExact,
+      statisticsExact: optionalOmitUndefined(Snapshot.DiffManifest.fields.statisticsExact),
+      includedFiles: Snapshot.DiffManifest.fields.includedFiles,
+      truncatedFiles: Snapshot.DiffManifest.fields.truncatedFiles,
+    }),
+  ),
 })
 
 const Tokens = Schema.Struct({
@@ -557,6 +577,18 @@ export const Event = {
     schema: {
       sessionID: SessionID,
       diff: Schema.Array(Snapshot.FileDiff),
+      manifest: Schema.optional(
+        Schema.Struct({
+          completeness: Snapshot.DiffManifest.fields.completeness,
+          truncationReasons: Snapshot.DiffManifest.fields.truncationReasons,
+          manifestHash: Snapshot.DiffManifest.fields.manifestHash,
+          totalFiles: Snapshot.DiffManifest.fields.totalFiles,
+          totalFilesExact: Snapshot.DiffManifest.fields.totalFilesExact,
+          statisticsExact: optionalOmitUndefined(Snapshot.DiffManifest.fields.statisticsExact),
+          includedFiles: Snapshot.DiffManifest.fields.includedFiles,
+          truncatedFiles: Snapshot.DiffManifest.fields.truncatedFiles,
+        }),
+      ),
     },
   }),
   Error: EventV2.define({
@@ -693,6 +725,18 @@ export interface Interface {
   readonly assertRunnable: (sessionID: SessionID) => Effect.Effect<void, UnavailableError>
   readonly touch: (sessionID: SessionID) => Effect.Effect<void>
   readonly get: (id: SessionID) => Effect.Effect<Info, NotFound>
+  readonly getMessage: (input: {
+    sessionID: SessionID
+    messageID: MessageID
+  }) => Effect.Effect<SessionV1.WithParts, NotFound>
+  readonly getClientMessage: (input: {
+    sessionID: SessionID
+    messageID: MessageID
+  }) => Effect.Effect<SessionV1.WithParts, NotFound>
+  readonly turnSnapshotRange: (input: {
+    sessionID: SessionID
+    parentID: MessageID
+  }) => Effect.Effect<{ from?: string; to?: string }>
   readonly mutationEpoch: (sessionID: SessionID) => Effect.Effect<number, NotFound>
   readonly setTitle: (input: { sessionID: SessionID; title: string }) => Effect.Effect<void>
   readonly setPreview: (input: { sessionID: SessionID; preview: string }) => Effect.Effect<void>
@@ -723,6 +767,15 @@ export interface Interface {
     limit: number
     before?: string
   }) => Effect.Effect<{ items: SessionV1.WithParts[]; more: boolean; cursor?: string }, NotFound>
+  readonly messagesForwardPage: (input: {
+    sessionID: SessionID
+    limit: number
+    after: string
+  }) => Effect.Effect<{ items: SessionV1.WithParts[]; more: boolean; cursor?: string }>
+  readonly snapshotRangeFromMessage: (input: {
+    sessionID: SessionID
+    messageID: MessageID
+  }) => Effect.Effect<{ from?: string; to?: string }, NotFound>
   readonly children: (parentID: SessionID) => Effect.Effect<Info[]>
   readonly remove: (sessionID: SessionID) => Effect.Effect<void, NotFound>
   readonly updateMessage: <T extends SessionV1.Info>(msg: T) => Effect.Effect<T>
@@ -819,9 +872,64 @@ export const layer: Layer.Layer<
     })
 
     const get = Effect.fn("Session.get")(function* (id: SessionID) {
-      const row = yield* db.select().from(SessionTable).where(eq(SessionTable.id, id)).get().pipe(Effect.orDie)
+      const row = yield* db
+        .select(sessionClientColumns)
+        .from(SessionTable)
+        .where(eq(SessionTable.id, id))
+        .get()
+        .pipe(Effect.orDie)
       if (!row) return yield* Effect.fail(new NotFoundError({ message: `Session not found: ${id}` }))
       return fromRow(row)
+    })
+
+    const getMessage: Interface["getMessage"] = (input) =>
+      MessageV2.get(input).pipe(Effect.provideService(Database.Service, database))
+    const getClientMessage: Interface["getClientMessage"] = (input) =>
+      MessageV2.clientGet(input).pipe(Effect.provideService(Database.Service, database))
+
+    const turnSnapshotRange: Interface["turnSnapshotRange"] = Effect.fn("Session.turnSnapshotRange")(function* (input) {
+      const message = or(
+        eq(MessageTable.id, input.parentID),
+        eq(sql<string>`json_extract(${MessageTable.data}, '$.parentID')`, input.parentID),
+      )
+      const start = yield* db
+        .select({ snapshot: sql<string | null>`json_extract(${PartTable.data}, '$.snapshot')` })
+        .from(PartTable)
+        .innerJoin(
+          MessageTable,
+          and(eq(MessageTable.id, PartTable.message_id), eq(MessageTable.session_id, PartTable.session_id)),
+        )
+        .where(
+          and(
+            eq(MessageTable.session_id, input.sessionID),
+            message,
+            eq(sql<string>`json_extract(${PartTable.data}, '$.type')`, "step-start"),
+          ),
+        )
+        .orderBy(asc(MessageTable.time_created), asc(MessageTable.id), asc(PartTable.id))
+        .get()
+        .pipe(Effect.orDie)
+      const finish = yield* db
+        .select({ snapshot: sql<string | null>`json_extract(${PartTable.data}, '$.snapshot')` })
+        .from(PartTable)
+        .innerJoin(
+          MessageTable,
+          and(eq(MessageTable.id, PartTable.message_id), eq(MessageTable.session_id, PartTable.session_id)),
+        )
+        .where(
+          and(
+            eq(MessageTable.session_id, input.sessionID),
+            message,
+            eq(sql<string>`json_extract(${PartTable.data}, '$.type')`, "step-finish"),
+          ),
+        )
+        .orderBy(desc(MessageTable.time_created), desc(MessageTable.id), desc(PartTable.id))
+        .get()
+        .pipe(Effect.orDie)
+      return {
+        ...(start?.snapshot ? { from: start.snapshot } : {}),
+        ...(finish?.snapshot ? { to: finish.snapshot } : {}),
+      }
     })
 
     const mutationEpoch = Effect.fn("Session.mutationEpoch")(function* (sessionID: SessionID) {
@@ -857,10 +965,10 @@ export const layer: Layer.Layer<
       const query =
         conditions.length > 0
           ? db
-              .select()
+              .select(sessionClientColumns)
               .from(SessionTable)
               .where(and(...conditions))
-          : db.select().from(SessionTable)
+          : db.select(sessionClientColumns).from(SessionTable)
       const rows = yield* query
         .orderBy(desc(SessionTable.time_updated), desc(SessionTable.id))
         .limit(input?.limit ?? 100)
@@ -888,7 +996,7 @@ export const layer: Layer.Layer<
 
     const children = Effect.fn("Session.children")(function* (parentID: SessionID) {
       const rows = yield* db
-        .select()
+        .select(sessionClientColumns)
         .from(SessionTable)
         .where(and(eq(SessionTable.parent_id, parentID)))
         .all()
@@ -929,10 +1037,26 @@ export const layer: Layer.Layer<
           .pipe(Effect.orDie)
         if (existing && existing.session_id !== msg.sessionID)
           return yield* Effect.die(`Session.updateMessage: message ${msg.id} belongs to another Session`)
-        yield* events.publish(SessionV1.Event.MessageUpdated, {
-          sessionID: msg.sessionID,
-          info: MessageV2.stripActivityProgress(msg),
-        })
+        yield* events.publish(
+          SessionV1.Event.MessageUpdated,
+          {
+            sessionID: msg.sessionID,
+            info: MessageV2.clientProjection(MessageV2.stripActivityProgress(msg)),
+          },
+          {
+            commit: () =>
+              db
+                .update(MessageTable)
+                .set({
+                  data: Object.fromEntries(
+                    Object.entries(msg).filter(([key]) => key !== "id" && key !== "sessionID"),
+                  ) as typeof MessageTable.$inferInsert.data,
+                })
+                .where(and(eq(MessageTable.id, msg.id), eq(MessageTable.session_id, msg.sessionID)))
+                .run()
+                .pipe(Effect.orDie),
+          },
+        )
         return msg
       }).pipe(Effect.withSpan("Session.updateMessage"))
 
@@ -949,7 +1073,10 @@ export const layer: Layer.Layer<
         ),
       )
       if (!message) return
-      yield* events.publish(SessionV1.Event.MessageUpdated, { sessionID: input.sessionID, info: message.info })
+      yield* events.publish(SessionV1.Event.MessageUpdated, {
+        sessionID: input.sessionID,
+        info: MessageV2.clientProjection(message.info),
+      })
       return message.info
     })
 
@@ -1209,7 +1336,7 @@ export const layer: Layer.Layer<
         })
 
         for (const row of rows) {
-          const message = MessageV2.stripActivityProgress(row.info)
+          const message = MessageV2.clientProjection(MessageV2.stripActivityProgress(row.info))
           const messageEventID = EventV2.ID.make(
             `evt_${Hash.sha256(`fork-event:v1:${intentID}:message:${row.info.id}`).slice(0, 26)}`,
           )
@@ -1952,7 +2079,14 @@ export const layer: Layer.Layer<
       const ctx = yield* InstanceState.context
       const original = yield* get(input.sessionID)
       const title = getForkedTitle(original.title)
-      const sourceProjection = yield* MessageV2.promptHistoryProjectionEffect(input.sessionID).pipe(
+      const sourceProjection = yield* (
+        input.messageID
+          ? MessageV2.promptHistoryCutoffProjectionEffect({
+              sessionID: input.sessionID,
+              cutoffMessageID: input.messageID,
+            })
+          : MessageV2.promptHistoryProjectionEffect(input.sessionID)
+      ).pipe(
         Effect.provideService(Database.Service, database),
         Effect.mapError(
           (error) =>
@@ -1971,29 +2105,15 @@ export const layer: Layer.Layer<
         .get()
         .pipe(Effect.orDie)
       if (!sourceSession) return yield* new NotFoundError({ message: `Session not found: ${input.sessionID}` })
-      const cutoffIndex = input.messageID
-        ? sourceProjection.messages.findIndex((message) => message.info.id === input.messageID)
-        : sourceProjection.messages.length
-      if (cutoffIndex < 0) {
-        return yield* Effect.fail(
-          new ForkConflict({ intentID, reason: "fork cutoff is not part of the active effective history" }),
-        )
-      }
-      if (sourceProjection.epoch > 0 && cutoffIndex < 2) {
-        return yield* Effect.fail(
-          new ForkConflict({ intentID, reason: "fork cutoff splits the active checkpoint pair" }),
-        )
-      }
       const sourceMessages =
-        forkMode === "task"
-          ? sanitizeTaskHistory(sourceProjection.messages.slice(0, cutoffIndex))
-          : sourceProjection.messages.slice(0, cutoffIndex)
-      if (sourceProjection.epoch > 0 && sourceMessages.length < 2) {
+        forkMode === "task" ? sanitizeTaskHistory(sourceProjection.messages) : sourceProjection.messages
+      const sourceUsesCheckpoint = sourceProjection.epoch > 0 && !sourceProjection.recoveryResolutionID
+      if (sourceUsesCheckpoint && sourceMessages.length < 2) {
         return yield* Effect.fail(new ForkConflict({ intentID, reason: "fork would omit the active checkpoint pair" }))
       }
       if (
         forkMode === "task" &&
-        sourceProjection.epoch > 0 &&
+        sourceUsesCheckpoint &&
         (sourceMessages[0]?.info.role !== "user" ||
           sourceMessages[1]?.info.role !== "assistant" ||
           !sourceMessages[1].info.summary)
@@ -2228,7 +2348,7 @@ export const layer: Layer.Layer<
       // `parentID` would misclassify it as a background subagent. It mirrors the ForkOrigin marker
       // persisted below (context store), but travels with Session.Info so no extra IO/route is needed.
       const firstWindowID = HistoryAuthority.windowID()
-      const targetWindowID = sourceProjection.epoch === 0 ? firstWindowID : HistoryAuthority.windowID()
+      const targetWindowID = sourceUsesCheckpoint ? HistoryAuthority.windowID() : firstWindowID
       const messageIDMap = new Map(
         sourceMessages.map((message) => [
           message.info.id,
@@ -2286,7 +2406,7 @@ export const layer: Layer.Layer<
         projectionVersion: sourceProjection.projectionVersion,
         sanitationPolicyVersion: forkMode === "task" ? 3 : 1,
         ...(input.taskRequestHash ? { taskRequestHash: input.taskRequestHash } : {}),
-        targetPromptEpoch: sourceProjection.epoch === 0 ? 0 : 1,
+        targetPromptEpoch: sourceUsesCheckpoint ? 1 : 0,
         targetWindowID,
         targetEffectiveHistoryHash,
         targetWorldStateBaselineHash: worldStateBaseline.hash,
@@ -2315,9 +2435,9 @@ export const layer: Layer.Layer<
         tokens: EmptyTokens,
         time: { created: Date.now(), updated: Date.now() },
       }
-      const sourceCheckpointUserID = sourceProjection.epoch > 0 ? sourceMessages[0]?.info.id : undefined
-      const sourceCheckpointAssistantID = sourceProjection.epoch > 0 ? sourceMessages[1]?.info.id : undefined
-      const sourceMarker = sourceProjection.epoch > 0 ? sourceMessages[0] : undefined
+      const sourceCheckpointUserID = sourceUsesCheckpoint ? sourceMessages[0]?.info.id : undefined
+      const sourceCheckpointAssistantID = sourceUsesCheckpoint ? sourceMessages[1]?.info.id : undefined
+      const sourceMarker = sourceUsesCheckpoint ? sourceMessages[0] : undefined
       const sourceTailStartID = sourceMarker?.parts.find(
         (part): part is SessionV1.CompactionPart => part.type === "compaction",
       )?.tail_start_id
@@ -2326,7 +2446,7 @@ export const layer: Layer.Layer<
         ? messageIDMap.get(sourceCheckpointAssistantID)
         : undefined
       const targetTailStartID = sourceTailStartID ? messageIDMap.get(sourceTailStartID) : undefined
-      if (sourceProjection.epoch > 0 && (!targetCheckpointUserID || !targetCheckpointAssistantID)) {
+      if (sourceUsesCheckpoint && (!targetCheckpointUserID || !targetCheckpointAssistantID)) {
         return yield* Effect.fail(
           new ForkConflict({ intentID, reason: "fork projection has an invalid checkpoint pair" }),
         )
@@ -2351,16 +2471,19 @@ export const layer: Layer.Layer<
                   return yield* Effect.die(
                     new ForkConflict({ intentID, reason: "fork admission is not ready for manifest commit" }),
                   )
-                const currentSource = yield* MessageV2.promptHistoryProjectionEffect(input.sessionID).pipe(
-                  Effect.provideService(Database.Service, database),
-                  Effect.orDie,
-                )
+                const currentSource = input.messageID
+                  ? yield* MessageV2.promptHistoryCutoffProjectionInTransaction(db, {
+                      sessionID: input.sessionID,
+                      cutoffMessageID: input.messageID,
+                    })
+                  : yield* MessageV2.promptHistoryProjectionInTransaction(db, input.sessionID)
                 const currentSession = yield* db
                   .select({ mutation_epoch: SessionTable.mutation_epoch })
                   .from(SessionTable)
                   .where(eq(SessionTable.id, input.sessionID))
                   .get()
                 if (
+                  !currentSource ||
                   !currentSession ||
                   currentSession.mutation_epoch !== sourceSession.mutation_epoch ||
                   currentSource.epoch !== sourceProjection.epoch ||
@@ -2417,7 +2540,7 @@ export const layer: Layer.Layer<
                 }
 
                 const now = Date.now()
-                if (sourceProjection.epoch === 0) {
+                if (!sourceUsesCheckpoint) {
                   yield* db
                     .insert(SessionPromptEpochTable)
                     .values({
@@ -2439,6 +2562,7 @@ export const layer: Layer.Layer<
                       world_state_baseline_hash: worldStateBaseline.hash,
                       authority_state: "ready",
                       recovery_reason: null,
+                      recovery_resolution_id: null,
                       reason: "bootstrap",
                       created_at: now,
                       retired_at: null,
@@ -2467,6 +2591,7 @@ export const layer: Layer.Layer<
                         world_state_baseline_hash: null,
                         authority_state: "ready",
                         recovery_reason: null,
+                        recovery_resolution_id: null,
                         reason: "bootstrap",
                         created_at: now,
                         retired_at: now,
@@ -2490,6 +2615,7 @@ export const layer: Layer.Layer<
                         world_state_baseline_hash: worldStateBaseline.hash,
                         authority_state: "ready",
                         recovery_reason: null,
+                        recovery_resolution_id: null,
                         reason: "compaction",
                         created_at: now,
                         retired_at: null,
@@ -2503,7 +2629,7 @@ export const layer: Layer.Layer<
                     .values(
                       cloned.map((message, ordinal) => ({
                         session_id: session.id,
-                        prompt_epoch: sourceProjection.epoch === 0 ? 0 : 1,
+                        prompt_epoch: sourceUsesCheckpoint ? 1 : 0,
                         ordinal,
                         message_id: message.info.id,
                       })),
@@ -2515,7 +2641,7 @@ export const layer: Layer.Layer<
                   .values(
                     worldStateBaseline.sections.map((section) => ({
                       session_id: session.id,
-                      prompt_epoch: sourceProjection.epoch === 0 ? 0 : 1,
+                      prompt_epoch: sourceUsesCheckpoint ? 1 : 0,
                       section_id: section.sectionID,
                       snapshot: section.snapshot,
                       fragment: section.fragment,
@@ -2551,7 +2677,7 @@ export const layer: Layer.Layer<
                     projection_version: sourceProjection.projectionVersion,
                     sanitation_policy_version: forkMode === "task" ? 3 : 1,
                     target_session_id: session.id,
-                    target_prompt_epoch: sourceProjection.epoch === 0 ? 0 : 1,
+                    target_prompt_epoch: sourceUsesCheckpoint ? 1 : 0,
                     target_window_id: targetWindowID,
                     target_effective_history_hash: targetEffectiveHistoryHash,
                     target_world_state_baseline_hash: worldStateBaseline.hash,
@@ -2893,6 +3019,17 @@ export const layer: Layer.Layer<
           revert: info.revert === null ? undefined : (info.revert ?? current.revert),
           permission: info.permission === null ? undefined : (info.permission ?? current.permission),
         } as Info
+        if (next.summary?.diffs !== undefined) {
+          next.summary = {
+            ...next.summary,
+            diffs: next.summary.diffs.slice(0, MessageV2.ClientDiffLimits.files).map((item) => ({
+              ...(item.file === undefined ? {} : { file: item.file }),
+              additions: item.additions,
+              deletions: item.deletions,
+              ...(item.status === undefined ? {} : { status: item.status }),
+            })),
+          }
+        }
         yield* events.publish(SessionV1.Event.Updated, { sessionID, info: next })
       })
 
@@ -2991,6 +3128,7 @@ export const layer: Layer.Layer<
                         summary_deletions: input.summary.deletions,
                         summary_files: input.summary.files,
                         summary_diffs: input.summary.diffs,
+                        summary_diff_manifest: input.summary.diffManifest,
                       }
                     : {}),
                   time_updated: now,
@@ -2998,7 +3136,7 @@ export const layer: Layer.Layer<
                 .where(
                   and(eq(SessionTable.id, input.sessionID), eq(SessionTable.mutation_epoch, current.mutationEpoch)),
                 )
-                .returning()
+                .returning(sessionClientColumns)
                 .get()
                 .pipe(Effect.orDie)
               if (!row) return yield* Effect.die("Session mutation epoch changed inside an IMMEDIATE transaction")
@@ -3083,7 +3221,64 @@ export const layer: Layer.Layer<
     })
 
     const messagesPage: Interface["messagesPage"] = (input) =>
-      MessageV2.page(input).pipe(Effect.provideService(Database.Service, database))
+      MessageV2.clientPage(input).pipe(Effect.provideService(Database.Service, database))
+
+    const messagesForwardPage: Interface["messagesForwardPage"] = (input) =>
+      MessageV2.forwardPage(input).pipe(Effect.provideService(Database.Service, database))
+
+    const snapshotRangeFromMessage: Interface["snapshotRangeFromMessage"] = Effect.fn(
+      "Session.snapshotRangeFromMessage",
+    )(function* (input) {
+      const target = yield* db
+        .select({ id: MessageTable.id, time: MessageTable.time_created })
+        .from(MessageTable)
+        .where(and(eq(MessageTable.session_id, input.sessionID), eq(MessageTable.id, input.messageID)))
+        .get()
+        .pipe(Effect.orDie)
+      if (!target) return yield* new NotFoundError({ message: `Message not found: ${input.messageID}` })
+      const atOrAfter = or(
+        gt(MessageTable.time_created, target.time),
+        and(eq(MessageTable.time_created, target.time), gte(MessageTable.id, target.id)),
+      )
+      const start = yield* db
+        .select({ snapshot: sql<string | null>`json_extract(${PartTable.data}, '$.snapshot')` })
+        .from(PartTable)
+        .innerJoin(
+          MessageTable,
+          and(eq(MessageTable.id, PartTable.message_id), eq(MessageTable.session_id, PartTable.session_id)),
+        )
+        .where(
+          and(
+            eq(MessageTable.session_id, input.sessionID),
+            atOrAfter,
+            eq(sql<string>`json_extract(${PartTable.data}, '$.type')`, "step-start"),
+          ),
+        )
+        .orderBy(asc(MessageTable.time_created), asc(MessageTable.id), asc(PartTable.id))
+        .get()
+        .pipe(Effect.orDie)
+      const finish = yield* db
+        .select({ snapshot: sql<string | null>`json_extract(${PartTable.data}, '$.snapshot')` })
+        .from(PartTable)
+        .innerJoin(
+          MessageTable,
+          and(eq(MessageTable.id, PartTable.message_id), eq(MessageTable.session_id, PartTable.session_id)),
+        )
+        .where(
+          and(
+            eq(MessageTable.session_id, input.sessionID),
+            atOrAfter,
+            eq(sql<string>`json_extract(${PartTable.data}, '$.type')`, "step-finish"),
+          ),
+        )
+        .orderBy(desc(MessageTable.time_created), desc(MessageTable.id), desc(PartTable.id))
+        .get()
+        .pipe(Effect.orDie)
+      return {
+        ...(start?.snapshot ? { from: start.snapshot } : {}),
+        ...(finish?.snapshot ? { to: finish.snapshot } : {}),
+      }
+    })
 
     const messages: Interface["messages"] = Effect.fn("Session.messages")(function* (input) {
       if (input.limit) {
@@ -3148,7 +3343,7 @@ export const layer: Layer.Layer<
       const size = 50
       let before: string | undefined
       while (true) {
-        const page = yield* MessageV2.page({ sessionID, limit: size, before }).pipe(
+        const page = yield* MessageV2.clientPage({ sessionID, limit: size, before }).pipe(
           Effect.provideService(Database.Service, database),
         )
         if (page.items.length === 0) break
@@ -3171,6 +3366,9 @@ export const layer: Layer.Layer<
       assertRunnable,
       touch,
       get,
+      getMessage,
+      getClientMessage,
+      turnSnapshotRange,
       mutationEpoch,
       setTitle,
       setPreview,
@@ -3188,6 +3386,8 @@ export const layer: Layer.Layer<
       diff,
       messages,
       messagesPage,
+      messagesForwardPage,
+      snapshotRangeFromMessage,
       children,
       remove,
       updateMessage,
@@ -3271,7 +3471,7 @@ function listByProject(
   const limit = input.limit ?? 100
 
   return db
-    .select()
+    .select(sessionClientColumns)
     .from(SessionTable)
     .where(and(...conditions))
     .orderBy(desc(SessionTable.time_updated))
@@ -3321,10 +3521,10 @@ export function* listGlobal(input?: {
     const query =
       conditions.length > 0
         ? db
-            .select()
+            .select(sessionClientColumns)
             .from(SessionTable)
             .where(and(...conditions))
-        : db.select().from(SessionTable)
+        : db.select(sessionClientColumns).from(SessionTable)
     return query.orderBy(desc(SessionTable.time_updated), desc(SessionTable.id)).limit(limit).all().pipe(Effect.orDie)
   })
 

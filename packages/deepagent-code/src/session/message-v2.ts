@@ -29,9 +29,12 @@ import { Database } from "@deepagent-code/core/database/database"
 import { NotFoundError } from "@/storage/storage"
 import { and } from "drizzle-orm"
 import { desc } from "drizzle-orm"
+import { asc } from "drizzle-orm"
 import { eq } from "drizzle-orm"
 import { inArray } from "drizzle-orm"
+import { isNull } from "drizzle-orm"
 import { lt } from "drizzle-orm"
+import { gt } from "drizzle-orm"
 import { or } from "drizzle-orm"
 import { sql } from "drizzle-orm"
 import {
@@ -39,8 +42,11 @@ import {
   PartTable,
   SessionForkAdmissionTable,
   SessionForkIntentTable,
+  SessionIntentTable,
   SessionPromptEpochMessageTable,
+  SessionPromptEpochRecoveryTable,
   SessionTable,
+  SessionToolRequestResolutionTable,
   SessionWorldStateBaselineTable,
 } from "@deepagent-code/core/session/sql"
 import { SessionPromptEpochTable } from "./prompt-epoch.sql"
@@ -54,6 +60,7 @@ import { Data, Effect, Exit, Option, Schema } from "effect"
 import * as EffectLogger from "@deepagent-code/core/effect/logger"
 import { SessionHistoryStateTable } from "@deepagent-code/core/session/sql"
 import { CompactionArtifactTable, CompactionRunTable } from "./compaction-sql"
+import { SessionToolRequestReceiptTable } from "./tool-request-receipt.sql"
 import { HistoryAuthority } from "./history-authority"
 import {
   collectSessionWorldStateBaseline,
@@ -110,6 +117,7 @@ export type PromptHistoryProjection = {
     readonly windowID: string
   }
   readonly worldStateBaselineHash?: string
+  readonly recoveryResolutionID?: string
 }
 
 export type PromptWorldStateProjection = {
@@ -275,12 +283,59 @@ export function stripActivityProgress<T extends Info>(message: T): T {
   return rest as T
 }
 
-export function stripActivityProgressPart<T extends Part>(messagePart: T): T {
-  if (
-    messagePart.type !== "text" ||
-    !messagePart.metadata ||
-    !("deepagent_activity_progress" in messagePart.metadata)
+export const ClientDiffLimits = {
+  files: 200,
+} as const
+
+export const ClientMessageLimits = {
+  page: 100,
+} as const
+
+const decodeClientMessageData = Schema.decodeUnknownOption(Schema.UnknownFromJsonString)
+
+const clientMessageData = sql<string>`CASE
+  WHEN json_valid(${MessageTable.data}) AND json_type(${MessageTable.data}, '$.summary.diffs') = 'array'
+  THEN json_set(
+    ${MessageTable.data},
+    '$.summary.diffs',
+    json(COALESCE((
+      SELECT json_group_array(json_remove(value, '$.patch'))
+      FROM (
+        SELECT value
+        FROM json_each(json_extract(${MessageTable.data}, '$.summary.diffs'))
+        LIMIT ${ClientDiffLimits.files}
+      )
+    ), '[]'))
   )
+  ELSE ${MessageTable.data}
+END`
+
+const promptMessageData = sql<string>`CASE
+  WHEN json_valid(${MessageTable.data})
+    AND json_type(${MessageTable.data}, '$.summary.diffs') = 'array'
+  THEN json_remove(${MessageTable.data}, '$.summary.diffs')
+  ELSE ${MessageTable.data}
+END`
+
+export function clientProjection<T extends Info>(message: T): T {
+  if (message.role !== "user" || !message.summary) return message
+  const diffs = message.summary.diffs.slice(0, ClientDiffLimits.files).map((item) => ({
+    ...(item.file === undefined ? {} : { file: item.file }),
+    additions: item.additions,
+    deletions: item.deletions,
+    ...(item.status === undefined ? {} : { status: item.status }),
+  }))
+  return {
+    ...message,
+    summary: {
+      ...message.summary,
+      diffs,
+    },
+  } as T
+}
+
+export function stripActivityProgressPart<T extends Part>(messagePart: T): T {
+  if (messagePart.type !== "text" || !messagePart.metadata || !("deepagent_activity_progress" in messagePart.metadata))
     return messagePart
   const { deepagent_activity_progress: _, ...metadata } = messagePart.metadata
   return {
@@ -299,6 +354,8 @@ const part = (row: typeof PartTable.$inferSelect) =>
 
 const older = (row: Cursor) =>
   or(lt(MessageTable.time_created, row.time), and(eq(MessageTable.time_created, row.time), lt(MessageTable.id, row.id)))
+const newer = (row: Cursor) =>
+  or(gt(MessageTable.time_created, row.time), and(eq(MessageTable.time_created, row.time), gt(MessageTable.id, row.id)))
 
 function hydrate(db: Database.Interface["db"], rows: (typeof MessageTable.$inferSelect)[]) {
   const ids = rows.map((row) => row.id)
@@ -374,9 +431,7 @@ function hydrate(db: Database.Interface["db"], rows: (typeof MessageTable.$infer
           activityID: row.activityID,
           revision: row.revision,
           state,
-          ...(row.revision === row.latestRevision && row.terminalReason
-            ? { terminalReason: row.terminalReason }
-            : {}),
+          ...(row.revision === row.latestRevision && row.terminalReason ? { terminalReason: row.terminalReason } : {}),
         })
       }
     }
@@ -842,6 +897,97 @@ export const page = Effect.fn("MessageV2.page")(function* (input: {
   }
 })
 
+export const forwardPage = Effect.fn("MessageV2.forwardPage")(function* (input: {
+  sessionID: SessionID
+  limit: number
+  after: string
+}) {
+  const { db } = yield* Database.Service
+  const after = cursor.decode(input.after)
+  const selected = yield* db
+    .select({
+      id: MessageTable.id,
+      session_id: MessageTable.session_id,
+      time_created: MessageTable.time_created,
+      time_updated: MessageTable.time_updated,
+      data: clientMessageData,
+    })
+    .from(MessageTable)
+    .where(and(eq(MessageTable.session_id, input.sessionID), newer(after)))
+    .orderBy(asc(MessageTable.time_created), asc(MessageTable.id))
+    .limit(input.limit + 1)
+    .all()
+    .pipe(Effect.orDie)
+  const rows = selected.flatMap((row) => {
+    const data = Option.getOrUndefined(decodeClientMessageData(row.data))
+    if (!data || typeof data !== "object" || Array.isArray(data)) return []
+    return [{ ...row, data: data as typeof MessageTable.$inferSelect.data }]
+  })
+  if (rows.length !== selected.length) return yield* Effect.die("stored message data is not valid JSON object")
+  const more = rows.length > input.limit
+  const slice = more ? rows.slice(0, input.limit) : rows
+  const items = yield* hydrate(db, slice)
+  const tail = slice.at(-1)
+  return {
+    items,
+    more,
+    cursor: more && tail ? cursor.encode({ id: tail.id, time: tail.time_created }) : undefined,
+  }
+})
+
+export const clientPage = Effect.fn("MessageV2.clientPage")(function* (input: {
+  sessionID: SessionID
+  limit: number
+  before?: string
+}) {
+  const { db } = yield* Database.Service
+  const before = input.before ? cursor.decode(input.before) : undefined
+  const where = before
+    ? and(eq(MessageTable.session_id, input.sessionID), older(before))
+    : eq(MessageTable.session_id, input.sessionID)
+  const selected = yield* db
+    .select({
+      id: MessageTable.id,
+      session_id: MessageTable.session_id,
+      time_created: MessageTable.time_created,
+      time_updated: MessageTable.time_updated,
+      data: clientMessageData,
+    })
+    .from(MessageTable)
+    .where(where)
+    .orderBy(desc(MessageTable.time_created), desc(MessageTable.id))
+    .limit(input.limit + 1)
+    .all()
+    .pipe(Effect.orDie)
+  if (selected.length === 0) {
+    const row = yield* db
+      .select({ id: SessionTable.id })
+      .from(SessionTable)
+      .where(eq(SessionTable.id, input.sessionID))
+      .get()
+      .pipe(Effect.orDie)
+    if (!row) return yield* new NotFoundError({ message: `Session not found: ${input.sessionID}` })
+    return { items: [] as WithParts[], more: false }
+  }
+
+  const rows = selected.flatMap((row) => {
+    const data = Option.getOrUndefined(decodeClientMessageData(row.data))
+    if (!data || typeof data !== "object" || Array.isArray(data)) return []
+    return [{ ...row, data: data as typeof MessageTable.$inferSelect.data }]
+  })
+  if (rows.length !== selected.length) return yield* Effect.die("stored message data is not valid JSON object")
+  const more = rows.length > input.limit
+  const slice = more ? rows.slice(0, input.limit) : rows
+  const items = yield* hydrate(db, slice)
+  items.reverse()
+  const tail = slice.at(-1)
+  return {
+    items,
+    more,
+    cursor: more && tail ? cursor.encode({ id: tail.id, time: tail.time_created }) : undefined,
+  }
+})
+
 export function stream(sessionID: SessionID) {
   const size = 50
   return Effect.gen(function* () {
@@ -860,6 +1006,50 @@ export function stream(sessionID: SessionID) {
       }
       if (!next.more || !next.cursor) break
       before = next.cursor
+    }
+    return result
+  })
+}
+
+export function promptStream(sessionID: SessionID) {
+  const size = 50
+  return Effect.gen(function* () {
+    const { db } = yield* Database.Service
+    const result = [] as WithParts[]
+    let before: string | undefined
+    while (true) {
+      const decoded = before ? cursor.decode(before) : undefined
+      const where = decoded
+        ? and(eq(MessageTable.session_id, sessionID), older(decoded))
+        : eq(MessageTable.session_id, sessionID)
+      const selected = yield* db
+        .select({
+          id: MessageTable.id,
+          session_id: MessageTable.session_id,
+          time_created: MessageTable.time_created,
+          time_updated: MessageTable.time_updated,
+          data: promptMessageData,
+        })
+        .from(MessageTable)
+        .where(where)
+        .orderBy(desc(MessageTable.time_created), desc(MessageTable.id))
+        .limit(size + 1)
+        .all()
+        .pipe(Effect.orDie)
+      if (selected.length === 0) break
+      const rows = selected.flatMap((row) => {
+        const data = Option.getOrUndefined(decodeClientMessageData(row.data))
+        if (!data || typeof data !== "object" || Array.isArray(data)) return []
+        return [{ ...row, data: data as typeof MessageTable.$inferSelect.data }]
+      })
+      if (rows.length !== selected.length) return yield* Effect.die("stored message data is not valid JSON object")
+      const more = rows.length > size
+      const slice = more ? rows.slice(0, size) : rows
+      const items = yield* hydrate(db, slice)
+      result.push(...items)
+      const tail = slice.at(-1)
+      if (!more || !tail) break
+      before = cursor.encode({ id: tail.id, time: tail.time_created })
     }
     return result
   })
@@ -893,6 +1083,31 @@ export const get = Effect.fn("MessageV2.get")(function* (input: { sessionID: Ses
     .pipe(Effect.orDie)
   if (!row) return yield* new NotFoundError({ message: `Message not found: ${input.messageID}` })
   const result = yield* hydrate(db, [row])
+  return result[0]!
+})
+
+export const clientGet = Effect.fn("MessageV2.clientGet")(function* (input: {
+  sessionID: SessionID
+  messageID: MessageID
+}) {
+  const { db } = yield* Database.Service
+  const selected = yield* db
+    .select({
+      id: MessageTable.id,
+      session_id: MessageTable.session_id,
+      time_created: MessageTable.time_created,
+      time_updated: MessageTable.time_updated,
+      data: clientMessageData,
+    })
+    .from(MessageTable)
+    .where(and(eq(MessageTable.id, input.messageID), eq(MessageTable.session_id, input.sessionID)))
+    .get()
+    .pipe(Effect.orDie)
+  if (!selected) return yield* new NotFoundError({ message: `Message not found: ${input.messageID}` })
+  const data = Option.getOrUndefined(decodeClientMessageData(selected.data))
+  if (!data || typeof data !== "object" || Array.isArray(data))
+    return yield* Effect.die("stored message data is not valid JSON object")
+  const result = yield* hydrate(db, [{ ...selected, data: data as typeof MessageTable.$inferSelect.data }])
   return result[0]!
 })
 
@@ -950,7 +1165,7 @@ export function filterCompacted(msgs: Iterable<WithParts>) {
 }
 
 export const filterCompactedEffect = Effect.fnUntraced(function* (sessionID: SessionID) {
-  return filterCompacted(yield* stream(sessionID))
+  return filterCompacted(yield* promptStream(sessionID))
 })
 
 const projectPromptHistory = Effect.fn("MessageV2.projectPromptHistory")(function* (
@@ -991,7 +1206,8 @@ const projectPromptHistory = Effect.fn("MessageV2.projectPromptHistory")(functio
     epoch.base_message_count === null ||
     !epoch.effective_history_hash ||
     !epoch.first_window_id ||
-    !epoch.window_id
+    !epoch.window_id ||
+    !snapshot.recoveryBindingValid
   ) {
     return yield* failHistoryAuthority({
       sessionID,
@@ -1000,7 +1216,12 @@ const projectPromptHistory = Effect.fn("MessageV2.projectPromptHistory")(functio
     })
   }
 
-  const selected = selectEpochHistory(chronological, epoch, snapshot.replacementMessageIDs)
+  const selected = selectEpochHistory(
+    chronological,
+    epoch,
+    snapshot.replacementMessageIDs,
+    snapshot.recoveryAdmittedMessageIDs,
+  )
   if (!selected.ok) return yield* failHistoryAuthority({ sessionID, epoch: epoch.epoch, reason: selected.reason })
   if (epoch.base_message_count < 0 || epoch.base_message_count > selected.messages.length) {
     return yield* failHistoryAuthority({
@@ -1032,6 +1253,7 @@ const projectPromptHistory = Effect.fn("MessageV2.projectPromptHistory")(functio
       windowID: epoch.window_id,
     },
     ...(epoch.world_state_baseline_hash ? { worldStateBaselineHash: epoch.world_state_baseline_hash } : {}),
+    ...(epoch.recovery_resolution_id ? { recoveryResolutionID: epoch.recovery_resolution_id } : {}),
   } satisfies PromptHistoryProjection
 })
 
@@ -1040,6 +1262,136 @@ export const promptHistoryProjectionEffect = Effect.fn("MessageV2.promptHistoryP
 ) {
   return yield* projectPromptHistory(sessionID)
 })
+
+type HistorySnapshot = {
+  physical: WithParts[]
+  chronological: WithParts[]
+  epoch: EpochRow | undefined
+  replacementMessageIDs: MessageID[]
+  recoveryBindingValid: boolean
+  recoveryAdmittedMessageIDs: Set<MessageID>
+}
+
+function promptHistoryCutoffProjectionFromSnapshot(
+  sessionID: SessionID,
+  cutoffMessageID: MessageID,
+  snapshot: HistorySnapshot,
+) {
+  return Effect.gen(function* () {
+    const epoch = snapshot.epoch
+    if (
+      !epoch ||
+      (epoch.authority_state !== "ready" && epoch.authority_state !== "recovery_required") ||
+      epoch.projection_version !== HistoryAuthority.PROJECTION_VERSION ||
+      epoch.canonicalization_version !== HistoryAuthority.CANONICALIZATION_VERSION ||
+      epoch.base_message_count === null ||
+      !epoch.effective_history_hash ||
+      !epoch.first_window_id ||
+      !epoch.window_id ||
+      !snapshot.recoveryBindingValid
+    )
+      return
+    const selected = selectEpochHistory(
+      snapshot.chronological,
+      epoch,
+      snapshot.replacementMessageIDs,
+      snapshot.recoveryAdmittedMessageIDs,
+    )
+    if (!selected.ok || epoch.base_message_count < 0 || epoch.base_message_count > selected.messages.length) return
+    if (HistoryAuthority.hash(selected.messages.slice(0, epoch.base_message_count)) !== epoch.effective_history_hash)
+      return
+    const cutoffIndex = selected.messages.findIndex((message) => message.info.id === cutoffMessageID)
+    if (cutoffIndex < 0) return
+    const messages = selected.messages.slice(0, cutoffIndex)
+    return {
+      sessionID,
+      epoch: epoch.epoch,
+      messages,
+      orderedMessageIDs: messages.map((message) => message.info.id),
+      effectiveHistoryHash: HistoryAuthority.hash(messages),
+      projectionVersion: epoch.projection_version,
+      canonicalizationVersion: epoch.canonicalization_version,
+      baseMessageCount: messages.length,
+      window: {
+        firstWindowID: epoch.first_window_id,
+        ...(epoch.previous_window_id ? { previousWindowID: epoch.previous_window_id } : {}),
+        windowID: epoch.window_id,
+      },
+      ...(epoch.world_state_baseline_hash ? { worldStateBaselineHash: epoch.world_state_baseline_hash } : {}),
+      ...(epoch.recovery_resolution_id ? { recoveryResolutionID: epoch.recovery_resolution_id } : {}),
+    } satisfies PromptHistoryProjection
+  })
+}
+
+export function promptHistoryCutoffAuthorityInTransaction(
+  tx: Pick<Database.Interface["db"], "select">,
+  input: { sessionID: SessionID; cutoffMessageID: MessageID },
+) {
+  return Effect.gen(function* () {
+    const snapshotExit = yield* Effect.exit(readHistorySnapshotInTransaction(tx, input.sessionID))
+    if (Exit.isFailure(snapshotExit)) return
+    const projection = yield* promptHistoryCutoffProjectionFromSnapshot(
+      input.sessionID,
+      input.cutoffMessageID,
+      snapshotExit.value,
+    )
+    if (!projection) return
+    if (snapshotExit.value.epoch?.authority_state !== "recovery_required")
+      return { projection, physical: snapshotExit.value.physical }
+    const unresolved = yield* tx
+      .select({
+        userMessageID: SessionToolRequestReceiptTable.user_message_id,
+        assistantMessageID: SessionToolRequestReceiptTable.assistant_message_id,
+      })
+      .from(SessionToolRequestReceiptTable)
+      .leftJoin(
+        SessionToolRequestResolutionTable,
+        eq(SessionToolRequestResolutionTable.receipt_id, SessionToolRequestReceiptTable.receipt_id),
+      )
+      .where(
+        and(
+          eq(SessionToolRequestReceiptTable.session_id, input.sessionID),
+          eq(SessionToolRequestReceiptTable.provider_state, "indeterminate_after_crash"),
+          isNull(SessionToolRequestResolutionTable.resolution_id),
+        ),
+      )
+      .all()
+    const cutoffIndex = snapshotExit.value.chronological.findIndex(
+      (message) => message.info.id === input.cutoffMessageID,
+    )
+    const unsafe = unresolved.some((receipt) => {
+      const userIndex = snapshotExit.value.chronological.findIndex(
+        (message) => message.info.id === receipt.userMessageID,
+      )
+      return userIndex >= 0 && cutoffIndex > userIndex
+    })
+    if (unsafe) return
+    return { projection, physical: snapshotExit.value.physical }
+  })
+}
+
+export function promptHistoryCutoffProjectionInTransaction(
+  tx: Pick<Database.Interface["db"], "select">,
+  input: { sessionID: SessionID; cutoffMessageID: MessageID },
+) {
+  return Effect.gen(function* () {
+    return (yield* promptHistoryCutoffAuthorityInTransaction(tx, input))?.projection
+  })
+}
+
+export const promptHistoryCutoffProjectionEffect = Effect.fn("MessageV2.promptHistoryCutoffProjection")(
+  function* (input: { sessionID: SessionID; cutoffMessageID: MessageID }) {
+    const { db } = yield* Database.Service
+    const projection = yield* db
+      .transaction((tx) => promptHistoryCutoffProjectionInTransaction(tx as unknown as Database.Interface["db"], input))
+      .pipe(Effect.orDie)
+    if (projection) return projection
+    return yield* new HistoryAuthorityError({
+      sessionID: input.sessionID,
+      reason: "fork cutoff is outside the recoverable history prefix",
+    })
+  },
+)
 
 export const promptHistoryBeforeCompactionEffect = Effect.fn("MessageV2.promptHistoryBeforeCompaction")(
   function* (input: { sessionID: SessionID; markerMessageID: MessageID }) {
@@ -1156,7 +1508,7 @@ export const promptControlHistoryEffect = Effect.fn("MessageV2.promptControlHist
   const known = new Set(history.map((message) => message.info.id))
   return [
     ...history,
-    ...(yield* stream(sessionID))
+    ...(yield* promptStream(sessionID))
       .reverse()
       .filter((message) => markers.has(message.info.id) && !known.has(message.info.id)),
   ]
@@ -1168,7 +1520,7 @@ type EpochSelection =
   | { readonly ok: false; readonly reason: string }
 
 function readHistorySnapshotInTransaction(
-  tx: Database.Interface["db"],
+  tx: Pick<Database.Interface["db"], "select">,
   sessionID: SessionID,
   ignoredCompactionMarkerID?: MessageID,
 ) {
@@ -1182,7 +1534,9 @@ function readHistorySnapshotInTransaction(
         .filter((artifact) => artifact.state !== "committed")
         .map((artifact) => artifact.message_id),
     )
-    const physical = (yield* stream(sessionID).pipe(Effect.provideService(Database.Service, { db: tx }))).reverse()
+    const physical = (yield* promptStream(sessionID).pipe(
+      Effect.provideService(Database.Service, { db: tx }),
+    )).reverse()
     const visible = physical.filter(
       (message) => message.info.id === ignoredCompactionMarkerID || !hidden.has(message.info.id),
     )
@@ -1205,7 +1559,57 @@ function readHistorySnapshotInTransaction(
           .orderBy(SessionPromptEpochMessageTable.ordinal)
           .all()).map((row) => row.message_id)
       : []
-    return { chronological, epoch, replacementMessageIDs }
+    const recoveryBinding = epoch?.recovery_resolution_id
+      ? yield* tx
+          .select({
+            resolutionID: SessionPromptEpochRecoveryTable.resolution_id,
+            sourcePromptEpoch: SessionPromptEpochRecoveryTable.source_prompt_epoch,
+            successorPromptEpoch: SessionToolRequestResolutionTable.successor_prompt_epoch,
+            successorWindowID: SessionToolRequestResolutionTable.successor_window_id,
+            successorHistoryHash: SessionToolRequestResolutionTable.successor_history_hash,
+            successorMutationEpoch: SessionPromptEpochRecoveryTable.successor_mutation_epoch,
+          })
+          .from(SessionPromptEpochRecoveryTable)
+          .innerJoin(
+            SessionToolRequestResolutionTable,
+            eq(SessionToolRequestResolutionTable.resolution_id, SessionPromptEpochRecoveryTable.resolution_id),
+          )
+          .where(
+            and(
+              eq(SessionPromptEpochRecoveryTable.session_id, sessionID),
+              eq(SessionPromptEpochRecoveryTable.prompt_epoch, epoch.epoch),
+              eq(SessionPromptEpochRecoveryTable.resolution_id, epoch.recovery_resolution_id),
+            ),
+          )
+          .get()
+      : undefined
+    const recoveryBindingValid =
+      !epoch?.recovery_resolution_id ||
+      !!(
+        recoveryBinding &&
+        recoveryBinding.sourcePromptEpoch < epoch.epoch &&
+        recoveryBinding.successorPromptEpoch === epoch.epoch &&
+        recoveryBinding.successorWindowID === epoch.window_id &&
+        recoveryBinding.successorHistoryHash === epoch.effective_history_hash &&
+        recoveryBinding.successorMutationEpoch >= 0
+      )
+    const recoveryAdmittedMessageIDs =
+      recoveryBinding && epoch?.recovery_resolution_id
+        ? new Set(
+            (yield* tx
+              .select({ messageID: SessionIntentTable.admitted_message_id })
+              .from(SessionIntentTable)
+              .where(
+                and(
+                  eq(SessionIntentTable.session_id, sessionID),
+                  eq(SessionIntentTable.state, "admitted"),
+                  eq(SessionIntentTable.mutation_epoch, recoveryBinding.successorMutationEpoch),
+                ),
+              )
+              .all()).flatMap((row) => (row.messageID ? [MessageID.make(row.messageID)] : [])),
+          )
+        : new Set<MessageID>()
+    return { physical, chronological, epoch, replacementMessageIDs, recoveryBindingValid, recoveryAdmittedMessageIDs }
   })
 }
 
@@ -1225,6 +1629,7 @@ function selectEpochHistory(
   chronological: WithParts[],
   epoch: EpochRow,
   replacementMessageIDs: readonly MessageID[] = [],
+  recoveryAdmittedMessageIDs = new Set<MessageID>(),
 ): EpochSelection {
   if (epoch.base_message_count !== null && epoch.base_message_count !== replacementMessageIDs.length) {
     return { ok: false, reason: `epoch ${epoch.epoch} replacement membership is incomplete` }
@@ -1238,7 +1643,7 @@ function selectEpochHistory(
     if (replacement.length !== replacementMessageIDs.length) {
       return { ok: false, reason: `epoch ${epoch.epoch} replacement message is missing` }
     }
-    if (epoch.epoch > 0) {
+    if (epoch.epoch > 0 && !epoch.recovery_resolution_id) {
       const user = replacement[0]
       const assistant = replacement[1]
       if (
@@ -1263,15 +1668,43 @@ function selectEpochHistory(
       return { ok: false, reason: `epoch ${epoch.epoch} append boundary is missing` }
     }
     const replacementIDs = new Set(replacementMessageIDs)
+    const future = boundaryIndex < 0 ? [] : chronological.slice(boundaryIndex + 1)
+    const appended = epoch.recovery_resolution_id
+      ? future.filter((message) => {
+          if (message.info.role === "user") {
+            if (!recoveryAdmittedMessageIDs.has(message.info.id)) return false
+            replacementIDs.add(message.info.id)
+            return true
+          }
+          if (!replacementIDs.has(message.info.parentID)) return false
+          replacementIDs.add(message.info.id)
+          return true
+        })
+      : future.filter((message) => !replacementIDs.has(message.info.id))
     return {
       ok: true,
-      messages: [
-        ...replacement,
-        ...(boundaryIndex < 0
-          ? []
-          : chronological.slice(boundaryIndex + 1).filter((message) => !replacementIDs.has(message.info.id))),
-      ],
+      messages: [...replacement, ...appended],
     }
+  }
+  if (epoch.recovery_resolution_id) {
+    const boundaryIndex = epoch.source_end_message_id
+      ? chronological.findIndex((message) => message.info.id === epoch.source_end_message_id)
+      : -1
+    if (epoch.source_end_message_id && boundaryIndex < 0) {
+      return { ok: false, reason: `epoch ${epoch.epoch} append boundary is missing` }
+    }
+    const admitted = new Set<MessageID>()
+    const appended = (boundaryIndex < 0 ? [] : chronological.slice(boundaryIndex + 1)).filter((message) => {
+      if (message.info.role === "user") {
+        if (!recoveryAdmittedMessageIDs.has(message.info.id)) return false
+        admitted.add(message.info.id)
+        return true
+      }
+      if (!admitted.has(message.info.parentID)) return false
+      admitted.add(message.info.id)
+      return true
+    })
+    return { ok: true, messages: appended }
   }
   if (epoch.epoch === 0) return { ok: true, messages: chronological }
   if (!epoch.checkpoint_user_id || !epoch.checkpoint_assistant_id) {
@@ -1318,7 +1751,7 @@ function selectEpochHistory(
 // missing/incomplete authority simply fails the caller's CAS so no replacement window is committed
 // against a different physical history.
 export function promptHistoryProjectionInTransaction(
-  tx: Database.Interface["db"],
+  tx: Pick<Database.Interface["db"], "select">,
   sessionID: SessionID,
   ignoredCompactionMarkerID?: MessageID,
 ) {
@@ -1335,10 +1768,16 @@ export function promptHistoryProjectionInTransaction(
       epoch.base_message_count === null ||
       !epoch.effective_history_hash ||
       !epoch.first_window_id ||
-      !epoch.window_id
+      !epoch.window_id ||
+      !snapshot.recoveryBindingValid
     )
       return
-    const selected = selectEpochHistory(snapshot.chronological, epoch, snapshot.replacementMessageIDs)
+    const selected = selectEpochHistory(
+      snapshot.chronological,
+      epoch,
+      snapshot.replacementMessageIDs,
+      snapshot.recoveryAdmittedMessageIDs,
+    )
     if (!selected.ok || epoch.base_message_count < 0 || epoch.base_message_count > selected.messages.length) return
     if (HistoryAuthority.hash(selected.messages.slice(0, epoch.base_message_count)) !== epoch.effective_history_hash)
       return
@@ -1357,6 +1796,7 @@ export function promptHistoryProjectionInTransaction(
         windowID: epoch.window_id,
       },
       ...(epoch.world_state_baseline_hash ? { worldStateBaselineHash: epoch.world_state_baseline_hash } : {}),
+      ...(epoch.recovery_resolution_id ? { recoveryResolutionID: epoch.recovery_resolution_id } : {}),
     } satisfies PromptHistoryProjection
   })
 }
@@ -1491,7 +1931,7 @@ const migrateHistoryAuthority = Effect.fn("MessageV2.migrateHistoryAuthority")(f
           const hidden = new Set(
             artifacts.filter((artifact) => artifact.state !== "committed").map((artifact) => artifact.message_id),
           )
-          const physical = (yield* stream(input.sessionID).pipe(
+          const physical = (yield* promptStream(input.sessionID).pipe(
             Effect.provideService(Database.Service, {
               db: tx as unknown as Database.Interface["db"],
             }),
@@ -1692,6 +2132,7 @@ function legacyEpochCandidate(
         world_state_baseline_hash: null,
         authority_state: "legacy_pending",
         recovery_reason: null,
+        recovery_resolution_id: null,
         reason: "bootstrap",
         created_at: Date.now(),
         retired_at: null,
@@ -1738,6 +2179,7 @@ function legacyEpochCandidate(
       world_state_baseline_hash: null,
       authority_state: "legacy_pending",
       recovery_reason: null,
+      recovery_resolution_id: null,
       reason: "compaction",
       created_at: Date.now(),
       retired_at: null,

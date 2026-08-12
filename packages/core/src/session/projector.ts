@@ -60,6 +60,9 @@ function sessionRow(info: SessionV1.SessionInfo): typeof SessionTable.$inferInse
     summary_deletions: info.summary?.deletions,
     summary_files: info.summary?.files,
     summary_diffs: info.summary?.diffs ? [...info.summary.diffs] : undefined,
+    summary_diff_manifest: info.summary?.diffManifest
+      ? { ...info.summary.diffManifest, truncationReasons: [...info.summary.diffManifest.truncationReasons] }
+      : undefined,
     metadata: info.metadata,
     cost: info.cost ?? 0,
     tokens_input: (info.tokens ?? { input: 0 }).input,
@@ -75,6 +78,13 @@ function sessionRow(info: SessionV1.SessionInfo): typeof SessionTable.$inferInse
     time_archived: info.time.archived,
     preview: info.preview,
   }
+}
+
+function sessionUpdateRow(info: SessionV1.SessionInfo) {
+  const row = sessionRow(info)
+  if (info.summary?.diffs !== undefined) return row
+  const { summary_diffs: _, ...bounded } = row
+  return bounded
 }
 
 function messageData(
@@ -242,7 +252,7 @@ export const layer = Layer.effectDiscard(
     yield* events.project(SessionV1.Event.Updated, (event) =>
       db
         .update(SessionTable)
-        .set(sessionRow(event.data.info))
+        .set(sessionUpdateRow(event.data.info))
         .where(eq(SessionTable.id, event.data.sessionID))
         .run()
         .pipe(Effect.orDie),

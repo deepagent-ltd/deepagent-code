@@ -7,18 +7,24 @@ import { Authorization } from "../middleware/authorization"
 import { InstanceContextMiddleware } from "../middleware/instance-context"
 import { WorkspaceRoutingMiddleware, WorkspaceRoutingQuery } from "../middleware/workspace-routing"
 import { described } from "./metadata"
+import { ConflictError, ServiceUnavailableError } from "../errors"
+import { SyncReplayLimits } from "@/sync/replay-protocol"
 
 const root = "/sync"
+export { SyncReplayLimits } from "@/sync/replay-protocol"
 export const ReplayEvent = Schema.Struct({
-  id: EventV2.ID,
-  aggregateID: Schema.String,
+  id: EventV2.ID.check(Schema.isMaxLength(SyncReplayLimits.eventIDCharacters)),
+  aggregateID: Schema.String.check(
+    Schema.isMinLength(1),
+    Schema.isMaxLength(SyncReplayLimits.aggregateIDCharacters),
+  ),
   seq: NonNegativeInt,
-  type: Schema.String,
+  type: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(SyncReplayLimits.typeCharacters)),
   data: Schema.Record(Schema.String, Schema.Unknown),
 })
 export const ReplayPayload = Schema.Struct({
-  directory: Schema.String,
-  events: Schema.NonEmptyArray(ReplayEvent),
+  directory: Schema.String.check(Schema.isMaxLength(SyncReplayLimits.directoryCharacters)),
+  events: Schema.NonEmptyArray(ReplayEvent).check(Schema.isMaxLength(SyncReplayLimits.events)),
 })
 export const ReplayResponse = Schema.Struct({
   sessionID: Schema.String,
@@ -72,7 +78,7 @@ export const SyncApi = HttpApi.make("sync")
           query: WorkspaceRoutingQuery,
           payload: SessionPayload,
           success: described(SessionPayload, "Session stolen into workspace"),
-          error: HttpApiError.BadRequest,
+          error: [HttpApiError.BadRequest, ConflictError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "sync.steal",
@@ -84,13 +90,13 @@ export const SyncApi = HttpApi.make("sync")
           query: WorkspaceRoutingQuery,
           payload: HistoryPayload,
           success: described(Schema.Array(HistoryEvent), "Sync events"),
-          error: HttpApiError.BadRequest,
+          error: [HttpApiError.BadRequest, ServiceUnavailableError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "sync.history.list",
             summary: "List sync events",
             description:
-              "List sync events for all aggregates. Keys are aggregate IDs the client already knows about, values are the last known sequence ID. Events with seq > value are returned for those aggregates. Aggregates not listed in the input get their full history.",
+              "List a bounded page of sync events. Keys are aggregate IDs the client already knows about, values are the last known sequence ID. Oversized legacy events fail closed until maintenance migration externalizes their inline payload.",
           }),
         ),
       )

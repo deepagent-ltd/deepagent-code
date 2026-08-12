@@ -152,8 +152,7 @@ const stubRuntimeBaseLayer = Layer.succeed(
 
 // Fully-inert DebugService (D1) stub — avoids InstanceState.make + finalizer side effects
 // at registry-build time. This test never invokes the debug tool.
-const debugStubDie = <A>(): Effect.Effect<A, never, never> =>
-  Effect.die("DebugService stub (not used in this test)")
+const debugStubDie = <A>(): Effect.Effect<A, never, never> => Effect.die("DebugService stub (not used in this test)")
 const stubDebugServiceLayer = Layer.succeed(
   DebugService.Service,
   DebugService.Service.of({
@@ -336,13 +335,48 @@ it.live("tool execution produces non-empty session diff (snapshot race)", () =>
       if (!user) throw new Error("Expected user message")
 
       // Poll for the turn diff — summarize() is fire-and-forget.
-      let diff: Array<{ file?: string }> = []
+      let diff: Snapshot.FileDiff[] = []
       for (let i = 0; i < 50; i++) {
         diff = yield* summary.diff({ sessionID: session.id, messageID: user.info.id })
         if (diff.length > 0) break
         yield* Effect.sleep("100 millis")
       }
       expect(diff.length).toBeGreaterThan(0)
+      expect(diff.every((item) => item.patch === undefined)).toBe(true)
+      const persisted = (yield* sessions.messages({ sessionID: session.id })).find(
+        (message) => message.info.id === user.info.id && message.info.role === "user",
+      )
+      expect(
+        persisted?.info.role === "user"
+          ? persisted.info.summary?.diffs.every((item) => item.patch === undefined)
+          : false,
+      ).toBe(true)
+      expect(persisted?.info.role === "user" ? persisted.info.summary?.diffManifest : undefined).toMatchObject({
+        completeness: "complete",
+        totalFiles: 1,
+        totalFilesExact: true,
+        statisticsExact: true,
+        includedFiles: 1,
+        truncatedFiles: 0,
+      })
+      expect(
+        persisted?.info.role === "user" ? persisted.info.summary?.diffManifest?.manifestHash : undefined,
+      ).toStartWith("sha256:")
+      let sessionSummary = (yield* sessions.get(session.id)).summary
+      for (let i = 0; i < 20 && sessionSummary?.files === 0; i++) {
+        yield* Effect.sleep("50 millis")
+        sessionSummary = (yield* sessions.get(session.id)).summary
+      }
+      expect(sessionSummary).toMatchObject({ additions: 1, deletions: 0, files: 1 })
+      expect(sessionSummary?.diffManifest).toMatchObject({
+        completeness: "complete",
+        totalFiles: 1,
+        totalFilesExact: true,
+        statisticsExact: true,
+        includedFiles: 1,
+        truncatedFiles: 0,
+      })
+      expect(sessionSummary?.diffManifest?.manifestHash).toStartWith("sha256:")
     }),
     { git: true, config: providerCfg },
   ),

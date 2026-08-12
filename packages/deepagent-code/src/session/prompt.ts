@@ -123,8 +123,13 @@ import {
 } from "@deepagent-code/core/session/prompt"
 import { Reference } from "@/reference/reference"
 import * as DateTime from "effect/DateTime"
-import { and, eq, inArray, isNull, max, ne, or } from "drizzle-orm"
-import { SessionHistoryStateTable, SessionTable, TaskRunTable } from "@deepagent-code/core/session/sql"
+import { and, eq, inArray, isNull, max, ne, notInArray, or } from "drizzle-orm"
+import {
+  SessionHistoryStateTable,
+  SessionTable,
+  SessionToolRequestResolutionTable,
+  TaskRunTable,
+} from "@deepagent-code/core/session/sql"
 import { SessionPromptEpochTable } from "./prompt-epoch.sql"
 import { referencePromptMetadata, referenceTextPart } from "./prompt/reference"
 import { SessionReminders } from "./reminders"
@@ -203,8 +208,16 @@ export const recoverProviderReceiptsOnStartup = Effect.fn("SessionPrompt.recover
         assistantMessageID: SessionToolRequestReceiptTable.assistant_message_id,
       })
       .from(SessionToolRequestReceiptTable)
+      .leftJoin(
+        SessionToolRequestResolutionTable,
+        eq(SessionToolRequestResolutionTable.receipt_id, SessionToolRequestReceiptTable.receipt_id),
+      )
       .where(
-        and(inArray(SessionToolRequestReceiptTable.provider_state, ["dispatching", "streaming"] as const), staleOwner),
+        and(
+          inArray(SessionToolRequestReceiptTable.provider_state, ["dispatching", "streaming"] as const),
+          staleOwner,
+          isNull(SessionToolRequestResolutionTable.resolution_id),
+        ),
       )
       .all()
       .pipe(Effect.orDie)
@@ -250,10 +263,15 @@ export const recoverProviderReceiptsOnStartup = Effect.fn("SessionPrompt.recover
             const started = tx
               .select({ receipt_id: SessionToolRequestReceiptTable.receipt_id })
               .from(SessionToolRequestReceiptTable)
+              .leftJoin(
+                SessionToolRequestResolutionTable,
+                eq(SessionToolRequestResolutionTable.receipt_id, SessionToolRequestReceiptTable.receipt_id),
+              )
               .where(
                 and(
                   inArray(SessionToolRequestReceiptTable.provider_state, ["dispatching", "streaming"] as const),
                   staleOwner,
+                  isNull(SessionToolRequestResolutionTable.resolution_id),
                 ),
               )
             const now = Date.now()
@@ -302,6 +320,12 @@ export const recoverProviderReceiptsOnStartup = Effect.fn("SessionPrompt.recover
                 and(
                   inArray(SessionToolRequestReceiptTable.provider_state, ["dispatching", "streaming"] as const),
                   staleOwner,
+                  notInArray(
+                    SessionToolRequestReceiptTable.receipt_id,
+                    tx
+                      .select({ receiptID: SessionToolRequestResolutionTable.receipt_id })
+                      .from(SessionToolRequestResolutionTable),
+                  ),
                 ),
               )
               .run()

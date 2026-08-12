@@ -1,7 +1,7 @@
 export * as EventV2 from "./event"
 
 import { Cause, Context, Effect, Layer, Option, PubSub, Schema, Stream } from "effect"
-import { and, asc, eq, gt } from "drizzle-orm"
+import { and, eq, gt, inArray, sql } from "drizzle-orm"
 import { Database } from "./database/database"
 import { EventSequenceTable, EventTable } from "./event/sql"
 import { Location } from "./location"
@@ -78,6 +78,20 @@ export class InvalidSyncEventError extends Schema.TaggedErrorClass<InvalidSyncEv
   },
 ) {}
 
+export const MAX_ENCODED_PAYLOAD_BYTES = 4 * 1024 * 1024
+export const AGGREGATE_READ_BATCH_EVENTS = 100
+export const AGGREGATE_READ_BATCH_BYTES = 4 * 1024 * 1024
+
+export class EncodedPayloadTooLargeError extends Schema.TaggedErrorClass<EncodedPayloadTooLargeError>()(
+  "EventV2.EncodedPayloadTooLarge",
+  {
+    type: Schema.String,
+    encodedBytes: NonNegativeInt,
+    limitBytes: NonNegativeInt,
+    message: Schema.String,
+  },
+) {}
+
 export function versionedType(type: string, version: number) {
   return `${type}.${version}`
 }
@@ -89,6 +103,21 @@ type SyncDefinition = Definition & {
   readonly decode: (data: unknown) => unknown
 }
 const syncRegistry = new Map<string, SyncDefinition>()
+
+function admitEncodedPayload(definition: SyncDefinition, data: unknown) {
+  const encoded = definition.encode(data) as Record<string, unknown>
+  const encodedBytes = Buffer.byteLength(JSON.stringify(encoded))
+  if (encodedBytes > MAX_ENCODED_PAYLOAD_BYTES)
+    return {
+      error: new EncodedPayloadTooLargeError({
+        type: definition.type,
+        encodedBytes,
+        limitBytes: MAX_ENCODED_PAYLOAD_BYTES,
+        message: `Encoded event payload is ${encodedBytes} bytes; limit is ${MAX_ENCODED_PAYLOAD_BYTES} bytes`,
+      }),
+    } as const
+  return { encoded } as const
+}
 
 // Synchronized events cross a JSON boundary, so their data schemas must encode and decode without services.
 const syncCodec = (definition: Definition) => definition.data as Schema.Codec<unknown, unknown, never, never>
@@ -182,6 +211,7 @@ export class Service extends Context.Service<Service, Interface>()("@deepagent-c
 
 export interface LayerOptions {
   readonly beforeAggregateRead?: (aggregateID: string) => Effect.Effect<void>
+  readonly afterAggregateReadMetadata?: (aggregateID: string, eventIDs: readonly ID[]) => Effect.Effect<void>
 }
 
 export const layerWith = (options?: LayerOptions) =>
@@ -258,6 +288,12 @@ export const layerWith = (options?: LayerOptions) =>
                   }),
                 )
               }
+              const admission = admitEncodedPayload(
+                syncRegistry.get(versionedType(definition.type, sync.version))!,
+                event.data,
+              )
+              if ("error" in admission) return yield* Effect.die(admission.error)
+              const encoded = admission.encoded
               const list = projectors.get(event.type) ?? []
               return yield* Effect.uninterruptible(
                 Effect.gen(function* () {
@@ -272,9 +308,6 @@ export const layerWith = (options?: LayerOptions) =>
                             .get()
                             .pipe(Effect.orDie)
                           const latest = row?.seq ?? -1
-                          const encoded = syncRegistry
-                            .get(versionedType(definition.type, sync.version))!
-                            .encode(event.data) as Record<string, unknown>
                           if (input?.strictOwner && row?.ownerID && row.ownerID !== input.ownerID) {
                             yield* Effect.die(
                               new InvalidSyncEventError({
@@ -550,6 +583,17 @@ export const layerWith = (options?: LayerOptions) =>
             }
           }
           for (const event of events) {
+            const definition = syncRegistry.get(event.type)
+            if (!definition) {
+              yield* Effect.die(
+                new InvalidSyncEventError({ type: event.type, message: `Unknown sync event type ${event.type}` }),
+              )
+              continue
+            }
+            const admission = admitEncodedPayload(definition, definition.decode(event.data))
+            if ("error" in admission) return yield* Effect.die(admission.error)
+          }
+          for (const event of events) {
             yield* replay(event, options)
           }
           return source
@@ -600,29 +644,85 @@ export const layerWith = (options?: LayerOptions) =>
         }
       }
 
+      const decodeStoredEventData = Schema.decodeUnknownSync(Schema.UnknownFromJsonString)
+
       const readAfter = (aggregateID: string, after: number) =>
-        (options?.beforeAggregateRead?.(aggregateID) ?? Effect.void).pipe(
-          Effect.andThen(
-            db
-              .select()
-              .from(EventTable)
-              .where(and(eq(EventTable.aggregate_id, aggregateID), gt(EventTable.seq, after)))
-              .orderBy(asc(EventTable.seq))
-              .all(),
-          ),
-          Effect.orDie,
-          Effect.map((rows) =>
-            rows.map((event) =>
-              decodeSerializedEvent({
-                id: event.id,
-                aggregateID: event.aggregate_id,
-                seq: event.seq,
-                type: event.type,
-                data: event.data,
+        Effect.gen(function* () {
+          yield* options?.beforeAggregateRead?.(aggregateID) ?? Effect.void
+          const candidates = yield* db
+            .all<{
+              id: ID
+              seq: number
+              type: string
+              bytes: number
+              cumulativeBytes: number
+            }>(sql`
+              WITH candidate AS (
+                SELECT
+                  ${EventTable.id} AS id,
+                  ${EventTable.seq} AS seq,
+                  ${EventTable.type} AS type,
+                  length(CAST(${EventTable.data} AS BLOB)) AS bytes
+                FROM ${EventTable}
+                WHERE ${EventTable.aggregate_id} = ${aggregateID}
+                  AND ${EventTable.seq} > ${after}
+                ORDER BY ${EventTable.seq} ASC
+                LIMIT ${AGGREGATE_READ_BATCH_EVENTS + 1}
+              )
+              SELECT
+                id,
+                seq,
+                type,
+                bytes,
+                sum(bytes) OVER (ORDER BY seq ASC ROWS UNBOUNDED PRECEDING) AS cumulativeBytes
+              FROM candidate
+              ORDER BY seq ASC
+            `)
+            .pipe(Effect.orDie)
+          const oversized = candidates[0]
+          if (oversized && oversized.bytes > AGGREGATE_READ_BATCH_BYTES)
+            return yield* Effect.die(
+              new EncodedPayloadTooLargeError({
+                type: oversized.type,
+                encodedBytes: oversized.bytes,
+                limitBytes: AGGREGATE_READ_BATCH_BYTES,
+                message: `Stored event payload is ${oversized.bytes} bytes; aggregate read limit is ${AGGREGATE_READ_BATCH_BYTES} bytes`,
               }),
-            ),
-          ),
-        )
+            )
+          const metadata = candidates
+            .slice(0, AGGREGATE_READ_BATCH_EVENTS)
+            .filter((event) => event.cumulativeBytes <= AGGREGATE_READ_BATCH_BYTES)
+          if (metadata.length === 0) return { events: [], more: false }
+          yield* options?.afterAggregateReadMetadata?.(
+            aggregateID,
+            metadata.map((event) => event.id),
+          ) ?? Effect.void
+          const rows = yield* db
+            .select({ id: EventTable.id, data: sql<string>`${EventTable.data}` })
+            .from(EventTable)
+            .where(inArray(EventTable.id, metadata.map((event) => event.id)))
+            .all()
+            .pipe(Effect.orDie)
+          const dataByID = new Map(rows.map((row) => [row.id, row.data]))
+          const missing = metadata.find((event) => !dataByID.has(event.id))
+          if (missing)
+            return yield* Effect.die(
+              new InvalidSyncEventError({
+                type: missing.type,
+                message: `Stored event ${missing.id} disappeared while reading aggregate ${aggregateID}`,
+              }),
+            )
+          const events = metadata.map((event) =>
+            decodeSerializedEvent({
+              id: event.id,
+              aggregateID,
+              seq: event.seq,
+              type: event.type,
+              data: decodeStoredEventData(dataByID.get(event.id)!) as Record<string, unknown>,
+            }),
+          )
+          return { events, more: candidates.length > metadata.length }
+        })
 
       const subscribeSynchronized = (aggregateID: string) =>
         Effect.gen(function* () {
@@ -652,19 +752,23 @@ export const layerWith = (options?: LayerOptions) =>
           Effect.gen(function* () {
             const synchronized = yield* subscribeSynchronized(input.aggregateID)
             let cursor = input.after ?? -1
-            const read = Effect.suspend(() => readAfter(input.aggregateID, cursor)).pipe(
-              Effect.tap((events) =>
-                Effect.sync(() => {
-                  cursor = events.at(-1)?.cursor ?? cursor
-                }),
-              ),
-            )
-            const historical = yield* read
+            const drain = () =>
+              Stream.paginate(cursor, (after) =>
+                readAfter(input.aggregateID, after).pipe(
+                  Effect.map((page) => {
+                    const next = page.events.at(-1)?.cursor
+                    if (next !== undefined) cursor = next
+                    return [
+                      page.events,
+                      page.more && next !== undefined ? Option.some(next) : Option.none<Cursor>(),
+                    ] as const
+                  }),
+                ),
+              )
             const live = Stream.fromSubscription(synchronized).pipe(
-              Stream.mapEffect(() => read),
-              Stream.flattenIterable,
+              Stream.flatMap(() => drain()),
             )
-            return Stream.concat(Stream.fromIterable(historical), live)
+            return Stream.concat(drain(), live)
           }),
         )
 

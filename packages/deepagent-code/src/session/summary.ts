@@ -62,10 +62,25 @@ function unquoteGitPath(input: string) {
   return Buffer.from(bytes).toString()
 }
 
+export const emptyManifest = (): Snapshot.DiffManifest => ({
+  files: [],
+  additions: 0,
+  deletions: 0,
+  totalFiles: 0,
+  totalFilesExact: true,
+  statisticsExact: true,
+  includedFiles: 0,
+  truncatedFiles: 0,
+  manifestHash: "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  completeness: "complete",
+  truncationReasons: [],
+})
+
 export interface Interface {
   readonly summarize: (input: { sessionID: SessionID; messageID: MessageID }) => Effect.Effect<void>
   readonly diff: (input: { sessionID: SessionID; messageID?: MessageID }) => Effect.Effect<Snapshot.FileDiff[]>
   readonly computeDiff: (input: { messages: SessionV1.WithParts[] }) => Effect.Effect<Snapshot.FileDiff[]>
+  readonly computeManifest: (input: { messages: SessionV1.WithParts[] }) => Effect.Effect<Snapshot.DiffManifest>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/SessionSummary") {}
@@ -78,10 +93,10 @@ export const layer = Layer.effect(
     const events = yield* EventV2Bridge.Service
     const config = yield* Config.Service
 
-    const computeDiff = Effect.fn("SessionSummary.computeDiff")(function* (input: { messages: SessionV1.WithParts[] }) {
+    const snapshots = (messages: SessionV1.WithParts[]) => {
       let from: string | undefined
       let to: string | undefined
-      for (const item of input.messages) {
+      for (const item of messages) {
         if (!from) {
           for (const part of item.parts) {
             if (part.type === "step-start" && part.snapshot) {
@@ -94,53 +109,116 @@ export const layer = Layer.effect(
           if (part.type === "step-finish" && part.snapshot) to = part.snapshot
         }
       }
-      if (from && to) return yield* snapshot.diffFull(from, to)
-      return []
+      return { from, to }
+    }
+
+    const descriptor = (manifest: Snapshot.DiffManifest) => ({
+      completeness: manifest.completeness,
+      truncationReasons: [...manifest.truncationReasons],
+      manifestHash: manifest.manifestHash,
+      totalFiles: manifest.totalFiles,
+      totalFilesExact: manifest.totalFilesExact,
+      statisticsExact: manifest.statisticsExact,
+      includedFiles: manifest.includedFiles,
+      truncatedFiles: manifest.truncatedFiles,
+    })
+
+    const computeManifest = Effect.fn("SessionSummary.computeManifest")(function* (input: {
+      messages: SessionV1.WithParts[]
+    }) {
+      const range = snapshots(input.messages)
+      if (range.from && range.to) return yield* snapshot.diffManifest(range.from, range.to)
+      return emptyManifest()
+    })
+
+    const computeDiff = Effect.fn("SessionSummary.computeDiff")(function* (input: { messages: SessionV1.WithParts[] }) {
+      return (yield* computeManifest(input)).files.map((item) => {
+        if (item.patch !== "") return item
+        const { patch, ...metadata } = item
+        return metadata
+      })
+    })
+
+    const turnManifest = Effect.fn("SessionSummary.turnManifest")(function* (input: {
+      sessionID: SessionID
+      parentID: MessageID
+    }) {
+      const range = yield* sessions.turnSnapshotRange(input)
+      if (range.from && range.to) return yield* snapshot.diffManifest(range.from, range.to)
+      return emptyManifest()
     })
 
     const summarize = Effect.fn("SessionSummary.summarize")(function* (input: {
       sessionID: SessionID
       messageID: MessageID
     }) {
+      const empty = emptyManifest()
       yield* sessions.setSummary({
         sessionID: input.sessionID,
         summary: {
           additions: 0,
           deletions: 0,
           files: 0,
+          diffManifest: descriptor(empty),
         },
       })
-      yield* events.publish(Session.Event.Diff, { sessionID: input.sessionID, diff: [] })
+      yield* events.publish(Session.Event.Diff, {
+        sessionID: input.sessionID,
+        diff: [],
+        manifest: descriptor(empty),
+      })
       if ((yield* config.get()).snapshot === false) return
-      const all = yield* sessions.messages({ sessionID: input.sessionID }).pipe(Effect.orDie)
-      if (!all.length) return
-
-      const messages = all.filter(
-        (m) => m.info.id === input.messageID || (m.info.role === "assistant" && m.info.parentID === input.messageID),
-      )
-      const target = messages.find((m) => m.info.id === input.messageID)
+      const target = yield* sessions
+        .getClientMessage({ sessionID: input.sessionID, messageID: input.messageID })
+        .pipe(Effect.orDie)
       if (!target || target.info.role !== "user") return
-      const msgDiffs = yield* computeDiff({ messages })
-      target.info.summary = { ...target.info.summary, diffs: msgDiffs }
+      const manifest = yield* turnManifest({ sessionID: input.sessionID, parentID: target.info.id })
+      const diffs = manifest.files.map((item) => {
+        if (item.patch !== "") return item
+        const { patch, ...metadata } = item
+        return metadata
+      })
+      target.info.summary = { ...target.info.summary, diffs, diffManifest: descriptor(manifest) }
+      yield* sessions.setSummary({
+        sessionID: input.sessionID,
+        summary: {
+          additions: manifest.additions,
+          deletions: manifest.deletions,
+          files: manifest.totalFiles,
+          diffManifest: descriptor(manifest),
+        },
+      })
+      yield* events.publish(Session.Event.Diff, {
+        sessionID: input.sessionID,
+        diff: diffs,
+        manifest: descriptor(manifest),
+      })
       yield* sessions.updateMessage(target.info)
     })
 
     const diff = Effect.fn("SessionSummary.diff")(function* (input: { sessionID: SessionID; messageID?: MessageID }) {
       if (!input.messageID) return []
-      const message = (yield* sessions.messages({ sessionID: input.sessionID }).pipe(Effect.orDie)).find(
-        (item) => item.info.id === input.messageID,
+      const message = yield* sessions.getClientMessage({ sessionID: input.sessionID, messageID: input.messageID }).pipe(
+        Effect.catchTag("NotFoundError", () => Effect.succeed(undefined)),
+        Effect.orDie,
       )
       if (!message || message.info.role !== "user") return []
       const diffs = message.info.summary?.diffs ?? []
       return diffs.map((item) => {
-        if (item.file === undefined) return item
+        const metadata = {
+          ...(item.file === undefined ? {} : { file: item.file }),
+          additions: item.additions,
+          deletions: item.deletions,
+          ...(item.status === undefined ? {} : { status: item.status }),
+        } satisfies Snapshot.FileDiff
+        if (item.file === undefined) return metadata
         const file = unquoteGitPath(item.file)
-        if (file === item.file) return item
-        return { ...item, file }
+        if (file === item.file) return metadata
+        return { ...metadata, file }
       })
     })
 
-    return Service.of({ summarize, diff, computeDiff })
+    return Service.of({ summarize, diff, computeDiff, computeManifest })
   }),
 )
 

@@ -6,7 +6,7 @@ import { Cause, Effect } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { InstanceHttpApi } from "../api"
 import { notFound } from "../errors"
-import { ApiVcsApplyError } from "../groups/instance"
+import { ApiVcsApplyError, ApiVcsRawDiffError } from "../groups/instance"
 import { ApiWorkspaceCreateError, ApiWorkspaceWarpError, CreatePayload, WarpPayload } from "../groups/workspace"
 
 export const workspaceHandlers = HttpApiBuilder.group(InstanceHttpApi, "workspace", (handlers) =>
@@ -77,6 +77,18 @@ export const workspaceHandlers = HttpApiBuilder.group(InstanceHttpApi, "workspac
                 data: {
                   message: error.message,
                   reason: error.reason,
+                },
+              })
+            }
+            if (error instanceof Vcs.RawDiffError) {
+              return new ApiVcsRawDiffError({
+                name: "VcsRawDiffError",
+                data: {
+                  message: error.message,
+                  reason: error.reason,
+                  limit: error.limit,
+                  actual: error.actual,
+                  file: error.file,
                 },
               })
             }
