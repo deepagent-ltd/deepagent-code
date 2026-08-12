@@ -90,6 +90,7 @@ import { projectDurableSettledRun, projectRecoveredSubagentRun, TaskTool, type T
 import { SessionRunState } from "./run-state"
 import { SessionSteer } from "./steer"
 import { SessionPromptIntent } from "./prompt-intent"
+import { SessionActivityOwner } from "./activity-owner"
 import { pause as pauseAtActivityCrashPoint } from "./activity-crash-test"
 import { writeGovernanceAudit } from "./goal-governance-audit"
 import { RuntimeFlags } from "@/effect/runtime-flags"
@@ -561,10 +562,12 @@ const promptInputToPrompt = (parts: PromptInput["parts"]): Effect.Effect<Prompt,
 
 export interface Interface {
   readonly cancel: (sessionID: SessionID) => Effect.Effect<void>
-  readonly prompt: (input: PromptInput) => Effect.Effect<SessionV1.WithParts, Image.Error | SessionPromptIntent.Error>
+  readonly prompt: (
+    input: PromptInput,
+  ) => Effect.Effect<SessionV1.WithParts, Image.Error | SessionPromptIntent.Error | Session.BusyError>
   readonly promptAsync: (
     input: PromptInput,
-  ) => Effect.Effect<PromptAdmissionReceipt, Image.Error | SessionPromptIntent.Error>
+  ) => Effect.Effect<PromptAdmissionReceipt, Image.Error | SessionPromptIntent.Error | Session.BusyError>
   readonly prepareTaskInput: (
     input: PromptInput,
     timeCreated: number,
@@ -587,10 +590,12 @@ export interface Interface {
   // own busy semantics), preserving pre-steering behavior exactly.
   readonly promptOrSteer: (
     input: PromptInput,
-  ) => Effect.Effect<PromptOrSteerResult, Image.Error | SessionPromptIntent.Error>
+  ) => Effect.Effect<PromptOrSteerResult, Image.Error | SessionPromptIntent.Error | Session.BusyError>
   readonly loop: (input: LoopInput, onRunning?: Effect.Effect<void>) => Effect.Effect<SessionV1.WithParts>
   readonly shell: (input: ShellInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError>
-  readonly command: (input: CommandInput) => Effect.Effect<SessionV1.WithParts, Image.Error | SessionPromptIntent.Error>
+  readonly command: (
+    input: CommandInput,
+  ) => Effect.Effect<SessionV1.WithParts, Image.Error | SessionPromptIntent.Error | Session.BusyError>
   readonly resolvePromptParts: (template: string) => Effect.Effect<PromptInput["parts"]>
   readonly refineIntelligenceDraft: (input: {
     sessionID: SessionID
@@ -633,12 +638,12 @@ type PromptLifecycle = {
 type ExecutePrompt = (
   input: PromptInput,
   lifecycle?: PromptLifecycle,
-) => Effect.Effect<SessionV1.WithParts, Image.Error | SessionPromptIntent.Error>
+) => Effect.Effect<SessionV1.WithParts, Image.Error | SessionPromptIntent.Error | Session.BusyError>
 
 type ExecutePromptOrSteer = (
   input: PromptInput,
   lifecycle?: PromptLifecycle,
-) => Effect.Effect<PromptOrSteerResult, Image.Error | SessionPromptIntent.Error>
+) => Effect.Effect<PromptOrSteerResult, Image.Error | SessionPromptIntent.Error | Session.BusyError>
 
 export const layer = Layer.effect(
   Service,
@@ -698,6 +703,16 @@ export const layer = Layer.effect(
             messageID: input.assistantMessageID,
           })
         : Effect.void
+    const reconcileInactiveActivity = Effect.fn("SessionPrompt.reconcileInactiveActivity")(function* (
+      sessionID: SessionID,
+    ) {
+      const activities = yield* SessionPromptIntent.recoverActiveActivities(SessionActivityOwner.processOwnerToken, {
+        includeCurrentOwner: true,
+        sessionID,
+        source: "same_process_recovery",
+      }).pipe(Effect.provideService(Database.Service, database))
+      yield* Effect.forEach(activities, publishActivityProjection, { discard: true })
+    })
     yield* recoverProviderReceiptsOnStartup()
     yield* SessionPromptIntent.recoverActiveActivities().pipe(
       Effect.provideService(Database.Service, database),
@@ -1641,6 +1656,8 @@ export const layer = Layer.effect(
         readonly persist?: boolean
         readonly timeCreated?: number
         readonly intent?: PromptLifecycle["intent"]
+        readonly executionMode?: SessionPromptIntent.ExecutionMode
+        readonly onMaterialized?: (turn: SessionPromptIntent.MaterializedTurn) => Effect.Effect<void>
       },
     ) {
       const persist = options?.persist !== false
@@ -2045,8 +2062,14 @@ export const layer = Layer.effect(
       if (!persist) return { info, parts }
 
       if (options?.intent) {
-        yield* SessionPromptIntent.materializeTurn({ receipt: options.intent, message: { info, parts } }).pipe(
+        yield* SessionPromptIntent.materializeTurn({
+          receipt: options.intent,
+          message: { info, parts },
+          executionMode: options.executionMode,
+        }).pipe(
           Effect.provideService(Database.Service, database),
+          Effect.tap((materialized) => options.onMaterialized?.(materialized) ?? Effect.void),
+          Effect.uninterruptible,
         )
       }
       if (current?.agent !== info.agent) {
@@ -2242,6 +2265,7 @@ export const layer = Layer.effect(
           variant: input.intentVariant ?? "original",
           payloadHash: promptIntentPayloadHash(input),
           messageID,
+          executionMode: input.noReply === true ? "deferred" : "run_now",
         }).pipe(Effect.provideService(Database.Service, database))
         if (claimed.kind === "admitted") {
           if (claimed.receipt.delivery !== "turn")
@@ -2285,42 +2309,92 @@ export const layer = Layer.effect(
           ),
         )
       }
-      const mutationEpoch =
-        lifecycle?.intent?.mutationEpoch ?? (yield* sessions.mutationEpoch(session.id).pipe(Effect.orDie))
-      yield* revert.cleanup(session, mutationEpoch)
-      const pipeline = yield* buildPromptPipelineSubmission(input)
-      const message = yield* createUserMessage(
-        {
-          ...input,
-          parts: pipeline.parts,
-          metadata: {
-            ...(input.metadata ?? {}),
-            deepagent: {
-              ...(isRecord(input.metadata?.deepagent) ? input.metadata.deepagent : {}),
-              prompt_pipeline: pipeline.metadata,
+      const ownedRun: { value?: SessionPromptIntent.RunIdentity } = {}
+      const admit = Effect.gen(function* () {
+        const mutationEpoch =
+          lifecycle?.intent?.mutationEpoch ?? (yield* sessions.mutationEpoch(session.id).pipe(Effect.orDie))
+        yield* revert.cleanup(session, mutationEpoch)
+        const pipeline = yield* buildPromptPipelineSubmission(input)
+        const materialized = yield* Ref.make<SessionPromptIntent.MaterializedTurn | undefined>(undefined)
+        const message = yield* createUserMessage(
+          {
+            ...input,
+            parts: pipeline.parts,
+            metadata: {
+              ...(input.metadata ?? {}),
+              deepagent: {
+                ...(isRecord(input.metadata?.deepagent) ? input.metadata.deepagent : {}),
+                prompt_pipeline: pipeline.metadata,
+              },
             },
           },
-        },
-        lifecycle?.intent ? { intent: lifecycle.intent } : undefined,
-      )
-      yield* sessions.touch(input.sessionID)
+          lifecycle?.intent
+            ? {
+                intent: lifecycle.intent,
+                executionMode: input.noReply === true ? "deferred" : "run_now",
+                onMaterialized: (turn) =>
+                  Ref.set(materialized, turn).pipe(
+                    Effect.tap(() =>
+                      Effect.sync(() => {
+                        ownedRun.value = turn.run
+                      }),
+                    ),
+                  ),
+              }
+            : undefined,
+        )
+        yield* sessions.touch(input.sessionID)
 
-      const permissions: PermissionV1.Rule[] = []
-      for (const [t, enabled] of Object.entries(input.tools ?? {})) {
-        permissions.push({ permission: t, action: enabled ? "allow" : "deny", pattern: "*" })
-      }
-      if (permissions.length > 0) {
-        session.permission = permissions
-        yield* sessions.setPermission({ sessionID: session.id, permission: permissions })
-      }
+        const permissions: PermissionV1.Rule[] = []
+        for (const [t, enabled] of Object.entries(input.tools ?? {})) {
+          permissions.push({ permission: t, action: enabled ? "allow" : "deny", pattern: "*" })
+        }
+        if (permissions.length > 0) {
+          session.permission = permissions
+          yield* sessions.setPermission({ sessionID: session.id, permission: permissions })
+        }
+        return { message, materialized: yield* Ref.get(materialized) }
+      })
 
       if (input.noReply === true) {
-        if (lifecycle) yield* lifecycle.ready({ messageID: message.info.id, delivery: "turn" })
-        return message
+        const admitted = yield* admit
+        if (admitted.materialized && "run" in admitted.materialized)
+          return yield* Effect.die(new Error(`deferred prompt created an activity run: ${input.sessionID}`))
+        if (lifecycle) yield* lifecycle.ready({ messageID: admitted.message.info.id, delivery: "turn" })
+        return admitted.message
       }
-      const first = yield* loop(
-        { sessionID: input.sessionID },
-        lifecycle?.ready({ messageID: message.info.id, delivery: "turn" }),
+      const first = yield* state.startRunning(
+        input.sessionID,
+        lastAssistant(input.sessionID),
+        Effect.gen(function* () {
+          yield* reconcileInactiveActivity(input.sessionID)
+          const admitted = yield* admit
+          if (!admitted.materialized || !("run" in admitted.materialized))
+            return yield* Effect.die(new Error(`run-now prompt did not create an activity run: ${input.sessionID}`))
+          const run = admitted.materialized.run
+          if (!run) return yield* Effect.die(new Error(`run-now prompt created an empty activity run: ${input.sessionID}`))
+          yield* pauseAtActivityCrashPoint("after_admit_and_bind")
+          if (lifecycle) yield* lifecycle.ready({ messageID: admitted.message.info.id, delivery: "turn" })
+          return yield* runLoop(input.sessionID, false, run)
+        }).pipe(
+          Effect.onInterrupt(() => {
+            const run = ownedRun.value
+            return Effect.all(
+              [
+                settleFederatedActivity(input.sessionID, "interrupted"),
+                run
+                  ? SessionPromptIntent.finalizeCancellationBeforeProgress(run).pipe(
+                      Effect.provideService(Database.Service, database),
+                      Effect.flatMap((result) =>
+                        result ? publishActivityProjection(result.invalidation) : Effect.void,
+                      ),
+                    )
+                  : Effect.void,
+              ],
+              { discard: true },
+            )
+          }),
+        ),
       )
       if (isStructuredFinalizer(input.metadata)) return first
       // V3 Plan A: mode-driven multi-round autonomous loop for high/max/ultra. It remains
@@ -2764,14 +2838,22 @@ export const layer = Layer.effect(
       "</system-reminder>",
     ].join("\n")
 
-    const runLoop: (sessionID: SessionID, drainFirst?: boolean) => Effect.Effect<SessionV1.WithParts> = Effect.fn(
-      "SessionPrompt.run",
-    )(
+    const runLoop: (
+      sessionID: SessionID,
+      drainFirst?: boolean,
+      activityRun?: SessionPromptIntent.RunIdentity,
+      onActivityRun?: (run: SessionPromptIntent.RunIdentity) => void,
+    ) => Effect.Effect<SessionV1.WithParts, SessionPromptIntent.Error> = Effect.fn("SessionPrompt.run")(
       // §S1.2: `drainFirst` — a PURE-DRAIN turn (started to absorb a steer that landed in the isBusy→admit
       // race, with no initiating user message of its own) must drain on step 0 too; otherwise the step-0
       // skip + the immediate finish check would break before the steer is ever consumed. A normal turn
       // leaves it false so the initiating message samples first (S1.1).
-      function* (sessionID: SessionID, drainFirst = false) {
+      function* (
+        sessionID: SessionID,
+        drainFirst = false,
+        activityRun?: SessionPromptIntent.RunIdentity,
+        onActivityRun?: (run: SessionPromptIntent.RunIdentity) => void,
+      ) {
         const ctx = yield* InstanceState.context
         const slog = elog.with({ sessionID })
         let structured: unknown
@@ -2828,12 +2910,62 @@ export const layer = Layer.effect(
               ),
         )
         const initialUser = MessageV2.latest(initialMessages).user
-        let legacyActivity = initialUser
-          ? yield* SessionPromptIntent.activityForMessage({ sessionID, messageID: initialUser.id }).pipe(
-              Effect.provideService(Database.Service, database),
-              Effect.map((activity) => (activity?.state === "active" ? activity : undefined)),
-            )
-          : undefined
+        let currentActivityRun = activityRun
+        let legacyActivity = currentActivityRun
+          ? { activityID: currentActivityRun.activityID, state: "active" as const }
+          : initialUser
+            ? yield* SessionPromptIntent.activityForMessage({ sessionID, messageID: initialUser.id }).pipe(
+                Effect.provideService(Database.Service, database),
+                Effect.map((activity) => (activity?.state === "active" ? activity : undefined)),
+              )
+            : undefined
+        let providerBoundary: SessionPromptIntent.ProviderInputBoundary | undefined
+        let activityTerminalCommitted = false
+        const terminalDecision = (
+          state: SessionPromptIntent.ActivityTerminalState,
+          reasonCode: string,
+          source: "provider_final" | "host_stop" | "cancel" = "host_stop",
+        ): SessionPromptIntent.ActivityTerminalDecision | undefined =>
+          currentActivityRun
+            ? {
+                state,
+                reasonCode,
+                source,
+                operationID: `${currentActivityRun.runID}:terminal`,
+                ownerToken: currentActivityRun.ownerToken,
+              }
+            : undefined
+        const finalizeHostExit = (
+          state: SessionPromptIntent.ActivityTerminalState,
+          reasonCode: string,
+          assistantMessageID?: MessageID,
+          source: "provider_final" | "host_stop" | "compaction" = "host_stop",
+        ) => {
+          const decision = terminalDecision(state, reasonCode, source === "provider_final" ? source : "host_stop")
+          if (!currentActivityRun || !providerBoundary || !decision) return Effect.succeed(undefined)
+          const finalized = assistantMessageID
+            ? SessionPromptIntent.finalizeActivityWithRevision({
+                run: currentActivityRun,
+                assistantMessageID,
+                decision,
+              })
+            : SessionPromptIntent.finalizeActivityWithoutRevision({
+                run: currentActivityRun,
+                membershipOrdinal: providerBoundary.membershipOrdinal,
+                decision: { ...decision, source },
+              })
+          return finalized.pipe(
+            Effect.provideService(Database.Service, database),
+            Effect.tap((result) =>
+              Effect.sync(() => {
+                activityTerminalCommitted = result.kind !== "follow_up_required"
+              }),
+            ),
+            Effect.tap((result) =>
+              result.kind === "follow_up_required" ? Effect.void : publishActivityProjection(result.invalidation),
+            ),
+          )
+        }
         const publishActivityProgress = (progress: SessionPromptIntent.Progress) =>
           Effect.gen(function* () {
             yield* sessions.publishMessageProjection({
@@ -2900,6 +3032,17 @@ export const layer = Layer.effect(
           // arrived after the model said "done" is naturally absorbed on this next pass.
           if (step > 0 || drainFirst) {
             if (!(yield* compaction.hasPending(sessionID))) {
+              if (!currentActivityRun && flags.v4Steering && (yield* steerBuffer.hasPending(sessionID))) {
+                currentActivityRun = yield* SessionPromptIntent.claimActiveActivityRun({ sessionID }).pipe(
+                  Effect.provideService(Database.Service, database),
+                  Effect.tap((run) => Effect.sync(() => run && onActivityRun?.(run))),
+                  Effect.uninterruptible,
+                )
+                if (currentActivityRun) {
+                  yield* pauseAtActivityCrashPoint("after_admit_and_bind")
+                  legacyActivity = { activityID: currentActivityRun.activityID, state: "active" as const }
+                }
+              }
               const absorbed = yield* drainSteers(sessionID, drainFirst && step === 0)
               pendingContextInputIds = [...pendingContextInputIds, ...absorbed]
             }
@@ -2923,6 +3066,17 @@ export const layer = Layer.effect(
             messageID: lastUser.id,
           }).pipe(Effect.provideService(Database.Service, database))
           if (currentLegacyActivity?.state === "active") legacyActivity = currentLegacyActivity
+          if (currentActivityRun) {
+            const frozen = yield* SessionPromptIntent.freezeProviderInputBoundary(currentActivityRun, {
+              includePendingSteers: flags.v4Steering,
+            }).pipe(Effect.provideService(Database.Service, database))
+            if (frozen.kind === "pending_steer") {
+              const absorbed = yield* drainSteers(sessionID)
+              pendingContextInputIds = [...pendingContextInputIds, ...absorbed]
+              continue
+            }
+            providerBoundary = frozen.boundary
+          }
           const finalizerMode = isStructuredFinalizer(lastUser.metadata)
           const finalizerAllowsText = structuredFinalizerAllowsText(lastUser.metadata)
 
@@ -2932,6 +3086,12 @@ export const layer = Layer.effect(
           const elapsed = taskActivity?.startedAt ? Math.max(0, Date.now() - taskActivity.startedAt) : 0
           if (lastAssistant && taskActivity?.maxWallMs && elapsed >= taskActivity.maxWallMs) {
             yield* failTaskBudget(lastAssistant, "wall_time", taskActivity.maxWallMs, elapsed)
+            const finalized = yield* finalizeHostExit(
+              "failed",
+              "task_wall_budget_exhausted",
+              lastAssistant.id,
+            )
+            if (finalized?.kind === "follow_up_required") continue
             break
           }
           // Some providers return "stop" even when the assistant message contains
@@ -2981,6 +3141,8 @@ export const layer = Layer.effect(
               yield* slog.warn("output soft-landing: continuation cap reached, ending turn", {
                 max: outputContinuationMax(),
               })
+              const finalized = yield* finalizeHostExit("failed", "output_continuation_exhausted", lastAssistant.id)
+              if (finalized?.kind === "follow_up_required") continue
             }
             if (orphan) {
               yield* slog.warn("loop exit with orphaned interrupted tool", {
@@ -3007,6 +3169,8 @@ export const layer = Layer.effect(
           if (step === 1 && finalizerMode) LLMRequestPrep.resetCacheHitOutcome(sessionID)
           if (lastAssistant && taskActivity?.maxSteps && step > taskActivity.maxSteps) {
             yield* failTaskBudget(lastAssistant, "steps", taskActivity.maxSteps, step - 1)
+            const finalized = yield* finalizeHostExit("failed", "task_step_budget_exhausted", lastAssistant.id)
+            if (finalized?.kind === "follow_up_required") continue
             break
           }
           if (step === 1 && !finalizerMode) {
@@ -3036,7 +3200,11 @@ export const layer = Layer.effect(
               auto: task.auto,
               overflow: task.overflow,
             })
-            if (result === "stop") break
+            if (result === "stop") {
+              const finalized = yield* finalizeHostExit("recovery_required", "compaction_stop", undefined, "compaction")
+              if (finalized?.kind === "follow_up_required") continue
+              break
+            }
             continue
           }
 
@@ -3223,6 +3391,11 @@ export const layer = Layer.effect(
               reason: finalizerDecision.reason,
               protocol: finalizerDecision.protocol,
             })
+            const finalized = yield* finalizeHostExit(
+              "failed",
+              `structured_finalizer_unsupported:${finalizerDecision.reason}`,
+            )
+            if (finalized?.kind === "follow_up_required") continue
             break
           }
 
@@ -3241,13 +3414,40 @@ export const layer = Layer.effect(
           } = {}
           const receiptFinalizer: { value?: () => Effect.Effect<void> } = {}
           const activityProgressFinalizer: { value?: () => Effect.Effect<void> } = {}
+          let progressAssistantMessageID: MessageID | undefined
           const finalizeInterruptedTurn = Effect.uninterruptible(
             Effect.gen(function* () {
               yield* finalizeInterruptedAssistant
               receiptTerminal.value ??= { state: "failed", errorCode: "AbortError" }
               if (receiptFinalizer.value) yield* receiptFinalizer.value()
-              if (activityProgressFinalizer.value) yield* activityProgressFinalizer.value()
-              if (legacyActivity && !activityProgressFinalizer.value)
+              const decision = terminalDecision("interrupted", "user_cancelled", "cancel")
+              const finalized =
+                currentActivityRun && providerBoundary && decision
+                  ? yield* (progressAssistantMessageID
+                      ? SessionPromptIntent.finalizeActivityWithRevision({
+                          run: currentActivityRun,
+                          assistantMessageID: progressAssistantMessageID,
+                          decision,
+                        })
+                      : SessionPromptIntent.finalizeActivityWithoutRevision({
+                          run: currentActivityRun,
+                          membershipOrdinal: providerBoundary.membershipOrdinal,
+                          decision,
+                        }))
+                      .pipe(
+                        Effect.provideService(Database.Service, database),
+                        Effect.tap((result) =>
+                          Effect.sync(() => {
+                            activityTerminalCommitted = result.kind !== "follow_up_required"
+                          }),
+                        ),
+                        Effect.tap((result) =>
+                          result.kind === "follow_up_required" ? Effect.void : publishActivityProjection(result.invalidation),
+                        ),
+                      )
+                  : undefined
+              if (!finalized && activityProgressFinalizer.value) yield* activityProgressFinalizer.value()
+              if (legacyActivity && !activityProgressFinalizer.value && !finalized)
                 yield* SessionPromptIntent.interruptActivity(legacyActivity.activityID).pipe(
                   Effect.provideService(Database.Service, database),
                   Effect.flatMap((activity) => (activity ? publishActivityProjection(activity) : Effect.void)),
@@ -3583,13 +3783,12 @@ export const layer = Layer.effect(
                 activityID: progressActivity.activityID,
                 assistantMessageID: handle.message.id,
                 providerReceiptID: receiptID,
-              }).pipe(
-                Effect.provideService(Database.Service, database),
-                Effect.tap(publishActivityProgress),
-              )
+                membershipOrdinal: providerBoundary?.membershipOrdinal,
+              }).pipe(Effect.provideService(Database.Service, database), Effect.tap(publishActivityProgress))
+            if (progressActivity) progressAssistantMessageID = handle.message.id
             if (progressActivity)
               activityProgressFinalizer.value = () =>
-                SessionPromptIntent.settleProgress({
+                (currentActivityRun ? SessionPromptIntent.settleProgressOnly : SessionPromptIntent.settleProgress)({
                   activityID: progressActivity.activityID,
                   assistantMessageID: handle.message.id,
                 }).pipe(
@@ -3789,18 +3988,35 @@ export const layer = Layer.effect(
               })
             receiptFinalizer.value = finalizeReceipt
             const turnSettled = { value: false }
-            const settleProviderTurn = () =>
+            const settleProviderTurn = (decision?: SessionPromptIntent.ActivityTerminalDecision) =>
               Effect.gen(function* () {
-                if (turnSettled.value) return
+                if (turnSettled.value) return undefined
                 yield* finalizeReceipt()
                 yield* pauseAtActivityCrashPoint("after_provider_receipt_terminal")
-                if (activityProgressFinalizer.value) yield* activityProgressFinalizer.value()
+                const finalized =
+                  decision && currentActivityRun && progressActivity
+                    ? yield* SessionPromptIntent.finalizeActivityWithRevision({
+                        run: currentActivityRun,
+                        assistantMessageID: handle.message.id,
+                        decision,
+                      }).pipe(
+                        Effect.provideService(Database.Service, database),
+                        Effect.tap((result) =>
+                          result.kind === "follow_up_required"
+                            ? Effect.void
+                            : publishActivityProjection(result.invalidation),
+                        ),
+                      )
+                    : undefined
+                if (!finalized && activityProgressFinalizer.value) yield* activityProgressFinalizer.value()
+                activityProgressFinalizer.value = undefined
                 yield* pauseAtActivityCrashPoint("after_progress_settled")
                 turnSettled.value = true
                 // Summary diffs mutate user-message metadata. Run them only after the Provider
                 // receipt is terminal so cancellation cannot strand an admitted request.
                 if (step === 1 && !finalizerMode)
                   yield* summary.summarize({ sessionID, messageID: lastUser.id }).pipe(Effect.ignore)
+                return finalized
               })
             const prepareAdapterReceipt = (input: {
               finalRequestHash: string
@@ -3980,7 +4196,7 @@ export const layer = Layer.effect(
               handle.message.structured = structured
               handle.message.finish = handle.message.finish ?? "stop"
               yield* sessions.updateMessage(handle.message)
-              yield* settleProviderTurn()
+              yield* settleProviderTurn(terminalDecision("settled", "structured_output_completed", "provider_final"))
               return "break" as const
             }
 
@@ -3991,7 +4207,9 @@ export const layer = Layer.effect(
                   (part) => part.type === "text" && !part.synthetic && !part.ignored && part.text.trim() !== "",
                 )
               if (hasTextFallback) {
-                yield* settleProviderTurn()
+                yield* settleProviderTurn(
+                  terminalDecision("settled", "structured_output_completed", "provider_final"),
+                )
                 return "break" as const
               }
               if (!handle.message.error) {
@@ -4001,7 +4219,7 @@ export const layer = Layer.effect(
                 }).toObject()
                 yield* sessions.updateMessage(handle.message)
               }
-              yield* settleProviderTurn()
+              yield* settleProviderTurn(terminalDecision("failed", "structured_finalizer_invalid"))
               return "break" as const
             }
 
@@ -4013,7 +4231,7 @@ export const layer = Layer.effect(
                   retries: 0,
                 }).toObject()
                 yield* sessions.updateMessage(handle.message)
-                yield* settleProviderTurn()
+                yield* settleProviderTurn(terminalDecision("failed", "structured_output_missing"))
                 return "break" as const
               }
             }
@@ -4053,7 +4271,7 @@ export const layer = Layer.effect(
                     retries: structuredFailedAttempts,
                   }).toObject()
                   yield* sessions.updateMessage(handle.message)
-                  yield* settleProviderTurn()
+                  yield* settleProviderTurn(terminalDecision("failed", "structured_output_retry_exhausted"))
                   yield* slog.warn("structured-output retry cap reached", {
                     attempts: structuredFailedAttempts,
                     retryMax,
@@ -4077,9 +4295,30 @@ export const layer = Layer.effect(
               }
             }
 
+            if (result.action === "stop") {
+              const rejected =
+                result.reason.code === "user_rejected_question" || result.reason.code === "user_rejected_permission"
+              const finalized = yield* settleProviderTurn(
+                terminalDecision(
+                  rejected ? "interrupted" : "failed",
+                  result.reason.code === "assistant_error"
+                    ? `${result.reason.code}:${result.reason.errorName}`
+                    : result.reason.code,
+                ),
+              )
+              return finalized?.kind === "follow_up_required" ? ("continue" as const) : ("break" as const)
+            }
+            const hasToolCalls = response.parts.some(
+              (part) => part.type === "tool" && !part.metadata?.providerExecuted && !isOrphanedInterruptedTool(part),
+            )
+            if (result.action === "continue" && handle.message.finish === "stop" && !hasToolCalls) {
+              const finalized = yield* settleProviderTurn(
+                terminalDecision("settled", "assistant_completed", "provider_final"),
+              )
+              return finalized?.kind === "follow_up_required" ? ("continue" as const) : ("break" as const)
+            }
             yield* settleProviderTurn()
-            if (result === "stop") return "break" as const
-            if (result === "compact") {
+            if (result.action === "compact") {
               // V4.0.1 P0 — a turn-internal hard compaction (the provider signalled overflow mid-stream).
               // This IS a hard rollover, so bump the soft-landing generation + reset its flags so the next
               // window can warn + flush again. Gated by softLandingCompaction; OFF ⇒ unchanged behavior.
@@ -4109,6 +4348,7 @@ export const layer = Layer.effect(
           // it (codex: needsFollowUp = modelSaidContinue || pendingInput-nonempty). A non-consuming peek;
           // the actual drain (consume-once) happens at the next iteration's top. Gated by the flag.
           if (outcome === "break") {
+            if (activityTerminalCommitted) break
             if (!finalizerMode && flags.v4Steering && (yield* steerBuffer.hasPending(sessionID))) {
               yield* slog.info("steer pending at model boundary, continuing to absorb")
               continue
@@ -4199,6 +4439,10 @@ export const layer = Layer.effect(
       input: PromptInput,
       lifecycle?: PromptLifecycle,
     ) {
+      if (input.noReply === true) {
+        const message = yield* prompt(input, lifecycle)
+        return { kind: "turn" as const, message }
+      }
       if (!flags.v4Steering) {
         const message = yield* prompt(input, lifecycle)
         return { kind: "turn" as const, message }
@@ -4259,7 +4503,7 @@ export const layer = Layer.effect(
 
     const promptAsync: (
       input: PromptInput,
-    ) => Effect.Effect<PromptAdmissionReceipt, Image.Error | SessionPromptIntent.Error> = Effect.fn(
+    ) => Effect.Effect<PromptAdmissionReceipt, Image.Error | SessionPromptIntent.Error | Session.BusyError> = Effect.fn(
       "SessionPrompt.promptAsync",
     )(function* (input: PromptInput) {
       const messageID = input.messageID ?? MessageID.ascending()
@@ -4273,6 +4517,7 @@ export const layer = Layer.effect(
               (promptPipelineRequest(input.metadata).confirmedDraftID ? "rewritten" : "original"),
             payloadHash: promptIntentPayloadHash(input),
             messageID,
+            executionMode: input.noReply === true ? "deferred" : "run_now",
           }).pipe(Effect.provideService(Database.Service, database))
         : undefined
       if (claim?.kind === "admitted")
@@ -4288,7 +4533,10 @@ export const layer = Layer.effect(
             parts: stableIntentParts(input.parts, claimed.intentID),
           }
         : { ...input, messageID }
-      const admission = yield* Deferred.make<PromptAdmissionReceipt, Image.Error | SessionPromptIntent.Error>()
+      const admission = yield* Deferred.make<
+        PromptAdmissionReceipt,
+        Image.Error | SessionPromptIntent.Error | Session.BusyError
+      >()
       if (claimed) {
         yield* Effect.suspend(() =>
           SessionPromptIntent.renew({
@@ -4369,11 +4617,56 @@ export const layer = Layer.effect(
       if (FSUtil.resolve(session.directory) !== FSUtil.resolve(current.directory)) {
         return yield* instances.provide({ directory: session.directory }, loop(input, onRunning))
       }
+      const ownedRun: { value?: SessionPromptIntent.RunIdentity } = {}
       return yield* state.ensureRunning(
         input.sessionID,
         lastAssistant(input.sessionID),
-        runLoop(input.sessionID, input.drainFirst ?? false).pipe(
-          Effect.onInterrupt(() => settleFederatedActivity(input.sessionID, "interrupted")),
+        Effect.gen(function* () {
+          yield* reconcileInactiveActivity(input.sessionID)
+          const deferredRun = yield* SessionPromptIntent.claimDeferredActivity({ sessionID: input.sessionID }).pipe(
+            Effect.provideService(Database.Service, database),
+            Effect.tap((run) =>
+              Effect.sync(() => {
+                ownedRun.value = run
+              }),
+            ),
+            Effect.uninterruptible,
+          )
+          const activityRun =
+            deferredRun ??
+            (input.drainFirst
+              ? yield* SessionPromptIntent.claimActiveActivityRun({ sessionID: input.sessionID }).pipe(
+                  Effect.provideService(Database.Service, database),
+                  Effect.tap((run) =>
+                    Effect.sync(() => {
+                      ownedRun.value = run
+                    }),
+                  ),
+                  Effect.uninterruptible,
+                )
+              : undefined)
+          if (activityRun) yield* pauseAtActivityCrashPoint("after_admit_and_bind")
+          return yield* runLoop(input.sessionID, input.drainFirst ?? false, activityRun, (run) => {
+            ownedRun.value = run
+          })
+        }).pipe(
+          Effect.onInterrupt(() => {
+            const run = ownedRun.value
+            return Effect.all(
+              [
+                settleFederatedActivity(input.sessionID, "interrupted"),
+                run
+                  ? SessionPromptIntent.finalizeCancellationBeforeProgress(run).pipe(
+                      Effect.provideService(Database.Service, database),
+                      Effect.flatMap((result) =>
+                        result ? publishActivityProjection(result.invalidation) : Effect.void,
+                      ),
+                    )
+                  : Effect.void,
+              ],
+              { discard: true },
+            )
+          }),
         ),
         onRunning,
       )
@@ -4732,8 +5025,24 @@ export const layer = Layer.effect(
                     TaskDelivery.deliverOne({
                       item,
                       ownerToken: deliveryOwner,
-                      driveParentLoop: () =>
-                        runLoop(item.parentSessionID).pipe(Effect.provideService(InstanceRef, ctx)),
+                      driveParentLoop: () => {
+                        const ownedRun: { value?: SessionPromptIntent.RunIdentity } = {}
+                        return runLoop(item.parentSessionID, false, undefined, (run) => {
+                          ownedRun.value = run
+                        }).pipe(
+                          Effect.provideService(InstanceRef, ctx),
+                          Effect.onInterrupt(() => {
+                            const run = ownedRun.value
+                            if (!run) return Effect.void
+                            return SessionPromptIntent.finalizeCancellationBeforeProgress(run).pipe(
+                              Effect.provideService(Database.Service, database),
+                              Effect.flatMap((result) =>
+                                result ? publishActivityProjection(result.invalidation) : Effect.void,
+                              ),
+                            )
+                          }),
+                        )
+                      },
                     }).pipe(
                       Effect.provideService(Database.Service, database),
                       Effect.tap((result) => Ref.set(delivered, result)),
@@ -5058,7 +5367,7 @@ const promptIntentPayloadHash = (input: PromptInput) =>
       sessionID: input.sessionID,
       model: input.model,
       agent: input.agent,
-      noReply: input.noReply,
+      executionMode: input.noReply === true ? "deferred" : "run_now",
       tools: input.tools,
       format: input.format,
       system: input.system,

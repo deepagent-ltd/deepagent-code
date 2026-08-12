@@ -1,5 +1,6 @@
 import { NodeFileSystem } from "@effect/platform-node"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
+import { PermissionV1 } from "@deepagent-code/core/v1/permission"
 import { Database } from "@deepagent-code/core/database/database"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { expect } from "bun:test"
@@ -12,6 +13,7 @@ import { Agent as AgentSvc } from "../../src/agent/agent"
 import { Config } from "@/config/config"
 import { Image } from "@/image/image"
 import { Permission } from "../../src/permission"
+import { Question } from "../../src/question"
 import { Plugin } from "../../src/plugin"
 import { Provider } from "@/provider/provider"
 
@@ -237,6 +239,49 @@ const providerErrorEnv = SessionProcessor.layer.pipe(
 )
 const itProviderError = testEffect(providerErrorEnv)
 
+function typedToolFailureEnv(failure: { id: string; name: string; error: Error }) {
+  return SessionProcessor.layer.pipe(
+    Layer.provide(summary),
+    Layer.provide(Image.defaultLayer),
+    Layer.provide(RuntimeFlags.layer({ experimentalEventSystem: true })),
+    Layer.provide(
+      Layer.succeed(
+        LLM.Service,
+        LLM.Service.of({
+          stream: () =>
+            Stream.make(
+              LLMEvent.stepStart({ index: 0 }),
+              LLMEvent.toolInputStart({ id: failure.id, name: failure.name }),
+              LLMEvent.toolInputEnd({ id: failure.id, name: failure.name }),
+              LLMEvent.toolCall({ id: failure.id, name: failure.name, input: {} }),
+              LLMEvent.toolResult({
+                id: failure.id,
+                name: failure.name,
+                result: { type: "error", value: failure.error },
+              }),
+              LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
+              LLMEvent.finish({ reason: "tool-calls" }),
+            ),
+        }),
+      ),
+    ),
+    Layer.provideMerge(deps),
+  )
+}
+const itQuestionRejected = testEffect(
+  typedToolFailureEnv({ id: "question-call", name: "question", error: new Question.RejectedError() }),
+)
+const itPermissionRejected = testEffect(
+  typedToolFailureEnv({ id: "permission-call", name: "bash", error: new PermissionV1.RejectedError() }),
+)
+const itPermissionCorrected = testEffect(
+  typedToolFailureEnv({
+    id: "permission-corrected-call",
+    name: "bash",
+    error: new PermissionV1.CorrectedError({ feedback: "Use the approved directory" }),
+  }),
+)
+
 const fragmentFailureLLM = Layer.succeed(
   LLM.Service,
   LLM.Service.of({
@@ -451,9 +496,91 @@ const boot = Effect.fn("test.boot")(function* () {
   return { processors, session, provider }
 })
 
+const processTypedToolFailure = Effect.fn("test.processTypedToolFailure")(function* (dir: string) {
+  const { processors, session, provider } = yield* boot()
+  const chat = yield* session.create({})
+  const parent = yield* user(chat.id, "run the tool")
+  const msg = yield* assistant(chat.id, parent.id, path.resolve(dir))
+  const mdl = yield* provider.getModel(ref.providerID, ref.modelID)
+  const handle = yield* processors.create({ assistantMessage: msg, sessionID: chat.id, model: mdl })
+  const decision = yield* handle.process({
+    user: {
+      id: parent.id,
+      sessionID: chat.id,
+      role: "user",
+      time: parent.time,
+      agent: parent.agent,
+      model: { providerID: ref.providerID, modelID: ref.modelID },
+    } satisfies SessionV1.User,
+    sessionID: chat.id,
+    model: mdl,
+    agent: agent(),
+    system: [],
+    messages: [{ role: "user", content: "run the tool" }],
+    tools: {},
+  })
+  const part = (yield* MessageV2.parts(msg.id)).find(
+    (candidate): candidate is SessionV1.ToolPart => candidate.type === "tool",
+  )
+  return { decision, part }
+})
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+itQuestionRejected.live("question rejection returns a typed terminal decision and durable failure code", () =>
+  provideTmpdirInstance(
+    (dir) =>
+      Effect.gen(function* () {
+        const result = yield* processTypedToolFailure(dir)
+
+        expect(result.decision).toEqual({
+          action: "stop",
+          reason: { code: "user_rejected_question", callID: "question-call" },
+        })
+        expect(result.part?.state.status).toBe("error")
+        if (result.part?.state.status === "error")
+          expect(result.part.state.metadata?.failureCode).toBe("user_rejected_question")
+      }),
+    { config: cfg },
+  ),
+)
+
+itPermissionRejected.live("plain permission rejection returns a typed terminal decision and durable failure code", () =>
+  provideTmpdirInstance(
+    (dir) =>
+      Effect.gen(function* () {
+        const result = yield* processTypedToolFailure(dir)
+
+        expect(result.decision).toEqual({
+          action: "stop",
+          reason: { code: "user_rejected_permission", callID: "permission-call" },
+        })
+        expect(result.part?.state.status).toBe("error")
+        if (result.part?.state.status === "error")
+          expect(result.part.state.metadata?.failureCode).toBe("user_rejected_permission")
+      }),
+    { config: cfg },
+  ),
+)
+
+itPermissionCorrected.live("permission correction remains a non-terminal tool failure", () =>
+  provideTmpdirInstance(
+    (dir) =>
+      Effect.gen(function* () {
+        const result = yield* processTypedToolFailure(dir)
+
+        expect(result.decision).toEqual({ action: "continue" })
+        expect(result.part?.state.status).toBe("error")
+        if (result.part?.state.status === "error") {
+          expect(result.part.state.error).toContain("Use the approved directory")
+          expect(result.part.state.metadata?.failureCode).toBeUndefined()
+        }
+      }),
+    { config: cfg },
+  ),
+)
 
 itPlanProtocol.live("session.processor persists activity-scoped plan violations and stops without retry", () =>
   provideTmpdirInstance(
@@ -500,12 +627,12 @@ itPlanProtocol.live("session.processor persists activity-scoped plan violations 
           (part): part is SessionV1.ToolPart => part.type === "tool" && part.tool === "plan",
         )
 
-        expect(first.result).toBe("continue")
+        expect(first.result).toEqual({ action: "continue" })
         expect(first.handle.message.error).toBeUndefined()
         expect(firstPlan?.state.status).toBe("completed")
         if (firstPlan?.state.status === "completed") expect(firstPlan.state.metadata.plan_attempt_ordinal).toBe(1)
 
-        expect(second.result).toBe("stop")
+        expect(second.result.action).toBe("stop")
         expect(second.handle.message.finish).toBe("error")
         expect(second.handle.message.error).toMatchObject({
           name: "PlanProtocolViolation",
@@ -567,9 +694,9 @@ itOrphanPlanProtocol.live("schema failure before durable tool-call consumes the 
         tracker = new PlanProtocolTracker(restorePlanProtocolFailures(yield* MessageV2.stream(chat.id)))
         expect(restorePlanProtocolFailures(yield* MessageV2.stream(chat.id))).toBe(1)
         const second = yield* run()
-        expect(first.result).toBe("continue")
+        expect(first.result).toEqual({ action: "continue" })
         expect(first.handle.message.error).toBeUndefined()
-        expect(second.result).toBe("stop")
+        expect(second.result.action).toBe("stop")
         expect(second.handle.message.finish).toBe("error")
         expect(second.handle.message.error).toMatchObject({
           name: "PlanProtocolViolation",
@@ -636,7 +763,7 @@ it.live("session.processor effect tests capture llm input cleanly", () =>
         const parts = yield* MessageV2.parts(msg.id)
         const calls = yield* llm.calls
 
-        expect(value).toBe("continue")
+        expect(value).toEqual({ action: "continue" })
         expect(calls).toBe(1)
         expect(transitions).toEqual(["dispatching", "streaming", "settled"])
         expect(parts.some((part) => part.type === "text" && part.text === "hello")).toBe(true)
@@ -769,7 +896,7 @@ it.live("session.processor effect tests stop after token overflow requests compa
         })
 
         const parts = yield* MessageV2.parts(msg.id)
-        expect(value).toBe("compact")
+        expect(value).toEqual({ action: "compact" })
         expect(parts.some((part) => part.type === "text" && part.text === "after")).toBe(true)
         expect(parts.some((part) => part.type === "step-finish")).toBe(true)
       }),
@@ -817,7 +944,7 @@ it.live("session.processor effect tests capture reasoning from http mock", () =>
         const reasoning = parts.find((part): part is SessionV1.ReasoningPart => part.type === "reasoning")
         const text = parts.find((part): part is SessionV1.TextPart => part.type === "text")
 
-        expect(value).toBe("continue")
+        expect(value).toEqual({ action: "continue" })
         expect(yield* llm.calls).toBe(1)
         expect(reasoning?.text).toBe("think")
         expect(text?.text).toBe("done")
@@ -864,7 +991,7 @@ it.live("session.processor effect tests reset reasoning state across retries", (
         const parts = yield* MessageV2.parts(msg.id)
         const reasoning = parts.filter((part): part is SessionV1.ReasoningPart => part.type === "reasoning")
 
-        expect(value).toBe("continue")
+        expect(value).toEqual({ action: "continue" })
         expect(yield* llm.calls).toBe(2)
         expect(reasoning.some((part) => part.text === "two")).toBe(true)
         expect(reasoning.some((part) => part.text === "onetwo")).toBe(false)
@@ -928,7 +1055,7 @@ it.live("session.processor effect tests never retry a durable provider attempt",
           },
         )
 
-        expect(value).toBe("stop")
+        expect(value.action).toBe("stop")
         expect(yield* llm.calls).toBe(1)
         expect(transitions).toEqual(["dispatching", "failed"])
       }),
@@ -971,7 +1098,7 @@ it.live("session.processor effect tests do not retry unknown json errors", () =>
           tools: {},
         })
 
-        expect(value).toBe("stop")
+        expect(value.action).toBe("stop")
         expect(yield* llm.calls).toBe(1)
         expect(handle.message.error?.name).toBe("APIError")
       }),
@@ -1017,7 +1144,7 @@ it.live("session.processor effect tests retry recognized structured json errors"
 
         const parts = yield* MessageV2.parts(msg.id)
 
-        expect(value).toBe("continue")
+        expect(value).toEqual({ action: "continue" })
         expect(yield* llm.calls).toBe(2)
         expect(parts.some((part) => part.type === "text" && part.text === "after")).toBe(true)
         expect(handle.message.error).toBeUndefined()
@@ -1072,7 +1199,7 @@ it.live("session.processor effect tests publish retry status updates", () =>
 
         yield* off
 
-        expect(value).toBe("continue")
+        expect(value).toEqual({ action: "continue" })
         expect(yield* llm.calls).toBe(2)
         expect(states).toStrictEqual([1])
       }),
@@ -1115,7 +1242,7 @@ it.live("session.processor effect tests compact on structured context overflow",
           tools: {},
         })
 
-        expect(value).toBe("compact")
+        expect(value).toEqual({ action: "compact" })
         expect(yield* llm.calls).toBe(1)
         expect(handle.message.error).toBeUndefined()
       }),
@@ -1171,7 +1298,7 @@ it.live("session.processor effect tests complete AI SDK tool calls when native f
         const parts = yield* MessageV2.parts(msg.id)
         const call = parts.find((part): part is SessionV1.ToolPart => part.type === "tool")
 
-        expect(value).toBe("continue")
+        expect(value).toEqual({ action: "continue" })
         expect(yield* llm.calls).toBe(1)
         expect(call?.callID).toBe("call_1")
         expect(call?.tool).toBe("lookup")
@@ -1482,7 +1609,7 @@ itFragmentFailure.live("session.processor effect tests flush partial v2 fragment
             messages: [{ role: "user", content: "provider failure" }],
             tools: {},
           }),
-        ).toBe("stop")
+        ).toMatchObject({ action: "stop", reason: { code: "assistant_error" } })
         yield* off
 
         const failed = seen.indexOf(SessionEvent.Step.Failed.type)
@@ -1544,7 +1671,7 @@ itIncidentOriginal.live("§9.3 BUG-010: original incident payloads (no operation
         const first = yield* run()
 
         // Dispatch 1: first malformed plan → correctable error, session continues
-        expect(first.result).toBe("continue")
+        expect(first.result).toEqual({ action: "continue" })
         expect(first.handle.message.error).toBeUndefined()
         const firstPlan = first.parts.find(
           (part): part is SessionV1.ToolPart => part.type === "tool" && part.tool === "plan",
@@ -1558,7 +1685,7 @@ itIncidentOriginal.live("§9.3 BUG-010: original incident payloads (no operation
         const second = yield* run()
 
         // Dispatch 2: second consecutive malformed plan → PlanProtocolViolation, stops
-        expect(second.result).toBe("stop")
+        expect(second.result.action).toBe("stop")
         expect(second.handle.message.finish).toBe("error")
         expect(second.handle.message.error).toMatchObject({
           name: "PlanProtocolViolation",
@@ -1614,11 +1741,11 @@ itIncidentForwardCompat.live("§9.3 BUG-010: forward-compatible incident payload
         })
 
         const first = yield* run()
-        expect(first.result).toBe("continue")
+        expect(first.result).toEqual({ action: "continue" })
         expect(first.handle.message.error).toBeUndefined()
 
         const second = yield* run()
-        expect(second.result).toBe("stop")
+        expect(second.result.action).toBe("stop")
         expect(second.handle.message.finish).toBe("error")
         expect(second.handle.message.error).toMatchObject({ name: "PlanProtocolViolation" })
 

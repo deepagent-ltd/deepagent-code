@@ -80,5 +80,6 @@ export const migrations = (
     import("./migration/20260810170000_part_integrity_backfill"),
     import("./migration/20260811090000_legacy_activity_progress"),
     import("./migration/20260811100000_legacy_activity_owner"),
+    import("./migration/20260812130000_legacy_activity_lifecycle_expand"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

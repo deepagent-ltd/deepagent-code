@@ -10,11 +10,12 @@ import {
   PartTable,
   SessionInputTable,
   SessionIntentTable,
+  SessionSteerTable,
   SessionTable,
 } from "@deepagent-code/core/session/sql"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { eq } from "drizzle-orm"
-import { Effect } from "effect"
+import { Effect, Exit } from "effect"
 import { MessageV2 } from "../../src/session/message-v2"
 import { SessionMutationEpoch } from "../../src/session/mutation-epoch"
 import { SessionPromptIntent } from "../../src/session/prompt-intent"
@@ -22,7 +23,9 @@ import {
   SessionActivityAdmissionTable,
   SessionActivityProgressTable,
   SessionLegacyActivityAdmissionTable,
+  SessionLegacyActivityRunTable,
   SessionLegacyActivityTable,
+  SessionLegacyActivityTerminalTable,
 } from "../../src/session/activity-sql"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { SessionToolRequestReceiptTable } from "../../src/session/tool-request-receipt.sql"
@@ -61,6 +64,7 @@ const claim = (input: {
   variant?: SessionPromptIntent.Variant
   payloadHash?: string
   source?: SessionPromptIntent.Source
+  executionMode?: SessionPromptIntent.ExecutionMode
 }) =>
   SessionPromptIntent.claim({
     intentID: input.intentID,
@@ -69,6 +73,7 @@ const claim = (input: {
     variant: input.variant ?? "original",
     payloadHash: input.payloadHash ?? "payload-a",
     messageID: input.messageID,
+    executionMode: input.executionMode,
   })
 
 const message = (messageID: MessageID): { info: SessionV1.User; parts: SessionV1.Part[] } => ({
@@ -207,6 +212,358 @@ describe("SessionPromptIntent", () => {
     }),
   )
 
+  it.effect("deferred admission creates no Activity until an explicit resume claims exactly one run", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const deferred = yield* claim({
+        intentID: "intent_deferred_resume",
+        messageID: MessageID.make("msg_deferred_resume"),
+        executionMode: "deferred",
+      })
+      expect(deferred.kind).toBe("claimed")
+      if (deferred.kind !== "claimed") return
+      const materialized = yield* SessionPromptIntent.materializeTurn({
+        receipt: deferred.receipt,
+        message: message(deferred.receipt.messageID),
+        executionMode: "deferred",
+      })
+      expect(materialized.executionMode).toBe("deferred")
+      expect("run" in materialized).toBeFalse()
+
+      const { db } = yield* Database.Service
+      expect(yield* db.select().from(SessionLegacyActivityTable).all().pipe(Effect.orDie)).toHaveLength(0)
+      expect(yield* db.select().from(SessionLegacyActivityRunTable).all().pipe(Effect.orDie)).toHaveLength(0)
+      expect(
+        yield* db
+          .select()
+          .from(SessionIntentTable)
+          .where(eq(SessionIntentTable.intent_id, deferred.receipt.intentID))
+          .get()
+          .pipe(Effect.orDie),
+      ).toMatchObject({ execution_mode: "deferred", execution_state: "pending", execution_claim_id: null })
+
+      const run = yield* SessionPromptIntent.claimDeferredActivity({
+        sessionID,
+        messageID: deferred.receipt.messageID,
+      })
+      expect(run).toBeDefined()
+      if (!run) return
+      expect(yield* db.select().from(SessionLegacyActivityTable).all().pipe(Effect.orDie)).toHaveLength(1)
+      expect(yield* db.select().from(SessionLegacyActivityRunTable).all().pipe(Effect.orDie)).toMatchObject([
+        { run_id: run.runID, activity_id: run.activityID, state: "running" },
+      ])
+      expect(yield* db.select().from(SessionLegacyActivityAdmissionTable).all().pipe(Effect.orDie)).toMatchObject([
+        { activity_id: run.activityID, ordinal: 0, role: "trigger" },
+      ])
+      expect(
+        yield* db
+          .select()
+          .from(SessionIntentTable)
+          .where(eq(SessionIntentTable.intent_id, deferred.receipt.intentID))
+          .get()
+          .pipe(Effect.orDie),
+      ).toMatchObject({ execution_state: "claimed", execution_claim_id: run.runID })
+      expect(
+        yield* SessionPromptIntent.claimDeferredActivity({ sessionID, messageID: deferred.receipt.messageID }),
+      ).toBeUndefined()
+    }),
+  )
+
+  it.effect("a normal run absorbs deferred context and freezes its membership ordinal into progress", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const deferred = yield* claim({
+        intentID: "intent_deferred_absorbed",
+        messageID: MessageID.make("msg_deferred_absorbed"),
+        executionMode: "deferred",
+      })
+      if (deferred.kind !== "claimed") return
+      yield* SessionPromptIntent.materializeTurn({
+        receipt: deferred.receipt,
+        message: message(deferred.receipt.messageID),
+        executionMode: "deferred",
+      })
+
+      const trigger = yield* claim({
+        intentID: "intent_run_absorbs_deferred",
+        messageID: MessageID.make("msg_run_absorbs_deferred"),
+        executionMode: "run_now",
+      })
+      if (trigger.kind !== "claimed") return
+      const materialized = yield* SessionPromptIntent.materializeTurn({
+        receipt: trigger.receipt,
+        message: message(trigger.receipt.messageID),
+        executionMode: "run_now",
+      })
+      expect("run" in materialized).toBeTrue()
+      if (!("run" in materialized)) return
+
+      const { db } = yield* Database.Service
+      expect(yield* db.select().from(SessionLegacyActivityAdmissionTable).all().pipe(Effect.orDie)).toMatchObject([
+        { activity_id: materialized.run.activityID, ordinal: 0, role: "trigger" },
+        { activity_id: materialized.run.activityID, ordinal: 1, role: "deferred_context" },
+      ])
+      expect(
+        yield* db
+          .select()
+          .from(SessionIntentTable)
+          .where(eq(SessionIntentTable.intent_id, deferred.receipt.intentID))
+          .get()
+          .pipe(Effect.orDie),
+      ).toMatchObject({ execution_state: "absorbed", execution_claim_id: materialized.run.runID })
+
+      const boundary = yield* SessionPromptIntent.freezeProviderInputBoundary(materialized.run)
+      expect(boundary).toMatchObject({ kind: "ready", boundary: { membershipOrdinal: 1 } })
+      if (boundary.kind !== "ready") return
+      const assistantID = MessageID.make("msg_absorbed_progress_assistant")
+      yield* db
+        .insert(MessageTable)
+        .values({
+          id: assistantID,
+          session_id: sessionID,
+          time_created: 2,
+          data: {
+            role: "assistant",
+            parentID: trigger.receipt.messageID,
+            mode: "build",
+            agent: "build",
+            path: { cwd: "/project", root: "/project" },
+            cost: 0,
+            tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+            modelID: ModelV2.ID.make("test"),
+            providerID: ProviderV2.ID.make("test"),
+            time: { created: 2 },
+          } as typeof MessageTable.$inferInsert.data,
+        })
+        .run()
+        .pipe(Effect.orDie)
+      yield* db
+        .insert(SessionToolRequestReceiptTable)
+        .values({
+          receipt_id: "receipt-absorbed-boundary",
+          request_ordinal: 1,
+          session_id: sessionID,
+          user_message_id: trigger.receipt.messageID,
+          assistant_message_id: assistantID,
+          provider_id: "test",
+          model_id: "test",
+          registry_tool_ids: [],
+          permission_filtered_tool_ids: [],
+          final_offered_tool_ids: [],
+          call_ids: [],
+          provider_state: "preparing",
+          request_state: "prepared",
+          created_at: 2,
+        })
+        .run()
+        .pipe(Effect.orDie)
+      yield* SessionPromptIntent.beginProgress({
+        activityID: materialized.run.activityID,
+        assistantMessageID: assistantID,
+        providerReceiptID: "receipt-absorbed-boundary",
+        membershipOrdinal: boundary.boundary.membershipOrdinal,
+      })
+      expect(
+        yield* db
+          .select()
+          .from(SessionActivityProgressTable)
+          .where(eq(SessionActivityProgressTable.assistant_message_id, assistantID))
+          .get()
+          .pipe(Effect.orDie),
+      ).toMatchObject({ input_membership_ordinal: 1, state: "provisional" })
+    }),
+  )
+
+  it.effect("typed question rejection atomically terminalizes a progress revision and exact-replays", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const trigger = yield* claim({
+        intentID: "intent_question_rejected",
+        messageID: MessageID.make("msg_question_rejected_user"),
+      })
+      if (trigger.kind !== "claimed") return
+      const materialized = yield* SessionPromptIntent.materializeTurn({
+        receipt: trigger.receipt,
+        message: message(trigger.receipt.messageID),
+      })
+      if (!("run" in materialized)) return
+      const boundary = yield* SessionPromptIntent.freezeProviderInputBoundary(materialized.run)
+      if (boundary.kind !== "ready") return
+
+      const { db } = yield* Database.Service
+      const assistantID = MessageID.make("msg_question_rejected_assistant")
+      yield* db
+        .insert(MessageTable)
+        .values({
+          id: assistantID,
+          session_id: sessionID,
+          time_created: 2,
+          data: {
+            role: "assistant",
+            parentID: trigger.receipt.messageID,
+            mode: "build",
+            agent: "build",
+            path: { cwd: "/project", root: "/project" },
+            cost: 0,
+            tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+            modelID: ModelV2.ID.make("test"),
+            providerID: ProviderV2.ID.make("test"),
+            time: { created: 2, completed: 3 },
+            finish: "tool-calls",
+          } as typeof MessageTable.$inferInsert.data,
+        })
+        .run()
+        .pipe(Effect.orDie)
+      yield* db
+        .insert(SessionToolRequestReceiptTable)
+        .values({
+          receipt_id: "receipt-question-rejected",
+          request_ordinal: 1,
+          session_id: sessionID,
+          user_message_id: trigger.receipt.messageID,
+          assistant_message_id: assistantID,
+          provider_id: "test",
+          model_id: "test",
+          registry_tool_ids: ["question"],
+          permission_filtered_tool_ids: ["question"],
+          final_offered_tool_ids: ["question"],
+          call_ids: ["call-question-rejected"],
+          provider_state: "settled",
+          terminal_at: 3,
+          response_fingerprint: "response-question-rejected",
+          request_state: "dispatched",
+          created_at: 2,
+        })
+        .run()
+        .pipe(Effect.orDie)
+      yield* SessionPromptIntent.beginProgress({
+        activityID: materialized.run.activityID,
+        assistantMessageID: assistantID,
+        providerReceiptID: "receipt-question-rejected",
+        membershipOrdinal: boundary.boundary.membershipOrdinal,
+      })
+      const decision = {
+        state: "interrupted" as const,
+        reasonCode: "user_rejected_question",
+        source: "host_stop" as const,
+        operationID: `${materialized.run.runID}:terminal`,
+        ownerToken: materialized.run.ownerToken,
+      }
+
+      expect(
+        yield* SessionPromptIntent.finalizeActivityWithRevision({
+          run: materialized.run,
+          assistantMessageID: assistantID,
+          decision,
+        }),
+      ).toMatchObject({ kind: "terminal_committed" })
+      expect(
+        yield* db
+          .select()
+          .from(SessionActivityProgressTable)
+          .where(eq(SessionActivityProgressTable.assistant_message_id, assistantID))
+          .get()
+          .pipe(Effect.orDie),
+      ).toMatchObject({ state: "progress", input_membership_ordinal: 0 })
+      expect(
+        yield* db
+          .select()
+          .from(SessionLegacyActivityTable)
+          .where(eq(SessionLegacyActivityTable.activity_id, materialized.run.activityID))
+          .get()
+          .pipe(Effect.orDie),
+      ).toMatchObject({ state: "interrupted", terminal_reason: "user_rejected_question" })
+      expect(
+        yield* db
+          .select()
+          .from(SessionLegacyActivityRunTable)
+          .where(eq(SessionLegacyActivityRunTable.run_id, materialized.run.runID))
+          .get()
+          .pipe(Effect.orDie),
+      ).toMatchObject({ state: "interrupted", terminal_reason: "user_rejected_question" })
+      expect(yield* db.select().from(SessionLegacyActivityTerminalTable).all().pipe(Effect.orDie)).toMatchObject([
+        {
+          activity_id: materialized.run.activityID,
+          run_id: materialized.run.runID,
+          state: "interrupted",
+          reason_code: "user_rejected_question",
+          membership_ordinal: 0,
+        },
+      ])
+      expect(
+        yield* SessionPromptIntent.finalizeActivityWithRevision({
+          run: materialized.run,
+          assistantMessageID: assistantID,
+          decision,
+        }),
+      ).toMatchObject({ kind: "exact_replay" })
+      const divergent = yield* SessionPromptIntent.finalizeActivityWithRevision({
+        run: materialized.run,
+        assistantMessageID: assistantID,
+        decision: { ...decision, reasonCode: "different_reason" },
+      }).pipe(Effect.exit)
+      expect(Exit.isFailure(divergent)).toBeTrue()
+    }),
+  )
+
+  it.effect("host-only terminal exact-replays and rejects divergent ordinal or payload", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const trigger = yield* claim({
+        intentID: "intent_host_only_terminal",
+        messageID: MessageID.make("msg_host_only_terminal"),
+      })
+      if (trigger.kind !== "claimed") return
+      const materialized = yield* SessionPromptIntent.materializeTurn({
+        receipt: trigger.receipt,
+        message: message(trigger.receipt.messageID),
+      })
+      if (!("run" in materialized) || !materialized.run) return
+      const boundary = yield* SessionPromptIntent.freezeProviderInputBoundary(materialized.run)
+      if (boundary.kind !== "ready") return
+      const decision = {
+        state: "failed" as const,
+        reasonCode: "structured_finalizer_unsupported",
+        source: "host_stop" as const,
+        operationID: `${materialized.run.runID}:terminal`,
+        ownerToken: materialized.run.ownerToken,
+      }
+
+      expect(
+        yield* SessionPromptIntent.finalizeActivityWithoutRevision({
+          run: materialized.run,
+          membershipOrdinal: boundary.boundary.membershipOrdinal,
+          decision,
+        }),
+      ).toMatchObject({ kind: "terminal_committed" })
+      expect(
+        yield* SessionPromptIntent.finalizeActivityWithoutRevision({
+          run: materialized.run,
+          membershipOrdinal: boundary.boundary.membershipOrdinal,
+          decision,
+        }),
+      ).toMatchObject({ kind: "exact_replay" })
+      expect(
+        Exit.isFailure(
+          yield* SessionPromptIntent.finalizeActivityWithoutRevision({
+            run: materialized.run,
+            membershipOrdinal: boundary.boundary.membershipOrdinal + 1,
+            decision,
+          }).pipe(Effect.exit),
+        ),
+      ).toBeTrue()
+      expect(
+        Exit.isFailure(
+          yield* SessionPromptIntent.finalizeActivityWithoutRevision({
+            run: materialized.run,
+            membershipOrdinal: boundary.boundary.membershipOrdinal,
+            decision: { ...decision, reasonCode: "different_reason" },
+          }).pipe(Effect.exit),
+        ),
+      ).toBeTrue()
+    }),
+  )
+
   it.effect("terminal provider receipts settle provisional progress deterministically after restart", () =>
     Effect.gen(function* () {
       yield* setup
@@ -318,7 +675,22 @@ describe("SessionPromptIntent", () => {
           .where(eq(SessionLegacyActivityTable.activity_id, activity.activityID))
           .get()
           .pipe(Effect.orDie),
-      ).toMatchObject({ state: "settled", terminal_reason: "stop" })
+      ).toMatchObject({ state: "recovery_required", terminal_reason: "host_terminal_decision_missing" })
+      expect(yield* db.select().from(SessionLegacyActivityRunTable).all().pipe(Effect.orDie)).toMatchObject([
+        { state: "recovery_required", terminal_reason: "host_terminal_decision_missing" },
+      ])
+      expect(yield* db.select().from(SessionLegacyActivityTerminalTable).all().pipe(Effect.orDie)).toMatchObject([
+        {
+          activity_id: activity.activityID,
+          state: "recovery_required",
+          reason_code: "host_terminal_decision_missing",
+          source: "restart_recovery",
+          assistant_message_id: assistantID,
+          progress_revision: 0,
+          membership_ordinal: 0,
+        },
+      ])
+      expect(yield* SessionPromptIntent.recoverActiveActivities("next-process-owner")).toEqual([])
       expect(
         yield* db
           .select({ data: PartTable.data })
@@ -457,8 +829,22 @@ describe("SessionPromptIntent", () => {
             .pipe(Effect.orDie),
         ).toMatchObject({
           state: "recovery_required",
-          terminal_reason: "process restarted after settled activity progress",
+          terminal_reason: "host_terminal_decision_missing",
         })
+        expect(yield* db.select().from(SessionLegacyActivityRunTable).all().pipe(Effect.orDie)).toMatchObject([
+          { state: "recovery_required", terminal_reason: "host_terminal_decision_missing" },
+        ])
+        expect(yield* db.select().from(SessionLegacyActivityTerminalTable).all().pipe(Effect.orDie)).toMatchObject([
+          {
+            activity_id: activity.activityID,
+            state: "recovery_required",
+            reason_code: "host_terminal_decision_missing",
+            source: "restart_recovery",
+            assistant_message_id: assistantID,
+            progress_revision: 0,
+            membership_ordinal: 0,
+          },
+        ])
       }),
   )
 

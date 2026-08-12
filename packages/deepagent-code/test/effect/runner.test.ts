@@ -12,6 +12,29 @@ describe("Runner", () => {
   // --- ensureRunning semantics ---
 
   it.live(
+    "startRunning reserves idle atomically and rejects a concurrent start",
+    Effect.gen(function* () {
+      const s = yield* Scope.Scope
+      const runner = Runner.make<string>(s)
+      const started = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      const first = yield* runner
+        .startRunning(
+          Deferred.succeed(started, undefined).pipe(Effect.andThen(Deferred.await(release)), Effect.as("first")),
+        )
+        .pipe(Effect.forkChild)
+
+      yield* Deferred.await(started)
+      const second = yield* runner.startRunning(Effect.succeed("second")).pipe(Effect.exit)
+
+      expect(Exit.isFailure(second)).toBe(true)
+      expect(runner.state._tag).toBe("Running")
+      yield* Deferred.succeed(release, undefined)
+      expect(yield* Fiber.join(first)).toBe("first")
+    }),
+  )
+
+  it.live(
     "ensureRunning starts work and returns result",
     Effect.gen(function* () {
       const s = yield* Scope.Scope

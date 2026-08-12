@@ -47,11 +47,13 @@ import { providerResponseFingerprint, recoverProviderReceiptsOnStartup, SessionP
 import { SessionRevert } from "../../src/session/revert"
 import { SessionRunState } from "../../src/session/run-state"
 import { SessionSteer } from "../../src/session/steer"
+import { SessionPromptIntent } from "../../src/session/prompt-intent"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { SessionStatus } from "../../src/session/status"
 import { SessionV2 } from "@deepagent-code/core/session"
 import { SessionExecution } from "@deepagent-code/core/session/execution"
 import { SessionMessage } from "@deepagent-code/core/session/message"
+import { Prompt } from "@deepagent-code/core/session/prompt"
 import { Skill } from "../../src/skill"
 import { SystemPrompt } from "../../src/session/system"
 import { Shell } from "../../src/shell/shell"
@@ -90,7 +92,10 @@ import { CompactionArtifactTable, CompactionRunTable } from "@/session/compactio
 import {
   SessionActivityAdmissionTable,
   SessionActivityProgressTable,
+  SessionLegacyActivityAdmissionTable,
+  SessionLegacyActivityRunTable,
   SessionLegacyActivityTable,
+  SessionLegacyActivityTerminalTable,
 } from "@/session/activity-sql"
 
 void Log.init({ print: false })
@@ -917,6 +922,9 @@ it.instance("loop calls LLM and returns assistant message", () =>
       noReply: true,
       parts: [{ type: "text", text: "hello" }],
     })
+    const { db } = yield* Database.Service
+    expect(yield* db.select().from(SessionLegacyActivityTable).all().pipe(Effect.orDie)).toHaveLength(0)
+    expect(yield* db.select().from(SessionLegacyActivityRunTable).all().pipe(Effect.orDie)).toHaveLength(0)
     yield* llm.text("world")
 
     const result = yield* prompt.loop({ sessionID: chat.id })
@@ -924,6 +932,165 @@ it.instance("loop calls LLM and returns assistant message", () =>
     const parts = result.parts.filter((p) => p.type === "text")
     expect(parts.some((p) => p.type === "text" && p.text === "world")).toBe(true)
     expect(yield* llm.hits).toHaveLength(1)
+    expect(yield* db.select().from(SessionLegacyActivityTable).all().pipe(Effect.orDie)).toHaveLength(1)
+    expect(yield* db.select().from(SessionLegacyActivityRunTable).all().pipe(Effect.orDie)).toHaveLength(1)
+  }),
+)
+
+it.instance("a new prompt reconciles a same-process pre-dispatch owner loss before admission", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const steer = yield* SessionSteer.Service
+    const sessions = yield* Session.Service
+    const { db } = yield* Database.Service
+    const chat = yield* sessions.create({
+      title: "Same-process owner loss",
+      permission: [{ permission: "*", pattern: "*", action: "allow" }],
+    })
+    const deferred = yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "orphaned before provider dispatch" }],
+    })
+    const orphanedRun = yield* SessionPromptIntent.claimDeferredActivity({
+      sessionID: chat.id,
+      messageID: deferred.info.id,
+    })
+    expect(orphanedRun).toBeDefined()
+    const attachedSteer = yield* awaitWithTimeout(
+      steer.admit({
+        sessionID: chat.id,
+        prompt: new Prompt({ text: "attached to the orphaned run" }),
+      }),
+      "timed out attaching steer to orphaned run",
+      "2 seconds",
+    )
+    expect(yield* llm.hits).toHaveLength(0)
+
+    yield* awaitWithTimeout(llm.text("recovered next prompt"), "timed out queuing recovery response", "2 seconds")
+    const next = yield* awaitWithTimeout(
+      prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        parts: [{ type: "text", text: "start after owner loss" }],
+      }),
+      "timed out reconciling same-process owner loss",
+      "3 seconds",
+    )
+    expect(next.parts.some((part) => part.type === "text" && part.text === "recovered next prompt")).toBeTrue()
+    expect(yield* llm.hits).toHaveLength(1)
+    expect(
+      yield* db
+        .select()
+        .from(SessionSteerTable)
+        .where(eq(SessionSteerTable.id, attachedSteer.id))
+        .get()
+        .pipe(Effect.orDie),
+    ).toMatchObject({ consumed_seq: null, superseded_at: expect.any(Number) })
+    expect(
+      yield* db
+        .select()
+        .from(SessionIntentTable)
+        .where(eq(SessionIntentTable.admitted_message_id, attachedSteer.id))
+        .get()
+        .pipe(Effect.orDie),
+    ).toMatchObject({ execution_mode: "run_now", execution_state: "canceled" })
+
+    expect(
+      yield* db
+        .select()
+        .from(SessionLegacyActivityRunTable)
+        .where(eq(SessionLegacyActivityRunTable.session_id, chat.id))
+        .orderBy(SessionLegacyActivityRunTable.generation)
+        .all()
+        .pipe(Effect.orDie),
+    ).toMatchObject([
+      { run_id: orphanedRun?.runID, state: "failed", terminal_reason: "pre_dispatch_owner_lost" },
+      { state: "completed", terminal_reason: "assistant_completed" },
+    ])
+    expect(
+      yield* db
+        .select()
+        .from(SessionLegacyActivityTerminalTable)
+        .where(eq(SessionLegacyActivityTerminalTable.session_id, chat.id))
+        .orderBy(SessionLegacyActivityTerminalTable.created_at)
+        .all()
+        .pipe(Effect.orDie),
+    ).toMatchObject([
+      {
+        run_id: orphanedRun?.runID,
+        state: "failed",
+        reason_code: "pre_dispatch_owner_lost",
+        source: "same_process_recovery",
+      },
+      { state: "settled", reason_code: "assistant_completed", source: "provider_final" },
+    ])
+  }),
+  15_000,
+)
+
+it.instance("question rejection terminalizes the live run and permits the next prompt", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const question = yield* Question.Service
+    const { db } = yield* Database.Service
+    const chat = yield* sessions.create({
+      title: "Question rejection lifecycle",
+      permission: [{ permission: "*", pattern: "*", action: "allow" }],
+    })
+    yield* llm.tool("question", {
+      questions: [
+        {
+          question: "Continue with this approach?",
+          header: "Continue",
+          options: [{ label: "Yes", description: "Continue" }],
+        },
+      ],
+    })
+    yield* llm.text("next prompt succeeded")
+
+    const first = yield* prompt
+      .prompt({
+        sessionID: chat.id,
+        agent: "build",
+        parts: [{ type: "text", text: "ask before proceeding" }],
+      })
+      .pipe(Effect.forkChild)
+    const request = yield* pollWithTimeout(
+      Effect.gen(function* () {
+        const pending = yield* question.list()
+        return pending.find((item) => item.sessionID === chat.id)
+      }),
+      "timed out waiting for question request",
+    )
+    yield* question.reject(request.id)
+    const firstResult = yield* Fiber.join(first)
+    expect(firstResult.info.role).toBe("assistant")
+
+    expect(yield* db.select().from(SessionActivityProgressTable).all().pipe(Effect.orDie)).toMatchObject([
+      { state: "progress" },
+    ])
+    expect(yield* db.select().from(SessionLegacyActivityTable).all().pipe(Effect.orDie)).toMatchObject([
+      { state: "interrupted", terminal_reason: "user_rejected_question" },
+    ])
+    expect(yield* db.select().from(SessionLegacyActivityRunTable).all().pipe(Effect.orDie)).toMatchObject([
+      { state: "interrupted", terminal_reason: "user_rejected_question" },
+    ])
+    expect(yield* db.select().from(SessionLegacyActivityTerminalTable).all().pipe(Effect.orDie)).toMatchObject([
+      { state: "interrupted", reason_code: "user_rejected_question", source: "host_stop" },
+    ])
+
+    const next = yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      parts: [{ type: "text", text: "continue now" }],
+    })
+    expect(next.parts.some((part) => part.type === "text" && part.text === "next prompt succeeded")).toBeTrue()
+    expect(yield* llm.hits).toHaveLength(2)
   }),
 )
 
@@ -1550,6 +1717,7 @@ worldStateCompaction.instance(
       const steerBuffer = yield* SessionSteer.Service
       const compaction = yield* SessionCompaction.Service
       const epochs = yield* PromptEpoch.Service
+      const { db } = yield* Database.Service
       const chat = yield* sessions.create({ title: "Compaction steer ordering" })
       const seeded = yield* seed(chat.id, { finish: "stop" })
       seeded.assistant.tokens.input = 95_000
@@ -1612,6 +1780,153 @@ worldStateCompaction.instance(
         return value.role === "user" && value.content === "CONCURRENT_STEER_EXACTLY_ONCE"
       })
       expect(userMessages).toHaveLength(1)
+      const activity = yield* db
+        .select()
+        .from(SessionLegacyActivityTable)
+        .where(eq(SessionLegacyActivityTable.session_id, chat.id))
+        .get()
+        .pipe(Effect.orDie)
+      expect(activity).toMatchObject({ state: "settled", terminal_reason: "assistant_completed" })
+      if (!activity) return
+      expect(
+        yield* db
+          .select()
+          .from(SessionLegacyActivityAdmissionTable)
+          .where(eq(SessionLegacyActivityAdmissionTable.activity_id, activity.activity_id))
+          .all()
+          .pipe(Effect.orDie),
+      ).toMatchObject([{ ordinal: 0, role: "trigger" }])
+      const run = yield* db
+        .select()
+        .from(SessionLegacyActivityRunTable)
+        .where(eq(SessionLegacyActivityRunTable.activity_id, activity.activity_id))
+        .get()
+        .pipe(Effect.orDie)
+      expect(run).toMatchObject({ state: "completed", terminal_reason: "assistant_completed" })
+      expect(
+        yield* db
+          .select()
+          .from(SessionLegacyActivityTerminalTable)
+          .where(eq(SessionLegacyActivityTerminalTable.activity_id, activity.activity_id))
+          .all()
+          .pipe(Effect.orDie),
+      ).toMatchObject([
+        {
+          run_id: run?.run_id,
+          state: "settled",
+          reason_code: "assistant_completed",
+          source: "provider_final",
+          membership_ordinal: 0,
+        },
+      ])
+    }),
+  { git: true },
+  30_000,
+)
+
+worldStateCompaction.instance(
+  "cancel after compaction terminalizes a dynamically claimed steer run before provider dispatch",
+  () =>
+    Effect.gen(function* () {
+      const { dir, llm } = yield* useServerConfig(providerCfg)
+      const gate = yield* Deferred.make<void>()
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const steer = yield* SessionSteer.Service
+      const compaction = yield* SessionCompaction.Service
+      const { db } = yield* Database.Service
+      const chat = yield* sessions.create({ title: "Compaction dynamic run cancel" })
+      const seeded = yield* seed(chat.id, { finish: "stop" })
+      seeded.assistant.tokens.input = 95_000
+      seeded.assistant.tokens.total = 95_000
+      yield* sessions.updateMessage(seeded.assistant)
+      yield* user(chat.id, "Start compaction, then cancel the queued steer run.")
+      yield* llm.hold("## Progress\n- durable summary", deferredAsPromise(gate))
+
+      const running = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
+      yield* llm.wait(1)
+      const admitted = yield* steer.admit({
+        sessionID: chat.id,
+        prompt: new Prompt({ text: "CANCEL-DYNAMIC-RUN-BEFORE-DISPATCH" }),
+      })
+      expect(yield* compaction.hasPending(chat.id)).toBe(true)
+      const marker = path.join(dir, "activity-admit-and-bind.json")
+      const previousPoint = process.env.DEEPAGENT_CODE_TEST_ACTIVITY_CRASH_POINT
+      const previousRoot = process.env.DEEPAGENT_CODE_TEST_ROOT
+      const previousMarker = process.env.DEEPAGENT_CODE_TEST_ACTIVITY_CRASH_MARKER
+
+      yield* Effect.acquireUseRelease(
+        Effect.sync(() => {
+          process.env.DEEPAGENT_CODE_TEST_ACTIVITY_CRASH_POINT = "after_admit_and_bind"
+          process.env.DEEPAGENT_CODE_TEST_ROOT = dir
+          process.env.DEEPAGENT_CODE_TEST_ACTIVITY_CRASH_MARKER = marker
+        }),
+        () =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(gate, void 0)
+            yield* pollWithTimeout(
+              Effect.promise(async () => ((await Bun.file(marker).exists()) ? true : undefined)),
+              "timed out waiting for the dynamically claimed steer run",
+            )
+            expect(yield* llm.calls).toBe(1)
+            yield* awaitWithTimeout(prompt.cancel(chat.id), "timed out cancelling the dynamic steer run", "5 seconds")
+            yield* awaitWithTimeout(Fiber.await(running), "timed out joining the canceled dynamic steer run", "5 seconds")
+          }),
+        () =>
+          Effect.sync(() => {
+            if (previousPoint === undefined) delete process.env.DEEPAGENT_CODE_TEST_ACTIVITY_CRASH_POINT
+            else process.env.DEEPAGENT_CODE_TEST_ACTIVITY_CRASH_POINT = previousPoint
+            if (previousRoot === undefined) delete process.env.DEEPAGENT_CODE_TEST_ROOT
+            else process.env.DEEPAGENT_CODE_TEST_ROOT = previousRoot
+            if (previousMarker === undefined) delete process.env.DEEPAGENT_CODE_TEST_ACTIVITY_CRASH_MARKER
+            else process.env.DEEPAGENT_CODE_TEST_ACTIVITY_CRASH_MARKER = previousMarker
+          }),
+      )
+
+      expect(yield* llm.calls).toBe(1)
+      expect(
+        yield* db
+          .select()
+          .from(SessionLegacyActivityTable)
+          .where(eq(SessionLegacyActivityTable.session_id, chat.id))
+          .all()
+          .pipe(Effect.orDie),
+      ).toMatchObject([{ state: "interrupted", terminal_reason: "user_cancelled" }])
+      const runs = yield* db
+        .select()
+        .from(SessionLegacyActivityRunTable)
+        .where(eq(SessionLegacyActivityRunTable.session_id, chat.id))
+        .all()
+        .pipe(Effect.orDie)
+      expect(runs).toMatchObject([{ state: "interrupted", terminal_reason: "user_cancelled" }])
+      expect(
+        yield* db
+          .select()
+          .from(SessionLegacyActivityTerminalTable)
+          .where(eq(SessionLegacyActivityTerminalTable.session_id, chat.id))
+          .all()
+          .pipe(Effect.orDie),
+      ).toMatchObject([{ state: "interrupted", reason_code: "user_cancelled", source: "cancel" }])
+      expect(
+        yield* db
+          .select()
+          .from(SessionIntentTable)
+          .where(eq(SessionIntentTable.admitted_message_id, admitted.id))
+          .get()
+          .pipe(Effect.orDie),
+      ).toMatchObject({
+        execution_mode: "run_now",
+        execution_state: "claimed",
+        execution_claim_id: runs[0]?.run_id,
+      })
+      expect(
+        yield* db
+          .select()
+          .from(SessionSteerTable)
+          .where(eq(SessionSteerTable.id, admitted.id))
+          .get()
+          .pipe(Effect.orDie),
+      ).toMatchObject({ consumed_seq: null, superseded_at: expect.any(Number) })
     }),
   { git: true },
   30_000,
@@ -2158,7 +2473,7 @@ it.instance("synthetic output continuation preserves the durable legacy activity
         .pipe(Effect.orDie),
     ).toEqual([expect.objectContaining({ state: "progress" }), expect.objectContaining({ state: "final" })])
     expect(yield* db.select().from(SessionLegacyActivityTable).all().pipe(Effect.orDie)).toMatchObject([
-      { state: "settled", terminal_reason: "stop" },
+      { state: "settled", terminal_reason: "assistant_completed" },
     ])
   }),
 )
@@ -3555,9 +3870,7 @@ noLLMServer.instance(
           .pipe(Effect.orDie),
       ).toHaveLength(1)
       expect(yield* db.select().from(SessionActivityAdmissionTable).all().pipe(Effect.orDie)).toHaveLength(1)
-      expect(yield* db.select().from(SessionLegacyActivityTable).all().pipe(Effect.orDie)).toMatchObject([
-        { state: "active", terminal_reason: null },
-      ])
+      expect(yield* db.select().from(SessionLegacyActivityTable).all().pipe(Effect.orDie)).toHaveLength(0)
     }),
   { config: cfg },
 )
@@ -3942,6 +4255,115 @@ it.instance(
       if (last?.info.role === "assistant") {
         expect(last.info.error?.name).toBe("MessageAbortedError")
       }
+    }),
+  15_000,
+)
+
+it.instance(
+  "cancel terminalizes the durable run, supersedes attached steer, and permits the next prompt",
+  () =>
+    Effect.gen(function* () {
+      const { dir, llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const steer = yield* SessionSteer.Service
+      const sessions = yield* Session.Service
+      const { db } = yield* Database.Service
+      const session = yield* sessions.create({ title: "Durable cancel lifecycle" })
+      const marker = path.join(dir, "normal-prompt-admit-and-bind.json")
+      const previousPoint = process.env.DEEPAGENT_CODE_TEST_ACTIVITY_CRASH_POINT
+      const previousRoot = process.env.DEEPAGENT_CODE_TEST_ROOT
+      const previousMarker = process.env.DEEPAGENT_CODE_TEST_ACTIVITY_CRASH_MARKER
+      const steered = yield* Effect.acquireUseRelease(
+        Effect.sync(() => {
+          process.env.DEEPAGENT_CODE_TEST_ACTIVITY_CRASH_POINT = "after_admit_and_bind"
+          process.env.DEEPAGENT_CODE_TEST_ROOT = dir
+          process.env.DEEPAGENT_CODE_TEST_ACTIVITY_CRASH_MARKER = marker
+        }),
+        () =>
+          Effect.gen(function* () {
+            const running = yield* prompt
+              .prompt({
+                sessionID: session.id,
+                agent: "build",
+                parts: [{ type: "text", text: "Cancel this run" }],
+              })
+              .pipe(Effect.forkChild)
+            yield* pollWithTimeout(
+              Effect.promise(async () => ((await Bun.file(marker).exists()) ? true : undefined)),
+              "timed out waiting for normal prompt admit-and-bind",
+            )
+            expect(yield* llm.calls).toBe(0)
+            const admitted = yield* steer.admit({
+              sessionID: session.id,
+              prompt: new Prompt({ text: "This steer belongs to the canceled run" }),
+            })
+            expect(
+              yield* db
+                .select({
+                  activityID: SessionLegacyActivityAdmissionTable.activity_id,
+                  executionMode: SessionIntentTable.execution_mode,
+                  executionState: SessionIntentTable.execution_state,
+                })
+                .from(SessionLegacyActivityAdmissionTable)
+                .innerJoin(
+                  SessionActivityAdmissionTable,
+                  eq(SessionActivityAdmissionTable.admission_id, SessionLegacyActivityAdmissionTable.admission_id),
+                )
+                .innerJoin(
+                  SessionIntentTable,
+                  eq(SessionIntentTable.intent_id, SessionActivityAdmissionTable.legacy_intent_id),
+                )
+                .where(eq(SessionActivityAdmissionTable.admitted_message_id, admitted.id))
+                .get()
+                .pipe(Effect.orDie),
+            ).toMatchObject({ executionMode: "run_now", executionState: "pending" })
+            yield* awaitWithTimeout(prompt.cancel(session.id), "timed out cancelling durable run", "5 seconds")
+            yield* awaitWithTimeout(Fiber.await(running), "timed out joining canceled durable run", "5 seconds")
+            return admitted
+          }),
+        () =>
+          Effect.sync(() => {
+            if (previousPoint === undefined) delete process.env.DEEPAGENT_CODE_TEST_ACTIVITY_CRASH_POINT
+            else process.env.DEEPAGENT_CODE_TEST_ACTIVITY_CRASH_POINT = previousPoint
+            if (previousRoot === undefined) delete process.env.DEEPAGENT_CODE_TEST_ROOT
+            else process.env.DEEPAGENT_CODE_TEST_ROOT = previousRoot
+            if (previousMarker === undefined) delete process.env.DEEPAGENT_CODE_TEST_ACTIVITY_CRASH_MARKER
+            else process.env.DEEPAGENT_CODE_TEST_ACTIVITY_CRASH_MARKER = previousMarker
+          }),
+      )
+      expect(yield* db.select().from(SessionLegacyActivityTable).all().pipe(Effect.orDie)).toMatchObject([
+        { state: "interrupted", terminal_reason: "user_cancelled" },
+      ])
+      expect(yield* db.select().from(SessionLegacyActivityRunTable).all().pipe(Effect.orDie)).toMatchObject([
+        { state: "interrupted", terminal_reason: "user_cancelled" },
+      ])
+      expect(yield* db.select().from(SessionLegacyActivityTerminalTable).all().pipe(Effect.orDie)).toMatchObject([
+        { state: "interrupted", reason_code: "user_cancelled", source: "cancel" },
+      ])
+      expect(yield* db.select().from(SessionSteerTable).all().pipe(Effect.orDie)).toMatchObject([
+        { consumed_seq: null, superseded_at: expect.any(Number) },
+      ])
+      expect(
+        yield* db
+          .select()
+          .from(SessionIntentTable)
+          .where(eq(SessionIntentTable.admitted_message_id, steered.id))
+          .get()
+          .pipe(Effect.orDie),
+      ).toMatchObject({ execution_mode: "run_now", execution_state: "canceled" })
+
+      yield* llm.text("next prompt completed")
+      const next = yield* awaitWithTimeout(
+        prompt.prompt({
+          sessionID: session.id,
+          agent: "build",
+          parts: [{ type: "text", text: "Start a new run" }],
+        }),
+        "timed out starting prompt after durable cancel",
+        "5 seconds",
+      )
+      expect(next.parts.some((part) => part.type === "text" && part.text === "next prompt completed")).toBeTrue()
+
     }),
   15_000,
 )
