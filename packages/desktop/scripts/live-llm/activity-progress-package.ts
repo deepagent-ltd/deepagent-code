@@ -2,7 +2,7 @@ import { strict as assert } from "node:assert"
 import { createHash, randomUUID } from "node:crypto"
 import { execFile } from "node:child_process"
 import { createReadStream } from "node:fs"
-import { readdir, rm, stat } from "node:fs/promises"
+import { rm } from "node:fs/promises"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { promisify } from "node:util"
@@ -11,6 +11,7 @@ import {
   close,
   closeAll,
   createSession,
+  findPackagedExecutable,
   focusSession,
   launch,
   loadLiveConfig,
@@ -351,28 +352,6 @@ async function textCounts(
     latestProgress: await runtime.page.getByText(input.latestProgress, { exact: false }).count(),
     final: await runtime.page.getByText(input.finalText, { exact: false }).count(),
   }
-}
-
-async function findPackagedExecutable(directory: string) {
-  const candidates: Array<{ path: string; modified: number }> = []
-  async function visit(current: string) {
-    for (const entry of await readdir(current, { withFileTypes: true })) {
-      const target = path.join(current, entry.name)
-      if (entry.isDirectory()) {
-        await visit(target)
-        continue
-      }
-      const segments = path.relative(directory, target).split(path.sep)
-      const app = segments.findIndex((segment) => segment.endsWith(".app"))
-      if (app === -1 || segments[app + 1] !== "Contents" || segments[app + 2] !== "MacOS") continue
-      const info = await stat(target)
-      if ((info.mode & 0o111) !== 0) candidates.push({ path: target, modified: info.mtimeMs })
-    }
-  }
-  await visit(directory)
-  const executable = candidates.sort((left, right) => right.modified - left.modified)[0]?.path
-  if (!executable) throw new Error(`No packaged macOS executable found under ${directory}`)
-  return executable
 }
 
 function hashFile(file: string) {

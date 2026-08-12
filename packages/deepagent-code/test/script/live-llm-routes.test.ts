@@ -151,8 +151,8 @@ describe("live LLM route manifest", () => {
           "ext:legacy-session:subagent-resume",
           "ext:legacy-session:subagent-takeover",
           "ext:legacy-session:subagent-worktree-routing",
-          "ext:packaged-sidecar:long-session",
           "ext:renderer-ui:activity-progress-package",
+          "ext:renderer-ui:long-session",
           "ext:v4-event-runtime:v4-multi-agent-runtime",
           "live:adapter:provider-smoke",
           "live:adapter:structured-output",
@@ -204,7 +204,7 @@ describe("live LLM route manifest", () => {
       },
       {
         path: "packages/desktop/scripts/live-llm/long-session.ts",
-        runs: ["ext:packaged-sidecar:long-session"],
+        runs: ["ext:renderer-ui:long-session"],
       },
       {
         path: "packages/deepagent-code/script/live-llm/autonomous-eval.ts",
@@ -357,7 +357,7 @@ describe("live LLM route manifest", () => {
 
     expect(selected.runs.map(modelRunKey)).toContain("live:packaged-sidecar:activity-progress-restart")
     expect(selected.runs.map(modelRunKey)).toContain("ext:renderer-ui:activity-progress-package")
-    expect(selected.runs.map(modelRunKey)).toContain("ext:packaged-sidecar:long-session")
+    expect(selected.runs.map(modelRunKey)).toContain("ext:renderer-ui:long-session")
     expect(
       commandForModelRun(
         selected.runs.find((run) => modelRunKey(run) === "live:packaged-sidecar:activity-progress-restart")!,
@@ -375,7 +375,7 @@ describe("live LLM route manifest", () => {
       args: ["bun", "run", "test:llm-release:activity-progress-package"],
     })
     expect(
-      commandForModelRun(selected.runs.find((run) => modelRunKey(run) === "ext:packaged-sidecar:long-session")!),
+      commandForModelRun(selected.runs.find((run) => modelRunKey(run) === "ext:renderer-ui:long-session")!),
     ).toEqual({
       cwd: "packages/desktop",
       args: ["bun", "run", "test:llm-release:long-session"],
@@ -387,10 +387,11 @@ describe("live LLM route manifest", () => {
       "packages/deepagent-code/src/session/legacy-provider-resolution.ts",
       "packages/deepagent-code/src/session/processor.ts",
       "packages/deepagent-code/src/session/recovery-transfer-guard.ts",
+      "packages/app/src/pages/session/composer/session-question-dock.tsx",
       "packages/desktop/scripts/live-llm/long-session.ts",
     ]) {
       const run = selectRoutes([path]).runs.find(
-        (item) => modelRunKey(item) === "ext:packaged-sidecar:long-session",
+        (item) => modelRunKey(item) === "ext:renderer-ui:long-session",
       )
       expect(run).toBeDefined()
       expect(commandForModelRun(run!)).toEqual({

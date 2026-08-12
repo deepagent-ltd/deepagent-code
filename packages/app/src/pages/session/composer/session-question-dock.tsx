@@ -451,7 +451,14 @@ export const SessionQuestionDock: Component<{ request: QuestionRequest; onSubmit
       }
       footer={
         <>
-          <Button variant="ghost" size="large" disabled={sending()} onClick={reject} aria-keyshortcuts="Escape">
+          <Button
+            variant="ghost"
+            size="large"
+            disabled={sending()}
+            onClick={reject}
+            aria-keyshortcuts="Escape"
+            data-action="question-reject"
+          >
             {language.t("ui.common.dismiss")}
           </Button>
           <div data-slot="question-footer-actions">
