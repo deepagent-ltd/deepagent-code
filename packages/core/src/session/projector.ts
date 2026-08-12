@@ -80,6 +80,10 @@ function sessionRow(info: SessionV1.SessionInfo): typeof SessionTable.$inferInse
 function messageData(
   info: (typeof SessionV1.Event.MessageUpdated.Type)["data"]["info"],
 ): typeof MessageTable.$inferInsert.data {
+  if (info.role === "assistant") {
+    const { id: _, sessionID: __, activityProgress: ___, ...rest } = info
+    return rest as DeepMutable<typeof rest>
+  }
   const { id: _, sessionID: __, ...rest } = info
   return rest as DeepMutable<typeof rest>
 }

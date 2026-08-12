@@ -152,6 +152,7 @@ export namespace Timeline {
     const error = assistantMessages.find((m) => m.error && m.error.name !== "MessageAbortedError")?.error
 
     const assistantPartRefs = latestActivityProgress(
+      assistantMessages,
       assistantMessages.flatMap((message, messageIndex) =>
         getMessageParts(message.id)
           .filter((part) => renderable(part, showReasoning))
@@ -287,30 +288,47 @@ export namespace Timeline {
     const refs = assistantMessages.flatMap((message, messageIndex) =>
       getMessageParts(message.id).map((part) => ({ messageID: message.id, messageIndex, part })),
     )
-    return new Set(latestActivityProgress(refs).map((ref) => `${ref.messageID}:${ref.part.id}`))
+    return new Set(
+      latestActivityProgress(assistantMessages, refs).map((ref) => `${ref.messageID}:${ref.part.id}`),
+    )
   }
 
   function latestActivityProgress<T extends { messageID: string; part: Part }>(
+    assistantMessages: AssistantMessage[],
     refs: T[],
     visibility?: ReadonlySet<string>,
   ) {
-    const progressByMessage = new Map<string, NonNullable<ReturnType<typeof activityProgress>>>()
+    const progressByMessage = new Map<string, NonNullable<ReturnType<typeof messageActivityProgress>>>()
+    assistantMessages.forEach((message) => {
+      const marker = messageActivityProgress(message)
+      if (marker) progressByMessage.set(message.id, marker)
+    })
     refs.forEach((ref) => {
-      const marker = activityProgress(ref.part)
+      const marker = partActivityProgress(ref.part)
+      const projected = progressByMessage.get(ref.messageID)
+      if (
+        marker &&
+        projected &&
+        (marker.activityID !== projected.activityID || marker.revision !== projected.revision)
+      )
+        console.error("Conflicting activity progress projection", {
+          messageID: ref.messageID,
+          projected,
+          legacy: marker,
+        })
+      if (projected) return
       if (marker) progressByMessage.set(ref.messageID, marker)
     })
-    const markerFor = (ref: T) =>
-      activityProgress(ref.part) ?? (ref.part.type === "text" ? progressByMessage.get(ref.messageID) : undefined)
+    const markerFor = (ref: T) => progressByMessage.get(ref.messageID) ?? partActivityProgress(ref.part)
     if (visibility)
       return refs.filter((ref) => {
         if (!markerFor(ref)) return true
         return visibility.has(`${ref.messageID}:${ref.part.id}`)
       })
     const selected = new Map<string, { revision: number; terminal: boolean }>()
-    refs.forEach((ref) => {
-      const marker = markerFor(ref)
+    progressByMessage.forEach((marker) => {
       if (!marker) return
-      const terminal = marker.state !== "progress"
+      const terminal = marker.state !== "provisional" && marker.state !== "progress"
       const current = selected.get(marker.activityID)
       if (
         current &&
@@ -323,22 +341,37 @@ export namespace Timeline {
       const marker = markerFor(ref)
       if (!marker) return true
       const current = selected.get(marker.activityID)
-      return current?.revision === marker.revision && current.terminal === (marker.state !== "progress")
+      return (
+        current?.revision === marker.revision &&
+        current.terminal === (marker.state !== "provisional" && marker.state !== "progress")
+      )
     })
   }
 
-  function activityProgress(part: Part) {
+  function messageActivityProgress(message: AssistantMessage) {
+    const marker = message.activityProgress
+    if (!marker) return
+    if (!marker.activityID || !Number.isInteger(marker.revision) || marker.revision < 0) return
+    if (
+      !["provisional", "progress", "final", "interrupted", "recovery_required", "failed"].includes(marker.state)
+    )
+      return
+    return marker
+  }
+
+  function partActivityProgress(part: Part) {
     if (part.type !== "text") return
     const value = part.metadata?.deepagent_activity_progress
     if (!value || typeof value !== "object") return
     const marker = value as Record<string, unknown>
     if (typeof marker.activity_id !== "string" || marker.activity_id.length === 0) return
     if (typeof marker.revision !== "number" || !Number.isInteger(marker.revision) || marker.revision < 0) return
-    if (!["progress", "final", "interrupted", "recovery_required"].includes(String(marker.state))) return
+    if (!["provisional", "progress", "final", "interrupted", "recovery_required"].includes(String(marker.state)))
+      return
     return {
       activityID: marker.activity_id,
       revision: marker.revision,
-      state: marker.state as "progress" | "final" | "interrupted" | "recovery_required",
+      state: marker.state as "provisional" | "progress" | "final" | "interrupted" | "recovery_required",
     }
   }
 

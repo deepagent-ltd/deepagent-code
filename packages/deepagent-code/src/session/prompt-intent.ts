@@ -81,6 +81,12 @@ export type Progress = {
   readonly state: "provisional" | "progress" | "final" | "interrupted" | "recovery_required"
 }
 
+export type ProjectionInvalidation = {
+  readonly activityID: string
+  readonly sessionID: SessionID
+  readonly assistantMessageID?: MessageID
+}
+
 const leaseDuration = 30_000
 
 const fromRow = (row: typeof SessionIntentTable.$inferSelect): Receipt => ({
@@ -935,7 +941,10 @@ export const recoverActiveActivities = Effect.fn("SessionPromptIntent.recoverAct
 ) {
   const { db } = yield* Database.Service
   const active = yield* db
-    .select({ activityID: SessionLegacyActivityTable.activity_id })
+    .select({
+      activityID: SessionLegacyActivityTable.activity_id,
+      sessionID: SessionLegacyActivityTable.session_id,
+    })
     .from(SessionLegacyActivityTable)
     .where(
       and(
@@ -945,7 +954,7 @@ export const recoverActiveActivities = Effect.fn("SessionPromptIntent.recoverAct
     )
     .all()
     .pipe(Effect.orDie)
-  yield* Effect.forEach(
+  return yield* Effect.forEach(
     active,
     (activity) =>
       Effect.gen(function* () {
@@ -973,7 +982,12 @@ export const recoverActiveActivities = Effect.fn("SessionPromptIntent.recoverAct
                 assistantMessageID: MessageID.make(latest.assistant_message_id),
               })
             : undefined
-        if (settled && settled.state !== "progress") return
+        if (settled && settled.state !== "progress")
+          return {
+            activityID: activity.activityID,
+            sessionID: SessionID.make(activity.sessionID),
+            assistantMessageID: settled.assistantMessageID,
+          } satisfies ProjectionInvalidation
         const recoveryProgressState = settled?.state ?? latest?.state
         const recoveryReason = settled
           ? "process restarted after settled activity progress"
@@ -1015,19 +1029,44 @@ export const recoverActiveActivities = Effect.fn("SessionPromptIntent.recoverAct
             { behavior: "immediate" },
           )
           .pipe(Effect.orDie)
+        return {
+          activityID: activity.activityID,
+          sessionID: SessionID.make(activity.sessionID),
+          ...(latest ? { assistantMessageID: MessageID.make(latest.assistant_message_id) } : {}),
+        } satisfies ProjectionInvalidation
       }),
-    { discard: true },
   )
-  return active.length
 })
 
 export const interruptActivity = Effect.fn("SessionPromptIntent.interruptActivity")(function* (activityID: string) {
   const { db } = yield* Database.Service
-  yield* db
-    .update(SessionLegacyActivityTable)
-    .set({ state: "interrupted", terminal_reason: "aborted_before_provider_settlement", settled_at: Date.now() })
-    .where(and(eq(SessionLegacyActivityTable.activity_id, activityID), eq(SessionLegacyActivityTable.state, "active")))
-    .run()
+  return yield* db
+    .transaction(
+      (tx) =>
+        Effect.gen(function* () {
+          const updated = yield* tx
+            .update(SessionLegacyActivityTable)
+            .set({ state: "interrupted", terminal_reason: "aborted_before_provider_settlement", settled_at: Date.now() })
+            .where(
+              and(eq(SessionLegacyActivityTable.activity_id, activityID), eq(SessionLegacyActivityTable.state, "active")),
+            )
+            .returning({ sessionID: SessionLegacyActivityTable.session_id })
+            .get()
+          if (!updated) return
+          const latest = yield* tx
+            .select({ assistantMessageID: SessionActivityProgressTable.assistant_message_id })
+            .from(SessionActivityProgressTable)
+            .where(eq(SessionActivityProgressTable.activity_id, activityID))
+            .orderBy(sql`${SessionActivityProgressTable.revision} DESC`)
+            .get()
+          return {
+            activityID,
+            sessionID: SessionID.make(updated.sessionID),
+            ...(latest ? { assistantMessageID: MessageID.make(latest.assistantMessageID) } : {}),
+          } satisfies ProjectionInvalidation
+        }),
+      { behavior: "immediate" },
+    )
     .pipe(Effect.orDie)
 })
 
@@ -1035,39 +1074,57 @@ export const retireDisabledSteerActivity = Effect.fn("SessionPromptIntent.retire
   sessionID: SessionID,
 ) {
   const { db } = yield* Database.Service
-  const activity = yield* db
-    .select({ activityID: SessionLegacyActivityTable.activity_id })
-    .from(SessionLegacyActivityTable)
-    .innerJoin(
-      SessionActivityAdmissionTable,
-      eq(SessionActivityAdmissionTable.admission_id, SessionLegacyActivityTable.trigger_admission_id),
+  return yield* db
+    .transaction(
+      (tx) =>
+        Effect.gen(function* () {
+          const activity = yield* tx
+            .select({ activityID: SessionLegacyActivityTable.activity_id })
+            .from(SessionLegacyActivityTable)
+            .innerJoin(
+              SessionActivityAdmissionTable,
+              eq(SessionActivityAdmissionTable.admission_id, SessionLegacyActivityTable.trigger_admission_id),
+            )
+            .where(
+              and(
+                eq(SessionLegacyActivityTable.session_id, sessionID),
+                eq(SessionLegacyActivityTable.state, "active"),
+                eq(SessionActivityAdmissionTable.delivery, "steer"),
+              ),
+            )
+            .get()
+          if (!activity) return
+          const updated = yield* tx
+            .update(SessionLegacyActivityTable)
+            .set({
+              state: "interrupted",
+              terminal_reason: "steering_disabled_before_absorption",
+              settled_at: Date.now(),
+            })
+            .where(
+              and(
+                eq(SessionLegacyActivityTable.activity_id, activity.activityID),
+                eq(SessionLegacyActivityTable.state, "active"),
+              ),
+            )
+            .returning({ activityID: SessionLegacyActivityTable.activity_id })
+            .get()
+          if (!updated) return
+          const latest = yield* tx
+            .select({ assistantMessageID: SessionActivityProgressTable.assistant_message_id })
+            .from(SessionActivityProgressTable)
+            .where(eq(SessionActivityProgressTable.activity_id, activity.activityID))
+            .orderBy(sql`${SessionActivityProgressTable.revision} DESC`)
+            .get()
+          return {
+            activityID: activity.activityID,
+            sessionID,
+            ...(latest ? { assistantMessageID: MessageID.make(latest.assistantMessageID) } : {}),
+          } satisfies ProjectionInvalidation
+        }),
+      { behavior: "immediate" },
     )
-    .where(
-      and(
-        eq(SessionLegacyActivityTable.session_id, sessionID),
-        eq(SessionLegacyActivityTable.state, "active"),
-        eq(SessionActivityAdmissionTable.delivery, "steer"),
-      ),
-    )
-    .get()
     .pipe(Effect.orDie)
-  if (!activity) return false
-  yield* db
-    .update(SessionLegacyActivityTable)
-    .set({
-      state: "interrupted",
-      terminal_reason: "steering_disabled_before_absorption",
-      settled_at: Date.now(),
-    })
-    .where(
-      and(
-        eq(SessionLegacyActivityTable.activity_id, activity.activityID),
-        eq(SessionLegacyActivityTable.state, "active"),
-      ),
-    )
-    .run()
-    .pipe(Effect.orDie)
-  return true
 })
 
 const progress = (row: typeof SessionActivityProgressTable.$inferSelect): Progress => ({

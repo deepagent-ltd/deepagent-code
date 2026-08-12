@@ -15,10 +15,11 @@ import { SessionMessage } from "@deepagent-code/core/session/message"
 import { Prompt } from "@deepagent-code/core/session/prompt"
 import { SessionMessageUpdater } from "@deepagent-code/core/session/message-updater"
 import { SessionProjector } from "@deepagent-code/core/session/projector"
+import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { SessionExecution } from "@deepagent-code/core/session/execution"
 import { SessionInput } from "@deepagent-code/core/session/input"
 import { SessionStore } from "@deepagent-code/core/session/store"
-import { SessionInputTable, SessionMessageTable, SessionTable } from "@deepagent-code/core/session/sql"
+import { MessageTable, SessionInputTable, SessionMessageTable, SessionTable } from "@deepagent-code/core/session/sql"
 import { testEffect } from "./lib/effect"
 
 const database = Database.layerFromPath(":memory:")
@@ -44,6 +45,59 @@ const assistantRow = (
 }
 
 describe("SessionProjector", () => {
+  it.effect("never persists computed V1 activity progress from a full message update", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      yield* db
+        .insert(ProjectTable)
+        .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
+        .run()
+        .pipe(Effect.orDie)
+      yield* db
+        .insert(SessionTable)
+        .values({
+          id: sessionID,
+          project_id: Project.ID.global,
+          slug: "test",
+          directory: "/project",
+          title: "test",
+          version: "test",
+        })
+        .run()
+        .pipe(Effect.orDie)
+      const events = yield* EventV2.Service
+      yield* events.publish(SessionV1.Event.MessageUpdated, {
+        sessionID,
+        info: {
+          id: SessionV1.MessageID.make("msg_v1_activity_progress"),
+          sessionID,
+          role: "assistant",
+          time: { created: 1 },
+          parentID: SessionV1.MessageID.make("msg_v1_parent"),
+          modelID: ModelV2.ID.make("model"),
+          providerID: ProviderV2.ID.make("provider"),
+          mode: "build",
+          agent: "build",
+          path: { cwd: "/project", root: "/project" },
+          cost: 0,
+          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          activityProgress: { activityID: "activity-1", revision: 3, state: "final" },
+        },
+      })
+
+      expect(
+        (
+          yield* db
+            .select({ data: MessageTable.data })
+            .from(MessageTable)
+            .where(eq(MessageTable.id, SessionV1.MessageID.make("msg_v1_activity_progress")))
+            .get()
+            .pipe(Effect.orDie)
+        )?.data,
+      ).not.toHaveProperty("activityProgress")
+    }),
+  )
+
   it.effect("orders projected messages and context by durable aggregate sequence", () =>
     Effect.gen(function* () {
       const { db } = yield* Database.Service

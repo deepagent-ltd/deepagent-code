@@ -21,9 +21,21 @@ function sortParts(parts: Part[]) {
   return parts.filter((part) => !!part?.id).sort((a, b) => cmp(a.id, b.id))
 }
 
-function runInflight(map: Map<string, Promise<void>>, key: string, task: () => Promise<void>) {
+export async function runInflight(
+  map: Map<string, Promise<void>>,
+  trailing: Set<string>,
+  key: string,
+  force: boolean,
+  task: () => Promise<void>,
+): Promise<void> {
   const pending = map.get(key)
-  if (pending) return pending
+  if (pending) {
+    if (!force) return pending
+    trailing.add(key)
+    await pending.catch(() => {})
+    if (!trailing.delete(key)) return
+    return runInflight(map, trailing, key, true, task)
+  }
   const promise = task().finally(() => {
     map.delete(key)
   })
@@ -210,7 +222,9 @@ export const createDirSyncContext = (
   const initialMessagePageSize = 80
   const historyMessagePageSize = 200
   const inflight = new Map<string, Promise<void>>()
+  const trailing = new Set<string>()
   const inflightDiff = new Map<string, Promise<void>>()
+  const trailingDiff = new Set<string>()
   const optimistic = new Map<string, Map<string, OptimisticItem>>()
   const maxDirs = 30
   const seen = new Map<string, Set<string>>()
@@ -407,7 +421,7 @@ export const createDirSyncContext = (
 
   const loadPlan = (sessionID: string) => serverSync.plan.sync(directory, sessionID)
 
-  return {
+  const result = {
     get data() {
       return current()[0]
     },
@@ -499,7 +513,7 @@ export const createDirSyncContext = (
           })
         }
 
-        return runInflight(inflight, key, async () => {
+        return runInflight(inflight, trailing, key, opts?.force === true, async () => {
           const pending = getSessionPrefetchPromise(serverSDK.scope, directory, sessionID)
           if (pending) {
             await pending
@@ -568,7 +582,7 @@ export const createDirSyncContext = (
         if (store.session_diff[sessionID] !== undefined && !opts?.force) return
 
         const key = keyFor(directory, sessionID)
-        return runInflight(inflightDiff, key, () =>
+        return runInflight(inflightDiff, trailingDiff, key, opts?.force === true, () =>
           retry(() => client.session.diff({ sessionID })).then((diff) => {
             if (!tracked(directory, sessionID)) return
             setStore("session_diff", sessionID, reconcile(list(diff.data), { key: "file" }))
@@ -651,4 +665,8 @@ export const createDirSyncContext = (
       return current()[0].path.directory
     },
   }
+  serverSync.registerSessionReloader?.(directory, (sessionID) =>
+    result.session.sync(sessionID, { force: true }),
+  )
+  return result
 }

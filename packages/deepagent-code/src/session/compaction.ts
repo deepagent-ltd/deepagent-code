@@ -919,7 +919,9 @@ export const layer = Layer.effect(
                     time_created: continuation.message.info.time.created,
                     time_updated: continuation.message.info.time.created,
                     data: Object.fromEntries(
-                      Object.entries(continuation.message.info).filter(([key]) => key !== "id" && key !== "sessionID"),
+                      Object.entries(MessageV2.stripActivityProgress(continuation.message.info)).filter(
+                        ([key]) => key !== "id" && key !== "sessionID",
+                      ),
                     ) as typeof MessageTable.$inferInsert.data,
                   })
                   .run()

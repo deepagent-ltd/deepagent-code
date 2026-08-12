@@ -691,12 +691,20 @@ export const layer = Layer.effect(
     )
     const database = yield* Database.Service
     const { db } = database
+    const publishActivityProjection = (input: SessionPromptIntent.ProjectionInvalidation) =>
+      input.assistantMessageID
+        ? sessions.publishMessageProjection({
+            sessionID: input.sessionID,
+            messageID: input.assistantMessageID,
+          })
+        : Effect.void
     yield* recoverProviderReceiptsOnStartup()
     yield* SessionPromptIntent.recoverActiveActivities().pipe(
       Effect.provideService(Database.Service, database),
-      Effect.tap((count) =>
-        count > 0
-          ? Effect.logWarning(`marked ${count} legacy activities recovery_required after restart`)
+      Effect.tap((activities) => Effect.forEach(activities, publishActivityProjection, { discard: true })),
+      Effect.tap((activities) =>
+        activities.length > 0
+          ? Effect.logWarning(`marked ${activities.length} legacy activities recovery_required after restart`)
           : Effect.void,
       ),
     )
@@ -2223,6 +2231,7 @@ export const layer = Layer.effect(
         if (!flags.v4Steering)
           yield* SessionPromptIntent.retireDisabledSteerActivity(input.sessionID).pipe(
             Effect.provideService(Database.Service, database),
+            Effect.flatMap((activity) => (activity ? publishActivityProjection(activity) : Effect.void)),
           )
         const messageID = input.messageID ?? MessageID.ascending()
         const intentID = input.intentID ?? `legacy-prompt:${input.sessionID}:${messageID}`
@@ -2827,6 +2836,10 @@ export const layer = Layer.effect(
           : undefined
         const publishActivityProgress = (progress: SessionPromptIntent.Progress) =>
           Effect.gen(function* () {
+            yield* sessions.publishMessageProjection({
+              sessionID,
+              messageID: progress.assistantMessageID,
+            })
             if (!progress.textPartID) return
             const messages = yield* sessions.messages({ sessionID }).pipe(Effect.orDie)
             const parts = messages
@@ -3237,6 +3250,7 @@ export const layer = Layer.effect(
               if (legacyActivity && !activityProgressFinalizer.value)
                 yield* SessionPromptIntent.interruptActivity(legacyActivity.activityID).pipe(
                   Effect.provideService(Database.Service, database),
+                  Effect.flatMap((activity) => (activity ? publishActivityProjection(activity) : Effect.void)),
                 )
             }),
           )
@@ -3569,7 +3583,10 @@ export const layer = Layer.effect(
                 activityID: progressActivity.activityID,
                 assistantMessageID: handle.message.id,
                 providerReceiptID: receiptID,
-              }).pipe(Effect.provideService(Database.Service, database))
+              }).pipe(
+                Effect.provideService(Database.Service, database),
+                Effect.tap(publishActivityProgress),
+              )
             if (progressActivity)
               activityProgressFinalizer.value = () =>
                 SessionPromptIntent.settleProgress({
@@ -5093,7 +5110,12 @@ function stableJson(value: unknown, seen = new WeakSet<object>()): string {
 
 /** @internal Exported for deterministic receipt verification. */
 function providerResponseFingerprint(response: SessionV1.WithParts) {
-  return Hash.sha256(stableJson(response))
+  return Hash.sha256(
+    stableJson({
+      ...response,
+      info: MessageV2.stripActivityProgress(response.info),
+    }),
+  )
 }
 
 /** @internal Exported for testing */

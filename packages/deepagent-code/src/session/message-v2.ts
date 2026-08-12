@@ -44,6 +44,7 @@ import {
   SessionWorldStateBaselineTable,
 } from "@deepagent-code/core/session/sql"
 import { SessionPromptEpochTable } from "./prompt-epoch.sql"
+import { SessionActivityProgressTable, SessionLegacyActivityTable } from "./activity-sql"
 import { ProviderError } from "@/provider/error"
 import { iife } from "@/util/iife"
 import { errorMessage } from "@/util/error"
@@ -268,6 +269,26 @@ const info = (row: typeof MessageTable.$inferSelect) =>
     sessionID: row.session_id,
   }) as Info
 
+export function stripActivityProgress<T extends Info>(message: T): T {
+  if (message.role !== "assistant" || !message.activityProgress) return message
+  const { activityProgress: _, ...rest } = message
+  return rest as T
+}
+
+export function stripActivityProgressPart<T extends Part>(messagePart: T): T {
+  if (
+    messagePart.type !== "text" ||
+    !messagePart.metadata ||
+    !("deepagent_activity_progress" in messagePart.metadata)
+  )
+    return messagePart
+  const { deepagent_activity_progress: _, ...metadata } = messagePart.metadata
+  return {
+    ...messagePart,
+    metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
+  } as T
+}
+
 const part = (row: typeof PartTable.$inferSelect) =>
   ({
     ...row.data,
@@ -282,31 +303,92 @@ const older = (row: Cursor) =>
 function hydrate(db: Database.Interface["db"], rows: (typeof MessageTable.$inferSelect)[]) {
   const ids = rows.map((row) => row.id)
   const partByMessage = new Map<string, Part[]>()
+  const progressByMessage = new Map<MessageID, SessionV1.ActivityProgress>()
   return Effect.gen(function* () {
     if (ids.length > 0) {
-      const partRows = yield* db
-        .select({ part: PartTable })
-        .from(PartTable)
-        .innerJoin(
-          MessageTable,
-          and(eq(MessageTable.id, PartTable.message_id), eq(MessageTable.session_id, PartTable.session_id)),
-        )
-        .where(inArray(PartTable.message_id, ids))
-        .orderBy(PartTable.message_id, PartTable.id)
-        .all()
-        .pipe(Effect.orDie)
+      const [partRows, progressRows] = yield* Effect.all([
+        db
+          .select({ part: PartTable })
+          .from(PartTable)
+          .innerJoin(
+            MessageTable,
+            and(eq(MessageTable.id, PartTable.message_id), eq(MessageTable.session_id, PartTable.session_id)),
+          )
+          .where(inArray(PartTable.message_id, ids))
+          .orderBy(PartTable.message_id, PartTable.id)
+          .all()
+          .pipe(Effect.orDie),
+        db
+          .select({
+            assistantMessageID: SessionActivityProgressTable.assistant_message_id,
+            activityID: SessionActivityProgressTable.activity_id,
+            revision: SessionActivityProgressTable.revision,
+            progressState: SessionActivityProgressTable.state,
+            activityState: SessionLegacyActivityTable.state,
+            activitySessionID: SessionLegacyActivityTable.session_id,
+            terminalReason: SessionLegacyActivityTable.terminal_reason,
+            latestRevision: sql<number>`(
+              SELECT max(latest.revision)
+              FROM session_activity_progress AS latest
+              WHERE latest.activity_id = ${SessionActivityProgressTable.activity_id}
+            )`,
+            messageData: MessageTable.data,
+            messageSessionID: MessageTable.session_id,
+          })
+          .from(SessionActivityProgressTable)
+          .innerJoin(
+            SessionLegacyActivityTable,
+            eq(SessionLegacyActivityTable.activity_id, SessionActivityProgressTable.activity_id),
+          )
+          .innerJoin(MessageTable, eq(MessageTable.id, SessionActivityProgressTable.assistant_message_id))
+          .where(inArray(SessionActivityProgressTable.assistant_message_id, ids))
+          .all()
+          .pipe(Effect.orDie),
+      ])
       for (const row of partRows) {
         const next = part(row.part)
         const list = partByMessage.get(row.part.message_id)
         if (list) list.push(next)
         else partByMessage.set(row.part.message_id, [next])
       }
+      for (const row of progressRows) {
+        if (row.activitySessionID !== row.messageSessionID || row.messageData.role !== "assistant") {
+          yield* Effect.logWarning("ignored activity progress with inconsistent Session ownership").pipe(
+            Effect.annotateLogs({
+              activityID: row.activityID,
+              assistantMessageID: row.assistantMessageID,
+              activitySessionID: row.activitySessionID,
+              messageSessionID: row.messageSessionID,
+              messageRole: row.messageData.role,
+            }),
+          )
+          continue
+        }
+        const state =
+          row.revision !== row.latestRevision || row.activityState === "active"
+            ? row.progressState
+            : row.activityState === "settled"
+              ? "final"
+              : row.activityState
+        progressByMessage.set(MessageID.make(row.assistantMessageID), {
+          activityID: row.activityID,
+          revision: row.revision,
+          state,
+          ...(row.revision === row.latestRevision && row.terminalReason
+            ? { terminalReason: row.terminalReason }
+            : {}),
+        })
+      }
     }
 
-    return rows.map((row) => ({
-      info: info(row),
-      parts: partByMessage.get(row.id) ?? [],
-    }))
+    return rows.map((row) => {
+      const message = info(row)
+      const activityProgress = progressByMessage.get(MessageID.make(row.id))
+      return {
+        info: message.role === "assistant" && activityProgress ? { ...message, activityProgress } : message,
+        parts: partByMessage.get(row.id) ?? [],
+      }
+    })
   })
 }
 
@@ -810,10 +892,8 @@ export const get = Effect.fn("MessageV2.get")(function* (input: { sessionID: Ses
     .get()
     .pipe(Effect.orDie)
   if (!row) return yield* new NotFoundError({ message: `Message not found: ${input.messageID}` })
-  return {
-    info: info(row),
-    parts: yield* parts(input.messageID),
-  }
+  const result = yield* hydrate(db, [row])
+  return result[0]!
 })
 
 export function filterCompacted(msgs: Iterable<WithParts>) {
