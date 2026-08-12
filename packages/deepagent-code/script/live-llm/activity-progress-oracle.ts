@@ -16,6 +16,23 @@ type ActivityDurability = {
     state: string
     terminal_reason: string | null
   }>
+  legacyActivityRuns: ReadonlyArray<{
+    run_id: string
+    activity_id: string
+    owner_token: string
+    state: string
+    terminal_reason: string | null
+  }>
+  legacyActivityTerminals: ReadonlyArray<{
+    activity_id: string
+    state: string
+    reason_code: string
+    source: string
+    run_id: string | null
+    progress_revision: number | null
+    membership_ordinal: number
+    owner_token: string
+  }>
   legacyActivityAdmissions: ReadonlyArray<{
     activity_id: string
     admission_id: string
@@ -27,6 +44,7 @@ type ActivityDurability = {
     revision: number
     assistant_message_id: string
     provider_receipt_id: string
+    input_membership_ordinal: number
     state: string
   }>
   activityTextParts: ReadonlyArray<{
@@ -108,7 +126,7 @@ export function assertActivityProgressObservation(input: {
     durability.legacyActivities.length !== 1 ||
     !activity ||
     activity.state !== "settled" ||
-    activity.terminal_reason !== "stop" ||
+    activity.terminal_reason !== "assistant_completed" ||
     activity.owner_token.length === 0 ||
     activity.owner_token === "pre-owner-migration"
   ) {
@@ -145,6 +163,29 @@ export function assertActivityProgressObservation(input: {
   )
   if (progress.some((item) => !receiptIDs.has(item.provider_receipt_id))) {
     throw new Error(`${input.caseName} progress row lacked a dispatched provider receipt`)
+  }
+  const run = durability.legacyActivityRuns[0]
+  const terminal = durability.legacyActivityTerminals[0]
+  const final = progress.at(-1)
+  if (
+    durability.legacyActivityRuns.length !== 1 ||
+    !run ||
+    run.activity_id !== activity.activity_id ||
+    run.owner_token !== activity.owner_token ||
+    run.state !== "completed" ||
+    run.terminal_reason !== "assistant_completed" ||
+    durability.legacyActivityTerminals.length !== 1 ||
+    !terminal ||
+    terminal.activity_id !== activity.activity_id ||
+    terminal.state !== "settled" ||
+    terminal.reason_code !== "assistant_completed" ||
+    terminal.source !== "provider_final" ||
+    terminal.run_id !== run.run_id ||
+    terminal.progress_revision !== final?.revision ||
+    terminal.membership_ordinal !== final?.input_membership_ordinal ||
+    terminal.owner_token !== activity.owner_token
+  ) {
+    throw new Error(`${input.caseName} lacked one matching run and terminal receipt`)
   }
   progress.forEach((item) => {
     const parts = durability.activityTextParts.filter((part) => part.message_id === item.assistant_message_id)

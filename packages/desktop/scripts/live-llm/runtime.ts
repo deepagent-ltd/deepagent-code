@@ -54,7 +54,7 @@ export type Message = {
           | { status: "pending"; input?: unknown }
           | { status: "running"; input: unknown }
           | { status: "completed"; input: unknown; output: string; metadata: Record<string, unknown> }
-          | { status: "error"; input: unknown; error: string }
+          | { status: "error"; input: unknown; error: string; metadata?: Record<string, unknown> }
       }
     | { type: string }
   >

@@ -259,7 +259,9 @@ export async function runLegacyLiveCases(input: {
       SessionActivityAdmissionTable,
       SessionActivityProgressTable,
       SessionLegacyActivityAdmissionTable,
+      SessionLegacyActivityRunTable,
       SessionLegacyActivityTable,
+      SessionLegacyActivityTerminalTable,
     } = await import("../../src/session/activity-sql")
     const { SessionPromptEpochTable } = await import("../../src/session/prompt-epoch.sql")
     const { PartTable, SessionIntentTable, SessionWorldStateBaselineTable } = await import(
@@ -1174,6 +1176,16 @@ export async function runLegacyLiveCases(input: {
                     .all()
                     .pipe(Effect.orDie),
                   legacyActivities,
+                  legacyActivityRuns: (yield* database.db
+                    .select()
+                    .from(SessionLegacyActivityRunTable)
+                    .all()
+                    .pipe(Effect.orDie)).filter((run) => activityIDs.has(run.activity_id)),
+                  legacyActivityTerminals: (yield* database.db
+                    .select()
+                    .from(SessionLegacyActivityTerminalTable)
+                    .all()
+                    .pipe(Effect.orDie)).filter((terminal) => activityIDs.has(terminal.activity_id)),
                   legacyActivityAdmissions: (yield* database.db
                     .select()
                     .from(SessionLegacyActivityAdmissionTable)
