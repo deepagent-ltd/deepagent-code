@@ -536,7 +536,7 @@ describe("sync HttpApi", () => {
           } as RequestInit),
         )
 
-        expect(response.status).toBe(400)
+        expect(response.status).toBe(413)
         expect(pulls).toBeLessThan(64)
         expect(yield* db.select({ id: EventTable.id }).from(EventTable).all().pipe(Effect.orDie)).toEqual(before)
       }),
