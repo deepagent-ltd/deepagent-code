@@ -240,6 +240,51 @@ describe("legacy provider recovery delete cascade", () => {
           { name: "session_tool_request_receipt_response_guard" },
         ])
         expect(
+          yield* db.get(`
+            SELECT name FROM sqlite_master
+            WHERE type = 'trigger' AND name = 'compaction_run_continuation_response_validate'
+          `),
+        ).toEqual({ name: "compaction_run_continuation_response_validate" })
+        expect(
+          yield* db.all(`
+            SELECT name FROM sqlite_master
+            WHERE type = 'trigger' AND name IN (
+              'session_history_state_ready_validate_insert',
+              'session_history_state_ready_validate_update',
+              'session_history_state_recovery_validate_insert',
+              'session_history_state_recovery_validate_update'
+            ) ORDER BY name
+          `),
+        ).toEqual([
+          { name: "session_history_state_ready_validate_insert" },
+          { name: "session_history_state_ready_validate_update" },
+          { name: "session_history_state_recovery_validate_insert" },
+          { name: "session_history_state_recovery_validate_update" },
+        ])
+        yield* db.run(`
+          INSERT INTO compaction_run (
+            run_id, session_id, from_prompt_epoch, trigger, state, created_at,
+            source_window_id, source_effective_history_hash, source_message_count,
+            source_projection_version, continuation_state, continuation_receipt_id,
+            continuation_admitted_at, continuation_dispatching_at
+          ) VALUES (
+            'compaction-receipt-upgrade', 'ses_receipt_upgrade', 0, 'manual', 'committed', 1,
+            'window-upgrade', 'history-upgrade', 1, 1, 'dispatching',
+            'receipt-upgrade-valid', 1, 1
+          )
+        `)
+        expect(
+          Exit.isFailure(
+            yield* db
+              .run(`
+                UPDATE compaction_run
+                SET continuation_state = 'settled', continuation_terminal_at = 2
+                WHERE run_id = 'compaction-receipt-upgrade'
+              `)
+              .pipe(Effect.exit),
+          ),
+        ).toBe(true)
+        expect(
           yield* db.all(`
             SELECT "table", "from", "to", on_delete
             FROM pragma_foreign_key_list('session_tool_request_receipt')
