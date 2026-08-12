@@ -1,13 +1,11 @@
 import { Workspace } from "@/control-plane/workspace"
 import * as InstanceState from "@/effect/instance-state"
-import { Session } from "@/session/session"
 import { MessageV2 } from "@/session/message-v2"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { Database } from "@deepagent-code/core/database/database"
 import { EventV2 } from "@deepagent-code/core/event"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { EventTable } from "@deepagent-code/core/event/sql"
-import { SessionRecoveryTransferGuard } from "@/session/recovery-transfer-guard"
 import { asc } from "drizzle-orm"
 import { and } from "drizzle-orm"
 import { eq } from "drizzle-orm"
@@ -59,7 +57,6 @@ END`
 export const syncHandlers = HttpApiBuilder.group(InstanceHttpApi, "sync", (handlers) =>
   Effect.gen(function* () {
     const workspace = yield* Workspace.Service
-    const session = yield* Session.Service
     const scope = yield* Scope.Scope
     const events = yield* EventV2Bridge.Service
     const { db } = yield* Database.Service
@@ -97,23 +94,10 @@ export const syncHandlers = HttpApiBuilder.group(InstanceHttpApi, "sync", (handl
     const steal = Effect.fn("SyncHttpApi.steal")(function* (ctx: { payload: typeof SessionPayload.Type }) {
       const workspaceID = yield* InstanceState.workspaceID
       if (!workspaceID) return yield* new HttpApiError.BadRequest({})
-
-      const recoveryAuthorityID = yield* SessionRecoveryTransferGuard.authorityID(db, ctx.payload.sessionID)
-      if (recoveryAuthorityID)
-        return yield* new ConflictError({
-          message:
-            "Provider recovery projection cannot move between workspaces until canonical snapshot import is available",
-          resource: recoveryAuthorityID,
-        })
-
-      yield* session.setWorkspace({ sessionID: ctx.payload.sessionID, workspaceID })
-
-      log.info("sync session stolen", {
-        sessionID: ctx.payload.sessionID,
-        workspaceID,
+      return yield* new ConflictError({
+        message: "Session steal requires a durable transfer operation receipt and is disabled in this release",
+        resource: `${workspaceID}:${ctx.payload.sessionID}`,
       })
-
-      return { sessionID: ctx.payload.sessionID }
     })
 
     const history = Effect.fn("SyncHttpApi.history")(function* (ctx: { payload: typeof HistoryPayload.Type }) {

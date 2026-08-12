@@ -1,16 +1,10 @@
 export * as MoveSession from "./move-session"
 
-import { Context, DateTime, Effect, Layer, Schema } from "effect"
-import { EventV2 } from "../event"
-import { Git } from "../git"
-import { Location } from "../location"
+import { Context, Effect, Layer, Schema } from "effect"
 import { ProjectV2 } from "../project"
 import { SessionV2 } from "../session"
-import { SessionExecution } from "../session/execution"
-import { SessionEvent } from "../session/event"
 import { SessionSchema } from "../session/schema"
-import { AbsolutePath, RelativePath } from "../schema"
-import path from "path"
+import { AbsolutePath } from "../schema"
 
 export const Destination = Schema.Struct({
   directory: AbsolutePath,
@@ -52,12 +46,23 @@ export class ResetSourceChangesError extends Schema.TaggedErrorClass<ResetSource
   },
 ) {}
 
+export class TransferUnsupportedError extends Schema.TaggedErrorClass<TransferUnsupportedError>()(
+  "MoveSession.TransferUnsupportedError",
+  {
+    sessionID: SessionSchema.ID,
+    source: AbsolutePath,
+    destination: AbsolutePath,
+    message: Schema.String,
+  },
+) {}
+
 export type Error =
   | SessionV2.NotFoundError
   | DestinationProjectMismatchError
   | CaptureChangesError
   | ApplyChangesError
   | ResetSourceChangesError
+  | TransferUnsupportedError
 
 export interface Interface {
   readonly moveSession: (input: Input) => Effect.Effect<void, Error>
@@ -68,93 +73,22 @@ export class Service extends Context.Service<Service, Interface>()("@deepagent-c
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
-    const git = yield* Git.Service
-    const events = yield* EventV2.Service
-    const project = yield* ProjectV2.Service
     const session = yield* SessionV2.Service
 
     const moveSession = Effect.fn("MoveSession.moveSession")(function* (input: Input) {
       const current = yield* session.get(input.sessionID)
       const directory = AbsolutePath.make(input.destination.directory)
       if (current.location.directory === directory) return
-
-      const source = yield* project.resolve(current.location.directory)
-      const destination = yield* project.resolve(directory)
-      if (current.projectID !== destination.id) {
-        return yield* new DestinationProjectMismatchError({ expected: current.projectID, actual: destination.id })
-      }
-
-      const patch =
-        input.moveChanges && source.directory !== destination.directory
-          ? yield* git
-              .patch(current.location.directory)
-              .pipe(Effect.mapError((error) => new CaptureChangesError({ message: error.message })))
-          : ""
-      if (patch) {
-        yield* git
-          .applyPatch({ directory, patch })
-          .pipe(Effect.mapError((error) => new ApplyChangesError({ message: error.message })))
-      }
-
-      const sessions = isFilesystemRoot(current.location.directory)
-        ? conversationTree(current, yield* session.list({ directory: current.location.directory }))
-        : [current]
-      const timestamp = yield* DateTime.now
-      yield* Effect.forEach(
-        sessions,
-        (item) =>
-          events.publish(SessionEvent.Moved, {
-            sessionID: item.id,
-            location: Location.Ref.make({ directory }),
-            subdirectory: RelativePath.make(path.relative(destination.directory, directory).replaceAll("\\", "/")),
-            timestamp,
-          }),
-        { discard: true },
-      )
-
-      if (patch) {
-        yield* git.softResetChanges(current.location.directory).pipe(
-          Effect.mapError(
-            (error) =>
-              new ResetSourceChangesError({
-                directory: current.location.directory,
-                message: error.message,
-                cause: error.cause,
-              }),
-          ),
-        )
-      }
+      return yield* new TransferUnsupportedError({
+        sessionID: input.sessionID,
+        source: current.location.directory,
+        destination: directory,
+        message: "Session moves require durable transfer admission, execution fencing, and idempotent change receipts",
+      })
     })
 
     return Service.of({ moveSession })
   }),
 )
 
-function isFilesystemRoot(directory: string) {
-  const resolved = path.resolve(directory)
-  return path.dirname(resolved) === resolved
-}
-
-function conversationTree(current: SessionSchema.Info, sessions: SessionSchema.Info[]) {
-  const byID = new Map(sessions.map((session) => [session.id, session]))
-  const root = sessions.reduce(
-    (session) => (session.parentID ? (byID.get(session.parentID) ?? session) : session),
-    current,
-  )
-  const result: SessionSchema.Info[] = []
-  const append = (session: SessionSchema.Info) => {
-    if (result.some((item) => item.id === session.id)) return
-    result.push(session)
-    sessions.filter((item) => item.parentID === session.id).forEach(append)
-  }
-  append(root)
-  return result
-}
-
-export const defaultLayer = layer.pipe(
-  Layer.provide(Git.defaultLayer),
-  Layer.provide(EventV2.defaultLayer),
-  Layer.provide(ProjectV2.defaultLayer),
-  Layer.provide(SessionExecution.noopLayer),
-  Layer.provide(SessionV2.defaultLayer),
-)
+export const defaultLayer = layer.pipe(Layer.provide(SessionV2.defaultLayer))
