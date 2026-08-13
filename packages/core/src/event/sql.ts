@@ -7,6 +7,7 @@ export const EventSequenceTable = sqliteTable("event_sequence", {
   owner_id: text(),
   retention_floor_seq: integer(),
   snapshot_id: text(),
+  write_fence_transfer_id: text(),
 })
 
 export const EventTable = sqliteTable(
@@ -24,7 +25,6 @@ export const EventTable = sqliteTable(
   (table) => [
     uniqueIndex("event_aggregate_seq_idx").on(table.aggregate_id, table.seq),
     index("event_aggregate_type_seq_idx").on(table.aggregate_id, table.type, table.seq),
-    uniqueIndex("event_sync_seq_idx").on(table.sync_seq),
   ],
 )
 
@@ -51,12 +51,83 @@ export const EventSnapshotTable = sqliteTable(
   ],
 )
 
+export const EventSnapshotRowTable = sqliteTable(
+  "event_snapshot_row",
+  {
+    snapshot_id: text().notNull(),
+    row_index: integer().notNull(),
+    table_name: text().notNull(),
+    row_key: text().notNull(),
+    row_hash: text().notNull(),
+    row_bytes: integer().notNull(),
+    chunk_count: integer().notNull(),
+    chain_hash: text().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.snapshot_id, table.row_index] }),
+    uniqueIndex("event_snapshot_row_identity_idx").on(table.snapshot_id, table.table_name, table.row_key),
+  ],
+)
+
+export const EventSnapshotChunkTable = sqliteTable(
+  "event_snapshot_chunk",
+  {
+    row_hash: text().notNull(),
+    chunk_index: integer().notNull(),
+    data: blob({ mode: "buffer" }).notNull(),
+    chunk_hash: text().notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.row_hash, table.chunk_index] })],
+)
+
+export const EventSnapshotAttemptTable = sqliteTable("event_snapshot_attempt", {
+  snapshot_id: text().primaryKey(),
+  aggregate_id: text().notNull(),
+  through_seq: integer().notNull(),
+  expected_latest: integer().notNull(),
+  owner_id: text(),
+  codec: text().notNull(),
+  schema_version: integer().notNull(),
+  projection_revision: text().notNull(),
+  cursor: text(),
+  row_count: integer().notNull(),
+  encoded_bytes: integer().notNull(),
+  content_hash: text().notNull(),
+  tables: text({ mode: "json" }).$type<Record<string, number>>().notNull(),
+  state: text().$type<"prepared" | "staged" | "complete">().notNull(),
+  created_at: integer().notNull(),
+  updated_at: integer().notNull(),
+})
+
 export const EventSyncSequenceTable = sqliteTable("event_sync_sequence", {
   id: integer().primaryKey(),
   seq: integer().notNull(),
   generation: text().notNull(),
   cursor_secret: text().notNull(),
+  backfill_complete: integer({ mode: "boolean" }).notNull(),
 })
+
+export const EventSyncBackfillTable = sqliteTable("event_sync_backfill", {
+  id: integer().primaryKey(),
+  state: text().$type<"pending" | "complete">().notNull(),
+  cursor_rowid: integer().notNull(),
+  high_water_rowid: integer().notNull(),
+  processed_count: integer().notNull(),
+  started_at: integer().notNull(),
+  updated_at: integer().notNull(),
+  completed_at: integer(),
+})
+
+export const EventSyncIndexTable = sqliteTable(
+  "event_sync_index",
+  {
+    sync_seq: integer().primaryKey(),
+    event_id: text().$type<EventV2.ID>().notNull().unique(),
+    aggregate_id: text().notNull(),
+    seq: integer().notNull(),
+  },
+  (table) => [index("event_sync_index_aggregate_seq_idx").on(table.aggregate_id, table.seq)],
+)
 
 export const WorkspaceSyncCursorTable = sqliteTable(
   "workspace_sync_cursor",
@@ -79,6 +150,7 @@ export const EventDedupeTable = sqliteTable(
     event_id: text().$type<EventV2.ID>().notNull(),
     type: text().notNull(),
     data_hash: text().notNull(),
+    source_data: text({ mode: "json" }).$type<Record<string, unknown>>(),
     compacted_at: integer().notNull(),
   },
   (table) => [
@@ -86,6 +158,20 @@ export const EventDedupeTable = sqliteTable(
     uniqueIndex("event_dedupe_event_idx").on(table.event_id),
   ],
 )
+
+export const EventCompactionReceiptTable = sqliteTable("event_compaction_receipt", {
+  aggregate_id: text()
+    .primaryKey()
+    .references(() => EventSequenceTable.aggregate_id, { onDelete: "cascade" }),
+  snapshot_id: text().notNull(),
+  through_seq: integer().notNull(),
+  codec: text().notNull(),
+  schema_version: integer().notNull(),
+  cursor_seq: integer().notNull(),
+  deleted_count: integer().notNull(),
+  state: text().$type<"running" | "complete">().notNull(),
+  updated_at: integer().notNull(),
+})
 
 export const EventArtifactTable = sqliteTable(
   "event_artifact",

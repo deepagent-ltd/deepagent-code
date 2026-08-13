@@ -26,6 +26,7 @@ import {
 import { NamedError } from "@deepagent-code/core/util/error"
 import { APICallError, convertToModelMessages, LoadAPIKeyError, type ModelMessage, type UIMessage } from "ai"
 import { Database } from "@deepagent-code/core/database/database"
+import { FilePartArtifact } from "@deepagent-code/core/file-part-artifact"
 import { NotFoundError } from "@/storage/storage"
 import { and } from "drizzle-orm"
 import { desc } from "drizzle-orm"
@@ -270,12 +271,18 @@ export const normalizeFormat = (data: Record<string, unknown>): Record<string, u
   return Exit.isSuccess(decoded) ? { ...data, format: decoded.value } : data
 }
 
-const info = (row: typeof MessageTable.$inferSelect) =>
-  ({
-    ...normalizeFormat(row.data as Record<string, unknown>),
-    id: row.id,
-    sessionID: row.session_id,
-  }) as Info
+const info = (row: typeof MessageTable.$inferSelect) => {
+  const data = normalizeFormat(row.data as Record<string, unknown>)
+  const summary =
+    data.summary && typeof data.summary === "object" && !Array.isArray(data.summary)
+      ? (data.summary as Record<string, unknown>)
+      : undefined
+  const normalized =
+    data.role === "user" && summary
+      ? { ...data, summary: { ...summary, diffs: Array.isArray(summary.diffs) ? summary.diffs : [] } }
+      : data
+  return { ...normalized, id: row.id, sessionID: row.session_id } as Info
+}
 
 export function stripActivityProgress<T extends Info>(message: T): T {
   if (message.role !== "assistant" || !message.activityProgress) return message
@@ -543,6 +550,7 @@ export const toModelMessagesEffect = Effect.fnUntraced(function* (
   const result: UIMessage[] = []
   const toolNames = new Set<string>()
   const reasoningReplay = reasoningReplayCapability(model)
+  const database = Option.getOrUndefined(yield* Effect.serviceOption(Database.Service))
   // Track media from tool results that need to be injected as user messages
   // for providers that don't support that media type in tool results.
   //
@@ -624,9 +632,22 @@ export const toModelMessagesEffect = Effect.fnUntraced(function* (
               text: `[Attached ${part.mime}: ${part.filename ?? "file"}]`,
             })
           } else {
+            if (part.artifact && !database)
+              return yield* Effect.die(
+                new FilePartArtifact.IntegrityError({
+                  artifactID: part.artifact.id,
+                  message: "File-part artifact materialization requires the durable database authority",
+                }),
+              )
+            const body = part.artifact
+              ? yield* FilePartArtifact.read({
+                  aggregateID: part.sessionID,
+                  descriptor: FilePartArtifact.Descriptor.make(part.artifact),
+                }).pipe(Effect.provideService(Database.Service, database!))
+              : undefined
             userMessage.parts.push({
               type: "file",
-              url: part.url,
+              url: body ? `data:${part.mime};base64,${body.toString("base64")}` : part.url,
               mediaType: part.mime,
               filename: part.filename,
             })

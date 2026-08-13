@@ -1,0 +1,839 @@
+export * as FilePartArtifact from "./file-part-artifact"
+
+import { createHash } from "node:crypto"
+import { isDeepStrictEqual } from "node:util"
+import { and, asc, desc, eq, gt, isNull, sql } from "drizzle-orm"
+import { Effect, Schema } from "effect"
+import { Database } from "./database/database"
+import type { EventV2 } from "./event"
+import {
+  FilePartArtifactBindingTable,
+  FilePartArtifactChunkTable,
+  FilePartArtifactImportTable,
+  FilePartArtifactTable,
+} from "./file-part-artifact.sql"
+import { NonNegativeInt } from "./schema"
+import { Hash } from "./util/hash"
+import { EventTable } from "./event/sql"
+import { PartTable } from "./session/sql"
+
+export const CHUNK_BYTES = 262_144 as const
+export const MAX_BYTES = 32 * 1024 * 1024
+export const MAX_CHUNKS = MAX_BYTES / CHUNK_BYTES
+export const CODEC = "file-part.v1" as const
+
+const Digest = Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/))
+const EventID = Schema.String.check(Schema.isStartsWith("evt_"))
+export const ID = Schema.String.check(Schema.isPattern(/^fpart_[a-f0-9]{64}$/))
+export type ID = typeof ID.Type
+
+export const Descriptor = Schema.Struct({
+  codec: Schema.Literal(CODEC),
+  id: ID,
+  hash: Digest,
+  bytes: NonNegativeInt.check(Schema.isLessThanOrEqualTo(MAX_BYTES)),
+  chunkBytes: Schema.Literal(CHUNK_BYTES),
+  chunks: NonNegativeInt.check(Schema.isGreaterThanOrEqualTo(1), Schema.isLessThanOrEqualTo(MAX_CHUNKS)),
+})
+  .annotate({ identifier: "FilePartArtifact.Descriptor" })
+export type Descriptor = Schema.Schema.Type<typeof Descriptor>
+
+export const Metadata = Schema.Struct({
+  eventID: EventID,
+  aggregateID: Schema.String,
+  seq: NonNegativeInt,
+  originalDataHash: Digest,
+  canonicalDataHash: Digest,
+  canonicalData: Schema.Record(Schema.String, Schema.Unknown),
+  descriptor: Descriptor,
+  chunkHashes: Schema.Array(Digest).check(Schema.isMaxLength(MAX_CHUNKS)),
+})
+  .annotate({ identifier: "FilePartArtifact.Metadata" })
+export type Metadata = Schema.Schema.Type<typeof Metadata>
+
+export class IntegrityError extends Schema.TaggedErrorClass<IntegrityError>()("FilePartArtifact.IntegrityError", {
+  artifactID: Schema.String,
+  message: Schema.String,
+}) {}
+
+export type Prepared = {
+  readonly descriptor: Descriptor
+  readonly chunks: readonly Buffer[]
+}
+
+type Binding = {
+  readonly descriptor: Descriptor
+  readonly aggregateID: string
+  readonly partID: string
+}
+
+const descriptorFromData = (type: string, data: Record<string, unknown>): Binding | undefined => {
+  if (type !== "message.part.updated") return undefined
+  const part = data.part
+  if (!part || typeof part !== "object" || Array.isArray(part)) return undefined
+  const value = part as Record<string, unknown>
+  if (value.type !== "file" || !Schema.is(Descriptor)(value.artifact)) return undefined
+  if (
+    value.url !== `artifact:${value.artifact.id}` ||
+    data.sessionID !== value.sessionID ||
+    typeof value.id !== "string" ||
+    !value.id.startsWith("prt")
+  )
+    return undefined
+  return { descriptor: value.artifact, aggregateID: String(data.sessionID), partID: value.id }
+}
+
+const fail = (artifactID: string, message: string) =>
+  Effect.die(new IntegrityError({ artifactID, message }))
+
+export function prepare(type: string, data: Record<string, unknown>, encodedBytes: number, limitBytes: number) {
+  if (type !== "message.part.updated") return { data, artifacts: [] as Prepared[] }
+  const part = data.part
+  if (!part || typeof part !== "object" || Array.isArray(part)) return { data, artifacts: [] as Prepared[] }
+  const value = part as Record<string, unknown>
+  if (value.type !== "file" || typeof value.url !== "string") return { data, artifacts: [] as Prepared[] }
+  const match = /^data:([^;,]*);base64,([A-Za-z0-9+/]*={0,2})$/.exec(value.url)
+  if (!match) return { data, artifacts: [] as Prepared[] }
+  const body = Buffer.from(match[2]!, "base64")
+  if (body.toString("base64").replace(/=+$/, "") !== match[2]!.replace(/=+$/, ""))
+    return { data, artifacts: [] as Prepared[] }
+  if (body.byteLength > MAX_BYTES)
+    throw new IntegrityError({
+      artifactID: "pending",
+      message: `File part body is ${body.byteLength} bytes; limit is ${MAX_BYTES} bytes`,
+    })
+  if (encodedBytes <= limitBytes && body.byteLength <= CHUNK_BYTES) return { data, artifacts: [] as Prepared[] }
+  const hash = Hash.sha256(body)
+  const descriptor = Descriptor.make({
+    codec: CODEC,
+    id: ID.make(`fpart_${hash}`),
+    hash,
+    bytes: body.byteLength,
+    chunkBytes: CHUNK_BYTES,
+    chunks: Math.max(1, Math.ceil(body.byteLength / CHUNK_BYTES)),
+  })
+  return {
+    data: {
+      ...data,
+      part: { ...value, url: `artifact:${descriptor.id}`, artifact: descriptor },
+    },
+    artifacts: [
+      {
+        descriptor,
+        chunks: Array.from({ length: descriptor.chunks }, (_, index) =>
+          Buffer.from(body.subarray(index * CHUNK_BYTES, (index + 1) * CHUNK_BYTES)),
+        ),
+      },
+    ],
+  }
+}
+
+export function put(db: Database.Interface["db"], prepared: Prepared, now = Date.now()) {
+  return Effect.gen(function* () {
+    yield* validate(prepared.descriptor, prepared.chunks)
+    const existing = yield* db
+      .select()
+      .from(FilePartArtifactTable)
+      .where(eq(FilePartArtifactTable.artifact_id, prepared.descriptor.id))
+      .get()
+      .pipe(Effect.orDie)
+    if (existing) {
+      if (
+        existing.body_hash !== prepared.descriptor.hash ||
+        existing.body_bytes !== prepared.descriptor.bytes ||
+        existing.chunk_bytes !== prepared.descriptor.chunkBytes ||
+        existing.chunk_count !== prepared.descriptor.chunks ||
+        existing.codec_version !== 1 ||
+        !existing.complete
+      )
+        return yield* fail(prepared.descriptor.id, "Artifact identity is bound to different metadata")
+      return
+    }
+    yield* db
+      .insert(FilePartArtifactTable)
+      .values({
+        artifact_id: prepared.descriptor.id,
+        body_hash: prepared.descriptor.hash,
+        body_bytes: prepared.descriptor.bytes,
+        chunk_bytes: prepared.descriptor.chunkBytes,
+        chunk_count: prepared.descriptor.chunks,
+        codec_version: 1,
+        complete: true,
+        created_at: now,
+      })
+      .run()
+      .pipe(Effect.orDie)
+    yield* Effect.forEach(
+      prepared.chunks,
+      (chunk, index) =>
+        db
+          .insert(FilePartArtifactChunkTable)
+          .values({ artifact_id: prepared.descriptor.id, chunk_index: index, data: chunk, chunk_hash: Hash.sha256(chunk) })
+          .run()
+          .pipe(Effect.orDie),
+      { discard: true },
+    )
+  })
+}
+
+export function requireAvailable(db: Database.Interface["db"], descriptor: Descriptor) {
+  return Effect.gen(function* () {
+    const row = yield* db
+      .select({
+        hash: FilePartArtifactTable.body_hash,
+        bytes: FilePartArtifactTable.body_bytes,
+        chunkBytes: FilePartArtifactTable.chunk_bytes,
+        chunks: FilePartArtifactTable.chunk_count,
+        complete: FilePartArtifactTable.complete,
+      })
+      .from(FilePartArtifactTable)
+      .where(eq(FilePartArtifactTable.artifact_id, descriptor.id))
+      .get()
+      .pipe(Effect.orDie)
+    if (
+      !row ||
+      row.hash !== descriptor.hash ||
+      row.bytes !== descriptor.bytes ||
+      row.chunkBytes !== descriptor.chunkBytes ||
+      row.chunks !== descriptor.chunks ||
+      !row.complete
+    )
+      return yield* fail(descriptor.id, "Artifact body is missing or does not match its descriptor")
+  })
+}
+
+export function bind(
+  db: Database.Interface["db"],
+  input: {
+    readonly eventID: EventV2.ID
+    readonly aggregateID: string
+    readonly seq: number
+    readonly type: string
+    readonly data: Record<string, unknown>
+    readonly originalData?: Record<string, unknown>
+    readonly requireImport?: boolean
+    readonly now?: number
+  },
+) {
+  return Effect.gen(function* () {
+    const binding = descriptorFromData(input.type, input.data)
+    if (!binding) return
+    if (binding.aggregateID !== input.aggregateID)
+      return yield* fail(binding.descriptor.id, "Artifact aggregate does not match its event")
+    yield* requireAvailable(db, binding.descriptor)
+    const canonicalDataHash = Hash.sha256(JSON.stringify(input.data))
+    const imported = input.requireImport
+      ? yield* db
+          .select()
+          .from(FilePartArtifactImportTable)
+          .where(eq(FilePartArtifactImportTable.event_id, input.eventID))
+          .get()
+          .pipe(Effect.orDie)
+      : undefined
+    if (
+      input.requireImport &&
+      (!imported ||
+        imported.aggregate_id !== input.aggregateID ||
+        imported.seq !== input.seq ||
+        imported.artifact_id !== binding.descriptor.id ||
+        imported.canonical_data_hash !== canonicalDataHash ||
+        !isDeepStrictEqual(imported.canonical_data, input.data))
+    )
+      return yield* fail(binding.descriptor.id, "Replayed artifact has no exact staged import receipt")
+    const originalDataHash = imported?.original_data_hash ?? Hash.sha256(JSON.stringify(input.originalData ?? input.data))
+    const existing = yield* db
+      .select()
+      .from(FilePartArtifactBindingTable)
+      .where(eq(FilePartArtifactBindingTable.event_id, input.eventID))
+      .get()
+      .pipe(Effect.orDie)
+    if (existing) {
+      if (
+        existing.aggregate_id !== input.aggregateID ||
+        existing.seq !== input.seq ||
+        existing.part_id !== binding.partID ||
+        existing.artifact_id !== binding.descriptor.id ||
+        existing.original_data_hash !== originalDataHash ||
+        existing.canonical_data_hash !== canonicalDataHash ||
+        !isDeepStrictEqual(existing.canonical_data, input.data)
+      )
+        return yield* fail(binding.descriptor.id, "Event identity is bound to a different artifact")
+      return
+    }
+    yield* db
+      .insert(FilePartArtifactBindingTable)
+      .values({
+        event_id: input.eventID,
+        aggregate_id: input.aggregateID,
+        seq: input.seq,
+        part_id: binding.partID,
+        artifact_id: binding.descriptor.id,
+        original_data_hash: originalDataHash,
+        canonical_data_hash: canonicalDataHash,
+        canonical_data: input.data,
+        created_at: input.now ?? Date.now(),
+      })
+      .run()
+      .pipe(Effect.orDie)
+    if (input.requireImport)
+      yield* db
+        .delete(FilePartArtifactImportTable)
+        .where(eq(FilePartArtifactImportTable.event_id, input.eventID))
+        .run()
+        .pipe(Effect.orDie)
+  })
+}
+
+export function metadata(
+  db: Database.Interface["db"],
+  input: { readonly eventID: EventV2.ID; readonly aggregateID: string; readonly seq: number; readonly artifactID: ID },
+) {
+  return Effect.gen(function* () {
+    const row = yield* db
+      .select({
+        originalDataHash: FilePartArtifactBindingTable.original_data_hash,
+        canonicalDataHash: FilePartArtifactBindingTable.canonical_data_hash,
+        canonicalData: FilePartArtifactBindingTable.canonical_data,
+        hash: FilePartArtifactTable.body_hash,
+        bytes: FilePartArtifactTable.body_bytes,
+        chunkBytes: FilePartArtifactTable.chunk_bytes,
+        chunks: FilePartArtifactTable.chunk_count,
+        complete: FilePartArtifactTable.complete,
+      })
+      .from(FilePartArtifactBindingTable)
+      .innerJoin(
+        FilePartArtifactTable,
+        eq(FilePartArtifactTable.artifact_id, FilePartArtifactBindingTable.artifact_id),
+      )
+      .where(
+        and(
+          eq(FilePartArtifactBindingTable.event_id, input.eventID),
+          eq(FilePartArtifactBindingTable.aggregate_id, input.aggregateID),
+          eq(FilePartArtifactBindingTable.seq, input.seq),
+          eq(FilePartArtifactBindingTable.artifact_id, input.artifactID),
+        ),
+      )
+      .get()
+      .pipe(Effect.orDie)
+    if (!row || !row.complete)
+      return yield* fail(input.artifactID, "Artifact metadata is not bound to a complete requested event")
+    const chunks = yield* db
+      .select({ index: FilePartArtifactChunkTable.chunk_index, hash: FilePartArtifactChunkTable.chunk_hash })
+      .from(FilePartArtifactChunkTable)
+      .where(eq(FilePartArtifactChunkTable.artifact_id, input.artifactID))
+      .orderBy(asc(FilePartArtifactChunkTable.chunk_index))
+      .all()
+      .pipe(Effect.orDie)
+    const descriptor = Descriptor.make({
+      codec: CODEC,
+      id: input.artifactID,
+      hash: row.hash,
+      bytes: row.bytes,
+      chunkBytes: CHUNK_BYTES,
+      chunks: row.chunks,
+    })
+    if (chunks.length !== descriptor.chunks || chunks.some((chunk, index) => chunk.index !== index))
+      return yield* fail(input.artifactID, "Artifact chunk metadata is incomplete")
+    return Metadata.make({
+      eventID: input.eventID,
+      aggregateID: input.aggregateID,
+      seq: input.seq,
+      originalDataHash: row.originalDataHash,
+      canonicalDataHash: row.canonicalDataHash,
+      canonicalData: row.canonicalData,
+      descriptor,
+      chunkHashes: chunks.map((chunk) => chunk.hash),
+    })
+  })
+}
+
+export function chunk(
+  db: Database.Interface["db"],
+  input: { readonly artifactID: ID; readonly index: number; readonly expectedHash: string },
+) {
+  return Effect.gen(function* () {
+    const row = yield* db
+      .select({ data: FilePartArtifactChunkTable.data, hash: FilePartArtifactChunkTable.chunk_hash })
+      .from(FilePartArtifactChunkTable)
+      .where(
+        and(
+          eq(FilePartArtifactChunkTable.artifact_id, input.artifactID),
+          eq(FilePartArtifactChunkTable.chunk_index, input.index),
+        ),
+      )
+      .get()
+      .pipe(Effect.orDie)
+    if (!row || row.hash !== input.expectedHash || Hash.sha256(row.data) !== row.hash)
+      return yield* fail(input.artifactID, `Artifact chunk ${input.index} is missing or corrupt`)
+    return row.data
+  })
+}
+
+export function has(descriptor: Descriptor) {
+  return Database.Service.use(({ db }) =>
+    db
+      .select({ id: FilePartArtifactTable.artifact_id })
+      .from(FilePartArtifactTable)
+      .where(
+        and(
+          eq(FilePartArtifactTable.artifact_id, descriptor.id),
+          eq(FilePartArtifactTable.body_hash, descriptor.hash),
+          eq(FilePartArtifactTable.body_bytes, descriptor.bytes),
+          eq(FilePartArtifactTable.chunk_count, descriptor.chunks),
+          eq(FilePartArtifactTable.complete, true),
+        ),
+      )
+      .get()
+      .pipe(Effect.orDie, Effect.map(Boolean)),
+  )
+}
+
+export function importChunks(input: { readonly descriptor: Descriptor; readonly chunks: readonly Uint8Array[] }) {
+  return Database.Service.use(({ db }) =>
+    db.transaction(
+      () => put(db, { descriptor: input.descriptor, chunks: input.chunks.map((chunk) => Buffer.from(chunk)) }),
+      { behavior: "immediate" },
+    ).pipe(Effect.orDie),
+  )
+}
+
+export function importChunk(input: {
+  readonly metadata: Metadata
+  readonly index: number
+  readonly hash: string
+  readonly data: Uint8Array
+}) {
+  return Database.Service.use(({ db }) =>
+    db
+      .transaction(
+        () =>
+          Effect.gen(function* () {
+            const descriptor = input.metadata.descriptor
+            if (
+              input.index < 0 ||
+              input.index >= descriptor.chunks ||
+              input.metadata.chunkHashes[input.index] !== input.hash ||
+              Hash.sha256(Buffer.from(input.data)) !== input.hash
+            )
+              return yield* fail(descriptor.id, `Artifact import chunk ${input.index} does not match metadata`)
+            const existing = yield* db
+              .select()
+              .from(FilePartArtifactTable)
+              .where(eq(FilePartArtifactTable.artifact_id, descriptor.id))
+              .get()
+              .pipe(Effect.orDie)
+            if (
+              existing &&
+              (existing.body_hash !== descriptor.hash ||
+                existing.body_bytes !== descriptor.bytes ||
+                existing.chunk_bytes !== descriptor.chunkBytes ||
+                existing.chunk_count !== descriptor.chunks ||
+                existing.codec_version !== 1)
+            )
+              return yield* fail(descriptor.id, "Artifact identity is bound to different import metadata")
+            if (!existing)
+              yield* db
+                .insert(FilePartArtifactTable)
+                .values({
+                  artifact_id: descriptor.id,
+                  body_hash: descriptor.hash,
+                  body_bytes: descriptor.bytes,
+                  chunk_bytes: descriptor.chunkBytes,
+                  chunk_count: descriptor.chunks,
+                  codec_version: 1,
+                  complete: false,
+                  created_at: Date.now(),
+                })
+                .run()
+                .pipe(Effect.orDie)
+            const storedChunk = yield* db
+              .select({ hash: FilePartArtifactChunkTable.chunk_hash, data: FilePartArtifactChunkTable.data })
+              .from(FilePartArtifactChunkTable)
+              .where(
+                and(
+                  eq(FilePartArtifactChunkTable.artifact_id, descriptor.id),
+                  eq(FilePartArtifactChunkTable.chunk_index, input.index),
+                ),
+              )
+              .get()
+              .pipe(Effect.orDie)
+            if (storedChunk && (storedChunk.hash !== input.hash || !storedChunk.data.equals(Buffer.from(input.data))))
+              return yield* fail(descriptor.id, `Artifact import chunk ${input.index} conflicts with durable CAS`)
+            if (!storedChunk)
+              yield* db
+                .insert(FilePartArtifactChunkTable)
+                .values({ artifact_id: descriptor.id, chunk_index: input.index, data: Buffer.from(input.data), chunk_hash: input.hash })
+                .run()
+                .pipe(Effect.orDie)
+            const chunks = yield* db
+              .select({ data: FilePartArtifactChunkTable.data })
+              .from(FilePartArtifactChunkTable)
+              .where(eq(FilePartArtifactChunkTable.artifact_id, descriptor.id))
+              .orderBy(asc(FilePartArtifactChunkTable.chunk_index))
+              .all()
+              .pipe(Effect.orDie)
+            if (chunks.length !== descriptor.chunks) return false
+            yield* validate(descriptor, chunks.map((chunk) => chunk.data))
+            yield* db
+              .update(FilePartArtifactTable)
+              .set({ complete: true })
+              .where(eq(FilePartArtifactTable.artifact_id, descriptor.id))
+              .run()
+              .pipe(Effect.orDie)
+            yield* stage(db, input.metadata)
+            return true
+          }),
+        { behavior: "immediate" },
+      )
+      .pipe(Effect.orDie),
+  )
+}
+
+export function stageImport(metadata: Metadata) {
+  return Database.Service.use(({ db }) =>
+    db.transaction(() => stage(db, metadata), { behavior: "immediate" }).pipe(Effect.orDie),
+  )
+}
+
+export function read(input: { readonly aggregateID: string; readonly descriptor: Descriptor }) {
+  return Database.Service.use(({ db }) =>
+    Effect.gen(function* () {
+      const binding = yield* db
+        .select({ id: FilePartArtifactBindingTable.event_id })
+        .from(FilePartArtifactBindingTable)
+        .where(
+          and(
+            eq(FilePartArtifactBindingTable.aggregate_id, input.aggregateID),
+            eq(FilePartArtifactBindingTable.artifact_id, input.descriptor.id),
+          ),
+        )
+        .get()
+        .pipe(Effect.orDie)
+      if (!binding) return yield* fail(input.descriptor.id, "Artifact is not bound to the requested aggregate")
+      const chunks = yield* db
+        .select({ data: FilePartArtifactChunkTable.data, hash: FilePartArtifactChunkTable.chunk_hash })
+        .from(FilePartArtifactChunkTable)
+        .where(eq(FilePartArtifactChunkTable.artifact_id, input.descriptor.id))
+        .orderBy(asc(FilePartArtifactChunkTable.chunk_index))
+        .all()
+        .pipe(Effect.orDie)
+      if (chunks.some((chunk) => Hash.sha256(chunk.data) !== chunk.hash))
+        return yield* fail(input.descriptor.id, "Artifact chunk hash is corrupt")
+      yield* validate(input.descriptor, chunks.map((chunk) => chunk.data))
+      return Buffer.concat(chunks.map((chunk) => chunk.data), input.descriptor.bytes)
+    }),
+  )
+}
+
+export function descriptor(data: Record<string, unknown>) {
+  return descriptorFromData("message.part.updated", data)?.descriptor
+}
+
+export function snapshotRef(
+  db: Database.Interface["db"],
+  input: { readonly aggregateID: string; readonly partID: string; readonly descriptor: Descriptor },
+) {
+  return Effect.gen(function* () {
+    const binding = yield* db
+      .select({
+        eventID: FilePartArtifactBindingTable.event_id,
+        seq: FilePartArtifactBindingTable.seq,
+      })
+      .from(FilePartArtifactBindingTable)
+      .where(
+        and(
+          eq(FilePartArtifactBindingTable.aggregate_id, input.aggregateID),
+          eq(FilePartArtifactBindingTable.part_id, input.partID),
+          eq(FilePartArtifactBindingTable.artifact_id, input.descriptor.id),
+        ),
+      )
+      .orderBy(desc(FilePartArtifactBindingTable.seq))
+      .limit(1)
+      .get()
+      .pipe(Effect.orDie)
+    if (!binding) return yield* fail(input.descriptor.id, "Snapshot part has no durable artifact binding")
+    const result = yield* metadata(db, {
+      eventID: binding.eventID,
+      aggregateID: input.aggregateID,
+      seq: binding.seq,
+      artifactID: input.descriptor.id,
+    })
+    if (JSON.stringify(result.descriptor) !== JSON.stringify(input.descriptor))
+      return yield* fail(input.descriptor.id, "Snapshot part descriptor diverges from its durable binding")
+    return result
+  })
+}
+
+export function bindSnapshotRef(input: { readonly metadata: Metadata; readonly partID: string }) {
+  return Database.Service.use(({ db }) =>
+    db
+      .transaction(
+        () =>
+          Effect.gen(function* () {
+            if (!input.partID.startsWith("prt"))
+              return yield* fail(input.metadata.descriptor.id, "Snapshot artifact part identity is invalid")
+            yield* stage(db, input.metadata)
+            const existing = yield* db
+              .select()
+              .from(FilePartArtifactBindingTable)
+              .where(eq(FilePartArtifactBindingTable.event_id, input.metadata.eventID as EventV2.ID))
+              .get()
+              .pipe(Effect.orDie)
+            if (existing) {
+              if (
+                existing.aggregate_id !== input.metadata.aggregateID ||
+                existing.seq !== input.metadata.seq ||
+                existing.part_id !== input.partID ||
+                existing.artifact_id !== input.metadata.descriptor.id ||
+                existing.original_data_hash !== input.metadata.originalDataHash ||
+                existing.canonical_data_hash !== input.metadata.canonicalDataHash ||
+                !isDeepStrictEqual(existing.canonical_data, input.metadata.canonicalData)
+              )
+                return yield* fail(input.metadata.descriptor.id, "Snapshot artifact binding conflicts with durable CAS")
+            } else {
+              yield* db
+                .insert(FilePartArtifactBindingTable)
+                .values({
+                  event_id: input.metadata.eventID as EventV2.ID,
+                  aggregate_id: input.metadata.aggregateID,
+                  seq: input.metadata.seq,
+                  part_id: input.partID,
+                  artifact_id: input.metadata.descriptor.id,
+                  original_data_hash: input.metadata.originalDataHash,
+                  canonical_data_hash: input.metadata.canonicalDataHash,
+                  canonical_data: input.metadata.canonicalData,
+                  created_at: Date.now(),
+                })
+                .run()
+                .pipe(Effect.orDie)
+            }
+            yield* db
+              .delete(FilePartArtifactImportTable)
+              .where(eq(FilePartArtifactImportTable.event_id, input.metadata.eventID as EventV2.ID))
+              .run()
+              .pipe(Effect.orDie)
+          }),
+        { behavior: "immediate" },
+      )
+      .pipe(Effect.orDie),
+  )
+}
+
+export function canonicalizeLegacy(
+  db: Database.Interface["db"],
+  input?: { readonly afterID?: EventV2.ID; readonly limit?: number; readonly now?: number },
+) {
+  const limit = Math.min(Math.max(input?.limit ?? 1, 1), 1)
+  return db
+    .transaction(
+      () =>
+        Effect.gen(function* () {
+          const rows = yield* db
+            .select({
+              id: EventTable.id,
+              aggregateID: EventTable.aggregate_id,
+              seq: EventTable.seq,
+              bytes: sql<number>`length(CAST(${EventTable.data} AS BLOB))`,
+            })
+            .from(EventTable)
+            .leftJoin(FilePartArtifactBindingTable, eq(FilePartArtifactBindingTable.event_id, EventTable.id))
+            .where(
+              and(
+                eq(EventTable.type, "message.part.updated.1"),
+                sql`length(CAST(${EventTable.data} AS BLOB)) > ${4 * 1024 * 1024}`,
+                sql`json_valid(${EventTable.data})`,
+                sql`json_type(${EventTable.data}, '$.part.url') = 'text'`,
+                sql`json_extract(${EventTable.data}, '$.part.url') LIKE 'data:%;base64,%'`,
+                isNull(FilePartArtifactBindingTable.event_id),
+                input?.afterID ? gt(EventTable.id, input.afterID) : undefined,
+              ),
+            )
+            .orderBy(asc(EventTable.id))
+            .limit(limit)
+            .all()
+            .pipe(Effect.orDie)
+          const oversized = rows.find((row) => row.bytes > MAX_BYTES)
+          if (oversized)
+            return yield* fail(
+              "pending",
+              `Legacy file-part event ${oversized.id} is ${oversized.bytes} bytes; limit is ${MAX_BYTES} bytes`,
+            )
+          yield* Effect.forEach(
+            rows,
+            (row) =>
+              Effect.gen(function* () {
+                const source = yield* db
+                  .select({ data: EventTable.data })
+                  .from(EventTable)
+                  .where(eq(EventTable.id, row.id))
+                  .get()
+                  .pipe(Effect.orDie)
+                if (!source)
+                  return yield* fail("pending", `Legacy file-part event ${row.id} disappeared during maintenance`)
+                const prepared = prepare("message.part.updated", source.data, row.bytes, 4 * 1024 * 1024)
+                if (prepared.artifacts.length !== 1)
+                  return yield* fail("pending", `Legacy file-part event ${row.id} cannot be externalized canonically`)
+                yield* put(db, prepared.artifacts[0]!, input?.now)
+                yield* bind(db, {
+                  eventID: row.id,
+                  aggregateID: row.aggregateID,
+                  seq: row.seq,
+                  type: "message.part.updated",
+                  data: prepared.data,
+                  originalData: source.data,
+                  now: input?.now,
+                })
+                const originalBinding = descriptorFromData("message.part.updated", prepared.data)
+                const originalPart = source.data.part
+                const canonicalPart = prepared.data.part
+                if (
+                  !originalBinding ||
+                  !originalPart ||
+                  typeof originalPart !== "object" ||
+                  Array.isArray(originalPart) ||
+                  !canonicalPart ||
+                  typeof canonicalPart !== "object" ||
+                  Array.isArray(canonicalPart)
+                )
+                  return yield* fail(prepared.artifacts[0]!.descriptor.id, `Legacy file-part event ${row.id} has invalid part data`)
+                const projected = yield* db
+                  .select()
+                  .from(PartTable)
+                  .where(eq(PartTable.id, originalBinding.partID as typeof PartTable.$inferSelect.id))
+                  .get()
+                  .pipe(Effect.orDie)
+                if (!projected)
+                  return yield* fail(
+                    prepared.artifacts[0]!.descriptor.id,
+                    `Legacy file-part event ${row.id} has no corresponding projected part`,
+                  )
+                const sourcePart = originalPart as Record<string, unknown>
+                if (projected.session_id !== row.aggregateID || projected.message_id !== sourcePart.messageID)
+                  return yield* fail(prepared.artifacts[0]!.descriptor.id, `Legacy file-part event ${row.id} has a conflicting projected part`)
+                const sourceData = Object.fromEntries(
+                  Object.entries(sourcePart).filter(([key]) => key !== "id" && key !== "sessionID" && key !== "messageID"),
+                )
+                if (!isDeepStrictEqual(projected.data, sourceData))
+                  return yield* fail(
+                    prepared.artifacts[0]!.descriptor.id,
+                    `Legacy file-part event ${row.id} no longer matches its projected part`,
+                  )
+                const canonicalData = Object.fromEntries(
+                  Object.entries(canonicalPart as Record<string, unknown>).filter(
+                    ([key]) => key !== "id" && key !== "sessionID" && key !== "messageID",
+                  ),
+                ) as typeof PartTable.$inferInsert.data
+                yield* db
+                  .update(PartTable)
+                  .set({ data: canonicalData })
+                  .where(eq(PartTable.id, originalBinding.partID as typeof PartTable.$inferSelect.id))
+                  .run()
+                  .pipe(Effect.orDie)
+              }),
+            { discard: true },
+          )
+          return { processed: rows.length, next: rows.at(-1)?.id }
+        }),
+      { behavior: "immediate" },
+    )
+    .pipe(Effect.orDie)
+}
+
+function validate(descriptor: Descriptor, chunks: readonly Uint8Array[]) {
+  return Effect.gen(function* () {
+    if (
+      descriptor.codec !== CODEC ||
+      descriptor.id !== `fpart_${descriptor.hash}` ||
+      descriptor.chunkBytes !== CHUNK_BYTES ||
+      descriptor.bytes > MAX_BYTES ||
+      descriptor.chunks !== Math.max(1, Math.ceil(descriptor.bytes / CHUNK_BYTES)) ||
+      chunks.length !== descriptor.chunks
+    )
+      return yield* fail(descriptor.id, "Artifact descriptor is not canonical")
+    const digest = createHash("sha256")
+    let bytes = 0
+    for (const [index, chunk] of chunks.entries()) {
+      const expected = index === chunks.length - 1 ? descriptor.bytes - index * CHUNK_BYTES : CHUNK_BYTES
+      if (chunk.byteLength !== expected) return yield* fail(descriptor.id, `Artifact chunk ${index} has an invalid length`)
+      bytes += chunk.byteLength
+      digest.update(chunk)
+    }
+    if (bytes !== descriptor.bytes || digest.digest("hex") !== descriptor.hash)
+      return yield* fail(descriptor.id, "Artifact body hash does not match its descriptor")
+  })
+}
+
+function stage(db: Database.Interface["db"], metadata: Metadata) {
+  return Effect.gen(function* () {
+    yield* requireAvailable(db, metadata.descriptor)
+    const chunks = yield* db
+      .select({ index: FilePartArtifactChunkTable.chunk_index, hash: FilePartArtifactChunkTable.chunk_hash, data: FilePartArtifactChunkTable.data })
+      .from(FilePartArtifactChunkTable)
+      .where(eq(FilePartArtifactChunkTable.artifact_id, metadata.descriptor.id))
+      .orderBy(asc(FilePartArtifactChunkTable.chunk_index))
+      .all()
+      .pipe(Effect.orDie)
+    if (
+      metadata.chunkHashes.length !== metadata.descriptor.chunks ||
+      chunks.length !== metadata.descriptor.chunks ||
+      chunks.some(
+        (chunk, index) =>
+          chunk.index !== index ||
+          chunk.hash !== metadata.chunkHashes[index] ||
+          Hash.sha256(chunk.data) !== chunk.hash,
+      )
+    )
+      return yield* fail(metadata.descriptor.id, "Artifact import metadata does not match durable chunks")
+    yield* validate(metadata.descriptor, chunks.map((chunk) => chunk.data))
+    const existing = yield* db
+      .select()
+      .from(FilePartArtifactImportTable)
+      .where(eq(FilePartArtifactImportTable.event_id, metadata.eventID as EventV2.ID))
+      .get()
+      .pipe(Effect.orDie)
+    if (existing) {
+      if (
+        existing.aggregate_id !== metadata.aggregateID ||
+        existing.seq !== metadata.seq ||
+        existing.artifact_id !== metadata.descriptor.id ||
+        existing.original_data_hash !== metadata.originalDataHash ||
+        existing.canonical_data_hash !== metadata.canonicalDataHash ||
+        !isDeepStrictEqual(existing.canonical_data, metadata.canonicalData)
+      )
+        return yield* fail(metadata.descriptor.id, "Artifact import receipt conflicts with durable CAS")
+      return
+    }
+    const binding = yield* db
+      .select()
+      .from(FilePartArtifactBindingTable)
+      .where(eq(FilePartArtifactBindingTable.event_id, metadata.eventID as EventV2.ID))
+      .get()
+      .pipe(Effect.orDie)
+    if (binding) {
+      if (
+        binding.aggregate_id !== metadata.aggregateID ||
+        binding.seq !== metadata.seq ||
+        binding.artifact_id !== metadata.descriptor.id ||
+        binding.original_data_hash !== metadata.originalDataHash ||
+        binding.canonical_data_hash !== metadata.canonicalDataHash ||
+        !isDeepStrictEqual(binding.canonical_data, metadata.canonicalData)
+      )
+        return yield* fail(metadata.descriptor.id, "Artifact binding conflicts with import metadata")
+      return
+    }
+    yield* db
+      .insert(FilePartArtifactImportTable)
+      .values({
+        event_id: metadata.eventID as EventV2.ID,
+        aggregate_id: metadata.aggregateID,
+        seq: metadata.seq,
+        artifact_id: metadata.descriptor.id,
+        original_data_hash: metadata.originalDataHash,
+        canonical_data_hash: metadata.canonicalDataHash,
+        canonical_data: metadata.canonicalData,
+        created_at: Date.now(),
+      })
+      .run()
+      .pipe(Effect.orDie)
+  })
+}

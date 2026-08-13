@@ -1,5 +1,12 @@
 import { parseCommentNote, readCommentMetadata } from "@/utils/comment-note"
-import { AssistantMessage, Part, SessionStatus, SnapshotFileDiff, UserMessage } from "@deepagent-code/sdk/v2"
+import {
+  AssistantMessage,
+  Part,
+  SessionStatus,
+  SnapshotDiffArtifactDescriptor,
+  SnapshotFileDiff,
+  UserMessage,
+} from "@deepagent-code/sdk/v2"
 import { groupParts, PartGroup, renderable } from "@deepagent-code/ui/message-part"
 import { Data, Equal } from "effect"
 
@@ -37,7 +44,7 @@ export type TimelineRowMap = {
   }
   Thinking: { userMessageID: string; reasoningHeading?: string }
   Retry: { userMessageID: string }
-  DiffSummary: { userMessageID: string; diffs: SummaryDiff[] }
+  DiffSummary: { userMessageID: string; diffs: SummaryDiff[]; artifact?: SnapshotDiffArtifactDescriptor }
   Error: { userMessageID: string; text: string }
   BottomSpacer: {}
 }
@@ -75,6 +82,7 @@ export namespace TimelineRow {
   export class DiffSummary extends Data.TaggedClass("DiffSummary")<{
     userMessageID: string
     diffs: SummaryDiff[]
+    artifact?: SnapshotDiffArtifactDescriptor
   }> {}
   export class Error extends Data.TaggedClass("Error")<{
     userMessageID: string
@@ -255,11 +263,13 @@ export namespace Timeline {
         return result
       }, [])
       .reverse()
-    if (diffs.length > 0 && (status === "idle" || !isActive)) {
+    const artifact = userMessage.summary?.diffArtifact
+    if ((diffs.length > 0 || artifact) && (status === "idle" || !isActive)) {
       rows.push(
         new TimelineRow.DiffSummary({
           userMessageID: userMessage.id,
           diffs,
+          ...(artifact ? { artifact } : {}),
         }),
       )
     }

@@ -37,6 +37,20 @@ export const layer = Layer.effect(
     yield* db.run("PRAGMA wal_autocheckpoint = 200")
     yield* DatabaseMigration.apply(db)
 
+    const capabilities = yield* db.all<{
+      capability: string
+      minimum_reader_protocol: number
+      minimum_writer_protocol: number
+    }>("SELECT capability, minimum_reader_protocol, minimum_writer_protocol FROM database_capability")
+    for (const capability of capabilities) {
+      if (capability.minimum_reader_protocol > 2 || capability.minimum_writer_protocol > 2)
+        return yield* Effect.die(
+          new Error(
+            `Database capability ${capability.capability} requires reader protocol ${capability.minimum_reader_protocol} and writer protocol ${capability.minimum_writer_protocol}; this runtime supports protocol 2`,
+          ),
+        )
+    }
+
     return { db }
   }).pipe(Effect.orDie),
 )

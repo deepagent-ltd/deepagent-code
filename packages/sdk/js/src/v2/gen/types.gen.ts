@@ -568,6 +568,14 @@ export type FilePart = {
   mime: string
   filename?: string
   url: string
+  artifact?: {
+    codec: "file-part.v1"
+    id: string
+    hash: string
+    bytes: number
+    chunkBytes: 262144
+    chunks: number
+  }
   source?: FilePartSource
 }
 
@@ -5431,6 +5439,28 @@ export type SessionLegacyProviderResolutionDescriptor =
       sourceWorldStateBaselineStatus: "available" | "missing" | "invalid"
       worldStateBaselineHash?: string
     }
+
+export type FilePartArtifactDescriptor = {
+  codec: "file-part.v1"
+  id: string
+  hash: string
+  bytes: number
+  chunkBytes: 262144
+  chunks: number
+}
+
+export type FilePartArtifactMetadata = {
+  eventID: string
+  aggregateID: string
+  seq: number
+  originalDataHash: string
+  canonicalDataHash: string
+  canonicalData: {
+    [key: string]: unknown
+  }
+  descriptor: FilePartArtifactDescriptor
+  chunkHashes: Array<string>
+}
 
 export type LocationInfo = {
   directory: string
@@ -13574,6 +13604,112 @@ export type SessionDiffResponses = {
 
 export type SessionDiffResponse = SessionDiffResponses[keyof SessionDiffResponses]
 
+export type SessionDiffArtifactManifestData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query: {
+    directory?: string
+    workspace?: string
+    messageID: string
+    artifactID: string
+    cursor?: string
+    limit?: string
+  }
+  url: "/session/{sessionID}/diff-artifact/manifest"
+}
+
+export type SessionDiffArtifactManifestErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionDiffArtifactManifestError =
+  SessionDiffArtifactManifestErrors[keyof SessionDiffArtifactManifestErrors]
+
+export type SessionDiffArtifactManifestResponses = {
+  /**
+   * Bounded Session diff artifact manifest page
+   */
+  200: {
+    artifact: {
+      id: string
+      hash: string
+      codec: "legacy-message-diff.v1" | "legacy-message-diff.v2"
+      fileCount: number
+    }
+    files: Array<{
+      file: string
+      additions: number
+      deletions: number
+      status?: "added" | "deleted" | "modified"
+      patchBytes: number
+      patchHash: string
+    }>
+    nextCursor?: string
+    complete: boolean
+  }
+}
+
+export type SessionDiffArtifactManifestResponse =
+  SessionDiffArtifactManifestResponses[keyof SessionDiffArtifactManifestResponses]
+
+export type SessionDiffArtifactFileData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query: {
+    directory?: string
+    workspace?: string
+    messageID: string
+    artifactID: string
+    path: string
+    maxBytes?: string
+  }
+  url: "/session/{sessionID}/diff-artifact/file"
+}
+
+export type SessionDiffArtifactFileErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionDiffArtifactFileError = SessionDiffArtifactFileErrors[keyof SessionDiffArtifactFileErrors]
+
+export type SessionDiffArtifactFileResponses = {
+  /**
+   * Bounded Session diff artifact file patch
+   */
+  200: {
+    artifactID: string
+    file: string
+    additions: number
+    deletions: number
+    status?: "added" | "deleted" | "modified"
+    patch: string
+    patchBytes: number
+    returnedBytes: number
+    patchHash: string
+    truncated: boolean
+  }
+}
+
+export type SessionDiffArtifactFileResponse = SessionDiffArtifactFileResponses[keyof SessionDiffArtifactFileResponses]
+
 export type SessionMessagesData = {
   body?: never
   path: {
@@ -15280,22 +15416,228 @@ export type SyncHistoryListResponses = {
    */
   200: {
     version: 1
-    items: Array<{
-      kind: "event"
-      id: string
-      aggregate_id: string
-      seq: number
-      type: string
-      data: {
-        [key: string]: unknown
-      }
-    }>
+    items: Array<
+      | {
+          kind: "event"
+          id: string
+          aggregate_id: string
+          seq: number
+          type: string
+          data: {
+            [key: string]: unknown
+          }
+        }
+      | {
+          kind: "resync_required"
+          snapshot: {
+            snapshotID: string
+            aggregateID: string
+            throughSeq: number
+            syncSeq: number
+            codec: string
+            schemaVersion: number
+            snapshotHash: string
+            body: {
+              [key: string]: unknown
+            }
+            ownerID?: string
+            createdAt: number
+          }
+        }
+    >
     nextCursor: string
     complete: boolean
   }
 }
 
 export type SyncHistoryListResponse = SyncHistoryListResponses[keyof SyncHistoryListResponses]
+
+export type SyncArtifactFileMetadataData = {
+  body?: {
+    eventID: string
+    aggregateID: string
+    seq: number
+    artifactID: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/sync/artifact/file/metadata"
+}
+
+export type SyncArtifactFileMetadataErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * Not found
+   */
+  404: NotFoundError
+}
+
+export type SyncArtifactFileMetadataError = SyncArtifactFileMetadataErrors[keyof SyncArtifactFileMetadataErrors]
+
+export type SyncArtifactFileMetadataResponses = {
+  /**
+   * Scoped file-part artifact metadata
+   */
+  200: FilePartArtifactMetadata
+}
+
+export type SyncArtifactFileMetadataResponse =
+  SyncArtifactFileMetadataResponses[keyof SyncArtifactFileMetadataResponses]
+
+export type SyncArtifactFileChunkData = {
+  body?: {
+    eventID: string
+    aggregateID: string
+    seq: number
+    artifactID: string
+    index: number
+    hash: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/sync/artifact/file/chunk"
+}
+
+export type SyncArtifactFileChunkErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * Not found
+   */
+  404: NotFoundError
+}
+
+export type SyncArtifactFileChunkError = SyncArtifactFileChunkErrors[keyof SyncArtifactFileChunkErrors]
+
+export type SyncArtifactFileChunkResponses = {
+  /**
+   * One verified file-part artifact chunk
+   */
+  200: {
+    artifactID: string
+    index: number
+    hash: string
+    data: string
+  }
+}
+
+export type SyncArtifactFileChunkResponse = SyncArtifactFileChunkResponses[keyof SyncArtifactFileChunkResponses]
+
+export type SyncSnapshotRowsData = {
+  body?: {
+    aggregateID: string
+    snapshotID: string
+    snapshotHash: string
+    after?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    limit?: number
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/sync/snapshot/rows"
+}
+
+export type SyncSnapshotRowsErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * Not found
+   */
+  404: NotFoundError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type SyncSnapshotRowsError = SyncSnapshotRowsErrors[keyof SyncSnapshotRowsErrors]
+
+export type SyncSnapshotRowsResponses = {
+  /**
+   * One bounded scoped snapshot row page
+   */
+  200: {
+    rows: Array<{
+      snapshotID: string
+      rowIndex: number
+      tableName: string
+      rowKey: string
+      rowHash: string
+      rowBytes: number
+      chunkCount: number
+      chainHash: string
+    }>
+    complete: boolean
+  }
+}
+
+export type SyncSnapshotRowsResponse = SyncSnapshotRowsResponses[keyof SyncSnapshotRowsResponses]
+
+export type SyncSnapshotChunksData = {
+  body?: {
+    aggregateID: string
+    snapshotID: string
+    snapshotHash: string
+    rowHash: string
+    after?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    limit?: number
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/sync/snapshot/chunks"
+}
+
+export type SyncSnapshotChunksErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * Not found
+   */
+  404: NotFoundError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type SyncSnapshotChunksError = SyncSnapshotChunksErrors[keyof SyncSnapshotChunksErrors]
+
+export type SyncSnapshotChunksResponses = {
+  /**
+   * One bounded scoped snapshot chunk page
+   */
+  200: {
+    chunks: Array<{
+      rowHash: string
+      chunkIndex: number
+      data: string
+      chunkHash: string
+    }>
+    complete: boolean
+  }
+}
+
+export type SyncSnapshotChunksResponse = SyncSnapshotChunksResponses[keyof SyncSnapshotChunksResponses]
 
 export type TuiAppendPromptData = {
   body?: {

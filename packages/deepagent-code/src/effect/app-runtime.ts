@@ -29,6 +29,7 @@ import { SessionProcessor } from "@/session/processor"
 import { SessionCompaction } from "@/session/compaction"
 import { SessionRevert } from "@/session/revert"
 import { SessionSummary } from "@/session/summary"
+import { SessionProjection } from "@/session/session-projector"
 import { SessionPrompt } from "@/session/prompt"
 import { GoalManager } from "@/session/goal-manager"
 import { Instruction } from "@/session/instruction"
@@ -82,6 +83,7 @@ export const AppLayer = Layer.mergeAll(
   BackgroundJob.defaultLayer,
   RuntimeFlags.defaultLayer,
   EventV2Bridge.defaultLayer,
+  SessionProjection.defaultLayer,
   SessionRunState.defaultLayer,
   SessionProcessor.defaultLayer,
   SessionCompaction.defaultLayer,
