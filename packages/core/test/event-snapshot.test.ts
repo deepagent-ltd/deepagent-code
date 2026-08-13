@@ -281,6 +281,7 @@ describe("EventV2 canonical projection snapshots", () => {
         messageID,
         label: "latest",
       })
+      latest.original_data_hash = Hash.sha256(JSON.stringify(sourceEvents[1]!.data))
       yield* db.insert(EventArtifactTable).values([old, latest]).run().pipe(Effect.orDie)
       yield* db
         .insert(EventArtifactChunkTable)
@@ -365,6 +366,28 @@ describe("EventV2 canonical projection snapshots", () => {
         ).toBe(latest.artifact_id)
         expect(JSON.stringify(imported)).not.toContain('"patch"')
       }).pipe(Effect.provide(Layer.fresh(Layer.mergeAll(targetDatabase, targetEvents, targetProjector))))
+
+      let compacted = { deleted: 0, complete: false }
+      while (!compacted.complete)
+        compacted = yield* events.compact({ aggregateID: sessionID, throughSeq: EventV2.Cursor.make(1), limit: 1 })
+      yield* events.replay({
+        id: sourceEvents[1]!.id,
+        aggregateID: sessionID,
+        seq: sourceEvents[1]!.seq,
+        type: sourceEvents[1]!.type,
+        data: sourceEvents[1]!.data,
+      })
+      const divergent = yield* events.replay({
+        id: sourceEvents[1]!.id,
+        aggregateID: sessionID,
+        seq: sourceEvents[1]!.seq,
+        type: sourceEvents[1]!.type,
+        data: {
+          ...sourceEvents[1]!.data,
+          info: { ...(sourceEvents[1]!.data.info as Record<string, unknown>), system: "divergent" },
+        },
+      }).pipe(Effect.catchDefect(Effect.succeed))
+      expect(divergent).toBeInstanceOf(EventV2.InvalidSyncEventError)
     }),
   )
 })

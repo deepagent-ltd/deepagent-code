@@ -287,6 +287,23 @@ function isLegacyFileArtifactRetry(
   return FilePartArtifact.isLegacySyntheticCanonical(binding.canonicalData, encoded)
 }
 
+function isCompactedLegacyFileArtifactRetry(
+  type: string,
+  original: Record<string, unknown>,
+  encoded: Record<string, unknown>,
+  binding: { readonly originalDataHash: string; readonly canonicalData: Record<string, unknown> },
+) {
+  if (!FilePartArtifact.matchesDataHash(binding.originalDataHash, original)) return false
+  const prepared = FilePartArtifact.prepare(
+    type,
+    original,
+    Buffer.byteLength(JSON.stringify(original)),
+    MAX_ENCODED_PAYLOAD_BYTES,
+  )
+  if (prepared.artifacts.length !== 1 || !isDeepStrictEqual(prepared.data, encoded)) return false
+  return FilePartArtifact.isLegacySyntheticCanonical(binding.canonicalData, encoded)
+}
+
 // Synchronized events cross a JSON boundary, so their data schemas must encode and decode without services.
 const syncCodec = (definition: Definition) => definition.data as Schema.Codec<unknown, unknown, never, never>
 
@@ -584,7 +601,16 @@ export const layerWith = (layerOptions?: LayerOptions) =>
                                   .where(eq(EventArtifactTable.event_id, stored.id))
                                   .get()
                                   .pipe(Effect.orDie)
-                              : undefined
+                              : yield* db
+                                  .select({
+                                    originalDataHash: EventArtifactTable.original_data_hash,
+                                    canonicalData: EventArtifactTable.canonical_data,
+                                    codecVersion: EventArtifactTable.codec_version,
+                                  })
+                                  .from(EventArtifactTable)
+                                  .where(eq(EventArtifactTable.event_id, event.id))
+                                  .get()
+                                  .pipe(Effect.orDie)
                             const fileArtifact = stored
                               ? yield* db
                                   .select({
@@ -595,7 +621,15 @@ export const layerWith = (layerOptions?: LayerOptions) =>
                                   .where(eq(FilePartArtifactBindingTable.event_id, stored.id))
                                   .get()
                                   .pipe(Effect.orDie)
-                              : undefined
+                              : yield* db
+                                  .select({
+                                    originalDataHash: FilePartArtifactBindingTable.original_data_hash,
+                                    canonicalData: FilePartArtifactBindingTable.canonical_data,
+                                  })
+                                  .from(FilePartArtifactBindingTable)
+                                  .where(eq(FilePartArtifactBindingTable.event_id, event.id))
+                                  .get()
+                                  .pipe(Effect.orDie)
                             const dedupe = !stored
                               ? yield* db
                                   .select()
@@ -630,7 +664,19 @@ export const layerWith = (layerOptions?: LayerOptions) =>
                                         : hashJson(encoded))))) ||
                                 (dedupe?.event_id === event.id &&
                                   dedupe.type === versionedType(definition.type, sync.version) &&
-                                  dedupe.data_hash === hashJson(encoded)))
+                                  (dedupe.data_hash === hashJson(encoded) ||
+                                    (artifact &&
+                                      artifact.originalDataHash ===
+                                        (artifact.codecVersion >= 2
+                                          ? Hash.sha256(JSON.stringify(encoded))
+                                          : hashJson(encoded))) ||
+                                    (fileArtifact &&
+                                      isCompactedLegacyFileArtifactRetry(
+                                        definition.type,
+                                        original,
+                                        encoded,
+                                        fileArtifact,
+                                      )))))
                             ) {
                               if (input.ownerID && row?.ownerID == null) {
                                 for (const guard of commitGuards) {
@@ -1680,43 +1726,92 @@ export const layerWith = (layerOptions?: LayerOptions) =>
                   receipt.codec !== active.codec || receipt.schema_version !== active.schema_version))
                   return yield* Effect.die(new InvalidSyncEventError({ type: "snapshot", message: `Compaction receipt conflicts with active snapshot ${active.snapshot_id}` }))
                 const cursor = receipt?.cursor_seq ?? -1
-                const candidates = yield* db
-                  .select({
-                    row: EventTable,
-                    canonicalData: sql<Record<string, unknown> | null>`COALESCE(${FilePartArtifactBindingTable.canonical_data}, ${EventArtifactTable.canonical_data})`,
-                  })
-                  .from(EventTable)
-                  .leftJoin(EventArtifactTable, eq(EventArtifactTable.event_id, EventTable.id))
-                  .leftJoin(FilePartArtifactBindingTable, eq(FilePartArtifactBindingTable.event_id, EventTable.id))
-                  .where(and(eq(EventTable.aggregate_id, input.aggregateID), gt(EventTable.seq, cursor), lte(EventTable.seq, input.throughSeq)))
-                  .orderBy(asc(EventTable.seq))
-                  .limit(Math.min(Math.max(input.limit ?? 100, 1), 100) + 1)
-                  .all()
-                  .pipe(Effect.orDie)
-                const rows = candidates.slice(0, Math.min(Math.max(input.limit ?? 100, 1), 100))
-                const compactable = rows.filter((item) => codec.rebuildEventTypes.has(item.row.type))
+                const limit = Math.min(Math.max(input.limit ?? 100, 1), 100)
+                const candidates = yield* db.all<{
+                  id: ID
+                  aggregateID: string
+                  seq: number
+                  type: string
+                  effectiveBytes: number
+                  cumulativeBytes: number
+                  canonicalData: string | null
+                }>(sql`
+                  WITH candidate AS (
+                    SELECT
+                      event.id,
+                      event.aggregate_id AS aggregateID,
+                      event.seq,
+                      event.type,
+                      COALESCE(file_binding.canonical_data, artifact.canonical_data) AS canonicalData,
+                      length(CAST(COALESCE(file_binding.canonical_data, artifact.canonical_data, event.data) AS BLOB)) AS effectiveBytes
+                    FROM event
+                    LEFT JOIN event_artifact artifact ON artifact.event_id = event.id
+                    LEFT JOIN file_part_artifact_binding file_binding ON file_binding.event_id = event.id
+                    WHERE event.aggregate_id = ${input.aggregateID}
+                      AND event.seq > ${cursor}
+                      AND event.seq <= ${input.throughSeq}
+                    ORDER BY event.seq ASC
+                    LIMIT ${limit + 1}
+                  )
+                  SELECT *, sum(effectiveBytes) OVER (
+                    ORDER BY seq ASC ROWS UNBOUNDED PRECEDING
+                  ) AS cumulativeBytes
+                  FROM candidate
+                  ORDER BY seq ASC
+                `).pipe(Effect.orDie)
+                const rows = candidates
+                  .slice(0, limit)
+                  .filter((item, index) => index === 0 || item.cumulativeBytes <= AGGREGATE_READ_BATCH_BYTES)
+                if (rows[0] && rows[0].effectiveBytes > AGGREGATE_READ_BATCH_BYTES)
+                  return yield* Effect.die(new EncodedPayloadTooLargeError({
+                    type: rows[0].type,
+                    encodedBytes: rows[0].effectiveBytes,
+                    limitBytes: AGGREGATE_READ_BATCH_BYTES,
+                    message: `Compaction source ${rows[0].id} has no bounded canonical projection`,
+                  }))
+                const compactable = rows.filter((item) => codec.rebuildEventTypes.has(item.type))
+                const rawIDs = compactable.filter((item) => item.canonicalData === null).map((item) => item.id)
+                const rawRows = rawIDs.length > 0
+                  ? yield* db
+                      .select({ id: EventTable.id, data: EventTable.data })
+                      .from(EventTable)
+                      .where(inArray(EventTable.id, rawIDs))
+                      .all()
+                      .pipe(Effect.orDie)
+                  : []
+                const rawByID = new Map(rawRows.map((row) => [row.id, row.data]))
                 yield* Effect.forEach(compactable, (item) => Effect.gen(function* () {
-                  const dataHash = hashJson(item.canonicalData ?? item.row.data)
+                  const dataHash = item.canonicalData
+                    ? hashJson(Schema.decodeUnknownSync(Schema.UnknownFromJsonString)(item.canonicalData))
+                    : rawByID.has(item.id)
+                      ? hashJson(rawByID.get(item.id))
+                      : yield* Effect.die(new InvalidSyncEventError({
+                          type: "snapshot",
+                          message: `Compaction source ${item.id} disappeared`,
+                        }))
                   const existing = yield* db.select().from(EventDedupeTable).where(or(
-                    and(eq(EventDedupeTable.aggregate_id, item.row.aggregate_id), eq(EventDedupeTable.seq, item.row.seq)),
-                    eq(EventDedupeTable.event_id, item.row.id),
+                    and(eq(EventDedupeTable.aggregate_id, item.aggregateID), eq(EventDedupeTable.seq, item.seq)),
+                    eq(EventDedupeTable.event_id, item.id),
                   )).get().pipe(Effect.orDie)
-                  if (existing && (existing.aggregate_id !== item.row.aggregate_id || existing.seq !== item.row.seq ||
-                    existing.event_id !== item.row.id || existing.type !== item.row.type || existing.data_hash !== dataHash))
-                    return yield* Effect.die(new InvalidSyncEventError({ type: "snapshot", message: `Compaction dedupe conflicts at ${item.row.aggregate_id}:${item.row.seq}` }))
-                  if (!existing) yield* db.insert(EventDedupeTable).values({
-                    aggregate_id: item.row.aggregate_id, seq: item.row.seq, event_id: item.row.id, type: item.row.type,
-                    data_hash: dataHash, source_data: item.row.data, compacted_at: input.now ?? Date.now(),
-                  }).run().pipe(Effect.orDie)
+                  if (existing && (existing.aggregate_id !== item.aggregateID || existing.seq !== item.seq ||
+                    existing.event_id !== item.id || existing.type !== item.type || existing.data_hash !== dataHash))
+                    return yield* Effect.die(new InvalidSyncEventError({ type: "snapshot", message: `Compaction dedupe conflicts at ${item.aggregateID}:${item.seq}` }))
+                  if (!existing) yield* db.run(sql`
+                    INSERT INTO event_dedupe (
+                      aggregate_id, seq, event_id, type, data_hash, source_data, compacted_at
+                    )
+                    SELECT aggregate_id, seq, id, type, ${dataHash}, data, ${input.now ?? Date.now()}
+                    FROM event WHERE id = ${item.id}
+                  `).pipe(Effect.orDie)
                 }), { discard: true })
                 if (compactable.length > 0) yield* db.delete(EventTable)
-                  .where(inArray(EventTable.id, compactable.map((item) => item.row.id))).run().pipe(Effect.orDie)
+                  .where(inArray(EventTable.id, compactable.map((item) => item.id))).run().pipe(Effect.orDie)
                 if (compactable.length > 0) yield* db.update(EventDedupeTable)
                   .set({ source_data: null })
-                  .where(inArray(EventDedupeTable.event_id, compactable.map((item) => item.row.id)))
+                  .where(inArray(EventDedupeTable.event_id, compactable.map((item) => item.id)))
                   .run()
                   .pipe(Effect.orDie)
-                const nextCursor = rows.at(-1)?.row.seq ?? cursor
+                const nextCursor = rows.at(-1)?.seq ?? cursor
                 const complete = rows.length === 0 || (nextCursor >= input.throughSeq && candidates.length <= rows.length)
                 yield* db.insert(EventCompactionReceiptTable).values({ aggregate_id: input.aggregateID,
                   snapshot_id: active.snapshot_id, through_seq: input.throughSeq, codec: active.codec,
