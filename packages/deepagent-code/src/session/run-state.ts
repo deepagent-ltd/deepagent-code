@@ -8,6 +8,7 @@ import { SessionID } from "./schema"
 import { SessionStatus } from "./status"
 import type { Image } from "@/image/image"
 import type { SessionPromptIntent } from "./prompt-intent"
+import { DeepAgentLearningLifecycleTrigger } from "@deepagent-code/core/deepagent/learning-lifecycle-trigger"
 
 type RunError = Image.Error | SessionPromptIntent.Error
 
@@ -75,6 +76,14 @@ export const layer = Layer.effect(
       const next = Runner.make<SessionV1.WithParts, RunError>(data.scope, {
         onIdle: Effect.gen(function* () {
           data.runners.delete(sessionID)
+          yield* Effect.promise(() =>
+            DeepAgentLearningLifecycleTrigger.notify({
+              trigger: "idle",
+              boundaryKey: `session-idle:${sessionID}`,
+              sessionID,
+              match: "session",
+            }),
+          ).pipe(Effect.ignore)
           yield* status.set(sessionID, { type: "idle" })
         }),
         onBusy: status.set(sessionID, { type: "busy" }),

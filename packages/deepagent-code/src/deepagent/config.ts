@@ -42,6 +42,7 @@ export function gatewayConfig(config?: ConfigInfo): AgentGatewayConfig {
     enabled: true,
     agentMode: agentMode(options.agentMode) ?? envAgentMode() ?? "high",
     selfLearning: selfLearning(options.selfLearning) ?? envSelfLearning() ?? "manual",
+    durableLearning: bool(options.durableLearning) ?? envBool("DEEPAGENT_DURABLE_LEARNING"),
     // Private runtime state is not configurable outside the canonical/test storage root.
     baseDir: Global.Path.agent.data,
     runsDir: Global.Path.agent.runs,
