@@ -290,11 +290,17 @@ export const syncHandlers = HttpApiBuilder.group(InstanceHttpApi, "sync", (handl
           service: "event_sync_backfill_required",
           message: "Event sync index backfill is incomplete; run bounded maintenance before reading history",
         })
-      const envelope = "version" in ctx.payload ? ctx.payload : { version: 1 as const, known: ctx.payload }
-      const known = envelope.known ?? {}
+      const versioned = "version" in ctx.payload
+      const known = versioned ? ctx.payload.known ?? {} : ctx.payload
       if (Object.keys(known).length > SyncHistoryLimits.legacyKnownAggregates)
         return yield* new HttpApiError.BadRequest({})
-      const after = historyCursor(workspaceID, authority.generation, authority.secret, authority.seq, typeof envelope.cursor === "string" ? envelope.cursor : undefined)
+      const after = historyCursor(
+        workspaceID,
+        authority.generation,
+        authority.secret,
+        authority.seq,
+        versioned && typeof ctx.payload.cursor === "string" ? ctx.payload.cursor : undefined,
+      )
       if (after === undefined)
         return yield* new ConflictError({
           message: "Sync history cursor is invalid, stale, or belongs to another workspace",
@@ -321,11 +327,13 @@ export const syncHandlers = HttpApiBuilder.group(InstanceHttpApi, "sync", (handl
           and(
             eq(SessionTable.workspace_id, workspaceID),
             gt(EventSnapshotTable.sync_seq, after),
-            sql`COALESCE((
-              SELECT CAST(value AS INTEGER)
-              FROM json_each(${knownJson})
-              WHERE key = ${EventSnapshotTable.aggregate_id}
-            ), -1) < ${EventSnapshotTable.through_seq}`,
+            !versioned
+              ? sql`COALESCE((
+                  SELECT CAST(value AS INTEGER)
+                  FROM json_each(${knownJson})
+                  WHERE key = ${EventSnapshotTable.aggregate_id}
+                ), -1) < ${EventSnapshotTable.through_seq}`
+              : undefined,
           ),
         )
         .orderBy(asc(EventSnapshotTable.sync_seq))

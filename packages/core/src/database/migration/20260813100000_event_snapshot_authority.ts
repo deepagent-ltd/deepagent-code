@@ -79,13 +79,13 @@ export default {
           snapshot_hash TEXT NOT NULL CHECK (length(snapshot_hash) = 64),
           body TEXT NOT NULL CHECK (json_valid(body)),
           owner_id TEXT,
-          created_at INTEGER NOT NULL,
-          UNIQUE (aggregate_id, through_seq)
+          created_at INTEGER NOT NULL
         )
       `)
       yield* tx.run(
         "CREATE INDEX event_snapshot_aggregate_created_idx ON event_snapshot(aggregate_id, created_at)",
       )
+      yield* tx.run("CREATE INDEX event_snapshot_aggregate_seq_idx ON event_snapshot(aggregate_id, through_seq)")
       yield* tx.run(`
         CREATE TABLE event_dedupe (
           aggregate_id TEXT NOT NULL REFERENCES event_sequence(aggregate_id) ON DELETE CASCADE,

@@ -16,15 +16,16 @@ import {
 import { FilePartArtifact } from "@deepagent-code/core/file-part-artifact"
 import { FilePartArtifactBindingTable } from "@deepagent-code/core/file-part-artifact.sql"
 import { SessionProjector } from "@deepagent-code/core/session/projector"
-import { MessageTable, SessionTable } from "@deepagent-code/core/session/sql"
+import { MessageTable, PartTable, SessionTable } from "@deepagent-code/core/session/sql"
 import { Hash } from "@deepagent-code/core/util/hash"
 import { Cause, Effect, Exit, Layer, Option, Schema } from "effect"
-import { and, asc, eq, sql } from "drizzle-orm"
+import { and, asc, eq, gt, sql } from "drizzle-orm"
+import { isDeepStrictEqual } from "node:util"
 import path from "node:path"
 import { parseArgs } from "node:util"
 import { SessionDiffArtifact } from "@/session/diff-artifact"
 import { SessionDiffMigrationReceiptTable } from "@/session/diff-artifact.sql"
-import { SessionID } from "@/session/schema"
+import { PartID, SessionID } from "@/session/schema"
 
 const args = parseArgs({
   args: process.argv.slice(2),
@@ -228,6 +229,98 @@ const program = Effect.gen(function* () {
     },
   )
 
+  const validateSnapshotFileAuthority = Effect.fn("Bug407010ReleaseGate.validateSnapshotFileAuthority")(
+    function* (input: { sessionID: SessionID; snapshotID: string }) {
+      let after = ""
+      let validated = 0
+      while (true) {
+        const bindings = yield* db
+          .select({
+            eventID: FilePartArtifactBindingTable.event_id,
+            seq: FilePartArtifactBindingTable.seq,
+            partID: FilePartArtifactBindingTable.part_id,
+            artifactID: FilePartArtifactBindingTable.artifact_id,
+          })
+          .from(FilePartArtifactBindingTable)
+          .where(and(
+            eq(FilePartArtifactBindingTable.aggregate_id, input.sessionID),
+            after ? gt(FilePartArtifactBindingTable.event_id, after as EventV2.ID) : undefined,
+          ))
+          .orderBy(asc(FilePartArtifactBindingTable.event_id))
+          .limit(100)
+          .all()
+          .pipe(Effect.orDie)
+        if (bindings.length === 0) break
+        for (const binding of bindings) {
+          const part = yield* db.select().from(PartTable).where(eq(PartTable.id, PartID.make(binding.partID))).get().pipe(Effect.orDie)
+          if (!part || part.session_id !== input.sessionID)
+            return yield* Effect.die(new Error(`File artifact ${binding.eventID} has no matching projected Part`))
+          const descriptor = FilePartArtifact.descriptor({
+            sessionID: input.sessionID,
+            part: { id: part.id, messageID: part.message_id, sessionID: input.sessionID, ...part.data },
+          })
+          if (!descriptor || descriptor.id !== binding.artifactID)
+            return yield* Effect.die(new Error(`File artifact ${binding.eventID} has a divergent Part descriptor`))
+          const expected = yield* FilePartArtifact.metadata(db, {
+            eventID: binding.eventID,
+            aggregateID: input.sessionID,
+            seq: binding.seq,
+            artifactID: descriptor.id,
+          })
+          for (const [index, hash] of expected.chunkHashes.entries())
+            yield* FilePartArtifact.chunk(db, { artifactID: descriptor.id, index, expectedHash: hash })
+          const partRow = yield* decodeSnapshotRow(input.snapshotID, "part", binding.partID)
+          const artifactRow = yield* decodeSnapshotRow(
+            input.snapshotID,
+            "file_part_artifact_binding",
+            binding.partID,
+          )
+          if (!record(partRow) || !isDeepStrictEqual(partRow.data, part.data))
+            return yield* Effect.die(new Error(`Snapshot ${input.snapshotID} has a stale Part ${binding.partID}`))
+          if (
+            !record(artifactRow) ||
+            artifactRow.partID !== binding.partID ||
+            !Schema.is(FilePartArtifact.Metadata)(artifactRow.metadata) ||
+            !isDeepStrictEqual(artifactRow.metadata, expected)
+          )
+            return yield* Effect.die(
+              new Error(`Snapshot ${input.snapshotID} has stale FilePart authority for ${binding.partID}`),
+            )
+          if (JSON.stringify(partRow).includes('"data:'))
+            return yield* Effect.die(new Error(`Snapshot ${input.snapshotID} retained inline FilePart data`))
+          validated += 1
+        }
+        after = bindings.at(-1)!.eventID
+      }
+      return { fileArtifacts: validated }
+    },
+  )
+
+  const decodeSnapshotRow = Effect.fn("Bug407010ReleaseGate.decodeSnapshotRow")(
+    function* (snapshotID: string, tableName: string, rowKey: string) {
+      const row = yield* db.select().from(EventSnapshotRowTable).where(and(
+        eq(EventSnapshotRowTable.snapshot_id, snapshotID),
+        eq(EventSnapshotRowTable.table_name, tableName),
+        eq(EventSnapshotRowTable.row_key, rowKey),
+      )).get().pipe(Effect.orDie)
+      if (!row) return yield* Effect.die(new Error(`Snapshot ${snapshotID} is missing ${tableName}:${rowKey}`))
+      const chunks = yield* db.select().from(EventSnapshotChunkTable)
+        .where(eq(EventSnapshotChunkTable.row_hash, row.row_hash))
+        .orderBy(asc(EventSnapshotChunkTable.chunk_index)).all().pipe(Effect.orDie)
+      if (
+        chunks.length !== row.chunk_count ||
+        chunks.some((chunk, index) => chunk.chunk_index !== index || Hash.sha256(chunk.data) !== chunk.chunk_hash)
+      )
+        return yield* Effect.die(new Error(`Snapshot ${snapshotID} has invalid chunks for ${tableName}:${rowKey}`))
+      const body = Buffer.concat(chunks.map((chunk) => chunk.data))
+      if (body.length !== row.row_bytes || Hash.sha256(body) !== row.row_hash)
+        return yield* Effect.die(new Error(`Snapshot ${snapshotID} has an invalid row hash for ${tableName}:${rowKey}`))
+      const decoded = Option.getOrUndefined(Schema.decodeUnknownOption(Schema.UnknownFromJsonString)(body.toString()))
+      if (!record(decoded)) return yield* Effect.die(new Error(`Snapshot ${snapshotID} row ${tableName}:${rowKey} is invalid`))
+      return decoded
+    },
+  )
+
   yield* stage("checkpoint-and-compact", Effect.forEach(checkpointSessions, (sessionID) => Effect.gen(function* () {
     const session = yield* db
       .select({ id: SessionTable.id })
@@ -243,11 +336,8 @@ const program = Effect.gen(function* () {
       .get()
       .pipe(Effect.orDie)
     if (!sequence) return yield* Effect.die(new Error(`Event sequence not found: ${sessionID}`))
-    const current = yield* events.snapshot(sessionID)
-    const snapshot = current?.throughSeq === sequence.seq
-      ? current
-      : yield* Effect.gen(function* () {
-          let attempt = yield* events.prepareCheckpoint!({
+    const snapshot = yield* Effect.gen(function* () {
+      let attempt = yield* events.prepareCheckpoint!({
             aggregateID: sessionID,
             throughSeq: EventV2.Cursor.make(sequence.seq),
             expectedLatest: EventV2.Cursor.make(sequence.seq),
@@ -255,16 +345,19 @@ const program = Effect.gen(function* () {
             schemaVersion: 1,
             ...(sequence.ownerID ? { ownerID: sequence.ownerID } : {}),
           })
-          while (attempt.state === "prepared")
-            attempt = yield* events.stageCheckpoint!({ snapshotID: attempt.snapshotID })
-          if (attempt.state === "complete") {
-            const active = yield* events.snapshot(sessionID)
-            if (active?.snapshotID === attempt.snapshotID) return active
-            return yield* Effect.die(new Error(`Completed snapshot is not active: ${attempt.snapshotID}`))
-          }
-          return yield* events.finalizeCheckpoint!({ snapshotID: attempt.snapshotID })
-        })
-    const authority = yield* validateSnapshotDiffAuthority({ sessionID, snapshotID: snapshot.snapshotID })
+      while (attempt.state === "prepared")
+        attempt = yield* events.stageCheckpoint!({ snapshotID: attempt.snapshotID })
+      if (attempt.state === "complete") {
+        const active = yield* events.snapshot(sessionID)
+        if (active?.snapshotID === attempt.snapshotID) return active
+        return yield* Effect.die(new Error(`Completed snapshot is not active: ${attempt.snapshotID}`))
+      }
+      return yield* events.finalizeCheckpoint!({ snapshotID: attempt.snapshotID })
+    })
+    const authority = {
+      ...(yield* validateSnapshotDiffAuthority({ sessionID, snapshotID: snapshot.snapshotID })),
+      ...(yield* validateSnapshotFileAuthority({ sessionID, snapshotID: snapshot.snapshotID })),
+    }
     let compacted = { deleted: 0, complete: false }
     let deleted = 0
     let batches = 0

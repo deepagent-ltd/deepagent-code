@@ -8,6 +8,7 @@ export default {
       yield* tx.run(`
         CREATE TABLE event_snapshot_row (
           snapshot_id TEXT NOT NULL,
+          aggregate_id TEXT NOT NULL,
           row_index INTEGER NOT NULL CHECK (row_index >= 0),
           table_name TEXT NOT NULL CHECK (length(table_name) > 0),
           row_key TEXT NOT NULL CHECK (length(row_key) > 0),
@@ -19,6 +20,7 @@ export default {
           UNIQUE (snapshot_id, table_name, row_key)
         )
       `)
+      yield* tx.run("CREATE INDEX event_snapshot_row_aggregate_idx ON event_snapshot_row(aggregate_id)")
       yield* tx.run(`
         CREATE TABLE event_snapshot_chunk (
           row_hash TEXT NOT NULL CHECK (length(row_hash) = 64),
@@ -31,7 +33,7 @@ export default {
       yield* tx.run(`
         CREATE TABLE event_snapshot_attempt (
           snapshot_id TEXT NOT NULL PRIMARY KEY,
-          aggregate_id TEXT NOT NULL,
+          aggregate_id TEXT NOT NULL REFERENCES event_sequence(aggregate_id) ON DELETE CASCADE,
           through_seq INTEGER NOT NULL CHECK (through_seq >= 0),
           expected_latest INTEGER NOT NULL CHECK (expected_latest >= 0),
           owner_id TEXT,
@@ -48,6 +50,7 @@ export default {
           updated_at INTEGER NOT NULL
         )
       `)
+      yield* tx.run("CREATE INDEX event_snapshot_attempt_aggregate_idx ON event_snapshot_attempt(aggregate_id)")
       yield* tx.run(`
         CREATE TRIGGER event_snapshot_row_immutable
         BEFORE UPDATE ON event_snapshot_row
@@ -55,6 +58,7 @@ export default {
           SELECT RAISE(ABORT, 'event_snapshot_row_immutable');
         END
       `)
+      yield* tx.run("CREATE INDEX event_snapshot_row_hash_idx ON event_snapshot_row(row_hash)")
       yield* tx.run(`
         CREATE TRIGGER event_snapshot_row_delete_guard
         BEFORE DELETE ON event_snapshot_row
@@ -63,9 +67,32 @@ export default {
             SELECT 1 FROM event_snapshot_attempt attempt
             WHERE attempt.snapshot_id = OLD.snapshot_id
               AND attempt.state != 'prepared'
+              AND EXISTS (
+                SELECT 1 FROM event_sequence sequence
+                WHERE sequence.aggregate_id = attempt.aggregate_id
+              )
           )
         BEGIN
           SELECT RAISE(ABORT, 'event_snapshot_row_active');
+        END
+      `)
+      yield* tx.run(`
+        CREATE TRIGGER event_snapshot_row_chunk_cleanup
+        AFTER DELETE ON event_snapshot_row
+        BEGIN
+          DELETE FROM event_snapshot_chunk
+          WHERE row_hash = OLD.row_hash
+            AND NOT EXISTS (
+              SELECT 1 FROM event_snapshot_row row
+              WHERE row.row_hash = OLD.row_hash
+            );
+        END
+      `)
+      yield* tx.run(`
+        CREATE TRIGGER event_snapshot_aggregate_cleanup
+        AFTER DELETE ON event_sequence
+        BEGIN
+          DELETE FROM event_snapshot_row WHERE aggregate_id = OLD.aggregate_id;
         END
       `)
       yield* tx.run(`

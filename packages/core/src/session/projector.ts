@@ -8,6 +8,7 @@ import { makeGlobalNode } from "../effect/app-node"
 import { EventV2 } from "../event"
 import { EventArtifactTable } from "../event/sql"
 import { FilePartArtifact } from "../file-part-artifact"
+import { FilePartArtifactBindingTable } from "../file-part-artifact.sql"
 import { SessionEvent } from "./event"
 import { SessionV1 } from "../v1/session"
 import { WorkspaceTable } from "../control-plane/workspace.sql"
@@ -318,7 +319,15 @@ export const layer = Layer.effectDiscard(
             .from(SessionTable).where(eq(SessionTable.id, SessionSchema.ID.make(aggregateID))).get().pipe(Effect.orDie)
           const context = yield* db.select({ revision: SessionContextEpochTable.revision })
             .from(SessionContextEpochTable).where(eq(SessionContextEpochTable.session_id, SessionSchema.ID.make(aggregateID))).get().pipe(Effect.orDie)
-          return `${session?.mutationEpoch ?? -1}:${context?.revision ?? -1}`
+          const fileArtifacts = yield* db.select({
+            eventID: FilePartArtifactBindingTable.event_id,
+            canonicalDataHash: FilePartArtifactBindingTable.canonical_data_hash,
+          }).from(FilePartArtifactBindingTable)
+            .where(eq(FilePartArtifactBindingTable.aggregate_id, aggregateID))
+            .orderBy(asc(FilePartArtifactBindingTable.seq)).all().pipe(Effect.orDie)
+          return `${session?.mutationEpoch ?? -1}:${context?.revision ?? -1}:${fileArtifacts
+            .map((artifact) => `${artifact.eventID}:${artifact.canonicalDataHash}`)
+            .join(",")}`
         }),
       next: (aggregateID, cursor) =>
         Effect.gen(function* () {
