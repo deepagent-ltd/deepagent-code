@@ -442,8 +442,6 @@ import type {
   SyncReplayResponses,
   SyncStartErrors,
   SyncStartResponses,
-  SyncStealErrors,
-  SyncStealResponses,
   TextPartInput,
   ToolIdsErrors,
   ToolIdsResponses,
@@ -8466,15 +8464,23 @@ export class History extends HeyApiClient {
   /**
    * List sync events
    *
-   * List a bounded page of sync events. Keys are aggregate IDs the client already knows about, values are the last known sequence ID. Oversized legacy events fail closed until maintenance migration externalizes their inline payload.
+   * List a bounded page with an opaque global cursor. A bounded legacy aggregate map is accepted only for the first upgrade request. Retention-floor crossings return resync_required with a canonical snapshot.
    */
   public list<ThrowOnError extends boolean = false>(
     parameters?: {
       directory?: string
       workspace?: string
-      body?: {
-        [key: string]: number
-      }
+      body?:
+        | {
+            [key: string]: number
+          }
+        | {
+            version: 1
+            cursor?: string
+            known?: {
+              [key: string]: number
+            }
+          }
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -8579,43 +8585,6 @@ export class Sync extends HeyApiClient {
     )
     return (options?.client ?? this.client).post<SyncReplayResponses, SyncReplayErrors, ThrowOnError>({
       url: "/sync/replay",
-      ...options,
-      ...params,
-      headers: {
-        "Content-Type": "application/json",
-        ...options?.headers,
-        ...params.headers,
-      },
-    })
-  }
-
-  /**
-   * Steal session into workspace
-   *
-   * Update a session to belong to the current workspace through the sync event system.
-   */
-  public steal<ThrowOnError extends boolean = false>(
-    parameters: {
-      directory?: string
-      workspace?: string
-      sessionID: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-            { in: "body", key: "sessionID" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).post<SyncStealResponses, SyncStealErrors, ThrowOnError>({
-      url: "/sync/steal",
       ...options,
       ...params,
       headers: {

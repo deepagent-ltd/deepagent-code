@@ -83,5 +83,8 @@ export const migrations = (
     import("./migration/20260812120000_legacy_provider_recovery"),
     import("./migration/20260812130000_legacy_activity_lifecycle_expand"),
     import("./migration/20260812140000_session_diff_manifest"),
+    import("./migration/20260813100000_event_snapshot_authority"),
+    import("./migration/20260813110000_provider_recovery_authority_bridge"),
+    import("./migration/20260813120000_legacy_provider_receipt_supersession"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

@@ -5,7 +5,7 @@ import { AgentV2 } from "@deepagent-code/core/agent"
 import { asc, eq } from "drizzle-orm"
 import { Database } from "@deepagent-code/core/database/database"
 import { EventV2 } from "@deepagent-code/core/event"
-import { EventTable } from "@deepagent-code/core/event/sql"
+import { EventSequenceTable, EventTable } from "@deepagent-code/core/event/sql"
 import { Location } from "@deepagent-code/core/location"
 import { ModelV2 } from "@deepagent-code/core/model"
 import { ProjectV2 } from "@deepagent-code/core/project"
@@ -308,6 +308,280 @@ describe("SessionV2.create", () => {
           [2, EventV2.versionedType(SessionEvent.PromptLifecycle.Promoted.type, 1)],
         ])
       }).pipe(Effect.provide(Layer.fresh(Layer.mergeAll(targetDatabase, targetEvents, targetProjector, targetStore))))
+    }),
+  )
+
+  it.effect("rejects replayed Session identity and placement changes without committing partial state", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const { db } = yield* Database.Service
+      const created = yield* session.create({ location })
+      const event = yield* db
+        .select()
+        .from(EventTable)
+        .where(eq(EventTable.aggregate_id, created.id))
+        .get()
+        .pipe(Effect.orDie)
+      const sequence = yield* db
+        .select()
+        .from(EventSequenceTable)
+        .where(eq(EventSequenceTable.aggregate_id, created.id))
+        .get()
+        .pipe(Effect.orDie)
+      expect(event).toBeDefined()
+      expect(sequence).toBeDefined()
+      const data = event!.data as { sessionID: string; info: Record<string, unknown> }
+      const beforeSession = yield* db
+        .select()
+        .from(SessionTable)
+        .where(eq(SessionTable.id, created.id))
+        .get()
+        .pipe(Effect.orDie)
+      const beforeEvents = yield* db
+        .select()
+        .from(EventTable)
+        .where(eq(EventTable.aggregate_id, created.id))
+        .all()
+        .pipe(Effect.orDie)
+
+      const exactOwnerDefect = yield* events
+        .replay(
+          {
+            id: event!.id,
+            aggregateID: created.id,
+            seq: event!.seq,
+            type: event!.type,
+            data: event!.data,
+          },
+          { ownerID: "wrk_other", strictOwner: true },
+        )
+        .pipe(Effect.catchDefect(Effect.succeed))
+      expect(exactOwnerDefect).toBeInstanceOf(EventV2.InvalidSyncEventError)
+      expect((exactOwnerDefect as EventV2.InvalidSyncEventError).message).toContain("current workspace authority")
+      expect(
+        yield* db
+          .select()
+          .from(EventSequenceTable)
+          .where(eq(EventSequenceTable.aggregate_id, created.id))
+          .get()
+          .pipe(Effect.orDie),
+      ).toEqual(sequence)
+
+      const childOwnerDefect = yield* events
+        .replay(
+          {
+            id: EventV2.ID.make("evt_replay_session_child_owner"),
+            aggregateID: created.id,
+            seq: sequence!.seq + 1,
+            type: EventV2.versionedType(SessionEvent.AgentSwitched.type, 1),
+            data: {
+              sessionID: created.id,
+              timestamp: 1,
+              messageID: "msg_replay_session_child_owner",
+              agent: "build",
+            },
+          },
+          { ownerID: "wrk_other", strictOwner: true },
+        )
+        .pipe(Effect.catchDefect(Effect.succeed))
+      expect(childOwnerDefect).toBeInstanceOf(EventV2.InvalidSyncEventError)
+      expect((childOwnerDefect as EventV2.InvalidSyncEventError).message).toContain("current workspace authority")
+      expect(
+        yield* db
+          .select()
+          .from(EventSequenceTable)
+          .where(eq(EventSequenceTable.aggregate_id, created.id))
+          .get()
+          .pipe(Effect.orDie),
+      ).toEqual(sequence)
+      expect(
+        yield* db
+          .select()
+          .from(EventTable)
+          .where(eq(EventTable.aggregate_id, created.id))
+          .all()
+          .pipe(Effect.orDie),
+      ).toEqual(beforeEvents)
+
+      yield* db
+        .insert(ProjectTable)
+        .values({
+          id: ProjectV2.ID.make("prj_replay_other"),
+          worktree: AbsolutePath.make("/other"),
+          sandboxes: [],
+        })
+        .run()
+        .pipe(Effect.orDie)
+
+      const batchAggregateID = SessionV2.ID.make("ses_replay_atomic_batch")
+      const batchDefect = yield* events
+        .replayAll([
+          {
+            id: EventV2.ID.make("evt_replay_atomic_created"),
+            aggregateID: batchAggregateID,
+            seq: 0,
+            type: EventV2.versionedType(SessionV1.Event.Created.type, 1),
+            data: {
+              ...data,
+              sessionID: batchAggregateID,
+              info: { ...data.info, id: batchAggregateID },
+            },
+          },
+          {
+            id: EventV2.ID.make("evt_replay_atomic_invalid_update"),
+            aggregateID: batchAggregateID,
+            seq: 1,
+            type: EventV2.versionedType(SessionV1.Event.Updated.type, 1),
+            data: {
+              ...data,
+              sessionID: batchAggregateID,
+              info: {
+                ...data.info,
+                id: batchAggregateID,
+                projectID: ProjectV2.ID.make("prj_replay_other"),
+              },
+            },
+          },
+        ])
+        .pipe(Effect.catchDefect(Effect.succeed))
+      expect(batchDefect).toBeInstanceOf(EventV2.InvalidSyncEventError)
+      expect((batchDefect as EventV2.InvalidSyncEventError).message).toContain("cannot change project")
+      expect(yield* db.select().from(SessionTable).where(eq(SessionTable.id, batchAggregateID)).get()).toBeUndefined()
+      expect(
+        yield* db.select().from(EventSequenceTable).where(eq(EventSequenceTable.aggregate_id, batchAggregateID)).get(),
+      ).toBeUndefined()
+      expect(yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, batchAggregateID)).all()).toEqual([])
+
+      const invalid = [
+        {
+          id: EventV2.ID.make("evt_replay_session_identity"),
+          type: EventV2.versionedType(SessionV1.Event.Updated.type, 1),
+          data: { ...data, info: { ...data.info, id: SessionV2.ID.make("ses_replay_other") } },
+          message: "identity does not match",
+        },
+        {
+          id: EventV2.ID.make("evt_replay_session_project"),
+          type: EventV2.versionedType(SessionV1.Event.Updated.type, 1),
+          data: { ...data, info: { ...data.info, projectID: ProjectV2.ID.make("prj_replay_other") } },
+          message: "cannot change project",
+        },
+        {
+          id: EventV2.ID.make("evt_replay_session_moved"),
+          type: EventV2.versionedType(SessionEvent.Moved.type, 1),
+          data: {
+            sessionID: created.id,
+            timestamp: 1,
+            location: { directory: "/other" },
+          },
+          message: "requires a durable transfer operation receipt",
+        },
+      ]
+
+      for (const item of invalid) {
+        const defect = yield* events
+          .replay({
+            id: item.id,
+            aggregateID: created.id,
+            seq: sequence!.seq + 1,
+            type: item.type,
+            data: item.data,
+          })
+          .pipe(Effect.catchDefect(Effect.succeed))
+        expect(defect).toBeInstanceOf(EventV2.InvalidSyncEventError)
+        expect((defect as EventV2.InvalidSyncEventError).message).toContain(item.message)
+        expect(
+          yield* db.select().from(SessionTable).where(eq(SessionTable.id, created.id)).get().pipe(Effect.orDie),
+        ).toEqual(beforeSession)
+        expect(
+          yield* db
+            .select()
+            .from(EventSequenceTable)
+            .where(eq(EventSequenceTable.aggregate_id, created.id))
+            .get()
+            .pipe(Effect.orDie),
+        ).toEqual(sequence)
+        expect(
+          yield* db
+            .select()
+            .from(EventTable)
+            .where(eq(EventTable.aggregate_id, created.id))
+            .all()
+            .pipe(Effect.orDie),
+        ).toEqual(beforeEvents)
+      }
+
+      const aggregateID = SessionV2.ID.make("ses_replay_created_aggregate")
+      const projectedID = SessionV2.ID.make("ses_replay_created_projection")
+      const defect = yield* events
+        .replay({
+          id: EventV2.ID.make("evt_replay_created_identity"),
+          aggregateID,
+          seq: 0,
+          type: EventV2.versionedType(SessionV1.Event.Created.type, 1),
+          data: { ...data, sessionID: aggregateID, info: { ...data.info, id: projectedID } },
+        })
+        .pipe(Effect.catchDefect(Effect.succeed))
+      expect(defect).toBeInstanceOf(EventV2.InvalidSyncEventError)
+      expect((defect as EventV2.InvalidSyncEventError).message).toContain("identity does not match")
+      expect(yield* db.select().from(SessionTable).where(eq(SessionTable.id, projectedID)).get()).toBeUndefined()
+      expect(
+        yield* db.select().from(EventSequenceTable).where(eq(EventSequenceTable.aggregate_id, aggregateID)).get(),
+      ).toBeUndefined()
+      expect(yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, aggregateID)).all()).toEqual([])
+
+      const ownedAggregateID = SessionV2.ID.make("ses_replay_owned_created")
+      const ownedDefect = yield* events
+        .replay(
+          {
+            id: EventV2.ID.make("evt_replay_owned_created"),
+            aggregateID: ownedAggregateID,
+            seq: 0,
+            type: EventV2.versionedType(SessionV1.Event.Created.type, 1),
+            data: {
+              ...data,
+              sessionID: ownedAggregateID,
+              info: { ...data.info, id: ownedAggregateID, workspaceID: "wrk_other" },
+            },
+          },
+          { ownerID: "wrk_owner", strictOwner: true },
+      )
+        .pipe(Effect.catchDefect(Effect.succeed))
+      expect(ownedDefect).toBeInstanceOf(EventV2.InvalidSyncEventError)
+      expect((ownedDefect as EventV2.InvalidSyncEventError).message).toContain("current workspace authority")
+      expect(yield* db.select().from(SessionTable).where(eq(SessionTable.id, ownedAggregateID)).get()).toBeUndefined()
+      expect(
+        yield* db.select().from(EventSequenceTable).where(eq(EventSequenceTable.aggregate_id, ownedAggregateID)).get(),
+      ).toBeUndefined()
+      expect(yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, ownedAggregateID)).all()).toEqual([])
+
+      const owned = yield* session.create({
+        location: Location.Ref.make({ directory: location.directory, workspaceID: WorkspaceV2.ID.make("wrk_owner") }),
+      })
+      const ownedEvent = yield* db
+        .select()
+        .from(EventTable)
+        .where(eq(EventTable.aggregate_id, owned.id))
+        .get()
+        .pipe(Effect.orDie)
+      yield* events.replay(
+        {
+          id: ownedEvent!.id,
+          aggregateID: owned.id,
+          seq: ownedEvent!.seq,
+          type: ownedEvent!.type,
+          data: ownedEvent!.data,
+        },
+        { ownerID: "wrk_owner", strictOwner: true },
+      )
+      expect(
+        yield* db
+          .select({ ownerID: EventSequenceTable.owner_id })
+          .from(EventSequenceTable)
+          .where(eq(EventSequenceTable.aggregate_id, owned.id))
+          .get()
+          .pipe(Effect.orDie),
+      ).toEqual({ ownerID: "wrk_owner" })
     }),
   )
 

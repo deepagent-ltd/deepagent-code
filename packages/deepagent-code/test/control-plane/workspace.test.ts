@@ -6,7 +6,7 @@ import path from "node:path"
 import { NodeHttpServer } from "@effect/platform-node"
 import { Cause, Effect, Exit, Fiber, Layer, Schema, Stream } from "effect"
 import { FetchHttpClient, HttpServer, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
-import { eq } from "drizzle-orm"
+import { and, eq } from "drizzle-orm"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import * as Log from "@deepagent-code/core/util/log"
 import { GlobalBus, type GlobalEvent } from "@/bus/global"
@@ -17,7 +17,7 @@ import { AbsolutePath } from "@deepagent-code/core/schema"
 import { Session as SessionNs } from "@/session/session"
 import { SessionID } from "@/session/schema"
 import { SessionTable } from "@deepagent-code/core/session/sql"
-import { EventSequenceTable, EventTable } from "@deepagent-code/core/event/sql"
+import { EventSequenceTable, EventTable, WorkspaceSyncCursorTable } from "@deepagent-code/core/event/sql"
 import { SessionToolRequestReceiptTable } from "@/session/tool-request-receipt.sql"
 import { resetDatabase } from "../fixture/db"
 import { disposeAllInstances, provideTmpdirInstance, requireInstance, TestInstance } from "../fixture/fixture"
@@ -38,6 +38,7 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { EventV2 } from "@deepagent-code/core/event"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { SyncReplayLimits } from "@/sync/replay-protocol"
+import { Hash } from "@deepagent-code/core/util/hash"
 
 void Log.init({ print: false })
 
@@ -728,7 +729,8 @@ describe("workspace CRUD", () => {
           calls.push(call)
           if (call.url.pathname === "/base/global/event")
             return HttpServerResponse.fromWeb(eventStreamResponse([], false))
-          if (call.url.pathname === "/base/sync/history") return yield* HttpServerResponse.json([])
+          if (call.url.pathname === "/base/sync/history")
+            return yield* HttpServerResponse.json({ version: 1, items: [], nextCursor: "cursor-empty", complete: true })
           return HttpServerResponse.text("unexpected", { status: 500 })
         }),
       )
@@ -747,7 +749,7 @@ describe("workspace CRUD", () => {
             expect(
               calls.map((call) => `${call.method} ${call.url.pathname}${call.url.search}${call.url.hash}`),
             ).toEqual(["GET /base/global/event", "POST /base/sync/history"])
-            expect(calls[1].json).toEqual({})
+            expect(calls[1].json).toEqual({ version: 1 })
             expect((yield* workspace.status()).find((item) => item.workspaceID === info.id)?.status).toBe("connected")
             expect(yield* workspace.isSyncing(info.id)).toBe(true)
 
@@ -1661,7 +1663,7 @@ describe("workspace sync state", () => {
     }),
   )
 
-  it.live("sync history sends the local sequence fence and replays returned events in workspace context", () => {
+  it.live("sync history advances its durable cursor and replays returned events in workspace context", () => {
     const historyBodies: unknown[] = []
     let historySessionID: SessionID | undefined
     let historySession: SessionNs.Info | undefined
@@ -1676,17 +1678,26 @@ describe("workspace sync state", () => {
           if (url.pathname === "/history/sync/history") {
             const body = bodyText ? JSON.parse(bodyText) : undefined
             historyBodies.push(body)
-            if (body?.[historySessionID!] === historyNextSeq) return HttpServerResponse.fromWeb(Response.json([]))
+            if (body?.cursor === "cursor-history-1")
+              return HttpServerResponse.fromWeb(
+                Response.json({ version: 1, items: [], nextCursor: "cursor-history-1", complete: true }),
+              )
             return HttpServerResponse.fromWeb(
-              Response.json([
-                {
-                  id: `evt_${unique("history")}`,
-                  aggregate_id: historySessionID!,
-                  seq: historyNextSeq,
-                  type: "session.updated.1",
-                  data: { sessionID: historySessionID!, info: historySession! },
-                },
-              ]),
+              Response.json({
+                version: 1,
+                items: [
+                  {
+                    kind: "event",
+                    id: `evt_${unique("history")}`,
+                    aggregate_id: historySessionID!,
+                    seq: historyNextSeq,
+                    type: "session.updated.1",
+                    data: { sessionID: historySessionID!, info: historySession! },
+                  },
+                ],
+                nextCursor: "cursor-history-1",
+                complete: false,
+              }),
             )
           }
           return HttpServerResponse.text("unexpected", { status: 500 })
@@ -1718,7 +1729,19 @@ describe("workspace sync state", () => {
                   expect((yield* sessionSvc.get(session.id).pipe(Effect.orDie)).title).toBe("from history")
                 }),
               )
-              expect(historyBodies).toEqual([{ [session.id]: historyNextSeq - 1 }, { [session.id]: historyNextSeq }])
+              expect(historyBodies).toEqual([
+                { version: 1 },
+                { version: 1, cursor: "cursor-history-1" },
+              ])
+              expect(
+                yield* Database.Service.use(({ db }) =>
+                  db
+                    .select({ workspaceID: WorkspaceSyncCursorTable.workspace_id, cursor: WorkspaceSyncCursorTable.cursor })
+                    .from(WorkspaceSyncCursorTable)
+                    .where(eq(WorkspaceSyncCursorTable.workspace_id, info.id))
+                    .get(),
+                ),
+              ).toEqual({ workspaceID: info.id, cursor: "cursor-history-1" })
               expect(
                 captured.events.some(
                   (event) =>
@@ -1736,7 +1759,269 @@ describe("workspace sync state", () => {
         { git: true },
       )
     })
-  })
+  }, 30_000)
+
+  it.live("does not advance its durable cursor when a history page fails replay", () => {
+    return Effect.gen(function* () {
+      yield* HttpServer.serveEffect()(
+        Effect.gen(function* () {
+          const req = yield* HttpServerRequest.HttpServerRequest
+          const url = new URL(req.url, "http://localhost")
+          if (url.pathname === "/history-replay-fail/global/event")
+            return HttpServerResponse.fromWeb(eventStreamResponse([], false))
+          if (url.pathname === "/history-replay-fail/sync/history")
+            return HttpServerResponse.fromWeb(
+              Response.json({
+                version: 1,
+                items: [{ kind: "event", id: `evt_${unique("bad-history")}`, aggregate_id: "ses_missing", seq: 1, type: "unknown.sync.1", data: {} }],
+                nextCursor: "must-not-commit",
+                complete: true,
+              }),
+            )
+          return HttpServerResponse.text("unexpected", { status: 500 })
+        }),
+      )
+      const url = yield* serverUrl()
+      yield* provideTmpdirInstance(
+        () =>
+          Effect.gen(function* () {
+            const workspace = yield* Workspace.Service
+            const instance = yield* requireInstance
+            const type = unique("history-replay-fail")
+            const info = workspaceInfo(instance.project.id, type)
+            yield* insertWorkspace(info)
+            registerAdapter(instance.project.id, type, remoteAdapter(`${url}/history-replay-fail`).adapter)
+            yield* workspace.startWorkspaceSyncing(instance.project.id)
+            yield* Effect.sleep("100 millis")
+            expect(
+              yield* Database.Service.use(({ db }) =>
+                db.select().from(WorkspaceSyncCursorTable).where(eq(WorkspaceSyncCursorTable.workspace_id, info.id)).get(),
+              ),
+            ).toBeUndefined()
+            yield* workspace.remove(info.id)
+          }),
+        { git: true },
+      )
+    })
+  }, 30_000)
+
+  it.live("resumes from its durable cursor after reconnecting", () => {
+    const historyBodies = new Array<{ version: 1; cursor?: string }>()
+    return Effect.gen(function* () {
+      yield* HttpServer.serveEffect()(
+        Effect.gen(function* () {
+          const req = yield* HttpServerRequest.HttpServerRequest
+          const url = new URL(req.url, "http://localhost")
+          if (url.pathname === "/history-reconnect/global/event")
+            return HttpServerResponse.fromWeb(eventStreamResponse([], false))
+          if (url.pathname === "/history-reconnect/sync/history") {
+            const body = JSON.parse(yield* req.text) as { version: 1; cursor?: string }
+            historyBodies.push(body)
+            return HttpServerResponse.fromWeb(
+              Response.json({
+                version: 1,
+                items: [],
+                nextCursor: body.cursor ? "cursor-reconnect-2" : "cursor-reconnect-1",
+                complete: true,
+              }),
+            )
+          }
+          return HttpServerResponse.text("unexpected", { status: 500 })
+        }),
+      )
+      const url = yield* serverUrl()
+      yield* provideTmpdirInstance(
+        () =>
+          Effect.gen(function* () {
+            const workspace = yield* Workspace.Service
+            const instance = yield* requireInstance
+            const type = unique("history-reconnect")
+            const info = workspaceInfo(instance.project.id, type)
+            yield* insertWorkspace(info)
+            registerAdapter(instance.project.id, type, remoteAdapter(`${url}/history-reconnect`).adapter)
+
+            yield* workspace.startWorkspaceSyncing(instance.project.id)
+            yield* eventuallyEffect(Effect.sync(() => expect(historyBodies.length).toBeGreaterThanOrEqual(2)), 3_000)
+
+            expect(historyBodies.slice(0, 2)).toEqual([
+              { version: 1 },
+              { version: 1, cursor: "cursor-reconnect-1" },
+            ])
+            expect(
+              yield* Database.Service.use(({ db }) =>
+                db
+                  .select({ cursor: WorkspaceSyncCursorTable.cursor })
+                  .from(WorkspaceSyncCursorTable)
+                  .where(eq(WorkspaceSyncCursorTable.workspace_id, info.id))
+                  .get(),
+              ),
+            ).toEqual({ cursor: "cursor-reconnect-2" })
+            yield* workspace.remove(info.id)
+          }),
+        { git: true },
+      )
+    })
+  }, 30_000)
+
+  it.live("resets a stale cursor once and preserves it for unrelated conflicts", () => {
+    const historyBodies = new Array<{ version: 1; cursor?: string }>()
+    return Effect.gen(function* () {
+      yield* HttpServer.serveEffect()(
+        Effect.gen(function* () {
+          const req = yield* HttpServerRequest.HttpServerRequest
+          const url = new URL(req.url, "http://localhost")
+          if (url.pathname.endsWith("/global/event")) return HttpServerResponse.fromWeb(eventStreamResponse())
+          if (url.pathname === "/history-stale/sync/history") {
+            const body = JSON.parse(yield* req.text) as { version: 1; cursor?: string }
+            historyBodies.push(body)
+            if (body.cursor)
+              return HttpServerResponse.fromWeb(
+                Response.json(
+                  {
+                    _tag: "ConflictError",
+                    message: "stale cursor",
+                    resource: `sync-cursor-reset:${staleWorkspaceID}`,
+                  },
+                  { status: 409 },
+                ),
+              )
+            return HttpServerResponse.fromWeb(
+              Response.json({ version: 1, items: [], nextCursor: "cursor-stale-reset", complete: true }),
+            )
+          }
+          if (url.pathname === "/history-bad-request/sync/history") {
+            historyBodies.push(JSON.parse(yield* req.text) as { version: 1; cursor?: string })
+            return HttpServerResponse.fromWeb(
+              Response.json(
+                { _tag: "ConflictError", message: "not a cursor reset", resource: "another-conflict" },
+                { status: 409 },
+              ),
+            )
+          }
+          return HttpServerResponse.text("unexpected", { status: 500 })
+        }),
+      )
+      const url = yield* serverUrl()
+      let staleWorkspaceID = ""
+      yield* provideTmpdirInstance(
+        () =>
+          Effect.gen(function* () {
+            const workspace = yield* Workspace.Service
+            const instance = yield* requireInstance
+            const staleType = unique("history-stale")
+            const stale = workspaceInfo(instance.project.id, staleType)
+            staleWorkspaceID = stale.id
+            const staleTarget = `${url}/history-stale`
+            yield* insertWorkspace(stale)
+            registerAdapter(instance.project.id, staleType, remoteAdapter(staleTarget).adapter)
+            yield* Database.Service.use(({ db }) =>
+              db.insert(WorkspaceSyncCursorTable).values({
+                workspace_id: stale.id,
+                remote_fingerprint: Hash.sha256(`${new URL(staleTarget).toString()}:workspace:${stale.id}`),
+                cursor: "cursor-stale-old-generation",
+                updated_at: 1,
+              }),
+            )
+
+            yield* workspace.startWorkspaceSyncing(instance.project.id)
+            yield* eventuallyEffect(Effect.sync(() => expect(historyBodies.length).toBe(2)) )
+            expect(historyBodies).toEqual([
+              { version: 1, cursor: "cursor-stale-old-generation" },
+              { version: 1 },
+            ])
+            expect(
+              yield* Database.Service.use(({ db }) =>
+                db
+                  .select({ cursor: WorkspaceSyncCursorTable.cursor })
+                  .from(WorkspaceSyncCursorTable)
+                  .where(eq(WorkspaceSyncCursorTable.workspace_id, stale.id))
+                  .get(),
+              ),
+            ).toEqual({ cursor: "cursor-stale-reset" })
+            yield* workspace.remove(stale.id)
+
+            historyBodies.length = 0
+            const badType = unique("history-bad-request")
+            const bad = workspaceInfo(instance.project.id, badType)
+            const badTarget = `${url}/history-bad-request`
+            yield* insertWorkspace(bad)
+            registerAdapter(instance.project.id, badType, remoteAdapter(badTarget).adapter)
+            yield* Database.Service.use(({ db }) =>
+              db.insert(WorkspaceSyncCursorTable).values({
+                workspace_id: bad.id,
+                remote_fingerprint: Hash.sha256(`${new URL(badTarget).toString()}:workspace:${bad.id}`),
+                cursor: "cursor-preserved-on-400",
+                updated_at: 1,
+              }),
+            )
+
+            yield* workspace.startWorkspaceSyncing(instance.project.id)
+            yield* eventuallyEffect(
+              Effect.gen(function* () {
+                expect((yield* workspace.status()).find((item) => item.workspaceID === bad.id)?.status).toBe("error")
+              }),
+            )
+            expect(historyBodies[0]).toEqual({ version: 1, cursor: "cursor-preserved-on-400" })
+            expect(
+              yield* Database.Service.use(({ db }) =>
+                db
+                  .select({ cursor: WorkspaceSyncCursorTable.cursor })
+                  .from(WorkspaceSyncCursorTable)
+                  .where(eq(WorkspaceSyncCursorTable.workspace_id, bad.id))
+                  .get(),
+              ),
+            ).toEqual({ cursor: "cursor-preserved-on-400" })
+            yield* workspace.remove(bad.id)
+          }),
+        { git: true },
+      )
+    })
+  }, 30_000)
+
+  it.effect("allows only one concurrent durable cursor compare-and-swap winner", () =>
+    Effect.gen(function* () {
+      const workspaceID = WorkspaceV2.ID.make("wrk_cursor_cas")
+      const fingerprint = Hash.sha256("cursor-cas-fingerprint")
+      const { db } = yield* Database.Service
+      yield* db
+        .insert(WorkspaceSyncCursorTable)
+        .values({ workspace_id: workspaceID, remote_fingerprint: fingerprint, cursor: "cursor-base", updated_at: 1 })
+        .run()
+        .pipe(Effect.orDie)
+      const winners = yield* Effect.all(
+        ["cursor-left", "cursor-right"].map((cursor) =>
+          db
+            .update(WorkspaceSyncCursorTable)
+            .set({ cursor, updated_at: 2 })
+            .where(
+              and(
+                eq(WorkspaceSyncCursorTable.workspace_id, workspaceID),
+                eq(WorkspaceSyncCursorTable.remote_fingerprint, fingerprint),
+                eq(WorkspaceSyncCursorTable.cursor, "cursor-base"),
+              ),
+            )
+            .returning({ cursor: WorkspaceSyncCursorTable.cursor })
+            .get()
+            .pipe(Effect.orDie),
+        ),
+        { concurrency: "unbounded" },
+      )
+
+      expect(winners.filter(Boolean)).toHaveLength(1)
+      expect(
+        yield* db
+          .select({ cursor: WorkspaceSyncCursorTable.cursor })
+          .from(WorkspaceSyncCursorTable)
+          .where(
+            and(
+              eq(WorkspaceSyncCursorTable.workspace_id, workspaceID),
+              eq(WorkspaceSyncCursorTable.remote_fingerprint, fingerprint),
+            ),
+          )
+          .get(),
+      ).toEqual(winners.find(Boolean))
+    }),
+  )
 
   it.live("SSE forwards non-heartbeat events and ignores heartbeats", () =>
     Effect.gen(function* () {

@@ -2,7 +2,14 @@ import { describe, expect } from "bun:test"
 import { Cause, DateTime, Deferred, Effect, Exit, Fiber, Layer, Schema, Stream } from "effect"
 import { EventV2 } from "@deepagent-code/core/event"
 import { Database } from "@deepagent-code/core/database/database"
-import { EventSequenceTable, EventTable } from "@deepagent-code/core/event/sql"
+import {
+  EventArtifactChunkTable,
+  EventArtifactTable,
+  EventDedupeTable,
+  EventSequenceTable,
+  EventSnapshotTable,
+  EventTable,
+} from "@deepagent-code/core/event/sql"
 import { Location } from "@deepagent-code/core/location"
 import { AbsolutePath } from "@deepagent-code/core/schema"
 import { WorkspaceV2 } from "@deepagent-code/core/workspace"
@@ -872,6 +879,67 @@ describe("EventV2", () => {
     }),
   )
 
+  it.effect("refuses checkpoint and compaction while no canonical projection codec is registered", () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2.Service
+      const { db } = yield* Database.Service
+      const aggregateID = EventV2.ID.create()
+      yield* events.publish(SyncMessage, { id: aggregateID, text: "zero" })
+      const checkpoint = yield* events.checkpoint({
+        aggregateID,
+        throughSeq: EventV2.Cursor.make(0),
+        expectedLatest: EventV2.Cursor.make(0),
+        codec: "test.v1",
+        schemaVersion: 1,
+        body: { value: "zero" },
+      }).pipe(Effect.catchDefect(Effect.succeed))
+      expect(checkpoint).toBeInstanceOf(EventV2.InvalidSyncEventError)
+      const compact = yield* events
+        .compact({ aggregateID, throughSeq: EventV2.Cursor.make(0), limit: 1 })
+        .pipe(Effect.catchDefect(Effect.succeed))
+      expect(compact).toBeInstanceOf(EventV2.InvalidSyncEventError)
+      expect(yield* events.snapshot(aggregateID)).toBeUndefined()
+      expect(yield* db.select().from(EventDedupeTable).all().pipe(Effect.orDie)).toEqual([])
+      expect(yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, aggregateID)).all().pipe(Effect.orDie)).toHaveLength(1)
+    }),
+  )
+
+  it.effect("canonicalizes oversized legacy message diffs into deterministic BLOB chunks", () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2.Service
+      const { db } = yield* Database.Service
+      const aggregateID = EventV2.ID.create()
+      yield* events.publish(SyncMessage, { id: aggregateID, text: "zero" })
+      const id = EventV2.ID.make("evt_legacy_message_diff_artifact")
+      const patch = "x".repeat(EventV2.MAX_ENCODED_PAYLOAD_BYTES + 1)
+      yield* db.insert(EventTable).values({
+        id,
+        aggregate_id: aggregateID,
+        seq: 1,
+        type: EventV2.versionedType("message.updated", 1),
+        data: {
+          sessionID: aggregateID,
+          info: { summary: { diffs: [{ file: "large.patch", patch, additions: 1, deletions: 0 }] } },
+        },
+      }).run().pipe(Effect.orDie)
+      yield* db.update(EventSequenceTable).set({ seq: 1 }).where(eq(EventSequenceTable.aggregate_id, aggregateID)).run().pipe(Effect.orDie)
+
+      const first = yield* events.canonicalizeLegacyArtifacts({ limit: 1, now: 10 })
+      expect(first).toEqual({ processed: 1, next: id })
+      expect(yield* events.canonicalizeLegacyArtifacts({ afterID: id, limit: 1, now: 11 })).toEqual({ processed: 0 })
+      const artifact = yield* db.select().from(EventArtifactTable).where(eq(EventArtifactTable.event_id, id)).get().pipe(Effect.orDie)
+      expect(artifact?.kind).toBe("legacy_message_diff")
+      expect(artifact?.body_bytes).toBeGreaterThan(EventV2.MAX_ENCODED_PAYLOAD_BYTES)
+      expect(artifact?.chunk_count).toBeGreaterThan(1)
+      const summary = (artifact?.canonical_data.info as { summary: { diffs: Array<{ patch?: string }>; diffArtifact: { hash: string } } }).summary
+      expect(summary.diffs[0]?.patch).toBeUndefined()
+      expect(summary.diffArtifact.hash).toBe(artifact!.body_hash)
+      const chunks = yield* db.select().from(EventArtifactChunkTable).where(eq(EventArtifactChunkTable.artifact_id, artifact!.artifact_id)).all().pipe(Effect.orDie)
+      expect(chunks).toHaveLength(artifact?.chunk_count ?? 0)
+      expect(Buffer.concat(chunks.map((chunk) => chunk.data)).length).toBe(artifact!.body_bytes)
+    }),
+  )
+
   it.effect("uses custom sync aggregate field", () =>
     Effect.gen(function* () {
       const events = yield* EventV2.Service
@@ -1124,6 +1192,65 @@ describe("EventV2", () => {
       expect(one).toBe(aggregateID)
       expect(two).toBe(aggregateID)
       expect(rows.map((row) => row.seq)).toEqual([0, 1, 2, 3])
+    }),
+  )
+
+  it.effect("wakes aggregate subscribers when replayAll is interrupted after commit", () => {
+    const initialRead = Deferred.make<void>()
+    const committed = Deferred.make<void>()
+    const releaseCommit = Deferred.make<void>()
+    return Effect.all({ initialRead, committed, releaseCommit }).pipe(
+      Effect.flatMap((signals) => {
+        const database = Database.layerFromPath(":memory:")
+        const eventLayer = EventV2.layerWith({
+          afterAggregateRead: () => Deferred.succeed(signals.initialRead, undefined),
+          afterReplayAllCommit: () =>
+            Deferred.succeed(signals.committed, undefined).pipe(Effect.andThen(Deferred.await(signals.releaseCommit))),
+        }).pipe(Layer.provide(database))
+        return Effect.gen(function* () {
+          const events = yield* EventV2.Service
+          const aggregateID = EventV2.ID.create()
+          const event = {
+            id: EventV2.ID.create(),
+            type: EventV2.versionedType(SyncMessage.type, 1),
+            seq: 0,
+            aggregateID,
+            data: { id: aggregateID, text: "committed before interruption" },
+          }
+          const subscriber = yield* events
+            .aggregateEvents({ aggregateID })
+            .pipe(Stream.take(1), Stream.runCollect, Effect.forkScoped)
+          yield* Deferred.await(signals.initialRead)
+          const replay = yield* events.replayAll([event]).pipe(Effect.forkChild)
+          yield* Deferred.await(signals.committed)
+          const interruption = yield* Fiber.interrupt(replay).pipe(Effect.forkChild)
+          yield* Deferred.succeed(signals.releaseCommit, undefined)
+          yield* Fiber.join(interruption)
+
+          expect(Array.from(yield* Fiber.join(subscriber)).map((item) => item.event.data)).toEqual([event.data])
+        }).pipe(Effect.provide(Layer.mergeAll(database, eventLayer)))
+      }),
+    )
+  })
+
+  it.effect("publishes replayAll observers once across an exact retry", () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2.Service
+      const aggregateID = EventV2.ID.create()
+      const received: EventV2.Payload[] = []
+      const event = {
+        id: EventV2.ID.create(),
+        type: EventV2.versionedType(SyncMessage.type, 1),
+        seq: 0,
+        aggregateID,
+        data: { id: aggregateID, text: "exact replay" },
+      }
+      yield* events.listen((payload) => Effect.sync(() => received.push(payload)))
+
+      yield* events.replayAll([event], { publish: true })
+      yield* events.replayAll([event], { publish: true })
+
+      expect(received.map((payload) => payload.id)).toEqual([event.id])
     }),
   )
 

@@ -1,6 +1,6 @@
 import { test, expect, describe, afterEach, beforeEach, spyOn } from "bun:test"
 import { ConfigV1 } from "@deepagent-code/core/v1/config/config"
-import { Effect, Exit, Layer, Option } from "effect"
+import { Deferred, Effect, Exit, Layer, Option } from "effect"
 import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/unstable/http"
 import { NodeFileSystem, NodePath } from "@effect/platform-node"
 import { Config } from "@/config/config"
@@ -14,6 +14,7 @@ import { Auth } from "../../src/auth"
 import { Account } from "../../src/account/account"
 import { AccessToken, AccountID, OrgID } from "../../src/account/schema"
 import { FSUtil } from "@deepagent-code/core/fs-util"
+import { Npm } from "@deepagent-code/core/npm"
 import { Env } from "../../src/env"
 import {
   provideTmpdirInstance,
@@ -25,6 +26,7 @@ import {
   testInstanceStoreLayer,
 } from "../fixture/fixture"
 import { InstanceRuntime } from "@/project/instance-runtime"
+import { InstanceStore } from "@/project/instance-store"
 import { CrossSpawnSpawner } from "@deepagent-code/core/cross-spawn-spawner"
 import { testEffect } from "../lib/effect"
 import path from "path"
@@ -93,6 +95,7 @@ const configLayer = (
     auth?: Layer.Layer<Auth.Service>
     account?: Layer.Layer<Account.Service>
     client?: HttpClient.HttpClient
+    npm?: Layer.Layer<Npm.Service>
   } = {},
 ) =>
   Config.layer.pipe(
@@ -101,7 +104,7 @@ const configLayer = (
     Layer.provide(options.auth ?? AuthTest.empty),
     Layer.provide(options.account ?? AccountTest.empty),
     Layer.provideMerge(infra),
-    Layer.provide(NpmTest.noop),
+    Layer.provide(options.npm ?? NpmTest.noop),
     Layer.provide(Layer.succeed(HttpClient.HttpClient, options.client ?? unexpectedHttp)),
     Layer.provideMerge(FSUtil.defaultLayer),
   )
@@ -1072,6 +1075,34 @@ it.effect("does not install dependencies in a writable DEEPAGENT_CODE_CONFIG_DIR
     expect(yield* FSUtil.use.existsSafe(path.join(configDir, ".gitignore"))).toBe(false)
   }).pipe(Effect.provide(testInstanceStoreLayer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
 )
+
+test("interrupts background dependency installs when the instance is disposed", async () => {
+  const started = Deferred.makeUnsafe<void>()
+  const interrupted = Deferred.makeUnsafe<void>()
+  const npm = Layer.mock(Npm.Service)({
+    install: () =>
+      Deferred.succeed(started, undefined).pipe(
+        Effect.andThen(Effect.never),
+        Effect.onInterrupt(() => Deferred.succeed(interrupted, undefined)),
+      ),
+  })
+
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped()
+      const store = yield* InstanceStore.Service
+      yield* store.provide({ directory: dir }, Config.use.get())
+      yield* Deferred.await(started).pipe(Effect.timeout("1 second"))
+      yield* store.disposeDirectory(dir).pipe(Effect.timeout("1 second"))
+      yield* Deferred.await(interrupted).pipe(Effect.timeout("1 second"))
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(configLayer({ npm })),
+      Effect.provide(testInstanceStoreLayer),
+      Effect.provide(CrossSpawnSpawner.defaultLayer),
+    ),
+  )
+})
 
 // Note: deduplication and serialization of npm installs is now handled by the
 // core Npm.Service (via EffectFlock). Those behaviors are tested in the core

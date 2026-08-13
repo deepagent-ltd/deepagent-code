@@ -16,7 +16,17 @@ import {
 import { and, eq } from "drizzle-orm"
 import { Effect, Layer } from "effect"
 import { EventV2Bridge } from "@/event-v2-bridge"
-import { EventTable } from "@deepagent-code/core/event/sql"
+import { EventSequenceTable, EventTable } from "@deepagent-code/core/event/sql"
+import {
+  SessionActivityTable,
+  SessionContextSelectionTable,
+  SessionProviderAttemptRecoveryBridgeTable,
+  SessionProviderAttemptResolutionTable,
+  SessionProviderAttemptTable,
+} from "@deepagent-code/core/context-federation/session-sql"
+import { Prompt } from "@deepagent-code/core/session/prompt"
+import { SessionMessage } from "@deepagent-code/core/session/message"
+import { SessionInputTable } from "@deepagent-code/core/session/sql"
 import { SessionLegacyProviderResolution } from "@/session/legacy-provider-resolution"
 import { MessageV2 } from "@/session/message-v2"
 import { SessionPromptEpochTable } from "@/session/prompt-epoch.sql"
@@ -113,8 +123,81 @@ it.instance(
       const baselineHash = authority.worldStateBaselineHash
       const requestHash = "final-request-hash"
       const receiptID = "receipt-ambiguous-provider-turn"
+      const providerAttemptID = "attempt-ambiguous-provider-turn"
+      const providerActivityID = "activity-ambiguous-provider-turn"
+      const providerSelectionID = "selection-ambiguous-provider-turn"
       const now = Date.now()
 
+      yield* db
+        .insert(SessionInputTable)
+        .values({
+          id: SessionMessage.ID.make(user.id),
+          session_id: source.id,
+          prompt: new Prompt({ text: "dispatch then crash" }),
+          delivery: "steer",
+          admitted_seq: 0,
+          promoted_seq: 0,
+        })
+        .run()
+        .pipe(Effect.orDie)
+      yield* db
+        .insert(SessionActivityTable)
+        .values({
+          activity_id: providerActivityID,
+          session_id: source.id,
+          ordinal: 0,
+          trigger_input_id: user.id,
+          delivery: "steer",
+          state: "active",
+          created_at: now,
+        })
+        .run()
+        .pipe(Effect.orDie)
+      yield* db
+        .insert(SessionContextSelectionTable)
+        .values({
+          selection_id: providerSelectionID,
+          session_id: source.id,
+          activity_id: providerActivityID,
+          revision: 0,
+          trigger_input_id: user.id,
+          location_key: "local",
+          query_fingerprint: "query",
+          authorization_fingerprint: "authorization",
+          authorization_epoch: 0,
+          execution_fingerprint: "execution",
+          selected_source_fingerprint: "sources",
+          observed_location_mutation_epoch: 0,
+          next_revalidation_at: now + 60_000,
+          graph_revisions: "{}",
+          graph_statuses: "[]",
+          selected_refs: "[]",
+          projection: "",
+          projection_hash: "projection",
+          token_count: 0,
+          artifact_write_status: "degraded_unavailable",
+          inline_audit: "{}",
+          created_at: now,
+        })
+        .run()
+        .pipe(Effect.orDie)
+      yield* db
+        .insert(SessionProviderAttemptTable)
+        .values({
+          attempt_id: providerAttemptID,
+          session_id: source.id,
+          activity_id: providerActivityID,
+          provider_turn_seq: 0,
+          selection_id: providerSelectionID,
+          projection_hash: "projection",
+          request_hash: requestHash,
+          provider_id: model.providerID,
+          state: "indeterminate_after_crash",
+          created_at: now,
+          error_code: "process_recovery",
+        })
+        .run()
+        .pipe(Effect.orDie)
       yield* db
         .insert(SessionToolRequestReceiptTable)
         .values({
@@ -123,7 +206,7 @@ it.instance(
           session_id: source.id,
           user_message_id: user.id,
           assistant_message_id: assistant.id,
-          provider_attempt_id: null,
+          provider_attempt_id: providerAttemptID,
           provider_id: model.providerID,
           model_id: model.modelID,
           protocol: "chat",
@@ -144,30 +227,6 @@ it.instance(
           request_state: "dispatched",
           request_error_code: "provider_started_outcome_unknown_after_process_restart",
           created_at: now,
-        })
-        .run()
-        .pipe(Effect.orDie)
-      yield* db
-        .insert(SessionToolRequestReceiptTable)
-        .values({
-          receipt_id: "legacy-stale-indeterminate-without-prompt-authority",
-          request_ordinal: 2,
-          session_id: source.id,
-          user_message_id: safeUser.id,
-          assistant_message_id: safeAssistant.id,
-          provider_attempt_id: null,
-          provider_id: model.providerID,
-          model_id: model.modelID,
-          protocol: "chat",
-          registry_tool_ids: [],
-          permission_filtered_tool_ids: [],
-          final_offered_tool_ids: [],
-          call_ids: [],
-          provider_state: "indeterminate_after_crash",
-          terminal_at: now,
-          request_state: "dispatched",
-          request_error_code: "legacy_migration_without_prompt_authority",
-          created_at: now - 1,
         })
         .run()
         .pipe(Effect.orDie)
@@ -257,6 +316,10 @@ it.instance(
         worldStateBaselineHash: baselineHash,
       })
       if (!descriptor) return
+      if (!descriptor.resolutionSupported)
+        return yield* Effect.die(
+          `expected a resolvable provider recovery descriptor: ${descriptor.unsupportedReasons.join(",")}`,
+        )
       if (!descriptor.worldStateBaselineHash)
         return yield* Effect.die("expected a resolvable provider recovery descriptor")
       const command = {
@@ -289,12 +352,12 @@ it.instance(
       const assertRecoveryUnchanged = Effect.fnUntraced(function* () {
         expect(
           yield* db
-            .select()
+            .select({ result: SessionToolRequestResolutionCommandTable.result_resolution_id })
             .from(SessionToolRequestResolutionCommandTable)
             .where(eq(SessionToolRequestResolutionCommandTable.session_id, source.id))
             .all()
             .pipe(Effect.orDie),
-        ).toEqual([])
+        ).not.toContainEqual(expect.objectContaining({ result: expect.any(String) }))
         expect(
           yield* db
             .select()
@@ -383,9 +446,23 @@ it.instance(
         .pipe(Effect.orDie)
       yield* db.insert(SessionWorldStateBaselineTable).values(sourceBaseline).run().pipe(Effect.orDie)
 
+      const sequenceBefore = yield* db
+        .select({ seq: EventSequenceTable.seq })
+        .from(EventSequenceTable)
+        .where(eq(EventSequenceTable.aggregate_id, source.id))
+        .get()
+        .pipe(Effect.orDie)
       const first = yield* recovery.resolve(command)
       const retry = yield* recovery.resolve(command)
       expect(retry).toEqual(first)
+      expect(
+        yield* db
+          .select({ seq: EventSequenceTable.seq })
+          .from(EventSequenceTable)
+          .where(eq(EventSequenceTable.aggregate_id, source.id))
+          .get()
+          .pipe(Effect.orDie),
+      ).toEqual(sequenceBefore)
       expect(
         yield* db
           .select({ id: EventTable.id })
@@ -496,6 +573,50 @@ it.instance(
       expect(
         yield* db
           .select()
+          .from(SessionProviderAttemptRecoveryBridgeTable)
+          .where(eq(SessionProviderAttemptRecoveryBridgeTable.resolution_id, first.resolutionID))
+          .get()
+          .pipe(Effect.orDie),
+      ).toMatchObject({
+        resolution_id: first.resolutionID,
+        attempt_id: providerAttemptID,
+        receipt_id: receiptID,
+        command_id: command.commandID,
+      })
+      expect(
+        yield* db
+          .select()
+          .from(SessionProviderAttemptResolutionTable)
+          .where(eq(SessionProviderAttemptResolutionTable.attempt_id, providerAttemptID))
+          .get()
+          .pipe(Effect.orDie),
+      ).toMatchObject({ resolution_id: first.resolutionID, decision: "abandoned" })
+      expect(
+        (yield* db
+          .delete(SessionProviderAttemptResolutionTable)
+          .where(eq(SessionProviderAttemptResolutionTable.attempt_id, providerAttemptID))
+          .run()
+          .pipe(Effect.orDie, Effect.exit))._tag,
+      ).toBe("Failure")
+      expect(
+        yield* db
+          .select({ state: SessionProviderAttemptTable.state })
+          .from(SessionProviderAttemptTable)
+          .where(eq(SessionProviderAttemptTable.attempt_id, providerAttemptID))
+          .get()
+          .pipe(Effect.orDie),
+      ).toEqual({ state: "resolved_abandoned" })
+      expect(
+        yield* db
+          .select({ state: SessionActivityTable.state })
+          .from(SessionActivityTable)
+          .where(eq(SessionActivityTable.activity_id, providerActivityID))
+          .get()
+          .pipe(Effect.orDie),
+      ).toEqual({ state: "interrupted" })
+      expect(
+        yield* db
+          .select()
           .from(SessionToolRequestResolutionTable)
           .where(eq(SessionToolRequestResolutionTable.resolution_id, first.resolutionID))
           .get()
@@ -565,6 +686,125 @@ it.instance(
           .get()
           .pipe(Effect.orDie),
       ).toBeUndefined()
+    }),
+  { git: true },
+  30_000,
+)
+
+it.instance(
+  "keeps orphaned unknown outcomes visible and blocks every cutoff after their user boundary",
+  () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const recovery = yield* SessionLegacyProviderResolution.Service
+      yield* TestInstance
+      const { db } = yield* Database.Service
+      const source = yield* sessions.create({ title: "orphaned provider outcome" })
+      const before = yield* addUser(source.id, "before orphan")
+      const beforeAssistant = yield* addAssistant(source.id, before.id, true)
+      const orphanUser = yield* addUser(source.id, "dispatch before legacy migration")
+      const orphanAssistant = yield* addAssistant(source.id, orphanUser.id)
+      const tail = yield* addUser(source.id, "after orphan")
+      const authority = yield* MessageV2.promptHistoryProjectionEffect(source.id)
+      const now = Date.now()
+      yield* db
+        .insert(SessionToolRequestReceiptTable)
+        .values({
+          receipt_id: "legacy-orphan-without-prompt-authority",
+          request_ordinal: 1,
+          session_id: source.id,
+          user_message_id: orphanUser.id,
+          assistant_message_id: orphanAssistant.id,
+          provider_attempt_id: null,
+          provider_id: model.providerID,
+          model_id: model.modelID,
+          protocol: "chat",
+          registry_tool_ids: [],
+          permission_filtered_tool_ids: [],
+          final_offered_tool_ids: [],
+          call_ids: [],
+          provider_state: "indeterminate_after_crash",
+          terminal_at: now,
+          request_state: "dispatched",
+          request_error_code: "legacy_migration_without_prompt_authority",
+          created_at: now,
+        })
+        .run()
+        .pipe(Effect.orDie)
+      yield* db
+        .update(SessionPromptEpochTable)
+        .set({ authority_state: "recovery_required", recovery_reason: "provider outcome is unknown after restart" })
+        .where(
+          and(eq(SessionPromptEpochTable.session_id, source.id), eq(SessionPromptEpochTable.epoch, authority.epoch)),
+        )
+        .run()
+        .pipe(Effect.orDie)
+      yield* db
+        .update(SessionHistoryStateTable)
+        .set({
+          state: "recovery_required",
+          reason: "provider outcome is unknown after restart",
+          time_updated: now,
+        })
+        .where(eq(SessionHistoryStateTable.session_id, source.id))
+        .run()
+        .pipe(Effect.orDie)
+
+      const safe = yield* MessageV2.promptHistoryCutoffProjectionEffect({
+        sessionID: source.id,
+        cutoffMessageID: orphanUser.id,
+      })
+      expect(safe.messages.map((message) => message.info.id)).toEqual([before.id, beforeAssistant.id])
+      const fork = yield* sessions.fork({
+        sessionID: source.id,
+        messageID: orphanUser.id,
+        intentID: "fork-before-orphaned-provider-outcome",
+      })
+      expect((yield* sessions.messages({ sessionID: fork.id })).map((message) => message.info.role)).toEqual([
+        "user",
+        "assistant",
+      ])
+      for (const cutoffMessageID of [orphanAssistant.id, tail.id]) {
+        expect(
+          yield* sessions
+            .fork({
+              sessionID: source.id,
+              messageID: cutoffMessageID,
+              intentID: `fork-after-orphaned-provider-outcome-${cutoffMessageID}`,
+            })
+            .pipe(Effect.flip),
+        ).toMatchObject({
+          _tag: "Session.ForkConflict",
+          reason: expect.stringContaining("fork cutoff is outside the recoverable history prefix"),
+        })
+      }
+
+      expect(yield* recovery.describe(source.id)).toEqual([
+        expect.objectContaining({
+          receiptID: "legacy-orphan-without-prompt-authority",
+          resolutionSupported: false,
+          unsupportedReasons: expect.arrayContaining([
+            "legacy_receipt_authority_incomplete",
+            "source_world_state_baseline_missing",
+          ]),
+        }),
+      ])
+      expect(
+        yield* db
+          .select()
+          .from(SessionToolRequestResolutionCommandTable)
+          .where(eq(SessionToolRequestResolutionCommandTable.session_id, source.id))
+          .all()
+          .pipe(Effect.orDie),
+      ).toEqual([])
+      expect(
+        yield* db
+          .select()
+          .from(SessionToolRequestResolutionTable)
+          .where(eq(SessionToolRequestResolutionTable.session_id, source.id))
+          .all()
+          .pipe(Effect.orDie),
+      ).toEqual([])
     }),
   { git: true },
   30_000,

@@ -277,6 +277,13 @@ export type OutputFormatJsonSchema = {
 
 export type OutputFormat = OutputFormatText | OutputFormatJsonSchema
 
+export type SnapshotDiffArtifactDescriptor = {
+  id: string
+  hash: string
+  codec: "legacy-message-diff.v1"
+  fileCount: number
+}
+
 export type UserMessage = {
   id: string
   sessionID: string
@@ -290,6 +297,7 @@ export type UserMessage = {
     body?: string
     diffs: Array<SnapshotFileDiff>
     diffManifest?: SnapshotDiffManifestDescriptor
+    diffArtifact?: SnapshotDiffArtifactDescriptor
   }
   agent: string
   model: {
@@ -5372,6 +5380,57 @@ export type ProjectDirectories = Array<string>
 export type ProjectCopyCopy = {
   directory: string
 }
+
+export type SessionLegacyProviderResolutionDescriptor =
+  | {
+      receiptID: string
+      sessionID: string
+      providerID: string
+      modelID: string
+      providerState: "indeterminate_after_crash"
+      sessionMutationEpoch: number
+      resolutionSupported: true
+      unsupportedReasons: Array<unknown>
+      assistantMessageID: string
+      promptEpoch: number
+      promptWindowID: string
+      historyHash: string
+      requestHash: string
+      continuationRecoverySupported: boolean
+      workspaceRecoverySupported: boolean
+      sourceWorldStateBaselineStatus: "available"
+      worldStateBaselineHash: string
+    }
+  | {
+      receiptID: string
+      sessionID: string
+      providerID: string
+      modelID: string
+      providerState: "indeterminate_after_crash"
+      sessionMutationEpoch: number
+      resolutionSupported: false
+      unsupportedReasons: Array<
+        | "legacy_receipt_authority_incomplete"
+        | "source_prompt_epoch_missing"
+        | "source_prompt_epoch_not_recovery_required"
+        | "source_prompt_epoch_binding_mismatch"
+        | "provider_attempt_authority_incomplete"
+        | "provider_attempt_resolution_requires_reconciliation"
+        | "compaction_continuation_requires_maintenance"
+        | "workspace_recovery_requires_coordination"
+        | "source_world_state_baseline_missing"
+        | "source_world_state_baseline_invalid"
+      >
+      assistantMessageID?: string
+      promptEpoch?: number
+      promptWindowID?: string
+      historyHash?: string
+      requestHash?: string
+      continuationRecoverySupported: boolean
+      workspaceRecoverySupported: boolean
+      sourceWorldStateBaselineStatus: "available" | "missing" | "invalid"
+      worldStateBaselineHash?: string
+    }
 
 export type LocationInfo = {
   directory: string
@@ -15030,23 +15089,7 @@ export type SessionProviderResolutionListResponses = {
   /**
    * Pending provider recovery decisions
    */
-  200: Array<{
-    receiptID: string
-    sessionID: string
-    assistantMessageID: string
-    providerID: string
-    modelID: string
-    providerState: "indeterminate_after_crash"
-    promptEpoch: number
-    promptWindowID: string
-    historyHash: string
-    requestHash: string
-    sessionMutationEpoch: number
-    continuationRecoverySupported: boolean
-    workspaceRecoverySupported: boolean
-    sourceWorldStateBaselineStatus: "available" | "missing" | "invalid"
-    worldStateBaselineHash?: string
-  }>
+  200: Array<SessionLegacyProviderResolutionDescriptor>
 }
 
 export type SessionProviderResolutionListResponse =
@@ -15175,6 +15218,10 @@ export type SyncReplayErrors = {
    * BadRequest | InvalidRequestError
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
 }
 
 export type SyncReplayError = SyncReplayErrors[keyof SyncReplayErrors]
@@ -15190,46 +15237,18 @@ export type SyncReplayResponses = {
 
 export type SyncReplayResponse = SyncReplayResponses[keyof SyncReplayResponses]
 
-export type SyncStealData = {
-  body?: {
-    sessionID: string
-  }
-  path?: never
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/sync/steal"
-}
-
-export type SyncStealErrors = {
-  /**
-   * BadRequest | InvalidRequestError
-   */
-  400: EffectHttpApiErrorBadRequest | InvalidRequestError
-  /**
-   * ConflictError
-   */
-  409: ConflictError
-}
-
-export type SyncStealError = SyncStealErrors[keyof SyncStealErrors]
-
-export type SyncStealResponses = {
-  /**
-   * Session stolen into workspace
-   */
-  200: {
-    sessionID: string
-  }
-}
-
-export type SyncStealResponse = SyncStealResponses[keyof SyncStealResponses]
-
 export type SyncHistoryListData = {
-  body?: {
-    [key: string]: number
-  }
+  body?:
+    | {
+        [key: string]: number
+      }
+    | {
+        version: 1
+        cursor?: string
+        known?: {
+          [key: string]: number
+        }
+      }
   path?: never
   query?: {
     directory?: string
@@ -15244,6 +15263,10 @@ export type SyncHistoryListErrors = {
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
   /**
+   * ConflictError
+   */
+  409: ConflictError
+  /**
    * ServiceUnavailableError
    */
   503: ServiceUnavailableError
@@ -15253,17 +15276,23 @@ export type SyncHistoryListError = SyncHistoryListErrors[keyof SyncHistoryListEr
 
 export type SyncHistoryListResponses = {
   /**
-   * Sync events
+   * Bounded sync history page
    */
-  200: Array<{
-    id: string
-    aggregate_id: string
-    seq: number
-    type: string
-    data: {
-      [key: string]: unknown
-    }
-  }>
+  200: {
+    version: 1
+    items: Array<{
+      kind: "event"
+      id: string
+      aggregate_id: string
+      seq: number
+      type: string
+      data: {
+        [key: string]: unknown
+      }
+    }>
+    nextCursor: string
+    complete: boolean
+  }
 }
 
 export type SyncHistoryListResponse = SyncHistoryListResponses[keyof SyncHistoryListResponses]

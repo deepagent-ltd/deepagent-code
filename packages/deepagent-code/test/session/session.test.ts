@@ -3,6 +3,7 @@ import path from "path"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { Database } from "@deepagent-code/core/database/database"
 import { EventV2 } from "@deepagent-code/core/event"
+import { EventTable } from "@deepagent-code/core/event/sql"
 import { ModelV2 } from "@deepagent-code/core/model"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { SessionProjector } from "@deepagent-code/core/session/projector"
@@ -25,6 +26,8 @@ import { Worktree } from "@/worktree"
 import { Git } from "../../src/git"
 import { DeepAgentContext, DeepAgentDocumentStore } from "@deepagent-code/core/deepagent/index"
 import { contextStoreRoot, loadForkOrigin, forwardLedgerOnFork } from "@/session/context-ledger"
+import { WorkspaceV2 } from "@deepagent-code/core/workspace"
+import { eq } from "drizzle-orm"
 
 void Log.init({ print: false })
 
@@ -38,6 +41,7 @@ const it = testEffect(
       Layer.provide(RuntimeFlags.layer({ experimentalWorkspaces: false })),
       Layer.provide(BackgroundJob.defaultLayer),
     ),
+    Database.defaultLayer,
     CrossSpawnSpawner.defaultLayer,
     testInstanceStoreLayer,
   ),
@@ -412,6 +416,65 @@ describe("Session", () => {
         directory,
       })
       expect((yield* sessions.get(created.id)).path).toBeUndefined()
+    }),
+  )
+
+  it.instance("rejects workspace placement changes without writing Session or EventV2 state", () =>
+    Effect.gen(function* () {
+      const sessions = yield* SessionNs.Service
+      const { db } = yield* Database.Service
+      const workspaceID = WorkspaceV2.ID.make("wrk_session_placement_guard")
+      const workspaceSession = yield* Effect.acquireRelease(
+        sessions.create({ title: "workspace placement guard", workspaceID }),
+        (info) => sessions.remove(info.id).pipe(Effect.ignore),
+      )
+      const localSession = yield* Effect.acquireRelease(sessions.create({ title: "local placement guard" }), (info) =>
+        sessions.remove(info.id).pipe(Effect.ignore),
+      )
+      const beforeWorkspace = yield* sessions.get(workspaceSession.id)
+      const beforeLocal = yield* sessions.get(localSession.id)
+      const beforeWorkspaceEvents = yield* db
+        .select()
+        .from(EventTable)
+        .where(eq(EventTable.aggregate_id, workspaceSession.id))
+        .all()
+        .pipe(Effect.orDie)
+      const beforeLocalEvents = yield* db
+        .select()
+        .from(EventTable)
+        .where(eq(EventTable.aggregate_id, localSession.id))
+        .all()
+        .pipe(Effect.orDie)
+
+      const directoryError = yield* sessions
+        .setDirectory({ sessionID: workspaceSession.id, directory: path.join(workspaceSession.directory, "other") })
+        .pipe(Effect.flip)
+      const workspaceError = yield* sessions
+        .setWorkspace({ sessionID: localSession.id, workspaceID })
+        .pipe(Effect.flip)
+
+      expect(directoryError).toBeInstanceOf(SessionNs.PlacementChangeUnsupportedError)
+      expect(directoryError.operation).toBe("directory")
+      expect(workspaceError).toBeInstanceOf(SessionNs.PlacementChangeUnsupportedError)
+      expect(workspaceError.operation).toBe("workspace")
+      expect(yield* sessions.get(workspaceSession.id)).toEqual(beforeWorkspace)
+      expect(yield* sessions.get(localSession.id)).toEqual(beforeLocal)
+      expect(
+        yield* db
+          .select()
+          .from(EventTable)
+          .where(eq(EventTable.aggregate_id, workspaceSession.id))
+          .all()
+          .pipe(Effect.orDie),
+      ).toEqual(beforeWorkspaceEvents)
+      expect(
+        yield* db
+          .select()
+          .from(EventTable)
+          .where(eq(EventTable.aggregate_id, localSession.id))
+          .all()
+          .pipe(Effect.orDie),
+      ).toEqual(beforeLocalEvents)
     }),
   )
 

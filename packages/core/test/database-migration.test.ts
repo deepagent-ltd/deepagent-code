@@ -28,6 +28,7 @@ import compactionContinuationAdmissionMigration from "@deepagent-code/core/datab
 import partIntegrityBackfillMigration from "@deepagent-code/core/database/migration/20260810170000_part_integrity_backfill"
 import legacyActivityProgressMigration from "@deepagent-code/core/database/migration/20260811090000_legacy_activity_progress"
 import legacyActivityOwnerMigration from "@deepagent-code/core/database/migration/20260811100000_legacy_activity_owner"
+import eventSnapshotAuthorityMigration from "@deepagent-code/core/database/migration/20260813100000_event_snapshot_authority"
 import type { SqlClient as SqlClientService } from "effect/unstable/sql/SqlClient"
 import { Database } from "@deepagent-code/core/database/database"
 import { tmpdir } from "./fixture/tmpdir"
@@ -40,6 +41,51 @@ const run = <A, E>(effect: Effect.Effect<A, E, SqlClientService>) =>
 const makeDb = EffectDrizzleSqlite.makeWithDefaults()
 
 describe("DatabaseMigration", () => {
+  test("rejects duplicate migration IDs before changing the database", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        const duplicate = {
+          id: "duplicate-migration-id",
+          up: () => Effect.die("duplicate migration must not run"),
+        }
+        const result = yield* DatabaseMigration.applyOnly(db, [duplicate, duplicate]).pipe(Effect.exit)
+
+        expect(result).toMatchObject({ _tag: "Failure" })
+        expect(
+          yield* db.get(sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'migration'`),
+        ).toBeUndefined()
+      }),
+    )
+  })
+
+  test("upgrades EventV2 history and allocates sync_seq for old and new writers", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(sql`CREATE TABLE event_sequence (aggregate_id TEXT PRIMARY KEY, seq INTEGER NOT NULL, owner_id TEXT)`)
+        yield* db.run(sql`CREATE TABLE event (id TEXT PRIMARY KEY, aggregate_id TEXT NOT NULL, seq INTEGER NOT NULL, type TEXT NOT NULL, data TEXT NOT NULL)`)
+        yield* db.run(sql`INSERT INTO event_sequence VALUES ('session-a', 1, NULL)`)
+        yield* db.run(sql`INSERT INTO event VALUES ('event-a', 'session-a', 0, 'test.1', '{}')`)
+        yield* db.run(sql`INSERT INTO event VALUES ('event-b', 'session-a', 1, 'test.1', '{}')`)
+
+        yield* DatabaseMigration.applyOnly(db, [eventSnapshotAuthorityMigration])
+        yield* db.run(sql`INSERT INTO event(id, aggregate_id, seq, type, data) VALUES ('event-old-writer', 'session-a', 2, 'test.1', '{}')`)
+        yield* db.run(sql`UPDATE event_sync_sequence SET seq = seq + 1 WHERE id = 1`)
+        yield* db.run(sql`INSERT INTO event(id, aggregate_id, seq, type, data, sync_seq) VALUES ('event-new-writer', 'session-a', 3, 'test.1', '{}', (SELECT seq FROM event_sync_sequence WHERE id = 1))`)
+        yield* db.run(sql`INSERT INTO event(id, aggregate_id, seq, type, data) VALUES ('event-old-writer-again', 'session-a', 4, 'test.1', '{}')`)
+
+        expect(yield* db.all(sql`SELECT id, sync_seq FROM event ORDER BY sync_seq`)).toEqual([
+          { id: "event-a", sync_seq: 1 },
+          { id: "event-b", sync_seq: 2 },
+          { id: "event-old-writer", sync_seq: 3 },
+          { id: "event-new-writer", sync_seq: 4 },
+          { id: "event-old-writer-again", sync_seq: 5 },
+        ])
+        expect(yield* db.get(sql`SELECT seq, length(generation) AS generation_length, length(cursor_secret) AS secret_length FROM event_sync_sequence WHERE id = 1`)).toEqual({ seq: 5, generation_length: 32, secret_length: 64 })
+      }),
+    )
+  })
   test("serializes concurrent embedded initialization for one database path", async () => {
     await using tmp = await tmpdir()
     const filename = path.join(tmp.path, "embedded.sqlite")

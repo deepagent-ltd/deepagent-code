@@ -15,6 +15,7 @@ import { WorkspaceV2 } from "../workspace"
 import { SessionContextEpoch } from "./context-epoch"
 import { MessageTable, PartTable, SessionMessageTable, SessionTable } from "./sql"
 import type { DeepMutable } from "../schema"
+import { SessionSchema } from "./schema"
 
 type DatabaseService = Database.Interface["db"]
 
@@ -229,6 +230,87 @@ export const layer = Layer.effectDiscard(
     const events = yield* EventV2.Service
     const { db } = yield* Database.Service
     yield* events.beforeCommit((event) => SessionInput.guardReservedID(db, event))
+    yield* events.beforeCommit((event) =>
+      Effect.gen(function* () {
+        if (!event.replay) return
+        if (
+          (Schema.is(SessionV1.Event.Created)(event) || Schema.is(SessionV1.Event.Updated)(event)) &&
+          event.data.info.id !== event.data.sessionID
+        )
+          return yield* Effect.die(
+            new EventV2.InvalidSyncEventError({
+              type: event.type,
+              message: "Session replay identity does not match its aggregate",
+            }),
+          )
+        const replaySessionID =
+          event.replayOwnerID &&
+          typeof event.data === "object" &&
+          event.data !== null &&
+          "sessionID" in event.data &&
+          Schema.is(SessionSchema.ID)(event.data.sessionID)
+            ? event.data.sessionID
+            : undefined
+        if (replaySessionID) {
+          const authority = yield* db
+            .select({ workspaceID: SessionTable.workspace_id })
+            .from(SessionTable)
+            .where(eq(SessionTable.id, replaySessionID))
+            .get()
+            .pipe(Effect.orDie)
+          const freshCreated =
+            !authority &&
+            Schema.is(SessionV1.Event.Created)(event) &&
+            event.seq === 0 &&
+            event.data.info.id === replaySessionID &&
+            event.data.info.workspaceID === event.replayOwnerID
+          if ((!authority && !freshCreated) || (authority && authority.workspaceID !== event.replayOwnerID))
+            return yield* Effect.die(
+              new EventV2.InvalidSyncEventError({
+                type: event.type,
+                message: "Session replay owner does not match the current workspace authority",
+              }),
+            )
+        }
+        if (Schema.is(SessionEvent.Moved)(event) && !event.replayExact)
+          return yield* Effect.die(
+            new EventV2.InvalidSyncEventError({
+              type: event.type,
+              message: "Session placement replay requires a durable transfer operation receipt",
+            }),
+          )
+        if (!Schema.is(SessionV1.Event.Updated)(event)) return
+        const current = yield* db
+          .select({
+            projectID: SessionTable.project_id,
+            directory: SessionTable.directory,
+            workspaceID: SessionTable.workspace_id,
+          })
+          .from(SessionTable)
+          .where(eq(SessionTable.id, event.data.sessionID))
+          .get()
+          .pipe(Effect.orDie)
+        if (!current)
+          return yield* Effect.die(
+            new EventV2.InvalidSyncEventError({
+              type: event.type,
+              message: "Session update replay requires an existing projected Session",
+            }),
+          )
+        if (
+          current.projectID === event.data.info.projectID &&
+          current.directory === event.data.info.directory &&
+          (current.workspaceID ?? undefined) === (event.data.info.workspaceID ?? undefined)
+        )
+          return
+        return yield* Effect.die(
+          new EventV2.InvalidSyncEventError({
+            type: event.type,
+            message: "Session update replay cannot change project, directory, or workspace placement",
+          }),
+        )
+      }),
+    )
     yield* events.project(SessionV1.Event.Created, (event) =>
       Effect.gen(function* () {
         const stored = yield* db
