@@ -501,6 +501,16 @@ export const SessionContextEpochTable = sqliteTable("session_context_epoch", {
   revision: integer().notNull().default(0),
 })
 
+export type TaskStructuredOutputReceipt = {
+  readonly attempt: number
+} & (
+  | { readonly transport: "structured" | "text_fallback" }
+  | {
+      readonly transport: "degraded_text"
+      readonly reason: "structured_output_missing" | "structured_output_invalid"
+    }
+)
+
 export const TaskRunTable = sqliteTable(
   "task_run",
   {
@@ -541,6 +551,7 @@ export const TaskRunTable = sqliteTable(
     lease_expires_at: integer(),
     raw_result_message_id: text().$type<MessageID>(),
     structured_result_message_id: text().$type<MessageID>(),
+    structured_output_receipt: text({ mode: "json" }).$type<TaskStructuredOutputReceipt>(),
     output: text(),
     error: text({ mode: "json" }).$type<{ code: string; message: string; data?: Record<string, unknown> }>(),
     time_created: integer().notNull(),
@@ -639,6 +650,79 @@ export const TaskRunTable = sqliteTable(
       table.generation,
     ),
     index("task_run_goal_idx").on(table.goal_id, table.goal_tick_seq, table.goal_role, table.goal_ordinal),
+  ],
+)
+
+export const TaskStructuredOutputEvidenceTable = sqliteTable(
+  "task_structured_output_evidence",
+  {
+    run_id: text()
+      .primaryKey()
+      .references(() => TaskRunTable.run_id, { onDelete: "cascade" }),
+    child_session_id: text().$type<SessionSchema.ID>().notNull(),
+    owner_token: text().notNull(),
+    claim_generation: integer().notNull(),
+    expected_version: integer().notNull(),
+    terminal_state: text().$type<"completed" | "failed">().notNull(),
+    attempts: integer().notNull(),
+    contract_json: text().notNull(),
+    raw_result_message_id: text().$type<MessageID>().notNull(),
+    raw_message_json: text().notNull(),
+    raw_parts_json: text().notNull(),
+    result_message_id: text().$type<MessageID>(),
+    result_message_json: text(),
+    result_parts_json: text(),
+    output: text(),
+    structured_output_receipt: text({ mode: "json" }).$type<TaskStructuredOutputReceipt>(),
+    failure_code: text(),
+    created_at: integer().notNull(),
+  },
+  (table) => [
+    index("task_structured_output_evidence_raw_message_idx").on(table.raw_result_message_id),
+    index("task_structured_output_evidence_result_message_idx").on(table.result_message_id),
+  ],
+)
+
+export const TaskStructuredOutputEvidencePartTable = sqliteTable(
+  "task_structured_output_evidence_part",
+  {
+    run_id: text()
+      .notNull()
+      .references(() => TaskStructuredOutputEvidenceTable.run_id, { onDelete: "cascade" }),
+    role: text().$type<"raw" | "result">().notNull(),
+    ordinal: integer().notNull(),
+    part_id: text().$type<PartID>().notNull(),
+    message_id: text().$type<MessageID>().notNull(),
+    session_id: text().$type<SessionSchema.ID>().notNull(),
+    part_json: text().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.run_id, table.role, table.part_id] }),
+    uniqueIndex("task_structured_output_evidence_part_ordinal_idx").on(table.run_id, table.role, table.ordinal),
+    index("task_structured_output_evidence_part_part_idx").on(table.part_id),
+  ],
+)
+
+export const TaskStructuredFinalizerResponseTable = sqliteTable(
+  "task_structured_finalizer_response",
+  {
+    run_id: text()
+      .notNull()
+      .references(() => TaskRunTable.run_id, { onDelete: "cascade" }),
+    attempt: integer().notNull(),
+    child_session_id: text().$type<SessionSchema.ID>().notNull(),
+    owner_token: text().notNull(),
+    claim_generation: integer().notNull(),
+    expected_version: integer().notNull(),
+    source_message_id: text().$type<MessageID>().notNull(),
+    request_message_id: text().$type<MessageID>().notNull(),
+    response_message_id: text().$type<MessageID>().notNull(),
+    response_message_json: text().notNull(),
+    created_at: integer().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.run_id, table.attempt] }),
+    uniqueIndex("task_structured_finalizer_response_message_idx").on(table.response_message_id),
   ],
 )
 
