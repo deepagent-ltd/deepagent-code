@@ -43,6 +43,40 @@ describe("message timeline compaction", () => {
       }),
     )
   })
+
+  test("keeps a legacy diff artifact as metadata without materializing an inline patch", async () => {
+    const { Timeline } = await import("./message-timeline.data")
+    const message = {
+      id: "msg_diff_artifact",
+      sessionID: "ses_1",
+      role: "user",
+      agent: "build",
+      model: { providerID: "deepseek", modelID: "deepseek-chat" },
+      time: { created: 1 },
+      summary: {
+        diffs: [],
+        diffArtifact: {
+          id: "evtart_legacy",
+          hash: "a".repeat(64),
+          codec: "legacy-message-diff.v2",
+          fileCount: 4_500,
+        },
+      },
+    } as UserMessage
+
+    const rows = Timeline.constructMessageRows(message, () => [], [], 0, false, "idle", false)
+    const diff = rows.find((row) => row._tag === "DiffSummary")
+
+    expect(diff).toEqual(
+      expect.objectContaining({
+        _tag: "DiffSummary",
+        userMessageID: message.id,
+        diffs: [],
+        artifact: message.summary?.diffArtifact,
+      }),
+    )
+    expect(JSON.stringify(rows)).not.toContain('"patch"')
+  })
 })
 
 describe("message timeline activity progress", () => {

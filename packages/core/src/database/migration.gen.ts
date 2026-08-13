@@ -83,8 +83,15 @@ export const migrations = (
     import("./migration/20260812120000_legacy_provider_recovery"),
     import("./migration/20260812130000_legacy_activity_lifecycle_expand"),
     import("./migration/20260812140000_session_diff_manifest"),
+    import("./migration/20260813074240_bug_407_010_maintenance"),
     import("./migration/20260813100000_event_snapshot_authority"),
     import("./migration/20260813110000_provider_recovery_authority_bridge"),
     import("./migration/20260813120000_legacy_provider_receipt_supersession"),
+    import("./migration/20260813125000_event_sync_backfill_authority"),
+    import("./migration/20260813130000_file_part_artifact"),
+    import("./migration/20260813131000_event_snapshot_chunks"),
+    import("./migration/20260813132000_session_diff_artifact"),
+    import("./migration/20260813133000_session_transfer_authority"),
+    import("./migration/20260813134000_database_capability"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

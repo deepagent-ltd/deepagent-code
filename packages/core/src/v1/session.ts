@@ -189,6 +189,16 @@ export const FilePart = Schema.Struct({
   mime: Schema.String,
   filename: Schema.optional(Schema.String),
   url: Schema.String,
+  artifact: Schema.optional(
+    Schema.Struct({
+      codec: Schema.Literal("file-part.v1"),
+      id: Schema.String.check(Schema.isPattern(/^fpart_[a-f0-9]{64}$/)),
+      hash: Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/)),
+      bytes: NonNegativeInt.check(Schema.isLessThanOrEqualTo(32 * 1024 * 1024)),
+      chunkBytes: Schema.Literal(262_144 as const),
+      chunks: NonNegativeInt.check(Schema.isGreaterThanOrEqualTo(1), Schema.isLessThanOrEqualTo(128)),
+    }),
+  ),
   source: Schema.optional(FilePartSource),
 }).annotate({ identifier: "FilePart" })
 export type FilePart = Types.DeepMutable<Schema.Schema.Type<typeof FilePart>>

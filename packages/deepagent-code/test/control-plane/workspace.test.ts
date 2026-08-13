@@ -6,7 +6,7 @@ import path from "node:path"
 import { NodeHttpServer } from "@effect/platform-node"
 import { Cause, Effect, Exit, Fiber, Layer, Schema, Stream } from "effect"
 import { FetchHttpClient, HttpServer, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
-import { and, eq } from "drizzle-orm"
+import { and, eq, sql } from "drizzle-orm"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import * as Log from "@deepagent-code/core/util/log"
 import { GlobalBus, type GlobalEvent } from "@/bus/global"
@@ -17,7 +17,7 @@ import { AbsolutePath } from "@deepagent-code/core/schema"
 import { Session as SessionNs } from "@/session/session"
 import { SessionID } from "@/session/schema"
 import { SessionTable } from "@deepagent-code/core/session/sql"
-import { EventSequenceTable, EventTable, WorkspaceSyncCursorTable } from "@deepagent-code/core/event/sql"
+import { EventSequenceTable, EventSyncSequenceTable, EventTable, WorkspaceSyncCursorTable } from "@deepagent-code/core/event/sql"
 import { SessionToolRequestReceiptTable } from "@/session/tool-request-receipt.sql"
 import { resetDatabase } from "../fixture/db"
 import { disposeAllInstances, provideTmpdirInstance, requireInstance, TestInstance } from "../fixture/fixture"
@@ -39,6 +39,7 @@ import { EventV2 } from "@deepagent-code/core/event"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { SyncReplayLimits } from "@/sync/replay-protocol"
 import { Hash } from "@deepagent-code/core/util/hash"
+import { FilePartArtifact } from "@deepagent-code/core/file-part-artifact"
 
 void Log.init({ print: false })
 
@@ -1294,6 +1295,13 @@ describe("workspace CRUD", () => {
                 },
               }
               expect(Buffer.byteLength(JSON.stringify(data))).toBe(EventV2.MAX_ENCODED_PAYLOAD_BYTES)
+              const sync = yield* db
+                .update(EventSyncSequenceTable)
+                .set({ seq: sql`${EventSyncSequenceTable.seq} + 1` })
+                .where(eq(EventSyncSequenceTable.id, 1))
+                .returning({ seq: EventSyncSequenceTable.seq })
+                .get()
+                .pipe(Effect.orDie)
               yield* db
                 .insert(EventTable)
                 .values({
@@ -1302,6 +1310,7 @@ describe("workspace CRUD", () => {
                   seq: sequence + 1,
                   type: EventV2.versionedType(SessionV1.Event.MessageUpdated.type, 1),
                   data,
+                  sync_seq: sync!.seq,
                 })
                 .run()
                 .pipe(Effect.orDie)
@@ -1799,6 +1808,138 @@ describe("workspace sync state", () => {
               ),
             ).toBeUndefined()
             yield* workspace.remove(info.id)
+          }),
+        { git: true },
+      )
+    })
+  }, 30_000)
+
+  it.live("does not advance its durable cursor when file artifact import fails", () => {
+    let chunkRequests = 0
+    let historyRequests = 0
+    let metadataRequests = 0
+    let sourceEvent: {
+      id: EventV2.ID
+      aggregateID: SessionID
+      seq: number
+      data: Record<string, unknown>
+      metadata: FilePartArtifact.Metadata
+    }
+    return Effect.gen(function* () {
+      yield* HttpServer.serveEffect()(
+        Effect.gen(function* () {
+          const req = yield* HttpServerRequest.HttpServerRequest
+          const url = new URL(req.url, "http://localhost")
+          if (url.pathname === "/history-artifact-fail/global/event")
+            return HttpServerResponse.fromWeb(eventStreamResponse())
+          if (url.pathname === "/history-artifact-fail/sync/history")
+            return (
+              historyRequests++,
+              HttpServerResponse.fromWeb(
+                Response.json({
+                  version: 1,
+                  items: [
+                    {
+                      kind: "event",
+                      id: sourceEvent.id,
+                      aggregate_id: sourceEvent.aggregateID,
+                      seq: sourceEvent.seq,
+                      type: "message.part.updated.1",
+                      data: sourceEvent.data,
+                    },
+                  ],
+                  nextCursor: "must-not-commit-artifact",
+                  complete: true,
+                }),
+              )
+            )
+          if (url.pathname === "/history-artifact-fail/sync/artifact/file/metadata")
+            return (metadataRequests++, HttpServerResponse.fromWeb(Response.json(sourceEvent.metadata)))
+          if (url.pathname === "/history-artifact-fail/sync/artifact/file/chunk")
+            return yield* Effect.gen(function* () {
+              chunkRequests += 1
+              return HttpServerResponse.fromWeb(
+                Response.json({
+                  artifactID: sourceEvent.metadata.descriptor.id,
+                  index: 0,
+                  hash: sourceEvent.metadata.chunkHashes[0],
+                  data: Buffer.from("corrupt").toString("base64"),
+                }),
+              )
+            })
+          return HttpServerResponse.text("unexpected", { status: 500 })
+        }),
+      )
+      const url = yield* serverUrl()
+      yield* provideTmpdirInstance(
+        () =>
+          Effect.gen(function* () {
+            const workspace = yield* Workspace.Service
+            const sessionSvc = yield* SessionNs.Service
+            const { db } = yield* Database.Service
+            const instance = yield* requireInstance
+            const type = unique("history-artifact-fail")
+            const info = workspaceInfo(instance.project.id, type)
+            yield* insertWorkspace(info)
+            registerAdapter(instance.project.id, type, remoteAdapter(`${url}/history-artifact-fail`).adapter)
+            const session = yield* sessionSvc.create({ title: "artifact target" })
+            yield* attachSessionToWorkspace(session.id, info.id)
+            const messageID = SessionV1.MessageID.ascending()
+            yield* sessionSvc.updateMessage({
+              id: messageID,
+              sessionID: session.id,
+              role: "user",
+              time: { created: Date.now() },
+              agent: "build",
+              model: { providerID: "test" as never, modelID: "model" as never },
+            })
+            const nextSeq = ((yield* sessionSequence(session.id)) ?? -1) + 1
+            const body = Buffer.alloc(FilePartArtifact.CHUNK_BYTES + 1, 0x71)
+            const prepared = FilePartArtifact.prepare(
+              SessionV1.Event.PartUpdated.type,
+              {
+                sessionID: session.id,
+                part: {
+                  id: SessionV1.PartID.ascending(),
+                  sessionID: session.id,
+                  messageID,
+                  type: "file",
+                  mime: "application/octet-stream",
+                  url: `data:application/octet-stream;base64,${body.toString("base64")}`,
+                },
+                time: Date.now(),
+              },
+              EventV2.MAX_ENCODED_PAYLOAD_BYTES + 1,
+              EventV2.MAX_ENCODED_PAYLOAD_BYTES,
+            )
+            const descriptor = prepared.artifacts[0]!.descriptor
+            const eventID = EventV2.ID.create()
+            sourceEvent = {
+              id: eventID,
+              aggregateID: session.id,
+              seq: nextSeq,
+              data: prepared.data,
+              metadata: FilePartArtifact.Metadata.make({
+                eventID,
+                aggregateID: session.id,
+                seq: nextSeq,
+                originalDataHash: Hash.sha256(JSON.stringify(prepared.data)),
+                canonicalDataHash: Hash.sha256(JSON.stringify(prepared.data)),
+                canonicalData: prepared.data,
+                descriptor,
+                chunkHashes: prepared.artifacts[0]!.chunks.map((chunk) => Hash.sha256(chunk)),
+              }),
+            }
+
+            yield* workspace.startWorkspaceSyncing(instance.project.id)
+            yield* eventuallyEffect(Effect.sync(() => expect(chunkRequests).toBeGreaterThanOrEqual(1)), 5_000)
+            expect(historyRequests).toBeGreaterThanOrEqual(1)
+            expect(metadataRequests).toBeGreaterThanOrEqual(1)
+            expect(
+              yield* db.select().from(WorkspaceSyncCursorTable).where(eq(WorkspaceSyncCursorTable.workspace_id, info.id)).get(),
+            ).toBeUndefined()
+            expect(yield* sessionSequence(session.id)).toBe(nextSeq - 1)
+            expect(yield* db.select().from(EventTable).where(eq(EventTable.id, eventID)).get()).toBeUndefined()
           }),
         { git: true },
       )

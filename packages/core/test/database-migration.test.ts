@@ -59,7 +59,7 @@ describe("DatabaseMigration", () => {
     )
   })
 
-  test("upgrades EventV2 history and allocates sync_seq for old and new writers", async () => {
+  test("stages EventV2 history without rewriting legacy rows and fences old writers", async () => {
     await run(
       Effect.gen(function* () {
         const db = yield* makeDb
@@ -70,19 +70,22 @@ describe("DatabaseMigration", () => {
         yield* db.run(sql`INSERT INTO event VALUES ('event-b', 'session-a', 1, 'test.1', '{}')`)
 
         yield* DatabaseMigration.applyOnly(db, [eventSnapshotAuthorityMigration])
-        yield* db.run(sql`INSERT INTO event(id, aggregate_id, seq, type, data) VALUES ('event-old-writer', 'session-a', 2, 'test.1', '{}')`)
+        const oldWriter = yield* db
+          .run(sql`INSERT INTO event(id, aggregate_id, seq, type, data) VALUES ('event-old-writer', 'session-a', 2, 'test.1', '{}')`)
+          .pipe(Effect.exit)
         yield* db.run(sql`UPDATE event_sync_sequence SET seq = seq + 1 WHERE id = 1`)
-        yield* db.run(sql`INSERT INTO event(id, aggregate_id, seq, type, data, sync_seq) VALUES ('event-new-writer', 'session-a', 3, 'test.1', '{}', (SELECT seq FROM event_sync_sequence WHERE id = 1))`)
-        yield* db.run(sql`INSERT INTO event(id, aggregate_id, seq, type, data) VALUES ('event-old-writer-again', 'session-a', 4, 'test.1', '{}')`)
+        yield* db.run(sql`INSERT INTO event(id, aggregate_id, seq, type, data, sync_seq) VALUES ('event-new-writer', 'session-a', 2, 'test.1', '{}', (SELECT seq FROM event_sync_sequence WHERE id = 1))`)
 
-        expect(yield* db.all(sql`SELECT id, sync_seq FROM event ORDER BY sync_seq`)).toEqual([
-          { id: "event-a", sync_seq: 1 },
-          { id: "event-b", sync_seq: 2 },
-          { id: "event-old-writer", sync_seq: 3 },
-          { id: "event-new-writer", sync_seq: 4 },
-          { id: "event-old-writer-again", sync_seq: 5 },
+        expect(oldWriter._tag).toBe("Failure")
+        expect(yield* db.all(sql`SELECT id, sync_seq FROM event ORDER BY rowid`)).toEqual([
+          { id: "event-a", sync_seq: null },
+          { id: "event-b", sync_seq: null },
+          { id: "event-new-writer", sync_seq: 3 },
         ])
-        expect(yield* db.get(sql`SELECT seq, length(generation) AS generation_length, length(cursor_secret) AS secret_length FROM event_sync_sequence WHERE id = 1`)).toEqual({ seq: 5, generation_length: 32, secret_length: 64 })
+        expect(yield* db.all(sql`SELECT sync_seq, event_id FROM event_sync_index`)).toEqual([
+          { sync_seq: 3, event_id: "event-new-writer" },
+        ])
+        expect(yield* db.get(sql`SELECT seq, backfill_complete, length(generation) AS generation_length, length(cursor_secret) AS secret_length FROM event_sync_sequence WHERE id = 1`)).toEqual({ seq: 3, backfill_complete: 0, generation_length: 32, secret_length: 64 })
       }),
     )
   })

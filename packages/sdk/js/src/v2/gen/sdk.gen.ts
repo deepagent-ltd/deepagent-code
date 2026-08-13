@@ -387,6 +387,10 @@ import type {
   SessionDeleteMessageErrors,
   SessionDeleteMessageResponses,
   SessionDeleteResponses,
+  SessionDiffArtifactFileErrors,
+  SessionDiffArtifactFileResponses,
+  SessionDiffArtifactManifestErrors,
+  SessionDiffArtifactManifestResponses,
   SessionDiffErrors,
   SessionDiffResponses,
   SessionForkErrors,
@@ -436,10 +440,18 @@ import type {
   SessionUpdateErrors,
   SessionUpdateResponses,
   SubtaskPartInput,
+  SyncArtifactFileChunkErrors,
+  SyncArtifactFileChunkResponses,
+  SyncArtifactFileMetadataErrors,
+  SyncArtifactFileMetadataResponses,
   SyncHistoryListErrors,
   SyncHistoryListResponses,
   SyncReplayErrors,
   SyncReplayResponses,
+  SyncSnapshotChunksErrors,
+  SyncSnapshotChunksResponses,
+  SyncSnapshotRowsErrors,
+  SyncSnapshotRowsResponses,
   SyncStartErrors,
   SyncStartResponses,
   TextPartInput,
@@ -7402,6 +7414,94 @@ export class Session2 extends HeyApiClient {
   }
 
   /**
+   * Get a Session diff artifact manifest page
+   *
+   * Read only metadata for an artifact committed to the addressed Session message.
+   */
+  public diffArtifactManifest<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+      messageID: string
+      artifactID: string
+      cursor?: string
+      limit?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "messageID" },
+            { in: "query", key: "artifactID" },
+            { in: "query", key: "cursor" },
+            { in: "query", key: "limit" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      SessionDiffArtifactManifestResponses,
+      SessionDiffArtifactManifestErrors,
+      ThrowOnError
+    >({
+      url: "/session/{sessionID}/diff-artifact/manifest",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Get one bounded Session diff artifact file patch
+   *
+   * Verify content-addressed chunks and return at most the requested UTF-8 byte budget for one authorized path.
+   */
+  public diffArtifactFile<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+      messageID: string
+      artifactID: string
+      path: string
+      maxBytes?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "messageID" },
+            { in: "query", key: "artifactID" },
+            { in: "query", key: "path" },
+            { in: "query", key: "maxBytes" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      SessionDiffArtifactFileResponses,
+      SessionDiffArtifactFileErrors,
+      ThrowOnError
+    >({
+      url: "/session/{sessionID}/diff-artifact/file",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
    * Get session messages
    *
    * Retrieve all messages in a session, including user prompts and AI responses.
@@ -8509,6 +8609,113 @@ export class History extends HeyApiClient {
   }
 }
 
+export class File2 extends HeyApiClient {
+  /**
+   * Read scoped file-part artifact metadata
+   *
+   * Resolve a content-addressed file-part descriptor only through its exact workspace event binding.
+   */
+  public metadata<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      eventID: string
+      aggregateID: string
+      seq: number
+      artifactID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "eventID" },
+            { in: "body", key: "aggregateID" },
+            { in: "body", key: "seq" },
+            { in: "body", key: "artifactID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      SyncArtifactFileMetadataResponses,
+      SyncArtifactFileMetadataErrors,
+      ThrowOnError
+    >({
+      url: "/sync/artifact/file/metadata",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Read one verified file-part artifact chunk
+   *
+   * Return one bounded base64 chunk after workspace scope and expected hash validation.
+   */
+  public chunk<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      eventID: string
+      aggregateID: string
+      seq: number
+      artifactID: string
+      index: number
+      hash: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "eventID" },
+            { in: "body", key: "aggregateID" },
+            { in: "body", key: "seq" },
+            { in: "body", key: "artifactID" },
+            { in: "body", key: "index" },
+            { in: "body", key: "hash" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      SyncArtifactFileChunkResponses,
+      SyncArtifactFileChunkErrors,
+      ThrowOnError
+    >({
+      url: "/sync/artifact/file/chunk",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
+export class Artifact extends HeyApiClient {
+  private _file?: File2
+  get file(): File2 {
+    return (this._file ??= new File2({ client: this.client }))
+  }
+}
+
 export class Sync extends HeyApiClient {
   /**
    * Start workspace sync
@@ -8595,9 +8802,96 @@ export class Sync extends HeyApiClient {
     })
   }
 
+  public snapshotRows<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      aggregateID: string
+      snapshotID: string
+      snapshotHash: string
+      after?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      limit?: number
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "aggregateID" },
+            { in: "body", key: "snapshotID" },
+            { in: "body", key: "snapshotHash" },
+            { in: "body", key: "after" },
+            { in: "body", key: "limit" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<SyncSnapshotRowsResponses, SyncSnapshotRowsErrors, ThrowOnError>({
+      url: "/sync/snapshot/rows",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  public snapshotChunks<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      aggregateID: string
+      snapshotID: string
+      snapshotHash: string
+      rowHash: string
+      after?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      limit?: number
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "aggregateID" },
+            { in: "body", key: "snapshotID" },
+            { in: "body", key: "snapshotHash" },
+            { in: "body", key: "rowHash" },
+            { in: "body", key: "after" },
+            { in: "body", key: "limit" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<SyncSnapshotChunksResponses, SyncSnapshotChunksErrors, ThrowOnError>({
+      url: "/sync/snapshot/chunks",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
   private _history?: History
   get history(): History {
     return (this._history ??= new History({ client: this.client }))
+  }
+
+  private _artifact?: Artifact
+  get artifact(): Artifact {
+    return (this._artifact ??= new Artifact({ client: this.client }))
   }
 }
 

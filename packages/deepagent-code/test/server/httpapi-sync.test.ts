@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, spyOn } from "bun:test"
-import { Context, Effect, Layer } from "effect"
+import { Context, Effect, Layer, Schema } from "effect"
 import { Flag } from "@deepagent-code/core/flag/flag"
 import { SyncPaths, SyncReplayLimits } from "../../src/server/routes/instance/httpapi/groups/sync"
 import { HttpApiApp } from "../../src/server/routes/instance/httpapi/server"
@@ -15,14 +15,23 @@ import { testEffect } from "../lib/effect"
 import { httpApiLayer, requestInDirectory } from "./httpapi-layer"
 import { SyncHistoryLimits } from "@/server/routes/instance/httpapi/handlers/sync"
 import { Database } from "@deepagent-code/core/database/database"
-import { EventSequenceTable, EventTable } from "@deepagent-code/core/event/sql"
+import {
+  EventSequenceTable,
+  EventSnapshotChunkTable,
+  EventSnapshotRowTable,
+  EventSnapshotTable,
+  EventSyncSequenceTable,
+  EventTable,
+} from "@deepagent-code/core/event/sql"
 import { EventV2 } from "@deepagent-code/core/event"
-import { eq } from "drizzle-orm"
+import { eq, sql } from "drizzle-orm"
 import { HttpServer } from "effect/unstable/http"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { SessionTable } from "@deepagent-code/core/session/sql"
 import { encodeReplayRequestPrefix } from "@/sync/replay-protocol"
 import { WorkspaceV2 } from "@deepagent-code/core/workspace"
+import { FilePartArtifact } from "@deepagent-code/core/file-part-artifact"
+import { Hash } from "@deepagent-code/core/util/hash"
 
 void Log.init({ print: false })
 
@@ -61,6 +70,299 @@ afterEach(async () => {
 })
 
 describe("sync HttpApi", () => {
+  it.instance(
+    "creates, exposes, and compacts a canonical checkpoint through bounded maintenance routes",
+    () =>
+      Effect.gen(function* () {
+        const tmp = yield* TestInstance
+        const headers = { "x-deepagent-code-directory": tmp.directory, "content-type": "application/json" }
+        const session = yield* Session.use.create({ title: "maintenance checkpoint", workspaceID: syncWorkspaceID })
+        const sibling = yield* Session.use.create({ title: "interleaved event", workspaceID: syncWorkspaceID })
+
+        const prepared = yield* requestInDirectory(SyncPaths.checkpointPrepare, tmp.directory, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ aggregateID: session.id }),
+        })
+        expect(prepared.status, yield* prepared.text).toBe(200)
+        const attempt = Schema.decodeUnknownSync(
+          Schema.Struct({ snapshotID: Schema.String, state: Schema.String, hasMore: Schema.Boolean }),
+        )(yield* prepared.json)
+        expect(attempt.state).toBe("prepared")
+
+        let state = attempt.state
+        while (state === "prepared") {
+          const staged = yield* requestInDirectory(SyncPaths.checkpointStage, tmp.directory, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ snapshotID: attempt.snapshotID, limit: 1 }),
+          })
+          expect(staged.status, yield* staged.text).toBe(200)
+          state = String(((yield* staged.json) as Record<string, unknown>).state)
+        }
+        expect(state).toBe("staged")
+
+        const finalized = yield* requestInDirectory(SyncPaths.checkpointFinalize, tmp.directory, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ snapshotID: attempt.snapshotID }),
+        })
+        expect(finalized.status, yield* finalized.text).toBe(200)
+        const snapshot = (yield* finalized.json) as unknown as EventV2.SerializedSnapshot
+
+        const history = yield* requestInDirectory(SyncPaths.history, tmp.directory, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ version: 1 }),
+        })
+        expect(history.status, yield* history.text).toBe(200)
+        const firstPage = (yield* history.json) as {
+          items: { kind: string; aggregate_id?: string; snapshot?: { snapshotID: string } }[]
+          nextCursor: string
+        }
+        expect(firstPage.items).toEqual([
+          expect.objectContaining({ kind: "event", aggregate_id: sibling.id }),
+        ])
+
+        const resync = yield* requestInDirectory(SyncPaths.history, tmp.directory, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ version: 1, cursor: firstPage.nextCursor }),
+        })
+        expect(resync.status, yield* resync.text).toBe(200)
+        expect(((yield* resync.json) as { items: { kind: string; snapshot?: { snapshotID: string } }[] }).items).toEqual([
+          { kind: "resync_required", snapshot: expect.objectContaining({ snapshotID: snapshot.snapshotID }) },
+        ])
+
+        let compacted = false
+        while (!compacted) {
+          const response = yield* requestInDirectory(SyncPaths.checkpointCompact, tmp.directory, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ aggregateID: session.id, limit: 1 }),
+          })
+          expect(response.status, yield* response.text).toBe(200)
+          compacted = Boolean(((yield* response.json) as { complete: boolean }).complete)
+        }
+        const { db } = yield* Database.Service
+        expect(
+          yield* db
+            .select({ count: sql<number>`count(*)` })
+            .from(EventTable)
+            .where(eq(EventTable.aggregate_id, session.id))
+            .get()
+            .pipe(Effect.orDie, Effect.map((row) => row?.count)),
+        ).toBe(0)
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+    30_000,
+  )
+
+  it.instance(
+    "returns a scoped bounded snapshot before retained event history",
+    () =>
+      Effect.gen(function* () {
+        const tmp = yield* TestInstance
+        const headers = { "x-deepagent-code-directory": tmp.directory, "content-type": "application/json" }
+        const session = yield* Session.use.create({ title: "snapshot resync", workspaceID: syncWorkspaceID })
+        const { db } = yield* Database.Service
+        const sequence = yield* db
+          .select({ seq: EventSequenceTable.seq })
+          .from(EventSequenceTable)
+          .where(eq(EventSequenceTable.aggregate_id, session.id))
+          .get()
+          .pipe(Effect.orDie)
+        const sync = yield* db
+          .update(EventSyncSequenceTable)
+          .set({ seq: sql`${EventSyncSequenceTable.seq} + 1` })
+          .where(eq(EventSyncSequenceTable.id, 1))
+          .returning({ seq: EventSyncSequenceTable.seq })
+          .get()
+          .pipe(Effect.orDie)
+        const snapshot = {
+          snapshotID: "snapshot_sync_http",
+          aggregateID: session.id,
+          throughSeq: sequence!.seq,
+          syncSeq: sync!.seq,
+          codec: "session-projection",
+          schemaVersion: 1,
+          snapshotHash: "1".repeat(64),
+          body: { format: "chunked-rows.v1" },
+          ownerID: syncWorkspaceID,
+          createdAt: 1,
+        }
+        const rowHash = Hash.sha256("{}")
+        yield* db
+          .insert(EventSnapshotTable)
+          .values({
+            snapshot_id: snapshot.snapshotID,
+            aggregate_id: snapshot.aggregateID,
+            through_seq: snapshot.throughSeq,
+            sync_seq: snapshot.syncSeq,
+            codec: snapshot.codec,
+            schema_version: snapshot.schemaVersion,
+            snapshot_hash: snapshot.snapshotHash,
+            body: snapshot.body,
+            owner_id: snapshot.ownerID,
+            created_at: snapshot.createdAt,
+          })
+          .run()
+          .pipe(Effect.orDie)
+        yield* db
+          .insert(EventSnapshotRowTable)
+          .values({ snapshot_id: snapshot.snapshotID, row_index: 0, table_name: "session", row_key: session.id, row_hash: rowHash, row_bytes: 2, chunk_count: 1, chain_hash: "2".repeat(64) })
+          .run()
+          .pipe(Effect.orDie)
+        yield* db
+          .insert(EventSnapshotChunkTable)
+          .values({ row_hash: rowHash, chunk_index: 0, data: Buffer.from("{}"), chunk_hash: rowHash })
+          .run()
+          .pipe(Effect.orDie)
+        yield* db
+          .update(EventSequenceTable)
+          .set({ snapshot_id: snapshot.snapshotID, retention_floor_seq: snapshot.throughSeq })
+          .where(eq(EventSequenceTable.aggregate_id, session.id))
+          .run()
+          .pipe(Effect.orDie)
+        const history = yield* requestInDirectory(SyncPaths.history, tmp.directory, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ version: 1 }),
+        })
+        expect(history.status, yield* history.text).toBe(200)
+        const envelope = (yield* history.json) as { items: { kind: string; snapshot: EventV2.SerializedSnapshot }[] }
+        expect(envelope.items).toHaveLength(1)
+        expect(envelope.items[0]).toMatchObject({ kind: "resync_required", snapshot: { snapshotID: snapshot.snapshotID } })
+
+        const rows = yield* requestInDirectory(SyncPaths.snapshotRows, tmp.directory, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            aggregateID: session.id,
+            snapshotID: snapshot.snapshotID,
+            snapshotHash: snapshot.snapshotHash,
+            limit: 1,
+          }),
+        })
+        expect(rows.status, yield* rows.text).toBe(200)
+        const page = Schema.decodeUnknownSync(
+          Schema.Struct({ rows: Schema.Array(Schema.Struct({ rowHash: Schema.String })), complete: Schema.Boolean }),
+        )(yield* rows.json)
+        expect(page.rows).toHaveLength(1)
+        const chunks = yield* requestInDirectory(SyncPaths.snapshotChunks, tmp.directory, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            aggregateID: session.id,
+            snapshotID: snapshot.snapshotID,
+            snapshotHash: snapshot.snapshotHash,
+            rowHash: page.rows[0]!.rowHash,
+            limit: 1,
+          }),
+        })
+        expect(chunks.status, yield* chunks.text).toBe(200)
+        const wrongScope = yield* requestInDirectory(SyncPaths.snapshotChunks, tmp.directory, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            aggregateID: session.id,
+            snapshotID: snapshot.snapshotID,
+            snapshotHash: "0".repeat(64),
+            rowHash: page.rows[0]!.rowHash,
+            limit: 1,
+          }),
+        })
+        expect(wrongScope.status).toBe(404)
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+    20_000,
+  )
+
+  it.instance(
+    "serves file artifacts only through the exact workspace event binding",
+    () =>
+      Effect.gen(function* () {
+        const tmp = yield* TestInstance
+        const headers = { "x-deepagent-code-directory": tmp.directory, "content-type": "application/json" }
+        const session = yield* Session.use.create({ title: "file artifact", workspaceID: syncWorkspaceID })
+        const messageID = MessageID.ascending()
+        yield* Session.use.updateMessage({
+          id: messageID,
+          sessionID: session.id,
+          role: "user",
+          time: { created: Date.now() },
+          agent: "build",
+          model: { providerID: ProviderV2.ID.make("test"), modelID: ModelV2.ID.make("model") },
+        })
+        yield* Session.use.updatePart({
+          id: SessionV1.PartID.ascending(),
+          sessionID: session.id,
+          messageID,
+          type: "file",
+          mime: "application/octet-stream",
+          url: `data:application/octet-stream;base64,${Buffer.alloc(FilePartArtifact.CHUNK_BYTES + 7, 0x63).toString("base64")}`,
+        })
+        const { db } = yield* Database.Service
+        const event = yield* db
+          .select()
+          .from(EventTable)
+          .where(eq(EventTable.aggregate_id, session.id))
+          .all()
+          .pipe(Effect.orDie, Effect.map((rows) => rows.find((row) => row.type === "message.part.updated.1")))
+        expect(event).toBeDefined()
+        if (!event) return
+        const descriptor = FilePartArtifact.descriptor(event.data)
+        expect(descriptor).toBeDefined()
+        if (!descriptor) return
+        const scope = { eventID: event.id, aggregateID: session.id, seq: event.seq, artifactID: descriptor.id }
+        const metadataResponse = yield* requestInDirectory(SyncPaths.fileArtifactMetadata, tmp.directory, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(scope),
+        })
+        expect(metadataResponse.status).toBe(200)
+        const metadata = Schema.decodeUnknownSync(FilePartArtifact.Metadata)(yield* metadataResponse.json)
+        expect(metadata.chunkHashes).toHaveLength(2)
+        const chunkResponse = yield* requestInDirectory(SyncPaths.fileArtifactChunk, tmp.directory, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ ...scope, index: 0, hash: metadata.chunkHashes[0] }),
+        })
+        expect(chunkResponse.status).toBe(200)
+        const chunk = Schema.decodeUnknownSync(Schema.Struct({ data: Schema.String }))(yield* chunkResponse.json)
+        expect(chunk.data).toHaveLength(4 * Math.ceil(FilePartArtifact.CHUNK_BYTES / 3))
+
+        const wrongEvent = yield* requestInDirectory(SyncPaths.fileArtifactChunk, tmp.directory, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ ...scope, eventID: EventV2.ID.create(), index: 0, hash: metadata.chunkHashes[0] }),
+        })
+        expect(wrongEvent.status).toBe(404)
+        const wrongSequence = yield* requestInDirectory(SyncPaths.fileArtifactChunk, tmp.directory, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ ...scope, seq: event.seq + 1, index: 0, hash: metadata.chunkHashes[0] }),
+        })
+        expect(wrongSequence.status).toBe(404)
+        const wrongHash = yield* requestInDirectory(SyncPaths.fileArtifactChunk, tmp.directory, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ ...scope, index: 0, hash: "0".repeat(64) }),
+        })
+        expect(wrongHash.status).toBe(404)
+
+        Flag.DEEPAGENT_CODE_WORKSPACE_ID = WorkspaceV2.ID.make("wrk_other_scope")
+        const crossed = yield* requestInDirectory(SyncPaths.fileArtifactMetadata, tmp.directory, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(scope),
+        })
+        expect(crossed.status).toBe(404)
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+    30_000,
+  )
+
   it.instance(
     "fails closed when history has no routed workspace scope",
     () =>
@@ -484,6 +786,13 @@ describe("sync HttpApi", () => {
           .where(eq(EventSequenceTable.aggregate_id, session.id))
           .get()
           .pipe(Effect.orDie)
+        const sync = yield* db
+          .update(EventSyncSequenceTable)
+          .set({ seq: sql`${EventSyncSequenceTable.seq} + 1` })
+          .where(eq(EventSyncSequenceTable.id, 1))
+          .returning({ seq: EventSyncSequenceTable.seq })
+          .get()
+          .pipe(Effect.orDie)
         yield* db
           .insert(EventTable)
           .values({
@@ -492,6 +801,7 @@ describe("sync HttpApi", () => {
             seq: sequence!.seq + 1,
             type: "sync.legacy.1",
             data: { value: "x".repeat(SyncHistoryLimits.dataBytes + 1) },
+            sync_seq: sync!.seq,
           })
           .run()
           .pipe(Effect.orDie)
@@ -523,6 +833,13 @@ describe("sync HttpApi", () => {
           .where(eq(EventSequenceTable.aggregate_id, session.id))
           .get()
           .pipe(Effect.orDie)
+        const sync = yield* db
+          .update(EventSyncSequenceTable)
+          .set({ seq: sql`${EventSyncSequenceTable.seq} + 1` })
+          .where(eq(EventSyncSequenceTable.id, 1))
+          .returning({ seq: EventSyncSequenceTable.seq })
+          .get()
+          .pipe(Effect.orDie)
         yield* db
           .insert(EventTable)
           .values({
@@ -531,6 +848,7 @@ describe("sync HttpApi", () => {
             seq: sequence!.seq + 1,
             type: "sync.legacy.1",
             data: { value: "x".repeat(SyncHistoryLimits.dataBytes + 1) },
+            sync_seq: sync!.seq,
           })
           .run()
           .pipe(Effect.orDie)
@@ -580,6 +898,13 @@ describe("sync HttpApi", () => {
         const unicode = "界".repeat(Math.floor(available / 3)) + "x".repeat(available % 3)
         const middle = { value: unicode }
         expect(Buffer.byteLength(JSON.stringify(middle))).toBe(target)
+        const sync = yield* db
+          .update(EventSyncSequenceTable)
+          .set({ seq: sql`${EventSyncSequenceTable.seq} + 3` })
+          .where(eq(EventSyncSequenceTable.id, 1))
+          .returning({ seq: EventSyncSequenceTable.seq })
+          .get()
+          .pipe(Effect.orDie)
         yield* db
           .insert(EventTable)
           .values([
@@ -589,6 +914,7 @@ describe("sync HttpApi", () => {
               seq: sequence!.seq + 1,
               type: "sync.test.1",
               data: { value: "before" },
+              sync_seq: sync!.seq - 2,
             },
             {
               id: EventV2.ID.make("evt_sync_wire_middle"),
@@ -596,6 +922,7 @@ describe("sync HttpApi", () => {
               seq: sequence!.seq + 2,
               type: "sync.test.1",
               data: middle,
+              sync_seq: sync!.seq - 1,
             },
             {
               id: EventV2.ID.make("evt_sync_wire_small_after"),
@@ -603,6 +930,7 @@ describe("sync HttpApi", () => {
               seq: sequence!.seq + 3,
               type: "sync.test.1",
               data: { value: "after" },
+              sync_seq: sync!.seq,
             },
           ])
           .run()
