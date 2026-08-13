@@ -14,24 +14,21 @@ import {
   APICallError,
   NoSuchToolError,
   InvalidToolInputError,
+  asSchema,
 } from "ai"
 import { type LLMEvent } from "@deepagent-code/llm"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { LLMClient, RequestExecutor, WebSocketExecutor } from "@deepagent-code/llm/route"
 import type { LLMClientService } from "@deepagent-code/llm/route"
-import { GitLabWorkflowLanguageModel } from "gitlab-ai-provider"
+import { GitLabWorkflowLanguageModel, type WorkflowToolExecutor } from "gitlab-ai-provider"
 import { ProviderTransform } from "@/provider/transform"
 import { Config } from "@/config/config"
 import type { Agent } from "@/agent/agent"
 import type { MessageV2 } from "./message-v2"
 import { Plugin } from "@/plugin"
 import { Permission } from "@/permission"
-import { EventV2Bridge } from "@/event-v2-bridge"
-import { EventV2 } from "@deepagent-code/core/event"
 import { Wildcard } from "@/util/wildcard"
-import { SessionID } from "@/session/schema"
 import { Auth } from "@/auth"
-import { EffectBridge } from "@/effect/bridge"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import * as Option from "effect/Option"
 import * as OtelTracer from "@effect/opentelemetry/Tracer"
@@ -43,6 +40,9 @@ import { configureGateway } from "@/deepagent/config"
 import { requestBudget, type RequestBudgetStatus } from "./overflow"
 import { Token } from "@/util/token"
 import { Hash } from "@deepagent-code/core/util/hash"
+import { DeepAgentReleasedSnapshot } from "@deepagent-code/core/deepagent/released-snapshot"
+import { PreparedProviderTurn } from "@deepagent-code/core/session/runner/prepared-provider-turn"
+import { ProviderWireSeal } from "./llm/provider-wire-seal"
 
 const log = Log.create({ service: "llm" })
 export const OUTPUT_TOKEN_MAX = ProviderTransform.OUTPUT_TOKEN_MAX
@@ -107,17 +107,14 @@ function stableReceiptJson(value: unknown, ancestors = new WeakSet<object>()): s
   return serialized
 }
 
-function finalRequestFingerprint(value: unknown) {
-  return Hash.sha256(stableReceiptJson(value))
-}
-
 function finalToolDefinitions(tools: Readonly<Record<string, Tool>>) {
   return Object.entries(tools)
     .toSorted(([a], [b]) => a.localeCompare(b))
     .map(([name, definition]) => ({
+      type: "function" as const,
       name,
       description: definition.description,
-      inputSchema: "inputSchema" in definition ? definition.inputSchema : undefined,
+      inputSchema: "inputSchema" in definition ? asSchema(definition.inputSchema).jsonSchema : undefined,
     }))
 }
 
@@ -159,6 +156,57 @@ function physicalPromptCacheKey(value: unknown) {
   return keys.values().next().value
 }
 
+function prepareProviderTurn(input: {
+  readonly stream: StreamRequest
+  readonly prepared: LLMRequestPrep.Prepared
+  readonly owner: "legacy_aisdk" | "legacy_native"
+  readonly budget: RequestBudgetStatus
+  readonly permissionFilteredToolIDs: readonly string[]
+  readonly finalOfferedToolIDs: readonly string[]
+  readonly toolDefinitions: unknown
+  readonly toolCapability: PreparedProviderTurn.ToolCapability
+  readonly toolLoweringOutcome: PreparedProviderTurn.ToolLoweringOutcome
+  readonly toolChoice: "auto" | "required" | "none" | undefined
+  readonly wireRequest?: unknown
+  readonly wireRequestHash?: string
+}) {
+  const identity = input.stream.requestReceipt?.identity
+  if (!identity) return
+  return PreparedProviderTurn.prepare({
+    sessionID: input.stream.sessionID,
+    requestOrdinal: identity.requestOrdinal,
+    owner: input.owner,
+    stableSystemParts: input.prepared.stableSystemParts,
+    volatileSystemParts: input.prepared.volatileSystemParts,
+    historyMessages: input.prepared.historyMessages,
+    historyPromptEpoch: identity.promptEpoch,
+    historySourceEndMessageID: identity.historySourceEndMessageID,
+    contextSelectionID: identity.contextSelectionID,
+    contextProjectionHash: identity.contextProjectionHash,
+    contextReadiness: identity.contextReadiness,
+    contextSelectedRefs: identity.contextSelectedRefs,
+    toolRegistryIDs: identity.registryToolIDs,
+    toolPermissionFilteredIDs: input.permissionFilteredToolIDs,
+    toolFinalOfferedIDs: input.finalOfferedToolIDs,
+    toolDefinitions: input.toolDefinitions,
+    toolChoice: input.toolChoice ?? null,
+    toolCapability: input.toolCapability,
+    toolLoweringOutcome: input.toolLoweringOutcome,
+    toolResultReferences: LLMRequestPrep.toolResultReferences(input.prepared.historyMessages),
+    samplingModelID: input.stream.model.id,
+    samplingProviderID: input.stream.model.providerID,
+    samplingMaxOutputTokens: input.prepared.params.maxOutputTokens,
+    samplingTemperature: input.prepared.params.temperature,
+    budget: input.budget,
+    wireRequest: input.wireRequest,
+    wireRequestHash: input.wireRequestHash,
+    receiptID: identity.receiptID,
+    providerAttemptID: identity.providerAttemptID,
+    userMessageID: input.stream.user.id,
+    assistantMessageID: identity.assistantMessageID,
+  })
+}
+
 function adapterReceiptDetails(event: LLMEvent) {
   if (event.type === "tool-call") return { callID: event.id, toolName: event.name, payload: event.input }
   if (event.type === "tool-error") {
@@ -196,6 +244,131 @@ const deepagentModelAuthProviderID = (model: Provider.Model) => {
 // bounded auto-only controller; this layer never silently weakens `required`.
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value)
+
+type WorkflowModelHooks = {
+  sessionID: string
+  systemPrompt: string | null
+  sessionPreapprovedTools: string[]
+  toolExecutor: WorkflowToolExecutor | null
+  approvalHandler:
+    | ((approvalTools: Array<{ name: string; args: string }>) => Promise<{ approved: boolean; message?: string }>)
+    | null
+}
+
+export function wireWorkflowModel(input: {
+  readonly model: WorkflowModelHooks
+  readonly sessionID: string
+  readonly systemPrompt: string
+  readonly tools: Record<string, Pick<Tool, "execute">>
+  readonly messages: ModelMessage[]
+  readonly abort: AbortSignal
+  readonly ruleset: PermissionV1.Ruleset
+  readonly warn: (message: string, details: Record<string, unknown>) => void
+}) {
+  input.model.sessionID = input.sessionID
+  input.model.systemPrompt = input.systemPrompt
+  input.model.toolExecutor = async (toolName, argsJson, requestID) => {
+    const selected = input.tools[toolName]
+    if (!selected?.execute) {
+      input.warn("workflow tool call: unknown tool", { tool: toolName, errorType: "unknown_tool" })
+      return {
+        result: "",
+        error: `[unknown_tool] Tool "${toolName}" is not available. Resend the request using a valid tool name.`,
+      }
+    }
+
+    const parsedArgs = (() => {
+      try {
+        return { ok: true as const, value: JSON.parse(argsJson) as unknown }
+      } catch (error) {
+        return { ok: false as const, error }
+      }
+    })()
+    if (!parsedArgs.ok) {
+      const message = parsedArgs.error instanceof Error ? parsedArgs.error.message : "parse error"
+      input.warn("workflow tool call: invalid JSON", {
+        tool: toolName,
+        errorType: "invalid_json",
+        errorMessage: message.slice(0, 200),
+        inputPreview: argsJson.length > 200 ? argsJson.slice(0, 200) + "…[truncated]" : argsJson,
+      })
+      return {
+        result: "",
+        error: `[invalid_json] Arguments for tool "${toolName}" are not valid JSON (${message.slice(0, 200)}). Resend the request with complete, valid JSON arguments.`,
+      }
+    }
+
+    try {
+      const result = await selected.execute(parsedArgs.value, {
+        toolCallId: requestID,
+        messages: input.messages,
+        abortSignal: input.abort,
+      })
+      const output =
+        typeof result === "string"
+          ? result
+          : isRecord(result) && typeof result.output === "string"
+            ? result.output
+            : (JSON.stringify(result) ?? String(result))
+      return {
+        result: output,
+        metadata: isRecord(result) && isRecord(result.metadata) ? result.metadata : undefined,
+        title: isRecord(result) && typeof result.title === "string" ? result.title : undefined,
+      }
+    } catch (error) {
+      const detail = isRecord(error) ? error : undefined
+      const isSchemaError =
+        Array.isArray(detail?.issues) ||
+        detail?._tag === "ParseError" ||
+        (isRecord(detail?.cause) && detail.cause._tag === "ParseError")
+      const message = error instanceof Error ? error.message : String(error)
+      input.warn("workflow tool call: execution error", {
+        tool: toolName,
+        errorType: isSchemaError ? "schema_mismatch" : "execution_error",
+        errorMessage: message.slice(0, 200),
+      })
+      if (isSchemaError) {
+        return {
+          result: "",
+          error: `[schema_mismatch] Arguments for tool "${toolName}" do not match the expected schema. Resend the request with correctly structured arguments.`,
+        }
+      }
+      return { result: "", error: message.slice(0, 500) }
+    }
+  }
+
+  input.model.sessionPreapprovedTools = Object.keys(input.tools).filter((name) => {
+    const match = input.ruleset.findLast((rule) => Wildcard.match(name, rule.permission))
+    return !match || match.action !== "ask"
+  })
+  input.model.approvalHandler = async (approvalTools) => ({
+    // This provider checkpoint has no request ID. It is advisory only: exact permission admission,
+    // once consumption, and effect settlement happen when toolExecutor invokes the wrapped tool with
+    // the provider's request ID and actual arguments.
+    approved:
+      approvalTools.length > 0 &&
+      approvalTools.every((approval) =>
+        Boolean(input.tools[workflowApprovalToolName(approval.name, input.tools)]?.execute),
+      ),
+  })
+}
+
+function workflowApprovalToolName(name: string, tools: Record<string, Pick<Tool, "execute">>) {
+  if (name === "runReadFile" || name === "runReadFiles" || name === "listDirectory") return "read"
+  if (name === "runWriteFile") return tools.write?.execute ? "write" : "apply_patch"
+  if (name === "runEditFile") return tools.edit?.execute ? "edit" : "apply_patch"
+  if (name === "findFiles") return "glob"
+  if (name === "grep") return "grep"
+  if (
+    name === "runShellCommand" ||
+    name === "runCommand" ||
+    name === "runGitCommand" ||
+    name === "mkdir" ||
+    name === "runHTTPRequest"
+  )
+    return "bash"
+  return name
+}
 
 const thinkingActive = (options: Record<string, unknown> | undefined): boolean => {
   if (!options) return false
@@ -341,27 +514,46 @@ export type StreamInput = {
   federatedProjection?: boolean
   /** Aggregate-only shadow evidence. It is observed locally and never sent to the Provider. */
   federatedShadow?: Readonly<Record<"code" | "knowledge" | "memory" | "documents", number>>
+  /** Internal released-knowledge authority captured before this provider turn. */
+  releasedKnowledgeSelection?: DeepAgentReleasedSnapshot.Selection
   /** A durable attempt owns retry safety for this request; provider-internal retries must stay disabled. */
   durableAttempt?: boolean
   /** Internal durable receipt hook invoked after permission filtering and adapter preparation. */
   requestReceipt?: {
+    readonly identity: {
+      readonly receiptID: string
+      readonly requestOrdinal: number
+      readonly providerAttemptID?: string
+      readonly assistantMessageID?: string
+      readonly promptEpoch: number
+      readonly historySourceEndMessageID: string | null
+      readonly contextSelectionID: string | null
+      readonly contextProjectionHash: string | null
+      readonly contextReadiness: PreparedProviderTurn.ContextReadiness
+      readonly contextSelectedRefs: readonly string[]
+      readonly registryToolIDs: readonly string[]
+    }
     readonly prepared: (input: {
       readonly permissionFilteredToolIds: readonly string[]
       readonly finalOfferedTools: Readonly<Record<string, Tool>>
       readonly adapterToolCapability: "supported" | "unsupported" | "unknown"
       readonly adapterLoweringOutcome: "ok" | "schema_rejected" | "omitted_no_support"
       readonly budget: RequestBudgetStatus
+      readonly releasedKnowledgeSelectedRefs: readonly DeepAgentReleasedSnapshot.DocumentRef[]
+      readonly releasedKnowledgeSelectedRefsFingerprint: string
     }) => Effect.Effect<void>
     readonly adapterPrepared: (input: {
       readonly finalRequestHash: string
       readonly promptCacheKey?: string
       readonly finalOfferedToolIds: readonly string[]
       readonly toolDefinitionHash: string
+      readonly preparedTurn: PreparedProviderTurn.PreparedProviderTurn
     }) => Effect.Effect<void>
     readonly dispatched: () => Effect.Effect<void>
     readonly streaming: () => Effect.Effect<void>
     readonly settled: () => Effect.Effect<void>
     readonly failed: (error: unknown) => Effect.Effect<void>
+    readonly observed: (event: LLMEvent) => Effect.Effect<void>
     readonly rejected: (input: { readonly budget: RequestBudgetStatus; readonly reason: string }) => Effect.Effect<void>
     readonly aiSdkInput: (input: {
       readonly ordinal: number
@@ -427,14 +619,7 @@ export const use = serviceUse(Service)
 const live: Layer.Layer<
   Service,
   never,
-  | Auth.Service
-  | Config.Service
-  | Provider.Service
-  | Plugin.Service
-  | Permission.Service
-  | EventV2Bridge.Service
-  | LLMClientService
-  | RuntimeFlags.Service
+  Auth.Service | Config.Service | Provider.Service | Plugin.Service | LLMClientService | RuntimeFlags.Service
 > = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -442,8 +627,6 @@ const live: Layer.Layer<
     const config = yield* Config.Service
     const provider = yield* Provider.Service
     const plugin = yield* Plugin.Service
-    const perm = yield* Permission.Service
-    const events = yield* EventV2Bridge.Service
     const llmClient = yield* LLMClient.Service
     const flags = yield* RuntimeFlags.Service
 
@@ -533,137 +716,30 @@ const live: Layer.Layer<
       // from the workflow service are executed via deepagent-code's tool system
       // and results sent back over the WebSocket.
       if (language instanceof GitLabWorkflowLanguageModel) {
-        const workflowModel = language as GitLabWorkflowLanguageModel & {
-          sessionID?: string
-          sessionPreapprovedTools?: string[]
-          approvalHandler?: (approvalTools: { name: string; args: string }[]) => Promise<{ approved: boolean }>
-        }
-        workflowModel.sessionID = input.sessionID
-        workflowModel.systemPrompt = prepared.system.join("\n")
-        workflowModel.toolExecutor = async (toolName, argsJson, _requestID) => {
-          // (1) Unknown tool — classify before attempting parse or execute.
-          const t = prepared.tools[toolName]
-          if (!t || !t.execute) {
-            l.warn("workflow tool call: unknown tool", { tool: toolName, errorType: "unknown_tool" })
-            return {
-              result: "",
-              error: `[unknown_tool] Tool "${toolName}" is not available. Resend the request using a valid tool name.`,
-            }
-          }
-
-          // (2) JSON parse — separate from execution so we can classify invalid_json.
-          // Do NOT attempt to repair or fill in missing brackets/quotes.
-          let parsedArgs: unknown
-          try {
-            parsedArgs = JSON.parse(argsJson)
-          } catch (parseErr: any) {
-            const inputPreview = argsJson.length > 200 ? argsJson.slice(0, 200) + "…[truncated]" : argsJson
-            l.warn("workflow tool call: invalid JSON", {
-              tool: toolName,
-              errorType: "invalid_json",
-              errorMessage: (parseErr?.message ?? "parse error").slice(0, 200),
-              inputPreview,
-            })
-            return {
-              result: "",
-              error: `[invalid_json] Arguments for tool "${toolName}" are not valid JSON (${(parseErr?.message ?? "parse error").slice(0, 200)}). Resend the request with complete, valid JSON arguments.`,
-            }
-          }
-
-          // (3) Execute — classify schema_mismatch vs other runtime errors.
-          try {
-            const result = await t.execute!(parsedArgs, {
-              toolCallId: _requestID,
-              messages: input.messages,
-              abortSignal: input.abort,
-            })
-            const output = typeof result === "string" ? result : (result?.output ?? JSON.stringify(result))
-            return {
-              result: output,
-              metadata: typeof result === "object" ? result?.metadata : undefined,
-              title: typeof result === "object" ? result?.title : undefined,
-            }
-          } catch (e: any) {
-            // Effect Schema parse errors expose ._tag === "ParseError"; Zod errors expose .issues.
-            const isSchemaError =
-              Array.isArray(e?.issues) || e?._tag === "ParseError" || e?.cause?._tag === "ParseError"
-            const errorType = isSchemaError ? "schema_mismatch" : "execution_error"
-            l.warn("workflow tool call: execution error", {
-              tool: toolName,
-              errorType,
-              errorMessage: (e?.message ?? String(e)).slice(0, 200),
-            })
-            if (isSchemaError) {
-              return {
-                result: "",
-                error: `[schema_mismatch] Arguments for tool "${toolName}" do not match the expected schema. Resend the request with correctly structured arguments.`,
-              }
-            }
-            return { result: "", error: (e?.message ?? String(e)).slice(0, 500) }
-          }
-        }
-
-        const ruleset = Permission.merge(input.agent.permission ?? [], input.permission ?? [])
-        workflowModel.sessionPreapprovedTools = Object.keys(prepared.tools).filter((name) => {
-          const match = ruleset.findLast((rule) => Wildcard.match(name, rule.permission))
-          return !match || match.action !== "ask"
-        })
-
-        const bridge = yield* EffectBridge.make()
-        const approvedToolsForSession = new Set<string>()
-        workflowModel.approvalHandler = bridge.bind(async (approvalTools) => {
-          const uniqueNames = [...new Set(approvalTools.map((t: { name: string }) => t.name))] as string[]
-          // Auto-approve tools that were already approved in this session
-          // (prevents infinite approval loops for server-side MCP tools)
-          if (uniqueNames.every((name) => approvedToolsForSession.has(name))) {
-            return { approved: true }
-          }
-
-          const id = PermissionV1.ID.ascending()
-          let unsub: EventV2.Unsubscribe | undefined
-          try {
-            unsub = await bridge.promise(
-              events.listen((event) => {
-                if (event.type !== Permission.Event.Replied.type) return Effect.void
-                const data = event.data as EventV2.Data<typeof Permission.Event.Replied>
-                if (data.requestID !== id) return Effect.void
-                void data.reply
-                return Effect.void
-              }),
-            )
-            const toolPatterns = approvalTools.map((t: { name: string; args: string }) => {
-              try {
-                const parsed = JSON.parse(t.args) as Record<string, unknown>
-                const title = (parsed?.title ?? parsed?.name ?? "") as string
-                return title ? `${t.name}: ${title}` : t.name
-              } catch {
-                return t.name
-              }
-            })
-            const uniquePatterns = [...new Set(toolPatterns)] as string[]
-            await bridge.promise(
-              perm.ask({
-                id,
-                sessionID: SessionID.make(input.sessionID),
-                permission: "workflow_tool_approval",
-                patterns: uniquePatterns,
-                metadata: { tools: approvalTools },
-                always: uniquePatterns,
-                ruleset: [],
-              }),
-            )
-            for (const name of uniqueNames) approvedToolsForSession.add(name)
-            workflowModel.sessionPreapprovedTools = [...(workflowModel.sessionPreapprovedTools ?? []), ...uniqueNames]
-            return { approved: true }
-          } catch {
-            return { approved: false }
-          } finally {
-            if (unsub) await bridge.promise(unsub)
-          }
+        wireWorkflowModel({
+          model: language,
+          sessionID: input.sessionID,
+          systemPrompt: prepared.system.join("\n"),
+          tools: prepared.tools,
+          messages: input.messages,
+          abort: input.abort,
+          ruleset: Permission.merge(input.agent.permission ?? [], input.permission ?? []),
+          warn: (message, details) => l.warn(message, details),
         })
       }
 
       const runtimeTools = prepared.tools
+      const permissionFilteredToolIDs = Object.keys(prepared.tools)
+      const toolCapability =
+        toolChoiceProtocol(input.model) === "unknown"
+          ? ("unknown" as const)
+          : input.model.capabilities.toolcall
+            ? ("supported" as const)
+            : ("unsupported" as const)
+      const toolLoweringOutcome =
+        Object.keys(input.tools).length > 0 && Object.keys(runtimeTools).length === 0
+          ? ("omitted_no_support" as const)
+          : ("ok" as const)
       const budget = requestBudget({
         model: input.model,
         outputTokenMax: flags.outputTokenMax,
@@ -697,21 +773,17 @@ const live: Layer.Layer<
         )
       }
       yield* input.requestReceipt?.prepared({
-        permissionFilteredToolIds: Object.keys(prepared.tools),
+        permissionFilteredToolIds: permissionFilteredToolIDs,
         finalOfferedTools: runtimeTools,
-        adapterToolCapability:
-          toolChoiceProtocol(input.model) === "unknown"
-            ? "unknown"
-            : input.model.capabilities.toolcall
-              ? "supported"
-              : "unsupported",
-        adapterLoweringOutcome:
-          Object.keys(input.tools).length > 0 && Object.keys(runtimeTools).length === 0 ? "omitted_no_support" : "ok",
+        adapterToolCapability: toolCapability,
+        adapterLoweringOutcome: toolLoweringOutcome,
         budget,
+        releasedKnowledgeSelectedRefs: prepared.releasedKnowledgeSelectedRefs,
+        releasedKnowledgeSelectedRefsFingerprint: DeepAgentReleasedSnapshot.exactRefsFingerprint(
+          prepared.releasedKnowledgeSelectedRefs,
+        ),
       }) ?? Effect.void
       const physicalProviderOptions = ProviderTransform.providerOptions(input.model, effectiveOptions ?? {})
-      const receiptBridge = yield* EffectBridge.make()
-
       const tracer = cfg.experimental?.openTelemetry
         ? Option.getOrUndefined(yield* Effect.serviceOption(OtelTracer.OtelTracer))
         : undefined
@@ -731,6 +803,8 @@ const live: Layer.Layer<
       // Runtime seam: native is an opt-in adapter over @deepagent-code/llm. It
       // either returns a ready LLMEvent stream or a concrete fallback reason.
       if (flags.experimentalNativeLlm) {
+        const physicalTools = finalToolDefinitions(runtimeTools)
+        const requestReceipt = input.requestReceipt
         const native = LLMNativeRuntime.stream({
           model: input.model,
           provider: item,
@@ -747,28 +821,36 @@ const live: Layer.Layer<
           headers: prepared.headers,
           abort: input.abort,
           metadata: prepared.metadata,
+          durableAttempt: input.durableAttempt,
+          requestSeal: requestReceipt
+            ? ({ wireHash }) =>
+                Effect.gen(function* () {
+                  const preparedTurn = prepareProviderTurn({
+                    stream: input,
+                    prepared,
+                    owner: "legacy_native",
+                    budget,
+                    permissionFilteredToolIDs,
+                    finalOfferedToolIDs: physicalTools.map((tool) => tool.name),
+                    toolDefinitions: physicalTools,
+                    toolCapability,
+                    toolLoweringOutcome,
+                    toolChoice: effectiveToolChoice,
+                    wireRequestHash: wireHash,
+                  })
+                  if (!preparedTurn) return yield* Effect.die("provider receipt identity is missing")
+                  yield* requestReceipt.adapterPrepared({
+                    finalRequestHash: wireHash,
+                    promptCacheKey: physicalPromptCacheKey(physicalProviderOptions),
+                    finalOfferedToolIds: physicalTools.map((tool) => tool.name),
+                    toolDefinitionHash: Hash.sha256(stableReceiptJson(physicalTools)),
+                    preparedTurn,
+                  })
+                  yield* requestReceipt.dispatched()
+                })
+            : undefined,
         })
         if (native.type === "supported") {
-          const physicalTools = finalToolDefinitions(runtimeTools)
-          yield* input.requestReceipt?.adapterPrepared({
-            finalRequestHash: finalRequestFingerprint({
-              runtime: "native",
-              model: { providerID: input.model.providerID, modelID: input.model.id },
-              messages: ProviderTransform.message(prepared.messages, input.model, effectiveOptions ?? {}),
-              tools: physicalTools,
-              toolChoice: effectiveToolChoice,
-              temperature: prepared.params.temperature,
-              topP: prepared.params.topP,
-              topK: prepared.params.topK,
-              maxOutputTokens: prepared.params.maxOutputTokens,
-              providerOptions: physicalProviderOptions,
-              headers: prepared.headers,
-            }),
-            promptCacheKey: physicalPromptCacheKey(physicalProviderOptions),
-            finalOfferedToolIds: physicalTools.map((tool) => tool.name),
-            toolDefinitionHash: Hash.sha256(stableReceiptJson(physicalTools)),
-          }) ?? Effect.void
-          yield* input.requestReceipt?.dispatched() ?? Effect.void
           yield* input.requestReceipt?.aiSdkInput({
             ordinal: 0,
             eventType: "native-runtime",
@@ -918,32 +1000,41 @@ const live: Layer.Layer<
                       input.model,
                       prepared.messageTransformOptions,
                     )
-                    if (input.requestReceipt) {
-                      const physicalTools = physicalToolDefinitions(args.params.tools)
-                      await receiptBridge.promise(
-                        input.requestReceipt.adapterPrepared({
-                          finalRequestHash: finalRequestFingerprint({
-                            runtime: "ai-sdk",
-                            model: { providerID: input.model.providerID, modelID: input.model.id },
-                            prompt: args.params.prompt,
-                            tools: args.params.tools,
-                            toolChoice: args.params.toolChoice,
-                            temperature: args.params.temperature,
-                            topP: args.params.topP,
-                            topK: args.params.topK,
-                            maxOutputTokens: args.params.maxOutputTokens,
-                            providerOptions: args.params.providerOptions,
-                            headers: prepared.headers,
-                          }),
-                          promptCacheKey: physicalPromptCacheKey(args.params.providerOptions),
-                          finalOfferedToolIds: physicalTools.ids,
-                          toolDefinitionHash: Hash.sha256(stableReceiptJson(physicalTools.definitions)),
-                        }),
-                      )
-                      await receiptBridge.promise(input.requestReceipt.dispatched())
-                    }
                   }
                   return args.params
+                },
+                async wrapStream({ doStream, params }) {
+                  const requestReceipt = input.requestReceipt
+                  if (!requestReceipt) return doStream()
+                  const physicalTools = physicalToolDefinitions(params.tools)
+                  return ProviderWireSeal.run(
+                    ({ wireHash }) =>
+                      Effect.gen(function* () {
+                        const preparedTurn = prepareProviderTurn({
+                          stream: input,
+                          prepared,
+                          owner: "legacy_aisdk",
+                          budget,
+                          permissionFilteredToolIDs,
+                          finalOfferedToolIDs: physicalTools.ids,
+                          toolDefinitions: physicalTools.definitions,
+                          toolCapability,
+                          toolLoweringOutcome,
+                          toolChoice: effectiveToolChoice,
+                          wireRequestHash: wireHash,
+                        })
+                        if (!preparedTurn) return yield* Effect.die("provider receipt identity is missing")
+                        yield* requestReceipt.adapterPrepared({
+                          finalRequestHash: wireHash,
+                          promptCacheKey: physicalPromptCacheKey(params.providerOptions),
+                          finalOfferedToolIds: physicalTools.ids,
+                          toolDefinitionHash: Hash.sha256(stableReceiptJson(physicalTools.definitions)),
+                          preparedTurn,
+                        })
+                        yield* requestReceipt.dispatched()
+                      }),
+                    doStream,
+                  )
                 },
               },
             ],
@@ -1077,6 +1168,7 @@ const live: Layer.Layer<
                     parentSessionID: input.parentSessionID,
                     agent: input.agent.name,
                     metadata: result.metadata,
+                    releasedKnowledgeSelection: input.releasedKnowledgeSelection,
                   },
                   events,
                 ).pipe(
@@ -1103,7 +1195,7 @@ const live: Layer.Layer<
   }),
 )
 
-export const layer = live.pipe(Layer.provide(Permission.defaultLayer), Layer.provide(EventV2Bridge.defaultLayer))
+export const layer = live
 
 export const defaultLayer = Layer.suspend(() =>
   layer.pipe(
