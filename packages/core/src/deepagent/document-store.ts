@@ -1,7 +1,7 @@
 import { mkdirSync, readdirSync, readFileSync, existsSync } from "node:fs"
 import { createHash } from "node:crypto"
 import path from "node:path"
-import { writeFileAtomic, writeFileExclusive, writeRecoverableFileExclusive } from "./atomic-write"
+import { writeFileExclusive, writeRecoverableFileExclusive } from "./atomic-write"
 
 // V3 Document System (docs/28): the bedrock. All persistent state is a typed-document
 // graph — small files, content-addressed, append-only with a supersede chain, bidirectional
@@ -174,6 +174,70 @@ export type DocFilter = {
 
 export type IntegrityViolation = { readonly invariant: string; readonly docId: string; readonly detail: string }
 export type IntegrityReport = { readonly ok: boolean; readonly violations: readonly IntegrityViolation[] }
+export type DocumentRevision = Pick<Doc, "id" | "version" | "hash">
+
+export type GovernanceActor = {
+  readonly type: "human" | "agent" | "model_reviewer" | "system"
+  readonly id: string
+}
+
+export type GovernanceEnvelope = {
+  readonly candidate_id?: string
+  readonly fingerprint: string
+  readonly review_status: "pending" | "approved" | "rejected" | "quarantined"
+  readonly actor_type: GovernanceActor["type"]
+  readonly actor_id: string
+  readonly reason?: string
+  readonly review_ref?: string
+  readonly source_doc_ref: string
+  readonly updated_at: number
+}
+
+export type GovernanceTransition = {
+  readonly actor: GovernanceActor
+  readonly fingerprint?: string
+  readonly reviewRef?: string
+  readonly transitionedAt?: number
+} & (
+  | { readonly kind: "stage" }
+  | { readonly kind: "approve" }
+  | { readonly kind: "reject"; readonly reason: string }
+  | { readonly kind: "quarantine"; readonly reason?: string }
+)
+
+export const documentRevision = (doc: Doc): DocumentRevision => ({ id: doc.id, version: doc.version, hash: doc.hash })
+
+export const governanceFingerprint = (doc: Pick<Doc, "type" | "scope" | "description" | "body">): string =>
+  "sha256:" +
+  createHash("sha256")
+    .update(canonical({ type: doc.type, scope: doc.scope, description: doc.description, body: doc.body }))
+    .digest("hex")
+
+export const getGovernanceEnvelope = (doc: Doc): GovernanceEnvelope | undefined => {
+  const value = doc.extensions?.governance
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined
+  const governance = value as Record<string, unknown>
+  if (typeof governance.fingerprint !== "string") return undefined
+  if (!['pending', 'approved', 'rejected', 'quarantined'].includes(String(governance.review_status))) return undefined
+  if (!['human', 'agent', 'model_reviewer', 'system'].includes(String(governance.actor_type))) return undefined
+  if (typeof governance.actor_id !== "string") return undefined
+  if (typeof governance.source_doc_ref !== "string") return undefined
+  if (typeof governance.updated_at !== "number" || !Number.isFinite(governance.updated_at)) return undefined
+  if (governance.candidate_id !== undefined && typeof governance.candidate_id !== "string") return undefined
+  if (governance.reason !== undefined && typeof governance.reason !== "string") return undefined
+  if (governance.review_ref !== undefined && typeof governance.review_ref !== "string") return undefined
+  return {
+    ...(typeof governance.candidate_id === "string" ? { candidate_id: governance.candidate_id } : {}),
+    fingerprint: governance.fingerprint,
+    review_status: governance.review_status as GovernanceEnvelope["review_status"],
+    actor_type: governance.actor_type as GovernanceActor["type"],
+    actor_id: governance.actor_id,
+    ...(typeof governance.reason === "string" ? { reason: governance.reason } : {}),
+    ...(typeof governance.review_ref === "string" ? { review_ref: governance.review_ref } : {}),
+    source_doc_ref: governance.source_doc_ref,
+    updated_at: governance.updated_at,
+  }
+}
 
 // F30-1 (deepagentcore-v4.0.3 storage prereq): a CAS write conflict. Thrown when persist() tries to
 // create an append-only version file (`id@vN.json`) that already exists on disk with a DIFFERENT
@@ -195,6 +259,22 @@ export class DocumentConflictError extends Error {
         `Another writer produced this version concurrently; re-read the latest and re-apply.`,
     )
     this.name = "DocumentConflictError"
+  }
+}
+
+export class DocumentRevisionConflictError extends Error {
+  readonly _tag = "DocumentRevisionConflictError"
+  constructor(
+    readonly operation: string,
+    readonly expected: DocumentRevision,
+    readonly actual: DocumentRevision,
+  ) {
+    super(
+      `${operation}: stale document revision for ${expected.id}; ` +
+        `expected v${expected.version} (${expected.hash.slice(0, 16)}...) but found ` +
+        `v${actual.version} (${actual.hash.slice(0, 16)}...)`,
+    )
+    this.name = "DocumentRevisionConflictError"
   }
 }
 
@@ -364,7 +444,6 @@ export class DocumentStore {
     this.assertLinkTargets(next.links)
     next = { ...next, hash: computeHash(next) }
     this.persist(next)
-    this.replace({ ...cur, status: "superseded", superseded_by: `${cur.id}@v${next.version}` })
     return next
   }
 
@@ -375,7 +454,7 @@ export class DocumentStore {
     const cur = this.findLogical(input)
     if (cur) {
       const doc = this.upsert(input)
-      if (doc.status !== "active") this.setStatus(doc.id, "active")
+      if (doc.status !== "active") return this.setStatus(doc.id, "active", documentRevision(doc))
       return this.get(doc.id)!
     }
 
@@ -406,7 +485,6 @@ export class DocumentStore {
     this.assertLinkTargets(next.links)
     next = { ...next, hash: computeHash(next) }
     this.persist(next)
-    this.replace({ ...cur, status: "superseded", superseded_by: `${id}@v${next.version}` })
     return next
   }
 
@@ -436,7 +514,6 @@ export class DocumentStore {
     this.assertLinkTargets(next.links)
     next = { ...next, hash: computeHash(next) }
     this.persist(next)
-    this.replace({ ...cur, status: "superseded", superseded_by: `${id}@v${next.version}` })
     return next
   }
 
@@ -473,7 +550,6 @@ export class DocumentStore {
     const next: Doc = { ...cur, confidence: nextConfidence, version: cur.version + 1, superseded_by: null, hash: "" }
     const hashed = { ...next, hash: computeHash(next) }
     this.persist(hashed)
-    this.replace({ ...cur, status: "superseded", superseded_by: `${id}@v${hashed.version}` })
     return hashed
   }
 
@@ -484,10 +560,74 @@ export class DocumentStore {
     this.update(from, cur.body, [...cur.links, { rel, to, ...(note ? { note } : {}) }])
   }
 
-  setStatus(id: string, status: DocStatus): void {
-    const cur = this.get(id)
-    if (!cur) throw new Error(`setStatus: unknown doc ${id}`)
-    this.replace({ ...cur, status })
+  setStatus(id: string, status: DocStatus, expected: DocumentRevision): Doc {
+    const cur = this.requireRevision(id, expected, "setStatus")
+    if (cur.status === status) return cur
+    const next: Doc = {
+      ...cur,
+      status,
+      version: cur.version + 1,
+      superseded_by: null,
+      hash: "",
+    }
+    const hashed = { ...next, hash: computeHash(next) }
+    this.persist(hashed)
+    return hashed
+  }
+
+  commitGovernance(id: string, expected: DocumentRevision, transition: GovernanceTransition): Doc {
+    const cur = this.requireRevision(id, expected, "commitGovernance")
+    const status =
+      transition.kind === "stage"
+        ? "candidate"
+        : transition.kind === "approve"
+          ? "active"
+          : transition.kind === "reject"
+            ? "rejected"
+            : "quarantined"
+    const reviewStatus =
+      transition.kind === "stage"
+        ? "pending"
+        : transition.kind === "approve"
+          ? "approved"
+          : transition.kind === "reject"
+            ? "rejected"
+            : "quarantined"
+    const fingerprint = transition.fingerprint ?? governanceFingerprint(cur)
+    const currentGovernance = getGovernanceEnvelope(cur)
+    const reason = transition.kind === "reject" || transition.kind === "quarantine" ? transition.reason : undefined
+    if (
+      cur.status === status &&
+      currentGovernance?.fingerprint === fingerprint &&
+      currentGovernance.review_status === reviewStatus &&
+      currentGovernance.actor_type === transition.actor.type &&
+      currentGovernance.actor_id === transition.actor.id &&
+      currentGovernance.reason === reason &&
+      currentGovernance.review_ref === transition.reviewRef
+    )
+      return cur
+    const governance: GovernanceEnvelope = {
+      ...(typeof cur.extensions?.candidate_id === "string" ? { candidate_id: cur.extensions.candidate_id } : {}),
+      fingerprint,
+      review_status: reviewStatus,
+      actor_type: transition.actor.type,
+      actor_id: transition.actor.id,
+      ...(reason ? { reason } : {}),
+      ...(transition.reviewRef ? { review_ref: transition.reviewRef } : {}),
+      source_doc_ref: `${cur.id}@v${cur.version}`,
+      updated_at: transition.transitionedAt ?? Date.now(),
+    }
+    const next: Doc = {
+      ...cur,
+      status,
+      version: cur.version + 1,
+      superseded_by: null,
+      hash: "",
+      extensions: { ...cur.extensions, governance },
+    }
+    const hashed = { ...next, hash: computeHash(next) }
+    this.persist(hashed)
+    return hashed
   }
 
   // ---- read ----
@@ -568,9 +708,16 @@ export class DocumentStore {
         for (const l of doc.links)
           if (!this.docs.has(l.to))
             violations.push({ invariant: "INV-3", docId: id, detail: `dangling link -> ${l.to}` })
-        if (v < max && (doc.status !== "superseded" || !doc.superseded_by))
-          violations.push({ invariant: "INV-4", docId: `${id}@v${v}`, detail: "old version not superseded" })
+        if (doc.superseded_by) {
+          const target = `${id}@v`
+          const targetVersion = doc.superseded_by.startsWith(target) ? Number(doc.superseded_by.slice(target.length)) : NaN
+          if (!Number.isSafeInteger(targetVersion) || targetVersion <= v || !versions.has(targetVersion))
+            violations.push({ invariant: "INV-4", docId: `${id}@v${v}`, detail: "invalid superseded_by target" })
+        }
       }
+      for (let version = 1; version <= max; version++)
+        if (!versions.has(version))
+          violations.push({ invariant: "INV-4", docId: `${id}@v${version}`, detail: "missing immutable revision" })
     }
     return { ok: violations.length === 0, violations }
   }
@@ -641,16 +788,6 @@ export class DocumentStore {
     }
     this.indexDoc(doc)
   }
-  private replace(doc: Doc): void {
-    // rewrites the SAME version in place with new status/superseded_by; rehash so INV-2 holds. This
-    // is an intentional overwrite (not a new version), so it uses the crash-safe atomic OVERWRITE
-    // primitive (temp+fsync+rename) rather than the exclusive-create CAS path.
-    const hashed: Doc = { ...doc, hash: computeHash({ ...doc, hash: "" }) }
-    const dir = path.join(this.root, "docs", hashed.type)
-    const file = path.join(dir, `${idToFile(hashed.id)}@v${hashed.version}.json`)
-    writeFileAtomic(file, JSON.stringify(hashed, null, 2))
-    this.indexDoc(hashed)
-  }
   // F30-1: read+parse a single on-disk version file for CAS reconciliation. Returns null if the file
   // is missing or corrupt (a torn concurrent write) — the caller treats an unreadable existing file
   // as a conflict, never as an idempotent match.
@@ -665,6 +802,14 @@ export class DocumentStore {
     const versions = this.docs.get(doc.id) ?? new Map<number, Doc>()
     versions.set(doc.version, doc)
     this.docs.set(doc.id, versions)
+  }
+  private requireRevision(id: string, expected: DocumentRevision, operation: string): Doc {
+    this.rebuildIndex()
+    const cur = this.get(id)
+    if (!cur) throw new Error(`${operation}: unknown doc ${id}`)
+    if (expected.id !== id || cur.version !== expected.version || cur.hash !== expected.hash)
+      throw new DocumentRevisionConflictError(operation, expected, documentRevision(cur))
+    return cur
   }
   private docFromInput(id: string, version: number, input: CreateDocInput): Doc {
     return {

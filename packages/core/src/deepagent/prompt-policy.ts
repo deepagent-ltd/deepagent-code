@@ -3,6 +3,7 @@ import { knowledgeEnabled } from "./mode"
 import type { ActivationDecision } from "./activation-policy"
 import type { RoundState, CandidateRef, DiagnosisRef } from "./round-state"
 import { buildOrchestrationSection, type FanoutDecision } from "./orchestration"
+import type { DocumentRef } from "./released-snapshot"
 
 export type PromptContext = {
   readonly mode: AgentMode
@@ -78,11 +79,20 @@ export type KnowledgeSynthesis = {
   readonly conflicts: readonly string[]
   readonly candidateRefs?: readonly KnowledgeRefProjection[]
   readonly selectedRefs?: readonly KnowledgeRefProjection[]
-  readonly rejectedRefs?: readonly { readonly ref_id: string; readonly reason: string }[]
+  readonly selectedDocumentRefs?: readonly DocumentRef[]
+  readonly rejectedRefs?: readonly {
+    readonly ref_id: string
+    readonly authority_ref?: string
+    readonly reason: string
+  }[]
   // V3 anti-misleading fields (optional; docs/30). When present, the prompt renders
   // knowledge as advisory with evidence strength and surfaces excluded/blocked refs.
-  readonly gapAnalysis?: readonly { readonly ref_id: string; readonly excluded_by: string }[]
-  readonly doNotUse?: readonly { readonly ref_id: string; readonly reason: string }[]
+  readonly gapAnalysis?: readonly {
+    readonly ref_id: string
+    readonly authority_ref?: string
+    readonly excluded_by: string
+  }[]
+  readonly doNotUse?: readonly { readonly ref_id: string; readonly authority_ref?: string; readonly reason: string }[]
   readonly evidenceByRef?: Readonly<Record<string, string>>
   readonly topkApplied?: Readonly<Record<string, number>>
   readonly activeDomains?: readonly string[] // V3: domain packs activated for this retrieval
@@ -90,6 +100,8 @@ export type KnowledgeSynthesis = {
 
 export type KnowledgeRefProjection = {
   readonly ref_id: string
+  readonly authority_ref: string
+  readonly document_ref: DocumentRef
   readonly kind: "strategy" | "methodology" | "memory" | "knowledge" | "skill"
   readonly provenance: string
   readonly scope: string
@@ -204,9 +216,11 @@ export const buildVolatileRoundContext = (ctx: PromptContext, runtimeControl?: s
   // Token budget remaining: decremented every turn, so it was busting the constraints section.
   if (ctx.roundState.budget_remaining_tokens !== null) {
     sections.push(
-      ["# 预算 (budget)", "", `- Token budget remaining: ~${Math.round(ctx.roundState.budget_remaining_tokens / 1000)}k tokens`].join(
-        "\n",
-      ),
+      [
+        "# 预算 (budget)",
+        "",
+        `- Token budget remaining: ~${Math.round(ctx.roundState.budget_remaining_tokens / 1000)}k tokens`,
+      ].join("\n"),
     )
   }
 
