@@ -18,7 +18,7 @@ import { MessageV2 } from "@/session/message-v2"
 import { MessageID } from "@/session/schema"
 import { Session } from "@/session/session"
 import { SessionDiffArtifact } from "@/session/diff-artifact"
-import { SessionDiffMigrationReceiptTable } from "@/session/diff-artifact.sql"
+import { SessionDiffArtifactFileChunkTable, SessionDiffMigrationReceiptTable } from "@/session/diff-artifact.sql"
 import { SessionPromptEpochTable } from "@/session/prompt-epoch.sql"
 import { SessionPaths } from "@/server/routes/instance/httpapi/groups/session"
 import { and, asc, eq, sql } from "drizzle-orm"
@@ -36,20 +36,26 @@ afterEach(async () => {
   await resetDatabase()
 })
 
-const seed = Effect.fn("Test.seedLegacyDiff")(function* (input?: { corruptMessage?: boolean }) {
+const seed = Effect.fn("Test.seedLegacyDiff")(function* (input?: { corruptMessage?: boolean; nullPatch?: boolean }) {
   const sessions = yield* Session.Service
   const events = yield* EventV2.Service
   const { db } = yield* Database.Service
   const session = yield* sessions.create({ title: "legacy diff" })
   const messageID = MessageID.ascending()
   const patch = "你".repeat(Math.ceil((EventV2.MAX_ENCODED_PAYLOAD_BYTES + 1024) / 3))
+  const diffs = [
+    { file: "src/large.ts", patch, additions: 2, deletions: 1, status: "modified" as const },
+    ...(input?.nullPatch
+      ? [{ file: "src/metadata-only.ts", patch: null, additions: 0, deletions: 0, status: "modified" as const }]
+      : []),
+  ] as unknown as NonNullable<SessionV1.User["summary"]>["diffs"]
   const message = {
     role: "user" as const,
     time: { created: Date.now() },
     agent: "build",
     model: { providerID: ProviderV2.ID.make("test"), modelID: ModelV2.ID.make("model") },
     summary: {
-      diffs: [{ file: "src/large.ts", patch, additions: 2, deletions: 1, status: "modified" as const }],
+      diffs,
     },
   }
   yield* db
@@ -285,6 +291,61 @@ describe("Session legacy diff physical migration", () => {
           .get()
           .pipe(Effect.orDie)
         expect(epoch?.authority).toBe("ready")
+      }),
+    { git: true },
+    30_000,
+  )
+
+  it.instance(
+    "preserves a legacy null patch as one verified empty chunk",
+    () =>
+      Effect.gen(function* () {
+        const input = yield* seed({ nullPatch: true })
+        expect(yield* SessionDiffArtifact.migrate({ sessionID: input.session.id, now: 150 })).toEqual({
+          processed: 1,
+          committed: 1,
+          failed: 0,
+        })
+        const manifestResponse = yield* request(
+          `${pathFor(SessionPaths.diffArtifactManifest, input.session.id)}?${new URLSearchParams({
+            messageID: input.messageID,
+            artifactID: input.artifact.artifact_id,
+          })}`,
+        )
+        expect(manifestResponse.status).toBe(200)
+        const manifest = yield* json<typeof SessionDiffArtifact.Manifest.Type>(manifestResponse)
+        expect(manifest.files).toContainEqual(
+          expect.objectContaining({ file: "src/metadata-only.ts", patchBytes: 0 }),
+        )
+        const { db } = yield* Database.Service
+        const emptyChunks = yield* db
+          .select()
+          .from(SessionDiffArtifactFileChunkTable)
+          .where(
+            and(
+              eq(SessionDiffArtifactFileChunkTable.artifact_id, input.artifact.artifact_id),
+              eq(SessionDiffArtifactFileChunkTable.file_index, 1),
+            ),
+          )
+          .all()
+          .pipe(Effect.orDie)
+        expect(emptyChunks).toHaveLength(1)
+        expect(emptyChunks[0]?.data).toEqual(Buffer.alloc(0))
+        expect(emptyChunks[0]?.chunk_hash).toBe(Hash.sha256(Buffer.alloc(0)))
+        const fileResponse = yield* request(
+          `${pathFor(SessionPaths.diffArtifactFile, input.session.id)}?${new URLSearchParams({
+            messageID: input.messageID,
+            artifactID: input.artifact.artifact_id,
+            path: "src/metadata-only.ts",
+          })}`,
+        )
+        expect(fileResponse.status).toBe(200)
+        expect(yield* json<typeof SessionDiffArtifact.File.Type>(fileResponse)).toMatchObject({
+          patch: "",
+          patchBytes: 0,
+          returnedBytes: 0,
+          truncated: false,
+        })
       }),
     { git: true },
     30_000,
