@@ -8,6 +8,7 @@ import {
   type PlanEditSettlement,
 } from "@deepagent-code/core/deepagent/plan-edit-protocol"
 import type { SessionMessage } from "@deepagent-code/core/session/message"
+import { DeepAgentLearningLifecycleTrigger } from "@deepagent-code/core/deepagent/learning-lifecycle-trigger"
 import {
   makeGoalLoop,
   type ControllerDeps,
@@ -297,6 +298,15 @@ export const runOneTick = (
       // A steer staged BEFORE a pause is NOT stamped consumed (the tick that would absorb it never ran),
       // so it stays pending and is re-drained on resume — no guidance is lost across a pause. A plan edit
       // enqueued during pause likewise stays pending and is applied on the first post-resume iteration.
+      yield* Effect.promise(() =>
+        DeepAgentLearningLifecycleTrigger.notify({
+          trigger: "pause",
+          boundaryKey: `goal-pause:${input.handle.goalId}`,
+          sessionID: input.handle.sessionId,
+          match: "parent",
+          goalID: input.handle.goalId,
+        }),
+      ).pipe(Effect.ignore)
       return { outcome: "continue", progress: "paused" }
     }
 
@@ -392,10 +402,7 @@ const settlePlanEdit = (effect: Effect.Effect<void>, attempts = 3): Effect.Effec
     Effect.orDie,
   )
 
-const safeStatus = (
-  loop: ReturnType<typeof makeGoalLoop>,
-  handle: GoalHandle,
-): Effect.Effect<GoalStatus | null> =>
+const safeStatus = (loop: ReturnType<typeof makeGoalLoop>, handle: GoalHandle): Effect.Effect<GoalStatus | null> =>
   loop.status(handle).pipe(Effect.catchCause(() => Effect.succeed(null as GoalStatus | null)))
 
 // Re-export the materialize helper's scope so the server route can co-locate other goal docs.
