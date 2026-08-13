@@ -36,7 +36,11 @@ afterEach(async () => {
   await resetDatabase()
 })
 
-const seed = Effect.fn("Test.seedLegacyDiff")(function* (input?: { corruptMessage?: boolean; nullPatch?: boolean }) {
+const seed = Effect.fn("Test.seedLegacyDiff")(function* (input?: {
+  corruptMessage?: boolean
+  nullPatch?: boolean
+  supersededArtifact?: boolean
+}) {
   const sessions = yield* Session.Service
   const events = yield* EventV2.Service
   const { db } = yield* Database.Service
@@ -143,12 +147,77 @@ const seed = Effect.fn("Test.seedLegacyDiff")(function* (input?: { corruptMessag
     .get()
     .pipe(Effect.orDie)
   if (!artifact) return yield* Effect.die("legacy artifact missing")
+  const latest = input?.supersededArtifact
+    ? yield* Effect.gen(function* () {
+        const latestPatch = `${patch}\nlatest`
+        const latestMessage = {
+          ...message,
+          summary: {
+            diffs: [{ file: "src/large.ts", patch: latestPatch, additions: 3, deletions: 1, status: "modified" as const }],
+          },
+        }
+        yield* db
+          .update(MessageTable)
+          .set({ data: latestMessage })
+          .where(eq(MessageTable.id, messageID))
+          .run()
+          .pipe(Effect.orDie)
+        yield* db
+          .update(SessionTable)
+          .set({ summary_diffs: latestMessage.summary.diffs })
+          .where(eq(SessionTable.id, session.id))
+          .run()
+          .pipe(Effect.orDie)
+        const latestSync = yield* db
+          .update(EventSyncSequenceTable)
+          .set({ seq: sql`${EventSyncSequenceTable.seq} + 1` })
+          .where(eq(EventSyncSequenceTable.id, 1))
+          .returning({ seq: EventSyncSequenceTable.seq })
+          .get()
+          .pipe(Effect.orDie)
+        if (!latestSync) return yield* Effect.die("latest sync sequence authority missing")
+        const latestEventID = EventV2.ID.make(`evt_legacy_diff_latest_${messageID}`)
+        yield* db
+          .insert(EventTable)
+          .values({
+            id: latestEventID,
+            aggregate_id: session.id,
+            seq: (sequence?.seq ?? -1) + 2,
+            type: EventV2.versionedType("message.updated", 1),
+            data: { sessionID: session.id, info: { ...latestMessage, id: messageID, sessionID: session.id } },
+            sync_seq: latestSync.seq,
+          })
+          .run()
+          .pipe(Effect.orDie)
+        yield* db
+          .update(EventSequenceTable)
+          .set({ seq: (sequence?.seq ?? -1) + 2 })
+          .where(eq(EventSequenceTable.aggregate_id, session.id))
+          .run()
+          .pipe(Effect.orDie)
+        expect((yield* events.canonicalizeLegacyArtifacts({ limit: 1 })).processed).toBe(1)
+        const latestArtifact = yield* db
+          .select()
+          .from(EventArtifactTable)
+          .where(eq(EventArtifactTable.event_id, latestEventID))
+          .get()
+          .pipe(Effect.orDie)
+        if (!latestArtifact) return yield* Effect.die("latest legacy artifact missing")
+        return { message: latestMessage, artifact: latestArtifact, patch: latestPatch }
+      })
+    : undefined
   if (input?.corruptMessage) {
     yield* db
       .run(sql`UPDATE message SET data = json_set(data, '$.summary.diffs[0].patch', 'changed') WHERE id = ${messageID}`)
       .pipe(Effect.orDie)
   }
-  return { session, messageID, message, artifact, patch }
+  return {
+    session,
+    messageID,
+    message: latest?.message ?? message,
+    artifact: latest?.artifact ?? artifact,
+    patch: latest?.patch ?? patch,
+  }
 })
 
 function pathFor(template: string, sessionID: string) {
@@ -345,6 +414,33 @@ describe("Session legacy diff physical migration", () => {
           patchBytes: 0,
           returnedBytes: 0,
           truncated: false,
+        })
+      }),
+    { git: true },
+    30_000,
+  )
+
+  it.instance(
+    "rewrites from the latest artifact when one Message has multiple historical diff events",
+    () =>
+      Effect.gen(function* () {
+        const input = yield* seed({ supersededArtifact: true })
+        const { db } = yield* Database.Service
+        expect(yield* SessionDiffArtifact.migrate({ sessionID: input.session.id, now: 175 })).toEqual({
+          processed: 1,
+          committed: 1,
+          failed: 0,
+        })
+        const receipt = yield* db
+          .select()
+          .from(SessionDiffMigrationReceiptTable)
+          .where(eq(SessionDiffMigrationReceiptTable.message_id, input.messageID))
+          .get()
+          .pipe(Effect.orDie)
+        expect(receipt).toMatchObject({
+          artifact_id: input.artifact.artifact_id,
+          source_event_id: input.artifact.event_id,
+          state: "committed",
         })
       }),
     { git: true },
