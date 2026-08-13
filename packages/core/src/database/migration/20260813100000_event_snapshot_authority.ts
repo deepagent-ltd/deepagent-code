@@ -8,17 +8,57 @@ export default {
       yield* tx.run("ALTER TABLE event_sequence ADD COLUMN retention_floor_seq INTEGER")
       yield* tx.run("ALTER TABLE event_sequence ADD COLUMN snapshot_id TEXT")
       yield* tx.run("ALTER TABLE event ADD COLUMN sync_seq INTEGER")
-      yield* tx.run("UPDATE event SET sync_seq = rowid WHERE sync_seq IS NULL")
-      yield* tx.run("CREATE UNIQUE INDEX event_sync_seq_idx ON event(sync_seq)")
       yield* tx.run(`
         CREATE TABLE event_sync_sequence (
           id INTEGER NOT NULL PRIMARY KEY CHECK (id = 1),
           seq INTEGER NOT NULL CHECK (seq >= -1),
           generation TEXT NOT NULL CHECK (length(generation) = 32),
-          cursor_secret TEXT NOT NULL CHECK (length(cursor_secret) = 64)
+          cursor_secret TEXT NOT NULL CHECK (length(cursor_secret) = 64),
+          backfill_complete INTEGER NOT NULL CHECK (backfill_complete IN (0, 1))
         )
       `)
-      yield* tx.run("INSERT INTO event_sync_sequence(id, seq, generation, cursor_secret) SELECT 1, COALESCE(MAX(sync_seq), -1), lower(hex(randomblob(16))), lower(hex(randomblob(32))) FROM event")
+      // Reserve the existing rowid range without rewriting legacy event payload pages. A bounded,
+      // resumable maintenance job materializes the sidecar index before history sync is enabled.
+      yield* tx.run(`
+        INSERT INTO event_sync_sequence(id, seq, generation, cursor_secret, backfill_complete)
+        SELECT 1, COALESCE(MAX(rowid), -1), lower(hex(randomblob(16))), lower(hex(randomblob(32))),
+          CASE WHEN MAX(rowid) IS NULL THEN 1 ELSE 0 END
+        FROM event
+      `)
+      yield* tx.run(`
+        CREATE TABLE event_sync_backfill (
+          id INTEGER NOT NULL PRIMARY KEY CHECK (id = 1),
+          state TEXT NOT NULL CHECK (state IN ('pending', 'complete')),
+          cursor_rowid INTEGER NOT NULL CHECK (cursor_rowid >= 0),
+          high_water_rowid INTEGER NOT NULL CHECK (high_water_rowid >= 0),
+          processed_count INTEGER NOT NULL CHECK (processed_count >= 0),
+          started_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          completed_at INTEGER
+        )
+      `)
+      yield* tx.run(`
+        INSERT INTO event_sync_backfill(
+          id, state, cursor_rowid, high_water_rowid, processed_count,
+          started_at, updated_at, completed_at
+        )
+        SELECT 1,
+          CASE WHEN COALESCE(MAX(rowid), 0) = 0 THEN 'complete' ELSE 'pending' END,
+          0, COALESCE(MAX(rowid), 0), 0,
+          unixepoch('subsec') * 1000, unixepoch('subsec') * 1000,
+          CASE WHEN COALESCE(MAX(rowid), 0) = 0 THEN unixepoch('subsec') * 1000 END
+        FROM event
+      `)
+      yield* tx.run(`
+        CREATE TABLE event_sync_index (
+          sync_seq INTEGER NOT NULL PRIMARY KEY CHECK (sync_seq >= 0),
+          event_id TEXT NOT NULL UNIQUE REFERENCES event(id) ON DELETE CASCADE,
+          aggregate_id TEXT NOT NULL,
+          seq INTEGER NOT NULL CHECK (seq >= 0),
+          UNIQUE (aggregate_id, seq)
+        )
+      `)
+      yield* tx.run("CREATE INDEX event_sync_index_aggregate_seq_idx ON event_sync_index(aggregate_id, seq)")
       yield* tx.run(`
         CREATE TABLE workspace_sync_cursor (
           workspace_id TEXT NOT NULL,
@@ -85,12 +125,20 @@ export default {
         )
       `)
       yield* tx.run(`
-        CREATE TRIGGER event_sync_seq_legacy_allocator
-        AFTER INSERT ON event
+        CREATE TRIGGER event_sync_seq_required
+        BEFORE INSERT ON event
         WHEN NEW.sync_seq IS NULL
         BEGIN
-          UPDATE event_sync_sequence SET seq = seq + 1 WHERE id = 1;
-          UPDATE event SET sync_seq = (SELECT seq FROM event_sync_sequence WHERE id = 1) WHERE id = NEW.id;
+          SELECT RAISE(ABORT, 'event_sync_seq_required');
+        END
+      `)
+      yield* tx.run(`
+        CREATE TRIGGER event_sync_index_explicit_insert
+        AFTER INSERT ON event
+        WHEN NEW.sync_seq IS NOT NULL
+        BEGIN
+          INSERT INTO event_sync_index(sync_seq, event_id, aggregate_id, seq)
+          VALUES (NEW.sync_seq, NEW.id, NEW.aggregate_id, NEW.seq);
         END
       `)
       yield* tx.run(`

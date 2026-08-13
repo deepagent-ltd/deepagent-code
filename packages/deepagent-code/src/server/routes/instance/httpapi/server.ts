@@ -49,6 +49,7 @@ import { SessionSteer } from "@/session/steer"
 import { SessionRunState } from "@/session/run-state"
 import { SessionStatus } from "@/session/status"
 import { SessionSummary } from "@/session/summary"
+import { SessionProjection } from "@/session/session-projector"
 import { SessionLegacyProviderResolution } from "@/session/legacy-provider-resolution"
 import { Todo } from "@/session/todo"
 import { SessionShare } from "@/share/session"
@@ -380,6 +381,7 @@ export function createRoutes(
       ShareNext.defaultLayer,
       Snapshot.defaultLayer,
       EventV2Bridge.defaultLayer,
+      SessionProjection.defaultLayer,
       EventV2.defaultLayer,
       Skill.defaultLayer,
       Todo.defaultLayer,

@@ -7,6 +7,8 @@ import {
   EventArtifactTable,
   EventDedupeTable,
   EventSequenceTable,
+  EventSyncIndexTable,
+  EventSyncSequenceTable,
   EventSnapshotTable,
   EventTable,
 } from "@deepagent-code/core/event/sql"
@@ -904,7 +906,6 @@ describe("EventV2", () => {
         expectedLatest: EventV2.Cursor.make(0),
         codec: "test.v1",
         schemaVersion: 1,
-        body: { value: "zero" },
       }).pipe(Effect.catchDefect(Effect.succeed))
       expect(checkpoint).toBeInstanceOf(EventV2.InvalidSyncEventError)
       const compact = yield* events
@@ -929,14 +930,22 @@ describe("EventV2", () => {
         sessionID: aggregateID,
         info: { summary: { diffs: [{ file: "large.patch", patch, additions: 1, deletions: 0 }] } },
       }
+      const syncSeq = yield* db.update(EventSyncSequenceTable).set({ seq: sql`${EventSyncSequenceTable.seq} + 1` })
+        .where(eq(EventSyncSequenceTable.id, 1)).returning({ seq: EventSyncSequenceTable.seq }).get().pipe(Effect.orDie)
       yield* db.insert(EventTable).values({
         id,
         aggregate_id: aggregateID,
         seq: 1,
         type: EventV2.versionedType("message.updated", 1),
         data,
+        sync_seq: syncSeq!.seq,
       }).run().pipe(Effect.orDie)
       yield* db.update(EventSequenceTable).set({ seq: 1 }).where(eq(EventSequenceTable.aggregate_id, aggregateID)).run().pipe(Effect.orDie)
+      expect(yield* db.select().from(EventSyncIndexTable).where(eq(EventSyncIndexTable.event_id, id)).get().pipe(Effect.orDie)).toMatchObject({
+        sync_seq: syncSeq!.seq,
+        aggregate_id: aggregateID,
+        seq: 1,
+      })
 
       const first = yield* events.canonicalizeLegacyArtifacts({ limit: 1, now: 10 })
       expect(first).toEqual({ processed: 1, next: id })

@@ -31,6 +31,9 @@ import { InstanceHttpApi } from "../api"
 import {
   CommandPayload,
   ContextAttemptResolvePayload,
+  DiffArtifactFileQuery,
+  DiffArtifactMaintenancePayload,
+  DiffArtifactManifestQuery,
   DiffQuery,
   ForkPayload,
   InitPayload,
@@ -50,6 +53,7 @@ import { ConflictError, PermissionNotFoundError, notFound } from "../errors"
 import * as SessionError from "./session-errors"
 import { randomUUID } from "node:crypto"
 import { getWorkspaceContext } from "../utils/workspace-context"
+import { SessionDiffArtifact } from "@/session/diff-artifact"
 
 const tryParseJson = (text: string) =>
   Effect.try({
@@ -152,6 +156,48 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       query: typeof DiffQuery.Type
     }) {
       return yield* summary.diff({ sessionID: ctx.params.sessionID, messageID: ctx.query.messageID })
+    })
+
+    const mapDiffArtifactError = (error: SessionDiffArtifact.Invalid | SessionDiffArtifact.NotFound) =>
+      error instanceof SessionDiffArtifact.NotFound ? notFound(error.message) : new HttpApiError.BadRequest({})
+
+    const diffArtifactMaintenance = Effect.fn("SessionHttpApi.diffArtifactMaintenance")(function* (ctx: {
+      params: { sessionID: SessionID }
+      payload: typeof DiffArtifactMaintenancePayload.Type
+    }) {
+      yield* requireSession(ctx.params.sessionID)
+      return yield* SessionDiffArtifact.migrate({
+        sessionID: ctx.params.sessionID,
+        ...(ctx.payload.limit ? { limit: ctx.payload.limit } : {}),
+      }).pipe(Effect.mapError(mapDiffArtifactError))
+    })
+
+    const diffArtifactManifest = Effect.fn("SessionHttpApi.diffArtifactManifest")(function* (ctx: {
+      params: { sessionID: SessionID }
+      query: typeof DiffArtifactManifestQuery.Type
+    }) {
+      yield* requireSession(ctx.params.sessionID)
+      return yield* SessionDiffArtifact.manifest({
+        sessionID: ctx.params.sessionID,
+        messageID: ctx.query.messageID,
+        artifactID: ctx.query.artifactID,
+        ...(ctx.query.cursor ? { cursor: ctx.query.cursor } : {}),
+        ...(ctx.query.limit ? { limit: ctx.query.limit } : {}),
+      }).pipe(Effect.mapError(mapDiffArtifactError))
+    })
+
+    const diffArtifactFile = Effect.fn("SessionHttpApi.diffArtifactFile")(function* (ctx: {
+      params: { sessionID: SessionID }
+      query: typeof DiffArtifactFileQuery.Type
+    }) {
+      yield* requireSession(ctx.params.sessionID)
+      return yield* SessionDiffArtifact.file({
+        sessionID: ctx.params.sessionID,
+        messageID: ctx.query.messageID,
+        artifactID: ctx.query.artifactID,
+        path: ctx.query.path,
+        ...(ctx.query.maxBytes ? { maxBytes: ctx.query.maxBytes } : {}),
+      }).pipe(Effect.mapError(mapDiffArtifactError))
     })
 
     const messages = Effect.fn("SessionHttpApi.messages")(function* (ctx: {
@@ -703,6 +749,9 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       .handle("todo", todo)
       .handle("plan", plan)
       .handle("diff", diff)
+      .handle("diffArtifactMaintenance", diffArtifactMaintenance)
+      .handle("diffArtifactManifest", diffArtifactManifest)
+      .handle("diffArtifactFile", diffArtifactFile)
       .handle("messages", messages)
       .handle("message", message)
       .handleRaw("create", createRaw)

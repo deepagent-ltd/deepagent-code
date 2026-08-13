@@ -47,9 +47,10 @@ export const layer = Layer.effect(
     const revertUnlocked = Effect.fn("SessionRevert.revertUnlocked")(function* (input: RevertInput) {
       yield* state.assertNotBusy(input.sessionID)
       const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
-      const target = yield* sessions
-        .getClientMessage({ sessionID: input.sessionID, messageID: input.messageID })
-        .pipe(Effect.orDie)
+      const target = Option.getOrUndefined(
+        yield* sessions.getClientMessage({ sessionID: input.sessionID, messageID: input.messageID }).pipe(Effect.option),
+      )
+      if (!target) return session
       const lastUser = Option.getOrUndefined(
         yield* sessions
           .findMessage(input.sessionID, (message) => message.info.role === "user" && message.info.id <= input.messageID)

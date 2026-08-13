@@ -32,6 +32,7 @@ import { Vcs } from "@/project/vcs"
 import { WorkspaceAdapterRuntime } from "./workspace-adapter-runtime"
 import { SessionRecoveryTransferGuard } from "@/session/recovery-transfer-guard"
 import { Hash } from "@deepagent-code/core/util/hash"
+import { FilePartArtifact } from "@deepagent-code/core/file-part-artifact"
 
 export const Info = Schema.Struct({
   ...WorkspaceInfoSchema.fields,
@@ -327,6 +328,191 @@ export const layer = Layer.effect(
       let total = 0
       let cursor: string | undefined = receipt?.cursor
       let reset = Boolean(cursor)
+      const requestJson = Effect.fn("Workspace.syncArtifactRequest")(function* (
+        path: string,
+        body: unknown,
+        maxBytes: number,
+      ) {
+        const response = yield* http.execute(
+          HttpClientRequest.post(route(url, path), {
+            headers: new Headers(headers),
+            body: HttpBody.jsonUnsafe(body),
+          }),
+        )
+        const declaredBytes = Number(response.headers["content-length"])
+        if (Number.isFinite(declaredBytes) && declaredBytes > maxBytes)
+          return yield* new SyncHttpError({
+            message: `Workspace artifact response exceeds ${maxBytes} bytes`,
+            status: 502,
+          })
+        const chunks: Uint8Array[] = []
+        let bytes = 0
+        yield* Stream.runForEach(response.stream, (chunk) => {
+          bytes += chunk.byteLength
+          if (bytes > maxBytes)
+            return Effect.fail(
+              new SyncHttpError({ message: `Workspace artifact response exceeds ${maxBytes} bytes`, status: 502 }),
+            )
+          chunks.push(chunk)
+          return Effect.void
+        })
+        const text = Buffer.concat(chunks, bytes).toString()
+        if (response.status < 200 || response.status >= 300) {
+          return yield* new SyncHttpError({
+            message: `Workspace artifact HTTP failure: ${response.status} ${text}`,
+            status: response.status,
+            body: text,
+          })
+        }
+        const parsed = Option.getOrUndefined(Schema.decodeUnknownOption(Schema.UnknownFromJsonString)(text))
+        if (parsed === undefined)
+          return yield* new SyncHttpError({ message: "Workspace artifact response is not valid JSON", status: 502 })
+        return parsed
+      })
+      const importArtifactMetadata = Effect.fn("Workspace.syncFilePartArtifactMetadata")(function* (
+        metadata: FilePartArtifact.Metadata,
+        verified = false,
+      ) {
+        const descriptor = metadata.descriptor
+        const remote = verified
+          ? metadata
+          : Schema.decodeUnknownSync(FilePartArtifact.Metadata)(
+              yield* requestJson(
+                "/sync/artifact/file/metadata",
+                {
+                  eventID: metadata.eventID,
+                  aggregateID: metadata.aggregateID,
+                  seq: metadata.seq,
+                  artifactID: descriptor.id,
+                },
+                64 * 1024,
+              ),
+            )
+        if (JSON.stringify(remote) !== JSON.stringify(metadata))
+          return yield* new SyncHttpError({ message: "Workspace artifact metadata diverged from history", status: 409 })
+        if (!(yield* FilePartArtifact.has(descriptor).pipe(Effect.provideService(Database.Service, { db }))))
+          for (const [index, hash] of remote.chunkHashes.entries()) {
+            const chunk = yield* requestJson(
+              "/sync/artifact/file/chunk",
+              {
+                eventID: remote.eventID,
+                aggregateID: remote.aggregateID,
+                seq: remote.seq,
+                artifactID: descriptor.id,
+                index,
+                hash,
+              },
+              512 * 1024,
+            )
+            if (!chunk || typeof chunk !== "object" || Array.isArray(chunk))
+              return yield* new SyncHttpError({ message: `Workspace artifact chunk ${index} is invalid`, status: 409 })
+            const value = chunk as Record<string, unknown>
+            if (
+              value.artifactID !== descriptor.id ||
+              value.index !== index ||
+              value.hash !== hash ||
+              typeof value.data !== "string" ||
+              !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value.data)
+            )
+              return yield* new SyncHttpError({ message: `Workspace artifact chunk ${index} is invalid`, status: 409 })
+            yield* FilePartArtifact.importChunk({
+              metadata: remote,
+              index,
+              hash,
+              data: Buffer.from(value.data, "base64"),
+            }).pipe(Effect.provideService(Database.Service, { db }))
+          }
+        yield* FilePartArtifact.stageImport(remote).pipe(Effect.provideService(Database.Service, { db }))
+      })
+      const importArtifact = Effect.fn("Workspace.syncFilePartArtifact")(function* (item: HistoryEvent) {
+        const descriptor = FilePartArtifact.descriptor(item.data)
+        if (!descriptor) return
+        const metadata = Schema.decodeUnknownSync(FilePartArtifact.Metadata)(
+          yield* requestJson(
+            "/sync/artifact/file/metadata",
+            { eventID: item.id, aggregateID: item.aggregate_id, seq: item.seq, artifactID: descriptor.id },
+            64 * 1024,
+          ),
+        )
+        if (
+          metadata.eventID !== item.id ||
+          metadata.aggregateID !== item.aggregate_id ||
+          metadata.seq !== item.seq ||
+          metadata.canonicalDataHash !== Hash.sha256(JSON.stringify(item.data)) ||
+          JSON.stringify(metadata.descriptor) !== JSON.stringify(descriptor)
+        )
+          return yield* new SyncHttpError({ message: "Workspace artifact metadata diverged from history", status: 409 })
+        yield* importArtifactMetadata(metadata, true)
+      })
+      const importSnapshot = Effect.fn("Workspace.syncSnapshot")(function* (item: HistoryResync) {
+        if (!events.snapshotRows || !events.snapshotChunks || !events.stageSnapshotRows || !events.stageSnapshotChunks)
+          return yield* new SyncHttpError({ message: "Workspace snapshot transfer is unavailable", status: 503 })
+        const stageRows = events.stageSnapshotRows
+        const stageChunks = events.stageSnapshotChunks
+        let after = -1
+        while (true) {
+          const page = Schema.decodeUnknownSync(SnapshotRowsPage)(
+            yield* requestJson(
+              "/sync/snapshot/rows",
+              {
+                aggregateID: item.snapshot.aggregateID,
+                snapshotID: item.snapshot.snapshotID,
+                snapshotHash: item.snapshot.snapshotHash,
+                after,
+                limit: EventV2.SNAPSHOT_TRANSFER_ROWS,
+              },
+              256 * 1024,
+            ),
+          )
+          yield* stageRows(item.snapshot, page.rows)
+          yield* Effect.forEach(
+            page.rows,
+            (row) =>
+              Effect.gen(function* () {
+                let chunkAfter = -1
+                const body: Buffer[] = []
+                while (true) {
+                  const chunks = Schema.decodeUnknownSync(SnapshotChunksPage)(
+                    yield* requestJson(
+                      "/sync/snapshot/chunks",
+                      {
+                        aggregateID: item.snapshot.aggregateID,
+                        snapshotID: item.snapshot.snapshotID,
+                        snapshotHash: item.snapshot.snapshotHash,
+                        rowHash: row.rowHash,
+                        after: chunkAfter,
+                        limit: 8,
+                      },
+                      4 * 1024 * 1024,
+                    ),
+                  )
+                  const decoded = chunks.chunks.map((chunk) => ({ ...chunk, data: Buffer.from(chunk.data, "base64") }))
+                  yield* stageChunks(item.snapshot, row, decoded)
+                  body.push(...decoded.map((chunk) => chunk.data))
+                  if (chunks.complete) break
+                  const next = chunks.chunks.at(-1)?.chunkIndex
+                  if (next === undefined || next <= chunkAfter)
+                    return yield* new SyncHttpError({ message: "Workspace snapshot chunk cursor did not advance", status: 409 })
+                  chunkAfter = next
+                }
+                if (row.tableName !== "file_part_artifact_binding") return
+                const value = Option.getOrUndefined(
+                  Schema.decodeUnknownOption(Schema.UnknownFromJsonString)(Buffer.concat(body, row.rowBytes).toString()),
+                )
+                if (!value || typeof value !== "object" || Array.isArray(value) || !("metadata" in value))
+                  return yield* new SyncHttpError({ message: "Workspace snapshot artifact row is invalid", status: 409 })
+                yield* importArtifactMetadata(Schema.decodeUnknownSync(FilePartArtifact.Metadata)(value.metadata))
+              }),
+            { discard: true },
+          )
+          if (page.complete) break
+          const next = page.rows.at(-1)?.rowIndex
+          if (next === undefined || next <= after)
+            return yield* new SyncHttpError({ message: "Workspace snapshot row cursor did not advance", status: 409 })
+          after = next
+        }
+        yield* events.importSnapshot(item.snapshot)
+      })
       while (true) {
         const expectedCursor = cursor
         const response = yield* http.execute(
@@ -375,20 +561,25 @@ export const layer = Layer.effect(
         yield* Effect.forEach(
           history,
           (item) => {
-            return events
-              .replay(
-                {
-                  id: EventV2.ID.make(item.id),
-                  aggregateID: item.aggregate_id,
-                  seq: item.seq,
-                  type: item.type,
-                  data: item.data,
-                },
-                { publish: true, ownerID: space.id },
-              )
-              .pipe(
-                Effect.provideService(WorkspaceRef, space.id),
-              )
+            return Effect.gen(function* () {
+              if (item.kind === "resync_required") {
+                yield* importSnapshot(item)
+                return
+              }
+              yield* importArtifact(item)
+              yield* events
+                .replay(
+                  {
+                    id: EventV2.ID.make(item.id),
+                    aggregateID: item.aggregate_id,
+                    seq: item.seq,
+                    type: item.type,
+                    data: item.data,
+                  },
+                  { publish: true, ownerID: space.id },
+                )
+                .pipe(Effect.provideService(WorkspaceRef, space.id))
+            })
           },
           { discard: true },
         )
@@ -872,12 +1063,38 @@ type HistoryEvent = {
   data: Record<string, unknown>
 }
 
+type HistoryResync = {
+  kind: "resync_required"
+  snapshot: EventV2.SerializedSnapshot
+}
+
 type HistoryEnvelope = {
   version: 1
-  items: HistoryEvent[]
+  items: (HistoryEvent | HistoryResync)[]
   nextCursor: string
   complete: boolean
 }
+
+const SnapshotRow = Schema.Struct({
+  snapshotID: Schema.String,
+  rowIndex: Schema.Number,
+  tableName: Schema.String,
+  rowKey: Schema.String,
+  rowHash: Schema.String,
+  rowBytes: Schema.Number,
+  chunkCount: Schema.Number,
+  chainHash: Schema.String,
+})
+const SnapshotRowsPage = Schema.Struct({ rows: Schema.Array(SnapshotRow), complete: Schema.Boolean })
+const SnapshotChunksPage = Schema.Struct({
+  chunks: Schema.Array(Schema.Struct({
+    rowHash: Schema.String,
+    chunkIndex: Schema.Number,
+    data: Schema.String,
+    chunkHash: Schema.String,
+  })),
+  complete: Schema.Boolean,
+})
 
 function waitUntilSynced(input: {
   db: Database.Interface["db"]
