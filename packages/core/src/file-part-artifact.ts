@@ -14,12 +14,16 @@ import {
 } from "./file-part-artifact.sql"
 import { NonNegativeInt } from "./schema"
 import { Hash } from "./util/hash"
+import { CanonicalJson } from "./util/canonical-json"
 import { EventTable } from "./event/sql"
 import { PartTable } from "./session/sql"
 
 export const CHUNK_BYTES = 262_144 as const
 export const MAX_BYTES = 32 * 1024 * 1024
 export const MAX_CHUNKS = MAX_BYTES / CHUNK_BYTES
+export const MAX_ENCODED_EVENT_BYTES = 64 * 1024 * 1024
+export const MAX_BASE64_CHARS = Math.ceil(MAX_BYTES / 3) * 4
+export const MAX_DATA_URL_CHARS = MAX_BASE64_CHARS + 256
 export const CODEC = "file-part.v1" as const
 
 const Digest = Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/))
@@ -86,14 +90,50 @@ const descriptorFromData = (type: string, data: Record<string, unknown>): Bindin
 const fail = (artifactID: string, message: string) =>
   Effect.die(new IntegrityError({ artifactID, message }))
 
+export function dataHash(data: unknown) {
+  return Hash.sha256(CanonicalJson.stringify(data))
+}
+
+export function matchesDataHash(hash: string, data: unknown) {
+  return hash === dataHash(data)
+}
+
+export function isLegacySyntheticCanonical(canonical: Record<string, unknown>, encoded: Record<string, unknown>) {
+  const part = encoded.part
+  const canonicalPart = canonical.part
+  if (
+    !part ||
+    typeof part !== "object" ||
+    Array.isArray(part) ||
+    "synthetic" in part ||
+    !canonicalPart ||
+    typeof canonicalPart !== "object" ||
+    Array.isArray(canonicalPart) ||
+    (canonicalPart as Record<string, unknown>).synthetic !== true
+  )
+    return false
+  const { synthetic: _, ...rest } = canonicalPart as Record<string, unknown>
+  return isDeepStrictEqual(encoded, { ...canonical, part: rest })
+}
+
 export function prepare(type: string, data: Record<string, unknown>, encodedBytes: number, limitBytes: number) {
   if (type !== "message.part.updated") return { data, artifacts: [] as Prepared[] }
   const part = data.part
   if (!part || typeof part !== "object" || Array.isArray(part)) return { data, artifacts: [] as Prepared[] }
   const value = part as Record<string, unknown>
   if (value.type !== "file" || typeof value.url !== "string") return { data, artifacts: [] as Prepared[] }
+  if (value.url.startsWith("data:") && value.url.length > MAX_DATA_URL_CHARS)
+    throw new IntegrityError({
+      artifactID: "pending",
+      message: `File part data URL is ${value.url.length} characters; limit is ${MAX_DATA_URL_CHARS}`,
+    })
   const match = /^data:([^;,]*);base64,([A-Za-z0-9+/]*={0,2})$/.exec(value.url)
   if (!match) return { data, artifacts: [] as Prepared[] }
+  if (match[2]!.length > MAX_BASE64_CHARS)
+    throw new IntegrityError({
+      artifactID: "pending",
+      message: `File part base64 payload is ${match[2]!.length} characters; limit is ${MAX_BASE64_CHARS}`,
+    })
   const body = Buffer.from(match[2]!, "base64")
   if (body.toString("base64").replace(/=+$/, "") !== match[2]!.replace(/=+$/, ""))
     return { data, artifacts: [] as Prepared[] }
@@ -221,7 +261,7 @@ export function bind(
     if (binding.aggregateID !== input.aggregateID)
       return yield* fail(binding.descriptor.id, "Artifact aggregate does not match its event")
     yield* requireAvailable(db, binding.descriptor)
-    const canonicalDataHash = Hash.sha256(JSON.stringify(input.data))
+    const normalizedData = JSON.parse(CanonicalJson.stringify(input.data)) as Record<string, unknown>
     const imported = input.requireImport
       ? yield* db
           .select()
@@ -236,11 +276,13 @@ export function bind(
         imported.aggregate_id !== input.aggregateID ||
         imported.seq !== input.seq ||
         imported.artifact_id !== binding.descriptor.id ||
-        imported.canonical_data_hash !== canonicalDataHash ||
+        !matchesDataHash(imported.canonical_data_hash, imported.canonical_data) ||
         !isDeepStrictEqual(imported.canonical_data, input.data))
     )
       return yield* fail(binding.descriptor.id, "Replayed artifact has no exact staged import receipt")
-    const originalDataHash = imported?.original_data_hash ?? Hash.sha256(JSON.stringify(input.originalData ?? input.data))
+    const canonicalData = imported?.canonical_data ?? normalizedData
+    const canonicalDataHash = dataHash(canonicalData)
+    const originalDataHash = imported?.original_data_hash ?? dataHash(input.originalData ?? input.data)
     const existing = yield* db
       .select()
       .from(FilePartArtifactBindingTable)
@@ -255,7 +297,7 @@ export function bind(
         existing.artifact_id !== binding.descriptor.id ||
         existing.original_data_hash !== originalDataHash ||
         existing.canonical_data_hash !== canonicalDataHash ||
-        !isDeepStrictEqual(existing.canonical_data, input.data)
+        !isDeepStrictEqual(existing.canonical_data, canonicalData)
       )
         return yield* fail(binding.descriptor.id, "Event identity is bound to a different artifact")
       return
@@ -270,7 +312,7 @@ export function bind(
         artifact_id: binding.descriptor.id,
         original_data_hash: originalDataHash,
         canonical_data_hash: canonicalDataHash,
-        canonical_data: input.data,
+        canonical_data: canonicalData,
         created_at: input.now ?? Date.now(),
       })
       .run()
@@ -623,128 +665,141 @@ export function canonicalizeLegacy(
   db: Database.Interface["db"],
   input?: { readonly afterID?: EventV2.ID; readonly limit?: number; readonly now?: number },
 ) {
-  const limit = Math.min(Math.max(input?.limit ?? 1, 1), 1)
-  return db
-    .transaction(
-      () =>
-        Effect.gen(function* () {
-          const rows = yield* db
-            .select({
-              id: EventTable.id,
-              aggregateID: EventTable.aggregate_id,
-              seq: EventTable.seq,
-              bytes: sql<number>`length(CAST(${EventTable.data} AS BLOB))`,
-            })
-            .from(EventTable)
-            .leftJoin(FilePartArtifactBindingTable, eq(FilePartArtifactBindingTable.event_id, EventTable.id))
-            .where(
-              and(
-                eq(EventTable.type, "message.part.updated.1"),
-                sql`length(CAST(${EventTable.data} AS BLOB)) > ${4 * 1024 * 1024}`,
-                sql`json_valid(${EventTable.data})`,
-                sql`json_type(${EventTable.data}, '$.part.url') = 'text'`,
-                sql`json_extract(${EventTable.data}, '$.part.url') LIKE 'data:%;base64,%'`,
-                isNull(FilePartArtifactBindingTable.event_id),
-                input?.afterID ? gt(EventTable.id, input.afterID) : undefined,
+  return Effect.gen(function* () {
+    const row = yield* db
+      .select({
+        id: EventTable.id,
+        aggregateID: EventTable.aggregate_id,
+        seq: EventTable.seq,
+        bytes: sql<number>`length(CAST(${EventTable.data} AS BLOB))`,
+      })
+      .from(EventTable)
+      .leftJoin(FilePartArtifactBindingTable, eq(FilePartArtifactBindingTable.event_id, EventTable.id))
+      .where(
+        and(
+          eq(EventTable.type, "message.part.updated.1"),
+          sql`length(CAST(${EventTable.data} AS BLOB)) > ${4 * 1024 * 1024}`,
+          isNull(FilePartArtifactBindingTable.event_id),
+          input?.afterID ? gt(EventTable.id, input.afterID) : undefined,
+        ),
+      )
+      .orderBy(asc(EventTable.id))
+      .limit(1)
+      .get()
+      .pipe(Effect.orDie)
+    if (!row) return { processed: 0, next: undefined }
+    if (row.bytes > MAX_ENCODED_EVENT_BYTES)
+      return yield* fail(
+        "pending",
+        `Legacy file-part event ${row.id} is ${row.bytes} bytes; limit is ${MAX_ENCODED_EVENT_BYTES}`,
+      )
+    const source = yield* db
+      .select({ data: EventTable.data })
+      .from(EventTable)
+      .where(eq(EventTable.id, row.id))
+      .get()
+      .pipe(Effect.orDie)
+    if (!source) return yield* fail("pending", `Legacy file-part event ${row.id} disappeared during maintenance`)
+    if (Buffer.byteLength(JSON.stringify(source.data)) !== row.bytes)
+      return yield* fail("pending", `Legacy file-part event ${row.id} changed during maintenance`)
+    const originalPart = source.data.part
+    if (!originalPart || typeof originalPart !== "object" || Array.isArray(originalPart))
+      return { processed: 0, next: row.id }
+    const sourcePart = originalPart as Record<string, unknown>
+    if (sourcePart.type !== "file" || typeof sourcePart.url !== "string" || !sourcePart.url.startsWith("data:"))
+      return { processed: 0, next: row.id }
+    if (sourcePart.url.length > MAX_DATA_URL_CHARS)
+      return yield* fail(
+        "pending",
+        `Legacy file-part event ${row.id} data URL is ${sourcePart.url.length} characters; limit is ${MAX_DATA_URL_CHARS}`,
+      )
+    const prepared = prepare("message.part.updated", source.data, row.bytes, 4 * 1024 * 1024)
+    if (prepared.artifacts.length !== 1)
+      return yield* fail("pending", `Legacy file-part event ${row.id} cannot be externalized canonically`)
+    const originalBinding = descriptorFromData("message.part.updated", prepared.data)
+    const canonicalPart = prepared.data.part
+    if (!originalBinding || !canonicalPart || typeof canonicalPart !== "object" || Array.isArray(canonicalPart))
+      return yield* fail(prepared.artifacts[0]!.descriptor.id, `Legacy file-part event ${row.id} has invalid part data`)
+    return yield* db
+      .transaction(
+        () =>
+          Effect.gen(function* () {
+            const current = yield* db
+              .select({
+                aggregateID: EventTable.aggregate_id,
+                seq: EventTable.seq,
+                data: EventTable.data,
+              })
+              .from(EventTable)
+              .where(eq(EventTable.id, row.id))
+              .get()
+              .pipe(Effect.orDie)
+            if (
+              !current ||
+              current.aggregateID !== row.aggregateID ||
+              current.seq !== row.seq ||
+              !isDeepStrictEqual(current.data, source.data)
+            )
+              return yield* fail("pending", `Legacy file-part event ${row.id} changed during maintenance`)
+            const projected = yield* db
+              .select()
+              .from(PartTable)
+              .where(eq(PartTable.id, originalBinding.partID as typeof PartTable.$inferSelect.id))
+              .get()
+              .pipe(Effect.orDie)
+            if (!projected)
+              return yield* fail(
+                prepared.artifacts[0]!.descriptor.id,
+                `Legacy file-part event ${row.id} has no corresponding projected part`,
+              )
+            if (projected.session_id !== row.aggregateID || projected.message_id !== sourcePart.messageID)
+              return yield* fail(
+                prepared.artifacts[0]!.descriptor.id,
+                `Legacy file-part event ${row.id} has a conflicting projected part`,
+              )
+            const sourceData = Object.fromEntries(
+              Object.entries(sourcePart).filter(([key]) => key !== "id" && key !== "sessionID" && key !== "messageID"),
+            )
+            // Older FilePart event schemas dropped the runtime-owned synthetic marker while
+            // the local Part projection retained it. Accept only that exact historical skew.
+            const legacySynthetic =
+              !("synthetic" in sourceData) && "synthetic" in projected.data && projected.data.synthetic === true
+            const expectedData = legacySynthetic ? { ...sourceData, synthetic: true } : sourceData
+            if (!isDeepStrictEqual(projected.data, expectedData))
+              return yield* fail(
+                prepared.artifacts[0]!.descriptor.id,
+                `Legacy file-part event ${row.id} no longer matches its projected part`,
+              )
+            const canonicalEventData = legacySynthetic
+              ? { ...prepared.data, part: { ...(canonicalPart as Record<string, unknown>), synthetic: true } }
+              : prepared.data
+            const canonicalData = Object.fromEntries(
+              Object.entries(canonicalEventData.part as Record<string, unknown>).filter(
+                ([key]) => key !== "id" && key !== "sessionID" && key !== "messageID",
               ),
-            )
-            .orderBy(asc(EventTable.id))
-            .limit(limit)
-            .all()
-            .pipe(Effect.orDie)
-          const oversized = rows.find((row) => row.bytes > MAX_BYTES)
-          if (oversized)
-            return yield* fail(
-              "pending",
-              `Legacy file-part event ${oversized.id} is ${oversized.bytes} bytes; limit is ${MAX_BYTES} bytes`,
-            )
-          yield* Effect.forEach(
-            rows,
-            (row) =>
-              Effect.gen(function* () {
-                const source = yield* db
-                  .select({ data: EventTable.data })
-                  .from(EventTable)
-                  .where(eq(EventTable.id, row.id))
-                  .get()
-                  .pipe(Effect.orDie)
-                if (!source)
-                  return yield* fail("pending", `Legacy file-part event ${row.id} disappeared during maintenance`)
-                const prepared = prepare("message.part.updated", source.data, row.bytes, 4 * 1024 * 1024)
-                if (prepared.artifacts.length !== 1)
-                  return yield* fail("pending", `Legacy file-part event ${row.id} cannot be externalized canonically`)
-                yield* put(db, prepared.artifacts[0]!, input?.now)
-                yield* bind(db, {
-                  eventID: row.id,
-                  aggregateID: row.aggregateID,
-                  seq: row.seq,
-                  type: "message.part.updated",
-                  data: prepared.data,
-                  originalData: source.data,
-                  now: input?.now,
-                })
-                const originalBinding = descriptorFromData("message.part.updated", prepared.data)
-                const originalPart = source.data.part
-                const canonicalPart = prepared.data.part
-                if (
-                  !originalBinding ||
-                  !originalPart ||
-                  typeof originalPart !== "object" ||
-                  Array.isArray(originalPart) ||
-                  !canonicalPart ||
-                  typeof canonicalPart !== "object" ||
-                  Array.isArray(canonicalPart)
-                )
-                  return yield* fail(prepared.artifacts[0]!.descriptor.id, `Legacy file-part event ${row.id} has invalid part data`)
-                const projected = yield* db
-                  .select()
-                  .from(PartTable)
-                  .where(eq(PartTable.id, originalBinding.partID as typeof PartTable.$inferSelect.id))
-                  .get()
-                  .pipe(Effect.orDie)
-                if (!projected)
-                  return yield* fail(
-                    prepared.artifacts[0]!.descriptor.id,
-                    `Legacy file-part event ${row.id} has no corresponding projected part`,
-                  )
-                const sourcePart = originalPart as Record<string, unknown>
-                if (projected.session_id !== row.aggregateID || projected.message_id !== sourcePart.messageID)
-                  return yield* fail(prepared.artifacts[0]!.descriptor.id, `Legacy file-part event ${row.id} has a conflicting projected part`)
-                const sourceData = Object.fromEntries(
-                  Object.entries(sourcePart).filter(([key]) => key !== "id" && key !== "sessionID" && key !== "messageID"),
-                )
-                // Older FilePart event schemas dropped the runtime-owned synthetic marker while
-                // the local Part projection retained it. Accept only that exact historical skew.
-                const legacySynthetic =
-                  !("synthetic" in sourceData) && "synthetic" in projected.data && projected.data.synthetic === true
-                const expectedData = legacySynthetic ? { ...sourceData, synthetic: true } : sourceData
-                if (!isDeepStrictEqual(projected.data, expectedData))
-                  return yield* fail(
-                    prepared.artifacts[0]!.descriptor.id,
-                    `Legacy file-part event ${row.id} no longer matches its projected part`,
-                  )
-                const canonicalData = {
-                  ...Object.fromEntries(
-                    Object.entries(canonicalPart as Record<string, unknown>).filter(
-                      ([key]) => key !== "id" && key !== "sessionID" && key !== "messageID",
-                    ),
-                  ),
-                  ...(legacySynthetic ? { synthetic: true } : {}),
-                } as typeof PartTable.$inferInsert.data
-                yield* db
-                  .update(PartTable)
-                  .set({ data: canonicalData })
-                  .where(eq(PartTable.id, originalBinding.partID as typeof PartTable.$inferSelect.id))
-                  .run()
-                  .pipe(Effect.orDie)
-              }),
-            { discard: true },
-          )
-          return { processed: rows.length, next: rows.at(-1)?.id }
-        }),
-      { behavior: "immediate" },
-    )
-    .pipe(Effect.orDie)
+            ) as typeof PartTable.$inferInsert.data
+            yield* put(db, prepared.artifacts[0]!, input?.now)
+            yield* bind(db, {
+              eventID: row.id,
+              aggregateID: row.aggregateID,
+              seq: row.seq,
+              type: "message.part.updated",
+              data: canonicalEventData,
+              originalData: source.data,
+              now: input?.now,
+            })
+            yield* db
+              .update(PartTable)
+              .set({ data: canonicalData })
+              .where(eq(PartTable.id, originalBinding.partID as typeof PartTable.$inferSelect.id))
+              .run()
+              .pipe(Effect.orDie)
+            return { processed: 1, next: row.id }
+          }),
+        { behavior: "immediate" },
+      )
+      .pipe(Effect.orDie)
+  })
 }
 
 function validate(descriptor: Descriptor, chunks: readonly Uint8Array[]) {
@@ -774,6 +829,9 @@ function validate(descriptor: Descriptor, chunks: readonly Uint8Array[]) {
 function stage(db: Database.Interface["db"], metadata: Metadata) {
   return Effect.gen(function* () {
     yield* requireAvailable(db, metadata.descriptor)
+    if (!matchesDataHash(metadata.canonicalDataHash, metadata.canonicalData))
+      return yield* fail(metadata.descriptor.id, "Artifact import metadata canonical hash is invalid")
+    const canonicalData = JSON.parse(CanonicalJson.stringify(metadata.canonicalData)) as Record<string, unknown>
     const chunks = yield* db
       .select({ index: FilePartArtifactChunkTable.chunk_index, hash: FilePartArtifactChunkTable.chunk_hash, data: FilePartArtifactChunkTable.data })
       .from(FilePartArtifactChunkTable)
@@ -806,7 +864,7 @@ function stage(db: Database.Interface["db"], metadata: Metadata) {
         existing.artifact_id !== metadata.descriptor.id ||
         existing.original_data_hash !== metadata.originalDataHash ||
         existing.canonical_data_hash !== metadata.canonicalDataHash ||
-        !isDeepStrictEqual(existing.canonical_data, metadata.canonicalData)
+        !isDeepStrictEqual(existing.canonical_data, canonicalData)
       )
         return yield* fail(metadata.descriptor.id, "Artifact import receipt conflicts with durable CAS")
       return
@@ -838,7 +896,7 @@ function stage(db: Database.Interface["db"], metadata: Metadata) {
         artifact_id: metadata.descriptor.id,
         original_data_hash: metadata.originalDataHash,
         canonical_data_hash: metadata.canonicalDataHash,
-        canonical_data: metadata.canonicalData,
+        canonical_data: canonicalData,
         created_at: Date.now(),
       })
       .run()

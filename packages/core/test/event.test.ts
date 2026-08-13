@@ -998,6 +998,53 @@ describe("EventV2", () => {
     }),
   )
 
+  it.effect("fails closed before writing an overlarge legacy diff manifest", () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2.Service
+      const { db } = yield* Database.Service
+      const aggregateID = EventV2.ID.create()
+      yield* events.publish(SyncMessage, { id: aggregateID, text: "zero" })
+      const id = EventV2.ID.make("evt_legacy_message_diff_overlarge_manifest")
+      const diffs = Array.from({ length: EventV2.LEGACY_ARTIFACT_MAX_FILES + 1 }, (_, index) => ({
+        file: `file-${index}.patch`,
+        patch: "x".repeat(450),
+        additions: 1,
+        deletions: 0,
+      }))
+      const data = { sessionID: aggregateID, info: { summary: { diffs } } }
+      const syncSeq = yield* db
+        .update(EventSyncSequenceTable)
+        .set({ seq: sql`${EventSyncSequenceTable.seq} + 1` })
+        .where(eq(EventSyncSequenceTable.id, 1))
+        .returning({ seq: EventSyncSequenceTable.seq })
+        .get()
+        .pipe(Effect.orDie)
+      yield* db
+        .insert(EventTable)
+        .values({
+          id,
+          aggregate_id: aggregateID,
+          seq: 1,
+          type: EventV2.versionedType("message.updated", 1),
+          data,
+          sync_seq: syncSeq!.seq,
+        })
+        .run()
+        .pipe(Effect.orDie)
+      yield* db
+        .update(EventSequenceTable)
+        .set({ seq: 1 })
+        .where(eq(EventSequenceTable.aggregate_id, aggregateID))
+        .run()
+        .pipe(Effect.orDie)
+
+      const result = yield* events.canonicalizeLegacyArtifacts({ limit: 1, now: 11 }).pipe(Effect.exit)
+      expect(String(result)).toContain("EventV2.EncodedPayloadTooLarge")
+      expect(yield* db.select().from(EventArtifactTable).where(eq(EventArtifactTable.event_id, id)).all()).toEqual([])
+      expect(yield* db.select().from(EventArtifactChunkTable).all()).toEqual([])
+    }),
+  )
+
   it.effect("uses custom sync aggregate field", () =>
     Effect.gen(function* () {
       const events = yield* EventV2.Service

@@ -49,7 +49,7 @@ import {
   SummarizePayload,
   UpdatePayload,
 } from "../groups/session"
-import { ConflictError, PermissionNotFoundError, notFound } from "../errors"
+import { ConflictError, PermissionNotFoundError, ServiceUnavailableError, notFound } from "../errors"
 import * as SessionError from "./session-errors"
 import { randomUUID } from "node:crypto"
 import { getWorkspaceContext } from "../utils/workspace-context"
@@ -158,8 +158,10 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       return yield* summary.diff({ sessionID: ctx.params.sessionID, messageID: ctx.query.messageID })
     })
 
-    const mapDiffArtifactError = (error: SessionDiffArtifact.Invalid | SessionDiffArtifact.NotFound) =>
-      error instanceof SessionDiffArtifact.NotFound ? notFound(error.message) : new HttpApiError.BadRequest({})
+    const mapDiffArtifactError = (error: SessionDiffArtifact.Invalid | SessionDiffArtifact.NotFound) => {
+      if (error instanceof SessionDiffArtifact.NotFound) return notFound(error.message)
+      return new HttpApiError.BadRequest({})
+    }
 
     const diffArtifactMaintenance = Effect.fn("SessionHttpApi.diffArtifactMaintenance")(function* (ctx: {
       params: { sessionID: SessionID }
@@ -169,7 +171,9 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       return yield* SessionDiffArtifact.migrate({
         sessionID: ctx.params.sessionID,
         ...(ctx.payload.limit ? { limit: ctx.payload.limit } : {}),
-      }).pipe(Effect.mapError(mapDiffArtifactError))
+      }).pipe(Effect.mapError((error) =>
+        new ServiceUnavailableError({ service: "session.diff-artifact", message: error.message }),
+      ))
     })
 
     const diffArtifactManifest = Effect.fn("SessionHttpApi.diffArtifactManifest")(function* (ctx: {

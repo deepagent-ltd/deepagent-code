@@ -389,7 +389,7 @@ export const SessionApi = HttpApi.make("session")
           params: { sessionID: SessionID },
           query: WorkspaceRoutingQuery,
           success: described(Session.Info, "Get session"),
-          error: [HttpApiError.BadRequest, ApiNotFoundError],
+          error: [HttpApiError.BadRequest, ApiNotFoundError, ServiceUnavailableError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "session.get",
@@ -401,7 +401,7 @@ export const SessionApi = HttpApi.make("session")
           params: { sessionID: SessionID },
           query: WorkspaceRoutingQuery,
           success: described(Schema.Array(Session.Info), "List of children"),
-          error: [HttpApiError.BadRequest, ApiNotFoundError],
+          error: [HttpApiError.BadRequest, ApiNotFoundError, ServiceUnavailableError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "session.children",
@@ -456,7 +456,7 @@ export const SessionApi = HttpApi.make("session")
             }),
             "Legacy Session diff migration batch result",
           ),
-          error: [HttpApiError.BadRequest, ApiNotFoundError],
+          error: [HttpApiError.BadRequest, ApiNotFoundError, ServiceUnavailableError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "session.diffArtifactMaintenance",

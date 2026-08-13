@@ -29,6 +29,7 @@ import partIntegrityBackfillMigration from "@deepagent-code/core/database/migrat
 import legacyActivityProgressMigration from "@deepagent-code/core/database/migration/20260811090000_legacy_activity_progress"
 import legacyActivityOwnerMigration from "@deepagent-code/core/database/migration/20260811100000_legacy_activity_owner"
 import eventSnapshotAuthorityMigration from "@deepagent-code/core/database/migration/20260813100000_event_snapshot_authority"
+import eventImmutableMigration from "@deepagent-code/core/database/migration/20260813135000_event_immutable"
 import type { SqlClient as SqlClientService } from "effect/unstable/sql/SqlClient"
 import { Database } from "@deepagent-code/core/database/database"
 import { tmpdir } from "./fixture/tmpdir"
@@ -86,6 +87,47 @@ describe("DatabaseMigration", () => {
           { sync_seq: 3, event_id: "event-new-writer" },
         ])
         expect(yield* db.get(sql`SELECT seq, backfill_complete, length(generation) AS generation_length, length(cursor_secret) AS secret_length FROM event_sync_sequence WHERE id = 1`)).toEqual({ seq: 3, backfill_complete: 0, generation_length: 32, secret_length: 64 })
+      }),
+    )
+  })
+
+  test("keeps EventV2 rows append-only after bounded maintenance is installed", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(sql`CREATE TABLE event (id TEXT PRIMARY KEY, data TEXT NOT NULL)`)
+        yield* db.run(sql`CREATE TABLE event_sequence (aggregate_id TEXT PRIMARY KEY)`)
+        yield* db.run(sql`CREATE TABLE event_artifact (artifact_id TEXT PRIMARY KEY, aggregate_id TEXT NOT NULL)`)
+        yield* db.run(sql`CREATE TABLE event_artifact_chunk (artifact_id TEXT NOT NULL)`)
+        yield* db.run(sql`CREATE TABLE file_part_artifact (
+          artifact_id TEXT PRIMARY KEY, body_hash TEXT NOT NULL, body_bytes INTEGER NOT NULL,
+          chunk_bytes INTEGER NOT NULL, chunk_count INTEGER NOT NULL, codec_version INTEGER NOT NULL,
+          complete INTEGER NOT NULL, created_at INTEGER NOT NULL
+        )`)
+        yield* db.run(sql`CREATE TABLE file_part_artifact_chunk (artifact_id TEXT NOT NULL)`)
+        yield* db.run(sql`CREATE TABLE file_part_artifact_binding (
+          aggregate_id TEXT NOT NULL, artifact_id TEXT NOT NULL
+        )`)
+        yield* db.run(sql`CREATE TABLE file_part_artifact_import (artifact_id TEXT NOT NULL)`)
+        yield* db.run(sql`CREATE TABLE session_diff_artifact_file (artifact_id TEXT NOT NULL)`)
+        yield* db.run(sql`CREATE TABLE session_diff_artifact_file_chunk (artifact_id TEXT NOT NULL)`)
+        yield* db.run(sql`CREATE TABLE session (id TEXT PRIMARY KEY)`)
+        yield* db.run(sql`CREATE TABLE session_diff_migration_receipt (
+          artifact_id TEXT NOT NULL, session_id TEXT NOT NULL, state TEXT NOT NULL
+        )`)
+        yield* db.run(sql`INSERT INTO event VALUES ('event-a', '{}')`)
+        yield* DatabaseMigration.applyOnly(db, [eventImmutableMigration])
+
+        const updated = yield* db.run(sql`UPDATE event SET data = '{"changed":true}' WHERE id = 'event-a'`).pipe(Effect.exit)
+        expect(String(updated)).toContain("event_update_immutable")
+        expect(yield* db.get(sql`SELECT data FROM event WHERE id = 'event-a'`)).toEqual({ data: "{}" })
+
+        yield* db.run(sql`INSERT INTO file_part_artifact VALUES ('artifact-a', 'hash-a', 1, 1, 1, 1, 0, 1)`)
+        yield* db.run(sql`UPDATE file_part_artifact SET complete = 1 WHERE artifact_id = 'artifact-a'`)
+        const artifactUpdated = yield* db
+          .run(sql`UPDATE file_part_artifact SET body_hash = 'hash-b' WHERE artifact_id = 'artifact-a'`)
+          .pipe(Effect.exit)
+        expect(String(artifactUpdated)).toContain("file_part_artifact_update_immutable")
       }),
     )
   })
@@ -256,6 +298,35 @@ describe("DatabaseMigration", () => {
         const before = yield* db.get(sql`SELECT count(*) as count FROM migration`)
         yield* DatabaseMigration.apply(db)
         expect(yield* db.get(sql`SELECT count(*) as count FROM migration`)).toEqual(before)
+      }),
+    )
+  })
+
+  test("rejects divergent and gapped migration histories before running DDL", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(sql`CREATE TABLE migration (id TEXT PRIMARY KEY, time_completed INTEGER NOT NULL)`)
+        yield* db.run(sql`CREATE TABLE sentinel (value TEXT NOT NULL)`)
+        yield* db.run(sql`INSERT INTO sentinel VALUES ('unchanged')`)
+        yield* db.run(sql`INSERT INTO migration VALUES (${migrations[1]!.id}, 1)`)
+        const marker = { id: "migration-a", up: () => db.run(sql`DELETE FROM sentinel`) }
+        const later = { id: "migration-b", up: () => Effect.void }
+
+        const gapped = yield* DatabaseMigration.apply(db).pipe(Effect.exit)
+        expect(String(gapped)).toContain("database migration history")
+        expect(yield* db.all(sql`SELECT value FROM sentinel`)).toEqual([{ value: "unchanged" }])
+
+        yield* db.run(sql`DELETE FROM migration`)
+        yield* db.run(sql`INSERT INTO migration VALUES ('incompatible-lineage', 1)`)
+        const divergent = yield* DatabaseMigration.apply(db).pipe(Effect.exit)
+        expect(String(divergent)).toContain("incompatible lineage")
+        expect(yield* db.all(sql`SELECT value FROM sentinel`)).toEqual([{ value: "unchanged" }])
+
+        // Focused migration tests intentionally apply slices and remain independent of the global journal.
+        yield* db.run(sql`DELETE FROM migration`)
+        yield* DatabaseMigration.applyOnly(db, [marker, later])
+        expect(yield* db.all(sql`SELECT value FROM sentinel`)).toEqual([])
       }),
     )
   })
