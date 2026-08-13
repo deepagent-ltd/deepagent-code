@@ -5,6 +5,7 @@ import {
   TaskRunEventTable,
   TaskRunTable,
   SessionTable,
+  type TaskStructuredOutputReceipt,
 } from "@deepagent-code/core/session/sql"
 import { and, asc, desc, eq, gt, inArray, isNull, lte, max, ne, or, sql } from "drizzle-orm"
 import { Cause, Data, Effect } from "effect"
@@ -13,6 +14,11 @@ import { MessageID, SessionID } from "@/session/schema"
 import { Hash } from "@deepagent-code/core/util/hash"
 import type { PermissionV1 } from "@deepagent-code/core/v1/permission"
 import { verifyPersisted } from "@/session/task-input"
+import {
+  isStructuredOutputContract,
+  persistStructuredOutputEvidenceInTransaction,
+  recoverStructuredOutputCompletionInTransaction,
+} from "@/tool/task-structured-output-evidence"
 
 export type State =
   | "admitted"
@@ -32,6 +38,7 @@ export type Phase = "admission" | "research" | "finalize" | "settled" | "queue" 
 export type DeliveryMode = "foreground" | "background"
 export type ErrorData = { code: string; message: string; data?: Record<string, unknown> }
 export type NotificationPayload = { agent: string; variant?: string; text: string }
+export type StructuredOutputReceipt = TaskStructuredOutputReceipt
 
 export type ControlState = "open" | "close_requested" | "closed"
 export type OriginKind = "task_tool" | "goal_role"
@@ -60,6 +67,7 @@ export type Run = {
   leaseExpiresAt?: number
   rawResultMessageID?: MessageID
   structuredResultMessageID?: MessageID
+  structuredOutputReceipt?: StructuredOutputReceipt
   output?: string
   error?: ErrorData
   timeCreated: number
@@ -91,6 +99,17 @@ export type Run = {
     }
     readonly tools?: Record<string, boolean>
     readonly permission?: PermissionV1.Ruleset
+    readonly structuredOutput?: {
+      readonly schema: Record<string, unknown>
+      readonly allowTextFallback: boolean
+      readonly receiptVersion: 1
+      readonly maxAttempts: 2
+    }
+    readonly researchBudget?: {
+      readonly maxSteps: number
+      readonly maxWallMs: number
+      readonly maxNoProgress: number
+    }
     readonly [key: string]: unknown
   } | null
 }
@@ -188,6 +207,7 @@ const fromRow = (row: typeof TaskRunTable.$inferSelect): Run => ({
   leaseExpiresAt: row.lease_expires_at ?? undefined,
   rawResultMessageID: row.raw_result_message_id ?? undefined,
   structuredResultMessageID: row.structured_result_message_id ?? undefined,
+  structuredOutputReceipt: row.structured_output_receipt ?? undefined,
   output: row.output ?? undefined,
   error: row.error ?? undefined,
   timeCreated: row.time_created,
@@ -847,11 +867,21 @@ export function markTaskFinalizing(
   )
 }
 
-export function markTaskFinalized(run: Run, owner: string, structuredResultMessageID: MessageID, now = Date.now()) {
+export function markTaskFinalized(
+  run: Run,
+  owner: string,
+  structuredResultMessageID: MessageID | undefined,
+  now = Date.now(),
+  reason?: string,
+) {
   return updateActive(
     run,
     owner,
-    { structured_result_message_id: structuredResultMessageID, time_updated: now },
+    {
+      structured_result_message_id: structuredResultMessageID ?? null,
+      ...(reason ? { reason } : {}),
+      time_updated: now,
+    },
     ["finalizing"],
     now,
   )
@@ -893,6 +923,7 @@ export function settleTaskRun(input: {
   output?: string
   error?: ErrorData
   structuredResultMessageID?: MessageID
+  structuredOutputReceipt?: StructuredOutputReceipt
   notification?: { directory: string; payload: NotificationPayload }
   now?: number
 }) {
@@ -900,65 +931,116 @@ export function settleTaskRun(input: {
     const { db } = yield* Database.Service
     const now = input.now ?? Date.now()
     return yield* Effect.uninterruptible(
-      db.transaction((tx) =>
-        Effect.gen(function* () {
-          const updated = yield* tx
-            .update(TaskRunTable)
-            .set({
-              phase: "settled",
-              state: input.state,
-              reason: input.reason,
-              output: input.output,
-              error: input.error,
-              structured_result_message_id: input.structuredResultMessageID,
-              execution_owner: null,
-              lease_expires_at: null,
-              time_updated: now,
-              time_settled: now,
-            })
-            .where(
-              and(
-                eq(TaskRunTable.run_id, input.run.runID),
-                eq(TaskRunTable.generation, input.run.generation),
-                eq(TaskRunTable.execution_owner, input.owner),
-                inArray(TaskRunTable.state, [...activeStates]),
-                gt(TaskRunTable.lease_expires_at, now),
-              ),
-            )
-            .returning()
-            .get()
-            .pipe(Effect.orDie)
-          if (!updated) {
-            const existing = yield* tx
-              .select()
+      db.transaction(
+        (tx) =>
+          Effect.gen(function* () {
+            const current = yield* tx
+              .select({
+                version: TaskRunTable.version,
+                claim_generation: TaskRunTable.claim_generation,
+                child_session_id: TaskRunTable.child_session_id,
+                raw_result_message_id: TaskRunTable.raw_result_message_id,
+                attempts: TaskRunTable.attempts,
+                execution_spec: TaskRunTable.execution_spec,
+              })
               .from(TaskRunTable)
-              .where(eq(TaskRunTable.run_id, input.run.runID))
+              .where(
+                and(
+                  eq(TaskRunTable.run_id, input.run.runID),
+                  eq(TaskRunTable.generation, input.run.generation),
+                  eq(TaskRunTable.execution_owner, input.owner),
+                  inArray(TaskRunTable.state, [...activeStates]),
+                  gt(TaskRunTable.lease_expires_at, now),
+                ),
+              )
               .get()
               .pipe(Effect.orDie)
-            return { won: false as const, run: existing ? fromRow(existing) : input.run }
-          }
-          if (input.notification) {
-            yield* tx
-              .insert(TaskNotificationOutboxTable)
-              .values({
-                id: `task-notify:${input.run.runID}`,
-                run_id: input.run.runID,
-                message_id: MessageID.ascending(),
-                parent_session_id: input.run.parentSessionID,
-                directory: input.notification.directory,
-                payload: input.notification.payload,
-                status: "pending",
-                attempts: 0,
-                available_at: now,
-                time_created: now,
-                time_updated: now,
+            const structuredOutput = current?.execution_spec?.structuredOutput
+            const structuredFailure =
+              (input.state === "failed" || input.state === "error") && input.reason.startsWith("structured_finalizer_")
+            if (
+              current &&
+              isStructuredOutputContract(structuredOutput) &&
+              (input.state === "completed" || structuredFailure)
+            ) {
+              yield* persistStructuredOutputEvidenceInTransaction(tx, {
+                runID: input.run.runID,
+                childSessionID: current.child_session_id,
+                ownerToken: input.owner,
+                claimGeneration: current.claim_generation,
+                expectedVersion: current.version,
+                terminalState: input.state === "completed" ? "completed" : "failed",
+                attempts: input.structuredOutputReceipt?.attempt ?? current.attempts,
+                contract: structuredOutput,
+                rawResultMessageID: current.raw_result_message_id ?? undefined,
+                structuredResultMessageID: input.structuredResultMessageID,
+                output: input.output,
+                structuredOutputReceipt: input.structuredOutputReceipt,
+                failureCode: input.error?.code,
+                now,
               })
-              .onConflictDoNothing()
-              .run()
+            }
+            const updated = yield* tx
+              .update(TaskRunTable)
+              .set({
+                phase: "settled",
+                state: input.state,
+                reason: input.reason,
+                output: input.output,
+                error: input.error,
+                structured_result_message_id: input.structuredResultMessageID,
+                structured_output_receipt: input.structuredOutputReceipt,
+                execution_owner: null,
+                lease_expires_at: null,
+                version: current ? current.version + 1 : input.run.version + 1,
+                time_updated: now,
+                time_settled: now,
+              })
+              .where(
+                and(
+                  eq(TaskRunTable.run_id, input.run.runID),
+                  eq(TaskRunTable.generation, input.run.generation),
+                  eq(TaskRunTable.execution_owner, input.owner),
+                  eq(TaskRunTable.version, current?.version ?? input.run.version),
+                  inArray(TaskRunTable.state, [...activeStates]),
+                  gt(TaskRunTable.lease_expires_at, now),
+                ),
+              )
+              .returning()
+              .get()
               .pipe(Effect.orDie)
-          }
-          return { won: true as const, run: fromRow(updated) }
-        }),
+            if (!updated) {
+              const existing = yield* tx
+                .select()
+                .from(TaskRunTable)
+                .where(eq(TaskRunTable.run_id, input.run.runID))
+                .get()
+                .pipe(Effect.orDie)
+              return { won: false as const, run: existing ? fromRow(existing) : input.run }
+            }
+            if (input.notification) {
+              yield* tx
+                .insert(TaskNotificationOutboxTable)
+                .values({
+                  id: `task-notify:${input.run.runID}`,
+                  run_id: input.run.runID,
+                  message_id: MessageID.ascending(),
+                  parent_session_id: input.run.parentSessionID,
+                  directory: input.notification.directory,
+                  payload: input.notification.payload,
+                  status: "pending",
+                  attempts: 0,
+                  available_at: now,
+                  time_created: now,
+                  time_updated: now,
+                })
+                .onConflictDoNothing()
+                .run()
+                .pipe(Effect.orDie)
+            }
+            return { won: true as const, run: fromRow(updated) }
+          }),
+        { behavior: "immediate" },
       ),
     )
   })
@@ -1798,8 +1880,162 @@ export function classifyOnStartup(input: { directory: string; now?: number }) {
 
     let classified = 0
     let requeued = 0
+    let recovered = 0
 
     for (const { run } of candidates) {
+      const structuredOutput = run.execution_spec?.structuredOutput
+      const recoveredCompletion =
+        run.state === "finalizing" &&
+        run.control_state === "open" &&
+        run.interrupt_requested_at === null &&
+        run.execution_owner &&
+        (run.workspace_owner !== "run" || ["retained", "submitted"].includes(run.worktree_state ?? "none")) &&
+        isStructuredOutputContract(structuredOutput)
+          ? yield* db.transaction(
+              (tx) =>
+                Effect.gen(function* () {
+                  const recoveryLease = yield* tx
+                    .update(TaskRunTable)
+                    .set({ lease_expires_at: now + 60_000 })
+                    .where(
+                      and(
+                        eq(TaskRunTable.run_id, run.run_id),
+                        eq(TaskRunTable.version, run.version),
+                        eq(TaskRunTable.state, "finalizing"),
+                        eq(TaskRunTable.execution_owner, run.execution_owner!),
+                        eq(TaskRunTable.claim_generation, run.claim_generation),
+                        eq(TaskRunTable.control_state, "open"),
+                        isNull(TaskRunTable.interrupt_requested_at),
+                        or(isNull(TaskRunTable.lease_expires_at), lte(TaskRunTable.lease_expires_at, now)),
+                      ),
+                    )
+                    .returning({ runID: TaskRunTable.run_id })
+                    .get()
+                    .pipe(Effect.orDie)
+                  if (!recoveryLease) return false
+                  const completion = yield* recoverStructuredOutputCompletionInTransaction(tx, {
+                    runID: run.run_id,
+                    childSessionID: run.child_session_id,
+                    ownerToken: run.execution_owner!,
+                    claimGeneration: run.claim_generation,
+                    expectedVersion: run.version,
+                    attempt: run.attempts,
+                    rawResultMessageID: run.raw_result_message_id ?? undefined,
+                    contract: structuredOutput,
+                    now,
+                  })
+                  if (!completion) {
+                    yield* tx
+                      .update(TaskRunTable)
+                      .set({ lease_expires_at: run.lease_expires_at })
+                      .where(
+                        and(
+                          eq(TaskRunTable.run_id, run.run_id),
+                          eq(TaskRunTable.version, run.version),
+                          eq(TaskRunTable.state, "finalizing"),
+                          eq(TaskRunTable.execution_owner, run.execution_owner!),
+                          eq(TaskRunTable.claim_generation, run.claim_generation),
+                        ),
+                      )
+                      .run()
+                      .pipe(Effect.orDie)
+                    return false
+                  }
+                  const updated = yield* tx
+                    .update(TaskRunTable)
+                    .set({
+                      state: "completed",
+                      phase: "settled",
+                      control_state: "closed",
+                      reason:
+                        completion.structuredOutputReceipt.transport === "structured"
+                          ? "structured_output_valid"
+                          : completion.structuredOutputReceipt.transport === "text_fallback"
+                            ? "structured_output_text_fallback"
+                            : "structured_output_degraded_text",
+                      output: completion.output,
+                      structured_result_message_id: completion.structuredResultMessageID
+                        ? MessageID.make(completion.structuredResultMessageID)
+                        : null,
+                      structured_output_receipt: completion.structuredOutputReceipt,
+                      execution_owner: null,
+                      lease_expires_at: null,
+                      version: run.version + 1,
+                      time_updated: now,
+                      time_settled: now,
+                    })
+                    .where(
+                      and(
+                        eq(TaskRunTable.run_id, run.run_id),
+                        eq(TaskRunTable.version, run.version),
+                        eq(TaskRunTable.state, "finalizing"),
+                        eq(TaskRunTable.execution_owner, run.execution_owner!),
+                        eq(TaskRunTable.claim_generation, run.claim_generation),
+                        eq(TaskRunTable.control_state, "open"),
+                        isNull(TaskRunTable.interrupt_requested_at),
+                      ),
+                    )
+                    .returning({ version: TaskRunTable.version })
+                    .get()
+                    .pipe(Effect.orDie)
+                  if (!updated) return false
+                  yield* tx
+                    .insert(TaskRunEventTable)
+                    .values({
+                      event_id: Identifier.ascending("event"),
+                      run_id: run.run_id,
+                      version: updated.version,
+                      type: "structured_response_recovered",
+                      from_state: "finalizing",
+                      to_state: "completed",
+                      reason:
+                        completion.structuredOutputReceipt.transport === "degraded_text"
+                          ? "persisted_degraded_receipt"
+                          : "persisted_structured_response",
+                      data: completion.structuredResultMessageID
+                        ? { response_message_id: completion.structuredResultMessageID }
+                        : { raw_message_id: run.raw_result_message_id },
+                      time_created: now,
+                    })
+                    .run()
+                    .pipe(Effect.orDie)
+                  if (run.effective_delivery_mode === "background" || run.delivery_mode === "background") {
+                    const outboxID = `task-notify:${run.run_id}`
+                    const payload = {
+                      agent: typeof run.execution_spec?.agent === "string" ? run.execution_spec.agent : "subagent",
+                      text: `Background task completed. Call task_read({ task_id: "${run.child_session_id}" }) to read the result.`,
+                    }
+                    yield* tx
+                      .insert(TaskNotificationOutboxTable)
+                      .values({
+                        id: outboxID,
+                        run_id: run.run_id,
+                        event_kind: "terminal",
+                        correlation_id: outboxID,
+                        message_id: MessageID.ascending(`msg_task_notify_${Hash.sha256(outboxID).slice(0, 24)}`),
+                        parent_session_id: run.parent_session_id,
+                        directory: input.directory,
+                        payload,
+                        payload_hash: Hash.sha256(JSON.stringify(payload)),
+                        status: "pending",
+                        attempts: 0,
+                        available_at: now,
+                        time_created: now,
+                        time_updated: now,
+                      })
+                      .onConflictDoNothing()
+                      .run()
+                      .pipe(Effect.orDie)
+                  }
+                  return true
+                }),
+              { behavior: "immediate" },
+            )
+          : false
+      if (recoveredCompletion) {
+        recovered++
+        continue
+      }
       const readyVerified =
         run.input_state === "ready"
           ? yield* verifyPersisted(run.run_id).pipe(Effect.provideService(Database.Service, { db }))
@@ -1949,7 +2185,7 @@ export function classifyOnStartup(input: { directory: string; now?: number }) {
       }
     }
 
-    return { classified, requeued }
+    return { classified, requeued, recovered }
   })
 }
 

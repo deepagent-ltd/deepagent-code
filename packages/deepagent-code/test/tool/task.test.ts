@@ -28,7 +28,7 @@ import { pollWithTimeout, testEffect } from "../lib/effect"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { ModelV2 } from "@deepagent-code/core/model"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
-import { TaskRunEventTable, TaskRunTable } from "@deepagent-code/core/session/sql"
+import { TaskRunEventTable, TaskRunTable, TaskStructuredOutputEvidenceTable } from "@deepagent-code/core/session/sql"
 import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
 import { and, eq } from "drizzle-orm"
 import { requestInterrupt } from "../../src/tool/task-run"
@@ -164,6 +164,61 @@ function stubOps(opts?: { onPrompt?: (input: SessionPrompt.PromptInput) => void;
         return reply(input, opts?.text ?? "done")
       }),
   }
+}
+
+function persistedStubOps(
+  sessions: Session.Interface,
+  opts?: { onPrompt?: (input: SessionPrompt.PromptInput) => void; text?: string },
+): TaskPromptOps {
+  return {
+    ...stubOps(opts),
+    prompt: (input) =>
+      Effect.gen(function* () {
+        opts?.onPrompt?.(input)
+        return yield* persistPromptReply(input, reply(input, opts?.text ?? "done"))
+      }).pipe(Effect.provideService(Session.Service, sessions)),
+  }
+}
+
+function persistPromptReply(input: SessionPrompt.PromptInput, message: SessionV1.WithParts) {
+  return Effect.gen(function* () {
+    const session = yield* Session.Service
+    const messageID = input.messageID ?? MessageID.ascending()
+    yield* session.updateMessage({
+      id: messageID,
+      role: "user",
+      sessionID: input.sessionID,
+      time: { created: Date.now() },
+      agent: input.agent ?? "general",
+      model: input.model ?? ref,
+      format: input.format,
+      system: input.system,
+      tools: input.tools,
+      metadata: input.metadata,
+      variant: input.variant,
+    })
+    yield* Effect.forEach(
+      input.parts,
+      (part) =>
+        session.updatePart({
+          ...part,
+          id: PartID.ascending(),
+          messageID,
+          sessionID: input.sessionID,
+        }),
+      { discard: true },
+    )
+    return yield* persistReply(message)
+  })
+}
+
+function persistReply(message: SessionV1.WithParts) {
+  return Effect.gen(function* () {
+    const session = yield* Session.Service
+    yield* session.updateMessage(message.info)
+    yield* Effect.forEach(message.parts, session.updatePart, { discard: true })
+    return message
+  })
 }
 
 function durableOps(onPrepare?: () => void): TaskPromptOps {
@@ -683,10 +738,11 @@ describe("tool.task", () => {
   it.instance("auto-mounts the structured output schema for a native reviewer subagent", () =>
     Effect.gen(function* () {
       const { chat, assistant } = yield* seed()
+      const sessions = yield* Session.Service
       const tool = yield* TaskTool
       const def = yield* tool.init()
       let seen: SessionPrompt.PromptInput | undefined
-      const promptOps = stubOps({ onPrompt: (input) => (seen = input) })
+      const promptOps = persistedStubOps(sessions, { onPrompt: (input) => (seen = input) })
 
       yield* def.execute(
         {
@@ -710,6 +766,270 @@ describe("tool.task", () => {
       expect(seen?.format?.type).toBe("json_schema")
       const schema = seen?.format?.type === "json_schema" ? (seen.format.schema as Record<string, unknown>) : undefined
       expect((schema?.properties as Record<string, unknown>)?.verdict).toBeDefined()
+    }),
+  )
+
+  it.instance("persists explicit output_schema text fallback as a durable structured receipt", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      const sessions = yield* Session.Service
+      const { chat, assistant } = yield* seed()
+      const def = yield* (yield* TaskTool).init()
+      const calls: SessionPrompt.PromptInput[] = []
+      const promptOps: TaskPromptOps = {
+        cancel: () => Effect.void,
+        resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
+        prompt: (input) =>
+          Effect.gen(function* () {
+            calls.push(input)
+            if (calls.length === 1) return yield* persistPromptReply(input, reply(input, "persisted research"))
+            if (calls.length === 2) {
+              const output = reply(input, "not json")
+              if (output.info.role === "assistant") delete output.info.structured
+              return yield* persistPromptReply(input, output)
+            }
+            return yield* persistPromptReply(input, reply(input, '{"result":"fallback"}'))
+          }).pipe(Effect.provideService(Session.Service, sessions)),
+      }
+
+      const result = yield* def.execute(
+        {
+          description: "return explicit schema",
+          prompt: "produce a result",
+          subagent_type: "general",
+          output_schema: {
+            type: "object",
+            properties: { result: { type: "string" } },
+            required: ["result"],
+            additionalProperties: false,
+          },
+        },
+        {
+          sessionID: chat.id,
+          messageID: assistant.id,
+          callID: "tool_explicit_schema_fallback",
+          agent: "build",
+          abort: new AbortController().signal,
+          extra: { promptOps },
+          messages: [],
+          metadata: () => Effect.void,
+          ask: () => Effect.void,
+        },
+      )
+      const run = yield* db
+        .select({
+          state: TaskRunTable.state,
+          reason: TaskRunTable.reason,
+          attempts: TaskRunTable.attempts,
+          structuredResultMessageID: TaskRunTable.structured_result_message_id,
+          structuredOutputReceipt: TaskRunTable.structured_output_receipt,
+        })
+        .from(TaskRunTable)
+        .where(eq(TaskRunTable.tool_call_id, "tool_explicit_schema_fallback"))
+        .get()
+        .pipe(Effect.orDie)
+      const child = yield* sessions.get(result.metadata.sessionId)
+
+      expect(result.output).toContain('{"result":"fallback"}')
+      expect(calls).toHaveLength(3)
+      expect(calls[1]?.format?.type).toBe("json_schema")
+      expect(calls[2]?.format).toBeUndefined()
+      expect(run).toEqual({
+        state: "completed",
+        reason: "structured_output_text_fallback",
+        attempts: 2,
+        structuredResultMessageID: expect.any(String),
+        structuredOutputReceipt: { attempt: 2, transport: "text_fallback" },
+      })
+      expect(child.metadata?.deepagent?.subagent).toMatchObject({
+        state: "completed",
+        reason: "structured_output_text_fallback",
+        attempts: 2,
+      })
+    }),
+  )
+
+  it.instance("persists bounded Level-2 research output without a third finalizer prompt", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      const sessions = yield* Session.Service
+      const { chat, assistant } = yield* seed()
+      const def = yield* (yield* TaskTool).init()
+      const calls: SessionPrompt.PromptInput[] = []
+      const promptOps: TaskPromptOps = {
+        cancel: () => Effect.void,
+        resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
+        prompt: (input) =>
+          Effect.gen(function* () {
+            calls.push(input)
+            if (calls.length === 1) return yield* persistPromptReply(input, reply(input, "persisted research"))
+            if (calls.length === 2) {
+              const output = reply(input, "not json")
+              if (output.info.role === "assistant") delete output.info.structured
+              return yield* persistPromptReply(input, output)
+            }
+            return yield* persistPromptReply(input, reply(input, '{"wrong":"field"}'))
+          }).pipe(Effect.provideService(Session.Service, sessions)),
+      }
+
+      const result = yield* def.execute(
+        {
+          description: "reject invalid fallback",
+          prompt: "produce a result",
+          subagent_type: "general",
+          output_schema: {
+            type: "object",
+            properties: { result: { type: "string" } },
+            required: ["result"],
+            additionalProperties: false,
+          },
+        },
+        {
+          sessionID: chat.id,
+          messageID: assistant.id,
+          callID: "tool_explicit_schema_fallback_invalid",
+          agent: "build",
+          abort: new AbortController().signal,
+          extra: { promptOps },
+          messages: [],
+          metadata: () => Effect.void,
+          ask: () => Effect.void,
+        },
+      )
+      const run = yield* db
+        .select({
+          childSessionID: TaskRunTable.child_session_id,
+          state: TaskRunTable.state,
+          reason: TaskRunTable.reason,
+          attempts: TaskRunTable.attempts,
+          error: TaskRunTable.error,
+          rawResultMessageID: TaskRunTable.raw_result_message_id,
+          structuredResultMessageID: TaskRunTable.structured_result_message_id,
+          structuredOutputReceipt: TaskRunTable.structured_output_receipt,
+        })
+        .from(TaskRunTable)
+        .where(eq(TaskRunTable.tool_call_id, "tool_explicit_schema_fallback_invalid"))
+        .get()
+        .pipe(Effect.orDie)
+      if (!run) return yield* Effect.die(new Error("missing explicit schema degraded receipt"))
+      const child = yield* sessions.get(run.childSessionID)
+
+      expect(result.output).toContain('"_degraded":true')
+      expect(result.output).toContain('"_raw":"persisted research"')
+      expect(calls).toHaveLength(3)
+      expect(run).toMatchObject({
+        state: "completed",
+        reason: "structured_output_degraded_text",
+        attempts: 2,
+        error: null,
+        rawResultMessageID: expect.any(String),
+        structuredResultMessageID: null,
+        structuredOutputReceipt: {
+          attempt: 2,
+          transport: "degraded_text",
+          reason: "structured_output_invalid",
+        },
+      })
+      expect(child.metadata?.deepagent?.subagent).toMatchObject({
+        state: "completed",
+        reason: "structured_output_degraded_text",
+        attempts: 2,
+        structured_output: {
+          attempt: 2,
+          transport: "degraded_text",
+          reason: "structured_output_invalid",
+        },
+      })
+    }),
+  )
+
+  it.instance("persists foreground finalizer transport failure with exact recovery evidence", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      const sessions = yield* Session.Service
+      const { chat, assistant } = yield* seed()
+      const def = yield* (yield* TaskTool).init()
+      const calls: SessionPrompt.PromptInput[] = []
+      const exit = yield* def
+        .execute(
+          {
+            description: "fail finalizer transport",
+            prompt: "produce a result",
+            subagent_type: "general",
+            output_schema: {
+              type: "object",
+              properties: { result: { type: "string" } },
+              required: ["result"],
+              additionalProperties: false,
+            },
+          },
+          {
+            sessionID: chat.id,
+            messageID: assistant.id,
+            callID: "tool_explicit_schema_transport_failure",
+            agent: "build",
+            abort: new AbortController().signal,
+            extra: {
+              promptOps: {
+                cancel: () => Effect.void,
+                resolvePromptParts: (template: string) => Effect.succeed([{ type: "text" as const, text: template }]),
+                prompt: (input: SessionPrompt.PromptInput) =>
+                  Effect.gen(function* () {
+                    calls.push(input)
+                    if (calls.length === 1) return yield* persistPromptReply(input, reply(input, "persisted research"))
+                    const output = reply(input, "upstream unavailable")
+                    if (output.info.role === "assistant") {
+                      delete output.info.structured
+                      output.info.error = {
+                        name: "APIError",
+                        data: { message: "upstream unavailable", isRetryable: true },
+                      }
+                    }
+                    return yield* persistPromptReply(input, output)
+                  }).pipe(Effect.provideService(Session.Service, sessions)),
+              },
+            },
+            messages: [],
+            metadata: () => Effect.void,
+            ask: () => Effect.void,
+          },
+        )
+        .pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      expect(calls).toHaveLength(2)
+      const run = yield* db
+        .select()
+        .from(TaskRunTable)
+        .where(eq(TaskRunTable.tool_call_id, "tool_explicit_schema_transport_failure"))
+        .get()
+        .pipe(Effect.orDie)
+      if (!run) return yield* Effect.die("foreground finalizer failure did not persist its task run")
+      expect(run).toMatchObject({
+        state: "error",
+        reason: "structured_finalizer_transport_error",
+        attempts: 1,
+        raw_result_message_id: expect.any(String),
+        error: {
+          code: "structured_finalizer_transport_error",
+          data: { phase: "finalize", attempt: 1, failure_class: "transport", source_code: "provider_error" },
+        },
+      })
+      expect(
+        yield* db
+          .select({ terminalState: TaskStructuredOutputEvidenceTable.terminal_state })
+          .from(TaskStructuredOutputEvidenceTable)
+          .where(eq(TaskStructuredOutputEvidenceTable.run_id, run.run_id))
+          .get()
+          .pipe(Effect.orDie),
+      ).toEqual({ terminalState: "failed" })
+      expect((yield* sessions.get(run.child_session_id)).metadata?.deepagent?.subagent).toMatchObject({
+        state: "error",
+        reason: "structured_finalizer_transport_error",
+        attempts: 1,
+        raw_result_ref: run.raw_result_message_id,
+        error: { code: "structured_finalizer_transport_error" },
+      })
     }),
   )
 
@@ -750,6 +1070,7 @@ describe("tool.task", () => {
     () =>
       Effect.gen(function* () {
         const { chat, assistant } = yield* seed()
+        const sessions = yield* Session.Service
         const tool = yield* TaskTool
         const def = yield* tool.init()
 
@@ -770,8 +1091,8 @@ describe("tool.task", () => {
               // Hold the slot until every fiber that CAN start has started, so the peak is observable.
               yield* Effect.promise(() => Promise.race([release.promise, delay(500)]))
               live -= 1
-              return reply(input, "done")
-            }),
+              return yield* persistPromptReply(input, reply(input, "done"))
+            }).pipe(Effect.provideService(Session.Service, sessions)),
         }
 
         const exec = () =>
@@ -1739,7 +2060,7 @@ describe("tool.task", () => {
         const def = yield* tool.init()
         let research: SessionPrompt.PromptInput | undefined
         let finalizer: SessionPrompt.PromptInput | undefined
-        const promptOps = stubOps({
+        const promptOps = persistedStubOps(sessions, {
           onPrompt: (input) => {
             if (input.format?.type === "json_schema") finalizer = input
             else research = input
@@ -2281,6 +2602,7 @@ describe("tool.task", () => {
         AgentGateway.configure({ enabled: true, agentMode: "max", runsDir: undefined })
         try {
           const { chat, assistant } = yield* seed()
+          const sessions = yield* Session.Service
           const tool = yield* TaskTool
           const def = yield* tool.init()
           let seen: SessionPrompt.PromptInput | undefined
@@ -2359,6 +2681,7 @@ describe("tool.task", () => {
         AgentGateway.configure({ enabled: true, agentMode: "ultra", runsDir: undefined })
         try {
           const { chat, assistant } = yield* seed()
+          const sessions = yield* Session.Service
           const tool = yield* TaskTool
           const def = yield* tool.init()
 
@@ -2371,8 +2694,8 @@ describe("tool.task", () => {
                 // Yield so fibers interleave; if the channel leaked to shared state this would surface.
                 yield* Effect.sleep("5 millis")
                 byChild.set(input.sessionID, childOverride(input))
-                return reply(input, "done")
-              }),
+                return yield* persistPromptReply(input, reply(input, "done"))
+              }).pipe(Effect.provideService(Session.Service, sessions)),
           }
 
           const exec = () =>
