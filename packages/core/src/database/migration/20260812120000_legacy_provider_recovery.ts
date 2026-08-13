@@ -12,12 +12,16 @@ export default {
       // Historical orphan receipts are intentionally omitted from the rebuilt authority.
       yield* tx.run("DROP TRIGGER IF EXISTS compaction_run_continuation_response_validate")
       yield* tx.run(`
-        CREATE TEMP TABLE legacy_provider_recovery_argument_receipt AS
-        SELECT * FROM session_tool_argument_receipt
+        CREATE TEMP TABLE legacy_provider_recovery_argument_receipt AS SELECT
+          receipt_id, layer, ordinal, call_id, tool_name, event_type, payload_hash,
+          payload_length, payload_keys, unavailable_reason, created_at, validation_outcome
+        FROM session_tool_argument_receipt
       `)
       yield* tx.run(`
-        CREATE TEMP TABLE legacy_provider_recovery_activity_progress AS
-        SELECT * FROM session_activity_progress
+        CREATE TEMP TABLE legacy_provider_recovery_activity_progress AS SELECT
+          activity_id, revision, assistant_message_id, text_part_id, provider_receipt_id,
+          state, finish_observed, response_fingerprint, created_at, settled_at
+        FROM session_activity_progress
       `)
       yield* tx.run("DROP TABLE session_tool_argument_receipt")
       yield* tx.run("DROP TABLE session_activity_progress")
@@ -68,8 +72,37 @@ export default {
         )
       `)
       yield* tx.run(`
-        INSERT INTO session_tool_request_receipt_rebuilt
-        SELECT receipt.*
+        INSERT INTO session_tool_request_receipt_rebuilt (
+          receipt_id, request_ordinal, session_id, user_message_id, assistant_message_id,
+          provider_attempt_id, provider_id, model_id, protocol, registry_tool_ids,
+          permission_filtered_tool_ids, final_offered_tool_ids, call_ids,
+          tool_definition_hash, tool_choice_mode, adapter_tool_capability,
+          adapter_lowering_outcome, estimated_input_tokens, physical_input_budget,
+          reserved_output_tokens, safety_margin_tokens, context_limit_provenance,
+          request_state, request_error_code, created_at, prompt_epoch, prompt_window_id,
+          effective_history_hash, world_state_baseline_hash, prompt_cache_key,
+          provider_request_hash, response_chain_reuse_decision,
+          response_chain_refusal_reason, request_input_hash, final_request_hash,
+          provider_state, adapter_prepared_at, dispatching_at, streaming_at, terminal_at,
+          response_fingerprint, owner_token
+        )
+        SELECT
+          receipt.receipt_id, receipt.request_ordinal, receipt.session_id,
+          receipt.user_message_id, receipt.assistant_message_id, receipt.provider_attempt_id,
+          receipt.provider_id, receipt.model_id, receipt.protocol, receipt.registry_tool_ids,
+          receipt.permission_filtered_tool_ids, receipt.final_offered_tool_ids, receipt.call_ids,
+          receipt.tool_definition_hash, receipt.tool_choice_mode, receipt.adapter_tool_capability,
+          receipt.adapter_lowering_outcome, receipt.estimated_input_tokens,
+          receipt.physical_input_budget, receipt.reserved_output_tokens,
+          receipt.safety_margin_tokens, receipt.context_limit_provenance, receipt.request_state,
+          receipt.request_error_code, receipt.created_at, receipt.prompt_epoch,
+          receipt.prompt_window_id, receipt.effective_history_hash,
+          receipt.world_state_baseline_hash, receipt.prompt_cache_key,
+          receipt.provider_request_hash, receipt.response_chain_reuse_decision,
+          receipt.response_chain_refusal_reason, receipt.request_input_hash,
+          receipt.final_request_hash, receipt.provider_state, receipt.adapter_prepared_at,
+          receipt.dispatching_at, receipt.streaming_at, receipt.terminal_at,
+          receipt.response_fingerprint, receipt.owner_token
         FROM session_tool_request_receipt receipt
         JOIN session ON session.id = receipt.session_id
       `)
@@ -198,7 +231,11 @@ export default {
       `)
       yield* tx.run(`
         INSERT INTO session_tool_argument_receipt
-        SELECT argument.*
+        SELECT
+          argument.receipt_id, argument.layer, argument.ordinal, argument.call_id,
+          argument.tool_name, argument.event_type, argument.payload_hash,
+          argument.payload_length, argument.payload_keys, argument.unavailable_reason,
+          argument.created_at, argument.validation_outcome
         FROM legacy_provider_recovery_argument_receipt argument
         JOIN session_tool_request_receipt receipt ON receipt.receipt_id = argument.receipt_id
       `)
@@ -232,7 +269,11 @@ export default {
       `)
       yield* tx.run(`
         INSERT INTO session_activity_progress
-        SELECT progress.*
+        SELECT
+          progress.activity_id, progress.revision, progress.assistant_message_id,
+          progress.text_part_id, progress.provider_receipt_id, progress.state,
+          progress.finish_observed, progress.response_fingerprint,
+          progress.created_at, progress.settled_at
         FROM legacy_provider_recovery_activity_progress progress
         JOIN session_tool_request_receipt receipt ON receipt.receipt_id = progress.provider_receipt_id
       `)

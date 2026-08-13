@@ -1,4 +1,5 @@
 import { Context, Effect, FiberMap, Layer, Option, Schema, Stream } from "effect"
+import { isDeepStrictEqual } from "node:util"
 import { serviceUse } from "@deepagent-code/core/effect/service-use"
 import { FetchHttpClient, HttpBody, HttpClient, HttpClientError, HttpClientRequest } from "effect/unstable/http"
 import { Database } from "@deepagent-code/core/database/database"
@@ -438,7 +439,8 @@ export const layer = Layer.effect(
           metadata.eventID !== item.id ||
           metadata.aggregateID !== item.aggregate_id ||
           metadata.seq !== item.seq ||
-          metadata.canonicalDataHash !== Hash.sha256(JSON.stringify(item.data)) ||
+          !FilePartArtifact.matchesDataHash(metadata.canonicalDataHash, metadata.canonicalData) ||
+          !isDeepStrictEqual(metadata.canonicalData, item.data) ||
           JSON.stringify(metadata.descriptor) !== JSON.stringify(descriptor)
         )
           return yield* new SyncHttpError({ message: "Workspace artifact metadata diverged from history", status: 409 })

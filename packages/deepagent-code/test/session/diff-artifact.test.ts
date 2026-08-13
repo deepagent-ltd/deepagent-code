@@ -283,6 +283,12 @@ describe("Session legacy diff physical migration", () => {
         expect(receipt?.expected_session_summary_hash).not.toBe(receipt?.committed_session_summary_hash)
         expect(receipt?.committed_session_summary_hash).toBe(Hash.sha256("null"))
         expect(receipt?.epoch_hashes).toEqual([{ epoch: 0, before, after: before }])
+        const receiptDelete = yield* db
+          .delete(SessionDiffMigrationReceiptTable)
+          .where(eq(SessionDiffMigrationReceiptTable.message_id, input.messageID))
+          .run()
+          .pipe(Effect.exit)
+        expect(String(receiptDelete)).toContain("session_diff_migration_receipt_delete_immutable")
         const manifestResponse = yield* request(
           `${pathFor(SessionPaths.diffArtifactManifest, input.session.id)}?${new URLSearchParams({
             messageID: input.messageID,
@@ -317,6 +323,31 @@ describe("Session legacy diff physical migration", () => {
           })}`,
         )
         expect(unauthorized.status).toBe(404)
+
+        const fileDelete = yield* db
+          .delete(SessionDiffArtifactFileChunkTable)
+          .where(eq(SessionDiffArtifactFileChunkTable.artifact_id, input.artifact.artifact_id))
+          .run()
+          .pipe(Effect.exit)
+        expect(String(fileDelete)).toContain("session_diff_artifact_file_chunk_delete_immutable")
+        const sessions = yield* Session.Service
+        yield* sessions.remove(input.session.id)
+        expect(
+          yield* db
+            .select()
+            .from(SessionDiffMigrationReceiptTable)
+            .where(eq(SessionDiffMigrationReceiptTable.session_id, input.session.id))
+            .all()
+            .pipe(Effect.orDie),
+        ).toEqual([])
+        expect(
+          yield* db
+            .select()
+            .from(SessionDiffArtifactFileChunkTable)
+            .where(eq(SessionDiffArtifactFileChunkTable.artifact_id, input.artifact.artifact_id))
+            .all()
+            .pipe(Effect.orDie),
+        ).toEqual([])
       }),
     { git: true },
     30_000,
@@ -360,6 +391,56 @@ describe("Session legacy diff physical migration", () => {
           .get()
           .pipe(Effect.orDie)
         expect(epoch?.authority).toBe("ready")
+      }),
+    { git: true },
+    30_000,
+  )
+
+  it.instance(
+    "rejects an oversized Session history before rewriting durable message authority",
+    () =>
+      Effect.gen(function* () {
+        const input = yield* seed()
+        const { db } = yield* Database.Service
+        yield* db.run(sql`
+          WITH RECURSIVE counter(value) AS (
+            SELECT 1
+            UNION ALL
+            SELECT value + 1 FROM counter WHERE value < 1000
+          )
+          INSERT INTO message(id, session_id, time_created, time_updated, data)
+          SELECT 'msg_budget_' || printf('%04d', value), ${input.session.id}, value, value,
+            json_object('role', 'user', 'time', json_object('created', value))
+          FROM counter
+        `)
+
+        expect(yield* SessionDiffArtifact.migrate({ sessionID: input.session.id, now: 225 })).toEqual({
+          processed: 1,
+          committed: 0,
+          failed: 1,
+        })
+        const receipt = yield* db
+          .select()
+          .from(SessionDiffMigrationReceiptTable)
+          .where(eq(SessionDiffMigrationReceiptTable.message_id, input.messageID))
+          .get()
+          .pipe(Effect.orDie)
+        expect(receipt).toMatchObject({
+          state: "migration_validation_failed",
+          failure_reason: "Session message count exceeds 1000",
+        })
+        const message = yield* db
+          .select({ data: MessageTable.data })
+          .from(MessageTable)
+          .where(eq(MessageTable.id, input.messageID))
+          .get()
+          .pipe(Effect.orDie)
+        expect(
+          message?.data.role === "user" && message.data.summary && typeof message.data.summary === "object"
+            ? message.data.summary.diffs[0]?.patch
+            : undefined,
+        ).toBe(input.patch)
+        expect(yield* db.select().from(SessionDiffArtifactFileChunkTable).all().pipe(Effect.orDie)).toEqual([])
       }),
     { git: true },
     30_000,
@@ -448,7 +529,7 @@ describe("Session legacy diff physical migration", () => {
   )
 
   it.instance(
-    "fails closed when a committed artifact chunk is corrupted",
+    "rejects mutation of a committed artifact chunk before migration can observe corrupted authority",
     () =>
       Effect.gen(function* () {
         const input = yield* seed()
@@ -460,7 +541,7 @@ describe("Session legacy diff physical migration", () => {
           .orderBy(asc(EventArtifactChunkTable.chunk_index))
           .get()
           .pipe(Effect.orDie)
-        yield* db
+        const corrupted = yield* db
           .update(EventArtifactChunkTable)
           .set({ data: Buffer.from("corrupt") })
           .where(
@@ -470,8 +551,13 @@ describe("Session legacy diff physical migration", () => {
             ),
           )
           .run()
-          .pipe(Effect.orDie)
-        expect((yield* SessionDiffArtifact.migrate({ sessionID: input.session.id })).failed).toBe(1)
+          .pipe(Effect.exit)
+        expect(String(corrupted)).toContain("event_artifact_chunk_update_immutable")
+        expect(yield* SessionDiffArtifact.migrate({ sessionID: input.session.id })).toEqual({
+          processed: 1,
+          committed: 1,
+          failed: 0,
+        })
         const row = yield* db
           .select({ data: MessageTable.data })
           .from(MessageTable)
@@ -480,9 +566,11 @@ describe("Session legacy diff physical migration", () => {
           .pipe(Effect.orDie)
         expect(
           row?.data.role === "user" && row.data.summary && typeof row.data.summary === "object"
-            ? row.data.summary.diffs[0]?.patch
+            ? row.data.summary.diffArtifact?.id
             : undefined,
-        ).toBe(input.patch)
+        ).toBe(
+          input.artifact.artifact_id,
+        )
       }),
     { git: true },
     30_000,
