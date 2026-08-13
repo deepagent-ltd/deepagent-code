@@ -70,6 +70,8 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { TestContextFacades } from "../fixture/context-facades"
 import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
 import { PromptEpoch } from "@/session/prompt-epoch"
+import { LocationIdentity } from "@deepagent-code/core/context-federation/identity"
+import { SessionProviderOwner } from "@deepagent-code/core/context-federation/provider-owner"
 
 void Log.init({ print: false })
 
@@ -231,6 +233,7 @@ function makeHttp() {
     TestLLMServer.layer,
     SessionSummary.defaultLayer,
     SessionPrompt.layer.pipe(
+      Layer.provide(SessionProviderOwner.layer.pipe(Layer.provide(deps))),
       Layer.provide(testInstanceStoreLayer),
       Layer.provide(SessionRevert.defaultLayer),
       Layer.provide(Image.defaultLayer),
@@ -244,6 +247,7 @@ function makeHttp() {
       Layer.provideMerge(trunc),
       Layer.provide(Instruction.defaultLayer),
       Layer.provide(SystemPrompt.defaultLayer),
+      Layer.provide(LocationIdentity.layer.pipe(Layer.provide(deps))),
       Layer.provide(RuntimeFlags.layer({ experimentalEventSystem: true })),
       Layer.provideMerge(deps),
     ),
