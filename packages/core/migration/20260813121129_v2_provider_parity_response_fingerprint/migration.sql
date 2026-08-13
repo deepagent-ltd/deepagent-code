@@ -1,0 +1,1 @@
+ALTER TABLE `session_v2_provider_parity_baseline` ADD `legacy_response_fingerprint` text;
