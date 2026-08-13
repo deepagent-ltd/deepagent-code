@@ -127,4 +127,32 @@ describe("Npm.install", () => {
       server.stop(true)
     }
   })
+
+  test("does not retain npm retry timers after a scoped registry failure", async () => {
+    await using tmp = await tmpdir()
+    let requests = 0
+    const server = Bun.serve({
+      port: 0,
+      fetch: () => {
+        requests++
+        return new Response("temporary failure", { status: 500 })
+      },
+    })
+
+    try {
+      await writePackage(tmp.path, { name: "retry-fixture" })
+      await Bun.write(path.join(tmp.path, ".npmrc"), `registry=${server.url.origin}/\n`)
+      const exit = await Effect.gen(function* () {
+        const npm = yield* Npm.Service
+        return yield* npm
+          .install(tmp.path, { add: [{ name: "retry-fixture-package", version: "1.0.0" }] })
+          .pipe(Effect.exit, Effect.timeout("2 seconds"))
+      }).pipe(Effect.scoped, Effect.provide(npmLayer(path.join(tmp.path, "cache"))), Effect.runPromise)
+
+      expect(requests).toBe(1)
+      expect(exit._tag).toBe("Failure")
+    } finally {
+      server.stop(true)
+    }
+  })
 })
