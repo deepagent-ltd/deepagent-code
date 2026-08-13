@@ -6,6 +6,7 @@ import { existsSync, readFileSync, readdirSync } from "fs"
 import path from "path"
 
 const target = "20260507164347_add_workspace_time"
+const reset = "20260604172448_event_sourced_session_input"
 
 function migrations() {
   return readdirSync(path.join(import.meta.dirname, "../../../core/migration"), { withFileTypes: true })
@@ -31,8 +32,10 @@ describe("workspace time migration", () => {
     const db = drizzle({ client: sqlite })
     const entries = migrations()
     const index = entries.findIndex((entry) => entry.name === target)
+    const resetIndex = entries.findIndex((entry) => entry.name === reset)
 
     expect(index).toBeGreaterThan(0)
+    expect(resetIndex).toBeGreaterThan(index)
 
     migrate(db, entries.slice(0, index))
     sqlite.run(
@@ -44,7 +47,7 @@ describe("workspace time migration", () => {
       ["workspace_1", "local", "main", "main", "/tmp/project", null, "project_1"],
     )
 
-    expect(() => migrate(db, entries.slice(index))).not.toThrow()
+    expect(() => migrate(db, entries.slice(index, resetIndex + 1))).not.toThrow()
     expect(sqlite.query("SELECT time_used FROM workspace WHERE id = ?").get("workspace_1")).toBeNull()
   })
 })
