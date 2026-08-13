@@ -1,4 +1,4 @@
-import { Context, Effect, FiberMap, Layer, Schema, Stream } from "effect"
+import { Context, Effect, FiberMap, Layer, Option, Schema, Stream } from "effect"
 import { serviceUse } from "@deepagent-code/core/effect/service-use"
 import { FetchHttpClient, HttpBody, HttpClient, HttpClientError, HttpClientRequest } from "effect/unstable/http"
 import { Database } from "@deepagent-code/core/database/database"
@@ -11,7 +11,7 @@ import { GlobalBus } from "@/bus/global"
 import { Auth } from "@/auth"
 import { EventV2 } from "@deepagent-code/core/event"
 import { EventV2Bridge } from "@/event-v2-bridge"
-import { EventSequenceTable } from "@deepagent-code/core/event/sql"
+import { EventSequenceTable, WorkspaceSyncCursorTable } from "@deepagent-code/core/event/sql"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import * as Log from "@deepagent-code/core/util/log"
 import { RuntimeFlags } from "@/effect/runtime-flags"
@@ -31,6 +31,7 @@ import { WorkspaceRef } from "@/effect/instance-ref"
 import { Vcs } from "@/project/vcs"
 import { WorkspaceAdapterRuntime } from "./workspace-adapter-runtime"
 import { SessionRecoveryTransferGuard } from "@/session/recovery-transfer-guard"
+import { Hash } from "@deepagent-code/core/util/hash"
 
 export const Info = Schema.Struct({
   ...WorkspaceInfoSchema.fields,
@@ -74,6 +75,7 @@ function fromRow(row: typeof WorkspaceTable.$inferSelect): Info {
 }
 
 const log = Log.create({ service: "workspace-sync" })
+const decodeHttpError = Schema.decodeUnknownOption(Schema.UnknownFromJsonString)
 
 export const CreateInput = Schema.Struct({
   id: Schema.optional(WorkspaceV2.ID),
@@ -301,38 +303,63 @@ export const layer = Layer.effect(
       url: URL | string,
       headers: HeadersInit | undefined,
     ) {
-      const sessionIDs = (yield* db
-        .select({ id: SessionTable.id })
-        .from(SessionTable)
-        .where(eq(SessionTable.workspace_id, space.id))
-        .all()
-        .pipe(Effect.orDie)).map((row) => row.id)
-      const state = sessionIDs.length
-        ? Object.fromEntries(
-            (yield* db
-              .select()
-              .from(EventSequenceTable)
-              .where(inArray(EventSequenceTable.aggregate_id, sessionIDs))
-              .all()
-              .pipe(Effect.orDie)).map((row) => [row.aggregate_id, row.seq]),
-          )
-        : {}
-
+      const normalized = new URL(url)
+      normalized.hash = ""
+      normalized.search = ""
+      normalized.pathname = normalized.pathname.replace(/\/$/, "")
+      const remoteFingerprint = Hash.sha256(`${normalized.toString()}:workspace:${space.id}`)
+      const receipt = yield* db
+        .select({ cursor: WorkspaceSyncCursorTable.cursor })
+        .from(WorkspaceSyncCursorTable)
+        .where(
+          and(
+            eq(WorkspaceSyncCursorTable.workspace_id, space.id),
+            eq(WorkspaceSyncCursorTable.remote_fingerprint, remoteFingerprint),
+          ),
+        )
+        .get()
+        .pipe(Effect.orDie)
       log.info("syncing workspace history", {
         workspaceID: space.id,
-        sessions: sessionIDs.length,
-        known: Object.keys(state).length,
+        resume: Boolean(receipt),
       })
 
       let total = 0
+      let cursor: string | undefined = receipt?.cursor
+      let reset = Boolean(cursor)
       while (true) {
+        const expectedCursor = cursor
         const response = yield* http.execute(
           HttpClientRequest.post(route(url, "/sync/history"), {
             headers: new Headers(headers),
-            body: HttpBody.jsonUnsafe(state),
+            body: HttpBody.jsonUnsafe({ version: 1, ...(cursor ? { cursor } : {}) }),
           }),
         )
 
+        if (response.status === 409) {
+          const body = yield* response.text
+          const error = Option.getOrUndefined(decodeHttpError(body))
+          const stale =
+            error &&
+            typeof error === "object" &&
+            "resource" in error &&
+            error.resource === `sync-cursor-reset:${space.id}`
+          if (stale && reset && expectedCursor) {
+            yield* db
+              .delete(WorkspaceSyncCursorTable)
+              .where(and(eq(WorkspaceSyncCursorTable.workspace_id, space.id), eq(WorkspaceSyncCursorTable.remote_fingerprint, remoteFingerprint), eq(WorkspaceSyncCursorTable.cursor, expectedCursor)))
+              .run()
+              .pipe(Effect.orDie)
+            cursor = undefined
+            reset = false
+            continue
+          }
+          return yield* new SyncHttpError({
+            message: `Workspace history HTTP failure: ${response.status} ${body}`,
+            status: response.status,
+            body,
+          })
+        }
         if (response.status < 200 || response.status >= 300) {
           const body = yield* response.text
           return yield* new SyncHttpError({
@@ -342,29 +369,41 @@ export const layer = Layer.effect(
           })
         }
 
-        const history = (yield* response.json) as HistoryEvent[]
-        if (history.length === 0) break
+        const decoded = (yield* response.json) as HistoryEnvelope | HistoryEvent[]
+        const history = Array.isArray(decoded) ? decoded : decoded.items
+        const nextCursor = Array.isArray(decoded) ? cursor : decoded.nextCursor
         yield* Effect.forEach(
           history,
-          (event) =>
-            events
+          (item) => {
+            return events
               .replay(
                 {
-                  id: EventV2.ID.make(event.id),
-                  aggregateID: event.aggregate_id,
-                  seq: event.seq,
-                  type: event.type,
-                  data: event.data,
+                  id: EventV2.ID.make(item.id),
+                  aggregateID: item.aggregate_id,
+                  seq: item.seq,
+                  type: item.type,
+                  data: item.data,
                 },
                 { publish: true, ownerID: space.id },
               )
               .pipe(
                 Effect.provideService(WorkspaceRef, space.id),
-                Effect.tap(() => Effect.sync(() => (state[event.aggregate_id] = event.seq))),
-              ),
+              )
+          },
           { discard: true },
         )
+        if (!Array.isArray(decoded)) {
+          const advanced = expectedCursor
+            ? yield* db.update(WorkspaceSyncCursorTable).set({ cursor: decoded.nextCursor, updated_at: Date.now() }).where(and(eq(WorkspaceSyncCursorTable.workspace_id, space.id), eq(WorkspaceSyncCursorTable.remote_fingerprint, remoteFingerprint), eq(WorkspaceSyncCursorTable.cursor, expectedCursor))).returning({ cursor: WorkspaceSyncCursorTable.cursor }).get().pipe(Effect.orDie)
+            : yield* db.insert(WorkspaceSyncCursorTable).values({ workspace_id: space.id, remote_fingerprint: remoteFingerprint, cursor: decoded.nextCursor, updated_at: Date.now() }).onConflictDoNothing().returning({ cursor: WorkspaceSyncCursorTable.cursor }).get().pipe(Effect.orDie)
+          if (!advanced)
+            return yield* new SyncHttpError({ message: "Workspace sync cursor changed concurrently", status: 409 })
+        }
+        cursor = nextCursor
+        reset = false
         total += history.length
+        if (history.length === 0) break
+        if (!Array.isArray(decoded) && decoded.complete) break
       }
 
       log.info("workspace history synced", {
@@ -825,11 +864,19 @@ export const defaultLayer = layer.pipe(
 const TIMEOUT = 5000
 
 type HistoryEvent = {
+  kind: "event"
   id: string
   aggregate_id: string
   seq: number
   type: string
   data: Record<string, unknown>
+}
+
+type HistoryEnvelope = {
+  version: 1
+  items: HistoryEvent[]
+  nextCursor: string
+  complete: boolean
 }
 
 function waitUntilSynced(input: {

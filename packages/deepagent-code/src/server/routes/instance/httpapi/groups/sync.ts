@@ -32,13 +32,36 @@ export const ReplayResponse = Schema.Struct({
 export const SessionPayload = Schema.Struct({
   sessionID: SessionID,
 })
-export const HistoryPayload = Schema.Record(Schema.String, NonNegativeInt)
+export const HistoryKnown = Schema.Record(Schema.String, NonNegativeInt)
+export const HistoryPayload = Schema.Union([
+  HistoryKnown,
+  Schema.Struct({
+    version: Schema.Literal(1),
+    cursor: Schema.optional(Schema.String.check(Schema.isMaxLength(512))),
+    known: Schema.optional(HistoryKnown),
+  }),
+])
 export const HistoryEvent = Schema.Struct({
+  kind: Schema.Literal("event"),
   id: EventV2.ID,
   aggregate_id: Schema.String,
   seq: NonNegativeInt,
   type: Schema.String,
   data: Schema.Record(Schema.String, Schema.Unknown),
+})
+export const HistoryEnvelope = Schema.Struct({
+  version: Schema.Literal(1),
+  items: Schema.Array(HistoryEvent),
+  nextCursor: Schema.String,
+  complete: Schema.Boolean,
+})
+export const ArtifactMaintenancePayload = Schema.Struct({
+  cursor: Schema.optional(EventV2.ID),
+  limit: Schema.optional(NonNegativeInt),
+})
+export const ArtifactMaintenanceResponse = Schema.Struct({
+  processed: NonNegativeInt,
+  nextCursor: Schema.optional(EventV2.ID),
 })
 
 export const SyncPaths = {
@@ -46,6 +69,7 @@ export const SyncPaths = {
   replay: `${root}/replay`,
   steal: `${root}/steal`,
   history: `${root}/history`,
+  artifacts: `${root}/maintenance/artifacts`,
 } as const
 
 export const SyncApi = HttpApi.make("sync")
@@ -66,7 +90,7 @@ export const SyncApi = HttpApi.make("sync")
           query: WorkspaceRoutingQuery,
           payload: ReplayPayload,
           success: described(ReplayResponse, "Replayed sync events"),
-          error: HttpApiError.BadRequest,
+          error: [HttpApiError.BadRequest, ConflictError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "sync.replay",
@@ -77,26 +101,42 @@ export const SyncApi = HttpApi.make("sync")
         HttpApiEndpoint.post("steal", SyncPaths.steal, {
           query: WorkspaceRoutingQuery,
           payload: SessionPayload,
-          success: described(SessionPayload, "Session stolen into workspace"),
+          success: described(Schema.Never, "Disabled until durable ownership transfer is available"),
           error: [HttpApiError.BadRequest, ConflictError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "sync.steal",
-            summary: "Steal session into workspace",
-            description: "Update a session to belong to the current workspace through the sync event system.",
+            summary: "Reject unsupported session ownership transfer",
+            description:
+              "This endpoint is disabled until durable transfer admission, source fencing, and canonical owner handoff are available.",
+            exclude: true,
           }),
         ),
         HttpApiEndpoint.post("history", SyncPaths.history, {
           query: WorkspaceRoutingQuery,
           payload: HistoryPayload,
-          success: described(Schema.Array(HistoryEvent), "Sync events"),
-          error: [HttpApiError.BadRequest, ServiceUnavailableError],
+          success: described(HistoryEnvelope, "Bounded sync history page"),
+          error: [HttpApiError.BadRequest, ConflictError, ServiceUnavailableError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "sync.history.list",
             summary: "List sync events",
             description:
-              "List a bounded page of sync events. Keys are aggregate IDs the client already knows about, values are the last known sequence ID. Oversized legacy events fail closed until maintenance migration externalizes their inline payload.",
+              "List a bounded page with an opaque global cursor. A bounded legacy aggregate map is accepted only for the first upgrade request. Retention-floor crossings return resync_required with a canonical snapshot.",
+          }),
+        ),
+        HttpApiEndpoint.post("artifacts", SyncPaths.artifacts, {
+          query: WorkspaceRoutingQuery,
+          payload: ArtifactMaintenancePayload,
+          success: described(ArtifactMaintenanceResponse, "Canonicalized legacy EventV2 artifacts"),
+          error: HttpApiError.BadRequest,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "sync.maintenance.artifacts",
+            summary: "Canonicalize a bounded legacy EventV2 artifact batch",
+            description:
+              "Run one authenticated, idempotent maintenance batch and return the durable scan cursor for the next call.",
+            exclude: true,
           }),
         ),
       )

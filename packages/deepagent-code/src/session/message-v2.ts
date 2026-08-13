@@ -1349,13 +1349,6 @@ export function promptHistoryCutoffAuthorityInTransaction(
     const unresolved = yield* tx
       .select({
         userMessageID: SessionToolRequestReceiptTable.user_message_id,
-        assistantMessageID: SessionToolRequestReceiptTable.assistant_message_id,
-        promptEpoch: SessionToolRequestReceiptTable.prompt_epoch,
-        promptWindowID: SessionToolRequestReceiptTable.prompt_window_id,
-        effectiveHistoryHash: SessionToolRequestReceiptTable.effective_history_hash,
-        requestInputHash: SessionToolRequestReceiptTable.request_input_hash,
-        providerRequestHash: SessionToolRequestReceiptTable.provider_request_hash,
-        finalRequestHash: SessionToolRequestReceiptTable.final_request_hash,
       })
       .from(SessionToolRequestReceiptTable)
       .leftJoin(
@@ -1366,7 +1359,6 @@ export function promptHistoryCutoffAuthorityInTransaction(
         and(
           eq(SessionToolRequestReceiptTable.session_id, input.sessionID),
           eq(SessionToolRequestReceiptTable.provider_state, "indeterminate_after_crash"),
-          isNull(SessionToolRequestReceiptTable.provider_attempt_id),
           isNull(SessionToolRequestResolutionTable.resolution_id),
         ),
       )
@@ -1374,16 +1366,7 @@ export function promptHistoryCutoffAuthorityInTransaction(
     const cutoffIndex = selected.messages.findIndex((message) => message.info.id === input.cutoffMessageID)
     const unsafe = unresolved.some((receipt) => {
       const userIndex = selected.messages.findIndex((message) => message.info.id === receipt.userMessageID)
-      const assistantIndex = selected.messages.findIndex((message) => message.info.id === receipt.assistantMessageID)
-      return (
-        receipt.promptEpoch === epoch.epoch &&
-        receipt.promptWindowID === epoch.window_id &&
-        !!receipt.effectiveHistoryHash &&
-        !!(receipt.finalRequestHash ?? receipt.providerRequestHash ?? receipt.requestInputHash) &&
-        userIndex >= 0 &&
-        assistantIndex > userIndex &&
-        cutoffIndex > userIndex
-      )
+      return userIndex < 0 || cutoffIndex > userIndex
     })
     if (unsafe) return
     return { projection, physical: snapshotExit.value.physical }
@@ -1405,12 +1388,7 @@ export const promptHistoryCutoffProjectionEffect = Effect.fn("MessageV2.promptHi
     const authority = yield* db
       .select({ state: SessionPromptEpochTable.authority_state })
       .from(SessionPromptEpochTable)
-      .where(
-        and(
-          eq(SessionPromptEpochTable.session_id, input.sessionID),
-          eq(SessionPromptEpochTable.state, "active"),
-        ),
-      )
+      .where(and(eq(SessionPromptEpochTable.session_id, input.sessionID), eq(SessionPromptEpochTable.state, "active")))
       .get()
       .pipe(Effect.orDie)
     const history = yield* db
@@ -1419,10 +1397,7 @@ export const promptHistoryCutoffProjectionEffect = Effect.fn("MessageV2.promptHi
       .where(eq(SessionHistoryStateTable.session_id, input.sessionID))
       .get()
       .pipe(Effect.orDie)
-    if (
-      (!authority || authority.state === "legacy_pending") &&
-      history?.state !== "recovery_required"
-    )
+    if ((!authority || authority.state === "legacy_pending") && history?.state !== "recovery_required")
       yield* promptHistoryProjectionEffect(input.sessionID)
     const projection = yield* db
       .transaction((tx) => promptHistoryCutoffProjectionInTransaction(tx as unknown as Database.Interface["db"], input))

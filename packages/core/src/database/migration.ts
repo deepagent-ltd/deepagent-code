@@ -20,6 +20,10 @@ export function apply(db: Database) {
 
 export function applyOnly(db: Database, input: Migration[]) {
   return Effect.gen(function* () {
+    const duplicate = input.find(
+      (migration, index) => input.findIndex((candidate) => candidate.id === migration.id) !== index,
+    )
+    if (duplicate) return yield* Effect.die(new Error(`duplicate database migration id: ${duplicate.id}`))
     yield* db.run(
       sql`CREATE TABLE IF NOT EXISTS ${sql.identifier("migration")} (id TEXT PRIMARY KEY, time_completed INTEGER NOT NULL)`,
     )

@@ -5,7 +5,16 @@ import { Hash } from "@deepagent-code/core/util/hash"
 import { ModelV2 } from "@deepagent-code/core/model"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { WorkspaceV2 } from "@deepagent-code/core/workspace"
-import { SessionHistoryStateTable, SessionTable } from "@deepagent-code/core/session/sql"
+import {
+  SessionActivityTable,
+  SessionContextSelectionTable,
+  SessionProviderAttemptRecoveryBridgeTable,
+  SessionProviderAttemptResolutionTable,
+  SessionProviderAttemptTable,
+} from "@deepagent-code/core/context-federation/session-sql"
+import { Prompt } from "@deepagent-code/core/session/prompt"
+import { SessionMessage } from "@deepagent-code/core/session/message"
+import { SessionHistoryStateTable, SessionInputTable, SessionTable } from "@deepagent-code/core/session/sql"
 import { and, eq } from "drizzle-orm"
 import { Effect, Layer } from "effect"
 import { MessageV2 } from "@/session/message-v2"
@@ -39,7 +48,10 @@ const pathFor = (sessionID: string) => SessionPaths.providerResolution.replace("
 const parseJson = <A>(response: { readonly json: Effect.Effect<unknown, unknown> }) =>
   response.json.pipe(Effect.map((body) => body as A))
 
-const seedRecovery = Effect.fn("HttpProviderRecoveryTest.seedRecovery")(function* (title: string) {
+const seedRecovery = Effect.fn("HttpProviderRecoveryTest.seedRecovery")(function* (
+  title: string,
+  providerAttempt = false,
+) {
   const sessions = yield* Session.Service
   const { db } = yield* Database.Service
   const parent = yield* sessions.create({ title: `${title} parent` })
@@ -78,6 +90,82 @@ const seedRecovery = Effect.fn("HttpProviderRecoveryTest.seedRecovery")(function
   const now = Date.now()
   const receiptID = `receipt-${Hash.sha256(title).slice(0, 24)}`
   const requestHash = `request-${Hash.sha256(title).slice(0, 24)}`
+  const providerAttemptID = `attempt-${Hash.sha256(title).slice(0, 24)}`
+  const activityID = `activity-${Hash.sha256(title).slice(0, 24)}`
+  const selectionID = `selection-${Hash.sha256(title).slice(0, 24)}`
+
+  if (providerAttempt) {
+    yield* db
+      .insert(SessionInputTable)
+      .values({
+        id: SessionMessage.ID.make(user.id),
+        session_id: session.id,
+        prompt: new Prompt({ text: "dispatch this provider request" }),
+        delivery: "steer",
+        admitted_seq: 0,
+        promoted_seq: 0,
+      })
+      .run()
+      .pipe(Effect.orDie)
+    yield* db
+      .insert(SessionActivityTable)
+      .values({
+        activity_id: activityID,
+        session_id: session.id,
+        ordinal: 0,
+        trigger_input_id: user.id,
+        delivery: "steer",
+        state: "active",
+        created_at: now,
+      })
+      .run()
+      .pipe(Effect.orDie)
+    yield* db
+      .insert(SessionContextSelectionTable)
+      .values({
+        selection_id: selectionID,
+        session_id: session.id,
+        activity_id: activityID,
+        revision: 0,
+        trigger_input_id: user.id,
+        location_key: "local",
+        query_fingerprint: "query",
+        authorization_fingerprint: "authorization",
+        authorization_epoch: 0,
+        execution_fingerprint: "execution",
+        selected_source_fingerprint: "sources",
+        observed_location_mutation_epoch: 0,
+        next_revalidation_at: now + 60_000,
+        graph_revisions: "{}",
+        graph_statuses: "[]",
+        selected_refs: "[]",
+        projection: "",
+        projection_hash: "projection",
+        token_count: 0,
+        artifact_write_status: "degraded_unavailable",
+        inline_audit: "{}",
+        created_at: now,
+      })
+      .run()
+      .pipe(Effect.orDie)
+    yield* db
+      .insert(SessionProviderAttemptTable)
+      .values({
+        attempt_id: providerAttemptID,
+        session_id: session.id,
+        activity_id: activityID,
+        provider_turn_seq: 0,
+        selection_id: selectionID,
+        projection_hash: "projection",
+        request_hash: requestHash,
+        provider_id: model.providerID,
+        state: "indeterminate_after_crash",
+        created_at: now,
+        error_code: "process_recovery",
+      })
+      .run()
+      .pipe(Effect.orDie)
+  }
 
   yield* db
     .update(SessionPromptEpochTable)
@@ -96,7 +184,7 @@ const seedRecovery = Effect.fn("HttpProviderRecoveryTest.seedRecovery")(function
       session_id: session.id,
       user_message_id: user.id,
       assistant_message_id: assistant.id,
-      provider_attempt_id: null,
+      provider_attempt_id: providerAttempt ? providerAttemptID : null,
       provider_id: model.providerID,
       model_id: model.modelID,
       protocol: "chat",
@@ -131,7 +219,7 @@ const seedRecovery = Effect.fn("HttpProviderRecoveryTest.seedRecovery")(function
     .run()
     .pipe(Effect.orDie)
 
-  return { session, receiptID }
+  return { session, receiptID, ...(providerAttempt ? { providerAttemptID, activityID } : {}) }
 })
 
 const command = (descriptor: Descriptor, commandID: string) => ({
@@ -162,6 +250,75 @@ describe("provider recovery HttpApi", () => {
         const instance = yield* TestInstance
         const { db } = yield* Database.Service
         const headers = { "content-type": "application/json" }
+
+        const dual = yield* seedRecovery("http unified provider authority", true)
+        if (!dual.providerAttemptID || !dual.activityID) return
+        const contextPath = SessionPaths.contextAttemptResolve
+          .replace(":sessionID", dual.session.id)
+          .replace(":attemptID", dual.providerAttemptID)
+        const independentlyResolved = yield* requestInDirectory(contextPath, instance.directory, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            decision: "abandoned",
+            reason: "must use unified provider recovery",
+            riskAcknowledged: false,
+          }),
+        })
+        expect(independentlyResolved.status).toBe(400)
+        expect(yield* db.select().from(SessionProviderAttemptResolutionTable).all()).toEqual([])
+
+        const dualList = yield* requestInDirectory(pathFor(dual.session.id), instance.directory, { headers })
+        expect(dualList.status).toBe(200)
+        const [dualDescriptor] = yield* parseJson<Descriptor[]>(dualList)
+        if (!dualDescriptor) return
+        const dualCommand = command(dualDescriptor, "http-provider-recovery-unified")
+        const dualResponse = yield* requestInDirectory(pathFor(dual.session.id), instance.directory, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(dualCommand),
+        })
+        expect(dualResponse.status).toBe(200)
+        const dualResolution = yield* parseJson<{ resolutionID: string }>(dualResponse)
+        const dualRetry = yield* requestInDirectory(pathFor(dual.session.id), instance.directory, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(dualCommand),
+        })
+        expect(dualRetry.status).toBe(200)
+        expect(yield* parseJson<{ resolutionID: string }>(dualRetry)).toEqual(dualResolution)
+        expect(yield* db.select().from(SessionProviderAttemptRecoveryBridgeTable).get()).toMatchObject({
+          resolution_id: dualResolution.resolutionID,
+          attempt_id: dual.providerAttemptID,
+          receipt_id: dual.receiptID,
+          command_id: dualCommand.commandID,
+        })
+        expect(yield* db.select().from(SessionProviderAttemptResolutionTable).get()).toMatchObject({
+          resolution_id: dualResolution.resolutionID,
+          attempt_id: dual.providerAttemptID,
+          decision: "abandoned",
+        })
+        expect(
+          yield* db
+            .select({ state: SessionProviderAttemptTable.state })
+            .from(SessionProviderAttemptTable)
+            .where(eq(SessionProviderAttemptTable.attempt_id, dual.providerAttemptID))
+            .get(),
+        ).toEqual({ state: "resolved_abandoned" })
+        expect(
+          yield* db
+            .select({ state: SessionActivityTable.state })
+            .from(SessionActivityTable)
+            .where(eq(SessionActivityTable.activity_id, dual.activityID))
+            .get(),
+        ).toEqual({ state: "interrupted" })
+        expect(
+          yield* db
+            .select({ state: SessionHistoryStateTable.state })
+            .from(SessionHistoryStateTable)
+            .where(eq(SessionHistoryStateTable.session_id, dual.session.id))
+            .get(),
+        ).toEqual({ state: "ready" })
 
         const exact = yield* seedRecovery("http exact retry")
         const listed = yield* requestInDirectory(pathFor(exact.session.id), instance.directory, { headers })

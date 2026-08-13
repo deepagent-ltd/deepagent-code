@@ -4421,6 +4421,112 @@ it.instance(
   15_000,
 )
 
+it.instance(
+  "cancel keeps a finalizing follow-up busy until durable teardown completes",
+  () =>
+    Effect.gen(function* () {
+      const { dir, llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const steer = yield* SessionSteer.Service
+      const runState = yield* SessionRunState.Service
+      const status = yield* SessionStatus.Service
+      const { db } = yield* Database.Service
+      const session = yield* sessions.create({
+        title: "Finalizing cancel lifecycle",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      const gate = yield* Deferred.make<void>()
+      const marker = path.join(dir, "activity-finalizing-followup.json")
+      const previousPoint = process.env.DEEPAGENT_CODE_TEST_ACTIVITY_CRASH_POINT
+      const previousRoot = process.env.DEEPAGENT_CODE_TEST_ROOT
+      const previousMarker = process.env.DEEPAGENT_CODE_TEST_ACTIVITY_CRASH_MARKER
+
+      const admitted = yield* Effect.acquireUseRelease(
+        Effect.sync(() => {
+          process.env.DEEPAGENT_CODE_TEST_ACTIVITY_CRASH_POINT = "while_finalizing_before_follow_up_drain"
+          process.env.DEEPAGENT_CODE_TEST_ROOT = dir
+          process.env.DEEPAGENT_CODE_TEST_ACTIVITY_CRASH_MARKER = marker
+        }),
+        () =>
+          Effect.gen(function* () {
+            yield* llm.hold("first answer", deferredAsPromise(gate))
+            const running = yield* prompt
+              .prompt({
+                sessionID: session.id,
+                agent: "build",
+                parts: [{ type: "text", text: "finish, then absorb my follow-up" }],
+              })
+              .pipe(Effect.forkChild)
+            yield* llm.wait(1)
+            const admitted = yield* steer.admit({
+              sessionID: session.id,
+              prompt: new Prompt({ text: "cancel before this follow-up drains" }),
+            })
+            yield* Deferred.succeed(gate, undefined)
+            yield* pollWithTimeout(
+              Effect.promise(async () => ((await Bun.file(marker).exists()) ? true : undefined)),
+              "timed out waiting for finalizing follow-up boundary",
+              "5 seconds",
+            )
+            expect(yield* runState.isBusy(session.id)).toBe(true)
+            expect((yield* status.get(session.id)).type).toBe("busy")
+            expect(yield* llm.calls).toBe(1)
+
+            yield* awaitWithTimeout(prompt.cancel(session.id), "timed out cancelling finalizing run", "5 seconds")
+            yield* awaitWithTimeout(Fiber.await(running), "timed out joining finalizing run", "5 seconds")
+            expect(yield* runState.isBusy(session.id)).toBe(false)
+            expect((yield* status.get(session.id)).type).toBe("idle")
+            return admitted
+          }),
+        () =>
+          Effect.sync(() => {
+            if (previousPoint === undefined) delete process.env.DEEPAGENT_CODE_TEST_ACTIVITY_CRASH_POINT
+            else process.env.DEEPAGENT_CODE_TEST_ACTIVITY_CRASH_POINT = previousPoint
+            if (previousRoot === undefined) delete process.env.DEEPAGENT_CODE_TEST_ROOT
+            else process.env.DEEPAGENT_CODE_TEST_ROOT = previousRoot
+            if (previousMarker === undefined) delete process.env.DEEPAGENT_CODE_TEST_ACTIVITY_CRASH_MARKER
+            else process.env.DEEPAGENT_CODE_TEST_ACTIVITY_CRASH_MARKER = previousMarker
+          }),
+      )
+
+      expect(yield* llm.calls).toBe(1)
+      expect(
+        yield* db
+          .select()
+          .from(SessionLegacyActivityTable)
+          .where(eq(SessionLegacyActivityTable.session_id, session.id))
+          .all()
+          .pipe(Effect.orDie),
+      ).toMatchObject([{ state: "interrupted", terminal_reason: "user_cancelled" }])
+      expect(
+        yield* db
+          .select()
+          .from(SessionLegacyActivityRunTable)
+          .where(eq(SessionLegacyActivityRunTable.session_id, session.id))
+          .all()
+          .pipe(Effect.orDie),
+      ).toMatchObject([{ state: "interrupted", terminal_reason: "user_cancelled" }])
+      expect(
+        yield* db
+          .select()
+          .from(SessionLegacyActivityTerminalTable)
+          .where(eq(SessionLegacyActivityTerminalTable.session_id, session.id))
+          .all()
+          .pipe(Effect.orDie),
+      ).toMatchObject([{ state: "interrupted", reason_code: "user_cancelled", source: "cancel" }])
+      expect(
+        yield* db
+          .select()
+          .from(SessionSteerTable)
+          .where(eq(SessionSteerTable.id, admitted.id))
+          .get()
+          .pipe(Effect.orDie),
+      ).toMatchObject({ consumed_seq: null, superseded_at: expect.any(Number) })
+    }),
+  20_000,
+)
+
 // Agent variant
 
 noLLMServer.instance(

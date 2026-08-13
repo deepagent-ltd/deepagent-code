@@ -694,6 +694,15 @@ export class UnavailableError extends Schema.TaggedErrorClass<UnavailableError>(
   reason: Schema.String,
 }) {}
 
+export class PlacementChangeUnsupportedError extends Schema.TaggedErrorClass<PlacementChangeUnsupportedError>()(
+  "SessionPlacementChangeUnsupportedError",
+  {
+    sessionID: SessionID,
+    operation: Schema.Literals(["workspace", "directory"]),
+    message: Schema.String,
+  },
+) {}
+
 export type NotFound = NotFoundError
 
 export interface Interface {
@@ -757,9 +766,15 @@ export interface Interface {
   readonly clearRevert: (sessionID: SessionID) => Effect.Effect<void>
   readonly setSummary: (input: { sessionID: SessionID; summary: Info["summary"] }) => Effect.Effect<void>
   readonly setShare: (input: { sessionID: SessionID; share: Info["share"] }) => Effect.Effect<void>
-  readonly setWorkspace: (input: { sessionID: SessionID; workspaceID: Info["workspaceID"] }) => Effect.Effect<void>
+  readonly setWorkspace: (input: {
+    sessionID: SessionID
+    workspaceID: Info["workspaceID"]
+  }) => Effect.Effect<void, PlacementChangeUnsupportedError>
   /** Relocates a durable Session after a managed worktree has replaced its original checkout. */
-  readonly setDirectory: (input: { sessionID: SessionID; directory: string }) => Effect.Effect<void>
+  readonly setDirectory: (input: {
+    sessionID: SessionID
+    directory: string
+  }) => Effect.Effect<void, PlacementChangeUnsupportedError>
   readonly diff: (sessionID: SessionID) => Effect.Effect<Snapshot.FileDiff[]>
   readonly messages: (input: { sessionID: SessionID; limit?: number }) => Effect.Effect<SessionV1.WithParts[], NotFound>
   readonly messagesPage: (input: {
@@ -3068,6 +3083,12 @@ export const layer: Layer.Layer<
     }) {
       const current = yield* get(input.sessionID).pipe(Effect.orDie)
       if (current.directory === input.directory) return
+      if (current.workspaceID)
+        return yield* new PlacementChangeUnsupportedError({
+          sessionID: input.sessionID,
+          operation: "directory",
+          message: "Workspace Session relocation requires durable transfer admission and a target receipt",
+        })
       yield* events.publish(SessionEvent.Moved, {
         sessionID: input.sessionID,
         location: Location.Ref.make({
@@ -3210,9 +3231,13 @@ export const layer: Layer.Layer<
       sessionID: SessionID
       workspaceID: Info["workspaceID"]
     }) {
-      yield* patch(input.sessionID, { workspaceID: input.workspaceID, time: { updated: Date.now() } }).pipe(
-        Effect.orDie,
-      )
+      const current = yield* get(input.sessionID).pipe(Effect.orDie)
+      if (current.workspaceID === input.workspaceID) return
+      return yield* new PlacementChangeUnsupportedError({
+        sessionID: input.sessionID,
+        operation: "workspace",
+        message: "Session workspace changes require durable transfer admission and a target receipt",
+      })
     })
 
     const diff = Effect.fn("Session.diff")(function* (sessionID: SessionID) {

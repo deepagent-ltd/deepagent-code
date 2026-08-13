@@ -1585,4 +1585,5 @@ export const dict = {
   "session.providerRecovery.unsupported": "该 continuation 需要维护恢复，当前不能在这里放弃。",
   "session.providerRecovery.workspaceUnsupported": "共享工作区需要协调恢复，当前应用实例不能直接处理。",
   "session.providerRecovery.baselineUnsupported": "源 World State baseline 缺失或无效；维护恢复验证完成前，发送将保持锁定。",
+  "session.providerRecovery.maintenanceUnsupported": "该恢复记录不完整或属于其他恢复权威；维护修复完成前，发送将保持锁定。",
 } satisfies Partial<Record<Keys, string>>

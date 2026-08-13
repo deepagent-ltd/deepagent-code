@@ -318,6 +318,46 @@ describe("Runner", () => {
     }),
   )
 
+  it.live(
+    "keeps finalizing busy until cancellation teardown exits",
+    Effect.gen(function* () {
+      const s = yield* Scope.Scope
+      const interrupted = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      const idle = yield* Deferred.make<void>()
+      const runner = Runner.make<string>(s, { onIdle: Deferred.succeed(idle, undefined).pipe(Effect.asVoid) })
+      const run = yield* runner
+        .ensureRunning(
+          Effect.never.pipe(
+            Effect.onInterrupt(() => Deferred.succeed(interrupted, undefined).pipe(Effect.andThen(Deferred.await(release)))),
+            Effect.as("done"),
+          ),
+        )
+        .pipe(Effect.forkChild)
+
+      yield* waitForState(runner, "Running")
+      yield* runner.markFinalizing
+      const cancel = yield* runner.cancel.pipe(Effect.forkChild)
+      yield* Deferred.await(interrupted).pipe(Effect.timeout("250 millis"))
+      expect(runner.state._tag).toBe("Finalizing")
+      expect(runner.busy).toBe(true)
+      expect(yield* Deferred.isDone(idle)).toBe(false)
+
+      const replacementWhileFinalizing = yield* runner.startRunning(Effect.succeed("replacement")).pipe(Effect.exit)
+      expect(Exit.isFailure(replacementWhileFinalizing)).toBe(true)
+      if (Exit.isFailure(replacementWhileFinalizing))
+        expect(Cause.squash(replacementWhileFinalizing.cause)).toBeInstanceOf(Runner.Busy)
+
+      yield* Deferred.succeed(release, undefined)
+      yield* Fiber.join(cancel).pipe(Effect.timeout("250 millis"))
+      yield* Fiber.await(run)
+      expect(yield* Deferred.isDone(idle)).toBe(true)
+      expect(runner.state._tag).toBe("Idle")
+      expect(runner.busy).toBe(false)
+      expect(yield* runner.startRunning(Effect.succeed("replacement"))).toBe("replacement")
+    }),
+  )
+
   // --- shell semantics ---
 
   it.live(

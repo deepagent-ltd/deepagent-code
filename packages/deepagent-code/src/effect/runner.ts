@@ -203,7 +203,6 @@ export const make = <A, E = never>(
       case "Idle":
         return [Effect.void, st] as const
       case "Running":
-      case "Finalizing":
         return [
           Effect.gen(function* () {
             yield* Fiber.interrupt(st.run.fiber)
@@ -211,6 +210,16 @@ export const make = <A, E = never>(
             yield* idleIfCurrent()
           }),
           { _tag: "Idle" } as const,
+        ] as const
+      case "Finalizing":
+        // Finalization owns durable terminal settlement. Keep this runner busy until the
+        // interrupted fiber's onExit has completed that teardown and published Idle.
+        return [
+          Effect.gen(function* () {
+            yield* Fiber.interrupt(st.run.fiber)
+            yield* Deferred.fail(st.run.done, new Cancelled()).pipe(Effect.asVoid)
+          }),
+          st,
         ] as const
       case "Shell":
         return [

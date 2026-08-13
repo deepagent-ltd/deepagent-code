@@ -83,17 +83,17 @@ export const layer = Layer.effect(
         const { Arborist } = yield* Effect.promise(() => import("@npmcli/arborist"))
         const add = input.add ?? []
         const npmOptions = yield* NpmConfig.load(input.dir)
-        const arborist = new Arborist({
-          ...npmOptions,
-          path: input.dir,
-          binLinks: true,
-          progress: false,
-          savePrefix: "",
-          ignoreScripts: true,
-        })
         return yield* Effect.tryPromise({
-          try: () =>
-            arborist.reify({
+          try: (signal) =>
+            new Arborist({
+              ...npmOptions,
+              path: input.dir,
+              binLinks: true,
+              progress: false,
+              savePrefix: "",
+              ignoreScripts: true,
+              signal,
+            }).reify({
               ...npmOptions,
               add,
               save: true,

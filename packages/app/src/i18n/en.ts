@@ -1648,4 +1648,6 @@ export const dict = {
     "This shared workspace requires coordinated recovery and cannot be resolved from this app instance.",
   "session.providerRecovery.baselineUnsupported":
     "The source World State baseline is missing or invalid. Sending remains locked until maintenance recovery verifies it.",
+  "session.providerRecovery.maintenanceUnsupported":
+    "This recovery record is incomplete or belongs to another recovery authority. Sending remains locked until maintenance repair completes.",
 }
