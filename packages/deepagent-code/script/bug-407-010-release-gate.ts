@@ -50,6 +50,9 @@ const stage = Effect.fn("Bug407010ReleaseGate.stage")(function* <A, E, R>(
 ) {
   const started = Bun.nanoseconds()
   const result = yield* effect
+  const { db } = yield* Database.Service
+  yield* db.run("PRAGMA shrink_memory").pipe(Effect.orDie)
+  yield* Effect.sync(() => Bun.gc(true))
   console.log(JSON.stringify({
     stage: name,
     elapsedMs: Math.round((Bun.nanoseconds() - started) / 1_000_000),
@@ -98,6 +101,10 @@ const program = Effect.gen(function* () {
       processed += result.processed
       if (!result.next) return { batches, processed }
       cursor = result.next
+      if (batches % 8 === 0) {
+        yield* db.run("PRAGMA shrink_memory").pipe(Effect.orDie)
+        yield* Effect.sync(() => Bun.gc(true))
+      }
     }
   }))
 
@@ -120,7 +127,7 @@ const program = Effect.gen(function* () {
     .where(eq(EventArtifactTable.kind, "legacy_message_diff"))
     .all()
     .pipe(Effect.orDie)
-  yield* stage("legacy-session-diffs", Effect.gen(function* () {
+  const diffMigration = yield* stage("legacy-session-diffs", Effect.gen(function* () {
     let processed = 0
     let committed = 0
     let failed = 0
@@ -131,10 +138,14 @@ const program = Effect.gen(function* () {
         committed += result.committed
         failed += result.failed
         if (result.processed === 0) break
+        yield* db.run("PRAGMA shrink_memory").pipe(Effect.orDie)
+        yield* Effect.sync(() => Bun.gc(true))
       }
     }
     return { sessions: artifactSessions.length, processed, committed, failed }
   }))
+  if (diffMigration.failed > 0)
+    return yield* Effect.die(new Error(`Legacy Session diff migration failed: ${JSON.stringify(diffMigration)}`))
 
   yield* stage("checkpoint-and-compact", Effect.forEach(sessions, (sessionID) => Effect.gen(function* () {
     const session = yield* db
@@ -184,6 +195,8 @@ const program = Effect.gen(function* () {
       deleted += compacted.deleted
       batches += 1
     }
+    yield* db.run("PRAGMA shrink_memory").pipe(Effect.orDie)
+    yield* Effect.sync(() => Bun.gc(true))
     return { sessionID, snapshotID: snapshot.snapshotID, throughSeq: snapshot.throughSeq, deleted, batches }
   }), { concurrency: 1 }))
 
@@ -216,6 +229,12 @@ const program = Effect.gen(function* () {
   const activeSnapshots = yield* db.select({ count: sql<number>`count(*)` }).from(EventSnapshotTable).get().pipe(Effect.orDie)
   const compactions = yield* db.select({ count: sql<number>`count(*)` }).from(EventCompactionReceiptTable).get().pipe(Effect.orDie)
   const diffReceipts = yield* db.select({ count: sql<number>`count(*)` }).from(SessionDiffMigrationReceiptTable).get().pipe(Effect.orDie)
+  const failedDiffReceipts = yield* db
+    .select({ count: sql<number>`count(*)` })
+    .from(SessionDiffMigrationReceiptTable)
+    .where(eq(SessionDiffMigrationReceiptTable.state, "migration_validation_failed"))
+    .get()
+    .pipe(Effect.orDie)
   const fileArtifacts = yield* db.select({ count: sql<number>`count(*)` }).from(FilePartArtifactBindingTable).get().pipe(Effect.orDie)
   const result = {
     ...after[0],
@@ -223,13 +242,19 @@ const program = Effect.gen(function* () {
     activeSnapshots: activeSnapshots?.count ?? 0,
     compactionReceipts: compactions?.count ?? 0,
     diffMigrationReceipts: diffReceipts?.count ?? 0,
+    failedDiffMigrationReceipts: failedDiffReceipts?.count ?? 0,
     fileArtifactBindings: fileArtifacts?.count ?? 0,
     backfill,
     quickCheck: quickCheck.map((row) => row.quick_check),
     foreignKeyViolations: foreignKeys.length,
     rssBytes: process.memoryUsage.rss(),
   }
-  if (backfill?.state !== "complete" || quickCheck.some((row) => row.quick_check !== "ok") || foreignKeys.length > 0)
+  if (
+    backfill?.state !== "complete" ||
+    quickCheck.some((row) => row.quick_check !== "ok") ||
+    foreignKeys.length > 0 ||
+    result.failedDiffMigrationReceipts > 0
+  )
     return yield* Effect.die(new Error(`Release gate failed: ${JSON.stringify(result)}`))
   console.log(JSON.stringify({ stage: "after", ...result }))
 })

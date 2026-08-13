@@ -105,6 +105,14 @@ export const migrate = Effect.fn("SessionDiffArtifact.migrate")(function* (input
         sql`json_extract(${MessageTable.data}, '$.role') = 'user'`,
         sql`json_type(${MessageTable.data}, '$.summary.diffs') = 'array'`,
         sql`${SessionDiffMigrationReceiptTable.message_id} is null`,
+        sql`NOT EXISTS (
+          SELECT 1
+          FROM event_artifact newer
+          WHERE newer.aggregate_id = ${EventArtifactTable.aggregate_id}
+            AND newer.kind = 'legacy_message_diff'
+            AND newer.seq > ${EventArtifactTable.seq}
+            AND json_extract(newer.canonical_data, '$.info.id') = ${MessageTable.id}
+        )`,
       ),
     )
     .orderBy(asc(EventArtifactTable.event_id))
