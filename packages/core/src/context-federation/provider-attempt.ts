@@ -1,7 +1,7 @@
 export * as SessionProviderAttempt from "./provider-attempt"
 
 import { randomBytes } from "node:crypto"
-import { and, desc, eq, inArray, max } from "drizzle-orm"
+import { and, desc, eq, exists, gt, inArray, isNull, max, sql } from "drizzle-orm"
 import { Context, Effect, Layer, Schema } from "effect"
 import { Database } from "../database/database"
 import { SessionSchema } from "../session/schema"
@@ -11,6 +11,7 @@ import {
   SessionActivityTable,
   SessionProviderAttemptResolutionTable,
   SessionProviderAttemptTable,
+  SessionProviderOwnerLeaseTable,
 } from "./session-sql"
 
 export type State = typeof SessionProviderAttemptTable.$inferSelect.state
@@ -22,7 +23,10 @@ export type Attempt = {
   readonly selectionId: string
   readonly projectionHash: string
   readonly requestHash: string
+  readonly preparedTurnHash?: string
+  readonly wireRequestHash?: string
   readonly providerId: string
+  readonly ownerToken?: string
   readonly parentAttemptId?: string
   readonly idempotencyKey?: string
   readonly state: State
@@ -36,10 +40,9 @@ export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()(
   "SessionProviderAttempt.NotFoundError",
   {},
 ) {}
-export class ConflictError extends Schema.TaggedErrorClass<ConflictError>()(
-  "SessionProviderAttempt.ConflictError",
-  { reason: Schema.String.pipe(Schema.optional) },
-) {}
+export class ConflictError extends Schema.TaggedErrorClass<ConflictError>()("SessionProviderAttempt.ConflictError", {
+  reason: Schema.String.pipe(Schema.optional),
+}) {}
 export class InvalidStateError extends Schema.TaggedErrorClass<InvalidStateError>()(
   "SessionProviderAttempt.InvalidStateError",
   { state: Schema.String },
@@ -84,6 +87,7 @@ export type PrepareInput = {
   readonly projectionHash: string
   readonly requestHash: string
   readonly providerId: string
+  readonly ownerToken: string
   readonly parentAttemptId?: string
   readonly idempotencyKey?: string
   readonly authorizationEpoch: number
@@ -95,6 +99,7 @@ export type PrepareInput = {
 
 export type ResolutionInput = {
   readonly attemptId: string
+  readonly recoveryOwnerToken: string
   readonly actor: {
     readonly type: "user" | "administrator" | "system"
     readonly id: string
@@ -126,22 +131,58 @@ export type ResolutionInput = {
   }
   readonly replay?: Omit<
     PrepareInput,
-    "activityId" | "selectionId" | "projectionHash" | "requestHash" | "providerId" | "parentAttemptId"
+    "activityId" | "selectionId" | "projectionHash" | "requestHash" | "providerId" | "ownerToken" | "parentAttemptId"
   >
+  readonly now?: number
+}
+
+export type ExactRecoveryInput = {
+  readonly sessionId: SessionSchema.ID
+  readonly staleOwnerToken: string | null
+  readonly recoveryOwnerToken: string
+  readonly undispatchedAttemptIds: readonly string[]
+  readonly startedAttemptIds: readonly string[]
   readonly now?: number
 }
 
 export interface Interface {
   readonly prepare: (input: PrepareInput) => Effect.Effect<Attempt, Error>
-  readonly markDispatching: (attemptId: string, now?: number) => Effect.Effect<Attempt, Error>
-  readonly markStreaming: (attemptId: string, now?: number) => Effect.Effect<Attempt, Error>
+  readonly sealPrepared: (input: {
+    readonly attemptId: string
+    readonly expectedOwnerToken: string
+    readonly preparedTurnHash: string
+    readonly wireRequestHash: string
+    readonly now?: number
+  }) => Effect.Effect<Attempt, Error>
+  readonly abandonPrepared: (input: {
+    readonly attemptId: string
+    readonly expectedOwnerToken: string
+    readonly errorCode: string
+    readonly now?: number
+  }) => Effect.Effect<Attempt, Error>
+  readonly markDispatching: (input: {
+    readonly attemptId: string
+    readonly expectedOwnerToken: string
+    readonly now?: number
+  }) => Effect.Effect<Attempt, Error>
+  readonly markStreaming: (input: {
+    readonly attemptId: string
+    readonly expectedOwnerToken: string
+    readonly now?: number
+  }) => Effect.Effect<Attempt, Error>
   readonly settle: (input: {
     readonly attemptId: string
+    readonly expectedOwnerToken: string
     readonly outcome: "settled" | "failed"
     readonly errorCode?: string
     readonly now?: number
   }) => Effect.Effect<Attempt, Error>
-  readonly recoverIndeterminate: (sessionId: SessionSchema.ID, now?: number) => Effect.Effect<number>
+  readonly recoverIndeterminate: (input: {
+    readonly sessionId: SessionSchema.ID
+    readonly staleOwnerToken: string | null
+    readonly recoveryOwnerToken: string
+    readonly now?: number
+  }) => Effect.Effect<number, Error>
   readonly resolve: (
     input: ResolutionInput,
   ) => Effect.Effect<{ readonly attempt: Attempt; readonly replay?: Attempt }, Error>
@@ -166,61 +207,67 @@ export const layer = Layer.effect(
     })
 
     const prepare = Effect.fn("SessionProviderAttempt.prepare")(function* (input: PrepareInput) {
-      return yield* db.transaction((tx) => prepareInTransaction(tx, input)).pipe(preserveErrors)
-    })
-
-    const transition = Effect.fn("SessionProviderAttempt.transition")(function* (input: {
-      readonly attemptId: string
-      readonly from: readonly State[]
-      readonly to: State
-      readonly now: number
-      readonly firstEvent?: boolean
-      readonly errorCode?: string
-    }) {
       return yield* db
-        .transaction((tx) =>
-          Effect.gen(function* () {
-            const row = yield* tx
-              .select()
-              .from(SessionProviderAttemptTable)
-              .where(eq(SessionProviderAttemptTable.attempt_id, input.attemptId))
-              .get()
-            if (!row) return yield* new NotFoundError()
-            if (!input.from.includes(row.state)) return yield* new InvalidStateError({ state: row.state })
-            const terminal = isTerminal(input.to)
-            yield* tx
-              .update(SessionProviderAttemptTable)
-              .set({
-                state: input.to,
-                ...(input.firstEvent && row.first_event_at === null ? { first_event_at: input.now } : {}),
-                ...(terminal ? { settled_at: input.now } : {}),
-                ...(input.errorCode ? { error_code: input.errorCode } : {}),
-              })
-              .where(
-                and(
-                  eq(SessionProviderAttemptTable.attempt_id, input.attemptId),
-                  eq(SessionProviderAttemptTable.state, row.state),
-                ),
-              )
-              .run()
-            return attempt({
-              ...row,
-              state: input.to,
-              ...(input.firstEvent && row.first_event_at === null ? { first_event_at: input.now } : {}),
-              ...(terminal ? { settled_at: input.now } : {}),
-              ...(input.errorCode ? { error_code: input.errorCode } : {}),
-            })
-          }),
-        )
+        .transaction((tx) => prepareInTransaction(tx, input), { behavior: "immediate" })
         .pipe(preserveErrors)
     })
 
-    const markDispatching = (attemptId: string, now = Date.now()) =>
-      transition({ attemptId, from: ["prepared"], to: "dispatching", now })
-    const markStreaming = (attemptId: string, now = Date.now()) =>
-      transition({ attemptId, from: ["dispatching"], to: "streaming", now, firstEvent: true })
+    const transition = Effect.fn("SessionProviderAttempt.transition")(function* (input: TransitionInput) {
+      return yield* db
+        .transaction((tx) => transitionInTransaction(tx, input), { behavior: "immediate" })
+        .pipe(preserveErrors)
+    })
+
+    const sealPrepared = (input: {
+      readonly attemptId: string
+      readonly expectedOwnerToken: string
+      readonly preparedTurnHash: string
+      readonly wireRequestHash: string
+      readonly now?: number
+    }) =>
+      transition({
+        ...input,
+        from: ["prepared"],
+        to: "prepared",
+        now: input.now ?? Date.now(),
+      })
+
+    const markDispatching = (input: {
+      readonly attemptId: string
+      readonly expectedOwnerToken: string
+      readonly now?: number
+    }) => transition({ ...input, from: ["prepared"], to: "dispatching", now: input.now ?? Date.now() })
+    const abandonPrepared = (input: {
+      readonly attemptId: string
+      readonly expectedOwnerToken: string
+      readonly errorCode: string
+      readonly now?: number
+    }) => {
+      if (!input.errorCode.trim()) return Effect.fail(new ConflictError({ reason: "error_code_required" }))
+      return transition({
+        attemptId: input.attemptId,
+        expectedOwnerToken: input.expectedOwnerToken,
+        from: ["prepared"],
+        to: "failed",
+        now: input.now ?? Date.now(),
+        errorCode: input.errorCode,
+      })
+    }
+    const markStreaming = (input: {
+      readonly attemptId: string
+      readonly expectedOwnerToken: string
+      readonly now?: number
+    }) =>
+      transition({
+        ...input,
+        from: ["dispatching"],
+        to: "streaming",
+        now: input.now ?? Date.now(),
+        firstEvent: true,
+      })
     const settle = (input: {
       readonly attemptId: string
+      readonly expectedOwnerToken: string
       readonly outcome: "settled" | "failed"
       readonly errorCode?: string
       readonly now?: number
@@ -228,6 +275,7 @@ export const layer = Layer.effect(
       if (input.outcome === "settled" && input.errorCode) return Effect.fail(new ConflictError())
       return transition({
         attemptId: input.attemptId,
+        expectedOwnerToken: input.expectedOwnerToken,
         from: ["dispatching", "streaming"],
         to: input.outcome,
         now: input.now ?? Date.now(),
@@ -235,23 +283,55 @@ export const layer = Layer.effect(
       })
     }
 
-    const recoverIndeterminate = Effect.fn("SessionProviderAttempt.recoverIndeterminate")(function* (
-      sessionId: SessionSchema.ID,
-      _now = Date.now(),
-    ) {
-      const rows = yield* db
-        .update(SessionProviderAttemptTable)
-        .set({ state: "indeterminate_after_crash", error_code: "process_recovery" })
-        .where(
-          and(
-            eq(SessionProviderAttemptTable.session_id, sessionId),
-            inArray(SessionProviderAttemptTable.state, ["dispatching", "streaming"]),
-          ),
+    const recoverIndeterminate = Effect.fn("SessionProviderAttempt.recoverIndeterminate")(function* (input: {
+      readonly sessionId: SessionSchema.ID
+      readonly staleOwnerToken: string | null
+      readonly recoveryOwnerToken: string
+      readonly now?: number
+    }) {
+      return yield* db
+        .transaction((tx) =>
+          Effect.gen(function* () {
+            yield* requireLiveOwner(tx, input.recoveryOwnerToken)
+            yield* requireStaleOwner(tx, input.staleOwnerToken)
+            const prepared = yield* tx
+              .update(SessionProviderAttemptTable)
+              .set({
+                state: "failed",
+                settled_at: input.now ?? Date.now(),
+                error_code: "owner_lease_lost_before_dispatch",
+              })
+              .where(
+                and(
+                  eq(SessionProviderAttemptTable.session_id, input.sessionId),
+                  input.staleOwnerToken === null
+                    ? isNull(SessionProviderAttemptTable.owner_token)
+                    : eq(SessionProviderAttemptTable.owner_token, input.staleOwnerToken),
+                  eq(SessionProviderAttemptTable.state, "prepared"),
+                  liveOwnerExists(tx, input.recoveryOwnerToken),
+                ),
+              )
+              .returning({ attempt_id: SessionProviderAttemptTable.attempt_id })
+              .all()
+            const started = yield* tx
+              .update(SessionProviderAttemptTable)
+              .set({ state: "indeterminate_after_crash", error_code: "process_recovery" })
+              .where(
+                and(
+                  eq(SessionProviderAttemptTable.session_id, input.sessionId),
+                  input.staleOwnerToken === null
+                    ? isNull(SessionProviderAttemptTable.owner_token)
+                    : eq(SessionProviderAttemptTable.owner_token, input.staleOwnerToken),
+                  inArray(SessionProviderAttemptTable.state, ["dispatching", "streaming"]),
+                  liveOwnerExists(tx, input.recoveryOwnerToken),
+                ),
+              )
+              .returning({ attempt_id: SessionProviderAttemptTable.attempt_id })
+              .all()
+            return prepared.length + started.length
+          }),
         )
-        .returning({ attempt_id: SessionProviderAttemptTable.attempt_id })
-        .all()
-        .pipe(Effect.orDie)
-      return rows.length
+        .pipe(preserveErrors)
     })
 
     const resolve = Effect.fn("SessionProviderAttempt.resolve")(function* (input: ResolutionInput) {
@@ -267,6 +347,8 @@ export const layer = Layer.effect(
               .get()
             if (!row) return yield* new NotFoundError()
             if (row.state !== "indeterminate_after_crash") return yield* new InvalidStateError({ state: row.state })
+            yield* requireLiveOwner(tx, input.recoveryOwnerToken)
+            yield* requireStaleOwner(tx, row.owner_token)
             if (input.decision === "settled" && !validProviderEvidence(input.providerEvidence, row)) {
               return yield* new ResolutionEvidenceError()
             }
@@ -308,16 +390,19 @@ export const layer = Layer.effect(
               .run()
             const nextState = `resolved_${input.decision}` as const
             const settledAt = input.now ?? Date.now()
-            yield* tx
+            const resolved = yield* tx
               .update(SessionProviderAttemptTable)
               .set({ state: nextState, settled_at: settledAt })
               .where(
                 and(
                   eq(SessionProviderAttemptTable.attempt_id, row.attempt_id),
                   eq(SessionProviderAttemptTable.state, "indeterminate_after_crash"),
+                  liveOwnerExists(tx, input.recoveryOwnerToken),
                 ),
               )
-              .run()
+              .returning({ attemptId: SessionProviderAttemptTable.attempt_id })
+              .get()
+            if (!resolved) return yield* new ConflictError({ reason: "provider_resolution_fence_lost" })
             if (input.decision !== "replayed") {
               const activityState = input.decision === "abandoned" ? "interrupted" : "settled"
               const activity = yield* tx
@@ -338,6 +423,7 @@ export const layer = Layer.effect(
                   projectionHash: row.projection_hash,
                   requestHash: row.request_hash,
                   providerId: row.provider_id,
+                  ownerToken: input.recoveryOwnerToken,
                   parentAttemptId: row.attempt_id,
                   idempotencyKey: row.idempotency_key ?? undefined,
                   now: input.now,
@@ -352,14 +438,24 @@ export const layer = Layer.effect(
         .pipe(preserveErrors)
     })
 
-    return Service.of({ prepare, markDispatching, markStreaming, settle, recoverIndeterminate, resolve, get })
+    return Service.of({
+      prepare,
+      sealPrepared,
+      abandonPrepared,
+      markDispatching,
+      markStreaming,
+      settle,
+      recoverIndeterminate,
+      resolve,
+      get,
+    })
   }),
 )
 
-function prepareInTransaction(
+export function prepareInTransaction(
   tx: Parameters<Parameters<Database.Interface["db"]["transaction"]>[0]>[0],
   input: PrepareInput,
-) {
+): Effect.Effect<Attempt, Error> {
   return Effect.gen(function* () {
     const selection = yield* tx
       .select()
@@ -385,7 +481,7 @@ function prepareInTransaction(
       )
       .orderBy(desc(SessionContextValidationTable.validated_at))
       .get()
-    const now = input.now ?? Date.now()
+    yield* requireLiveOwner(tx, input.ownerToken)
     if (
       !validation ||
       validation.outcome !== "valid" ||
@@ -393,7 +489,7 @@ function prepareInTransaction(
       validation.egress_epoch !== input.egressEpoch ||
       validation.observed_location_mutation_epoch !== input.observedLocationMutationEpoch ||
       validation.selected_source_fingerprint !== input.selectedSourceFingerprint ||
-      validation.valid_until <= now
+      validation.valid_until <= (input.now ?? Date.now())
     ) {
       return yield* new ValidationRequiredError()
     }
@@ -415,6 +511,7 @@ function prepareInTransaction(
         existing.projection_hash !== input.projectionHash ||
         existing.request_hash !== input.requestHash ||
         existing.provider_id !== input.providerId ||
+        existing.owner_token !== input.ownerToken ||
         (existing.parent_attempt_id ?? undefined) !== input.parentAttemptId ||
         (existing.idempotency_key ?? undefined) !== input.idempotencyKey
       ) {
@@ -461,21 +558,160 @@ function prepareInTransaction(
       projection_hash: input.projectionHash,
       request_hash: input.requestHash,
       provider_id: input.providerId,
+      owner_token: input.ownerToken,
       parent_attempt_id: input.parentAttemptId,
       idempotency_key: input.idempotencyKey,
       state: "prepared",
-      created_at: now,
+      created_at: input.now ?? Date.now(),
     }
     yield* tx.insert(SessionProviderAttemptTable).values(row).run()
     return attempt({
       ...row,
       parent_attempt_id: row.parent_attempt_id ?? null,
       idempotency_key: row.idempotency_key ?? null,
+      owner_token: row.owner_token ?? null,
+      prepared_turn_hash: null,
+      wire_request_hash: null,
       first_event_at: null,
       settled_at: null,
       error_code: null,
     })
-  })
+  }).pipe(preserveErrors)
+}
+
+export type TransitionInput = {
+  readonly attemptId: string
+  readonly expectedOwnerToken: string
+  readonly from: readonly State[]
+  readonly to: State
+  readonly now: number
+  readonly firstEvent?: boolean
+  readonly errorCode?: string
+  readonly preparedTurnHash?: string
+  readonly wireRequestHash?: string
+}
+
+export function transitionInTransaction(
+  tx: Parameters<Parameters<Database.Interface["db"]["transaction"]>[0]>[0],
+  input: TransitionInput,
+): Effect.Effect<Attempt, Error> {
+  return Effect.gen(function* () {
+    const row = yield* tx
+      .select()
+      .from(SessionProviderAttemptTable)
+      .where(eq(SessionProviderAttemptTable.attempt_id, input.attemptId))
+      .get()
+    if (!row) return yield* new NotFoundError()
+    if (row.owner_token !== input.expectedOwnerToken)
+      return yield* new ConflictError({ reason: "provider_attempt_owner_mismatch" })
+    yield* requireLiveOwner(tx, input.expectedOwnerToken)
+    if (!input.from.includes(row.state)) return yield* new InvalidStateError({ state: row.state })
+    if (input.to === "dispatching" && (!row.prepared_turn_hash || !row.wire_request_hash))
+      return yield* new ConflictError({ reason: "provider_attempt_wire_identity_not_sealed" })
+    const terminal = isTerminal(input.to)
+    if ((input.preparedTurnHash === undefined) !== (input.wireRequestHash === undefined))
+      return yield* new ConflictError({ reason: "provider_attempt_wire_identity_incomplete" })
+    if (
+      input.preparedTurnHash !== undefined &&
+      (!HashPattern.test(input.preparedTurnHash) || !HashPattern.test(input.wireRequestHash!))
+    )
+      return yield* new ConflictError({ reason: "provider_attempt_wire_identity_invalid" })
+    if (
+      input.preparedTurnHash !== undefined &&
+      ((row.prepared_turn_hash !== null && row.prepared_turn_hash !== input.preparedTurnHash) ||
+        (row.wire_request_hash !== null && row.wire_request_hash !== input.wireRequestHash))
+    )
+      return yield* new ConflictError({ reason: "provider_attempt_wire_identity_mismatch" })
+    const updated = yield* tx
+      .update(SessionProviderAttemptTable)
+      .set({
+        state: input.to,
+        ...(input.firstEvent && row.first_event_at === null ? { first_event_at: input.now } : {}),
+        ...(terminal ? { settled_at: input.now } : {}),
+        ...(input.errorCode ? { error_code: input.errorCode } : {}),
+        ...(input.preparedTurnHash !== undefined
+          ? { prepared_turn_hash: input.preparedTurnHash, wire_request_hash: input.wireRequestHash }
+          : {}),
+      })
+      .where(
+        and(
+          eq(SessionProviderAttemptTable.attempt_id, input.attemptId),
+          eq(SessionProviderAttemptTable.owner_token, input.expectedOwnerToken),
+          eq(SessionProviderAttemptTable.state, row.state),
+          liveOwnerExists(tx, input.expectedOwnerToken),
+        ),
+      )
+      .returning({ attemptId: SessionProviderAttemptTable.attempt_id })
+      .get()
+    if (!updated) return yield* new ConflictError({ reason: "attempt_transition_cas_lost" })
+    return attempt({
+      ...row,
+      state: input.to,
+      ...(input.firstEvent && row.first_event_at === null ? { first_event_at: input.now } : {}),
+      ...(terminal ? { settled_at: input.now } : {}),
+      ...(input.errorCode ? { error_code: input.errorCode } : {}),
+      ...(input.preparedTurnHash !== undefined
+        ? { prepared_turn_hash: input.preparedTurnHash, wire_request_hash: input.wireRequestHash }
+        : {}),
+    })
+  }).pipe(preserveErrors)
+}
+
+export function recoverExactInTransaction(
+  tx: Parameters<Parameters<Database.Interface["db"]["transaction"]>[0]>[0],
+  input: ExactRecoveryInput,
+): Effect.Effect<number, Error> {
+  return Effect.gen(function* () {
+    const attemptIds = [...input.undispatchedAttemptIds, ...input.startedAttemptIds]
+    if (new Set(attemptIds).size !== attemptIds.length || attemptIds.some((attemptId) => !attemptId.trim())) {
+      return yield* new ConflictError({ reason: "provider_recovery_attempt_ids_invalid" })
+    }
+    yield* requireLiveOwner(tx, input.recoveryOwnerToken)
+    yield* requireStaleOwner(tx, input.staleOwnerToken)
+    const owner = input.staleOwnerToken === null
+      ? isNull(SessionProviderAttemptTable.owner_token)
+      : eq(SessionProviderAttemptTable.owner_token, input.staleOwnerToken)
+    const undispatched = input.undispatchedAttemptIds.length
+      ? yield* tx
+          .update(SessionProviderAttemptTable)
+          .set({
+            state: "failed",
+            settled_at: input.now ?? Date.now(),
+            error_code: "owner_lease_lost_before_dispatch",
+          })
+          .where(
+            and(
+              eq(SessionProviderAttemptTable.session_id, input.sessionId),
+              owner,
+              eq(SessionProviderAttemptTable.state, "prepared"),
+              inArray(SessionProviderAttemptTable.attempt_id, input.undispatchedAttemptIds),
+              liveOwnerExists(tx, input.recoveryOwnerToken),
+            ),
+          )
+          .returning({ attemptId: SessionProviderAttemptTable.attempt_id })
+          .all()
+      : []
+    const started = input.startedAttemptIds.length
+      ? yield* tx
+          .update(SessionProviderAttemptTable)
+          .set({ state: "indeterminate_after_crash", error_code: "process_recovery" })
+          .where(
+            and(
+              eq(SessionProviderAttemptTable.session_id, input.sessionId),
+              owner,
+              inArray(SessionProviderAttemptTable.state, ["prepared", "dispatching", "streaming"]),
+              inArray(SessionProviderAttemptTable.attempt_id, input.startedAttemptIds),
+              liveOwnerExists(tx, input.recoveryOwnerToken),
+            ),
+          )
+          .returning({ attemptId: SessionProviderAttemptTable.attempt_id })
+          .all()
+      : []
+    if (undispatched.length + started.length !== attemptIds.length) {
+      return yield* new ConflictError({ reason: "provider_recovery_exact_attempt_mismatch" })
+    }
+    return attemptIds.length
+  }).pipe(preserveErrors)
 }
 
 function attempt(row: typeof SessionProviderAttemptTable.$inferSelect): Attempt {
@@ -487,7 +723,10 @@ function attempt(row: typeof SessionProviderAttemptTable.$inferSelect): Attempt 
     selectionId: row.selection_id,
     projectionHash: row.projection_hash,
     requestHash: row.request_hash,
+    ...(row.prepared_turn_hash ? { preparedTurnHash: row.prepared_turn_hash } : {}),
+    ...(row.wire_request_hash ? { wireRequestHash: row.wire_request_hash } : {}),
     providerId: row.provider_id,
+    ...(row.owner_token ? { ownerToken: row.owner_token } : {}),
     ...(row.parent_attempt_id ? { parentAttemptId: row.parent_attempt_id } : {}),
     ...(row.idempotency_key ? { idempotencyKey: row.idempotency_key } : {}),
     state: row.state,
@@ -502,13 +741,15 @@ function isTerminal(state: State) {
   return ["settled", "failed", "resolved_abandoned", "resolved_settled", "resolved_replayed"].includes(state)
 }
 
+const HashPattern = /^[0-9a-f]{64}$/
+
 function validProviderEvidence(
   evidence: ResolutionInput["providerEvidence"],
   attempt: typeof SessionProviderAttemptTable.$inferSelect,
 ) {
   if (
     !evidence ||
-    evidence.requestHash !== attempt.request_hash ||
+    evidence.requestHash !== (attempt.wire_request_hash ?? attempt.request_hash) ||
     !Number.isSafeInteger(evidence.observedAt) ||
     evidence.observedAt < 0
   ) {
@@ -518,6 +759,69 @@ function validProviderEvidence(
   return evidence.providerId === attempt.provider_id && Boolean(evidence.reference.trim())
 }
 
+function liveOwnerExists(
+  tx: Parameters<Parameters<Database.Interface["db"]["transaction"]>[0]>[0],
+  ownerToken: string,
+) {
+  return exists(
+    tx
+      .select({ ownerToken: SessionProviderOwnerLeaseTable.owner_token })
+      .from(SessionProviderOwnerLeaseTable)
+      .where(
+        and(
+          eq(SessionProviderOwnerLeaseTable.owner_token, ownerToken),
+          isNull(SessionProviderOwnerLeaseTable.released_at),
+          gt(SessionProviderOwnerLeaseTable.lease_expires_at, databaseNow),
+        ),
+      ),
+  )
+}
+
+function requireLiveOwner(
+  tx: Parameters<Parameters<Database.Interface["db"]["transaction"]>[0]>[0],
+  ownerToken: string,
+) {
+  return Effect.gen(function* () {
+    if (!ownerToken.trim()) return yield* new ConflictError({ reason: "owner_token_required" })
+    const owner = yield* tx
+      .select({ ownerToken: SessionProviderOwnerLeaseTable.owner_token })
+      .from(SessionProviderOwnerLeaseTable)
+      .where(
+        and(
+          eq(SessionProviderOwnerLeaseTable.owner_token, ownerToken),
+          isNull(SessionProviderOwnerLeaseTable.released_at),
+          gt(SessionProviderOwnerLeaseTable.lease_expires_at, databaseNow),
+        ),
+      )
+      .get()
+    if (!owner) return yield* new ConflictError({ reason: "provider_owner_lease_not_live" })
+  })
+}
+
+function requireStaleOwner(
+  tx: Parameters<Parameters<Database.Interface["db"]["transaction"]>[0]>[0],
+  ownerToken: string | null,
+) {
+  if (ownerToken === null) return Effect.void
+  return Effect.gen(function* () {
+    const live = yield* tx
+      .select({ ownerToken: SessionProviderOwnerLeaseTable.owner_token })
+      .from(SessionProviderOwnerLeaseTable)
+      .where(
+        and(
+          eq(SessionProviderOwnerLeaseTable.owner_token, ownerToken),
+          isNull(SessionProviderOwnerLeaseTable.released_at),
+          gt(SessionProviderOwnerLeaseTable.lease_expires_at, databaseNow),
+        ),
+      )
+      .get()
+    if (!live) return
+    return yield* new ConflictError({ reason: "provider_attempt_owner_still_live" })
+  })
+}
+
+const databaseNow = sql`CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)`
+
 function validIdempotencyProof(
   proof: ResolutionInput["idempotencyProof"],
   attempt: typeof SessionProviderAttemptTable.$inferSelect,
@@ -526,7 +830,7 @@ function validIdempotencyProof(
     proof &&
       attempt.idempotency_key &&
       proof.providerId === attempt.provider_id &&
-      proof.requestHash === attempt.request_hash &&
+      proof.requestHash === (attempt.wire_request_hash ?? attempt.request_hash) &&
       proof.idempotencyKey === attempt.idempotency_key &&
       proof.contractVersion.trim(),
   )

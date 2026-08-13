@@ -13,6 +13,7 @@ import { AgentGateway } from "../src/agent-gateway"
 import * as OpenAIChat from "@deepagent-code/llm/protocols/openai-chat"
 import { Database } from "@deepagent-code/core/database/database"
 import { EventV2 } from "@deepagent-code/core/event"
+import { Hash } from "@deepagent-code/core/util/hash"
 import { PermissionV2 } from "@deepagent-code/core/permission"
 import { EventTable } from "@deepagent-code/core/event/sql"
 import { Project } from "@deepagent-code/core/project"
@@ -32,6 +33,12 @@ import { SessionRunCoordinator } from "@deepagent-code/core/session/run-coordina
 import { SessionRunner } from "@deepagent-code/core/session/runner"
 import * as SessionRunnerLLM from "@deepagent-code/core/session/runner/llm"
 import { SessionRunnerModel } from "@deepagent-code/core/session/runner/model"
+import { V2ProviderTurn } from "@deepagent-code/core/session/runner/v2-provider-turn"
+import {
+  V2ProviderParityReceiptTable,
+  V2ProviderTurnReceiptTable,
+} from "@deepagent-code/core/session/runner/v2-provider-turn.sql"
+import { SessionProviderOwner } from "@deepagent-code/core/context-federation/provider-owner"
 import { ToolRegistry } from "@deepagent-code/core/tool/registry"
 import { ToolOutputStore } from "@deepagent-code/core/tool-output-store"
 import { ApplicationTools } from "@deepagent-code/core/tool/application-tools"
@@ -53,10 +60,14 @@ import { ModelV2 } from "@deepagent-code/core/model"
 import { Location } from "@deepagent-code/core/location"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { Cause, DateTime, Deferred, Effect, Exit, Fiber, Layer, Schema, Stream } from "effect"
-import { asc, eq } from "drizzle-orm"
+import { asc, eq, sql } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
 
 const database = Database.layerFromPath(":memory:")
+const providerTurns = V2ProviderTurn.layer.pipe(
+  Layer.provide(SessionProviderOwner.layer.pipe(Layer.provide(database))),
+  Layer.provide(database),
+)
 const events = EventV2.layer.pipe(Layer.provide(database))
 const questions = QuestionV2.layer.pipe(Layer.provide(events))
 const projector = SessionProjector.layer.pipe(Layer.provide(events), Layer.provide(database))
@@ -234,6 +245,7 @@ const config = Layer.succeed(
   }),
 )
 const runner = SessionRunnerLLM.layer.pipe(
+  Layer.provide(providerTurns),
   Layer.provide(database),
   Layer.provide(store),
   Layer.provide(events),
@@ -271,6 +283,7 @@ const sessions = SessionV2.layer.pipe(
 const it = testEffect(
   Layer.mergeAll(
     database,
+    providerTurns,
     events,
     questions,
     projector,
@@ -636,6 +649,132 @@ describe("SessionRunnerLLM", () => {
       expect(yield* session.messages({ sessionID })).toMatchObject([
         { id: message.id, type: "user", text: "Run automatically" },
       ])
+    }),
+  )
+
+  it.effect("records parity from the production V2 runner after the exact wire seal", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const campaign = {
+        id: "runner-production-parity",
+        case: "admission_activity" as const,
+        evidence: ["shadow_snapshot", "recorded_provider", "real_session_replay"] as const,
+      }
+      process.env.DEEPAGENT_CODE_V2_PARITY_CAMPAIGN = campaign.id
+      process.env.DEEPAGENT_CODE_V2_PARITY_CASE = campaign.case
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          delete process.env.DEEPAGENT_CODE_V2_PARITY_CAMPAIGN
+          delete process.env.DEEPAGENT_CODE_V2_PARITY_CASE
+        }),
+      )
+      const session = yield* SessionV2.Service
+      const service = yield* V2ProviderTurn.Service
+      const { db } = yield* Database.Service
+      const events = fragmentFixture("text", "text-parity", ["Parity"]).completeEvents
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Record production parity" }), resume: false })
+      responseStream = Stream.unwrap(
+        Effect.gen(function* () {
+          const seal = yield* V2ProviderTurn.CurrentRequestSeal
+          if (!seal) return yield* Effect.die("V2 request seal is missing")
+          yield* seal
+            .seal({
+              wireHash: Hash.sha256("runner-production-parity-wire"),
+              bodyHash: Hash.sha256("runner-production-parity-body"),
+              bodyLength: 31,
+              contentType: "application/json",
+            })
+            .pipe(Effect.orDie)
+          const receipt = yield* db.select().from(V2ProviderTurnReceiptTable).get().pipe(Effect.orDie)
+          if (!receipt?.prepared_turn)
+            return yield* Effect.die("V2 prepared turn was not sealed before provider execution")
+          const legacyReceiptID = "legacy-runner-production-parity"
+          const legacy = {
+            ...receipt.prepared_turn,
+            owner: "legacy_native" as const,
+            receipt_id: legacyReceiptID,
+          }
+          const triggers = yield* db
+            .all<{
+              name: string
+            }>(sql`SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'session_tool_request_receipt'`)
+            .pipe(Effect.orDie)
+          yield* Effect.forEach(
+            triggers,
+            (trigger) => {
+              if (!/^[A-Za-z0-9_]+$/.test(trigger.name)) return Effect.die("Invalid SQLite trigger name")
+              return db.run(sql.raw(`DROP TRIGGER ${trigger.name}`)).pipe(Effect.orDie)
+            },
+            { discard: true },
+          )
+          yield* db
+            .run(
+              sql`
+              INSERT INTO session_tool_request_receipt (
+                receipt_id, request_ordinal, session_id, user_message_id, provider_id, model_id, protocol,
+                registry_tool_ids, permission_filtered_tool_ids, final_offered_tool_ids, call_ids,
+                request_state, provider_state, prepared_turn_hash, wire_request_hash, response_fingerprint, created_at
+              ) VALUES (
+                ${legacyReceiptID}, ${legacy.request_ordinal}, ${legacy.session_id}, ${legacy.user_message_id},
+                ${legacy.sampling_provider_id}, ${legacy.sampling_model_id}, ${"openai-chat"},
+                ${"[]"}, ${"[]"}, ${"[]"}, ${"[]"}, ${"prepared"}, ${"prepared"},
+                ${legacy.request_hash}, ${legacy.wire_request_hash}, ${null}, ${Date.now()}
+              )
+            `,
+            )
+            .pipe(Effect.orDie)
+          yield* service
+            .recordBaselinePrepared({ campaign, legacyReceiptId: legacyReceiptID, preparedTurn: legacy })
+            .pipe(Effect.orDie)
+          const fingerprint = Hash.sha256("runner-production-parity-response")
+          yield* db
+            .run(
+              sql`UPDATE session_tool_request_receipt
+              SET provider_state = ${"settled"}, response_fingerprint = ${fingerprint}
+              WHERE receipt_id = ${legacyReceiptID}`,
+            )
+            .pipe(Effect.orDie)
+          yield* service
+            .settleBaseline({
+              campaign,
+              legacyReceiptId: legacyReceiptID,
+              outcomeArtifact: events,
+              legacyResponseFingerprint: fingerprint,
+            })
+            .pipe(Effect.orDie)
+          return Stream.fromIterable(events)
+        }),
+      )
+
+      yield* session.resume(sessionID)
+
+      expect(yield* db.select().from(V2ProviderParityReceiptTable).all().pipe(Effect.orDie)).toMatchObject([
+        {
+          campaign_id: campaign.id,
+          case_name: campaign.case,
+          verified: true,
+          evidence: ["real_session_replay", "recorded_provider", "shadow_snapshot"],
+        },
+      ])
+      expect(yield* service.parityVerified(campaign.id)).toBe(false)
+    }),
+  )
+
+  it.effect("rejects an unverified V2 owner campaign before the provider call", () =>
+    Effect.gen(function* () {
+      yield* setup
+      process.env.DEEPAGENT_CODE_V2_OWNER_CAMPAIGN = "runner-owner-incomplete"
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          delete process.env.DEEPAGENT_CODE_V2_OWNER_CAMPAIGN
+        }),
+      )
+      const session = yield* SessionV2.Service
+      requests.length = 0
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Do not dispatch" }), resume: false })
+
+      expect(yield* session.resume(sessionID).pipe(Effect.exit)).toMatchObject({ _tag: "Failure" })
+      expect(requests).toHaveLength(0)
     }),
   )
 

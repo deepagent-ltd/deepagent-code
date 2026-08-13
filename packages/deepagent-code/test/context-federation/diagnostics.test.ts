@@ -1,13 +1,22 @@
 import { describe, expect, test } from "bun:test"
 import { ContextFederation } from "@deepagent-code/core/context-federation/federation"
 import { SessionProviderAttempt } from "@deepagent-code/core/context-federation/provider-attempt"
+import { SessionProviderOwner } from "@deepagent-code/core/context-federation/provider-owner"
+import { ProjectScopeKey, SecurityNamespaceID } from "@deepagent-code/core/context-federation/reference"
 import {
   SessionActivityTable,
   SessionContextSelectionTable,
   SessionProviderAttemptResolutionTable,
   SessionProviderAttemptTable,
+  SessionProviderOwnerLeaseTable,
 } from "@deepagent-code/core/context-federation/session-sql"
+import {
+  LocationIdentityTable,
+  ProjectScopeIdentityTable,
+  SecurityNamespaceTable,
+} from "@deepagent-code/core/context-federation/sql"
 import { Database } from "@deepagent-code/core/database/database"
+import { DeepAgentReleasedSnapshot } from "@deepagent-code/core/deepagent/released-snapshot"
 import { ProjectV2 } from "@deepagent-code/core/project"
 import { ProjectTable } from "@deepagent-code/core/project/sql"
 import { SessionMessage } from "@deepagent-code/core/session/message"
@@ -18,6 +27,7 @@ import { SessionToolRequestReceiptTable } from "../../src/session/tool-request-r
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { AbsolutePath } from "@deepagent-code/core/schema"
 import { Effect, Layer } from "effect"
+import { eq, sql } from "drizzle-orm"
 import { ContextFederationDiagnostics } from "../../src/context-federation/diagnostics"
 import { ContextFederationObservability } from "../../src/context-federation/observability"
 import { SessionFederatedContext } from "../../src/context-federation/session-context-runtime"
@@ -29,12 +39,16 @@ const inputId = SessionMessage.ID.make("msg_context_diagnostics")
 const activityId = "activity_context_diagnostics"
 const selectionId = "selection_context_diagnostics"
 const attemptId = "attempt_context_diagnostics"
+const securityNamespaceId = SecurityNamespaceID.make("sec_context_diagnostics")
+const projectScopeKey = ProjectScopeKey.make("prjctx_context_diagnostics")
+const releasedKnowledgeBinding = DeepAgentReleasedSnapshot.binding(undefined)
 
 describe("ContextFederationDiagnostics", () => {
   test("returns opaque evidence and requires durable terminal evidence before settle", async () => {
     ContextFederationObservability.reset()
     const database = Database.layerFromPath(":memory:")
     const attemptLayer = SessionProviderAttempt.layer.pipe(Layer.provide(database))
+    const ownerLayer = SessionProviderOwner.layer.pipe(Layer.provide(database))
     const messages = { value: [] as SessionV1.WithParts[] }
     const sessionLayer = Layer.succeed(Session.Service, {
       messages: () => Effect.sync(() => messages.value),
@@ -45,10 +59,12 @@ describe("ContextFederationDiagnostics", () => {
       prepareProviderTurn: () => Effect.die("not used"),
       settleActivity: () => Effect.void,
       replayIndeterminate: () => Effect.die("not used"),
+      releasedKnowledgeForActiveSession: () => Effect.succeed(undefined),
     } satisfies SessionFederatedContext.Interface)
     const diagnostics = ContextFederationDiagnostics.layer.pipe(
       Layer.provide(database),
       Layer.provide(attemptLayer),
+      Layer.provide(ownerLayer),
       Layer.provide(sessionLayer),
       Layer.provide(federationLayer),
     )
@@ -171,7 +187,7 @@ describe("ContextFederationDiagnostics", () => {
         })
         expect(settled.state).toBe("resolved_settled")
         expect((yield* db.select().from(SessionActivityTable).get())?.state).toBe("settled")
-      }).pipe(Effect.provide(Layer.merge(database, diagnostics)), Effect.scoped),
+      }).pipe(Effect.provide(diagnostics), Effect.provide(database), Effect.scoped),
     )
   })
 })
@@ -202,6 +218,37 @@ function seed(db: Database.Interface["db"]) {
     federated: { code: 1, knowledge: 1, memory: 0, documents: 1 },
   })
   return Effect.gen(function* () {
+    yield* db
+      .insert(SecurityNamespaceTable)
+      .values({
+        id: securityNamespaceId,
+        kind: "implicit_local",
+        binding_hash: "namespace-context-diagnostics",
+        created_at: 1,
+      })
+      .run()
+    yield* db
+      .insert(ProjectScopeIdentityTable)
+      .values({
+        security_namespace_id: securityNamespaceId,
+        project_scope_key: projectScopeKey,
+        project_kind: "registered_root",
+        project_identity_hash: "project-context-diagnostics",
+        observed_project_id: projectId,
+        created_at: 1,
+      })
+      .run()
+    yield* db
+      .insert(LocationIdentityTable)
+      .values({
+        security_namespace_id: securityNamespaceId,
+        location_key: "loc_context_diagnostics",
+        project_scope_key: projectScopeKey,
+        canonical_root: "/tmp/context-diagnostics",
+        observed_project_id: projectId,
+        created_at: 1,
+      })
+      .run()
     yield* db
       .insert(ProjectTable)
       .values({
@@ -253,6 +300,8 @@ function seed(db: Database.Interface["db"]) {
         revision: 0,
         trigger_input_id: inputId,
         location_key: "loc_context_diagnostics",
+        security_namespace_id: securityNamespaceId,
+        project_scope_key: projectScopeKey,
         query_fingerprint: "query",
         authorization_fingerprint: "authorization",
         authorization_epoch: 1,
@@ -260,6 +309,9 @@ function seed(db: Database.Interface["db"]) {
         selected_source_fingerprint: "sources",
         observed_location_mutation_epoch: 1,
         next_revalidation_at: 1_000,
+        released_knowledge_binding_state: releasedKnowledgeBinding.state,
+        released_knowledge_exact_refs: releasedKnowledgeBinding.exactRefs,
+        released_knowledge_exact_refs_fingerprint: releasedKnowledgeBinding.exactRefsFingerprint,
         graph_revisions: JSON.stringify({ code: "1", knowledge: "1", memory: "1", documents: "1" }),
         graph_statuses: JSON.stringify(statuses),
         selected_refs: JSON.stringify([
@@ -291,6 +343,16 @@ function seed(db: Database.Interface["db"]) {
         created_at: 20,
       })
       .run()
+    yield* db.run(sql`
+      INSERT INTO session_provider_owner_lease (
+        owner_token, registered_at, heartbeat_at, lease_expires_at
+      ) VALUES (
+        'diagnostics-stale-owner',
+        CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),
+        CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),
+        CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) + 60000
+      )
+    `)
     yield* db
       .insert(SessionProviderAttemptTable)
       .values({
@@ -302,11 +364,17 @@ function seed(db: Database.Interface["db"]) {
         projection_hash: "projection",
         request_hash: "request",
         provider_id: "provider-test",
+        owner_token: "diagnostics-stale-owner",
         state: "indeterminate_after_crash",
         created_at: 30,
         error_code: "process_recovery",
       })
       .run()
+    yield* db.run(sql`
+      UPDATE session_provider_owner_lease
+      SET released_at = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
+      WHERE owner_token = 'diagnostics-stale-owner'
+    `)
   })
 }
 

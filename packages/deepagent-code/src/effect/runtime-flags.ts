@@ -121,14 +121,14 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   experimentalPlanMode: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_PLAN_MODE"),
   experimentalEventSystem: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_EVENT_SYSTEM"),
   experimentalWorkspaces: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_WORKSPACES"),
-  // Four-graph federation rollout is owner-based and defaults OFF. These flags expose capability
-  // requests only; ContextFederationRollout.resolve applies the dependency and parity gates before
-  // any production owner may activate.
-  contextFederationShadow: bool("DEEPAGENT_CODE_CONTEXT_FEDERATION_SHADOW"),
-  locationIndexesV2Shadow: bool("DEEPAGENT_CODE_LOCATION_INDEXES_V2_SHADOW"),
-  contextProjectionV2: bool("DEEPAGENT_CODE_CONTEXT_PROJECTION_V2"),
-  contextQueryToolsV2: bool("DEEPAGENT_CODE_CONTEXT_QUERY_TOOLS_V2"),
-  coreV2ExecutionOwner: bool("DEEPAGENT_CODE_CORE_V2_EXECUTION_OWNER"),
+  // Four-graph federation and the V2 provider owner ship ON after the C4 qualification gates. Each
+  // flag remains an independent `=false` kill-switch; ContextFederationRollout.resolve still applies
+  // dependency, readiness, and release-qualification gates before any production owner activates.
+  contextFederationShadow: stableOn("DEEPAGENT_CODE_CONTEXT_FEDERATION_SHADOW"),
+  locationIndexesV2Shadow: stableOn("DEEPAGENT_CODE_LOCATION_INDEXES_V2_SHADOW"),
+  contextProjectionV2: stableOn("DEEPAGENT_CODE_CONTEXT_PROJECTION_V2"),
+  contextQueryToolsV2: stableOn("DEEPAGENT_CODE_CONTEXT_QUERY_TOOLS_V2"),
+  coreV2ExecutionOwner: stableOn("DEEPAGENT_CODE_CORE_V2_EXECUTION_OWNER"),
   contextFederationKillSwitch: bool("DEEPAGENT_CODE_CONTEXT_FEDERATION_KILL_SWITCH"),
   contextFederationRolloutStage: Config.string("DEEPAGENT_CODE_CONTEXT_FEDERATION_ROLLOUT_STAGE").pipe(
     Config.withDefault("all"),
@@ -311,6 +311,19 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   // ONLY the runLoop steer drain — it does NOT activate the dormant experimentalEventSystem V2 runner.
   // Disable with DEEPAGENT_CODE_V4_STEERING=false.
   v4Steering: stableOn("DEEPAGENT_CODE_V4_STEERING"),
+  // BUG-407-007 staged authority cutover. `legacy` preserves the existing in-process permission and
+  // no-progress owner. `durable` routes production legacy activities through the SQLite-backed
+  // objective/progress/permission authority. This deliberately ships legacy-owned until the live and
+  // packaged recovery gates are complete.
+  activityAuthority: Config.string("DEEPAGENT_CODE_ACTIVITY_AUTHORITY").pipe(
+    Config.withDefault("legacy"),
+    Config.map((value): "legacy" | "durable" => {
+      if (value === "legacy" || value === "durable") return value
+      throw new Error(
+        `Invalid DEEPAGENT_CODE_ACTIVITY_AUTHORITY="${value}". Must be one of: legacy, durable. Refusing to select an unknown activity authority.`,
+      )
+    }),
+  ),
   // PR-2: Streaming degeneration detector mode for reasoning outputs.
   // "off"    — detector is disabled; all output passes through unmodified.
   // "shadow" — detector runs and logs hits, but never triggers a circuit break.

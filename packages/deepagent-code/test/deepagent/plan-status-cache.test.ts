@@ -3,6 +3,13 @@ import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { Effect } from "effect"
 import { LLMRequestPrep } from "../../src/session/llm/request"
 import { SessionReminders } from "../../src/session/reminders"
+import { InstanceRef } from "../../src/effect/instance-ref"
+
+const instance = {
+  directory: process.cwd(),
+  worktree: process.cwd(),
+  project: { id: "project-plan-status-cache" },
+} as never
 
 // Plan status is trusted runtime control. It must stay out of durable history and travel in the same
 // ephemeral tail as round context. The stable system prompt assigns that tag its control semantics,
@@ -68,7 +75,7 @@ async function prepare(
       plugin,
       flags: { outputTokenMax: 32_000, client: "test" } as any,
       isWorkflow,
-    }),
+    }).pipe(Effect.provideService(InstanceRef, instance)),
   )
 }
 
