@@ -2,7 +2,20 @@ import { NodeFileSystem } from "@effect/platform-node"
 import { ConfigV1 } from "@deepagent-code/core/v1/config/config"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { Database } from "@deepagent-code/core/database/database"
-import { and, eq } from "drizzle-orm"
+import { LocationIdentity } from "@deepagent-code/core/context-federation/identity"
+import { LocationIdentityTable } from "@deepagent-code/core/context-federation/sql"
+import {
+  SessionActivityTable,
+  SessionContextSelectionTable,
+  SessionContextValidationTable,
+  SessionProviderAttemptTable,
+  SessionProviderOwnerLeaseTable,
+} from "@deepagent-code/core/context-federation/session-sql"
+import { SessionProviderOwner } from "@deepagent-code/core/context-federation/provider-owner"
+import { LocationKey, ProjectScopeKey, SecurityNamespaceID } from "@deepagent-code/core/context-federation/reference"
+import { DeepAgentReleasedSnapshot } from "@deepagent-code/core/deepagent/released-snapshot"
+import { AbsolutePath } from "@deepagent-code/core/schema"
+import { and, eq, sql } from "drizzle-orm"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { WorkspaceV2 } from "@deepagent-code/core/workspace"
 import { FetchHttpClient } from "effect/unstable/http"
@@ -11,6 +24,7 @@ import { Cause, Deferred, Duration, Effect, Exit, Fiber, Layer } from "effect"
 import path from "path"
 import { fileURLToPath, pathToFileURL } from "url"
 import { NamedError } from "@deepagent-code/core/util/error"
+import { Hash } from "@deepagent-code/core/util/hash"
 import { Agent as AgentSvc } from "../../src/agent/agent"
 import { Auth } from "../../src/auth"
 import { BackgroundJob } from "@/background/job"
@@ -35,6 +49,9 @@ import {
   MessageTable,
   SessionMessageTable,
   SessionPromptEpochMessageTable,
+  TaskRunEventTable,
+  TaskRunTable,
+  TaskStructuredOutputEvidenceTable,
 } from "@deepagent-code/core/session/sql"
 import { LLM } from "../../src/session/llm"
 import { MessageV2 } from "../../src/session/message-v2"
@@ -59,6 +76,7 @@ import { SystemPrompt } from "../../src/session/system"
 import { Shell } from "../../src/shell/shell"
 import { Snapshot } from "../../src/snapshot"
 import { ToolRegistry } from "@/tool/registry"
+import type { TaskPromptOps } from "@/tool/task"
 import { DebugService } from "@/debug/service"
 import { RuntimeBase } from "@/runtime/base"
 import { Truncate } from "@/tool/truncate"
@@ -82,6 +100,7 @@ import { TestContextFacades } from "../fixture/context-facades"
 import { SessionFederatedContext } from "../../src/context-federation/session-context-runtime"
 import { ContextFederationObservability } from "../../src/context-federation/observability"
 import { ContextFederationReadiness } from "../../src/context-federation/readiness"
+import { ContextActivationReceipt } from "../../src/context-federation/activation-receipt"
 import { ContextFederationRollout } from "@deepagent-code/core/context-federation/rollout"
 import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
 import { PromptEpoch } from "@/session/prompt-epoch"
@@ -334,6 +353,7 @@ function makePrompt(input?: PromptLayerOptions) {
   // `deps`) so drained steers are visible to the loop's history reads.
   const steer = SessionSteer.layer.pipe(Layer.provideMerge(deps))
   const promptLayer = SessionPrompt.layer.pipe(
+    Layer.provide(SessionProviderOwner.layer.pipe(Layer.provide(deps))),
     Layer.provide(testInstanceStoreLayer),
     Layer.provide(SessionRevert.defaultLayer),
     Layer.provide(Image.defaultLayer),
@@ -347,6 +367,7 @@ function makePrompt(input?: PromptLayerOptions) {
     Layer.provideMerge(trunc),
     Layer.provide(Instruction.defaultLayer),
     Layer.provide(SystemPrompt.defaultLayer),
+    Layer.provide(LocationIdentity.layer.pipe(Layer.provide(deps))),
     Layer.provide(
       Layer.succeed(
         ContextFederationReadiness.Service,
@@ -376,6 +397,9 @@ function makeHttpNoLLMServer(input?: PromptLayerOptions) {
 }
 
 const it = testEffect(makeHttp())
+const durableControlPlane = testEffect(
+  makeHttp({ flags: { experimentalBackgroundSubagents: true, subagentControlPlane: "durable" } }),
+)
 const worldStateCompaction = testEffect(
   makeHttp({ flags: { softLandingCompaction: false, worldStateReinjection: true } }),
 )
@@ -425,9 +449,67 @@ const federationAdapter = {
       federationTrace.push("recover")
       return 0
     }),
-  resolve: (input) =>
-    Effect.sync(() => {
+  resolve: (input: Parameters<SessionFederatedContext.Interface["resolve"]>[0]) =>
+    Effect.gen(function* () {
       federationTrace.push(`resolve:${input.agent.name}:${input.inputIds.join(",")}`)
+      const db = (yield* Database.Service).db
+      const identity = yield* db.select().from(LocationIdentityTable).get().pipe(Effect.orDie)
+      if (!identity) return yield* Effect.die("prompt federation identity unavailable")
+      const releasedKnowledgeBinding = DeepAgentReleasedSnapshot.binding(input.releasedKnowledgeSelection)
+      yield* db
+        .insert(SessionActivityTable)
+        .values({
+          activity_id: "activity_prompt_adapter",
+          session_id: input.session.id,
+          ordinal: 0,
+          trigger_input_id: input.inputIds[0] ?? "msg_prompt_adapter",
+          delivery: "steer",
+          state: "active",
+          created_at: Date.now(),
+        })
+        .onConflictDoNothing()
+        .run()
+      yield* db
+        .insert(SessionContextSelectionTable)
+        .values({
+          selection_id: "selection_prompt_adapter",
+          session_id: input.session.id,
+          activity_id: "activity_prompt_adapter",
+          revision: 0,
+          trigger_input_id: input.inputIds[0] ?? "msg_prompt_adapter",
+          location_key: LocationKey.make(identity.location_key),
+          security_namespace_id: SecurityNamespaceID.make(identity.security_namespace_id),
+          project_scope_key: ProjectScopeKey.make(identity.project_scope_key),
+          query_fingerprint: "query_prompt_adapter",
+          authorization_fingerprint: "authorization_prompt_adapter",
+          authorization_epoch: 1,
+          execution_fingerprint: "execution_prompt_adapter",
+          selected_source_fingerprint: "sources_prompt_adapter",
+          observed_location_mutation_epoch: 1,
+          next_revalidation_at: Date.now() + 60_000,
+          released_knowledge_binding_state: releasedKnowledgeBinding.state,
+          released_knowledge_snapshot_id:
+            releasedKnowledgeBinding.state === "bound" ? releasedKnowledgeBinding.snapshotId : null,
+          released_knowledge_generation:
+            releasedKnowledgeBinding.state === "bound" ? releasedKnowledgeBinding.generation : null,
+          released_knowledge_membership_hash:
+            releasedKnowledgeBinding.state === "bound" ? releasedKnowledgeBinding.membershipHash : null,
+          released_knowledge_manifest_hash:
+            releasedKnowledgeBinding.state === "bound" ? releasedKnowledgeBinding.manifestHash : null,
+          released_knowledge_exact_refs: releasedKnowledgeBinding.exactRefs,
+          released_knowledge_exact_refs_fingerprint: releasedKnowledgeBinding.exactRefsFingerprint,
+          graph_revisions: JSON.stringify({ code: "1", documents: "1", knowledge: "1", memory: "1" }),
+          graph_statuses: "[]",
+          selected_refs: "[]",
+          projection: "project-context-json-v1 bytes=2\n{}",
+          projection_hash: "projection_prompt_adapter",
+          token_count: 8,
+          artifact_write_status: "available",
+          artifact_ref: "artifact_prompt_adapter",
+          created_at: Date.now(),
+        })
+        .onConflictDoNothing()
+        .run()
       return {
         selection: {
           selectionId: "selection_prompt_adapter",
@@ -435,7 +517,9 @@ const federationAdapter = {
           activityId: "activity_prompt_adapter",
           revision: 0,
           triggerInputId: input.inputIds[0] ?? "msg_prompt_adapter",
-          locationKey: "loc_prompt_adapter",
+          locationKey: identity.location_key,
+          securityNamespaceId: identity.security_namespace_id,
+          projectScopeKey: identity.project_scope_key,
           promotedInputIds: input.inputIds,
           queryFingerprint: "query_prompt_adapter",
           authorizationFingerprint: "authorization_prompt_adapter",
@@ -444,6 +528,7 @@ const federationAdapter = {
           selectedSourceFingerprint: "sources_prompt_adapter",
           observedLocationMutationEpoch: 1,
           nextRevalidationAt: Date.now() + 60_000,
+          releasedKnowledgeBinding,
           graphRevisions: { code: "1", documents: "1", knowledge: "1", memory: "1" },
           graphStatuses: [],
           selectedRefs: [],
@@ -455,11 +540,11 @@ const federationAdapter = {
         } as unknown as SessionFederatedContext.Resolved["selection"],
         envelope: {
           principal: {
-            securityNamespaceId: "sec_prompt_adapter",
+            securityNamespaceId: identity.security_namespace_id,
             principalId: "local-user",
             authorizationEpoch: 1,
-            locationKeys: ["loc_prompt_adapter"],
-            projectScopeKeys: ["prjctx_prompt_adapter"],
+            locationKeys: [identity.location_key],
+            projectScopeKeys: [identity.project_scope_key],
             sessionIds: [input.session.id],
             subjectIds: ["local-user"],
             allowBuiltin: true,
@@ -474,38 +559,59 @@ const federationAdapter = {
         observedLocationMutationEpoch: 1,
       }
     }),
-  prepareProviderTurn: () =>
-    Effect.sync(() => {
+  prepareProviderTurn: (input: Parameters<SessionFederatedContext.Interface["prepareProviderTurn"]>[0]) =>
+    Effect.gen(function* () {
       federationTrace.push("prepare")
+      const db = (yield* Database.Service).db
+      yield* db
+        .insert(SessionContextValidationTable)
+        .values({
+          validation_id: "validation_prompt_adapter",
+          selection_id: input.selection.selectionId,
+          provider_turn_seq: 0,
+          authorization_epoch: input.envelope.principal.authorizationEpoch,
+          egress_epoch: input.envelope.egress.epoch,
+          observed_location_mutation_epoch: input.observedLocationMutationEpoch,
+          selected_source_fingerprint: input.selection.selectedSourceFingerprint,
+          validated_at: Date.now(),
+          valid_until: Date.now() + 60_000,
+          outcome: "valid",
+          reason_code: "prompt_adapter_test",
+        })
+        .onConflictDoNothing()
+        .run()
       return {
         attemptId: "attempt_prompt_adapter",
-        dispatching: Effect.sync(() => {
-          federationTrace.push("dispatching")
-        }),
-        streaming: Effect.sync(() => {
-          federationTrace.push("streaming")
-        }),
-        settled: Effect.sync(() => {
-          federationTrace.push("attempt:settled")
-        }),
-        failed: () =>
-          Effect.sync(() => {
-            federationTrace.push("attempt:failed")
-          }),
+        sessionId: input.selection.sessionId,
+        activityId: input.selection.activityId,
+        providerTurnSeq: 0,
+        selectionId: input.selection.selectionId,
+        projectionHash: input.selection.projectionHash,
+        requestHash: input.requestHash,
+        providerId: input.providerId,
+        authorizationEpoch: input.envelope.principal.authorizationEpoch,
+        egressEpoch: input.envelope.egress.epoch,
+        selectedSourceFingerprint: input.selection.selectedSourceFingerprint,
+        observedLocationMutationEpoch: input.observedLocationMutationEpoch,
       }
     }),
-  settleActivity: (_selection, state) =>
+  settleActivity: (
+    _selection: Parameters<SessionFederatedContext.Interface["settleActivity"]>[0],
+    state: Parameters<SessionFederatedContext.Interface["settleActivity"]>[1],
+  ) =>
     Effect.sync(() => {
       federationTrace.push(`activity:${state}`)
     }),
   replayIndeterminate: () => Effect.die("not used"),
-} satisfies SessionFederatedContext.Interface
+  releasedKnowledgeForActiveSession: () => Effect.succeed(undefined),
+} as unknown as SessionFederatedContext.Interface
 const federated = testEffect(
   makeHttp({
     flags: {
       contextFederationShadow: true,
       locationIndexesV2Shadow: true,
       contextProjectionV2: true,
+      contextQueryToolsV2: true,
     },
     federation: federationAdapter,
   }),
@@ -816,6 +922,135 @@ const boot = Effect.fn("test.boot")(function* (input?: { title?: string }) {
   const chat = yield* sessions.create(input ?? { title: "Pinned" })
   return { prompt, run, sessions, chat }
 })
+
+durableControlPlane.instance(
+  "durable initializer dispatches structured finalizer transport failure through production wiring",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const registry = yield* ToolRegistry.Service
+      const { db } = yield* Database.Service
+      const chat = yield* sessions.create({
+        title: "Durable dispatcher finalizer wiring",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      const parent = yield* seed(chat.id)
+      const { task } = yield* registry.named()
+
+      yield* llm.text("persisted durable research")
+      yield* llm.error(500, { error: { message: "provider unavailable" } })
+      const taskExit = yield* task
+        .execute(
+          {
+            description: "verify durable finalizer",
+            prompt: "Produce the durable research result.",
+            subagent_type: "researcher",
+            output_schema: {
+              type: "object",
+              properties: { result: { type: "string" } },
+              required: ["result"],
+              additionalProperties: false,
+            },
+          },
+          {
+            sessionID: chat.id,
+            messageID: parent.assistant.id,
+            callID: "tool_durable_dispatcher_finalizer_transport",
+            agent: "build",
+            abort: new AbortController().signal,
+            extra: {
+              promptOps: {
+                cancel: prompt.cancel,
+                resolvePromptParts: prompt.resolvePromptParts,
+                prepareTaskInput: prompt.prepareTaskInput,
+                prompt: (input) => prompt.prompt(input).pipe(Effect.catch(Effect.die)),
+              } satisfies TaskPromptOps,
+            },
+            messages: [],
+            metadata: () => Effect.void,
+            ask: () => Effect.void,
+          },
+        )
+        .pipe(Effect.exit)
+      expect(Exit.isFailure(taskExit)).toBe(true)
+
+      const run = yield* pollWithTimeout(
+        Effect.gen(function* () {
+          const row = yield* db
+            .select()
+            .from(TaskRunTable)
+            .where(eq(TaskRunTable.tool_call_id, "tool_durable_dispatcher_finalizer_transport"))
+            .get()
+            .pipe(Effect.orDie)
+          return row?.state === "failed" ? row : undefined
+        }),
+        "durable dispatcher did not settle the structured finalizer transport failure",
+        "15 seconds",
+      )
+
+      expect(yield* llm.calls).toBe(2)
+      expect(run).toMatchObject({
+        state: "failed",
+        reason: "structured_finalizer_transport_error",
+        attempts: 1,
+        raw_result_message_id: expect.any(String),
+        structured_result_message_id: null,
+        error: {
+          code: "structured_finalizer_transport_error",
+          data: { phase: "finalize", attempt: 1, failure_class: "transport", source_code: "provider_error" },
+        },
+      })
+      expect(
+        yield* db
+          .select({
+            type: TaskRunEventTable.type,
+            fromState: TaskRunEventTable.from_state,
+            toState: TaskRunEventTable.to_state,
+            reason: TaskRunEventTable.reason,
+          })
+          .from(TaskRunEventTable)
+          .where(eq(TaskRunEventTable.run_id, run.run_id))
+          .all()
+          .pipe(Effect.orDie),
+      ).toContainEqual({
+        type: "structured_finalizer_attempt_started",
+        fromState: "running",
+        toState: "finalizing",
+        reason: "attempt:1",
+      })
+      if (!run.raw_result_message_id) return yield* Effect.die("durable finalizer failure lost its raw result")
+      expect(
+        yield* db
+          .select({
+            terminalState: TaskStructuredOutputEvidenceTable.terminal_state,
+            attempts: TaskStructuredOutputEvidenceTable.attempts,
+            rawResultMessageID: TaskStructuredOutputEvidenceTable.raw_result_message_id,
+            failureCode: TaskStructuredOutputEvidenceTable.failure_code,
+          })
+          .from(TaskStructuredOutputEvidenceTable)
+          .where(eq(TaskStructuredOutputEvidenceTable.run_id, run.run_id))
+          .get()
+          .pipe(Effect.orDie),
+      ).toEqual({
+        terminalState: "failed",
+        attempts: 1,
+        rawResultMessageID: run.raw_result_message_id,
+        failureCode: "structured_finalizer_transport_error",
+      })
+      expect((yield* sessions.get(run.child_session_id)).metadata?.deepagent?.subagent).toMatchObject({
+        finished: true,
+        state: "error",
+        phase: "settled",
+        reason: "structured_finalizer_transport_error",
+        attempts: 1,
+        raw_result_ref: run.raw_result_message_id,
+        error: { code: "structured_finalizer_transport_error" },
+      })
+    }),
+  25_000,
+)
 
 noLLMServer.instance("prepareTaskInput materializes a stable envelope without persisting V1 rows", () =>
   Effect.gen(function* () {
@@ -1133,7 +1368,6 @@ it.instance("fingerprints the final persisted structured assistant", () =>
       .where(eq(SessionToolRequestReceiptTable.session_id, chat.id))
       .get()
       .pipe(Effect.orDie)
-
     expect(result.info.role).toBe("assistant")
     if (result.info.role === "assistant") {
       expect(result.info.structured).toEqual({ answer: 4 })
@@ -1345,9 +1579,70 @@ it.instance("quarantines a missing committed replacement message before provider
 
 it.instance("recovers only compaction continuations that were durably not dispatched", () =>
   Effect.gen(function* () {
+    const { dir } = yield* useServerConfig(providerCfg)
     const sessions = yield* Session.Service
     const compaction = yield* SessionCompaction.Service
     const { db } = yield* Database.Service
+    const canonicalDir = yield* (yield* FSUtil.Service).realPath(dir)
+    const legacyProjectId = AgentGateway.DeepAgentDurableKnowledgeStore.projectIdForWorkspace(canonicalDir)
+    const releasedIdentity = yield* Effect.gen(function* () {
+      return yield* (yield* LocationIdentity.Service).resolve({
+        boundary: { kind: "implicit_local" },
+        directory: AbsolutePath.make(canonicalDir),
+        project: { kind: "registered_root", observedProjectId: legacyProjectId },
+      })
+    }).pipe(Effect.provide(LocationIdentity.layer))
+    const releasedKnowledgeBinding = DeepAgentReleasedSnapshot.binding(undefined)
+    const contextEligibility = ContextFederationRollout.resolveProject(
+      ContextFederationRollout.resolve(
+        {
+          contextFederationShadow: false,
+          locationIndexesV2Shadow: false,
+          contextProjectionV2: false,
+          contextQueryToolsV2: false,
+          coreV2ExecutionOwner: false,
+        },
+        { coreV2ParityVerified: false },
+      ),
+      releasedIdentity.projectScopeKey,
+      { stage: "all", percentage: 100, internalProjectScopeKeys: [], killSwitch: false },
+    )
+    const contextReadiness = {
+      ...ContextFederationRollout.READINESS_READY_STUB,
+      revision: "readiness-compaction-recovery",
+      projectScopeKey: releasedIdentity.projectScopeKey,
+      observedAt: 1,
+    }
+    const contextActivation = ContextActivationReceipt.make({
+      readiness: contextReadiness,
+      decision: ContextFederationRollout.activate(contextEligibility, contextReadiness),
+      recordedAt: 2,
+      projectionEnabled: false,
+      toolsEnabled: false,
+    })
+    const contextActivationFingerprint = ContextActivationReceipt.fingerprint({
+      eligibility: contextEligibility,
+      readiness: contextReadiness,
+      activation: contextActivation,
+    })
+    const recoveryOwnerToken = "prompt-recovery-owner"
+    yield* db.run(sql`
+      INSERT INTO session_provider_owner_lease (
+        owner_token, registered_at, heartbeat_at, lease_expires_at
+      ) VALUES
+        (
+          ${recoveryOwnerToken},
+          CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),
+          CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),
+          CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) + 60000
+        ),
+        (
+          'stale-process-owner',
+          CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),
+          CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),
+          CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) + 60000
+        )
+    `)
 
     const seedContinuation = (input: { title: string; state: "admitted" | "dispatching" | "indeterminate" }) =>
       Effect.gen(function* () {
@@ -1419,6 +1714,15 @@ it.instance("recovers only compaction continuations that were durably not dispat
             session_id: session.id,
             user_message_id: continuation.id,
             assistant_message_id: assistant.id,
+            context_eligibility: contextEligibility,
+            context_readiness: contextReadiness,
+            context_activation: contextActivation,
+            context_activation_fingerprint: contextActivationFingerprint,
+            released_knowledge_security_namespace_id: releasedIdentity.securityNamespaceId,
+            released_knowledge_project_scope_key: releasedIdentity.projectScopeKey,
+            released_knowledge_binding_state: releasedKnowledgeBinding.state,
+            released_knowledge_exact_refs: releasedKnowledgeBinding.exactRefs,
+            released_knowledge_exact_refs_fingerprint: releasedKnowledgeBinding.exactRefsFingerprint,
             provider_id: "test",
             model_id: "test-model",
             protocol: "chat",
@@ -1430,18 +1734,76 @@ it.instance("recovers only compaction continuations that were durably not dispat
             prompt_window_id: authority.window.windowID,
             effective_history_hash: authority.effectiveHistoryHash,
             request_input_hash: "request-input-hash",
-            final_request_hash: input.state === "admitted" ? null : "final-request-hash",
-            provider_state:
-              input.state === "indeterminate" ? "settled" : input.state === "dispatching" ? "dispatching" : "prepared",
-            adapter_prepared_at: now,
-            dispatching_at: input.state === "admitted" ? null : now,
-            terminal_at: input.state === "indeterminate" ? now : null,
+            provider_state: "preparing",
             owner_token: "stale-process-owner",
-            request_state: input.state === "admitted" ? "prepared" : "dispatched",
+            request_state: "prepared",
             created_at: now,
           })
           .run()
           .pipe(Effect.orDie)
+        yield* db
+          .update(SessionToolRequestReceiptTable)
+          .set({
+            released_knowledge_selected_refs: [],
+            released_knowledge_selected_refs_fingerprint: releasedKnowledgeBinding.exactRefsFingerprint,
+          })
+          .where(
+            and(
+              eq(SessionToolRequestReceiptTable.receipt_id, receiptID),
+              eq(SessionToolRequestReceiptTable.provider_state, "preparing"),
+            ),
+          )
+          .run()
+          .pipe(Effect.orDie)
+        yield* db
+          .update(SessionToolRequestReceiptTable)
+          .set({
+            provider_state: "prepared",
+            final_request_hash: Hash.sha256("compaction-final-request"),
+            provider_request_hash: Hash.sha256("compaction-final-request"),
+            prepared_turn_hash: Hash.sha256("compaction-prepared-turn"),
+            system_stable_hash: Hash.sha256("compaction-system-stable"),
+            system_volatile_hash: Hash.sha256("compaction-system-volatile"),
+            wire_request_hash: Hash.sha256("compaction-final-request"),
+            tool_definition_hash: Hash.sha256("[]"),
+            tool_result_reference_ids: [],
+            tool_result_reference_count: 0,
+            adapter_prepared_at: now,
+          })
+          .where(
+            and(
+              eq(SessionToolRequestReceiptTable.receipt_id, receiptID),
+              eq(SessionToolRequestReceiptTable.provider_state, "preparing"),
+            ),
+          )
+          .run()
+          .pipe(Effect.orDie)
+        if (input.state !== "admitted") {
+          yield* db
+            .update(SessionToolRequestReceiptTable)
+            .set({ provider_state: "dispatching", request_state: "dispatched", dispatching_at: now })
+            .where(
+              and(
+                eq(SessionToolRequestReceiptTable.receipt_id, receiptID),
+                eq(SessionToolRequestReceiptTable.provider_state, "prepared"),
+              ),
+            )
+            .run()
+            .pipe(Effect.orDie)
+        }
+        if (input.state === "indeterminate") {
+          yield* db
+            .update(SessionToolRequestReceiptTable)
+            .set({ provider_state: "settled", terminal_at: now })
+            .where(
+              and(
+                eq(SessionToolRequestReceiptTable.receipt_id, receiptID),
+                eq(SessionToolRequestReceiptTable.provider_state, "dispatching"),
+              ),
+            )
+            .run()
+            .pipe(Effect.orDie)
+        }
         return { session, runID, receiptID, assistant }
       })
 
@@ -1451,6 +1813,11 @@ it.instance("recovers only compaction continuations that were durably not dispat
       title: "Incomplete terminal continuation recovery",
       state: "indeterminate",
     })
+    yield* db.run(sql`
+      UPDATE session_provider_owner_lease
+      SET released_at = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
+      WHERE owner_token = 'stale-process-owner'
+    `)
     const unadmittedSession = yield* sessions.create({ title: "Unadmitted continuation recovery" })
     const unadmittedContinuation = yield* user(unadmittedSession.id, "continuation-pending")
     const unadmittedAuthority = yield* MessageV2.promptHistoryProjectionEffect(unadmittedSession.id)
@@ -1501,15 +1868,12 @@ it.instance("recovers only compaction continuations that were durably not dispat
       })
       .run()
       .pipe(Effect.orDie)
-    yield* recoverProviderReceiptsOnStartup()
+    yield* recoverProviderReceiptsOnStartup({ ownerToken: recoveryOwnerToken })
 
     const recoveredUnadmittedAssistant = (yield* sessions.messages({ sessionID: unadmittedSession.id })).find(
       (message) => message.info.id === unadmittedAssistant.id,
     )
-    expect(recoveredUnadmittedAssistant?.info).toMatchObject({
-      finish: "error",
-      time: { completed: expect.any(Number) },
-    })
+    expect(recoveredUnadmittedAssistant?.info).not.toHaveProperty("finish")
     expect(
       (yield* compaction.recoverableContinuations(unadmittedSession.projectID)).map((item) => item.runID),
     ).toContain("continuation-recovery-pending")
@@ -1700,6 +2064,14 @@ worldStateCompactionContinuation.instance(
       expect(yield* llm.calls).toBe(3)
       expect(receipts).toHaveLength(2)
       expect(receipts.map((receipt) => receipt.provider_state)).toEqual(["settled", "settled"])
+      expect(receipts[0]?.tool_result_reference_ids).toEqual([])
+      expect(receipts[0]?.tool_result_reference_count).toBe(0)
+      expect(receipts[1]?.tool_result_reference_ids).toEqual(receipts[0]?.call_ids)
+      expect(receipts[1]?.tool_result_reference_count).toBe(receipts[0]?.call_ids.length)
+      expect(receipts.every((receipt) => receipt.prepared_turn_hash?.length === 64)).toBe(true)
+      expect(receipts.every((receipt) => receipt.system_stable_hash?.length === 64)).toBe(true)
+      expect(receipts.every((receipt) => receipt.system_volatile_hash?.length === 64)).toBe(true)
+      expect(receipts.every((receipt) => receipt.wire_request_hash === receipt.final_request_hash)).toBe(true)
       expect(run?.continuation_state).toBe("settled")
       expect(run?.continuation_receipt_id).toBe(receipts[0]?.receipt_id)
       expect(run?.continuation_receipt_id).not.toBe(receipts[1]?.receipt_id)
@@ -2022,20 +2394,57 @@ federated.instance("production prompt adapter owns one federated tail and durabl
     const inputs = yield* llm.inputs
     const serialized = JSON.stringify(inputs[0]?.messages)
     const calls = yield* llm.calls
+    const { db } = yield* Database.Service
+    const receipt = yield* db
+      .select()
+      .from(SessionToolRequestReceiptTable)
+      .where(eq(SessionToolRequestReceiptTable.session_id, chat.id))
+      .get()
+      .pipe(Effect.orDie)
+    const providerAttempt = receipt?.provider_attempt_id
+      ? yield* db
+          .select()
+          .from(SessionProviderAttemptTable)
+          .where(eq(SessionProviderAttemptTable.attempt_id, receipt.provider_attempt_id))
+          .get()
+          .pipe(Effect.orDie)
+      : undefined
 
     expect(result.info.role).toBe("assistant")
-    expect(calls).toBe(1)
     if (result.info.role === "assistant") expect(result.info.error).toBeUndefined()
+    expect(calls).toBe(1)
     expect(serialized.match(/project-context-json-v1/g)).toHaveLength(1)
-    expect(federationTrace).toEqual([
-      "recover",
-      `resolve:auto:${user.info.id}`,
-      "prepare",
-      "dispatching",
-      "streaming",
-      "attempt:settled",
-      "activity:settled",
-    ])
+    expect(receipt?.context_selection_id).toBe("selection_prompt_adapter")
+    expect(receipt?.context_eligibility?.project).toMatchObject({
+      projectScopeKey: chat.projectID,
+      stage: "all",
+      selected: true,
+      killSwitch: false,
+    })
+    expect(receipt?.context_readiness).toMatchObject({ state: "ready", reasons: [] })
+    expect(receipt?.context_activation).toMatchObject({
+      outcome: "active",
+      enabledCapabilities: ["context_projection_v2", "context_query_tools_v2"],
+      fallbackReasons: [],
+      selection: {
+        selectionId: "selection_prompt_adapter",
+        projectionHash: "projection_prompt_adapter",
+      },
+    })
+    expect(receipt?.context_activation?.decision).toEqual(receipt?.context_eligibility ?? undefined)
+    expect(receipt?.context_activation_fingerprint).toHaveLength(64)
+    expect(receipt?.released_knowledge_selected_refs).toEqual([])
+    expect(receipt?.released_knowledge_selected_refs_fingerprint).toBe(
+      DeepAgentReleasedSnapshot.exactRefsFingerprint([]),
+    )
+    expect(receipt?.provider_state).toBe("settled")
+    expect(providerAttempt?.state).toBe("settled")
+    expect(providerAttempt?.prepared_turn_hash).toBe(receipt?.prepared_turn_hash)
+    expect(providerAttempt?.wire_request_hash).toBe(receipt?.wire_request_hash)
+    expect(providerAttempt?.wire_request_hash).toBe(receipt?.final_request_hash)
+    expect(providerAttempt?.settled_at).toBe(receipt?.terminal_at)
+    expect(receipt?.final_offered_tool_ids).toContain("context_query")
+    expect(federationTrace).toEqual(["recover", `resolve:auto:${user.info.id}`, "prepare", "activity:settled"])
   }),
 )
 
@@ -2058,9 +2467,24 @@ shadowFederated.instance("runs selection shadow without model projection or a Pr
     })
     yield* prompt.loop({ sessionID: chat.id })
     const inputs = yield* llm.inputs
+    const { db } = yield* Database.Service
+    const receipt = yield* db
+      .select()
+      .from(SessionToolRequestReceiptTable)
+      .where(eq(SessionToolRequestReceiptTable.session_id, chat.id))
+      .get()
+      .pipe(Effect.orDie)
 
     expect(JSON.stringify(inputs[0]?.messages)).not.toContain("project-context-json-v1")
     expect(ContextFederationObservability.snapshot().shadow.comparisons).toBe(1)
+    expect(receipt?.context_selection_id).toBe("selection_prompt_adapter")
+    expect(receipt?.context_activation).toMatchObject({
+      outcome: "shadow_only",
+      enabledCapabilities: [],
+      fallbackReasons: [],
+      selection: { selectionId: "selection_prompt_adapter" },
+    })
+    expect(receipt?.final_offered_tool_ids).not.toContain("context_query")
     expect(federationTrace).toEqual([`resolve:auto:${user.info.id}`, "activity:settled"])
   }),
 )
@@ -2084,18 +2508,41 @@ federated.instance("production prompt adapter fails the attempt and interrupts t
     })
     const running = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
     yield* llm.wait(1)
+    const database = yield* Database.Service
     yield* pollWithTimeout(
-      Effect.sync(() => (federationTrace.includes("streaming") ? true : undefined)),
+      database.db
+        .select({ state: SessionProviderAttemptTable.state })
+        .from(SessionProviderAttemptTable)
+        .where(eq(SessionProviderAttemptTable.session_id, chat.id))
+        .get()
+        .pipe(
+          Effect.map((attempt) => (attempt?.state === "streaming" ? true : undefined)),
+          Effect.orDie,
+        ),
       "timed out waiting for the federated attempt to enter streaming",
     )
     yield* prompt.cancel(chat.id)
     yield* Fiber.await(running)
+    const { db } = yield* Database.Service
+    const receipt = yield* db
+      .select()
+      .from(SessionToolRequestReceiptTable)
+      .where(eq(SessionToolRequestReceiptTable.session_id, chat.id))
+      .get()
+      .pipe(Effect.orDie)
+    const providerAttempt = receipt?.provider_attempt_id
+      ? yield* db
+          .select()
+          .from(SessionProviderAttemptTable)
+          .where(eq(SessionProviderAttemptTable.attempt_id, receipt.provider_attempt_id))
+          .get()
+          .pipe(Effect.orDie)
+      : undefined
 
-    expect(federationTrace).toContain("dispatching")
-    expect(federationTrace).toContain("streaming")
-    expect(federationTrace).toContain("attempt:failed")
+    expect(receipt?.provider_state).toBe("failed")
+    expect(providerAttempt?.state).toBe("failed")
+    expect(providerAttempt?.settled_at).toBe(receipt?.terminal_at)
     expect(federationTrace).toContain("activity:interrupted")
-    expect(federationTrace).not.toContain("attempt:settled")
     expect(federationTrace).not.toContain("activity:settled")
   }),
 )
@@ -2119,9 +2566,24 @@ prepareFailureFederated.instance("does not send projection when durable provider
     yield* prompt.loop({ sessionID: chat.id })
     const inputs = yield* llm.inputs
     const calls = yield* llm.calls
+    const { db } = yield* Database.Service
+    const receipt = yield* db
+      .select()
+      .from(SessionToolRequestReceiptTable)
+      .where(eq(SessionToolRequestReceiptTable.session_id, chat.id))
+      .get()
+      .pipe(Effect.orDie)
 
     expect(calls).toBe(1)
     expect(JSON.stringify(inputs[0]?.messages)).not.toContain("project-context-json-v1")
+    expect(receipt?.context_selection_id).toBe("selection_prompt_adapter")
+    expect(receipt?.provider_attempt_id).toBeNull()
+    expect(receipt?.context_activation).toMatchObject({
+      outcome: "shadow_only",
+      enabledCapabilities: [],
+      fallbackReasons: ["provider_attempt_prepare_failed"],
+      selection: { selectionId: "selection_prompt_adapter" },
+    })
     expect(federationTrace.some((entry) => entry.startsWith("resolve:auto:"))).toBe(true)
     expect(federationTrace).not.toContain("prepare")
   }),
@@ -2302,6 +2764,10 @@ it.instance("loop continues when finish is tool-calls", () =>
     expect(receipts.every((receipt) => receipt.provider_state === "settled")).toBe(true)
     expect(receipts.every((receipt) => receipt.request_input_hash?.length === 64)).toBe(true)
     expect(receipts.every((receipt) => receipt.final_request_hash?.length === 64)).toBe(true)
+    expect(receipts.every((receipt) => receipt.prepared_turn_hash?.length === 64)).toBe(true)
+    expect(receipts.every((receipt) => receipt.system_stable_hash?.length === 64)).toBe(true)
+    expect(receipts.every((receipt) => receipt.system_volatile_hash?.length === 64)).toBe(true)
+    expect(receipts.every((receipt) => receipt.wire_request_hash === receipt.final_request_hash)).toBe(true)
     expect(receipts[0]?.provider_request_hash).toHaveLength(64)
     expect(receipts[0]?.provider_request_hash).toBe(receipts[0]?.final_request_hash)
     expect(receipts.every((receipt) => typeof receipt.adapter_prepared_at === "number")).toBe(true)
@@ -3139,11 +3605,74 @@ it.instance(
   "prompt submitted during an active run is included in the next LLM input",
   () =>
     Effect.gen(function* () {
-      const { llm } = yield* useServerConfig(providerCfg)
+      const { dir, llm } = yield* useServerConfig(providerCfg)
+      const previousMode = process.env.DEEPAGENT_MODE
+      const previousGatewayMode = AgentGateway.snapshot().agentMode
+      process.env.DEEPAGENT_MODE = "general"
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          if (previousMode === undefined) delete process.env.DEEPAGENT_MODE
+          else process.env.DEEPAGENT_MODE = previousMode
+          AgentGateway.configure({ agentMode: previousGatewayMode })
+        }),
+      )
       const gate = yield* Deferred.make<void>()
       const prompt = yield* SessionPrompt.Service
       const sessions = yield* Session.Service
       const chat = yield* sessions.create({ title: "Pinned" })
+      const { db } = yield* Database.Service
+      const canonicalDir = yield* (yield* FSUtil.Service).realPath(dir)
+      const legacyProjectId = AgentGateway.DeepAgentDurableKnowledgeStore.projectIdForWorkspace(canonicalDir)
+      const resolvedIdentity = yield* Effect.gen(function* () {
+        return yield* (yield* LocationIdentity.Service).resolve({
+          boundary: { kind: "implicit_local" },
+          directory: AbsolutePath.make(canonicalDir),
+          project: {
+            kind: "registered_root",
+            observedProjectId: legacyProjectId,
+          },
+        })
+      }).pipe(Effect.provide(LocationIdentity.layer))
+      const identity = yield* db
+        .select()
+        .from(LocationIdentityTable)
+        .where(
+          and(
+            eq(LocationIdentityTable.security_namespace_id, resolvedIdentity.securityNamespaceId),
+            eq(LocationIdentityTable.location_key, resolvedIdentity.locationKey),
+          ),
+        )
+        .get()
+        .pipe(Effect.orDie)
+      if (!identity) return yield* Effect.die("prompt location identity unavailable")
+      const releasedScope = {
+        securityNamespaceId: identity.security_namespace_id,
+        projectScopeKey: identity.project_scope_key,
+        legacyProjectId: identity.observed_project_id ?? legacyProjectId,
+      }
+      const emptyDocumentAuthority = {
+        userGlobal: { get: () => null },
+        project: { get: () => null },
+      }
+      const s1 = yield* DeepAgentReleasedSnapshot.publish(
+        db,
+        {
+          snapshotId: "snapshot_prompt_legacy_activity_s1",
+          evaluationId: "evaluation_prompt_legacy_activity_s1",
+          scope: releasedScope,
+          expectedParentSnapshotId: null,
+          expectedGeneration: 0,
+          releaseKind: "legacy_baseline",
+          verdict: "passed",
+          documents: [],
+          evaluationMatrix: { kind: "legacy_baseline" },
+          baselineRef: "prompt-legacy-activity-s1",
+          repetitions: 1,
+          actor: { type: "system", id: "prompt-test" },
+        },
+        emptyDocumentAuthority,
+      )
+      if (!s1) return yield* Effect.die("S1 baseline did not produce a released selection")
 
       yield* llm.hold("first", deferredAsPromise(gate))
       yield* llm.text("second")
@@ -3157,7 +3686,41 @@ it.instance(
         })
         .pipe(Effect.forkChild)
 
-      yield* llm.wait(1)
+      const firstProviderReceipt = yield* pollWithTimeout(
+        Effect.gen(function* () {
+          const early = a.pollUnsafe()
+          if (early) return yield* Effect.die(`first prompt ended before provider receipt: ${JSON.stringify(early)}`)
+          const receipt = yield* db
+            .select()
+            .from(SessionToolRequestReceiptTable)
+            .where(eq(SessionToolRequestReceiptTable.session_id, chat.id))
+            .get()
+            .pipe(Effect.orDie)
+          if (receipt?.provider_state === "dispatching" || receipt?.provider_state === "streaming") return receipt
+        }),
+        "timed out waiting for the first provider receipt to start",
+      )
+      expect(firstProviderReceipt.released_knowledge_snapshot_id).toBe(s1.snapshotId)
+
+      const s2 = yield* DeepAgentReleasedSnapshot.publish(
+        db,
+        {
+          snapshotId: "snapshot_prompt_legacy_activity_s2",
+          evaluationId: "evaluation_prompt_legacy_activity_s2",
+          scope: releasedScope,
+          expectedParentSnapshotId: s1.snapshotId,
+          expectedGeneration: s1.generation,
+          releaseKind: "rollback",
+          verdict: "passed",
+          documents: [],
+          evaluationMatrix: { kind: "rollback" },
+          baselineRef: s1.snapshotId,
+          repetitions: 1,
+          actor: { type: "system", id: "prompt-test" },
+        },
+        emptyDocumentAuthority,
+      )
+      if (!s2) return yield* Effect.die("S2 rollback did not produce a released selection")
 
       const receipt = yield* prompt.promptAsync({
         sessionID: chat.id,
@@ -3168,7 +3731,6 @@ it.instance(
         parts: [{ type: "text", text: "second" }],
       })
       expect(receipt.delivery).toBe("steer")
-      const { db } = yield* Database.Service
       const durableMessageID = SessionMessage.ID.make(receipt.messageID)
       expect(
         yield* db
@@ -3198,6 +3760,35 @@ it.instance(
       const steeredInput = JSON.stringify(inputs.at(-1)?.messages)
       expect(steeredInput).toContain("second")
       expect(steeredInput).not.toContain("The user sent the following message:")
+      expect((yield* DeepAgentReleasedSnapshot.current(db, releasedScope))?.snapshotId).toBe(s2.snapshotId)
+      const providerReceipts = (yield* db
+        .select()
+        .from(SessionToolRequestReceiptTable)
+        .where(eq(SessionToolRequestReceiptTable.session_id, chat.id))
+        .all()
+        .pipe(Effect.orDie)).toSorted((a, b) => a.request_ordinal - b.request_ordinal)
+      expect(providerReceipts).toHaveLength(2)
+      expect(providerReceipts.map((providerReceipt) => providerReceipt.released_knowledge_snapshot_id)).toEqual([
+        s1.snapshotId,
+        s1.snapshotId,
+      ])
+
+      yield* llm.text("third")
+      const nextActivity = yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        model: ref,
+        parts: [{ type: "text", text: "third" }],
+      })
+      expect(nextActivity.parts.some((part) => part.type === "text" && part.text === "third")).toBe(true)
+      const nextActivityReceipts = (yield* db
+        .select()
+        .from(SessionToolRequestReceiptTable)
+        .where(eq(SessionToolRequestReceiptTable.session_id, chat.id))
+        .all()
+        .pipe(Effect.orDie)).toSorted((a, b) => a.request_ordinal - b.request_ordinal)
+      expect(nextActivityReceipts).toHaveLength(3)
+      expect(nextActivityReceipts.at(-1)?.released_knowledge_snapshot_id).toBe(s2.snapshotId)
     }),
   15_000,
 )

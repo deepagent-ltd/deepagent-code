@@ -1,8 +1,19 @@
 import { describe, expect } from "bun:test"
+import { ProjectScopeKey, SecurityNamespaceID } from "@deepagent-code/core/context-federation/reference"
+import { ContextFederationRollout } from "@deepagent-code/core/context-federation/rollout"
+import { SessionProviderOwnerLeaseTable } from "@deepagent-code/core/context-federation/session-sql"
+import { ProjectScopeIdentityTable, SecurityNamespaceTable } from "@deepagent-code/core/context-federation/sql"
 import { Database } from "@deepagent-code/core/database/database"
+import { DeepAgentReleasedSnapshot } from "@deepagent-code/core/deepagent/released-snapshot"
+import { DeepAgentActivityAuthority } from "@deepagent-code/core/deepagent/index"
+import {
+  SessionActivityObjectiveTable,
+  SessionActivityPermissionEffectDispatchTable,
+} from "@deepagent-code/core/deepagent/activity-authority.sql"
 import { ProjectV2 } from "@deepagent-code/core/project"
 import { ProjectTable } from "@deepagent-code/core/project/sql"
 import { ModelV2 } from "@deepagent-code/core/model"
+import { Hash } from "@deepagent-code/core/util/hash"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { AbsolutePath } from "@deepagent-code/core/schema"
 import { SessionMessage } from "@deepagent-code/core/session/message"
@@ -16,9 +27,10 @@ import {
   SessionTable,
 } from "@deepagent-code/core/session/sql"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
-import { eq } from "drizzle-orm"
+import { and, eq, sql } from "drizzle-orm"
 import { Effect, Exit } from "effect"
 import { MessageV2 } from "../../src/session/message-v2"
+import { ContextActivationReceipt } from "../../src/context-federation/activation-receipt"
 import { SessionMutationEpoch } from "../../src/session/mutation-epoch"
 import { SessionPromptIntent } from "../../src/session/prompt-intent"
 import {
@@ -36,9 +48,43 @@ import { testEffect } from "../lib/effect"
 const database = Database.layerFromPath(":memory:")
 const it = testEffect(database)
 const sessionID = SessionID.make("ses_prompt_intent_test")
+const namespace = SecurityNamespaceID.make("sec_prompt_intent_test")
+const projectScope = ProjectScopeKey.make("prjctx_prompt_intent_test")
+const releasedKnowledgeBinding = DeepAgentReleasedSnapshot.binding(undefined)
+const providerOwnerToken = "prompt-intent-fixture"
 
 const setup = Effect.gen(function* () {
   const { db } = yield* Database.Service
+  yield* db
+    .insert(SessionProviderOwnerLeaseTable)
+    .values({
+      owner_token: providerOwnerToken,
+      registered_at: sql`CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)`,
+      heartbeat_at: sql`CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)`,
+      lease_expires_at: sql`CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) + 31536000000`,
+    })
+    .onConflictDoNothing()
+    .run()
+    .pipe(Effect.orDie)
+  yield* db
+    .insert(SecurityNamespaceTable)
+    .values({ id: namespace, kind: "implicit_local", binding_hash: "prompt-intent-namespace", created_at: 1 })
+    .onConflictDoNothing()
+    .run()
+    .pipe(Effect.orDie)
+  yield* db
+    .insert(ProjectScopeIdentityTable)
+    .values({
+      security_namespace_id: namespace,
+      project_scope_key: projectScope,
+      project_kind: "registered_root",
+      project_identity_hash: "prompt-intent-project",
+      observed_project_id: ProjectV2.ID.global,
+      created_at: 1,
+    })
+    .onConflictDoNothing()
+    .run()
+    .pipe(Effect.orDie)
   yield* db
     .insert(ProjectTable)
     .values({ id: ProjectV2.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
@@ -369,26 +415,13 @@ describe("SessionPromptIntent", () => {
         })
         .run()
         .pipe(Effect.orDie)
-      yield* db
-        .insert(SessionToolRequestReceiptTable)
-        .values({
-          receipt_id: "receipt-absorbed-boundary",
-          request_ordinal: 1,
-          session_id: sessionID,
-          user_message_id: trigger.receipt.messageID,
-          assistant_message_id: assistantID,
-          provider_id: "test",
-          model_id: "test",
-          registry_tool_ids: [],
-          permission_filtered_tool_ids: [],
-          final_offered_tool_ids: [],
-          call_ids: [],
-          provider_state: "preparing",
-          request_state: "prepared",
-          created_at: 2,
-        })
-        .run()
-        .pipe(Effect.orDie)
+      yield* preparingProviderReceipt({
+        db,
+        receiptID: "receipt-absorbed-boundary",
+        userMessageID: trigger.receipt.messageID,
+        assistantMessageID: assistantID,
+        registryToolIDs: [],
+      })
       yield* SessionPromptIntent.beginProgress({
         activityID: materialized.run.activityID,
         assistantMessageID: assistantID,
@@ -446,28 +479,17 @@ describe("SessionPromptIntent", () => {
         })
         .run()
         .pipe(Effect.orDie)
-      yield* db
-        .insert(SessionToolRequestReceiptTable)
-        .values({
-          receipt_id: "receipt-question-rejected",
-          request_ordinal: 1,
-          session_id: sessionID,
-          user_message_id: trigger.receipt.messageID,
-          assistant_message_id: assistantID,
-          provider_id: "test",
-          model_id: "test",
-          registry_tool_ids: ["question"],
-          permission_filtered_tool_ids: ["question"],
-          final_offered_tool_ids: ["question"],
-          call_ids: ["call-question-rejected"],
-          provider_state: "settled",
-          terminal_at: 3,
-          response_fingerprint: "response-question-rejected",
-          request_state: "dispatched",
-          created_at: 2,
-        })
-        .run()
-        .pipe(Effect.orDie)
+      yield* settledProviderReceipt({
+        db,
+        receiptID: "receipt-question-rejected",
+        userMessageID: trigger.receipt.messageID,
+        assistantMessageID: assistantID,
+        registryToolIDs: ["question"],
+        permissionFilteredToolIDs: ["question"],
+        finalOfferedToolIDs: ["question"],
+        callIDs: ["call-question-rejected"],
+        responseFingerprint: "response-question-rejected",
+      })
       yield* SessionPromptIntent.beginProgress({
         activityID: materialized.run.activityID,
         assistantMessageID: assistantID,
@@ -636,28 +658,17 @@ describe("SessionPromptIntent", () => {
         })
         .run()
         .pipe(Effect.orDie)
-      yield* db
-        .insert(SessionToolRequestReceiptTable)
-        .values({
-          receipt_id: "receipt-finalizing-followup",
-          request_ordinal: 1,
-          session_id: sessionID,
-          user_message_id: trigger.receipt.messageID,
-          assistant_message_id: assistantID,
-          provider_id: "test",
-          model_id: "test",
-          registry_tool_ids: [],
-          permission_filtered_tool_ids: [],
-          final_offered_tool_ids: [],
-          call_ids: [],
-          provider_state: "settled",
-          terminal_at: 3,
-          response_fingerprint: "response-finalizing-followup",
-          request_state: "dispatched",
-          created_at: 2,
-        })
-        .run()
-        .pipe(Effect.orDie)
+      yield* settledProviderReceipt({
+        db,
+        receiptID: "receipt-finalizing-followup",
+        userMessageID: trigger.receipt.messageID,
+        assistantMessageID: assistantID,
+        registryToolIDs: [],
+        permissionFilteredToolIDs: [],
+        finalOfferedToolIDs: [],
+        callIDs: [],
+        responseFingerprint: "response-finalizing-followup",
+      })
       yield* SessionPromptIntent.beginProgress({
         activityID: materialized.run.activityID,
         assistantMessageID: assistantID,
@@ -763,6 +774,57 @@ describe("SessionPromptIntent", () => {
     }),
   )
 
+  it.effect("direct interruption settles a monitoring objective with the legacy activity", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const first = yield* claim({ intentID: "intent_interrupt", messageID: MessageID.make("msg_interrupt_user") })
+      expect(first.kind).toBe("claimed")
+      if (first.kind !== "claimed") return
+      yield* SessionPromptIntent.materializeTurn({
+        receipt: first.receipt,
+        message: message(first.receipt.messageID),
+      })
+      const activity = yield* SessionPromptIntent.activityForMessage({
+        sessionID,
+        messageID: first.receipt.messageID,
+      })
+      expect(activity?.state).toBe("active")
+      if (!activity) return
+      const current = yield* DeepAgentActivityAuthority.reconstruct({
+        activityKind: "legacy",
+        activityID: activity.activityID,
+      })
+      yield* DeepAgentActivityAuthority.configure({
+        activityKind: "legacy",
+        activityID: activity.activityID,
+        expectedVersion: current.objective.version,
+        objectiveText: "interrupt the monitored activity",
+        completionCriteria: [{ kind: "plan_complete" }],
+        enforcementState: "monitoring",
+        stallThreshold: 2,
+      })
+
+      yield* SessionPromptIntent.interruptActivity(activity.activityID)
+      const { db } = yield* Database.Service
+      expect(
+        yield* db
+          .select()
+          .from(SessionLegacyActivityTable)
+          .where(eq(SessionLegacyActivityTable.activity_id, activity.activityID))
+          .get()
+          .pipe(Effect.orDie),
+      ).toMatchObject({ state: "interrupted", terminal_reason: "aborted_before_provider_settlement" })
+      expect(
+        yield* db
+          .select()
+          .from(SessionActivityObjectiveTable)
+          .where(eq(SessionActivityObjectiveTable.activity_id, activity.activityID))
+          .get()
+          .pipe(Effect.orDie),
+      ).toMatchObject({ state: "interrupted", terminal_reason: "aborted_before_provider_settlement" })
+    }),
+  )
+
   it.effect("terminal provider receipts settle provisional progress deterministically after restart", () =>
     Effect.gen(function* () {
       yield* setup
@@ -824,28 +886,17 @@ describe("SessionPromptIntent", () => {
         ])
         .run()
         .pipe(Effect.orDie)
-      yield* db
-        .insert(SessionToolRequestReceiptTable)
-        .values({
-          receipt_id: "receipt-progress-final",
-          request_ordinal: 1,
-          session_id: sessionID,
-          user_message_id: first.receipt.messageID,
-          assistant_message_id: assistantID,
-          provider_id: "test",
-          model_id: "test",
-          registry_tool_ids: [],
-          permission_filtered_tool_ids: [],
-          final_offered_tool_ids: [],
-          call_ids: [],
-          provider_state: "settled",
-          terminal_at: 3,
-          response_fingerprint: "response-final",
-          request_state: "dispatched",
-          created_at: 2,
-        })
-        .run()
-        .pipe(Effect.orDie)
+      yield* settledProviderReceipt({
+        db,
+        receiptID: "receipt-progress-final",
+        userMessageID: first.receipt.messageID,
+        assistantMessageID: assistantID,
+        registryToolIDs: [],
+        permissionFilteredToolIDs: [],
+        finalOfferedToolIDs: [],
+        callIDs: [],
+        responseFingerprint: "response-final",
+      })
       yield* SessionPromptIntent.beginProgress({
         activityID: activity.activityID,
         assistantMessageID: assistantID,
@@ -926,6 +977,100 @@ describe("SessionPromptIntent", () => {
     }),
   )
 
+  it.effect("restart activity recovery quarantines permission effects through the Core authority", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const first = yield* claim({
+        intentID: "intent_permission_recovery",
+        messageID: MessageID.make("msg_permission_recovery_user"),
+      })
+      expect(first.kind).toBe("claimed")
+      if (first.kind !== "claimed") return
+      yield* SessionPromptIntent.materializeTurn({
+        receipt: first.receipt,
+        message: message(first.receipt.messageID),
+      })
+      const activity = yield* SessionPromptIntent.activityForMessage({
+        sessionID,
+        messageID: first.receipt.messageID,
+      })
+      expect(activity?.state).toBe("active")
+      if (!activity) return
+      yield* DeepAgentActivityAuthority.heartbeatPermissionOwner({
+        ownerID: "prompt-recovery-old-owner",
+        leaseMs: 60_000,
+      })
+      const permissionRequest = yield* DeepAgentActivityAuthority.requestPermission({
+        activityKind: "legacy",
+        activityID: activity.activityID,
+        requestID: "permission-prompt-recovery",
+        requestKind: "tool",
+        idempotencyKey: "permission-prompt-recovery-request",
+        permission: "read",
+        patterns: ["stable.ts"],
+        alwaysPatterns: ["stable.ts"],
+        metadata: {},
+        tool: { messageID: "assistant-permission-recovery", callID: "call-permission-recovery" },
+        ownerID: "prompt-recovery-old-owner",
+      })
+      yield* DeepAgentActivityAuthority.decidePermission({
+        requestID: permissionRequest.requestID,
+        idempotencyKey: "permission-prompt-recovery-decision",
+        decision: "approved_always",
+        actorType: "user",
+        actorID: "test-user",
+      })
+      yield* DeepAgentActivityAuthority.beginPermissionEffect({
+        requestID: permissionRequest.requestID,
+        toolName: "read",
+        consumerID: "tool:assistant-permission-recovery:call-permission-recovery",
+        idempotencyKey: "permission-prompt-recovery-effect",
+        ownerID: "prompt-recovery-old-owner",
+      })
+      yield* DeepAgentActivityAuthority.releasePermissionOwner("prompt-recovery-old-owner")
+      yield* DeepAgentActivityAuthority.heartbeatPermissionOwner({
+        ownerID: "prompt-recovery-new-owner",
+        leaseMs: 60_000,
+      })
+      const database = yield* Database.Service
+
+      expect(
+        yield* SessionPromptIntent.recoverActiveActivities("next-process-owner", (input) =>
+          DeepAgentActivityAuthority.recoverActivity({
+            activityKind: "legacy",
+            ...input,
+            recoveryOwnerID: "prompt-recovery-new-owner",
+          }).pipe(Effect.provideService(Database.Service, database), Effect.orDie),
+        ),
+      ).toEqual([{ activityID: activity.activityID, sessionID }])
+      const { db } = database
+      expect(
+        yield* db
+          .select({ state: SessionActivityPermissionEffectDispatchTable.state })
+          .from(SessionActivityPermissionEffectDispatchTable)
+          .where(eq(SessionActivityPermissionEffectDispatchTable.request_id, permissionRequest.requestID))
+          .get()
+          .pipe(Effect.orDie),
+      ).toEqual({ state: "unknown" })
+      expect(
+        yield* db
+          .select({ state: SessionLegacyActivityTable.state })
+          .from(SessionLegacyActivityTable)
+          .where(eq(SessionLegacyActivityTable.activity_id, activity.activityID))
+          .get()
+          .pipe(Effect.orDie),
+      ).toEqual({ state: "recovery_required" })
+      expect(
+        yield* db
+          .select({ state: SessionActivityObjectiveTable.state })
+          .from(SessionActivityObjectiveTable)
+          .where(eq(SessionActivityObjectiveTable.activity_id, activity.activityID))
+          .get()
+          .pipe(Effect.orDie),
+      ).toEqual({ state: "recovery_required" })
+    }),
+  )
+
   it.effect(
     "terminal tool progress becomes recovery-required after restart instead of leaving an orphan active owner",
     () =>
@@ -948,6 +1093,19 @@ describe("SessionPromptIntent", () => {
         expect(activity?.state).toBe("active")
         if (!activity) return
         const { db } = yield* Database.Service
+        const current = yield* DeepAgentActivityAuthority.reconstruct({
+          activityKind: "legacy",
+          activityID: activity.activityID,
+        })
+        yield* DeepAgentActivityAuthority.configure({
+          activityKind: "legacy",
+          activityID: activity.activityID,
+          expectedVersion: current.objective.version,
+          objectiveText: "recover the monitored tool activity",
+          completionCriteria: [{ kind: "plan_complete" }],
+          enforcementState: "monitoring",
+          stallThreshold: 2,
+        })
         const assistantID = MessageID.make("msg_progress_tool_assistant")
         yield* db
           .insert(MessageTable)
@@ -982,28 +1140,17 @@ describe("SessionPromptIntent", () => {
           })
           .run()
           .pipe(Effect.orDie)
-        yield* db
-          .insert(SessionToolRequestReceiptTable)
-          .values({
-            receipt_id: "receipt-progress-tool",
-            request_ordinal: 1,
-            session_id: sessionID,
-            user_message_id: first.receipt.messageID,
-            assistant_message_id: assistantID,
-            provider_id: "test",
-            model_id: "test",
-            registry_tool_ids: ["read"],
-            permission_filtered_tool_ids: ["read"],
-            final_offered_tool_ids: ["read"],
-            call_ids: ["call-progress-tool"],
-            provider_state: "settled",
-            terminal_at: 3,
-            response_fingerprint: "response-progress-tool",
-            request_state: "dispatched",
-            created_at: 2,
-          })
-          .run()
-          .pipe(Effect.orDie)
+        yield* settledProviderReceipt({
+          db,
+          receiptID: "receipt-progress-tool",
+          userMessageID: first.receipt.messageID,
+          assistantMessageID: assistantID,
+          registryToolIDs: ["read"],
+          permissionFilteredToolIDs: ["read"],
+          finalOfferedToolIDs: ["read"],
+          callIDs: ["call-progress-tool"],
+          responseFingerprint: "response-progress-tool",
+        })
         yield* SessionPromptIntent.beginProgress({
           activityID: activity.activityID,
           assistantMessageID: assistantID,
@@ -1102,26 +1249,13 @@ describe("SessionPromptIntent", () => {
         })
         .run()
         .pipe(Effect.orDie)
-      yield* db
-        .insert(SessionToolRequestReceiptTable)
-        .values({
-          receipt_id: "receipt-reasoning-projection",
-          request_ordinal: 1,
-          session_id: sessionID,
-          user_message_id: first.receipt.messageID,
-          assistant_message_id: assistantID,
-          provider_id: "test",
-          model_id: "test",
-          registry_tool_ids: [],
-          permission_filtered_tool_ids: [],
-          final_offered_tool_ids: [],
-          call_ids: [],
-          provider_state: "preparing",
-          request_state: "prepared",
-          created_at: 20,
-        })
-        .run()
-        .pipe(Effect.orDie)
+      yield* preparingProviderReceipt({
+        db,
+        receiptID: "receipt-reasoning-projection",
+        userMessageID: first.receipt.messageID,
+        assistantMessageID: assistantID,
+        registryToolIDs: [],
+      })
       yield* SessionPromptIntent.beginProgress({
         activityID: activity.activityID,
         assistantMessageID: assistantID,
@@ -1297,4 +1431,190 @@ describe("SessionPromptIntent", () => {
       expect(intent?.delivery).toBe("queue")
     }),
   )
+})
+
+function settledProviderReceipt(input: {
+  readonly db: Database.Interface["db"]
+  readonly receiptID: string
+  readonly userMessageID: MessageID
+  readonly assistantMessageID: MessageID
+  readonly registryToolIDs: readonly string[]
+  readonly permissionFilteredToolIDs: readonly string[]
+  readonly finalOfferedToolIDs: readonly string[]
+  readonly callIDs: readonly string[]
+  readonly responseFingerprint: string
+}) {
+  return Effect.gen(function* () {
+    yield* preparingProviderReceipt(input)
+    const sealed = yield* input.db
+      .update(SessionToolRequestReceiptTable)
+      .set({
+        permission_filtered_tool_ids: [...input.permissionFilteredToolIDs],
+        adapter_tool_capability: "supported",
+        adapter_lowering_outcome: "ok",
+        released_knowledge_selected_refs: [],
+        released_knowledge_selected_refs_fingerprint: releasedKnowledgeBinding.exactRefsFingerprint,
+      })
+      .where(
+        and(
+          eq(SessionToolRequestReceiptTable.receipt_id, input.receiptID),
+          eq(SessionToolRequestReceiptTable.provider_state, "preparing"),
+        ),
+      )
+      .returning({ receiptID: SessionToolRequestReceiptTable.receipt_id })
+      .get()
+      .pipe(Effect.orDie)
+    if (!sealed) return yield* Effect.die(`selected refs seal lost: ${input.receiptID}`)
+    yield* transitionProviderReceipt({
+      db: input.db,
+      receiptID: input.receiptID,
+      from: "preparing",
+      to: "prepared",
+      values: {
+        final_request_hash: Hash.sha256(`request-${input.receiptID}`),
+        provider_request_hash: Hash.sha256(`request-${input.receiptID}`),
+        final_offered_tool_ids: [...input.finalOfferedToolIDs],
+        tool_definition_hash: Hash.sha256(`tools-${input.receiptID}`),
+        prepared_turn_hash: Hash.sha256(`prepared-turn-${input.receiptID}`),
+        system_stable_hash: Hash.sha256(`system-stable-${input.receiptID}`),
+        system_volatile_hash: Hash.sha256(`system-volatile-${input.receiptID}`),
+        wire_request_hash: Hash.sha256(`request-${input.receiptID}`),
+        tool_result_reference_ids: [],
+        tool_result_reference_count: 0,
+        adapter_prepared_at: 3,
+      },
+    })
+    yield* transitionProviderReceipt({
+      db: input.db,
+      receiptID: input.receiptID,
+      from: "prepared",
+      to: "dispatching",
+      values: { request_state: "dispatched", dispatching_at: 4 },
+    })
+    yield* transitionProviderReceipt({
+      db: input.db,
+      receiptID: input.receiptID,
+      from: "dispatching",
+      to: "streaming",
+      values: { streaming_at: 5 },
+    })
+    yield* transitionProviderReceipt({
+      db: input.db,
+      receiptID: input.receiptID,
+      from: "streaming",
+      to: "settled",
+      values: {
+        call_ids: [...input.callIDs],
+        terminal_at: 6,
+        response_fingerprint: input.responseFingerprint,
+      },
+    })
+  })
+}
+
+function preparingProviderReceipt(input: {
+  readonly db: Database.Interface["db"]
+  readonly receiptID: string
+  readonly userMessageID: MessageID
+  readonly assistantMessageID: MessageID
+  readonly registryToolIDs: readonly string[]
+}) {
+  return input.db
+    .insert(SessionToolRequestReceiptTable)
+    .values({
+      receipt_id: input.receiptID,
+      request_ordinal: 1,
+      session_id: sessionID,
+      user_message_id: input.userMessageID,
+      assistant_message_id: input.assistantMessageID,
+      context_eligibility: contextEligibility,
+      context_readiness: contextReadiness,
+      context_activation: contextActivation,
+      context_activation_fingerprint: contextActivationFingerprint,
+      released_knowledge_security_namespace_id: namespace,
+      released_knowledge_project_scope_key: projectScope,
+      released_knowledge_binding_state: releasedKnowledgeBinding.state,
+      released_knowledge_exact_refs: releasedKnowledgeBinding.exactRefs,
+      released_knowledge_exact_refs_fingerprint: releasedKnowledgeBinding.exactRefsFingerprint,
+      provider_id: "test",
+      model_id: "test",
+      protocol: "test",
+      registry_tool_ids: [...input.registryToolIDs],
+      permission_filtered_tool_ids: [],
+      final_offered_tool_ids: [],
+      call_ids: [],
+      adapter_tool_capability: "unknown",
+      prompt_epoch: 0,
+      prompt_window_id: `window-${input.receiptID}`,
+      effective_history_hash: `history-${input.receiptID}`,
+      request_input_hash: `input-${input.receiptID}`,
+      response_chain_reuse_decision: "not_supported",
+      response_chain_refusal_reason: "fixture_path_not_stateful",
+      provider_state: "preparing",
+      owner_token: providerOwnerToken,
+      request_state: "prepared",
+      created_at: 2,
+    })
+    .run()
+    .pipe(Effect.orDie)
+}
+
+function transitionProviderReceipt(input: {
+  readonly db: Database.Interface["db"]
+  readonly receiptID: string
+  readonly from: typeof SessionToolRequestReceiptTable.$inferSelect.provider_state
+  readonly to: typeof SessionToolRequestReceiptTable.$inferSelect.provider_state
+  readonly values: Partial<typeof SessionToolRequestReceiptTable.$inferInsert>
+}) {
+  return input.db
+    .update(SessionToolRequestReceiptTable)
+    .set({ ...input.values, provider_state: input.to })
+    .where(
+      and(
+        eq(SessionToolRequestReceiptTable.receipt_id, input.receiptID),
+        eq(SessionToolRequestReceiptTable.provider_state, input.from),
+      ),
+    )
+    .returning({ receiptID: SessionToolRequestReceiptTable.receipt_id })
+    .get()
+    .pipe(
+      Effect.orDie,
+      Effect.flatMap((updated) =>
+        updated ? Effect.void : Effect.die(`provider receipt transition lost: ${input.receiptID}: ${input.from}`),
+      ),
+    )
+}
+
+const contextEligibility = ContextFederationRollout.resolveProject(
+  ContextFederationRollout.resolve(
+    {
+      contextFederationShadow: false,
+      locationIndexesV2Shadow: false,
+      contextProjectionV2: false,
+      contextQueryToolsV2: false,
+      coreV2ExecutionOwner: false,
+    },
+    { coreV2ParityVerified: false },
+  ),
+  projectScope,
+  { stage: "all", percentage: 100, internalProjectScopeKeys: [], killSwitch: false },
+)
+const contextReadiness = {
+  ...ContextFederationRollout.READINESS_READY_STUB,
+  revision: "readiness-prompt-intent",
+  projectScopeKey: projectScope,
+  observedAt: 1,
+}
+const contextDecision = ContextFederationRollout.activate(contextEligibility, contextReadiness)
+const contextActivation = ContextActivationReceipt.make({
+  readiness: contextReadiness,
+  decision: contextDecision,
+  recordedAt: 2,
+  projectionEnabled: false,
+  toolsEnabled: false,
+})
+const contextActivationFingerprint = ContextActivationReceipt.fingerprint({
+  eligibility: contextEligibility,
+  readiness: contextReadiness,
+  activation: contextActivation,
 })

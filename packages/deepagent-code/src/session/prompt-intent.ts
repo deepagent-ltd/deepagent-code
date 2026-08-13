@@ -21,6 +21,7 @@ import {
   SessionLegacyActivityTable,
   SessionLegacyActivityTerminalTable,
 } from "./activity-sql"
+import { SessionActivityObjectiveTable } from "@deepagent-code/core/deepagent/activity-authority.sql"
 import { SessionToolRequestReceiptTable } from "./tool-request-receipt.sql"
 import { SessionActivityOwner } from "./activity-owner"
 import { pause as pauseAtActivityCrashPoint } from "./activity-crash-test"
@@ -1115,7 +1116,10 @@ export const claimActiveActivityRun = Effect.fn("SessionPromptIntent.claimActive
               SessionActivityAdmissionTable,
               eq(SessionActivityAdmissionTable.admission_id, SessionLegacyActivityTable.trigger_admission_id),
             )
-            .innerJoin(SessionIntentTable, eq(SessionIntentTable.intent_id, SessionActivityAdmissionTable.legacy_intent_id))
+            .innerJoin(
+              SessionIntentTable,
+              eq(SessionIntentTable.intent_id, SessionActivityAdmissionTable.legacy_intent_id),
+            )
             .where(
               and(
                 eq(SessionLegacyActivityTable.session_id, input.sessionID),
@@ -1259,16 +1263,11 @@ export const markRunFinalizing = Effect.fn("SessionPromptIntent.markRunFinalizin
             .returning({ runID: SessionLegacyActivityRunTable.run_id })
             .get()
           if (!updated)
-            return yield* Effect.fail(
-              new Conflict({ intentID: run.runID, reason: "activity run finalizing CAS lost" }),
-            )
+            return yield* Effect.fail(new Conflict({ intentID: run.runID, reason: "activity run finalizing CAS lost" }))
         }),
       { behavior: "immediate" },
     )
-    .pipe(
-      Effect.catchTag("EffectDrizzleQueryError", Effect.die),
-      Effect.catchTag("SqlError", Effect.die),
-    )
+    .pipe(Effect.catchTag("EffectDrizzleQueryError", Effect.die), Effect.catchTag("SqlError", Effect.die))
 })
 
 export const markRunRunning = Effect.fn("SessionPromptIntent.markRunRunning")(function* (run: RunIdentity) {
@@ -1312,10 +1311,7 @@ export const markRunRunning = Effect.fn("SessionPromptIntent.markRunRunning")(fu
         }),
       { behavior: "immediate" },
     )
-    .pipe(
-      Effect.catchTag("EffectDrizzleQueryError", Effect.die),
-      Effect.catchTag("SqlError", Effect.die),
-    )
+    .pipe(Effect.catchTag("EffectDrizzleQueryError", Effect.die), Effect.catchTag("SqlError", Effect.die))
 })
 
 export const activityForMessage = Effect.fn("SessionPromptIntent.activityForMessage")(function* (input: {
@@ -1354,6 +1350,36 @@ export const activityForMessage = Effect.fn("SessionPromptIntent.activityForMess
     sessionID: SessionID.make(row.sessionID),
     state: row.state,
   } satisfies Activity
+})
+
+export const activeActivityForSession = Effect.fn("SessionPromptIntent.activeActivityForSession")(function* (
+  sessionID: SessionID,
+) {
+  const { db } = yield* Database.Service
+  const row = yield* db
+    .select({
+      activityID: SessionLegacyActivityTable.activity_id,
+      admissionID: SessionLegacyActivityTable.trigger_admission_id,
+      messageID: SessionActivityAdmissionTable.admitted_message_id,
+      sessionID: SessionLegacyActivityTable.session_id,
+      state: SessionLegacyActivityTable.state,
+    })
+    .from(SessionLegacyActivityTable)
+    .innerJoin(
+      SessionActivityAdmissionTable,
+      eq(SessionActivityAdmissionTable.admission_id, SessionLegacyActivityTable.trigger_admission_id),
+    )
+    .where(and(eq(SessionLegacyActivityTable.session_id, sessionID), eq(SessionLegacyActivityTable.state, "active")))
+    .get()
+    .pipe(Effect.orDie)
+  if (!row) return undefined
+  return {
+    activityID: row.activityID,
+    admissionID: row.admissionID,
+    messageID: MessageID.make(row.messageID),
+    sessionID: SessionID.make(row.sessionID),
+    state: row.state,
+  }
 })
 
 export const freezeProviderInputBoundary = Effect.fn("SessionPromptIntent.freezeProviderInputBoundary")(function* (
@@ -1493,6 +1519,12 @@ const settleProgressInTransaction = Effect.fn("SessionPromptIntent.settleProgres
   if (!current || current.activity_id !== input.activityID)
     return yield* Effect.die(new Error(`activity progress is missing: ${input.assistantMessageID}`))
   if (current.state !== "provisional") return { value: progress(current), row: current }
+  const activity = yield* tx
+    .select()
+    .from(SessionLegacyActivityTable)
+    .where(eq(SessionLegacyActivityTable.activity_id, input.activityID))
+    .get()
+  if (!activity) return yield* Effect.die(new Error(`legacy activity is missing: ${input.activityID}`))
   const receipt = yield* tx
     .select()
     .from(SessionToolRequestReceiptTable)
@@ -1536,20 +1568,24 @@ const settleProgressInTransaction = Effect.fn("SessionPromptIntent.settleProgres
     return !(data.state.status === "error" && data.state.metadata?.interrupted === true)
   })
   const state =
-    receipt.provider_state === "indeterminate_after_crash"
-      ? "recovery_required"
-      : receipt.provider_state === "failed"
-        ? receipt.request_error_code === "AbortError"
-          ? "interrupted"
-          : "recovery_required"
-        : !assistantData.time.completed || !assistantData.finish
+    activity.state === "interrupted"
+      ? "interrupted"
+      : activity.state === "recovery_required" || activity.state === "failed"
+        ? "recovery_required"
+        : receipt.provider_state === "indeterminate_after_crash"
           ? "recovery_required"
-          : assistantData.finish === "tool-calls" ||
-              assistantData.finish === "length" ||
-              hasToolCalls ||
-              pendingAdmission
-            ? "progress"
-            : "final"
+          : receipt.provider_state === "failed"
+            ? receipt.request_error_code === "AbortError"
+              ? "interrupted"
+              : "recovery_required"
+            : !assistantData.time.completed || !assistantData.finish
+              ? "recovery_required"
+              : assistantData.finish === "tool-calls" ||
+                  assistantData.finish === "length" ||
+                  hasToolCalls ||
+                  pendingAdmission
+                ? "progress"
+                : "final"
   const now = Date.now()
   const updated = yield* tx
     .update(SessionActivityProgressTable)
@@ -1617,10 +1653,60 @@ const settleProgressInTransaction = Effect.fn("SessionPromptIntent.settleProgres
       )
       .returning({ activityID: SessionLegacyActivityTable.activity_id })
       .get()
-    if (!terminal) return yield* Effect.die(new Error(`legacy activity settlement CAS lost: ${input.activityID}`))
+    if (!terminal && activity.state === "active")
+      return yield* Effect.die(new Error(`legacy activity settlement CAS lost: ${input.activityID}`))
+    yield* settleMonitoringObjectiveInTransaction(
+      tx,
+      input.activityID,
+      state === "final" ? "completed" : state === "interrupted" ? "interrupted" : "recovery_required",
+      assistantData.finish ?? receipt.request_error_code ?? state,
+      now,
+    )
   }
   return { value: progress(updated), row: updated }
 })
+
+const settleMonitoringObjectiveInTransaction = Effect.fn("SessionPromptIntent.settleMonitoringObjectiveInTransaction")(
+  function* (
+    tx: Transaction,
+    activityID: string,
+    state: "completed" | "interrupted" | "recovery_required",
+    terminalReason: string,
+    now: number,
+  ) {
+    const objective = yield* tx
+      .select()
+      .from(SessionActivityObjectiveTable)
+      .where(
+        and(
+          eq(SessionActivityObjectiveTable.activity_kind, "legacy"),
+          eq(SessionActivityObjectiveTable.activity_id, activityID),
+        ),
+      )
+      .get()
+    if (objective?.enforcement_state !== "monitoring" || !["active", "needs_human"].includes(objective.state)) return
+    const updated = yield* tx
+      .update(SessionActivityObjectiveTable)
+      .set({
+        version: objective.version + 1,
+        state,
+        terminal_reason: terminalReason,
+        updated_at: now,
+        settled_at: now,
+      })
+      .where(
+        and(
+          eq(SessionActivityObjectiveTable.activity_kind, "legacy"),
+          eq(SessionActivityObjectiveTable.activity_id, activityID),
+          eq(SessionActivityObjectiveTable.version, objective.version),
+          sql`${SessionActivityObjectiveTable.state} IN ('active', 'needs_human')`,
+        ),
+      )
+      .returning({ activityID: SessionActivityObjectiveTable.activity_id })
+      .get()
+    if (!updated) return yield* Effect.die(new Error(`activity objective settlement CAS lost: ${activityID}`))
+  },
+)
 
 export const settleProgress = Effect.fn("SessionPromptIntent.settleProgress")(function* (input: {
   readonly activityID: string
@@ -1778,7 +1864,10 @@ export const finalizeActivityWithRevision = Effect.fn("SessionPromptIntent.final
                 ),
               )
               .get()
-            if (decision.source !== "cancel" && (latestMembership > settled.row.input_membership_ordinal || pendingSteer))
+            if (
+              decision.source !== "cancel" &&
+              (latestMembership > settled.row.input_membership_ordinal || pendingSteer)
+            )
               return {
                 kind: "follow_up_required" as const,
                 membershipOrdinal: latestMembership,
@@ -1824,6 +1913,17 @@ export const finalizeActivityWithRevision = Effect.fn("SessionPromptIntent.final
               return yield* Effect.fail(
                 new Conflict({ intentID: input.run.runID, reason: "activity terminal CAS lost" }),
               )
+            yield* settleMonitoringObjectiveInTransaction(
+              tx,
+              input.run.activityID,
+              decision.state === "settled"
+                ? "completed"
+                : decision.state === "failed"
+                  ? "recovery_required"
+                  : decision.state,
+              decision.reasonCode,
+              now,
+            )
             yield* tx
               .insert(SessionLegacyActivityTerminalTable)
               .values({
@@ -1999,6 +2099,17 @@ export const finalizeActivityWithoutRevision = Effect.fn("SessionPromptIntent.fi
               return yield* Effect.fail(
                 new Conflict({ intentID: input.run.runID, reason: "activity terminal CAS lost" }),
               )
+            yield* settleMonitoringObjectiveInTransaction(
+              tx,
+              input.run.activityID,
+              input.decision.state === "settled"
+                ? "completed"
+                : input.decision.state === "failed"
+                  ? "recovery_required"
+                  : input.decision.state,
+              input.decision.reasonCode,
+              now,
+            )
             yield* tx
               .insert(SessionLegacyActivityTerminalTable)
               .values({
@@ -2027,150 +2138,151 @@ export const finalizeActivityWithoutRevision = Effect.fn("SessionPromptIntent.fi
   },
 )
 
-export const finalizeCancellationBeforeProgress = Effect.fn(
-  "SessionPromptIntent.finalizeCancellationBeforeProgress",
-)(function* (run: RunIdentity) {
-  const { db } = yield* Database.Service
-  return yield* db
-    .transaction(
-      (tx) =>
-        Effect.gen(function* () {
-          const existing = yield* tx
-            .select()
-            .from(SessionLegacyActivityTerminalTable)
-            .where(eq(SessionLegacyActivityTerminalTable.activity_id, run.activityID))
-            .get()
-          if (existing) {
+export const finalizeCancellationBeforeProgress = Effect.fn("SessionPromptIntent.finalizeCancellationBeforeProgress")(
+  function* (run: RunIdentity) {
+    const { db } = yield* Database.Service
+    return yield* db
+      .transaction(
+        (tx) =>
+          Effect.gen(function* () {
+            const existing = yield* tx
+              .select()
+              .from(SessionLegacyActivityTerminalTable)
+              .where(eq(SessionLegacyActivityTerminalTable.activity_id, run.activityID))
+              .get()
+            if (existing) {
+              if (
+                existing.session_id !== run.sessionID ||
+                existing.mutation_epoch !== run.mutationEpoch ||
+                existing.state !== "interrupted" ||
+                existing.reason_code !== "user_cancelled" ||
+                existing.source !== "cancel" ||
+                existing.operation_id !== `${run.runID}:terminal` ||
+                existing.run_id !== run.runID ||
+                existing.owner_token !== run.ownerToken
+              )
+                return yield* Effect.fail(
+                  new Conflict({ intentID: run.runID, reason: "activity cancellation replay diverged" }),
+                )
+              return {
+                kind: "exact_replay" as const,
+                invalidation: {
+                  activityID: run.activityID,
+                  sessionID: run.sessionID,
+                  ...(existing.assistant_message_id
+                    ? { assistantMessageID: MessageID.make(existing.assistant_message_id) }
+                    : {}),
+                },
+              } satisfies FinalizeResult
+            }
+            const progress = yield* tx
+              .select({ assistantMessageID: SessionActivityProgressTable.assistant_message_id })
+              .from(SessionActivityProgressTable)
+              .where(eq(SessionActivityProgressTable.activity_id, run.activityID))
+              .limit(1)
+              .get()
+            if (progress) return undefined
+            const session = yield* tx
+              .select({ mutationEpoch: SessionTable.mutation_epoch })
+              .from(SessionTable)
+              .where(eq(SessionTable.id, run.sessionID))
+              .get()
+            const currentRun = yield* tx
+              .select()
+              .from(SessionLegacyActivityRunTable)
+              .where(eq(SessionLegacyActivityRunTable.run_id, run.runID))
+              .get()
+            const activity = yield* tx
+              .select()
+              .from(SessionLegacyActivityTable)
+              .where(eq(SessionLegacyActivityTable.activity_id, run.activityID))
+              .get()
             if (
-              existing.session_id !== run.sessionID ||
-              existing.mutation_epoch !== run.mutationEpoch ||
-              existing.state !== "interrupted" ||
-              existing.reason_code !== "user_cancelled" ||
-              existing.source !== "cancel" ||
-              existing.operation_id !== `${run.runID}:terminal` ||
-              existing.run_id !== run.runID ||
-              existing.owner_token !== run.ownerToken
+              !session ||
+              session.mutationEpoch !== run.mutationEpoch ||
+              !currentRun ||
+              currentRun.activity_id !== run.activityID ||
+              currentRun.session_id !== run.sessionID ||
+              currentRun.mutation_epoch !== run.mutationEpoch ||
+              currentRun.generation !== run.generation ||
+              currentRun.owner_token !== run.ownerToken ||
+              !["running", "finalizing"].includes(currentRun.state) ||
+              !activity ||
+              activity.session_id !== run.sessionID ||
+              activity.owner_token !== run.ownerToken ||
+              activity.state !== "active"
             )
               return yield* Effect.fail(
-                new Conflict({ intentID: run.runID, reason: "activity cancellation replay diverged" }),
+                new Conflict({ intentID: run.runID, reason: "activity cancellation ownership is stale" }),
               )
+            const membershipOrdinal =
+              (yield* tx
+                .select({ ordinal: max(SessionLegacyActivityAdmissionTable.ordinal) })
+                .from(SessionLegacyActivityAdmissionTable)
+                .where(eq(SessionLegacyActivityAdmissionTable.activity_id, run.activityID))
+                .get())?.ordinal ?? 0
+            const now = Date.now()
+            yield* cancelPendingActivitySteers(tx, run, now)
+            const terminalRun = yield* tx
+              .update(SessionLegacyActivityRunTable)
+              .set({ state: "interrupted", terminal_at: now, terminal_reason: "user_cancelled" })
+              .where(
+                and(
+                  eq(SessionLegacyActivityRunTable.run_id, run.runID),
+                  eq(SessionLegacyActivityRunTable.owner_token, run.ownerToken),
+                  inArray(SessionLegacyActivityRunTable.state, ["running", "finalizing"]),
+                ),
+              )
+              .returning({ runID: SessionLegacyActivityRunTable.run_id })
+              .get()
+            if (!terminalRun)
+              return yield* Effect.fail(
+                new Conflict({ intentID: run.runID, reason: "activity cancellation run CAS lost" }),
+              )
+            const terminalActivity = yield* tx
+              .update(SessionLegacyActivityTable)
+              .set({ state: "interrupted", terminal_reason: "user_cancelled", settled_at: now })
+              .where(
+                and(
+                  eq(SessionLegacyActivityTable.activity_id, run.activityID),
+                  eq(SessionLegacyActivityTable.owner_token, run.ownerToken),
+                  eq(SessionLegacyActivityTable.state, "active"),
+                ),
+              )
+              .returning({ activityID: SessionLegacyActivityTable.activity_id })
+              .get()
+            if (!terminalActivity)
+              return yield* Effect.fail(
+                new Conflict({ intentID: run.runID, reason: "activity cancellation terminal CAS lost" }),
+              )
+            yield* settleMonitoringObjectiveInTransaction(tx, run.activityID, "interrupted", "user_cancelled", now)
+            yield* tx
+              .insert(SessionLegacyActivityTerminalTable)
+              .values({
+                activity_id: run.activityID,
+                session_id: run.sessionID,
+                mutation_epoch: run.mutationEpoch,
+                state: "interrupted",
+                reason_code: "user_cancelled",
+                source: "cancel",
+                operation_id: `${run.runID}:terminal`,
+                run_id: run.runID,
+                membership_ordinal: membershipOrdinal,
+                owner_token: run.ownerToken,
+                created_at: now,
+              })
+              .run()
             return {
-              kind: "exact_replay" as const,
-              invalidation: {
-                activityID: run.activityID,
-                sessionID: run.sessionID,
-                ...(existing.assistant_message_id
-                  ? { assistantMessageID: MessageID.make(existing.assistant_message_id) }
-                  : {}),
-              },
+              kind: "terminal_committed" as const,
+              invalidation: { activityID: run.activityID, sessionID: run.sessionID },
             } satisfies FinalizeResult
-          }
-          const progress = yield* tx
-            .select({ assistantMessageID: SessionActivityProgressTable.assistant_message_id })
-            .from(SessionActivityProgressTable)
-            .where(eq(SessionActivityProgressTable.activity_id, run.activityID))
-            .limit(1)
-            .get()
-          if (progress) return undefined
-          const session = yield* tx
-            .select({ mutationEpoch: SessionTable.mutation_epoch })
-            .from(SessionTable)
-            .where(eq(SessionTable.id, run.sessionID))
-            .get()
-          const currentRun = yield* tx
-            .select()
-            .from(SessionLegacyActivityRunTable)
-            .where(eq(SessionLegacyActivityRunTable.run_id, run.runID))
-            .get()
-          const activity = yield* tx
-            .select()
-            .from(SessionLegacyActivityTable)
-            .where(eq(SessionLegacyActivityTable.activity_id, run.activityID))
-            .get()
-          if (
-            !session ||
-            session.mutationEpoch !== run.mutationEpoch ||
-            !currentRun ||
-            currentRun.activity_id !== run.activityID ||
-            currentRun.session_id !== run.sessionID ||
-            currentRun.mutation_epoch !== run.mutationEpoch ||
-            currentRun.generation !== run.generation ||
-            currentRun.owner_token !== run.ownerToken ||
-            !["running", "finalizing"].includes(currentRun.state) ||
-            !activity ||
-            activity.session_id !== run.sessionID ||
-            activity.owner_token !== run.ownerToken ||
-            activity.state !== "active"
-          )
-            return yield* Effect.fail(
-              new Conflict({ intentID: run.runID, reason: "activity cancellation ownership is stale" }),
-            )
-          const membershipOrdinal =
-            (yield* tx
-              .select({ ordinal: max(SessionLegacyActivityAdmissionTable.ordinal) })
-              .from(SessionLegacyActivityAdmissionTable)
-              .where(eq(SessionLegacyActivityAdmissionTable.activity_id, run.activityID))
-              .get())?.ordinal ?? 0
-          const now = Date.now()
-          yield* cancelPendingActivitySteers(tx, run, now)
-          const terminalRun = yield* tx
-            .update(SessionLegacyActivityRunTable)
-            .set({ state: "interrupted", terminal_at: now, terminal_reason: "user_cancelled" })
-            .where(
-              and(
-                eq(SessionLegacyActivityRunTable.run_id, run.runID),
-                eq(SessionLegacyActivityRunTable.owner_token, run.ownerToken),
-                inArray(SessionLegacyActivityRunTable.state, ["running", "finalizing"]),
-              ),
-            )
-            .returning({ runID: SessionLegacyActivityRunTable.run_id })
-            .get()
-          if (!terminalRun)
-            return yield* Effect.fail(
-              new Conflict({ intentID: run.runID, reason: "activity cancellation run CAS lost" }),
-            )
-          const terminalActivity = yield* tx
-            .update(SessionLegacyActivityTable)
-            .set({ state: "interrupted", terminal_reason: "user_cancelled", settled_at: now })
-            .where(
-              and(
-                eq(SessionLegacyActivityTable.activity_id, run.activityID),
-                eq(SessionLegacyActivityTable.owner_token, run.ownerToken),
-                eq(SessionLegacyActivityTable.state, "active"),
-              ),
-            )
-            .returning({ activityID: SessionLegacyActivityTable.activity_id })
-            .get()
-          if (!terminalActivity)
-            return yield* Effect.fail(
-              new Conflict({ intentID: run.runID, reason: "activity cancellation terminal CAS lost" }),
-            )
-          yield* tx
-            .insert(SessionLegacyActivityTerminalTable)
-            .values({
-              activity_id: run.activityID,
-              session_id: run.sessionID,
-              mutation_epoch: run.mutationEpoch,
-              state: "interrupted",
-              reason_code: "user_cancelled",
-              source: "cancel",
-              operation_id: `${run.runID}:terminal`,
-              run_id: run.runID,
-              membership_ordinal: membershipOrdinal,
-              owner_token: run.ownerToken,
-              created_at: now,
-            })
-            .run()
-          return {
-            kind: "terminal_committed" as const,
-            invalidation: { activityID: run.activityID, sessionID: run.sessionID },
-          } satisfies FinalizeResult
-        }),
-      { behavior: "immediate" },
-    )
-    .pipe(Effect.catchTag("EffectDrizzleQueryError", Effect.die))
-    .pipe(Effect.catchTag("SqlError", Effect.die))
-})
+          }),
+        { behavior: "immediate" },
+      )
+      .pipe(Effect.catchTag("EffectDrizzleQueryError", Effect.die))
+      .pipe(Effect.catchTag("SqlError", Effect.die))
+  },
+)
 
 const cancelPendingActivitySteers = Effect.fn("SessionPromptIntent.cancelPendingActivitySteers")(function* (
   tx: Transaction,
@@ -2252,13 +2364,26 @@ function terminalDecisionForProgress(
 
 export const recoverActiveActivities = Effect.fn("SessionPromptIntent.recoverActiveActivities")(function* (
   ownerToken = SessionActivityOwner.processOwnerToken,
-  options?: {
-    readonly includeCurrentOwner?: boolean
-    readonly sessionID?: SessionID
-    readonly source?: "restart_recovery" | "same_process_recovery"
-  },
+  optionsOrRecover?:
+    | {
+        readonly includeCurrentOwner?: boolean
+        readonly sessionID?: SessionID
+        readonly source?: "restart_recovery" | "same_process_recovery"
+        readonly recoverActivity?: (input: {
+          readonly activityID: string
+          readonly expectedVersion: number
+          readonly terminalReason: string
+        }) => Effect.Effect<boolean>
+      }
+    | ((input: {
+        readonly activityID: string
+        readonly expectedVersion: number
+        readonly terminalReason: string
+      }) => Effect.Effect<boolean>),
 ) {
   const { db } = yield* Database.Service
+  const options = typeof optionsOrRecover === "function" ? undefined : optionsOrRecover
+  const recoverActivity = typeof optionsOrRecover === "function" ? optionsOrRecover : optionsOrRecover?.recoverActivity
   const source = options?.source ?? "restart_recovery"
   const active = yield* db
     .select({
@@ -2276,232 +2401,273 @@ export const recoverActiveActivities = Effect.fn("SessionPromptIntent.recoverAct
     .all()
     .pipe(Effect.orDie)
   return yield* Effect.forEach(active, (activity) =>
-    db
-      .transaction(
-        (tx) =>
-          Effect.gen(function* () {
-            const current = yield* tx
-              .select({
-                activityID: SessionLegacyActivityTable.activity_id,
-                sessionID: SessionLegacyActivityTable.session_id,
-                ownerToken: SessionLegacyActivityTable.owner_token,
-                mutationEpoch: SessionIntentTable.mutation_epoch,
-                executionMode: SessionIntentTable.execution_mode,
-                executionState: SessionIntentTable.execution_state,
-              })
-              .from(SessionLegacyActivityTable)
-              .innerJoin(
-                SessionActivityAdmissionTable,
-                eq(SessionActivityAdmissionTable.admission_id, SessionLegacyActivityTable.trigger_admission_id),
-              )
-              .innerJoin(SessionIntentTable, eq(SessionIntentTable.intent_id, SessionActivityAdmissionTable.legacy_intent_id))
-              .where(
-                and(
-                  eq(SessionLegacyActivityTable.activity_id, activity.activityID),
-                  eq(SessionLegacyActivityTable.state, "active"),
-                ),
-              )
-              .get()
-            if (!current) return undefined
-            const run = yield* tx
-              .select()
-              .from(SessionLegacyActivityRunTable)
-              .where(eq(SessionLegacyActivityRunTable.activity_id, activity.activityID))
-              .orderBy(sql`${SessionLegacyActivityRunTable.generation} DESC`)
-              .get()
-            if (!run && current.executionMode === "run_now" && current.executionState === "pending") return undefined
-            const latest = yield* tx
-              .select()
-              .from(SessionActivityProgressTable)
-              .where(eq(SessionActivityProgressTable.activity_id, activity.activityID))
-              .orderBy(sql`${SessionActivityProgressTable.revision} DESC`)
-              .get()
-            const receipt = latest
-              ? yield* tx
-                  .select()
-                  .from(SessionToolRequestReceiptTable)
-                  .where(eq(SessionToolRequestReceiptTable.receipt_id, latest.provider_receipt_id))
-                  .get()
-              : yield* tx
-                  .select({
-                    receiptID: SessionToolRequestReceiptTable.receipt_id,
-                    providerState: SessionToolRequestReceiptTable.provider_state,
-                    requestErrorCode: SessionToolRequestReceiptTable.request_error_code,
-                  })
-                  .from(SessionToolRequestReceiptTable)
-                  .innerJoin(
-                    SessionActivityAdmissionTable,
-                    eq(SessionActivityAdmissionTable.admitted_message_id, SessionToolRequestReceiptTable.user_message_id),
-                  )
-                  .innerJoin(
-                    SessionLegacyActivityAdmissionTable,
-                    eq(SessionLegacyActivityAdmissionTable.admission_id, SessionActivityAdmissionTable.admission_id),
-                  )
-                  .where(eq(SessionLegacyActivityAdmissionTable.activity_id, activity.activityID))
-                  .orderBy(sql`${SessionToolRequestReceiptTable.request_ordinal} DESC`)
-                  .get()
-            const receiptState = receipt
-              ? "provider_state" in receipt
-                ? receipt.provider_state
-                : receipt.providerState
-              : undefined
-            const receiptID = receipt
-              ? "receipt_id" in receipt
-                ? receipt.receipt_id
-                : receipt.receiptID
-              : undefined
-            const requestErrorCode = receipt
-              ? "request_error_code" in receipt
-                ? receipt.request_error_code
-                : receipt.requestErrorCode
-              : undefined
-            const now = Date.now()
-            if (run)
-              yield* cancelPendingActivitySteers(
-                tx,
-                {
-                  runID: run.run_id,
-                  activityID: run.activity_id,
-                  sessionID: SessionID.make(run.session_id),
-                  mutationEpoch: run.mutation_epoch,
-                  generation: run.generation,
-                  ownerToken: run.owner_token,
-                },
-                now,
-              )
-            if (receiptID && ["preparing", "prepared"].includes(receiptState ?? ""))
-              yield* tx
-                .update(SessionToolRequestReceiptTable)
-                .set({ provider_state: "failed", terminal_at: now, request_error_code: "pre_dispatch_owner_lost" })
-                .where(
-                  and(
-                    eq(SessionToolRequestReceiptTable.receipt_id, receiptID),
-                    inArray(SessionToolRequestReceiptTable.provider_state, ["preparing", "prepared"] as const),
-                  ),
-                )
-                .run()
-            if (receiptID && ["dispatching", "streaming"].includes(receiptState ?? ""))
-              yield* tx
-                .update(SessionToolRequestReceiptTable)
-                .set({
-                  provider_state: "indeterminate_after_crash",
-                  terminal_at: now,
-                  request_error_code: "provider_outcome_indeterminate",
-                })
-                .where(
-                  and(
-                    eq(SessionToolRequestReceiptTable.receipt_id, receiptID),
-                    inArray(SessionToolRequestReceiptTable.provider_state, ["dispatching", "streaming"] as const),
-                  ),
-                )
-                .run()
-            if (latest?.state === "provisional" && !receiptID)
-              yield* tx
-                .update(SessionActivityProgressTable)
-                .set({
-                  state: "recovery_required",
-                  finish_observed: "provider_receipt_missing",
-                  settled_at: now,
-                })
-                .where(
-                  and(
-                    eq(SessionActivityProgressTable.activity_id, activity.activityID),
-                    eq(SessionActivityProgressTable.revision, latest.revision),
-                    eq(SessionActivityProgressTable.state, "provisional"),
-                  ),
-                )
-                .run()
-            const settled =
-              latest && receiptID
-                ? yield* settleProgressInTransaction(
-                    tx,
-                    {
-                      activityID: activity.activityID,
-                      assistantMessageID: MessageID.make(latest.assistant_message_id),
-                    },
-                    false,
-                  )
-                : undefined
-            const preDispatch =
-              !receiptID ||
-              ["preparing", "prepared"].includes(receiptState ?? "") ||
-              requestErrorCode === "pre_dispatch_owner_lost" ||
-              requestErrorCode === "provider_not_dispatched_before_process_restart"
-            const terminalState = !run
-              ? ("recovery_required" as const)
-              : preDispatch
-                ? ("failed" as const)
-                : ("recovery_required" as const)
-            const reasonCode = !run
-              ? "legacy_run_identity_missing"
-              : preDispatch
-                ? "pre_dispatch_owner_lost"
-                : ["dispatching", "streaming", "indeterminate_after_crash"].includes(receiptState ?? "")
-                  ? "provider_outcome_indeterminate"
-                  : "host_terminal_decision_missing"
-            const terminalRun = run && ["running", "finalizing"].includes(run.state)
-            if (terminalRun)
-              yield* tx
-                .update(SessionLegacyActivityRunTable)
-                .set({ state: terminalRunState(terminalState), terminal_at: now, terminal_reason: reasonCode })
-                .where(
-                  and(
-                    eq(SessionLegacyActivityRunTable.run_id, run.run_id),
-                    inArray(SessionLegacyActivityRunTable.state, ["running", "finalizing"] as const),
-                  ),
-                )
-                .run()
-            const updated = yield* tx
-              .update(SessionLegacyActivityTable)
-              .set({ state: terminalState, terminal_reason: reasonCode, settled_at: now })
-              .where(
-                and(
-                  eq(SessionLegacyActivityTable.activity_id, activity.activityID),
-                  eq(SessionLegacyActivityTable.owner_token, current.ownerToken),
-                  eq(SessionLegacyActivityTable.state, "active"),
-                ),
-              )
-              .returning({ activityID: SessionLegacyActivityTable.activity_id })
-              .get()
-            if (!updated) return yield* Effect.die(new Error(`legacy activity recovery CAS lost: ${activity.activityID}`))
-            const membership = yield* tx
-              .select({ ordinal: max(SessionLegacyActivityAdmissionTable.ordinal) })
-              .from(SessionLegacyActivityAdmissionTable)
-              .where(eq(SessionLegacyActivityAdmissionTable.activity_id, activity.activityID))
-              .get()
-            const terminalProgress = settled?.row ?? latest
-            const terminalRunID = run && terminalRunState(terminalState) === run.state ? run.run_id : terminalRun ? run.run_id : null
-            yield* tx
-              .insert(SessionLegacyActivityTerminalTable)
-              .values({
-                activity_id: activity.activityID,
-                session_id: current.sessionID,
-                mutation_epoch: current.mutationEpoch,
-                state: terminalState,
-                reason_code: reasonCode,
-                source,
-                operation_id: `legacy-activity-recovery:v1:${source}:${activity.activityID}`,
-                run_id: terminalRunID,
-                assistant_message_id: terminalProgress?.assistant_message_id ?? null,
-                progress_revision: terminalProgress?.revision ?? null,
-                membership_ordinal: terminalProgress?.input_membership_ordinal ?? membership?.ordinal ?? 0,
-                owner_token: current.ownerToken,
-                created_at: now,
-              })
-              .run()
-            return {
+    Effect.gen(function* () {
+      const recoveryReason = "process restarted after activity owner loss"
+      const objective = yield* db
+        .select({ version: SessionActivityObjectiveTable.version, state: SessionActivityObjectiveTable.state })
+        .from(SessionActivityObjectiveTable)
+        .where(
+          and(
+            eq(SessionActivityObjectiveTable.activity_kind, "legacy"),
+            eq(SessionActivityObjectiveTable.activity_id, activity.activityID),
+          ),
+        )
+        .get()
+        .pipe(Effect.orDie)
+      const permissionRecovered =
+        objective && ["active", "needs_human"].includes(objective.state) && recoverActivity
+          ? yield* recoverActivity({
               activityID: activity.activityID,
-              sessionID: SessionID.make(current.sessionID),
-              ...(terminalProgress
-                ? { assistantMessageID: MessageID.make(terminalProgress.assistant_message_id) }
-                : {}),
-            } satisfies ProjectionInvalidation
-          }),
-        { behavior: "immediate" },
-      )
-      .pipe(Effect.orDie),
-  )
-    .pipe(Effect.map((activities) => activities.filter((activity) => activity !== undefined)))
+              expectedVersion: objective.version,
+              terminalReason: recoveryReason,
+            })
+          : false
+      if (objective && ["active", "needs_human"].includes(objective.state) && recoverActivity && !permissionRecovered)
+        return undefined
+      return yield* db
+        .transaction(
+          (tx) =>
+            Effect.gen(function* () {
+              const current = yield* tx
+                .select({
+                  activityID: SessionLegacyActivityTable.activity_id,
+                  sessionID: SessionLegacyActivityTable.session_id,
+                  ownerToken: SessionLegacyActivityTable.owner_token,
+                  state: SessionLegacyActivityTable.state,
+                  mutationEpoch: SessionIntentTable.mutation_epoch,
+                  executionMode: SessionIntentTable.execution_mode,
+                  executionState: SessionIntentTable.execution_state,
+                })
+                .from(SessionLegacyActivityTable)
+                .innerJoin(
+                  SessionActivityAdmissionTable,
+                  eq(SessionActivityAdmissionTable.admission_id, SessionLegacyActivityTable.trigger_admission_id),
+                )
+                .innerJoin(
+                  SessionIntentTable,
+                  eq(SessionIntentTable.intent_id, SessionActivityAdmissionTable.legacy_intent_id),
+                )
+                .where(eq(SessionLegacyActivityTable.activity_id, activity.activityID))
+                .get()
+              if (
+                !current ||
+                (permissionRecovered ? current.state !== "recovery_required" : current.state !== "active")
+              )
+                return undefined
+              const run = yield* tx
+                .select()
+                .from(SessionLegacyActivityRunTable)
+                .where(eq(SessionLegacyActivityRunTable.activity_id, activity.activityID))
+                .orderBy(sql`${SessionLegacyActivityRunTable.generation} DESC`)
+                .get()
+              if (!run && current.executionMode === "run_now" && current.executionState === "pending") return undefined
+              const latest = yield* tx
+                .select()
+                .from(SessionActivityProgressTable)
+                .where(eq(SessionActivityProgressTable.activity_id, activity.activityID))
+                .orderBy(sql`${SessionActivityProgressTable.revision} DESC`)
+                .get()
+              const receipt = latest
+                ? yield* tx
+                    .select()
+                    .from(SessionToolRequestReceiptTable)
+                    .where(eq(SessionToolRequestReceiptTable.receipt_id, latest.provider_receipt_id))
+                    .get()
+                : yield* tx
+                    .select({
+                      receiptID: SessionToolRequestReceiptTable.receipt_id,
+                      providerState: SessionToolRequestReceiptTable.provider_state,
+                      requestErrorCode: SessionToolRequestReceiptTable.request_error_code,
+                    })
+                    .from(SessionToolRequestReceiptTable)
+                    .innerJoin(
+                      SessionActivityAdmissionTable,
+                      eq(
+                        SessionActivityAdmissionTable.admitted_message_id,
+                        SessionToolRequestReceiptTable.user_message_id,
+                      ),
+                    )
+                    .innerJoin(
+                      SessionLegacyActivityAdmissionTable,
+                      eq(SessionLegacyActivityAdmissionTable.admission_id, SessionActivityAdmissionTable.admission_id),
+                    )
+                    .where(eq(SessionLegacyActivityAdmissionTable.activity_id, activity.activityID))
+                    .orderBy(sql`${SessionToolRequestReceiptTable.request_ordinal} DESC`)
+                    .get()
+              const receiptState = receipt
+                ? "provider_state" in receipt
+                  ? receipt.provider_state
+                  : receipt.providerState
+                : undefined
+              const receiptID = receipt ? ("receipt_id" in receipt ? receipt.receipt_id : receipt.receiptID) : undefined
+              const requestErrorCode = receipt
+                ? "request_error_code" in receipt
+                  ? receipt.request_error_code
+                  : receipt.requestErrorCode
+                : undefined
+              const now = Date.now()
+              if (run)
+                yield* cancelPendingActivitySteers(
+                  tx,
+                  {
+                    runID: run.run_id,
+                    activityID: run.activity_id,
+                    sessionID: SessionID.make(run.session_id),
+                    mutationEpoch: run.mutation_epoch,
+                    generation: run.generation,
+                    ownerToken: run.owner_token,
+                  },
+                  now,
+                )
+              if (receiptID && ["preparing", "prepared"].includes(receiptState ?? ""))
+                yield* tx
+                  .update(SessionToolRequestReceiptTable)
+                  .set({ provider_state: "failed", terminal_at: now, request_error_code: "pre_dispatch_owner_lost" })
+                  .where(
+                    and(
+                      eq(SessionToolRequestReceiptTable.receipt_id, receiptID),
+                      inArray(SessionToolRequestReceiptTable.provider_state, ["preparing", "prepared"] as const),
+                    ),
+                  )
+                  .run()
+              if (receiptID && ["dispatching", "streaming"].includes(receiptState ?? ""))
+                yield* tx
+                  .update(SessionToolRequestReceiptTable)
+                  .set({
+                    provider_state: "indeterminate_after_crash",
+                    terminal_at: now,
+                    request_error_code: "provider_outcome_indeterminate",
+                  })
+                  .where(
+                    and(
+                      eq(SessionToolRequestReceiptTable.receipt_id, receiptID),
+                      inArray(SessionToolRequestReceiptTable.provider_state, ["dispatching", "streaming"] as const),
+                    ),
+                  )
+                  .run()
+              if (latest?.state === "provisional" && !receiptID)
+                yield* tx
+                  .update(SessionActivityProgressTable)
+                  .set({
+                    state: "recovery_required",
+                    finish_observed: "provider_receipt_missing",
+                    settled_at: now,
+                  })
+                  .where(
+                    and(
+                      eq(SessionActivityProgressTable.activity_id, activity.activityID),
+                      eq(SessionActivityProgressTable.revision, latest.revision),
+                      eq(SessionActivityProgressTable.state, "provisional"),
+                    ),
+                  )
+                  .run()
+              const settled =
+                latest && receiptID
+                  ? yield* settleProgressInTransaction(
+                      tx,
+                      {
+                        activityID: activity.activityID,
+                        assistantMessageID: MessageID.make(latest.assistant_message_id),
+                      },
+                      false,
+                    )
+                  : undefined
+              const preDispatch =
+                !receiptID ||
+                ["preparing", "prepared"].includes(receiptState ?? "") ||
+                requestErrorCode === "pre_dispatch_owner_lost" ||
+                requestErrorCode === "provider_not_dispatched_before_process_restart"
+              const terminalState = permissionRecovered
+                ? ("recovery_required" as const)
+                : !run
+                  ? ("recovery_required" as const)
+                  : preDispatch
+                    ? ("failed" as const)
+                    : ("recovery_required" as const)
+              const reasonCode = permissionRecovered
+                ? recoveryReason
+                : !run
+                  ? "legacy_run_identity_missing"
+                  : preDispatch
+                    ? "pre_dispatch_owner_lost"
+                    : ["dispatching", "streaming", "indeterminate_after_crash"].includes(receiptState ?? "")
+                      ? "provider_outcome_indeterminate"
+                      : "host_terminal_decision_missing"
+              const terminalRun = run && ["running", "finalizing"].includes(run.state)
+              if (terminalRun)
+                yield* tx
+                  .update(SessionLegacyActivityRunTable)
+                  .set({ state: terminalRunState(terminalState), terminal_at: now, terminal_reason: reasonCode })
+                  .where(
+                    and(
+                      eq(SessionLegacyActivityRunTable.run_id, run.run_id),
+                      inArray(SessionLegacyActivityRunTable.state, ["running", "finalizing"] as const),
+                    ),
+                  )
+                  .run()
+              const updated = permissionRecovered
+                ? { activityID: activity.activityID }
+                : yield* tx
+                    .update(SessionLegacyActivityTable)
+                    .set({ state: terminalState, terminal_reason: reasonCode, settled_at: now })
+                    .where(
+                      and(
+                        eq(SessionLegacyActivityTable.activity_id, activity.activityID),
+                        eq(SessionLegacyActivityTable.owner_token, current.ownerToken),
+                        eq(SessionLegacyActivityTable.state, "active"),
+                      ),
+                    )
+                    .returning({ activityID: SessionLegacyActivityTable.activity_id })
+                    .get()
+              if (!updated)
+                return yield* Effect.die(new Error(`legacy activity recovery CAS lost: ${activity.activityID}`))
+              if (!permissionRecovered)
+                yield* settleMonitoringObjectiveInTransaction(
+                  tx,
+                  activity.activityID,
+                  "recovery_required",
+                  reasonCode,
+                  now,
+                )
+              const membership = yield* tx
+                .select({ ordinal: max(SessionLegacyActivityAdmissionTable.ordinal) })
+                .from(SessionLegacyActivityAdmissionTable)
+                .where(eq(SessionLegacyActivityAdmissionTable.activity_id, activity.activityID))
+                .get()
+              const terminalProgress = settled?.row ?? latest
+              const terminalRunID =
+                run && terminalRunState(terminalState) === run.state ? run.run_id : terminalRun ? run.run_id : null
+              yield* tx
+                .insert(SessionLegacyActivityTerminalTable)
+                .values({
+                  activity_id: activity.activityID,
+                  session_id: current.sessionID,
+                  mutation_epoch: current.mutationEpoch,
+                  state: terminalState,
+                  reason_code: reasonCode,
+                  source,
+                  operation_id: `legacy-activity-recovery:v1:${source}:${activity.activityID}`,
+                  run_id: terminalRunID,
+                  assistant_message_id: terminalProgress?.assistant_message_id ?? null,
+                  progress_revision: terminalProgress?.revision ?? null,
+                  membership_ordinal: terminalProgress?.input_membership_ordinal ?? membership?.ordinal ?? 0,
+                  owner_token: current.ownerToken,
+                  created_at: now,
+                })
+                .run()
+              return {
+                activityID: activity.activityID,
+                sessionID: SessionID.make(current.sessionID),
+                ...(terminalProgress
+                  ? { assistantMessageID: MessageID.make(terminalProgress.assistant_message_id) }
+                  : {}),
+              } satisfies ProjectionInvalidation
+            }),
+          { behavior: "immediate" },
+        )
+        .pipe(Effect.orDie)
+    }),
+  ).pipe(Effect.map((activities) => activities.filter((activity) => activity !== undefined)))
 })
 
 export const interruptActivity = Effect.fn("SessionPromptIntent.interruptActivity")(function* (activityID: string) {
@@ -2510,12 +2676,14 @@ export const interruptActivity = Effect.fn("SessionPromptIntent.interruptActivit
     .transaction(
       (tx) =>
         Effect.gen(function* () {
+          const now = Date.now()
+          const terminalReason = "aborted_before_provider_settlement"
           const updated = yield* tx
             .update(SessionLegacyActivityTable)
             .set({
               state: "interrupted",
-              terminal_reason: "aborted_before_provider_settlement",
-              settled_at: Date.now(),
+              terminal_reason: terminalReason,
+              settled_at: now,
             })
             .where(
               and(
@@ -2526,6 +2694,7 @@ export const interruptActivity = Effect.fn("SessionPromptIntent.interruptActivit
             .returning({ sessionID: SessionLegacyActivityTable.session_id })
             .get()
           if (!updated) return
+          yield* settleMonitoringObjectiveInTransaction(tx, activityID, "interrupted", terminalReason, now)
           const latest = yield* tx
             .select({ assistantMessageID: SessionActivityProgressTable.assistant_message_id })
             .from(SessionActivityProgressTable)
@@ -2551,6 +2720,8 @@ export const retireDisabledSteerActivity = Effect.fn("SessionPromptIntent.retire
     .transaction(
       (tx) =>
         Effect.gen(function* () {
+          const now = Date.now()
+          const terminalReason = "steering_disabled_before_absorption"
           const activity = yield* tx
             .select({ activityID: SessionLegacyActivityTable.activity_id })
             .from(SessionLegacyActivityTable)
@@ -2571,8 +2742,8 @@ export const retireDisabledSteerActivity = Effect.fn("SessionPromptIntent.retire
             .update(SessionLegacyActivityTable)
             .set({
               state: "interrupted",
-              terminal_reason: "steering_disabled_before_absorption",
-              settled_at: Date.now(),
+              terminal_reason: terminalReason,
+              settled_at: now,
             })
             .where(
               and(
@@ -2583,6 +2754,7 @@ export const retireDisabledSteerActivity = Effect.fn("SessionPromptIntent.retire
             .returning({ activityID: SessionLegacyActivityTable.activity_id })
             .get()
           if (!updated) return
+          yield* settleMonitoringObjectiveInTransaction(tx, activity.activityID, "interrupted", terminalReason, now)
           const latest = yield* tx
             .select({ assistantMessageID: SessionActivityProgressTable.assistant_message_id })
             .from(SessionActivityProgressTable)

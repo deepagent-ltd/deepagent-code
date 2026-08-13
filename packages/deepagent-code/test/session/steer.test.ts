@@ -34,6 +34,7 @@ import { SessionSteer } from "../../src/session/steer"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { SessionStatus } from "../../src/session/status"
 import { SessionMessage } from "@deepagent-code/core/session/message"
+import { SessionV2 } from "@deepagent-code/core/session"
 import { Prompt } from "@deepagent-code/core/session/prompt"
 import { Skill } from "../../src/skill"
 import { SystemPrompt } from "../../src/session/system"
@@ -75,6 +76,8 @@ import {
   SessionLegacyActivityTable,
   SessionLegacyActivityTerminalTable,
 } from "../../src/session/activity-sql"
+import { LocationIdentity } from "@deepagent-code/core/context-federation/identity"
+import { SessionProviderOwner } from "@deepagent-code/core/context-federation/provider-owner"
 
 void Log.init({ print: false })
 
@@ -194,9 +197,14 @@ const infra = Layer.mergeAll(NodeFileSystem.layer, CrossSpawnSpawner.defaultLaye
 // steeringOn/steeringOff: the ONLY difference is the v4Steering flag, so tests can assert the
 // kill-switch cleanly. The steer buffer shares the same Database as Session (built over `deps`).
 function makePrompt(steering: boolean) {
-  const flags = RuntimeFlags.layer({ experimentalEventSystem: true, v4Steering: steering })
+  const flags = RuntimeFlags.layer({
+    experimentalEventSystem: true,
+    v4Steering: steering,
+    coreV2ExecutionOwner: false,
+  })
   const deps = Layer.mergeAll(
     Session.defaultLayer,
+    SessionV2.defaultLayer,
     Snapshot.defaultLayer,
     LLM.defaultLayer,
     AgentSvc.defaultLayer,
@@ -244,6 +252,7 @@ function makePrompt(steering: boolean) {
   )
   const compact = SessionCompaction.layer.pipe(Layer.provide(flags), Layer.provideMerge(proc), Layer.provideMerge(deps))
   return SessionPrompt.layer.pipe(
+    Layer.provide(SessionProviderOwner.layer.pipe(Layer.provide(deps))),
     Layer.provide(testInstanceStoreLayer),
     Layer.provide(SessionRevert.defaultLayer),
     Layer.provide(Image.defaultLayer),
@@ -257,6 +266,7 @@ function makePrompt(steering: boolean) {
     Layer.provideMerge(trunc),
     Layer.provide(Instruction.defaultLayer),
     Layer.provide(SystemPrompt.defaultLayer),
+    Layer.provide(LocationIdentity.layer.pipe(Layer.provide(deps))),
     Layer.provide(flags),
     Layer.provideMerge(deps),
     Layer.provide(summary),
