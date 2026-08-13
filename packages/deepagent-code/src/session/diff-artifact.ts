@@ -352,7 +352,7 @@ function migrateCandidate(db: Database.Interface["db"], candidate: Candidate, no
               })
               .run()
             for (const index of Array.from({ length: chunkCount }, (_, chunkIndex) => chunkIndex)) {
-              const patchChunk = yield* tx.get<{ data: Buffer }>(sql`
+              const patchChunk = yield* tx.get<{ data: Buffer | null }>(sql`
                   SELECT substr(
                     CAST(COALESCE(json_extract(diff.value, '$.patch'), '') AS BLOB),
                     ${index * FILE_CHUNK_BYTES + 1}, ${FILE_CHUNK_BYTES}
@@ -364,15 +364,18 @@ function migrateCandidate(db: Database.Interface["db"], candidate: Candidate, no
                 `)
               if (!patchChunk)
                 return yield* failure(`artifact file ${file.file_index} chunk is missing`, expectedMessageDataHash)
-              digest.update(patchChunk.data)
+              // SQLite exposes substr(X'', 1, n) as NULL through the Bun driver. A legacy
+              // JSON null patch is the canonical empty patch, represented by one empty chunk.
+              const data = patchChunk.data ?? Buffer.alloc(0)
+              digest.update(data)
               yield* tx
                 .insert(SessionDiffArtifactFileChunkTable)
                 .values({
                   artifact_id: candidate.artifactID,
                   file_index: file.file_index,
                   chunk_index: index,
-                  data: patchChunk.data,
-                  chunk_hash: Hash.sha256(patchChunk.data),
+                  data,
+                  chunk_hash: Hash.sha256(data),
                 })
                 .run()
             }
