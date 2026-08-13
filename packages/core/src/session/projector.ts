@@ -390,6 +390,26 @@ export const layer = Layer.effectDiscard(
                   and(
                     eq(EventArtifactTable.aggregate_id, aggregateID),
                     sql`json_extract(${EventArtifactTable.canonical_data}, '$.info.id') = ${MessageTable.id}`,
+                    sql`(
+                      EXISTS (
+                        SELECT 1 FROM session_diff_migration_receipt receipt
+                        WHERE receipt.message_id = ${MessageTable.id}
+                          AND receipt.artifact_id = ${EventArtifactTable.artifact_id}
+                          AND receipt.state = 'committed'
+                      ) OR (
+                        NOT EXISTS (
+                          SELECT 1 FROM session_diff_migration_receipt receipt
+                          WHERE receipt.message_id = ${MessageTable.id}
+                            AND receipt.state = 'committed'
+                        ) AND NOT EXISTS (
+                          SELECT 1 FROM event_artifact newer
+                          WHERE newer.aggregate_id = ${EventArtifactTable.aggregate_id}
+                            AND newer.kind = ${EventArtifactTable.kind}
+                            AND newer.seq > ${EventArtifactTable.seq}
+                            AND json_extract(newer.canonical_data, '$.info.id') = ${MessageTable.id}
+                        )
+                      )
+                    )`,
                   ),
                 )
                 .where(

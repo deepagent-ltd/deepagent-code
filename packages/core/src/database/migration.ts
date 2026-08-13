@@ -8,6 +8,7 @@ import { migrations } from "./migration.gen"
 type Database = EffectDrizzleSqlite.EffectSQLiteDatabase
 type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0]
 const lock = Semaphore.makeUnsafe(1)
+const historicalAliases = new Map([["20260530232709_lovely_romulus", "20260511173437_session-metadata"]])
 
 export type Migration = {
   id: string
@@ -15,10 +16,14 @@ export type Migration = {
 }
 
 export function apply(db: Database) {
-  return lock.withPermit(applyOnly(db, migrations))
+  return lock.withPermit(applyMigrations(db, migrations, true))
 }
 
 export function applyOnly(db: Database, input: Migration[]) {
+  return applyMigrations(db, input, false)
+}
+
+function applyMigrations(db: Database, input: Migration[], requireLinearHistory: boolean) {
   return Effect.gen(function* () {
     const duplicate = input.find(
       (migration, index) => input.findIndex((candidate) => candidate.id === migration.id) !== index,
@@ -46,6 +51,24 @@ export function applyOnly(db: Database, input: Migration[]) {
           (yield* db.all<{ id: string }>(sql`SELECT id FROM ${sql.identifier("migration")}`)).map((row) => row.id),
         )
       }
+    }
+
+    if (requireLinearHistory) {
+      const known = new Set(input.map((migration) => migration.id))
+      for (const [alias, canonical] of historicalAliases) {
+        if (completed.has(alias) && known.has(canonical)) completed.add(canonical)
+      }
+      const unknown = [...completed].filter((id) => !known.has(id) && !historicalAliases.has(id)).sort()
+      if (unknown.length > 0)
+        return yield* Effect.die(
+          new Error(`database migration history belongs to an incompatible lineage: ${unknown.join(", ")}`),
+        )
+      const firstMissing = input.findIndex((migration) => !completed.has(migration.id))
+      const gap = firstMissing < 0 ? undefined : input.slice(firstMissing + 1).find((migration) => completed.has(migration.id))
+      if (gap)
+        return yield* Effect.die(
+          new Error(`database migration history has a gap before ${gap.id}: ${input[firstMissing]!.id} is missing`),
+        )
     }
 
     for (const migration of input) {

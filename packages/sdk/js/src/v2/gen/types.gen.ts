@@ -277,12 +277,21 @@ export type OutputFormatJsonSchema = {
 
 export type OutputFormat = OutputFormatText | OutputFormatJsonSchema
 
-export type SnapshotDiffArtifactDescriptor = {
-  id: string
-  hash: string
-  codec: "legacy-message-diff.v1" | "legacy-message-diff.v2"
-  fileCount: number
-}
+export type SnapshotDiffArtifactDescriptor =
+  | {
+      id: string
+      hash: string
+      codec: "legacy-message-diff.v1"
+      fileCount: number
+    }
+  | {
+      id: string
+      hash: string
+      codec: "legacy-message-diff.v2"
+      fileCount: number
+      previewFileCount: number
+      previewTruncated: boolean
+    }
 
 export type UserMessage = {
   id: string
@@ -3621,6 +3630,12 @@ export type NotFoundError = {
   }
 }
 
+export type ServiceUnavailableError = {
+  _tag: "ServiceUnavailableError"
+  message: string
+  service?: string
+}
+
 export type Session3 = {
   id: string
   slug: string
@@ -4123,12 +4138,6 @@ export type Session8 = {
     diff?: string
   }
   preview?: string
-}
-
-export type ServiceUnavailableError = {
-  _tag: "ServiceUnavailableError"
-  message: string
-  service?: string
 }
 
 export type Session9 = {
@@ -13395,6 +13404,10 @@ export type SessionGetErrors = {
    * NotFoundError
    */
   404: NotFoundError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
 }
 
 export type SessionGetError = SessionGetErrors[keyof SessionGetErrors]
@@ -13472,6 +13485,10 @@ export type SessionChildrenErrors = {
    * NotFoundError
    */
   404: NotFoundError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
 }
 
 export type SessionChildrenError = SessionChildrenErrors[keyof SessionChildrenErrors]

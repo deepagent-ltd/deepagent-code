@@ -18,6 +18,7 @@ import { AbsolutePath } from "@deepagent-code/core/schema"
 import { Project } from "@deepagent-code/core/project"
 import { ProjectTable } from "@deepagent-code/core/project/sql"
 import { MessageTable, PartTable, SessionTable } from "@deepagent-code/core/session/sql"
+import { SessionProjector } from "@deepagent-code/core/session/projector"
 import { testEffect } from "./lib/effect"
 
 const Prelude = EventV2.define({
@@ -31,12 +32,19 @@ const runtime = () => {
   return Layer.mergeAll(database, EventV2.layer.pipe(Layer.provide(database)))
 }
 
+const projectedRuntime = () => {
+  const database = Database.layerFromPath(":memory:")
+  const events = EventV2.layer.pipe(Layer.provide(database))
+  const projector = SessionProjector.layer.pipe(Layer.provide(events), Layer.provide(database))
+  return Layer.mergeAll(database, events, projector)
+}
+
 const it = testEffect(Layer.empty)
 
 describe("FilePartArtifact", () => {
   it.effect("externalizes one bounded legacy inline file-part batch idempotently", () =>
     Effect.gen(function* () {
-      const source = yield* Layer.buildWithScope(Layer.fresh(runtime()), yield* Effect.scope)
+      const source = yield* Layer.buildWithScope(Layer.fresh(projectedRuntime()), yield* Effect.scope)
       const events = Context.get(source, EventV2.Service)
       const db = Context.get(source, Database.Service).db
       const sessionID = SessionSchema.ID.make("ses_legacy_file_part")
@@ -137,10 +145,11 @@ describe("FilePartArtifact", () => {
         .where(eq(FilePartArtifactBindingTable.event_id, eventID))
         .get()
         .pipe(Effect.orDie)
-      expect(binding!.original_data_hash).toBe(Hash.sha256(JSON.stringify(data)))
+      expect(binding!.original_data_hash).toBe(FilePartArtifact.dataHash(data))
       const descriptor = FilePartArtifact.descriptor(binding!.canonical_data)
       expect(descriptor).toBeDefined()
       if (!descriptor) return
+      expect(binding!.canonical_data).toMatchObject({ part: { synthetic: true } })
       expect(Buffer.byteLength(JSON.stringify(binding!.canonical_data))).toBeLessThan(2_000)
       const projected = yield* db.select().from(PartTable).where(eq(PartTable.id, partID)).get().pipe(Effect.orDie)
       expect(Buffer.byteLength(JSON.stringify(projected!.data))).toBeLessThan(1_000)
@@ -162,8 +171,119 @@ describe("FilePartArtifact", () => {
         type: EventV2.versionedType(SessionV1.Event.PartUpdated.type, 1),
         data,
       })
+      const divergent = yield* events
+        .replay({
+          id: eventID,
+          aggregateID: sessionID,
+          seq: 1,
+          type: EventV2.versionedType(SessionV1.Event.PartUpdated.type, 1),
+          data: { ...data, part: { ...data.part, synthetic: false } },
+        })
+        .pipe(Effect.exit)
+      expect(divergent._tag).toBe("Failure")
       expect(yield* db.select().from(EventTable).where(eq(EventTable.id, eventID)).all()).toHaveLength(1)
       expect((yield* db.select().from(EventTable).where(eq(EventTable.id, eventID)).get())!.data).toEqual(data)
+
+      const metadata = yield* FilePartArtifact.metadata(db, {
+        eventID,
+        aggregateID: sessionID,
+        seq: 1,
+        artifactID: descriptor.id,
+      })
+      const artifactChunks = yield* Effect.forEach(metadata.chunkHashes, (hash, index) =>
+        FilePartArtifact.chunk(db, { artifactID: descriptor.id, index, expectedHash: hash }),
+      )
+
+      const replayTarget = yield* Layer.buildWithScope(Layer.fresh(projectedRuntime()), yield* Effect.scope)
+      const replayDb = Context.get(replayTarget, Database.Service).db
+      const replayEvents = Context.get(replayTarget, EventV2.Service)
+      yield* replayDb
+        .insert(ProjectTable)
+        .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
+        .run()
+        .pipe(Effect.orDie)
+      yield* replayDb
+        .insert(SessionTable)
+        .values({
+          id: sessionID,
+          project_id: Project.ID.global,
+          slug: "legacy-replay",
+          directory: AbsolutePath.make("/project"),
+          title: "legacy-replay",
+          version: "test",
+        })
+        .run()
+        .pipe(Effect.orDie)
+      yield* replayDb
+        .insert(MessageTable)
+        .values({ id: messageID, session_id: sessionID, time_created: 1, data: { role: "user", time: { created: 1 } } } as typeof MessageTable.$inferInsert)
+        .run()
+        .pipe(Effect.orDie)
+      yield* replayDb
+        .insert(EventSequenceTable)
+        .values({ aggregate_id: sessionID, seq: 0 })
+        .run()
+        .pipe(Effect.orDie)
+      yield* Effect.forEach(
+        artifactChunks,
+        (chunk, index) =>
+          FilePartArtifact.importChunk({
+            metadata,
+            index,
+            hash: metadata.chunkHashes[index]!,
+            data: chunk,
+          }).pipe(Effect.provide(replayTarget)),
+        { discard: true },
+      )
+      yield* FilePartArtifact.stageImport(metadata).pipe(Effect.provide(replayTarget))
+      yield* replayEvents.replay({
+        id: eventID,
+        aggregateID: sessionID,
+        seq: 1,
+        type: EventV2.versionedType(SessionV1.Event.PartUpdated.type, 1),
+        data: binding!.canonical_data,
+      })
+      expect((yield* replayDb.select().from(PartTable).where(eq(PartTable.id, partID)).get())?.data).toEqual(projected!.data)
+
+      const snapshot = yield* events.checkpoint({
+        aggregateID: sessionID,
+        throughSeq: EventV2.Cursor.make(1),
+        expectedLatest: EventV2.Cursor.make(1),
+        codec: "session-projection",
+        schemaVersion: 1,
+      })
+      const snapshotRows = yield* events.snapshotRows!({ snapshotID: snapshot.snapshotID })
+      const snapshotTarget = yield* Layer.buildWithScope(Layer.fresh(projectedRuntime()), yield* Effect.scope)
+      const snapshotDb = Context.get(snapshotTarget, Database.Service).db
+      const snapshotEvents = Context.get(snapshotTarget, EventV2.Service)
+      yield* snapshotDb
+        .insert(ProjectTable)
+        .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
+        .run()
+        .pipe(Effect.orDie)
+      yield* Effect.forEach(
+        artifactChunks,
+        (chunk, index) =>
+          FilePartArtifact.importChunk({
+            metadata,
+            index,
+            hash: metadata.chunkHashes[index]!,
+            data: chunk,
+          }).pipe(Effect.provide(snapshotTarget)),
+        { discard: true },
+      )
+      yield* FilePartArtifact.stageImport(metadata).pipe(Effect.provide(snapshotTarget))
+      yield* snapshotEvents.stageSnapshotRows!(snapshot, snapshotRows)
+      yield* Effect.forEach(
+        snapshotRows,
+        (row) =>
+          events.snapshotChunks!({ rowHash: row.rowHash }).pipe(
+            Effect.flatMap((chunks) => snapshotEvents.stageSnapshotChunks!(snapshot, row, chunks)),
+          ),
+        { discard: true },
+      )
+      yield* snapshotEvents.importSnapshot(snapshot)
+      expect((yield* snapshotDb.select().from(PartTable).where(eq(PartTable.id, partID)).get())?.data).toEqual(projected!.data)
     }),
   )
 

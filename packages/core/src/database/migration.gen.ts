@@ -93,5 +93,6 @@ export const migrations = (
     import("./migration/20260813132000_session_diff_artifact"),
     import("./migration/20260813133000_session_transfer_authority"),
     import("./migration/20260813134000_database_capability"),
+    import("./migration/20260813135000_event_immutable"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

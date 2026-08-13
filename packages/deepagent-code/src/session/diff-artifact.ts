@@ -15,7 +15,7 @@ import {
 } from "./diff-artifact.sql"
 import { and, asc, eq, gt, sql } from "drizzle-orm"
 import { createHash } from "node:crypto"
-import { Data, Effect, Schema } from "effect"
+import { Data, Effect, Schedule, Schema } from "effect"
 import { Descriptor, File, Limits, Manifest, ManifestFile } from "./diff-artifact-schema"
 
 export { Descriptor, File, Limits, Manifest, ManifestFile } from "./diff-artifact-schema"
@@ -24,6 +24,12 @@ const FILE_CHUNK_BYTES = 256 * 1024
 const MAX_MIGRATION_FILES = 10_000
 const MAX_MIGRATION_BODY_BYTES = 64 * 1024 * 1024
 const MAX_PATH_BYTES = 4096
+const MAX_MIGRATION_MESSAGES = 1_000
+const MAX_MIGRATION_PARTS = 5_000
+const MAX_MIGRATION_EPOCHS = 64
+const MAX_MIGRATION_EPOCH_MEMBERS = 100_000
+const MAX_MIGRATION_SESSION_JSON_BYTES = 32 * 1024 * 1024
+const MAX_MIGRATION_ROW_JSON_BYTES = 16 * 1024 * 1024
 const NULL_SUMMARY_HASH = Hash.sha256("null")
 
 export class Invalid extends Data.TaggedError("SessionDiffArtifact.Invalid")<{
@@ -31,6 +37,10 @@ export class Invalid extends Data.TaggedError("SessionDiffArtifact.Invalid")<{
 }> {}
 
 export class NotFound extends Data.TaggedError("SessionDiffArtifact.NotFound")<{
+  readonly message: string
+}> {}
+
+export class Retryable extends Data.TaggedError("SessionDiffArtifact.Retryable")<{
   readonly message: string
 }> {}
 
@@ -45,6 +55,8 @@ type CanonicalArtifact = {
   hash: string
   codec: "legacy-message-diff.v1" | "legacy-message-diff.v2"
   fileCount: number
+  previewFileCount: number
+  previewTruncated: boolean
 }
 
 type Candidate = {
@@ -134,6 +146,35 @@ export const migrate = Effect.fn("SessionDiffArtifact.migrate")(function* (input
 })
 
 function migrateCandidate(db: Database.Interface["db"], candidate: Candidate, now: number) {
+  return Effect.gen(function* () {
+    const budgetFailure = yield* migrationBudget(db, candidate)
+    if (budgetFailure) return yield* recordValidationFailure(db, candidate, now, budgetFailure)
+    return yield* migrateBoundedCandidate(db, candidate, now).pipe(
+      Effect.retry({
+        while: isBusySnapshot,
+        schedule: Schedule.spaced("25 millis").pipe(Schedule.both(Schedule.recurs(2))),
+      }),
+      Effect.catchIf(isBusySnapshot, () =>
+        Effect.fail(new Retryable({ message: `Session diff migration is contended: ${candidate.messageID}` })),
+      ),
+    )
+  })
+}
+
+function isBusySnapshot(error: unknown) {
+  const seen = new Set<object>()
+  const inspect = (value: unknown): boolean => {
+    if (typeof value === "string") return value.includes("SQLITE_BUSY") || value.includes("database is locked")
+    if (!value || typeof value !== "object" || seen.has(value)) return false
+    seen.add(value)
+    if (value instanceof Error && (value.message.includes("SQLITE_BUSY") || value.message.includes("database is locked")))
+      return true
+    return "cause" in value && inspect((value as { cause?: unknown }).cause)
+  }
+  return inspect(error)
+}
+
+function migrateBoundedCandidate(db: Database.Interface["db"], candidate: Candidate, now: number) {
   return db
     .transaction(
       (tx) =>
@@ -192,6 +233,8 @@ function migrateCandidate(db: Database.Interface["db"], candidate: Candidate, no
 
           const artifact = canonicalArtifact(candidate)
           if (!artifact) return yield* failure("canonical artifact descriptor is invalid")
+          const budgetFailure = yield* migrationBudget(tx as unknown as Database.Interface["db"], candidate)
+          if (budgetFailure) return yield* failure(budgetFailure)
           if (candidate.bodyBytes > MAX_MIGRATION_BODY_BYTES)
             return yield* failure("artifact body exceeds the migration byte budget")
           if (Hash.sha256(candidate.canonicalDataText) !== candidate.canonicalDataHash)
@@ -344,21 +387,7 @@ function migrateCandidate(db: Database.Interface["db"], candidate: Candidate, no
             pathKeys.add(pathKey)
             const chunkCount = Math.max(1, Math.ceil(file.patch_bytes / FILE_CHUNK_BYTES))
             const digest = createHash("sha256")
-            yield* tx
-              .insert(SessionDiffArtifactFileTable)
-              .values({
-                artifact_id: candidate.artifactID,
-                file_index: file.file_index,
-                path,
-                path_key: pathKey,
-                additions: file.additions,
-                deletions: file.deletions,
-                status: file.status,
-                patch_hash: Hash.sha256("pending"),
-                patch_bytes: file.patch_bytes,
-                patch_chunk_count: chunkCount,
-              })
-              .run()
+            const chunks = [] as Buffer[]
             for (const index of Array.from({ length: chunkCount }, (_, chunkIndex) => chunkIndex)) {
               const patchChunk = yield* tx.get<{ data: Buffer | null }>(sql`
                   SELECT substr(
@@ -376,27 +405,38 @@ function migrateCandidate(db: Database.Interface["db"], candidate: Candidate, no
               // JSON null patch is the canonical empty patch, represented by one empty chunk.
               const data = patchChunk.data ?? Buffer.alloc(0)
               digest.update(data)
-              yield* tx
-                .insert(SessionDiffArtifactFileChunkTable)
-                .values({
-                  artifact_id: candidate.artifactID,
-                  file_index: file.file_index,
-                  chunk_index: index,
-                  data,
-                  chunk_hash: Hash.sha256(data),
-                })
-                .run()
+              chunks.push(data)
             }
             yield* tx
-              .update(SessionDiffArtifactFileTable)
-              .set({ patch_hash: digest.digest("hex") })
-              .where(
-                and(
-                  eq(SessionDiffArtifactFileTable.artifact_id, candidate.artifactID),
-                  eq(SessionDiffArtifactFileTable.file_index, file.file_index),
-                ),
-              )
+              .insert(SessionDiffArtifactFileTable)
+              .values({
+                artifact_id: candidate.artifactID,
+                file_index: file.file_index,
+                path,
+                path_key: pathKey,
+                additions: file.additions,
+                deletions: file.deletions,
+                status: file.status,
+                patch_hash: digest.digest("hex"),
+                patch_bytes: file.patch_bytes,
+                patch_chunk_count: chunkCount,
+              })
               .run()
+            yield* Effect.forEach(
+              chunks,
+              (data, index) =>
+                tx
+                  .insert(SessionDiffArtifactFileChunkTable)
+                  .values({
+                    artifact_id: candidate.artifactID,
+                    file_index: file.file_index,
+                    chunk_index: index,
+                    data,
+                    chunk_hash: Hash.sha256(data),
+                  })
+                  .run(),
+              { discard: true },
+            )
           }
 
           const updated = yield* tx
@@ -460,7 +500,9 @@ function migrateCandidate(db: Database.Interface["db"], candidate: Candidate, no
             .run()
           return { state: "committed" as const }
         }),
-      { behavior: "immediate" },
+      // WAL keeps the validation reads on one snapshot without reserving the writer.
+      // A concurrent commit makes the later write upgrade fail instead of committing stale authority.
+      { behavior: "deferred" },
     )
     .pipe(
       Effect.catchTag("SessionDiffArtifact.RewriteCasLost", (error) =>
@@ -501,6 +543,92 @@ function migrateCandidate(db: Database.Interface["db"], candidate: Candidate, no
     )
 }
 
+function migrationBudget(db: Database.Interface["db"], candidate: Candidate) {
+  return db
+    .get<{
+      messages: number
+      parts: number
+      epochs: number
+      members: number
+      jsonBytes: number
+      maxJsonBytes: number
+    }>(sql`
+      WITH bounded_messages AS (
+        SELECT length(CAST(data AS BLOB)) AS bytes
+        FROM message
+        WHERE session_id = ${candidate.sessionID}
+        LIMIT ${MAX_MIGRATION_MESSAGES + 1}
+      ), bounded_parts AS (
+        SELECT length(CAST(data AS BLOB)) AS bytes
+        FROM part
+        WHERE session_id = ${candidate.sessionID}
+        LIMIT ${MAX_MIGRATION_PARTS + 1}
+      ), bounded_epochs AS (
+        SELECT 1 FROM session_prompt_epoch
+        WHERE session_id = ${candidate.sessionID}
+        LIMIT ${MAX_MIGRATION_EPOCHS + 1}
+      ), bounded_members AS (
+        SELECT 1 FROM session_prompt_epoch_message
+        WHERE session_id = ${candidate.sessionID}
+        LIMIT ${MAX_MIGRATION_EPOCH_MEMBERS + 1}
+      )
+      SELECT
+        (SELECT count(*) FROM bounded_messages) AS messages,
+        (SELECT count(*) FROM bounded_parts) AS parts,
+        (SELECT count(*) FROM bounded_epochs) AS epochs,
+        (SELECT count(*) FROM bounded_members) AS members,
+        COALESCE((SELECT sum(bytes) FROM bounded_messages), 0) +
+          COALESCE((SELECT sum(bytes) FROM bounded_parts), 0) AS jsonBytes,
+        max(
+          COALESCE((SELECT max(bytes) FROM bounded_messages), 0),
+          COALESCE((SELECT max(bytes) FROM bounded_parts), 0)
+        ) AS maxJsonBytes
+    `)
+    .pipe(
+      Effect.orDie,
+      Effect.map((budget) => {
+        if (!budget) return "candidate Session is missing"
+        if (budget.messages > MAX_MIGRATION_MESSAGES) return `Session message count exceeds ${MAX_MIGRATION_MESSAGES}`
+        if (budget.parts > MAX_MIGRATION_PARTS) return `Session part count exceeds ${MAX_MIGRATION_PARTS}`
+        if (budget.epochs > MAX_MIGRATION_EPOCHS) return `PromptEpoch count exceeds ${MAX_MIGRATION_EPOCHS}`
+        if (budget.members > MAX_MIGRATION_EPOCH_MEMBERS)
+          return `PromptEpoch membership count exceeds ${MAX_MIGRATION_EPOCH_MEMBERS}`
+        if (budget.maxJsonBytes > MAX_MIGRATION_ROW_JSON_BYTES)
+          return `Session history row exceeds ${MAX_MIGRATION_ROW_JSON_BYTES} bytes`
+        if (budget.jsonBytes > MAX_MIGRATION_SESSION_JSON_BYTES)
+          return `Session history JSON exceeds ${MAX_MIGRATION_SESSION_JSON_BYTES} bytes`
+      }),
+    )
+}
+
+function recordValidationFailure(db: Database.Interface["db"], candidate: Candidate, now: number, reason: string) {
+  return db
+    .transaction(
+      (tx) =>
+        tx
+          .insert(SessionDiffMigrationReceiptTable)
+          .values({
+            message_id: candidate.messageID,
+            session_id: candidate.sessionID,
+            artifact_id: candidate.artifactID,
+            source_event_id: candidate.sourceEventID,
+            expected_message_data_hash: Hash.sha256("budget-rejected"),
+            expected_session_summary_hash: Hash.sha256("unknown"),
+            canonicalizer_version: candidate.codecVersion,
+            canonicalization_version: HistoryAuthority.CANONICALIZATION_VERSION,
+            epoch_hashes: [],
+            state: "migration_validation_failed" as const,
+            failure_reason: reason,
+            created_at: now,
+            updated_at: now,
+          })
+          .onConflictDoNothing()
+          .run(),
+      { behavior: "immediate" },
+    )
+    .pipe(Effect.orDie, Effect.as({ state: "migration_validation_failed" as const }))
+}
+
 function canonicalArtifact(candidate: Candidate): CanonicalArtifact | undefined {
   const info = record(candidate.canonicalData.info) ? candidate.canonicalData.info : undefined
   const summary = info && record(info.summary) ? info.summary : undefined
@@ -514,6 +642,20 @@ function canonicalArtifact(candidate: Candidate): CanonicalArtifact | undefined 
     typeof descriptor.fileCount !== "number" ||
     !Number.isSafeInteger(descriptor.fileCount) ||
     descriptor.fileCount < 0
+  )
+    return
+  if (descriptor.codec === "legacy-message-diff.v1")
+    return {
+      ...(descriptor as Omit<CanonicalArtifact, "previewFileCount" | "previewTruncated">),
+      previewFileCount: descriptor.fileCount,
+      previewTruncated: false,
+    }
+  if (
+    typeof descriptor.previewFileCount !== "number" ||
+    !Number.isSafeInteger(descriptor.previewFileCount) ||
+    descriptor.previewFileCount < 0 ||
+    descriptor.previewFileCount > descriptor.fileCount ||
+    descriptor.previewTruncated !== (descriptor.previewFileCount < descriptor.fileCount)
   )
     return
   return descriptor as CanonicalArtifact
@@ -541,6 +683,25 @@ function validateEpochHashes(
         .orderBy(asc(MessageTable.time_created), asc(MessageTable.id))
         .all()
     ).map((row) => row.id)
+    const messages = yield* MessageV2.messagesInTransaction(tx, sessionID, physicalIDs)
+    if (!messages) return { failure: "physical history is incomplete" }
+    const messagesByID = new Map(messages.map((message) => [message.info.id, message]))
+    const before = HistoryAuthority.hash(messages)
+    const after = HistoryAuthority.hash(
+      messages.map((message) =>
+        message.info.id === messageID
+          ? { ...message, info: { ...afterInfo, id: messageID, sessionID } as SessionV1.User }
+          : message,
+      ),
+    )
+    const isolatedBefore = HistoryAuthority.hash([
+      { info: { ...beforeInfo, id: messageID, sessionID } as SessionV1.User, parts: [] },
+    ])
+    const isolatedAfter = HistoryAuthority.hash([
+      { info: { ...afterInfo, id: messageID, sessionID } as SessionV1.User, parts: [] },
+    ])
+    if (before !== after || isolatedBefore !== isolatedAfter)
+      return { failure: "history hash changed during user summary rewrite" }
     const values = [] as Array<{ epoch: number; before: string; after: string }>
     for (const epoch of epochs) {
       if (
@@ -561,31 +722,17 @@ function validateEpochHashes(
           .orderBy(asc(SessionPromptEpochMessageTable.ordinal))
           .all()
       ).map((row) => row.message_id)
-      const messages = yield* MessageV2.messagesInTransaction(tx, sessionID, physicalIDs)
-      if (!messages) return { failure: `PromptEpoch ${epoch.epoch} physical history is incomplete` }
       const baseIDs = memberIDs.length > 0 ? memberIDs : physicalIDs.slice(0, epoch.base_message_count ?? 0)
-      const base = yield* MessageV2.messagesInTransaction(tx, sessionID, baseIDs)
-      if (!base) return { failure: `PromptEpoch ${epoch.epoch} references a missing base message` }
+      const base = baseIDs.flatMap((id) => {
+        const message = messagesByID.get(id)
+        return message ? [message] : []
+      })
+      if (base.length !== baseIDs.length)
+        return { failure: `PromptEpoch ${epoch.epoch} references a missing base message` }
       if (epoch.base_message_count !== base.length || !epoch.effective_history_hash)
         return { failure: `PromptEpoch ${epoch.epoch} immutable base authority is incomplete` }
       if (HistoryAuthority.hash(base) !== epoch.effective_history_hash)
         return { failure: `PromptEpoch ${epoch.epoch} immutable base hash is already inconsistent` }
-      const before = HistoryAuthority.hash(messages)
-      const after = HistoryAuthority.hash(
-        messages.map((message) =>
-          message.info.id === messageID
-            ? { ...message, info: { ...afterInfo, id: messageID, sessionID } as SessionV1.User }
-            : message,
-        ),
-      )
-      const isolatedBefore = HistoryAuthority.hash([
-        { info: { ...beforeInfo, id: messageID, sessionID } as SessionV1.User, parts: [] },
-      ])
-      const isolatedAfter = HistoryAuthority.hash([
-        { info: { ...afterInfo, id: messageID, sessionID } as SessionV1.User, parts: [] },
-      ])
-      if (before !== after || isolatedBefore !== isolatedAfter)
-        return { failure: `PromptEpoch ${epoch.epoch} history hash changed during user summary rewrite` }
       values.push({ epoch: epoch.epoch, before, after })
     }
     return { values }
