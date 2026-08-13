@@ -14,7 +14,8 @@ import { Location } from "@deepagent-code/core/location"
 import { AbsolutePath } from "@deepagent-code/core/schema"
 import { WorkspaceV2 } from "@deepagent-code/core/workspace"
 import { V2Schema } from "@deepagent-code/core/v2-schema"
-import { eq } from "drizzle-orm"
+import { asc, eq, sql } from "drizzle-orm"
+import { createHash } from "node:crypto"
 import { location } from "./fixture/location"
 import { testEffect } from "./lib/effect"
 
@@ -56,6 +57,18 @@ const SyncSent = EventV2.define({
   schema: {
     messageID: Schema.String,
     text: Schema.String,
+  },
+})
+
+const LegacyMessageUpdated = EventV2.define({
+  type: "message.updated",
+  sync: {
+    version: 1,
+    aggregate: "sessionID",
+  },
+  schema: {
+    sessionID: Schema.String,
+    info: Schema.Any,
   },
 })
 
@@ -912,15 +925,16 @@ describe("EventV2", () => {
       yield* events.publish(SyncMessage, { id: aggregateID, text: "zero" })
       const id = EventV2.ID.make("evt_legacy_message_diff_artifact")
       const patch = "x".repeat(EventV2.MAX_ENCODED_PAYLOAD_BYTES + 1)
+      const data = {
+        sessionID: aggregateID,
+        info: { summary: { diffs: [{ file: "large.patch", patch, additions: 1, deletions: 0 }] } },
+      }
       yield* db.insert(EventTable).values({
         id,
         aggregate_id: aggregateID,
         seq: 1,
         type: EventV2.versionedType("message.updated", 1),
-        data: {
-          sessionID: aggregateID,
-          info: { summary: { diffs: [{ file: "large.patch", patch, additions: 1, deletions: 0 }] } },
-        },
+        data,
       }).run().pipe(Effect.orDie)
       yield* db.update(EventSequenceTable).set({ seq: 1 }).where(eq(EventSequenceTable.aggregate_id, aggregateID)).run().pipe(Effect.orDie)
 
@@ -931,12 +945,47 @@ describe("EventV2", () => {
       expect(artifact?.kind).toBe("legacy_message_diff")
       expect(artifact?.body_bytes).toBeGreaterThan(EventV2.MAX_ENCODED_PAYLOAD_BYTES)
       expect(artifact?.chunk_count).toBeGreaterThan(1)
-      const summary = (artifact?.canonical_data.info as { summary: { diffs: Array<{ patch?: string }>; diffArtifact: { hash: string } } }).summary
+      const summary = (artifact?.canonical_data.info as {
+        summary: {
+          diffs: Array<{ patch?: string }>
+          diffArtifact: { codec: string; hash: string }
+        }
+      }).summary
       expect(summary.diffs[0]?.patch).toBeUndefined()
+      expect(summary.diffArtifact.codec).toBe("legacy-message-diff.v2")
       expect(summary.diffArtifact.hash).toBe(artifact!.body_hash)
-      const chunks = yield* db.select().from(EventArtifactChunkTable).where(eq(EventArtifactChunkTable.artifact_id, artifact!.artifact_id)).all().pipe(Effect.orDie)
+      const chunks = yield* db
+        .select()
+        .from(EventArtifactChunkTable)
+        .where(eq(EventArtifactChunkTable.artifact_id, artifact!.artifact_id))
+        .orderBy(asc(EventArtifactChunkTable.chunk_index))
+        .all()
+        .pipe(Effect.orDie)
       expect(chunks).toHaveLength(artifact?.chunk_count ?? 0)
-      expect(Buffer.concat(chunks.map((chunk) => chunk.data)).length).toBe(artifact!.body_bytes)
+      expect(artifact?.codec_version).toBe(2)
+      const body = Buffer.concat(chunks.map((chunk) => chunk.data))
+      expect(body.length).toBe(artifact!.body_bytes)
+      expect(createHash("sha256").update(body).digest("hex")).toBe(artifact!.body_hash)
+      for (const chunk of chunks) {
+        expect(createHash("sha256").update(chunk.data).digest("hex")).toBe(chunk.chunk_hash)
+      }
+      const source = yield* db
+        .select({ data: sql<string>`CAST(${EventTable.data} AS TEXT)` })
+        .from(EventTable)
+        .where(eq(EventTable.id, id))
+        .get()
+        .pipe(Effect.orDie)
+      expect(createHash("sha256").update(source!.data).digest("hex")).toBe(artifact!.original_data_hash)
+      expect(createHash("sha256").update(JSON.stringify(artifact!.canonical_data)).digest("hex")).toBe(
+        artifact!.canonical_data_hash,
+      )
+      yield* events.replay({
+        id,
+        type: EventV2.versionedType(LegacyMessageUpdated.type, 1),
+        seq: 1,
+        aggregateID,
+        data: artifact!.canonical_data,
+      })
     }),
   )
 

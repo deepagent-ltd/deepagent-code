@@ -382,7 +382,7 @@ const DiffManifestDescriptor = Schema.Struct({
 const DiffArtifactDescriptor = Schema.Struct({
   id: Schema.String,
   hash: Schema.String,
-  codec: Schema.Literal("legacy-message-diff.v1"),
+  codec: Schema.Literals(["legacy-message-diff.v1", "legacy-message-diff.v2"]),
   fileCount: NonNegativeInt,
 }).annotate({ identifier: "SnapshotDiffArtifactDescriptor" })
 
