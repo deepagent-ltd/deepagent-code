@@ -130,6 +130,11 @@ const program = Effect.gen(function* () {
     .where(eq(EventArtifactTable.kind, "legacy_message_diff"))
     .all()
     .pipe(Effect.orDie)
+  const fileArtifactSessions = yield* db
+    .selectDistinct({ id: FilePartArtifactBindingTable.aggregate_id })
+    .from(FilePartArtifactBindingTable)
+    .all()
+    .pipe(Effect.orDie)
   const diffMigration = yield* stage("legacy-session-diffs", Effect.gen(function* () {
     let processed = 0
     let committed = 0
@@ -153,6 +158,7 @@ const program = Effect.gen(function* () {
   const checkpointSessions = [...new Set([
     ...sessions,
     ...artifactSessions.map((row) => SessionID.make(row.id)),
+    ...fileArtifactSessions.map((row) => SessionID.make(row.id)),
   ])]
 
   const validateSnapshotDiffAuthority = Effect.fn("Bug407010ReleaseGate.validateSnapshotDiffAuthority")(
@@ -280,6 +286,7 @@ const program = Effect.gen(function* () {
     events: number
     eventBytes: number
     maximumEventBytes: number
+    oversizedEvents: number
     syncIndex: number
     snapshots: number
     eventArtifacts: number
@@ -291,6 +298,7 @@ const program = Effect.gen(function* () {
       (SELECT count(*) FROM event) AS events,
       (SELECT coalesce(sum(length(data)), 0) FROM event) AS eventBytes,
       (SELECT coalesce(max(length(data)), 0) FROM event) AS maximumEventBytes,
+      (SELECT count(*) FROM event WHERE length(CAST(data AS BLOB)) > ${EventV2.MAX_ENCODED_PAYLOAD_BYTES}) AS oversizedEvents,
       (SELECT count(*) FROM event_sync_index) AS syncIndex,
       (SELECT count(*) FROM event_snapshot) AS snapshots,
       (SELECT count(*) FROM event_artifact) AS eventArtifacts,
@@ -329,6 +337,7 @@ const program = Effect.gen(function* () {
     backfill?.state !== "complete" ||
     quickCheck.some((row) => row.quick_check !== "ok") ||
     foreignKeys.length > 0 ||
+    result.oversizedEvents > 0 ||
     result.failedDiffMigrationReceipts > 0
   )
     return yield* Effect.die(new Error(`Release gate failed: ${JSON.stringify(result)}`))
