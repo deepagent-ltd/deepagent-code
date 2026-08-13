@@ -46,6 +46,7 @@ export const FilePartArtifactBindingTable = sqliteTable(
   (table) => [
     uniqueIndex("file_part_artifact_binding_aggregate_seq_idx").on(table.aggregate_id, table.seq),
     index("file_part_artifact_binding_part_idx").on(table.aggregate_id, table.part_id, table.seq),
+    index("file_part_artifact_binding_artifact_idx").on(table.artifact_id),
   ],
 )
 
@@ -63,5 +64,25 @@ export const FilePartArtifactImportTable = sqliteTable(
     canonical_data: text({ mode: "json" }).$type<Record<string, unknown>>().notNull(),
     created_at: integer().notNull(),
   },
-  (table) => [uniqueIndex("file_part_artifact_import_aggregate_seq_idx").on(table.aggregate_id, table.seq)],
+  (table) => [
+    uniqueIndex("file_part_artifact_import_aggregate_seq_idx").on(table.aggregate_id, table.seq),
+    index("file_part_artifact_import_artifact_idx").on(table.artifact_id),
+  ],
+)
+
+export const FilePartArtifactDiscardTable = sqliteTable(
+  "file_part_artifact_discard",
+  {
+    event_id: text().$type<EventV2.ID>().primaryKey(),
+    aggregate_id: text().notNull(),
+    seq: integer().notNull(),
+    artifact_id: text()
+      .notNull()
+      .references(() => FilePartArtifactTable.artifact_id, { onDelete: "cascade" }),
+    original_data_hash: text().notNull(),
+    canonical_data_hash: text().notNull(),
+    canonical_data: text({ mode: "json" }).$type<Record<string, unknown>>().notNull(),
+    created_at: integer().notNull(),
+  },
+  (table) => [uniqueIndex("file_part_artifact_discard_aggregate_seq_idx").on(table.aggregate_id, table.seq)],
 )

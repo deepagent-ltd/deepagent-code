@@ -1,6 +1,6 @@
 import { describe, expect } from "bun:test"
 import path from "node:path"
-import { Effect, Layer } from "effect"
+import { DateTime, Effect, Layer } from "effect"
 import { asc, eq } from "drizzle-orm"
 import { Database } from "@deepagent-code/core/database/database"
 import { EventV2 } from "@deepagent-code/core/event"
@@ -10,6 +10,9 @@ import {
   EventCompactionReceiptTable,
   EventDedupeTable,
   EventSequenceTable,
+  EventSnapshotAttemptTable,
+  EventSnapshotChunkTable,
+  EventSnapshotRowTable,
   EventSnapshotTable,
   EventTable,
 } from "@deepagent-code/core/event/sql"
@@ -21,6 +24,7 @@ import { AbsolutePath } from "@deepagent-code/core/schema"
 import { SessionV2 } from "@deepagent-code/core/session"
 import { MessageTable, PartTable, SessionInputTable, SessionHistoryStateTable, SessionTable } from "@deepagent-code/core/session/sql"
 import { SessionMessage } from "@deepagent-code/core/session/message"
+import { SessionEvent } from "@deepagent-code/core/session/event"
 import { SessionProjector } from "@deepagent-code/core/session/projector"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { Hash } from "@deepagent-code/core/util/hash"
@@ -202,8 +206,29 @@ describe("EventV2 canonical projection snapshots", () => {
         yield* targetDb.insert(PartTable).values({ id: SessionV1.PartID.make("prt_target_stale"), message_id: SessionV1.MessageID.make("msg_target_stale"),
           session_id: sessionID, time_created: 1, data: { type: "text", text: "stale" } as typeof PartTable.$inferInsert["data"] }).run().pipe(Effect.orDie)
 
+        expect((yield* target.stageSnapshotChunks!(active, rows[0]!, chunks.get(rows[0]!.rowHash)!).pipe(Effect.exit))._tag)
+          .toBe("Failure")
+        expect(yield* targetDb.select().from(EventSnapshotChunkTable).all()).toEqual([])
+        expect((yield* target.stageSnapshotRows!(active, [{
+          ...rows[0]!,
+          rowIndex: rows.length,
+        }]).pipe(Effect.exit))._tag).toBe("Failure")
+        expect(yield* targetDb.select().from(EventSnapshotRowTable).all()).toEqual([])
+        yield* target.stageSnapshotRows!(active, [rows[0]!])
+        expect(yield* target.discardImportedSnapshot!({
+          snapshotID: active.snapshotID,
+          aggregateID: active.aggregateID,
+          limit: 1,
+        })).toEqual({ deletedRows: 1, complete: true })
+        expect(yield* targetDb.select().from(EventSnapshotRowTable).all()).toEqual([])
+        expect(yield* targetDb.select().from(EventSnapshotChunkTable).all()).toEqual([])
         yield* target.stageSnapshotRows!(active, rows)
         yield* target.stageSnapshotRows!(active, rows)
+        expect((yield* target.stageSnapshotChunks!(active, rows[0]!, [{
+          ...chunks.get(rows[0]!.rowHash)![0]!,
+          chunkIndex: rows[0]!.chunkCount,
+        }]).pipe(Effect.exit))._tag).toBe("Failure")
+        expect(yield* targetDb.select().from(EventSnapshotChunkTable).all()).toEqual([])
         for (const row of rows) {
           yield* target.stageSnapshotChunks!(active, row, chunks.get(row.rowHash)!)
           yield* target.stageSnapshotChunks!(active, row, chunks.get(row.rowHash)!)
@@ -388,6 +413,126 @@ describe("EventV2 canonical projection snapshots", () => {
         },
       }).pipe(Effect.catchDefect(Effect.succeed))
       expect(divergent).toBeInstanceOf(EventV2.InvalidSyncEventError)
+    }),
+  )
+
+  it.effect("advances compaction across retained audit events without deleting them", () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2.Service
+      const db = (yield* Database.Service).db
+      const auditSessionID = SessionV2.ID.make("ses_snapshot_retained_audit")
+      yield* db.insert(ProjectTable).values({
+        id: projectID,
+        worktree: AbsolutePath.make("/project"),
+        sandboxes: [],
+      }).run().pipe(Effect.orDie)
+      const info = SessionV1.SessionInfo.make({
+        id: auditSessionID,
+        slug: "snapshot-retained-audit",
+        version: "test",
+        projectID,
+        directory: "/project",
+        title: "snapshot-retained-audit",
+        cost: 0,
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        time: { created: 1, updated: 1 },
+      })
+      const updated = (id: string, text: string) => ({
+        sessionID: auditSessionID,
+        info: {
+          id: SessionV1.MessageID.make(id),
+          sessionID: auditSessionID,
+          role: "user" as const,
+          time: { created: 1 },
+          agent: "build",
+          model: { providerID: ProviderV2.ID.make("test"), modelID: ModelV2.ID.make("test") },
+          system: text,
+        },
+      })
+      yield* events.publish(SessionV1.Event.Created, { sessionID: auditSessionID, info })
+      yield* events.publish(SessionV1.Event.MessageUpdated, updated("msg_audit_before", "before"))
+      yield* events.publish(SessionEvent.Execution.Started, {
+        sessionID: auditSessionID,
+        timestamp: DateTime.makeUnsafe(2),
+      })
+      yield* events.publish(SessionV1.Event.MessageUpdated, updated("msg_audit_after", "after"))
+      const snapshot = yield* events.checkpoint({
+        aggregateID: auditSessionID,
+        throughSeq: EventV2.Cursor.make(3),
+        expectedLatest: EventV2.Cursor.make(3),
+        codec: "session-projection",
+        schemaVersion: 1,
+      })
+
+      const cursors: number[] = []
+      let result = { deleted: 0, complete: false }
+      let deleted = 0
+      while (!result.complete) {
+        result = yield* events.compact({
+          aggregateID: auditSessionID,
+          throughSeq: EventV2.Cursor.make(snapshot.throughSeq),
+          limit: 1,
+        })
+        deleted += result.deleted
+        cursors.push((yield* db.select().from(EventCompactionReceiptTable)
+          .where(eq(EventCompactionReceiptTable.aggregate_id, auditSessionID)).get().pipe(Effect.orDie))!.cursor_seq)
+      }
+
+      expect(deleted).toBe(3)
+      expect(cursors).toEqual([0, 1, 2, 3])
+      expect(yield* db.select({ type: EventTable.type }).from(EventTable)
+        .where(eq(EventTable.aggregate_id, auditSessionID)).all().pipe(Effect.orDie)).toEqual([
+        { type: EventV2.versionedType(SessionEvent.Execution.Started.type, 1) },
+      ])
+      expect(yield* db.select().from(EventDedupeTable)
+        .where(eq(EventDedupeTable.aggregate_id, auditSessionID)).all().pipe(Effect.orDie)).toHaveLength(3)
+      expect(yield* db.select().from(EventCompactionReceiptTable)
+        .where(eq(EventCompactionReceiptTable.aggregate_id, auditSessionID)).get().pipe(Effect.orDie))
+        .toMatchObject({ cursor_seq: 3, state: "complete" })
+      expect(yield* events.compact({
+        aggregateID: auditSessionID,
+        throughSeq: EventV2.Cursor.make(snapshot.throughSeq),
+        limit: 1,
+      })).toEqual({ deleted: 0, complete: true })
+    }),
+  )
+
+  it.effect("replaces a same-sequence snapshot after projection authority changes and cascades all snapshot sidecars", () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2.Service
+      const db = (yield* Database.Service).db
+      const localSessionID = SessionV2.ID.make("ses_snapshot_revision_replace")
+      yield* db.insert(ProjectTable).values({ id: projectID, worktree: AbsolutePath.make("/project"), sandboxes: [] }).run().pipe(Effect.orDie)
+      yield* events.publish(SessionV1.Event.Created, {
+        sessionID: localSessionID,
+        info: SessionV1.SessionInfo.make({ id: localSessionID, slug: "revision", version: "test", projectID,
+          directory: "/project", title: "revision", cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          time: { created: 1, updated: 1 } }),
+      })
+      const first = yield* events.checkpoint({ aggregateID: localSessionID, throughSeq: EventV2.Cursor.make(0),
+        expectedLatest: EventV2.Cursor.make(0), codec: "session-projection", schemaVersion: 1 })
+      let firstCompaction = { deleted: 0, complete: false }
+      while (!firstCompaction.complete)
+        firstCompaction = yield* events.compact({ aggregateID: localSessionID, throughSeq: EventV2.Cursor.make(0), limit: 1 })
+      expect(yield* db.select().from(EventCompactionReceiptTable).where(eq(EventCompactionReceiptTable.aggregate_id, localSessionID)).get().pipe(Effect.orDie))
+        .toMatchObject({ snapshot_id: first.snapshotID, state: "complete", cursor_seq: 0 })
+      yield* db.update(SessionTable).set({ mutation_epoch: 1 }).where(eq(SessionTable.id, localSessionID)).run().pipe(Effect.orDie)
+      const second = yield* events.checkpoint({ aggregateID: localSessionID, throughSeq: EventV2.Cursor.make(0),
+        expectedLatest: EventV2.Cursor.make(0), codec: "session-projection", schemaVersion: 1 })
+      expect(second.snapshotID).not.toBe(first.snapshotID)
+      expect((yield* events.snapshot(localSessionID))?.snapshotID).toBe(second.snapshotID)
+      expect(yield* events.compact({ aggregateID: localSessionID, throughSeq: EventV2.Cursor.make(0), limit: 1 }))
+        .toEqual({ deleted: 0, complete: true })
+      expect(yield* db.select().from(EventCompactionReceiptTable).where(eq(EventCompactionReceiptTable.aggregate_id, localSessionID)).get().pipe(Effect.orDie))
+        .toMatchObject({ snapshot_id: second.snapshotID, state: "complete", cursor_seq: 0 })
+      expect(yield* db.select().from(EventSnapshotTable).where(eq(EventSnapshotTable.aggregate_id, localSessionID)).all()).toHaveLength(1)
+      expect(yield* db.select().from(EventSnapshotAttemptTable).where(eq(EventSnapshotAttemptTable.aggregate_id, localSessionID)).all()).toHaveLength(1)
+      expect(yield* db.select().from(EventSnapshotRowTable).where(eq(EventSnapshotRowTable.aggregate_id, localSessionID)).all()).not.toHaveLength(0)
+      yield* events.remove(localSessionID)
+      expect(yield* db.select().from(EventSnapshotTable).where(eq(EventSnapshotTable.aggregate_id, localSessionID)).all()).toEqual([])
+      expect(yield* db.select().from(EventSnapshotAttemptTable).where(eq(EventSnapshotAttemptTable.aggregate_id, localSessionID)).all()).toEqual([])
+      expect(yield* db.select().from(EventSnapshotRowTable).where(eq(EventSnapshotRowTable.aggregate_id, localSessionID)).all()).toEqual([])
+      expect(yield* db.select().from(EventSnapshotChunkTable).all()).toEqual([])
     }),
   )
 })

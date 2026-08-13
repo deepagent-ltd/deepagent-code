@@ -45,7 +45,7 @@ export const EventSnapshotTable = sqliteTable(
     created_at: integer().notNull(),
   },
   (table) => [
-    uniqueIndex("event_snapshot_aggregate_seq_idx").on(table.aggregate_id, table.through_seq),
+    index("event_snapshot_aggregate_seq_idx").on(table.aggregate_id, table.through_seq),
     index("event_snapshot_aggregate_created_idx").on(table.aggregate_id, table.created_at),
     uniqueIndex("event_snapshot_sync_seq_idx").on(table.sync_seq),
   ],
@@ -55,6 +55,7 @@ export const EventSnapshotRowTable = sqliteTable(
   "event_snapshot_row",
   {
     snapshot_id: text().notNull(),
+    aggregate_id: text().notNull(),
     row_index: integer().notNull(),
     table_name: text().notNull(),
     row_key: text().notNull(),
@@ -66,6 +67,8 @@ export const EventSnapshotRowTable = sqliteTable(
   (table) => [
     primaryKey({ columns: [table.snapshot_id, table.row_index] }),
     uniqueIndex("event_snapshot_row_identity_idx").on(table.snapshot_id, table.table_name, table.row_key),
+    index("event_snapshot_row_hash_idx").on(table.row_hash),
+    index("event_snapshot_row_aggregate_idx").on(table.aggregate_id),
   ],
 )
 
@@ -82,7 +85,9 @@ export const EventSnapshotChunkTable = sqliteTable(
 
 export const EventSnapshotAttemptTable = sqliteTable("event_snapshot_attempt", {
   snapshot_id: text().primaryKey(),
-  aggregate_id: text().notNull(),
+  aggregate_id: text()
+    .notNull()
+    .references(() => EventSequenceTable.aggregate_id, { onDelete: "cascade" }),
   through_seq: integer().notNull(),
   expected_latest: integer().notNull(),
   owner_id: text(),
@@ -97,7 +102,7 @@ export const EventSnapshotAttemptTable = sqliteTable("event_snapshot_attempt", {
   state: text().$type<"prepared" | "staged" | "complete">().notNull(),
   created_at: integer().notNull(),
   updated_at: integer().notNull(),
-})
+}, (table) => [index("event_snapshot_attempt_aggregate_idx").on(table.aggregate_id)])
 
 export const EventSyncSequenceTable = sqliteTable("event_sync_sequence", {
   id: integer().primaryKey(),

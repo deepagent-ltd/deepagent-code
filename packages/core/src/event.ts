@@ -268,25 +268,6 @@ function hashJson(value: unknown) {
   return Hash.sha256(stableJson(value))
 }
 
-function isLegacyFileArtifactRetry(
-  type: string,
-  stored: Record<string, unknown>,
-  original: Record<string, unknown>,
-  encoded: Record<string, unknown>,
-  binding: { readonly originalDataHash: string; readonly canonicalData: Record<string, unknown> },
-) {
-  if (!isDeepStrictEqual(stored, original) || !FilePartArtifact.matchesDataHash(binding.originalDataHash, original))
-    return false
-  const prepared = FilePartArtifact.prepare(
-    type,
-    original,
-    Buffer.byteLength(JSON.stringify(original)),
-    MAX_ENCODED_PAYLOAD_BYTES,
-  )
-  if (prepared.artifacts.length !== 1 || !isDeepStrictEqual(prepared.data, encoded)) return false
-  return FilePartArtifact.isLegacySyntheticCanonical(binding.canonicalData, encoded)
-}
-
 function isCompactedLegacyFileArtifactRetry(
   type: string,
   original: Record<string, unknown>,
@@ -301,7 +282,8 @@ function isCompactedLegacyFileArtifactRetry(
     MAX_ENCODED_PAYLOAD_BYTES,
   )
   if (prepared.artifacts.length !== 1 || !isDeepStrictEqual(prepared.data, encoded)) return false
-  return FilePartArtifact.isLegacySyntheticCanonical(binding.canonicalData, encoded)
+  return isDeepStrictEqual(binding.canonicalData, encoded) ||
+    FilePartArtifact.isLegacySyntheticCanonical(binding.canonicalData, encoded)
 }
 
 // Synchronized events cross a JSON boundary, so their data schemas must encode and decode without services.
@@ -390,6 +372,10 @@ export interface Interface {
     options?: { readonly publish?: boolean; readonly ownerID?: string; readonly strictOwner?: boolean },
   ) => Effect.Effect<string | undefined>
   readonly snapshot: (aggregateID: string) => Effect.Effect<SerializedSnapshot | undefined>
+  readonly aggregateState?: (aggregateID: string) => Effect.Effect<{
+    readonly seq: Cursor
+    readonly ownerID?: string
+  } | undefined>
   readonly prepareCheckpoint?: (input: {
     readonly aggregateID: string
     readonly throughSeq: Cursor
@@ -410,6 +396,11 @@ export interface Interface {
   }) => Effect.Effect<SerializedSnapshot>
   readonly discardCheckpoint?: (input: {
     readonly snapshotID: string
+    readonly limit?: number
+  }) => Effect.Effect<{ readonly deletedRows: number; readonly complete: boolean }>
+  readonly discardImportedSnapshot?: (input: {
+    readonly snapshotID: string
+    readonly aggregateID: string
     readonly limit?: number
   }) => Effect.Effect<{ readonly deletedRows: number; readonly complete: boolean }>
   readonly checkpoint: (input: {
@@ -646,37 +637,40 @@ export const layerWith = (layerOptions?: LayerOptions) =>
                             if (
                               ((stored?.id === event.id &&
                                 stored.type === versionedType(definition.type, sync.version) &&
-                                (isDeepStrictEqual(stored.data, encoded) ||
-                                  isDeepStrictEqual(artifact?.canonicalData, encoded) ||
-                                  (fileArtifact &&
-                                    (isDeepStrictEqual(fileArtifact.canonicalData, encoded) ||
-                                      isLegacyFileArtifactRetry(
-                                        definition.type,
-                                        stored.data,
-                                        original,
-                                        encoded,
-                                        fileArtifact,
-                                      ))) ||
-                                  (artifact &&
-                                    artifact.originalDataHash ===
-                                      (artifact.codecVersion >= 2
-                                        ? Hash.sha256(JSON.stringify(encoded))
-                                        : hashJson(encoded))))) ||
-                                (dedupe?.event_id === event.id &&
-                                  dedupe.type === versionedType(definition.type, sync.version) &&
-                                  (dedupe.data_hash === hashJson(encoded) ||
-                                    (artifact &&
+                                (fileArtifact
+                                  ? (isDeepStrictEqual(original, encoded) &&
+                                      isDeepStrictEqual(fileArtifact.canonicalData, encoded)) ||
+                                    isCompactedLegacyFileArtifactRetry(
+                                      definition.type,
+                                      original,
+                                      encoded,
+                                      fileArtifact,
+                                    )
+                                  : artifact
+                                    ? isDeepStrictEqual(artifact.canonicalData, encoded) ||
                                       artifact.originalDataHash ===
                                         (artifact.codecVersion >= 2
                                           ? Hash.sha256(JSON.stringify(encoded))
-                                          : hashJson(encoded))) ||
-                                    (fileArtifact &&
-                                      isCompactedLegacyFileArtifactRetry(
-                                        definition.type,
-                                        original,
-                                        encoded,
-                                        fileArtifact,
-                                      )))))
+                                          : hashJson(encoded))
+                                    : isDeepStrictEqual(stored.data, encoded))) ||
+                                (dedupe?.event_id === event.id &&
+                                  dedupe.type === versionedType(definition.type, sync.version) &&
+                                  (artifact
+                                    ? isDeepStrictEqual(artifact.canonicalData, encoded) ||
+                                      artifact.originalDataHash ===
+                                        (artifact.codecVersion >= 2
+                                          ? Hash.sha256(JSON.stringify(encoded))
+                                          : hashJson(encoded))
+                                    : fileArtifact
+                                      ? (isDeepStrictEqual(original, encoded) &&
+                                          isDeepStrictEqual(fileArtifact.canonicalData, encoded)) ||
+                                        isCompactedLegacyFileArtifactRetry(
+                                          definition.type,
+                                          original,
+                                          encoded,
+                                          fileArtifact,
+                                        )
+                                      : dedupe.data_hash === hashJson(encoded))))
                             ) {
                               if (input.ownerID && row?.ownerID == null) {
                                 for (const guard of commitGuards) {
@@ -728,12 +722,32 @@ export const layerWith = (layerOptions?: LayerOptions) =>
                             .where(eq(EventTable.id, event.id))
                             .get()
                             .pipe(Effect.orDie)
+                          const storedFileArtifact = stored
+                            ? yield* db
+                                .select({
+                                  originalDataHash: FilePartArtifactBindingTable.original_data_hash,
+                                  canonicalData: FilePartArtifactBindingTable.canonical_data,
+                                })
+                                .from(FilePartArtifactBindingTable)
+                                .where(eq(FilePartArtifactBindingTable.event_id, event.id))
+                                .get()
+                                .pipe(Effect.orDie)
+                            : undefined
                           if (
                             stored &&
                             idempotent &&
                             stored.aggregateID === aggregateID &&
                             stored.type === versionedType(definition.type, sync.version) &&
-                            isDeepStrictEqual(stored.data, encoded)
+                            (storedFileArtifact
+                              ? (isDeepStrictEqual(original, encoded) &&
+                                  isDeepStrictEqual(storedFileArtifact.canonicalData, encoded)) ||
+                                isCompactedLegacyFileArtifactRetry(
+                                  definition.type,
+                                  original,
+                                  encoded,
+                                  storedFileArtifact,
+                                )
+                              : isDeepStrictEqual(stored.data, encoded))
                           ) {
                             if (commit) yield* commit(stored.seq)
                             return { aggregateID, seq: stored.seq, inserted: false }
@@ -1069,6 +1083,17 @@ export const layerWith = (layerOptions?: LayerOptions) =>
           )
       }
 
+      function aggregateState(aggregateID: string) {
+        return db.select({ seq: EventSequenceTable.seq, ownerID: EventSequenceTable.owner_id })
+          .from(EventSequenceTable).where(eq(EventSequenceTable.aggregate_id, aggregateID)).get().pipe(
+            Effect.orDie,
+            Effect.map((row) => row ? {
+              seq: Cursor.make(row.seq),
+              ...(row.ownerID ? { ownerID: row.ownerID } : {}),
+            } : undefined),
+          )
+      }
+
       function checkpoint(input: {
         readonly aggregateID: string
         readonly throughSeq: Cursor
@@ -1217,7 +1242,8 @@ export const layerWith = (layerOptions?: LayerOptions) =>
               const chunks = Math.ceil(data.length / SNAPSHOT_CHUNK_BYTES)
               const chainHash = Hash.sha256(`${attempt.content_hash}\0${row.tableName}\0${row.rowKey}\0${rowHash}\0${data.length}`)
               const insertedRow = yield* db.insert(EventSnapshotRowTable).values({
-                snapshot_id: input.snapshotID, row_index: rowCount, table_name: row.tableName, row_key: row.rowKey,
+                snapshot_id: input.snapshotID, aggregate_id: attempt.aggregate_id, row_index: rowCount,
+                table_name: row.tableName, row_key: row.rowKey,
                 row_hash: rowHash, row_bytes: data.length, chunk_count: chunks, chain_hash: chainHash,
               }).onConflictDoNothing().returning().get().pipe(Effect.orDie)
               if (!insertedRow) {
@@ -1301,6 +1327,8 @@ export const layerWith = (layerOptions?: LayerOptions) =>
             if (!syncSequence) return yield* Effect.die(new InvalidSyncEventError({ type: "snapshot", message: "Sync sequence authority missing" }))
             const createdAt = input.now ?? Date.now()
             const snapshotHash = hashJson(body)
+            const previousSnapshot = yield* db.select({ snapshotID: EventSequenceTable.snapshot_id })
+              .from(EventSequenceTable).where(eq(EventSequenceTable.aggregate_id, attempt.aggregate_id)).get().pipe(Effect.orDie)
             yield* db.insert(EventSnapshotTable).values({ snapshot_id: input.snapshotID, aggregate_id: attempt.aggregate_id, through_seq: attempt.through_seq,
               sync_seq: syncSequence.seq, codec: attempt.codec, schema_version: attempt.schema_version, snapshot_hash: snapshotHash,
               body, owner_id: attempt.owner_id, created_at: createdAt }).run().pipe(Effect.orDie)
@@ -1308,6 +1336,11 @@ export const layerWith = (layerOptions?: LayerOptions) =>
               .where(and(eq(EventSequenceTable.aggregate_id, attempt.aggregate_id), eq(EventSequenceTable.seq, attempt.expected_latest))).run().pipe(Effect.orDie)
             yield* db.update(EventSnapshotAttemptTable).set({ state: "complete", content_hash: body.contentHash, updated_at: createdAt })
               .where(eq(EventSnapshotAttemptTable.snapshot_id, input.snapshotID)).run().pipe(Effect.orDie)
+            if (previousSnapshot?.snapshotID && previousSnapshot.snapshotID !== input.snapshotID) {
+              yield* db.delete(EventSnapshotTable).where(eq(EventSnapshotTable.snapshot_id, previousSnapshot.snapshotID)).run().pipe(Effect.orDie)
+              yield* db.delete(EventSnapshotAttemptTable).where(eq(EventSnapshotAttemptTable.snapshot_id, previousSnapshot.snapshotID)).run().pipe(Effect.orDie)
+              yield* db.delete(EventSnapshotRowTable).where(eq(EventSnapshotRowTable.snapshot_id, previousSnapshot.snapshotID)).run().pipe(Effect.orDie)
+            }
             return { snapshotID: input.snapshotID, aggregateID: attempt.aggregate_id, throughSeq: attempt.through_seq,
               syncSeq: syncSequence.seq, codec: attempt.codec, schemaVersion: attempt.schema_version, snapshotHash, body,
               ...(attempt.owner_id ? { ownerID: attempt.owner_id } : {}), createdAt }
@@ -1336,6 +1369,71 @@ export const layerWith = (layerOptions?: LayerOptions) =>
             const remaining = yield* db.select({ rowIndex: EventSnapshotRowTable.row_index }).from(EventSnapshotRowTable)
               .where(eq(EventSnapshotRowTable.snapshot_id, input.snapshotID)).limit(1).get().pipe(Effect.orDie)
             if (!remaining) yield* db.delete(EventSnapshotAttemptTable).where(and(eq(EventSnapshotAttemptTable.snapshot_id, input.snapshotID), eq(EventSnapshotAttemptTable.state, "prepared"))).run().pipe(Effect.orDie)
+            return { deletedRows: rows.length, complete: !remaining }
+          }),
+          { behavior: "immediate" },
+        ).pipe(Effect.orDie)
+      }
+
+      function discardImportedSnapshot(input: {
+        readonly snapshotID: string
+        readonly aggregateID: string
+        readonly limit?: number
+      }) {
+        const limit = Math.min(Math.max(input.limit ?? SNAPSHOT_TRANSFER_ROWS, 1), SNAPSHOT_TRANSFER_ROWS)
+        return db.transaction(
+          () => Effect.gen(function* () {
+            const active = yield* db
+              .select({ aggregateID: EventSnapshotTable.aggregate_id })
+              .from(EventSnapshotTable)
+              .where(eq(EventSnapshotTable.snapshot_id, input.snapshotID))
+              .get()
+              .pipe(Effect.orDie)
+            if (active) {
+              if (active.aggregateID !== input.aggregateID)
+                return yield* Effect.die(new InvalidSyncEventError({ type: "snapshot", message: "Imported snapshot aggregate scope conflicts" }))
+              return { deletedRows: 0, complete: true }
+            }
+            const attempt = yield* db
+              .select({ aggregateID: EventSnapshotAttemptTable.aggregate_id })
+              .from(EventSnapshotAttemptTable)
+              .where(eq(EventSnapshotAttemptTable.snapshot_id, input.snapshotID))
+              .get()
+              .pipe(Effect.orDie)
+            if (attempt) {
+              if (attempt.aggregateID !== input.aggregateID)
+                return yield* Effect.die(new InvalidSyncEventError({ type: "snapshot", message: "Imported snapshot attempt scope conflicts" }))
+              return yield* Effect.die(new InvalidSyncEventError({ type: "snapshot", message: "Imported snapshot has a checkpoint authority" }))
+            }
+            const scopes = yield* db
+              .select({ aggregateID: EventSnapshotRowTable.aggregate_id })
+              .from(EventSnapshotRowTable)
+              .where(eq(EventSnapshotRowTable.snapshot_id, input.snapshotID))
+              .all()
+              .pipe(Effect.orDie)
+            if (scopes.some((row) => row.aggregateID !== input.aggregateID))
+              return yield* Effect.die(new InvalidSyncEventError({ type: "snapshot", message: "Imported snapshot row scope conflicts" }))
+            const rows = yield* db
+              .select({ rowIndex: EventSnapshotRowTable.row_index, rowHash: EventSnapshotRowTable.row_hash })
+              .from(EventSnapshotRowTable)
+              .where(and(eq(EventSnapshotRowTable.snapshot_id, input.snapshotID), eq(EventSnapshotRowTable.aggregate_id, input.aggregateID)))
+              .orderBy(asc(EventSnapshotRowTable.row_index))
+              .limit(limit)
+              .all()
+              .pipe(Effect.orDie)
+            if (rows.length > 0) {
+              yield* db.delete(EventSnapshotRowTable).where(and(
+                eq(EventSnapshotRowTable.snapshot_id, input.snapshotID),
+                eq(EventSnapshotRowTable.aggregate_id, input.aggregateID),
+                inArray(EventSnapshotRowTable.row_index, rows.map((row) => row.rowIndex)),
+              )).run().pipe(Effect.orDie)
+              yield* Effect.forEach(rows, (row) => db.delete(EventSnapshotChunkTable).where(and(
+                eq(EventSnapshotChunkTable.row_hash, row.rowHash),
+                sql`NOT EXISTS (SELECT 1 FROM ${EventSnapshotRowTable} WHERE ${EventSnapshotRowTable.row_hash} = ${row.rowHash})`,
+              )).run().pipe(Effect.orDie), { discard: true })
+            }
+            const remaining = yield* db.select({ rowIndex: EventSnapshotRowTable.row_index })
+              .from(EventSnapshotRowTable).where(eq(EventSnapshotRowTable.snapshot_id, input.snapshotID)).limit(1).get().pipe(Effect.orDie)
             return { deletedRows: rows.length, complete: !remaining }
           }),
           { behavior: "immediate" },
@@ -1476,6 +1574,8 @@ export const layerWith = (layerOptions?: LayerOptions) =>
                         message: `Snapshot ${input.snapshotID} manifest does not match its staged rows`,
                       }),
                     )
+                  const previousSnapshot = yield* db.select({ snapshotID: EventSequenceTable.snapshot_id })
+                    .from(EventSequenceTable).where(eq(EventSequenceTable.aggregate_id, input.aggregateID)).get().pipe(Effect.orDie)
                   yield* db
                     .insert(EventSequenceTable)
                     .values({
@@ -1544,6 +1644,11 @@ export const layerWith = (layerOptions?: LayerOptions) =>
                     .where(eq(EventSequenceTable.aggregate_id, input.aggregateID))
                     .run()
                     .pipe(Effect.orDie)
+                  if (previousSnapshot?.snapshotID && previousSnapshot.snapshotID !== input.snapshotID) {
+                    yield* db.delete(EventSnapshotTable).where(eq(EventSnapshotTable.snapshot_id, previousSnapshot.snapshotID)).run().pipe(Effect.orDie)
+                    yield* db.delete(EventSnapshotAttemptTable).where(eq(EventSnapshotAttemptTable.snapshot_id, previousSnapshot.snapshotID)).run().pipe(Effect.orDie)
+                    yield* db.delete(EventSnapshotRowTable).where(eq(EventSnapshotRowTable.snapshot_id, previousSnapshot.snapshotID)).run().pipe(Effect.orDie)
+                  }
                 }),
               { behavior: "immediate" },
             )
@@ -1601,9 +1706,34 @@ export const layerWith = (layerOptions?: LayerOptions) =>
         return db.transaction(() => Effect.gen(function* () {
           if (rows.length > SNAPSHOT_TRANSFER_ROWS)
             return yield* Effect.die(new InvalidSyncEventError({ type: "snapshot", message: `Snapshot row page exceeds ${SNAPSHOT_TRANSFER_ROWS}` }))
-          if (hashJson(Schema.decodeUnknownSync(SnapshotManifest)(input.body)) !== input.snapshotHash)
+          const manifest = Schema.decodeUnknownSync(SnapshotManifest)(input.body)
+          if (Buffer.byteLength(JSON.stringify(input.body)) > SNAPSHOT_MAX_ENCODED_BYTES ||
+            manifest.rowCount > SNAPSHOT_MAX_ROWS || manifest.encodedBytes > SNAPSHOT_MAX_TOTAL_BYTES ||
+            Object.values(manifest.tables).reduce((total, count) => total + count, 0) !== manifest.rowCount)
+            return yield* Effect.die(
+              new InvalidSyncEventError({ type: "snapshot", message: `Snapshot ${input.snapshotID} manifest exceeds admission limits` }),
+            )
+          if (hashJson(manifest) !== input.snapshotHash)
             return yield* Effect.die(
               new InvalidSyncEventError({ type: "snapshot", message: `Snapshot ${input.snapshotID} hash mismatch` }),
+            )
+          const previous = yield* db.select({ rowIndex: EventSnapshotRowTable.row_index })
+            .from(EventSnapshotRowTable).where(eq(EventSnapshotRowTable.snapshot_id, input.snapshotID))
+            .orderBy(sql`${EventSnapshotRowTable.row_index} DESC`).limit(1).get().pipe(Effect.orDie)
+          const nextRowIndex = (previous?.rowIndex ?? -1) + 1
+          if (rows.some((row, index) =>
+            !Number.isSafeInteger(row.rowIndex) || row.rowIndex < 0 || row.rowIndex >= manifest.rowCount ||
+            row.rowIndex !== (rows[0]?.rowIndex ?? 0) + index || (rows[0]?.rowIndex ?? 0) > nextRowIndex ||
+            row.rowBytes <= 0 || row.rowBytes > SNAPSHOT_ROW_MAX_ENCODED_BYTES ||
+            row.chunkCount !== Math.ceil(row.rowBytes / SNAPSHOT_CHUNK_BYTES) ||
+            row.chunkCount > Math.ceil(SNAPSHOT_ROW_MAX_ENCODED_BYTES / SNAPSHOT_CHUNK_BYTES) ||
+            row.tableName.length === 0 || Buffer.byteLength(row.tableName) > 128 ||
+            row.rowKey.length === 0 || Buffer.byteLength(row.rowKey) > 4_096 ||
+            row.rowHash.length !== 64 || row.chainHash.length !== 64 ||
+            manifest.tables[row.tableName] === undefined
+          ))
+            return yield* Effect.die(
+              new InvalidSyncEventError({ type: "snapshot", message: `Snapshot ${input.snapshotID} row page is not a bounded contiguous prefix` }),
             )
           yield* Effect.forEach(
             rows,
@@ -1616,6 +1746,7 @@ export const layerWith = (layerOptions?: LayerOptions) =>
                 .insert(EventSnapshotRowTable)
                 .values({
                   snapshot_id: row.snapshotID,
+                  aggregate_id: input.aggregateID,
                   row_index: row.rowIndex,
                   table_name: row.tableName,
                   row_key: row.rowKey,
@@ -1639,6 +1770,24 @@ export const layerWith = (layerOptions?: LayerOptions) =>
             }),
             { discard: true },
           )
+          const totals = yield* db.select({
+            count: sql<number>`COUNT(*)`,
+            bytes: sql<number>`COALESCE(SUM(${EventSnapshotRowTable.row_bytes}), 0)`,
+          }).from(EventSnapshotRowTable).where(eq(EventSnapshotRowTable.snapshot_id, input.snapshotID))
+            .get().pipe(Effect.orDie)
+          if ((totals?.count ?? 0) > manifest.rowCount || (totals?.bytes ?? 0) > manifest.encodedBytes)
+            return yield* Effect.die(
+              new InvalidSyncEventError({ type: "snapshot", message: `Snapshot ${input.snapshotID} rows exceed the manifest authority` }),
+            )
+          const tableCounts = yield* db.select({
+            tableName: EventSnapshotRowTable.table_name,
+            count: sql<number>`COUNT(*)`,
+          }).from(EventSnapshotRowTable).where(eq(EventSnapshotRowTable.snapshot_id, input.snapshotID))
+            .groupBy(EventSnapshotRowTable.table_name).all().pipe(Effect.orDie)
+          if (tableCounts.some((table) => table.count > (manifest.tables[table.tableName] ?? -1)))
+            return yield* Effect.die(
+              new InvalidSyncEventError({ type: "snapshot", message: `Snapshot ${input.snapshotID} table counts exceed the manifest authority` }),
+            )
         }), { behavior: "immediate" }).pipe(Effect.orDie)
       }
 
@@ -1650,17 +1799,45 @@ export const layerWith = (layerOptions?: LayerOptions) =>
         return db.transaction(() => Effect.gen(function* () {
           if (chunks.length > SNAPSHOT_TRANSFER_CHUNKS)
             return yield* Effect.die(new InvalidSyncEventError({ type: "snapshot", message: `Snapshot chunk page exceeds ${SNAPSHOT_TRANSFER_CHUNKS}` }))
-          if (row.snapshotID !== input.snapshotID || chunks.some((chunk) => chunk.rowHash !== row.rowHash))
+          const manifest = Schema.decodeUnknownSync(SnapshotManifest)(input.body)
+          if (Buffer.byteLength(JSON.stringify(input.body)) > SNAPSHOT_MAX_ENCODED_BYTES ||
+            manifest.rowCount > SNAPSHOT_MAX_ROWS || manifest.encodedBytes > SNAPSHOT_MAX_TOTAL_BYTES ||
+            hashJson(manifest) !== input.snapshotHash)
             return yield* Effect.die(
-              new InvalidSyncEventError({ type: "snapshot", message: "Snapshot chunk identity mismatch" }),
+              new InvalidSyncEventError({ type: "snapshot", message: `Snapshot ${input.snapshotID} manifest is invalid` }),
+            )
+          const durableRow = yield* db.select().from(EventSnapshotRowTable).where(and(
+            eq(EventSnapshotRowTable.snapshot_id, input.snapshotID),
+            eq(EventSnapshotRowTable.row_index, row.rowIndex),
+          )).get().pipe(Effect.orDie)
+          if (!durableRow || durableRow.aggregate_id !== input.aggregateID || row.snapshotID !== input.snapshotID ||
+            durableRow.table_name !== row.tableName || durableRow.row_key !== row.rowKey ||
+            durableRow.row_hash !== row.rowHash || durableRow.row_bytes !== row.rowBytes ||
+            durableRow.chunk_count !== row.chunkCount || durableRow.chain_hash !== row.chainHash ||
+            chunks.some((chunk) => chunk.rowHash !== row.rowHash))
+            return yield* Effect.die(
+              new InvalidSyncEventError({ type: "snapshot", message: "Snapshot chunk row authority mismatch" }),
+            )
+          const previous = yield* db.select({ chunkIndex: EventSnapshotChunkTable.chunk_index })
+            .from(EventSnapshotChunkTable).where(eq(EventSnapshotChunkTable.row_hash, row.rowHash))
+            .orderBy(sql`${EventSnapshotChunkTable.chunk_index} DESC`).limit(1).get().pipe(Effect.orDie)
+          const nextChunkIndex = (previous?.chunkIndex ?? -1) + 1
+          if (chunks.some((chunk, index) => {
+            const expectedIndex = (chunks[0]?.chunkIndex ?? 0) + index
+            const expectedBytes = chunk.chunkIndex === row.chunkCount - 1
+              ? row.rowBytes - SNAPSHOT_CHUNK_BYTES * (row.chunkCount - 1)
+              : SNAPSHOT_CHUNK_BYTES
+            return !Number.isSafeInteger(chunk.chunkIndex) || chunk.chunkIndex < 0 ||
+              chunk.chunkIndex >= row.chunkCount || chunk.chunkIndex !== expectedIndex ||
+              (chunks[0]?.chunkIndex ?? 0) > nextChunkIndex || chunk.data.length !== expectedBytes ||
+              chunk.chunkHash.length !== 64 || Hash.sha256(chunk.data) !== chunk.chunkHash
+          }))
+            return yield* Effect.die(
+              new InvalidSyncEventError({ type: "snapshot", message: "Snapshot chunk page is not a bounded contiguous prefix" }),
             )
           yield* Effect.forEach(
             chunks,
             (chunk) => Effect.gen(function* () {
-              if (chunk.data.length > SNAPSHOT_CHUNK_BYTES || Hash.sha256(chunk.data) !== chunk.chunkHash)
-                return yield* Effect.die(
-                  new InvalidSyncEventError({ type: "snapshot", message: "Snapshot chunk hash mismatch" }),
-                )
               const inserted = yield* db
                 .insert(EventSnapshotChunkTable)
                 .values({
@@ -1720,21 +1897,70 @@ export const layerWith = (layerOptions?: LayerOptions) =>
                 const codec = active ? snapshotCodecs.get(`${active.codec}@${active.schema_version}`) : undefined
                 if (!active || !codec || active.through_seq < input.throughSeq)
                   return yield* Effect.die(new InvalidSyncEventError({ type: "snapshot", message: `Compaction requires an active importable snapshot for ${input.aggregateID}` }))
-                const receipt = yield* db.select().from(EventCompactionReceiptTable)
+                const existingReceipt = yield* db.select().from(EventCompactionReceiptTable)
                   .where(eq(EventCompactionReceiptTable.aggregate_id, input.aggregateID)).get().pipe(Effect.orDie)
-                if (receipt && (receipt.snapshot_id !== active.snapshot_id || receipt.through_seq !== input.throughSeq ||
-                  receipt.codec !== active.codec || receipt.schema_version !== active.schema_version))
-                  return yield* Effect.die(new InvalidSyncEventError({ type: "snapshot", message: `Compaction receipt conflicts with active snapshot ${active.snapshot_id}` }))
+                const receipt = yield* Effect.gen(function* () {
+                  if (!existingReceipt) return undefined
+                  if (existingReceipt.snapshot_id === active.snapshot_id &&
+                    existingReceipt.through_seq === input.throughSeq && existingReceipt.codec === active.codec &&
+                    existingReceipt.schema_version === active.schema_version) return existingReceipt
+                  if (existingReceipt.state === "complete" && existingReceipt.through_seq === input.throughSeq &&
+                    active.through_seq === input.throughSeq) {
+                    const rebound = yield* db.update(EventCompactionReceiptTable).set({
+                      snapshot_id: active.snapshot_id,
+                      codec: active.codec,
+                      schema_version: active.schema_version,
+                      cursor_seq: input.throughSeq,
+                      state: "complete",
+                      updated_at: input.now ?? Date.now(),
+                    }).where(and(
+                      eq(EventCompactionReceiptTable.aggregate_id, input.aggregateID),
+                      eq(EventCompactionReceiptTable.snapshot_id, existingReceipt.snapshot_id),
+                      eq(EventCompactionReceiptTable.through_seq, existingReceipt.through_seq),
+                      eq(EventCompactionReceiptTable.state, "complete"),
+                    )).returning().get().pipe(Effect.orDie)
+                    if (!rebound) return yield* Effect.die(new InvalidSyncEventError({
+                      type: "snapshot",
+                      message: `Compaction receipt changed before snapshot ${active.snapshot_id} could rebind`,
+                    }))
+                    return rebound
+                  }
+                  if (existingReceipt.state !== "complete" || existingReceipt.through_seq >= input.throughSeq)
+                    return yield* Effect.die(new InvalidSyncEventError({
+                      type: "snapshot",
+                      message: `Compaction receipt conflicts with active snapshot ${active.snapshot_id}`,
+                    }))
+                  const continued = yield* db.update(EventCompactionReceiptTable).set({
+                    snapshot_id: active.snapshot_id,
+                    through_seq: input.throughSeq,
+                    codec: active.codec,
+                    schema_version: active.schema_version,
+                    cursor_seq: existingReceipt.through_seq,
+                    deleted_count: 0,
+                    state: "running",
+                    updated_at: input.now ?? Date.now(),
+                  }).where(and(
+                    eq(EventCompactionReceiptTable.aggregate_id, input.aggregateID),
+                    eq(EventCompactionReceiptTable.snapshot_id, existingReceipt.snapshot_id),
+                    eq(EventCompactionReceiptTable.through_seq, existingReceipt.through_seq),
+                    eq(EventCompactionReceiptTable.state, "complete"),
+                  )).returning().get().pipe(Effect.orDie)
+                  if (!continued) return yield* Effect.die(new InvalidSyncEventError({
+                    type: "snapshot",
+                    message: `Compaction receipt changed before snapshot ${active.snapshot_id} could continue`,
+                  }))
+                  return continued
+                })
                 const cursor = receipt?.cursor_seq ?? -1
                 const limit = Math.min(Math.max(input.limit ?? 100, 1), 100)
-                const candidates = yield* db.all<{
+                const rows = yield* db.all<{
                   id: ID
                   aggregateID: string
                   seq: number
                   type: string
                   effectiveBytes: number
                   cumulativeBytes: number
-                  canonicalData: string | null
+                  candidateCount: number
                 }>(sql`
                   WITH candidate AS (
                     SELECT
@@ -1742,7 +1968,6 @@ export const layerWith = (layerOptions?: LayerOptions) =>
                       event.aggregate_id AS aggregateID,
                       event.seq,
                       event.type,
-                      COALESCE(file_binding.canonical_data, artifact.canonical_data) AS canonicalData,
                       length(CAST(COALESCE(file_binding.canonical_data, artifact.canonical_data, event.data) AS BLOB)) AS effectiveBytes
                     FROM event
                     LEFT JOIN event_artifact artifact ON artifact.event_id = event.id
@@ -1752,16 +1977,20 @@ export const layerWith = (layerOptions?: LayerOptions) =>
                       AND event.seq <= ${input.throughSeq}
                     ORDER BY event.seq ASC
                     LIMIT ${limit + 1}
+                  ), scored AS (
+                    SELECT *,
+                      row_number() OVER (ORDER BY seq ASC) AS position,
+                      sum(effectiveBytes) OVER (
+                        ORDER BY seq ASC ROWS UNBOUNDED PRECEDING
+                      ) AS cumulativeBytes,
+                      count(*) OVER () AS candidateCount
+                    FROM candidate
                   )
-                  SELECT *, sum(effectiveBytes) OVER (
-                    ORDER BY seq ASC ROWS UNBOUNDED PRECEDING
-                  ) AS cumulativeBytes
-                  FROM candidate
+                  SELECT id, aggregateID, seq, type, effectiveBytes, cumulativeBytes, candidateCount
+                  FROM scored
+                  WHERE position = 1 OR (position <= ${limit} AND cumulativeBytes <= ${AGGREGATE_READ_BATCH_BYTES})
                   ORDER BY seq ASC
                 `).pipe(Effect.orDie)
-                const rows = candidates
-                  .slice(0, limit)
-                  .filter((item, index) => index === 0 || item.cumulativeBytes <= AGGREGATE_READ_BATCH_BYTES)
                 if (rows[0] && rows[0].effectiveBytes > AGGREGATE_READ_BATCH_BYTES)
                   return yield* Effect.die(new EncodedPayloadTooLargeError({
                     type: rows[0].type,
@@ -1770,7 +1999,24 @@ export const layerWith = (layerOptions?: LayerOptions) =>
                     message: `Compaction source ${rows[0].id} has no bounded canonical projection`,
                   }))
                 const compactable = rows.filter((item) => codec.rebuildEventTypes.has(item.type))
-                const rawIDs = compactable.filter((item) => item.canonicalData === null).map((item) => item.id)
+                const canonicalRows = compactable.length > 0
+                  ? yield* db.all<{
+                      id: ID
+                      data: string | null
+                      originalDataHash: string | null
+                    }>(sql`
+                      SELECT event.id,
+                        COALESCE(file_binding.canonical_data, artifact.canonical_data) AS data,
+                        COALESCE(file_binding.original_data_hash, artifact.original_data_hash) AS originalDataHash
+                      FROM event
+                      LEFT JOIN event_artifact artifact ON artifact.event_id = event.id
+                      LEFT JOIN file_part_artifact_binding file_binding ON file_binding.event_id = event.id
+                      WHERE event.id IN ${compactable.map((item) => item.id)}
+                    `).pipe(Effect.orDie)
+                  : []
+                const canonicalByID = new Map(canonicalRows.map((row) => [row.id, row.data]))
+                const originalDataHashByID = new Map(canonicalRows.map((row) => [row.id, row.originalDataHash]))
+                const rawIDs = compactable.filter((item) => canonicalByID.get(item.id) === null).map((item) => item.id)
                 const rawRows = rawIDs.length > 0
                   ? yield* db
                       .select({ id: EventTable.id, data: EventTable.data })
@@ -1781,8 +2027,10 @@ export const layerWith = (layerOptions?: LayerOptions) =>
                   : []
                 const rawByID = new Map(rawRows.map((row) => [row.id, row.data]))
                 yield* Effect.forEach(compactable, (item) => Effect.gen(function* () {
-                  const dataHash = item.canonicalData
-                    ? hashJson(Schema.decodeUnknownSync(Schema.UnknownFromJsonString)(item.canonicalData))
+                  const canonicalData = canonicalByID.get(item.id)
+                  const originalDataHash = originalDataHashByID.get(item.id)
+                  const dataHash = originalDataHash
+                    ? originalDataHash
                     : rawByID.has(item.id)
                       ? hashJson(rawByID.get(item.id))
                       : yield* Effect.die(new InvalidSyncEventError({
@@ -1796,7 +2044,16 @@ export const layerWith = (layerOptions?: LayerOptions) =>
                   if (existing && (existing.aggregate_id !== item.aggregateID || existing.seq !== item.seq ||
                     existing.event_id !== item.id || existing.type !== item.type || existing.data_hash !== dataHash))
                     return yield* Effect.die(new InvalidSyncEventError({ type: "snapshot", message: `Compaction dedupe conflicts at ${item.aggregateID}:${item.seq}` }))
-                  if (!existing) yield* db.run(sql`
+                  if (!existing && originalDataHash) yield* db.insert(EventDedupeTable).values({
+                    aggregate_id: item.aggregateID,
+                    seq: item.seq,
+                    event_id: item.id,
+                    type: item.type,
+                    data_hash: dataHash,
+                    source_data: null,
+                    compacted_at: input.now ?? Date.now(),
+                  }).run().pipe(Effect.orDie)
+                  if (!existing && !originalDataHash) yield* db.run(sql`
                     INSERT INTO event_dedupe (
                       aggregate_id, seq, event_id, type, data_hash, source_data, compacted_at
                     )
@@ -1806,13 +2063,14 @@ export const layerWith = (layerOptions?: LayerOptions) =>
                 }), { discard: true })
                 if (compactable.length > 0) yield* db.delete(EventTable)
                   .where(inArray(EventTable.id, compactable.map((item) => item.id))).run().pipe(Effect.orDie)
-                if (compactable.length > 0) yield* db.update(EventDedupeTable)
+                if (rawIDs.length > 0) yield* db.update(EventDedupeTable)
                   .set({ source_data: null })
-                  .where(inArray(EventDedupeTable.event_id, compactable.map((item) => item.id)))
+                  .where(inArray(EventDedupeTable.event_id, rawIDs))
                   .run()
                   .pipe(Effect.orDie)
                 const nextCursor = rows.at(-1)?.seq ?? cursor
-                const complete = rows.length === 0 || (nextCursor >= input.throughSeq && candidates.length <= rows.length)
+                const complete = rows.length === 0 ||
+                  (nextCursor >= input.throughSeq && (rows[0]?.candidateCount ?? 0) <= rows.length)
                 yield* db.insert(EventCompactionReceiptTable).values({ aggregate_id: input.aggregateID,
                   snapshot_id: active.snapshot_id, through_seq: input.throughSeq, codec: active.codec,
                   schema_version: active.schema_version, cursor_seq: nextCursor,
@@ -1985,9 +2243,28 @@ export const layerWith = (layerOptions?: LayerOptions) =>
         return db
           .transaction(() =>
             Effect.gen(function* () {
+              const artifactIDs = yield* db
+                .selectDistinct({ id: FilePartArtifactBindingTable.artifact_id })
+                .from(FilePartArtifactBindingTable)
+                .where(eq(FilePartArtifactBindingTable.aggregate_id, aggregateID))
+                .all()
+                .pipe(Effect.orDie)
               yield* db.delete(EventSequenceTable).where(eq(EventSequenceTable.aggregate_id, aggregateID)).run()
-              yield* db.delete(EventTable).where(eq(EventTable.aggregate_id, aggregateID)).run()
+              if (artifactIDs.length > 0)
+                yield* db.run(sql`
+                  DELETE FROM file_part_artifact
+                  WHERE artifact_id IN ${artifactIDs.map((row) => row.id)}
+                    AND NOT EXISTS (
+                      SELECT 1 FROM file_part_artifact_binding binding
+                      WHERE binding.artifact_id = file_part_artifact.artifact_id
+                    )
+                    AND NOT EXISTS (
+                      SELECT 1 FROM file_part_artifact_import imported
+                      WHERE imported.artifact_id = file_part_artifact.artifact_id
+                    )
+                `).pipe(Effect.orDie)
             }),
+            { behavior: "immediate" },
           )
           .pipe(Effect.orDie)
       }
@@ -2338,10 +2615,12 @@ export const layerWith = (layerOptions?: LayerOptions) =>
         replay,
         replayAll,
         snapshot,
+        aggregateState,
         prepareCheckpoint,
         stageCheckpoint,
         finalizeCheckpoint,
         discardCheckpoint,
+        discardImportedSnapshot,
         checkpoint,
         importSnapshot,
         compact,

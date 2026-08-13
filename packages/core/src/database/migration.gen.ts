@@ -94,5 +94,9 @@ export const migrations = (
     import("./migration/20260813133000_session_transfer_authority"),
     import("./migration/20260813134000_database_capability"),
     import("./migration/20260813135000_event_immutable"),
+    import("./migration/20260813140000_event_sidecar_compaction"),
+    import("./migration/20260813141000_bug_407_010_sidecar_lifecycle"),
+    import("./migration/20260813142000_bug_407_010_sidecar_indexes"),
+    import("./migration/20260813143000_bug_407_010_aggregate_indexes"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

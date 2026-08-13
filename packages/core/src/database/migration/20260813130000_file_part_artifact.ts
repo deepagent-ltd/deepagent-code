@@ -45,7 +45,28 @@ export default {
         ON file_part_artifact_binding(aggregate_id, part_id, seq)
       `)
       yield* tx.run(`
+        CREATE INDEX file_part_artifact_binding_artifact_idx
+        ON file_part_artifact_binding(artifact_id)
+      `)
+      yield* tx.run(`
         CREATE TABLE file_part_artifact_import (
+          event_id TEXT NOT NULL PRIMARY KEY,
+          aggregate_id TEXT NOT NULL,
+          seq INTEGER NOT NULL CHECK (seq >= 0),
+          artifact_id TEXT NOT NULL REFERENCES file_part_artifact(artifact_id) ON DELETE CASCADE,
+          original_data_hash TEXT NOT NULL CHECK (length(original_data_hash) = 64),
+          canonical_data_hash TEXT NOT NULL CHECK (length(canonical_data_hash) = 64),
+          canonical_data TEXT NOT NULL CHECK (json_valid(canonical_data)),
+          created_at INTEGER NOT NULL,
+          UNIQUE (aggregate_id, seq)
+        )
+      `)
+      yield* tx.run(`
+        CREATE INDEX file_part_artifact_import_artifact_idx
+        ON file_part_artifact_import(artifact_id)
+      `)
+      yield* tx.run(`
+        CREATE TABLE file_part_artifact_discard (
           event_id TEXT NOT NULL PRIMARY KEY,
           aggregate_id TEXT NOT NULL,
           seq INTEGER NOT NULL CHECK (seq >= 0),

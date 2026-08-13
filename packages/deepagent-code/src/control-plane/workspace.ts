@@ -373,6 +373,7 @@ export const layer = Layer.effect(
       const importArtifactMetadata = Effect.fn("Workspace.syncFilePartArtifactMetadata")(function* (
         metadata: FilePartArtifact.Metadata,
         verified = false,
+        stagedImports?: FilePartArtifact.Metadata[],
       ) {
         const descriptor = metadata.descriptor
         const remote = verified
@@ -391,6 +392,7 @@ export const layer = Layer.effect(
             )
         if (JSON.stringify(remote) !== JSON.stringify(metadata))
           return yield* new SyncHttpError({ message: "Workspace artifact metadata diverged from history", status: 409 })
+        if (!stagedImports?.some((candidate) => candidate.eventID === remote.eventID)) stagedImports?.push(remote)
         if (!(yield* FilePartArtifact.has(descriptor).pipe(Effect.provideService(Database.Service, { db }))))
           for (const [index, hash] of remote.chunkHashes.entries()) {
             const chunk = yield* requestJson(
@@ -425,7 +427,10 @@ export const layer = Layer.effect(
           }
         yield* FilePartArtifact.stageImport(remote).pipe(Effect.provideService(Database.Service, { db }))
       })
-      const importArtifact = Effect.fn("Workspace.syncFilePartArtifact")(function* (item: HistoryEvent) {
+      const importArtifact = Effect.fn("Workspace.syncFilePartArtifact")(function* (
+        item: HistoryEvent,
+        stagedImports: FilePartArtifact.Metadata[],
+      ) {
         const descriptor = FilePartArtifact.descriptor(item.data)
         if (!descriptor) return
         const metadata = Schema.decodeUnknownSync(FilePartArtifact.Metadata)(
@@ -444,13 +449,18 @@ export const layer = Layer.effect(
           JSON.stringify(metadata.descriptor) !== JSON.stringify(descriptor)
         )
           return yield* new SyncHttpError({ message: "Workspace artifact metadata diverged from history", status: 409 })
-        yield* importArtifactMetadata(metadata, true)
+        yield* importArtifactMetadata(metadata, true, stagedImports)
       })
-      const importSnapshot = Effect.fn("Workspace.syncSnapshot")(function* (item: HistoryResync) {
+      const importSnapshot = Effect.fn("Workspace.syncSnapshot")(function* (
+        item: HistoryResync,
+        stagedImports: FilePartArtifact.Metadata[],
+        stagedSnapshots: HistoryResync["snapshot"][],
+      ) {
         if (!events.snapshotRows || !events.snapshotChunks || !events.stageSnapshotRows || !events.stageSnapshotChunks)
           return yield* new SyncHttpError({ message: "Workspace snapshot transfer is unavailable", status: 503 })
         const stageRows = events.stageSnapshotRows
         const stageChunks = events.stageSnapshotChunks
+        stagedSnapshots.push(item.snapshot)
         let after = -1
         while (true) {
           const page = Schema.decodeUnknownSync(SnapshotRowsPage)(
@@ -503,7 +513,11 @@ export const layer = Layer.effect(
                 )
                 if (!value || typeof value !== "object" || Array.isArray(value) || !("metadata" in value))
                   return yield* new SyncHttpError({ message: "Workspace snapshot artifact row is invalid", status: 409 })
-                yield* importArtifactMetadata(Schema.decodeUnknownSync(FilePartArtifact.Metadata)(value.metadata))
+                yield* importArtifactMetadata(
+                  Schema.decodeUnknownSync(FilePartArtifact.Metadata)(value.metadata),
+                  false,
+                  stagedImports,
+                )
               }),
             { discard: true },
           )
@@ -563,25 +577,55 @@ export const layer = Layer.effect(
         yield* Effect.forEach(
           history,
           (item) => {
+            const stagedImports: FilePartArtifact.Metadata[] = []
+            const stagedSnapshots: HistoryResync["snapshot"][] = []
             return Effect.gen(function* () {
               if (item.kind === "resync_required") {
-                yield* importSnapshot(item)
+                yield* importSnapshot(item, stagedImports, stagedSnapshots)
                 return
               }
-              yield* importArtifact(item)
-              yield* events
-                .replay(
-                  {
-                    id: EventV2.ID.make(item.id),
-                    aggregateID: item.aggregate_id,
-                    seq: item.seq,
-                    type: item.type,
-                    data: item.data,
-                  },
-                  { publish: true, ownerID: space.id },
-                )
-                .pipe(Effect.provideService(WorkspaceRef, space.id))
-            })
+              yield* importArtifact(item, stagedImports)
+              yield* events.replay({
+                id: EventV2.ID.make(item.id),
+                aggregateID: item.aggregate_id,
+                seq: item.seq,
+                type: item.type,
+                data: item.data,
+              }, { publish: true, ownerID: space.id }).pipe(Effect.provideService(WorkspaceRef, space.id))
+            }).pipe(
+              Effect.ensuring(
+                Effect.suspend(() => Effect.gen(function* () {
+                  yield* Effect.forEach(
+                    stagedImports,
+                    (metadata) => FilePartArtifact.discardImport({
+                      eventID: EventV2.ID.make(metadata.eventID),
+                      aggregateID: metadata.aggregateID,
+                      artifactID: metadata.descriptor.id,
+                    }).pipe(Effect.provideService(Database.Service, { db }), Effect.ignore),
+                    { discard: true },
+                  )
+                  yield* Effect.forEach(
+                    stagedSnapshots,
+                    (snapshot) => {
+                      const discardImportedSnapshot = events.discardImportedSnapshot
+                      if (!discardImportedSnapshot) return Effect.succeed(undefined)
+                      return Effect.gen(function* () {
+                        let complete = false
+                        while (!complete) {
+                          const result = yield* discardImportedSnapshot({
+                            snapshotID: snapshot.snapshotID,
+                            aggregateID: snapshot.aggregateID,
+                            limit: EventV2.SNAPSHOT_TRANSFER_ROWS,
+                          })
+                          complete = result.complete
+                        }
+                      }).pipe(Effect.ignore)
+                    },
+                    { discard: true },
+                  )
+                })),
+              ),
+            )
           },
           { discard: true },
         )
