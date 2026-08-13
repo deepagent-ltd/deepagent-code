@@ -32,16 +32,18 @@ const args = parseArgs({
   options: {
     database: { type: "string" },
     session: { type: "string", multiple: true },
+    "all-sessions": { type: "boolean" },
   },
   strict: true,
 })
 const filename = args.values.database ? path.resolve(args.values.database) : undefined
 const sessions = (args.values.session ?? []).map((sessionID) => SessionID.make(sessionID))
+const allSessions = args.values["all-sessions"] === true
 
 if (!filename || !path.basename(filename).includes("release-gate"))
   throw new Error("--database must name an explicit release-gate copy")
 if (!(await Bun.file(filename).exists())) throw new Error(`Release-gate database does not exist: ${filename}`)
-if (sessions.length === 0) throw new Error("At least one --session is required")
+if (!allSessions && sessions.length === 0) throw new Error("At least one --session or --all-sessions is required")
 
 const databaseLayer = Database.layerFromPath(filename)
 const eventLayer = EventV2.layer.pipe(Layer.provide(databaseLayer))
@@ -156,7 +158,11 @@ const program = Effect.gen(function* () {
   if (diffMigration.failed > 0)
     return yield* Effect.die(new Error(`Legacy Session diff migration failed: ${JSON.stringify(diffMigration)}`))
 
+  const inventorySessions = allSessions
+    ? (yield* db.select({ id: SessionTable.id }).from(SessionTable).orderBy(asc(SessionTable.id)).all().pipe(Effect.orDie))
+    : []
   const checkpointSessions = [...new Set([
+    ...inventorySessions.map((row) => SessionID.make(row.id)),
     ...sessions,
     ...artifactSessions.map((row) => SessionID.make(row.id)),
     ...fileArtifactSessions.map((row) => SessionID.make(row.id)),
