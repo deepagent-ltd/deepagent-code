@@ -57,6 +57,7 @@ import { ShareNext } from "@/share/share-next"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { EventV2 } from "@deepagent-code/core/event"
 import { Database } from "@deepagent-code/core/database/database"
+import { LocationIdentity } from "@deepagent-code/core/context-federation/identity"
 import { Skill } from "@/skill"
 import { Snapshot } from "@/snapshot"
 import { ToolRegistry } from "@/tool/registry"
@@ -338,6 +339,7 @@ export function createRoutes(
       fenceLayer.pipe(Layer.provide(Database.defaultLayer)),
       cors(corsOptions),
       Database.defaultLayer,
+      LocationIdentity.defaultLayer,
       Account.defaultLayer,
       Agent.defaultLayer,
       Auth.defaultLayer,
