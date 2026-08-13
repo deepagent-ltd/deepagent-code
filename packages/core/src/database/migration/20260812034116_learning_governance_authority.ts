@@ -1,0 +1,83 @@
+import { Effect } from "effect"
+import type { DatabaseMigration } from "../migration"
+
+export default {
+  id: "20260812034116_learning_governance_authority",
+  up(tx) {
+    return Effect.gen(function* () {
+      yield* tx.run(`
+        CREATE TABLE \`learning_governance_action\` (
+          \`action_id\` text PRIMARY KEY,
+          \`plan_id\` text NOT NULL,
+          \`candidate_id\` text NOT NULL,
+          \`sequence\` integer NOT NULL,
+          \`kind\` text NOT NULL,
+          \`predecessor_action_id\` text,
+          \`payload_json\` text NOT NULL,
+          \`payload_fingerprint\` text NOT NULL,
+          \`state\` text NOT NULL,
+          \`owner\` text,
+          \`lease_expires_at\` integer,
+          \`version\` integer NOT NULL,
+          \`result_ref\` text,
+          \`result_hash\` text,
+          \`result_fingerprint\` text,
+          \`error_code\` text,
+          \`error_detail\` text,
+          \`created_at\` integer NOT NULL,
+          \`settled_at\` integer,
+          \`updated_at\` integer NOT NULL,
+          CONSTRAINT \`fk_learning_governance_action_plan_id_learning_governance_plan_plan_id_fk\` FOREIGN KEY (\`plan_id\`) REFERENCES \`learning_governance_plan\`(\`plan_id\`),
+          CONSTRAINT "learning_governance_action_sequence_check" CHECK("sequence" >= 0),
+          CONSTRAINT "learning_governance_action_version_check" CHECK("version" >= 0),
+          CONSTRAINT "learning_governance_action_candidate_check" CHECK(length(trim("candidate_id")) > 0),
+          CONSTRAINT "learning_governance_action_payload_json_check" CHECK(json_valid("payload_json")),
+          CONSTRAINT "learning_governance_action_kind_check" CHECK("kind" IN ('document_stage', 'memory_inbox')),
+          CONSTRAINT "learning_governance_action_payload_fingerprint_check" CHECK(length("payload_fingerprint") = 64 AND "payload_fingerprint" NOT GLOB '*[^0-9a-f]*'),
+          CONSTRAINT "learning_governance_action_result_hash_check" CHECK("result_hash" IS NULL OR (length("result_hash") = 64 AND "result_hash" NOT GLOB '*[^0-9a-f]*')),
+          CONSTRAINT "learning_governance_action_result_fingerprint_check" CHECK("result_fingerprint" IS NULL OR (length("result_fingerprint") = 64 AND "result_fingerprint" NOT GLOB '*[^0-9a-f]*')),
+          CONSTRAINT "learning_governance_action_state_check" CHECK("state" IN ('prepared', 'running', 'settled', 'recovery_required')),
+          CONSTRAINT "learning_governance_action_lifecycle_check" CHECK(("state" = 'prepared' AND "owner" IS NULL AND "lease_expires_at" IS NULL AND "result_ref" IS NULL AND "result_hash" IS NULL AND "result_fingerprint" IS NULL AND "error_code" IS NULL AND "settled_at" IS NULL) OR ("state" = 'running' AND length(trim("owner")) > 0 AND "lease_expires_at" IS NOT NULL AND "result_ref" IS NULL AND "result_hash" IS NULL AND "result_fingerprint" IS NULL AND "error_code" IS NULL AND "settled_at" IS NULL) OR ("state" = 'settled' AND "owner" IS NULL AND "lease_expires_at" IS NULL AND length(trim("result_ref")) > 0 AND "result_hash" IS NOT NULL AND "result_fingerprint" IS NOT NULL AND "error_code" IS NULL AND "settled_at" IS NOT NULL) OR ("state" = 'recovery_required' AND "owner" IS NULL AND "lease_expires_at" IS NULL AND length(trim("error_code")) > 0 AND "settled_at" IS NOT NULL))
+        );
+      `)
+      yield* tx.run(`
+        CREATE TABLE \`learning_governance_plan\` (
+          \`plan_id\` text PRIMARY KEY,
+          \`job_id\` text NOT NULL,
+          \`policy\` text NOT NULL,
+          \`payload_json\` text NOT NULL,
+          \`payload_fingerprint\` text NOT NULL,
+          \`action_count\` integer NOT NULL,
+          \`job_owner\` text NOT NULL,
+          \`source_job_version\` integer NOT NULL,
+          \`job_started_version\` integer NOT NULL,
+          \`state\` text NOT NULL,
+          \`version\` integer NOT NULL,
+          \`result_ref\` text,
+          \`result_hash\` text,
+          \`result_fingerprint\` text,
+          \`error_code\` text,
+          \`error_detail\` text,
+          \`created_at\` integer NOT NULL,
+          \`settled_at\` integer,
+          \`updated_at\` integer NOT NULL,
+          CONSTRAINT \`fk_learning_governance_plan_job_id_learning_job_job_id_fk\` FOREIGN KEY (\`job_id\`) REFERENCES \`learning_job\`(\`job_id\`),
+          CONSTRAINT "learning_governance_plan_policy_check" CHECK("policy" = 'manual_review'),
+          CONSTRAINT "learning_governance_plan_action_count_check" CHECK("action_count" >= 0),
+          CONSTRAINT "learning_governance_plan_version_check" CHECK("version" >= 0),
+          CONSTRAINT "learning_governance_plan_payload_json_check" CHECK(json_valid("payload_json")),
+          CONSTRAINT "learning_governance_plan_payload_fingerprint_check" CHECK(length("payload_fingerprint") = 64 AND "payload_fingerprint" NOT GLOB '*[^0-9a-f]*'),
+          CONSTRAINT "learning_governance_plan_result_hash_check" CHECK("result_hash" IS NULL OR (length("result_hash") = 64 AND "result_hash" NOT GLOB '*[^0-9a-f]*')),
+          CONSTRAINT "learning_governance_plan_result_fingerprint_check" CHECK("result_fingerprint" IS NULL OR (length("result_fingerprint") = 64 AND "result_fingerprint" NOT GLOB '*[^0-9a-f]*')),
+          CONSTRAINT "learning_governance_plan_state_check" CHECK("state" IN ('prepared', 'settled', 'recovery_required')),
+          CONSTRAINT "learning_governance_plan_settlement_check" CHECK(("state" = 'prepared' AND "result_ref" IS NULL AND "result_hash" IS NULL AND "result_fingerprint" IS NULL AND "error_code" IS NULL AND "settled_at" IS NULL) OR ("state" = 'settled' AND length(trim("result_ref")) > 0 AND "result_hash" IS NOT NULL AND "result_fingerprint" IS NOT NULL AND "error_code" IS NULL AND "settled_at" IS NOT NULL) OR ("state" = 'recovery_required' AND length(trim("error_code")) > 0 AND "settled_at" IS NOT NULL))
+        );
+      `)
+      yield* tx.run(`CREATE UNIQUE INDEX \`learning_governance_action_plan_sequence_idx\` ON \`learning_governance_action\` (\`plan_id\`,\`sequence\`);`)
+      yield* tx.run(`CREATE UNIQUE INDEX \`learning_governance_action_plan_candidate_kind_idx\` ON \`learning_governance_action\` (\`plan_id\`,\`candidate_id\`,\`kind\`);`)
+      yield* tx.run(`CREATE INDEX \`learning_governance_action_claim_idx\` ON \`learning_governance_action\` (\`plan_id\`,\`state\`,\`sequence\`);`)
+      yield* tx.run(`CREATE UNIQUE INDEX \`learning_governance_plan_job_idx\` ON \`learning_governance_plan\` (\`job_id\`);`)
+      yield* tx.run(`CREATE INDEX \`learning_governance_plan_state_idx\` ON \`learning_governance_plan\` (\`state\`,\`created_at\`);`)
+    })
+  },
+} satisfies DatabaseMigration.Migration

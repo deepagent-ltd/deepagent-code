@@ -1,0 +1,1 @@
+ALTER TABLE `task_run` ADD `structured_output_receipt` text;

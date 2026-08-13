@@ -33,6 +33,18 @@ import filePartArtifactMigration from "@deepagent-code/core/database/migration/2
 import eventSnapshotChunksMigration from "@deepagent-code/core/database/migration/20260813131000_event_snapshot_chunks"
 import eventImmutableMigration from "@deepagent-code/core/database/migration/20260813135000_event_immutable"
 import eventSidecarCompactionMigration from "@deepagent-code/core/database/migration/20260813140000_event_sidecar_compaction"
+import preparedProviderTurnReceiptMigration from "@deepagent-code/core/database/migration/20260811223000_prepared_provider_turn_receipt"
+import learningAdmissionOutboxMigration from "@deepagent-code/core/database/migration/20260812005647_learning_admission_outbox"
+import activityPermissionRouteFeedbackMigration from "@deepagent-code/core/database/migration/20260812014934_activity_permission_route_feedback"
+import releasedKnowledgeSnapshotMigration from "@deepagent-code/core/database/migration/20260811185417_released_knowledge_snapshot_authority"
+import providerAttemptPreDispatchTerminalMigration from "@deepagent-code/core/database/migration/20260812043000_provider_attempt_pre_dispatch_terminal"
+import providerOwnerAuthorityMigration from "@deepagent-code/core/database/migration/20260812050000_provider_owner_authority"
+import providerTurnIdentityAuthorityMigration from "@deepagent-code/core/database/migration/20260812053000_provider_turn_identity_authority"
+import taskStructuredOutputReceiptSchemaMigration from "@deepagent-code/core/database/migration/20260812114412_task_structured_output_receipt_schema"
+import taskStructuredOutputReceiptMigration from "@deepagent-code/core/database/migration/20260812114500_task_structured_output_receipt_authority"
+import taskExecutionSpecAuthorityMigration from "@deepagent-code/core/database/migration/20260812210000_task_execution_spec_authority"
+import taskStructuredOutputEvidenceAuthorityMigration from "@deepagent-code/core/database/migration/20260812220000_task_structured_output_evidence_authority"
+import providerCrossStateRecoveryMigration from "@deepagent-code/core/database/migration/20260812061000_provider_cross_state_recovery"
 import type { SqlClient as SqlClientService } from "effect/unstable/sql/SqlClient"
 import { Database } from "@deepagent-code/core/database/database"
 import { tmpdir } from "./fixture/tmpdir"
@@ -43,6 +55,47 @@ const run = <A, E>(effect: Effect.Effect<A, E, SqlClientService>) =>
   )
 
 const makeDb = EffectDrizzleSqlite.makeWithDefaults()
+const receiptNamespace = "sec_receipt_migration"
+const receiptProjectScope = "prjctx_receipt_migration"
+const emptyReleasedRefsFingerprint = "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+const preparedTurnHash = "b".repeat(64)
+const systemStableHash = "c".repeat(64)
+const systemVolatileHash = "d".repeat(64)
+const wireRequestHash = "e".repeat(64)
+const contextEligibility = {
+  requested: {
+    contextFederationShadow: false,
+    locationIndexesV2Shadow: false,
+    contextProjectionV2: false,
+    contextQueryToolsV2: false,
+    coreV2ExecutionOwner: false,
+  },
+  enabled: {
+    contextFederationShadow: false,
+    locationIndexesV2Shadow: false,
+    contextProjectionV2: false,
+    contextQueryToolsV2: false,
+    coreV2ExecutionOwner: false,
+  },
+  blocked: {},
+  project: {
+    projectScopeKey: receiptProjectScope,
+    stage: "all",
+    bucket: 0,
+    selected: true,
+    killSwitch: false,
+  },
+}
+const contextReadiness = {
+  revision: "context-readiness-migration",
+  state: "ready",
+  identityBound: true,
+  indexAvailable: true,
+  storageHealthy: true,
+  reasons: [],
+  observedAt: 0,
+  expiresAt: 100,
+}
 
 describe("DatabaseMigration", () => {
   test("rejects duplicate migration IDs before changing the database", async () => {
@@ -508,6 +561,7 @@ describe("DatabaseMigration", () => {
       Effect.gen(function* () {
         const db = yield* makeDb
         yield* DatabaseMigration.apply(db)
+        yield* seedReceiptScope(db)
 
         expect(yield* db.get(sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session'`)).toEqual({
           name: "session",
@@ -584,13 +638,27 @@ describe("DatabaseMigration", () => {
           ),
         ).toEqual({ name: "validation_outcome", dflt_value: "'not_evaluated'" })
         yield* db.run(sql`
+          INSERT INTO session_provider_owner_lease (
+            owner_token, registered_at, heartbeat_at, lease_expires_at
+          ) VALUES (
+            'owner-constraint-test',
+            CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),
+            CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),
+            CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) + 10000
+          )
+        `)
+        yield* db.run(sql`
           INSERT INTO session_tool_request_receipt (
             receipt_id, request_ordinal, session_id, user_message_id, provider_id, model_id,
             registry_tool_ids, permission_filtered_tool_ids, final_offered_tool_ids, call_ids,
-            request_state, created_at
+            released_knowledge_security_namespace_id, released_knowledge_project_scope_key,
+            released_knowledge_binding_state, released_knowledge_exact_refs,
+            released_knowledge_exact_refs_fingerprint, owner_token, request_state, created_at
           ) VALUES (
             'receipt-constraint-test', 1, 'session-constraint-test', 'message-constraint-test',
-            'provider-test', 'model-test', '[]', '[]', '[]', '[]', 'dispatched', 1
+            'provider-test', 'model-test', '[]', '[]', '[]', '[]',
+            ${receiptNamespace}, ${receiptProjectScope}, 'unavailable', '[]', ${emptyReleasedRefsFingerprint},
+            'owner-constraint-test', 'dispatched', 1
           )
         `)
         yield* db.run(sql`
@@ -677,6 +745,36 @@ describe("DatabaseMigration", () => {
         yield* db.run(sql`DELETE FROM migration`)
         yield* DatabaseMigration.applyOnly(db, [marker, later])
         expect(yield* db.all(sql`SELECT value FROM sentinel`)).toEqual([])
+      }),
+    )
+  })
+
+  test("upgrades a pre-snapshot database without inventing a released head", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        const migrationIndex = migrations.findIndex(
+          (migration) => migration.id === releasedKnowledgeSnapshotMigration.id,
+        )
+        expect(migrationIndex).toBeGreaterThan(0)
+        yield* DatabaseMigration.applyOnly(db, migrations.slice(0, migrationIndex))
+        yield* seedReceiptScope(db)
+
+        expect(
+          yield* db.get(
+            sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'released_knowledge_snapshot_head'`,
+          ),
+        ).toBeUndefined()
+
+        yield* DatabaseMigration.applyOnly(db, [releasedKnowledgeSnapshotMigration])
+
+        expect(
+          yield* db.get(
+            sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'released_knowledge_snapshot_head'`,
+          ),
+        ).toEqual({ name: "released_knowledge_snapshot_head" })
+        expect(yield* db.get(sql`SELECT count(*) AS count FROM released_knowledge_snapshot_head`)).toEqual({ count: 0 })
+        expect(yield* db.run(sql`PRAGMA foreign_key_check`)).toEqual([])
       }),
     )
   })
@@ -768,18 +866,136 @@ describe("DatabaseMigration", () => {
       Effect.gen(function* () {
         const db = yield* makeDb
         yield* DatabaseMigration.apply(db)
+        yield* seedReceiptScope(db)
+        yield* db.run(sql`
+          INSERT INTO session_provider_owner_lease (
+            owner_token, registered_at, heartbeat_at, lease_expires_at
+          ) VALUES (
+            'owner-1',
+            CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),
+            CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),
+            CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) + 10000
+          ), (
+            'owner-released',
+            CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),
+            CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),
+            CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) + 10000
+          )
+        `)
+        yield* db.run(sql`
+          UPDATE session_provider_owner_lease
+          SET released_at = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
+          WHERE owner_token = 'owner-released'
+        `)
+        expect(
+          Exit.isFailure(
+            yield* db
+              .run(
+                sql`
+                INSERT INTO session_tool_request_receipt (
+                  receipt_id, request_ordinal, session_id, user_message_id, provider_id, model_id,
+                  registry_tool_ids, permission_filtered_tool_ids, final_offered_tool_ids, call_ids,
+                  released_knowledge_security_namespace_id, released_knowledge_project_scope_key,
+                  released_knowledge_binding_state, released_knowledge_exact_refs,
+                  released_knowledge_exact_refs_fingerprint, request_state, created_at
+                ) VALUES (
+                  'receipt-provider-unowned', 99, 'session-provider-lifecycle', 'message-provider-lifecycle',
+                  'provider-test', 'model-test', '[]', '[]', '[]', '[]',
+                  ${receiptNamespace}, ${receiptProjectScope}, 'unavailable', '[]',
+                  ${emptyReleasedRefsFingerprint}, 'prepared', 1
+                )
+              `,
+              )
+              .pipe(Effect.exit),
+          ),
+        ).toBe(true)
+        expect(
+          Exit.isFailure(
+            yield* db
+              .run(
+                sql`
+                INSERT INTO session_tool_request_receipt (
+                  receipt_id, request_ordinal, session_id, user_message_id, provider_id, model_id,
+                  registry_tool_ids, permission_filtered_tool_ids, final_offered_tool_ids, call_ids,
+                  released_knowledge_security_namespace_id, released_knowledge_project_scope_key,
+                  released_knowledge_binding_state, released_knowledge_exact_refs,
+                  released_knowledge_exact_refs_fingerprint, owner_token, request_state, created_at
+                ) VALUES (
+                  'receipt-provider-expired-owner', 98, 'session-provider-lifecycle', 'message-provider-lifecycle',
+                  'provider-test', 'model-test', '[]', '[]', '[]', '[]',
+                  ${receiptNamespace}, ${receiptProjectScope}, 'unavailable', '[]',
+                  ${emptyReleasedRefsFingerprint}, 'owner-released', 'prepared', 100
+                )
+              `,
+              )
+              .pipe(Effect.exit),
+          ),
+        ).toBe(true)
         yield* db.run(sql`
           INSERT INTO session_tool_request_receipt (
             receipt_id, request_ordinal, session_id, user_message_id, provider_id, model_id,
             registry_tool_ids, permission_filtered_tool_ids, final_offered_tool_ids, call_ids,
             request_state, provider_state, prompt_epoch, prompt_window_id, effective_history_hash,
-            request_input_hash, owner_token, created_at
+            request_input_hash, owner_token, context_selection_id, context_eligibility,
+            context_readiness, context_activation, context_activation_fingerprint,
+            released_knowledge_security_namespace_id, released_knowledge_project_scope_key,
+            released_knowledge_binding_state, released_knowledge_exact_refs,
+            released_knowledge_exact_refs_fingerprint, created_at
           ) VALUES (
             'receipt-provider-lifecycle', 1, 'session-provider-lifecycle', 'message-provider-lifecycle',
             'provider-test', 'model-test', '[]', '[]', '[]', '[]', 'prepared', 'preparing',
-            0, 'window-0', 'history-0', 'input-hash', 'owner-1', 1
+            0, 'window-0', 'history-0', 'input-hash', 'owner-1', NULL,
+            ${JSON.stringify(contextEligibility)}, ${JSON.stringify(contextReadiness)},
+            ${contextActivation(1)},
+            lower(hex(zeroblob(32))), ${receiptNamespace}, ${receiptProjectScope}, 'unavailable', '[]',
+            ${emptyReleasedRefsFingerprint}, 1
           )
         `)
+        yield* db.run(sql`
+          INSERT INTO session_tool_request_receipt (
+            receipt_id, request_ordinal, session_id, user_message_id, provider_id, model_id,
+            registry_tool_ids, permission_filtered_tool_ids, final_offered_tool_ids, call_ids,
+            request_state, provider_state, prompt_epoch, prompt_window_id, effective_history_hash,
+            request_input_hash, owner_token, context_selection_id, context_eligibility,
+            context_readiness, context_activation, context_activation_fingerprint,
+            released_knowledge_security_namespace_id, released_knowledge_project_scope_key,
+            released_knowledge_binding_state, released_knowledge_exact_refs,
+            released_knowledge_exact_refs_fingerprint, created_at
+          ) VALUES (
+            'receipt-provider-forged-activation', 2, 'session-provider-lifecycle', 'message-provider-lifecycle',
+            'provider-test', 'model-test', '[]', '[]', '[]', '[]', 'prepared', 'preparing',
+            0, 'window-forged', 'history-forged', 'input-forged', 'owner-1', NULL,
+            ${JSON.stringify(contextEligibility)}, ${JSON.stringify(contextReadiness)},
+            ${contextActivation(2).replace('"readinessAgeMs":2', '"readinessAgeMs":99')},
+            lower(hex(zeroblob(32))), ${receiptNamespace}, ${receiptProjectScope}, 'unavailable', '[]',
+            ${emptyReleasedRefsFingerprint}, 2
+          )
+        `)
+        yield* db.run(sql`
+          UPDATE session_tool_request_receipt
+          SET released_knowledge_selected_refs = '[]',
+              released_knowledge_selected_refs_fingerprint = ${emptyReleasedRefsFingerprint}
+          WHERE receipt_id = 'receipt-provider-forged-activation'
+        `)
+        expect(
+          Exit.isFailure(
+            yield* db
+              .run(
+                sql`
+                UPDATE session_tool_request_receipt
+                SET provider_state = 'prepared', final_request_hash = ${wireRequestHash},
+                    adapter_prepared_at = 2, provider_request_hash = ${wireRequestHash},
+                    prepared_turn_hash = ${preparedTurnHash},
+                    system_stable_hash = ${systemStableHash},
+                    system_volatile_hash = ${systemVolatileHash},
+                    wire_request_hash = ${wireRequestHash},
+                    tool_definition_hash = ${preparedTurnHash}
+                WHERE receipt_id = 'receipt-provider-forged-activation'
+              `,
+              )
+              .pipe(Effect.exit),
+          ),
+        ).toBe(true)
 
         expect(
           Exit.isFailure(
@@ -794,10 +1010,62 @@ describe("DatabaseMigration", () => {
               .pipe(Effect.exit),
           ),
         ).toBe(true)
+        for (const update of [
+          sql`UPDATE session_tool_request_receipt SET final_request_hash = ${wireRequestHash} WHERE receipt_id = 'receipt-provider-lifecycle'`,
+          sql`UPDATE session_tool_request_receipt SET provider_request_hash = ${wireRequestHash} WHERE receipt_id = 'receipt-provider-lifecycle'`,
+          sql`UPDATE session_tool_request_receipt SET adapter_prepared_at = 2 WHERE receipt_id = 'receipt-provider-lifecycle'`,
+          sql`UPDATE session_tool_request_receipt SET prompt_cache_key = 'cache-key' WHERE receipt_id = 'receipt-provider-lifecycle'`,
+          sql`UPDATE session_tool_request_receipt SET tool_definition_hash = ${preparedTurnHash} WHERE receipt_id = 'receipt-provider-lifecycle'`,
+          sql`UPDATE session_tool_request_receipt SET final_offered_tool_ids = '["read"]' WHERE receipt_id = 'receipt-provider-lifecycle'`,
+        ]) {
+          expect(Exit.isFailure(yield* db.run(update).pipe(Effect.exit))).toBe(true)
+        }
+        for (const invalidSeal of [
+          sql`
+            UPDATE session_tool_request_receipt
+            SET provider_state = 'prepared', final_request_hash = ${wireRequestHash},
+                provider_request_hash = ${wireRequestHash}, adapter_prepared_at = 2,
+                prepared_turn_hash = ${preparedTurnHash}, system_stable_hash = ${systemStableHash},
+                system_volatile_hash = ${systemVolatileHash}, wire_request_hash = ${wireRequestHash},
+                tool_definition_hash = ''
+            WHERE receipt_id = 'receipt-provider-lifecycle'
+          `,
+          sql`
+            UPDATE session_tool_request_receipt
+            SET provider_state = 'prepared', final_request_hash = ${wireRequestHash},
+                provider_request_hash = ${wireRequestHash}, adapter_prepared_at = 2,
+                prepared_turn_hash = ${preparedTurnHash}, system_stable_hash = ${systemStableHash},
+                system_volatile_hash = ${systemVolatileHash}, wire_request_hash = ${wireRequestHash},
+                tool_definition_hash = ${preparedTurnHash}, final_offered_tool_ids = '[1,1]'
+            WHERE receipt_id = 'receipt-provider-lifecycle'
+          `,
+          sql`
+            UPDATE session_tool_request_receipt
+            SET provider_state = 'prepared', final_request_hash = ${wireRequestHash},
+                provider_request_hash = ${wireRequestHash}, adapter_prepared_at = 2,
+                prepared_turn_hash = ${preparedTurnHash}, system_stable_hash = ${systemStableHash},
+                system_volatile_hash = ${systemVolatileHash}, wire_request_hash = ${wireRequestHash},
+                tool_definition_hash = ${preparedTurnHash}, final_offered_tool_ids = '["read", "read"]'
+            WHERE receipt_id = 'receipt-provider-lifecycle'
+          `,
+        ]) {
+          expect(Exit.isFailure(yield* db.run(invalidSeal).pipe(Effect.exit))).toBe(true)
+        }
         yield* db.run(sql`
           UPDATE session_tool_request_receipt
-          SET provider_state = 'prepared', final_request_hash = 'final-hash',
-              adapter_prepared_at = 2, provider_request_hash = 'final-hash'
+          SET released_knowledge_selected_refs = '[]',
+              released_knowledge_selected_refs_fingerprint = ${emptyReleasedRefsFingerprint}
+          WHERE receipt_id = 'receipt-provider-lifecycle'
+        `)
+        yield* db.run(sql`
+          UPDATE session_tool_request_receipt
+          SET provider_state = 'prepared', final_request_hash = ${wireRequestHash},
+              adapter_prepared_at = 2, provider_request_hash = ${wireRequestHash},
+              prepared_turn_hash = ${preparedTurnHash},
+              system_stable_hash = ${systemStableHash},
+              system_volatile_hash = ${systemVolatileHash},
+              wire_request_hash = ${wireRequestHash},
+              tool_definition_hash = ${preparedTurnHash}
           WHERE receipt_id = 'receipt-provider-lifecycle'
         `)
         yield* db.run(sql`
@@ -812,6 +1080,19 @@ describe("DatabaseMigration", () => {
                 sql`
                 UPDATE session_tool_request_receipt
                 SET provider_state = 'prepared'
+                WHERE receipt_id = 'receipt-provider-lifecycle'
+              `,
+              )
+              .pipe(Effect.exit),
+          ),
+        ).toBe(true)
+        expect(
+          Exit.isFailure(
+            yield* db
+              .run(
+                sql`
+                UPDATE session_tool_request_receipt
+                SET released_knowledge_selected_refs = '[{"sourceStore":"project"}]'
                 WHERE receipt_id = 'receipt-provider-lifecycle'
               `,
               )
@@ -841,6 +1122,54 @@ describe("DatabaseMigration", () => {
                 UPDATE session_tool_request_receipt
                 SET final_request_hash = 'different-final-hash'
                 WHERE receipt_id = 'receipt-provider-lifecycle'
+              `,
+              )
+              .pipe(Effect.exit),
+          ),
+        ).toBe(true)
+        expect(
+          Exit.isFailure(
+            yield* db
+              .run(
+                sql`
+                UPDATE session_tool_request_receipt
+                SET context_activation = '{"outcome":"mutated"}'
+                WHERE receipt_id = 'receipt-provider-lifecycle'
+              `,
+              )
+              .pipe(Effect.exit),
+          ),
+        ).toBe(true)
+        expect(
+          Exit.isFailure(
+            yield* db
+              .run(
+                sql`
+                UPDATE session_tool_request_receipt
+                SET released_knowledge_exact_refs = '[{"id":"mutated"}]'
+                WHERE receipt_id = 'receipt-provider-lifecycle'
+              `,
+              )
+              .pipe(Effect.exit),
+          ),
+        ).toBe(true)
+
+        expect(
+          Exit.isFailure(
+            yield* db
+              .run(
+                sql`
+                INSERT INTO session_tool_request_receipt (
+                  receipt_id, request_ordinal, session_id, user_message_id, provider_id, model_id,
+                  registry_tool_ids, permission_filtered_tool_ids, final_offered_tool_ids, call_ids,
+                  request_state, provider_state, prompt_epoch, prompt_window_id, effective_history_hash,
+                  request_input_hash, final_request_hash, adapter_prepared_at, owner_token, created_at
+                ) VALUES (
+                  'receipt-provider-missing-context', 2, 'session-provider-lifecycle',
+                  'message-provider-lifecycle', 'provider-test', 'model-test', '[]', '[]', '[]', '[]',
+                  'prepared', 'prepared', 0, 'window-0', 'history-0', 'input-hash-2', 'final-hash-2',
+                  2, 'owner-2', 2
+                )
               `,
               )
               .pipe(Effect.exit),
@@ -938,6 +1267,1737 @@ describe("DatabaseMigration", () => {
               .pipe(Effect.exit),
           ),
         ).toBe(true)
+      }),
+    )
+  })
+
+  test("upgrades an existing learning-job database with a fenced admission outbox", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        const outboxMigrationIndex = migrations.findIndex(
+          (migration) => migration.id === learningAdmissionOutboxMigration.id,
+        )
+        expect(outboxMigrationIndex).toBeGreaterThan(0)
+        yield* DatabaseMigration.applyOnly(db, migrations.slice(0, outboxMigrationIndex))
+        expect(
+          yield* db.get(
+            sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'learning_admission_outbox'`,
+          ),
+        ).toBeUndefined()
+
+        yield* DatabaseMigration.applyOnly(db, [learningAdmissionOutboxMigration])
+
+        expect(
+          yield* db.get(
+            sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'learning_admission_outbox'`,
+          ),
+        ).toEqual({ name: "learning_admission_outbox" })
+        expect(
+          yield* db.all(sql`
+            SELECT name FROM sqlite_master
+            WHERE type = 'trigger' AND name LIKE 'learning_admission_outbox_%'
+            ORDER BY name
+          `),
+        ).toEqual([
+          { name: "learning_admission_outbox_identity_immutable" },
+          { name: "learning_admission_outbox_job_binding" },
+          { name: "learning_admission_outbox_terminal_immutable" },
+          { name: "learning_admission_outbox_transition_guard" },
+        ])
+        yield* db.run(sql`
+          INSERT INTO learning_admission_outbox (
+            intent_id, session_id, run_id, trigger, dedupe_key, payload_json,
+            payload_fingerprint, state, created_at, updated_at
+          ) VALUES (
+            'intent-upgrade', 'session-upgrade', 'run-upgrade', 'session_finalization',
+            'session_finalization:session-upgrade:run-upgrade', '{}', ${"a".repeat(64)},
+            'pending', 1, 1
+          )
+        `)
+        expect(
+          Exit.isFailure(
+            yield* db
+              .run(
+                sql`
+                UPDATE learning_admission_outbox
+                SET state = 'admitted', job_id = 'missing-job', candidate_input_ref = 'artifact-ref',
+                    settled_at = 2, updated_at = 2
+                WHERE intent_id = 'intent-upgrade'
+              `,
+              )
+              .pipe(Effect.exit),
+          ),
+        ).toBe(true)
+        yield* db.run(sql`
+          UPDATE learning_admission_outbox
+          SET state = 'rejected', rejection_code = 'legacy_terminal_missing_exact_intent',
+              rejection_detail = 'exact terminal admission payload was unavailable', settled_at = 2, updated_at = 2
+          WHERE intent_id = 'intent-upgrade'
+        `)
+        expect(
+          Exit.isFailure(
+            yield* db
+              .run(
+                sql`
+                UPDATE learning_admission_outbox
+                SET rejection_detail = 'rewritten', updated_at = 3
+                WHERE intent_id = 'intent-upgrade'
+              `,
+              )
+              .pipe(Effect.exit),
+          ),
+        ).toBe(true)
+      }),
+    )
+  })
+
+  test("upgrades durable permission routing and keeps route and feedback immutable", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        const migrationIndex = migrations.findIndex(
+          (migration) => migration.id === activityPermissionRouteFeedbackMigration.id,
+        )
+        expect(migrationIndex).toBeGreaterThan(0)
+        yield* DatabaseMigration.applyOnly(db, migrations.slice(0, migrationIndex))
+        expect(yield* db.all(sql`PRAGMA table_info(session_activity_permission_request)`)).not.toContainEqual(
+          expect.objectContaining({ name: "workspace_id" }),
+        )
+        yield* db.run(sql`
+          INSERT INTO project (id, worktree, sandboxes, time_created, time_updated)
+          VALUES ('permission-route-project', '/tmp/permission-route-project', '[]', 1, 1)
+        `)
+        yield* db.run(sql`
+          INSERT INTO session (
+            id, project_id, slug, directory, title, version, time_created, time_updated, workspace_id
+          ) VALUES (
+            'permission-route-session', 'permission-route-project', 'permission-route-session',
+            '/tmp/permission-route-project', 'Permission route migration', '1', 1, 1, 'wrk_original'
+          )
+        `)
+        yield* db.run(sql`
+          INSERT INTO session_intent (
+            intent_id, session_id, source, state, selected_variant, selected_payload_hash,
+            delivery, admitted_message_id, mutation_epoch, version, time_created, time_admitted, time_updated
+          ) VALUES (
+            'permission-route-intent', 'permission-route-session', 'composer', 'admitted', 'original',
+            'permission-route-payload', 'turn', 'permission-route-message', 0, 1, 1, 1, 1
+          )
+        `)
+        yield* db.run(sql`
+          INSERT INTO session_activity_admission (
+            admission_id, session_id, source_kind, legacy_intent_id, admitted_message_id, delivery,
+            payload_fingerprint_kind, payload_fingerprint, created_at
+          ) VALUES (
+            'permission-route-admission', 'permission-route-session', 'legacy_intent', 'permission-route-intent',
+            'permission-route-message', 'turn', 'payload_hash', 'permission-route-payload', 1
+          )
+        `)
+        yield* db.run(sql`
+          INSERT INTO session_legacy_activity (
+            activity_id, session_id, ordinal, trigger_admission_id, owner_token, state,
+            terminal_reason, created_at, settled_at
+          ) VALUES (
+            'permission-route-activity', 'permission-route-session', 0, 'permission-route-admission',
+            'permission-route-owner', 'active', NULL, 1, NULL
+          )
+        `)
+        yield* db.run(sql`
+          INSERT INTO session_activity_permission_request (
+            request_id, activity_kind, activity_id, session_id, project_id, request_kind,
+            idempotency_key, permission, patterns, always_patterns, metadata_hash,
+            tool_message_id, tool_call_id, state, authority_epoch, requested_scope,
+            owner_type, owner_id, created_at, expires_at, decided_at
+          ) VALUES (
+            'permission-route-request', 'legacy', 'permission-route-activity',
+            'permission-route-session', 'permission-route-project', 'tool',
+            'permission-route-request-key', 'bash', '["ls"]', '[]', 'metadata-hash',
+            'permission-route-message', 'permission-route-call', 'pending', 0, 'once',
+            'runtime', 'permission-route-owner', 1, NULL, NULL
+          )
+        `)
+
+        yield* DatabaseMigration.applyOnly(db, [activityPermissionRouteFeedbackMigration])
+
+        expect(yield* db.all(sql`PRAGMA table_info(session_activity_permission_request)`)).toContainEqual(
+          expect.objectContaining({ name: "workspace_id" }),
+        )
+        expect(yield* db.all(sql`PRAGMA table_info(session_activity_permission_decision)`)).toContainEqual(
+          expect.objectContaining({ name: "feedback" }),
+        )
+        expect(
+          yield* db.all(sql`
+            SELECT name FROM sqlite_master
+            WHERE type = 'trigger' AND name IN (
+              'session_activity_permission_route_immutable',
+              'session_activity_permission_feedback_immutable'
+            )
+            ORDER BY name
+          `),
+        ).toEqual([
+          { name: "session_activity_permission_feedback_immutable" },
+          { name: "session_activity_permission_route_immutable" },
+        ])
+        expect(
+          yield* db.get(sql`
+            SELECT workspace_id FROM session_activity_permission_request
+            WHERE request_id = 'permission-route-request'
+          `),
+        ).toEqual({ workspace_id: "wrk_original" })
+        yield* db.run(sql`
+          INSERT INTO session_activity_permission_decision (
+            decision_id, request_id, idempotency_key, decision, actor_type, actor_id,
+            scope, authority_epoch, decided_at, expires_at, feedback
+          ) VALUES (
+            'permission-route-decision', 'permission-route-request', 'permission-route-decision-key',
+            'denied', 'user', 'permission-user', 'once', 0, 2, NULL, 'keep this feedback'
+          )
+        `)
+        expect(
+          Exit.isFailure(
+            yield* db
+              .run(
+                sql`
+                UPDATE session_activity_permission_request
+                SET workspace_id = 'wrk_rewritten'
+                WHERE request_id = 'permission-route-request'
+              `,
+              )
+              .pipe(Effect.exit),
+          ),
+        ).toBe(true)
+        expect(
+          Exit.isFailure(
+            yield* db
+              .run(
+                sql`
+                UPDATE session_activity_permission_decision
+                SET feedback = 'rewritten'
+                WHERE request_id = 'permission-route-request'
+              `,
+              )
+              .pipe(Effect.exit),
+          ),
+        ).toBe(true)
+      }),
+    )
+  })
+
+  test("fails closed for pre-W3 prepared receipts while preserving terminal recovery", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        const preparedTurnMigrationIndex = migrations.findIndex(
+          (migration) => migration.id === preparedProviderTurnReceiptMigration.id,
+        )
+        expect(preparedTurnMigrationIndex).toBeGreaterThan(0)
+        yield* DatabaseMigration.applyOnly(db, migrations.slice(0, preparedTurnMigrationIndex))
+        yield* seedReceiptScope(db)
+
+        for (const [index, state] of ["prepared", "dispatching", "streaming"].entries()) {
+          const receiptID = `receipt-pre-w3-${state}`
+          yield* db.run(sql`
+            INSERT INTO session_tool_request_receipt (
+              receipt_id, request_ordinal, session_id, user_message_id, provider_id, model_id,
+              registry_tool_ids, permission_filtered_tool_ids, final_offered_tool_ids, call_ids,
+              request_state, provider_state, prompt_epoch, prompt_window_id, effective_history_hash,
+              request_input_hash, owner_token, context_selection_id, context_eligibility,
+              context_readiness, context_activation, context_activation_fingerprint,
+              released_knowledge_security_namespace_id, released_knowledge_project_scope_key,
+              released_knowledge_binding_state, released_knowledge_exact_refs,
+              released_knowledge_exact_refs_fingerprint, created_at
+            ) VALUES (
+              ${receiptID}, ${index + 1}, 'session-pre-w3', ${`message-pre-w3-${state}`},
+              'provider-test', 'model-test', '[]', '[]', '[]', '[]', 'prepared', 'preparing',
+              0, ${`window-pre-w3-${state}`}, ${`history-pre-w3-${state}`},
+              ${`input-pre-w3-${state}`}, 'owner-pre-w3', NULL, '{}', '{}', '{}',
+              lower(hex(zeroblob(32))), ${receiptNamespace}, ${receiptProjectScope}, 'unavailable', '[]',
+              ${emptyReleasedRefsFingerprint}, ${index + 1}
+            )
+          `)
+          yield* db.run(sql`
+            UPDATE session_tool_request_receipt
+            SET released_knowledge_selected_refs = '[]',
+                released_knowledge_selected_refs_fingerprint = ${emptyReleasedRefsFingerprint}
+            WHERE receipt_id = ${receiptID}
+          `)
+          yield* db.run(sql`
+            UPDATE session_tool_request_receipt
+            SET provider_state = 'prepared', final_request_hash = ${wireRequestHash},
+                provider_request_hash = ${wireRequestHash}, adapter_prepared_at = 2
+            WHERE receipt_id = ${receiptID}
+          `)
+          if (state === "prepared") continue
+          yield* db.run(sql`
+            UPDATE session_tool_request_receipt
+            SET provider_state = 'dispatching', request_state = 'dispatched', dispatching_at = 3
+            WHERE receipt_id = ${receiptID}
+          `)
+          if (state === "dispatching") continue
+          yield* db.run(sql`
+            UPDATE session_tool_request_receipt
+            SET provider_state = 'streaming', streaming_at = 4
+            WHERE receipt_id = ${receiptID}
+          `)
+        }
+
+        yield* DatabaseMigration.applyOnly(db, [preparedProviderTurnReceiptMigration])
+
+        expect(
+          Exit.isFailure(
+            yield* db
+              .run(
+                sql`
+                UPDATE session_tool_request_receipt
+                SET provider_state = 'dispatching', request_state = 'dispatched', dispatching_at = 5
+                WHERE receipt_id = 'receipt-pre-w3-prepared'
+              `,
+              )
+              .pipe(Effect.exit),
+          ),
+        ).toBe(true)
+        yield* db.run(sql`
+          UPDATE session_tool_request_receipt
+          SET provider_state = 'failed', terminal_at = 5, request_error_code = 'pre_w3_prepared_quarantined'
+          WHERE receipt_id = 'receipt-pre-w3-prepared'
+        `)
+        yield* db.run(sql`
+          UPDATE session_tool_request_receipt
+          SET provider_state = 'settled', terminal_at = 5
+          WHERE receipt_id = 'receipt-pre-w3-dispatching'
+        `)
+        yield* db.run(sql`
+          UPDATE session_tool_request_receipt
+          SET provider_state = 'indeterminate_after_crash', terminal_at = 5,
+              request_error_code = 'pre_w3_streaming_recovery'
+          WHERE receipt_id = 'receipt-pre-w3-streaming'
+        `)
+
+        expect(
+          yield* db.all<{
+            receipt_id: string
+            provider_state: string
+            prepared_turn_hash: string | null
+            tool_result_reference_ids: string
+            tool_result_reference_count: number
+          }>(sql`
+            SELECT receipt_id, provider_state, prepared_turn_hash,
+                   tool_result_reference_ids, tool_result_reference_count
+            FROM session_tool_request_receipt
+            WHERE receipt_id LIKE 'receipt-pre-w3-%'
+            ORDER BY receipt_id
+          `),
+        ).toEqual([
+          {
+            receipt_id: "receipt-pre-w3-dispatching",
+            provider_state: "settled",
+            prepared_turn_hash: null,
+            tool_result_reference_ids: "[]",
+            tool_result_reference_count: 0,
+          },
+          {
+            receipt_id: "receipt-pre-w3-prepared",
+            provider_state: "failed",
+            prepared_turn_hash: null,
+            tool_result_reference_ids: "[]",
+            tool_result_reference_count: 0,
+          },
+          {
+            receipt_id: "receipt-pre-w3-streaming",
+            provider_state: "indeterminate_after_crash",
+            prepared_turn_hash: null,
+            tool_result_reference_ids: "[]",
+            tool_result_reference_count: 0,
+          },
+        ])
+      }),
+    )
+  })
+
+  test("upgrades provider attempt transition law without classifying live rows", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        const migrationIndex = migrations.findIndex(
+          (migration) => migration.id === providerAttemptPreDispatchTerminalMigration.id,
+        )
+        expect(migrationIndex).toBeGreaterThan(0)
+        yield* DatabaseMigration.applyOnly(db, migrations.slice(0, migrationIndex))
+        yield* seedReceiptScope(db)
+        yield* db.run(sql`
+          INSERT INTO context_location_identity (
+            security_namespace_id, location_key, project_scope_key,
+            canonical_root, observed_project_id, created_at
+          ) VALUES (
+            ${receiptNamespace}, 'attempt-upgrade-location', ${receiptProjectScope},
+            '/tmp/attempt-upgrade', 'attempt-upgrade-project', 1
+          )
+        `)
+        yield* db.run(sql`
+          INSERT INTO project (id, worktree, sandboxes, time_created, time_updated)
+          VALUES ('attempt-upgrade-project', '/tmp/attempt-upgrade', '[]', 1, 1)
+        `)
+        yield* db.run(sql`
+          INSERT INTO session (id, project_id, slug, directory, title, version, time_created, time_updated)
+          VALUES ('attempt-upgrade-session', 'attempt-upgrade-project', 'attempt-upgrade',
+                  '/tmp/attempt-upgrade', 'Attempt upgrade', 'test', 1, 1)
+        `)
+        yield* db.run(sql`
+          INSERT INTO session_input (id, session_id, prompt, delivery, admitted_seq, promoted_seq, time_created)
+          VALUES ('attempt-upgrade-input', 'attempt-upgrade-session', '{"text":"upgrade"}', 'steer', 0, 0, 1)
+        `)
+        yield* db.run(sql`
+          INSERT INTO session_activity (
+            activity_id, session_id, ordinal, trigger_input_id, delivery, state, created_at
+          ) VALUES (
+            'attempt-upgrade-activity', 'attempt-upgrade-session', 0,
+            'attempt-upgrade-input', 'steer', 'active', 1
+          )
+        `)
+        yield* db.run(sql`
+          INSERT INTO session_context_selection (
+            selection_id, session_id, activity_id, revision, trigger_input_id, location_key,
+            security_namespace_id, project_scope_key,
+            query_fingerprint, authorization_fingerprint, authorization_epoch,
+            execution_fingerprint, selected_source_fingerprint,
+            observed_location_mutation_epoch, next_revalidation_at,
+            released_knowledge_binding_state, released_knowledge_exact_refs,
+            released_knowledge_exact_refs_fingerprint,
+            graph_revisions, graph_statuses, selected_refs, projection,
+            projection_hash, token_count, artifact_write_status, inline_audit, created_at
+          ) VALUES (
+            'attempt-upgrade-selection', 'attempt-upgrade-session', 'attempt-upgrade-activity', 0,
+            'attempt-upgrade-input', 'attempt-upgrade-location', ${receiptNamespace}, ${receiptProjectScope},
+            'query', 'authorization', 1, 'execution', 'sources', 0, 100,
+            'unavailable', '[]', ${emptyReleasedRefsFingerprint}, '{}', '{}', '[]', 'projection',
+            'projection-hash', 1, 'degraded_unavailable', '{}', 1
+          )
+        `)
+        yield* db.run(sql`
+          INSERT INTO session_provider_attempt (
+            attempt_id, session_id, activity_id, provider_turn_seq, selection_id,
+            projection_hash, request_hash, provider_id, state, created_at
+          ) VALUES
+            ('attempt-upgrade-prepared', 'attempt-upgrade-session', 'attempt-upgrade-activity', 0,
+             'attempt-upgrade-selection', 'projection-hash', 'request-0', 'provider', 'prepared', 1),
+            ('attempt-upgrade-dispatching', 'attempt-upgrade-session', 'attempt-upgrade-activity', 1,
+             'attempt-upgrade-selection', 'projection-hash', 'request-1', 'provider', 'dispatching', 2),
+            ('attempt-upgrade-orphan', 'attempt-upgrade-session', 'attempt-upgrade-activity', 2,
+             'attempt-upgrade-selection', 'projection-hash', 'request-2', 'provider', 'prepared', 3),
+            ('attempt-upgrade-started-receipt', 'attempt-upgrade-session', 'attempt-upgrade-activity', 3,
+             'attempt-upgrade-selection', 'projection-hash', 'request-3', 'provider', 'prepared', 4)
+        `)
+        yield* db.run(sql`
+          INSERT INTO session_tool_request_receipt (
+            receipt_id, request_ordinal, session_id, user_message_id,
+            provider_attempt_id, context_selection_id,
+            context_eligibility, context_readiness, context_activation, context_activation_fingerprint,
+            released_knowledge_security_namespace_id, released_knowledge_project_scope_key,
+            released_knowledge_binding_state, released_knowledge_exact_refs,
+            released_knowledge_exact_refs_fingerprint,
+            provider_id, model_id, registry_tool_ids, permission_filtered_tool_ids,
+            final_offered_tool_ids, call_ids, final_request_hash, adapter_prepared_at,
+            prompt_epoch, prompt_window_id, effective_history_hash,
+            request_state, provider_state, owner_token, created_at
+          ) VALUES (
+            'attempt-upgrade-receipt', 1, 'attempt-upgrade-session', 'attempt-upgrade-input',
+            'attempt-upgrade-prepared', 'attempt-upgrade-selection', '{}', '{}', '{}',
+            lower(hex(zeroblob(32))), ${receiptNamespace}, ${receiptProjectScope},
+            'unavailable', '[]', ${emptyReleasedRefsFingerprint},
+            'provider', 'model', '[]', '[]', '[]', '[]', NULL, NULL, NULL, NULL, NULL,
+            'prepared', 'preparing', 'stale-owner', 3
+          ), (
+            'attempt-upgrade-started-receipt', 2, 'attempt-upgrade-session', 'attempt-upgrade-input',
+            'attempt-upgrade-started-receipt', 'attempt-upgrade-selection', '{}', '{}', '{}',
+            lower(hex(zeroblob(32))), ${receiptNamespace}, ${receiptProjectScope},
+            'unavailable', '[]', ${emptyReleasedRefsFingerprint},
+            'provider', 'model', '[]', '[]', '[]', '[]', NULL, NULL, 0,
+            'attempt-upgrade-window', 'attempt-upgrade-history',
+            'prepared', 'preparing', 'stale-owner', 4
+          )
+        `)
+        yield* db.run(sql`
+          UPDATE session_tool_request_receipt
+          SET released_knowledge_selected_refs = '[]',
+              released_knowledge_selected_refs_fingerprint = ${emptyReleasedRefsFingerprint}
+          WHERE receipt_id = 'attempt-upgrade-started-receipt'
+        `)
+        yield* db.run(sql`
+          UPDATE session_tool_request_receipt
+          SET provider_state = 'prepared', final_request_hash = ${wireRequestHash},
+              provider_request_hash = ${wireRequestHash},
+              prepared_turn_hash = ${preparedTurnHash}, system_stable_hash = ${systemStableHash},
+              system_volatile_hash = ${systemVolatileHash}, wire_request_hash = ${wireRequestHash},
+              tool_result_reference_ids = '[]', tool_result_reference_count = 0,
+              tool_definition_hash = ${wireRequestHash}, adapter_prepared_at = 4
+          WHERE receipt_id = 'attempt-upgrade-started-receipt'
+        `)
+        yield* db.run(sql`
+          UPDATE session_tool_request_receipt
+          SET provider_state = 'dispatching', request_state = 'dispatched', dispatching_at = 5
+          WHERE receipt_id = 'attempt-upgrade-started-receipt'
+        `)
+        yield* db.run(sql`
+          INSERT INTO compaction_run (
+            run_id, session_id, from_prompt_epoch, trigger, state, created_at,
+            source_window_id, source_effective_history_hash, source_message_count, source_projection_version,
+            continuation_wakeup_at, continuation_state, continuation_receipt_id,
+            continuation_admitted_at
+          ) VALUES (
+            'attempt-upgrade-compaction', 'attempt-upgrade-session', 0, 'turn_start', 'committed', 4,
+            'attempt-upgrade-window', 'attempt-upgrade-history', 1, 1,
+            4, 'admitted', 'attempt-upgrade-receipt', 4
+          )
+        `)
+
+        yield* DatabaseMigration.applyOnly(db, [providerAttemptPreDispatchTerminalMigration])
+
+        expect(
+          yield* db.all<{
+            attempt_id: string
+            state: string
+            settled_at: number | null
+            error_code: string | null
+          }>(sql`
+            SELECT attempt_id, state, settled_at, error_code
+            FROM session_provider_attempt
+            ORDER BY provider_turn_seq
+          `),
+        ).toEqual([
+          {
+            attempt_id: "attempt-upgrade-prepared",
+            state: "prepared",
+            settled_at: null,
+            error_code: null,
+          },
+          {
+            attempt_id: "attempt-upgrade-dispatching",
+            state: "dispatching",
+            settled_at: null,
+            error_code: null,
+          },
+          {
+            attempt_id: "attempt-upgrade-orphan",
+            state: "prepared",
+            settled_at: null,
+            error_code: null,
+          },
+          {
+            attempt_id: "attempt-upgrade-started-receipt",
+            state: "prepared",
+            settled_at: null,
+            error_code: null,
+          },
+        ])
+        expect(
+          yield* db.get(sql`
+            SELECT provider_state, request_state, terminal_at, request_error_code
+            FROM session_tool_request_receipt
+            WHERE receipt_id = 'attempt-upgrade-receipt'
+          `),
+        ).toEqual({
+          provider_state: "preparing",
+          request_state: "prepared",
+          terminal_at: null,
+          request_error_code: null,
+        })
+        expect(
+          yield* db.get(sql`
+            SELECT continuation_state, continuation_receipt_id, continuation_admitted_at,
+                   continuation_wakeup_at, continuation_error_code
+            FROM compaction_run
+            WHERE run_id = 'attempt-upgrade-compaction'
+          `),
+        ).toEqual({
+          continuation_state: "admitted",
+          continuation_receipt_id: "attempt-upgrade-receipt",
+          continuation_admitted_at: 4,
+          continuation_wakeup_at: 4,
+          continuation_error_code: null,
+        })
+        expect(
+          Exit.isFailure(
+            yield* db
+              .run(
+                sql`
+                UPDATE session_provider_attempt
+                SET state = 'failed', settled_at = 3
+                WHERE attempt_id = 'attempt-upgrade-dispatching'
+              `,
+              )
+              .pipe(Effect.exit),
+          ),
+        ).toBe(false)
+        yield* db.run(sql`
+          INSERT INTO session_provider_attempt (
+            attempt_id, session_id, activity_id, provider_turn_seq, selection_id,
+            projection_hash, request_hash, provider_id, state, created_at
+          ) VALUES (
+            'attempt-upgrade-post-migration', 'attempt-upgrade-session', 'attempt-upgrade-activity', 4,
+            'attempt-upgrade-selection', 'projection-hash', 'request-4', 'provider', 'prepared', 5
+          )
+        `)
+        expect(
+          Exit.isFailure(
+            yield* db
+              .run(
+                sql`
+                UPDATE session_provider_attempt
+                SET state = 'failed', settled_at = 5
+                WHERE attempt_id = 'attempt-upgrade-post-migration'
+              `,
+              )
+              .pipe(Effect.exit),
+          ),
+        ).toBe(true)
+        yield* db.run(sql`
+          UPDATE session_provider_attempt
+          SET state = 'failed', settled_at = 5, error_code = 'provider_not_dispatched'
+          WHERE attempt_id = 'attempt-upgrade-post-migration'
+        `)
+        yield* DatabaseMigration.applyOnly(db, [providerOwnerAuthorityMigration])
+        expect(
+          yield* db.all(sql`
+            SELECT attempt_id, owner_token
+            FROM session_provider_attempt
+            ORDER BY provider_turn_seq
+          `),
+        ).toEqual([
+          { attempt_id: "attempt-upgrade-prepared", owner_token: null },
+          { attempt_id: "attempt-upgrade-dispatching", owner_token: null },
+          { attempt_id: "attempt-upgrade-orphan", owner_token: null },
+          { attempt_id: "attempt-upgrade-started-receipt", owner_token: null },
+          { attempt_id: "attempt-upgrade-post-migration", owner_token: null },
+        ])
+        expect(
+          Exit.isFailure(
+            yield* db
+              .run(
+                sql`
+                INSERT INTO session_provider_attempt (
+                  attempt_id, session_id, activity_id, provider_turn_seq, selection_id,
+                  projection_hash, request_hash, provider_id, state, created_at
+                ) VALUES (
+                  'attempt-upgrade-unowned-new', 'attempt-upgrade-session', 'attempt-upgrade-activity', 5,
+                  'attempt-upgrade-selection', 'projection-hash', 'request-5', 'provider', 'prepared', 6
+                )
+              `,
+              )
+              .pipe(Effect.exit),
+          ),
+        ).toBe(true)
+        yield* db.run(sql`
+          INSERT INTO session_provider_owner_lease (
+            owner_token, registered_at, heartbeat_at, lease_expires_at
+          ) VALUES ('attempt-upgrade-owner', 5, 5, 10)
+        `)
+        yield* db.run(sql`
+          INSERT INTO session_provider_attempt (
+            attempt_id, session_id, activity_id, provider_turn_seq, selection_id,
+            projection_hash, request_hash, provider_id, owner_token, state, created_at
+          ) VALUES (
+            'attempt-upgrade-owned-new', 'attempt-upgrade-session', 'attempt-upgrade-activity', 5,
+            'attempt-upgrade-selection', 'projection-hash', 'request-5', 'provider',
+            'attempt-upgrade-owner', 'prepared', 6
+          )
+        `)
+      }),
+    )
+  })
+
+  test("enforces exact provider attempt receipt and wire identity", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* DatabaseMigration.apply(db)
+        yield* seedReceiptScope(db)
+        yield* db.run(sql`
+          INSERT INTO context_location_identity (
+            security_namespace_id, location_key, project_scope_key,
+            canonical_root, observed_project_id, created_at
+          ) VALUES (
+            ${receiptNamespace}, 'provider-identity-location', ${receiptProjectScope},
+            '/tmp/provider-identity', 'provider-identity-project', 1
+          )
+        `)
+        yield* db.run(sql`
+          INSERT INTO project (id, worktree, sandboxes, time_created, time_updated)
+          VALUES ('provider-identity-project', '/tmp/provider-identity', '[]', 1, 1)
+        `)
+        yield* db.run(sql`
+          INSERT INTO session (id, project_id, slug, directory, title, version, time_created, time_updated)
+          VALUES ('provider-identity-session', 'provider-identity-project', 'provider-identity',
+                  '/tmp/provider-identity', 'Provider identity', 'test', 1, 1)
+        `)
+        yield* db.run(sql`
+          INSERT INTO session_input (id, session_id, prompt, delivery, admitted_seq, promoted_seq, time_created)
+          VALUES ('provider-identity-input', 'provider-identity-session', '{"text":"identity"}', 'steer', 0, 0, 1)
+        `)
+        yield* db.run(sql`
+          INSERT INTO session_activity (
+            activity_id, session_id, ordinal, trigger_input_id, delivery, state, created_at
+          ) VALUES ('provider-identity-activity', 'provider-identity-session', 0,
+                    'provider-identity-input', 'steer', 'active', 1)
+        `)
+        yield* db.run(sql`
+          UPDATE session_activity
+          SET state = 'settled', settled_at = 2
+          WHERE activity_id = 'provider-identity-activity'
+        `)
+        yield* db.run(sql`
+          INSERT INTO session_activity (
+            activity_id, session_id, ordinal, trigger_input_id, delivery, state, created_at
+          ) VALUES ('provider-identity-wrong-activity', 'provider-identity-session', 1,
+                    'provider-identity-input', 'steer', 'active', 2)
+        `)
+        yield* db.run(sql`
+          INSERT INTO session_context_selection (
+            selection_id, session_id, activity_id, revision, trigger_input_id, location_key,
+            security_namespace_id, project_scope_key,
+            query_fingerprint, authorization_fingerprint, authorization_epoch,
+            execution_fingerprint, selected_source_fingerprint,
+            observed_location_mutation_epoch, next_revalidation_at,
+            released_knowledge_binding_state, released_knowledge_exact_refs,
+            released_knowledge_exact_refs_fingerprint,
+            graph_revisions, graph_statuses, selected_refs, projection,
+            projection_hash, token_count, artifact_write_status, inline_audit, created_at
+          ) VALUES (
+            'provider-identity-selection', 'provider-identity-session', 'provider-identity-activity', 0,
+            'provider-identity-input', 'provider-identity-location', ${receiptNamespace}, ${receiptProjectScope},
+            'query', 'authorization', 1, 'execution', 'sources', 0, 100,
+            'unavailable', '[]', ${emptyReleasedRefsFingerprint}, '{}', '{}', '[]', 'projection',
+            'provider-identity-projection', 1, 'degraded_unavailable', '{}', 1
+          )
+        `)
+        yield* db.run(sql`
+          INSERT INTO session_provider_owner_lease (
+            owner_token, registered_at, heartbeat_at, lease_expires_at
+          ) VALUES (
+            'provider-identity-owner',
+            CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),
+            CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),
+            CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) + 10000
+          )
+        `)
+        yield* db.run(sql`
+          INSERT INTO session_provider_attempt (
+            attempt_id, session_id, activity_id, provider_turn_seq, selection_id,
+            projection_hash, request_hash, provider_id, owner_token, state, created_at
+          ) VALUES
+            ('provider-identity-valid', 'provider-identity-session', 'provider-identity-activity', 0,
+             'provider-identity-selection', 'provider-identity-projection', ${"a".repeat(64)},
+             'provider', 'provider-identity-owner', 'prepared', 2),
+            ('provider-identity-wrong-activity', 'provider-identity-session', 'provider-identity-wrong-activity', 1,
+             'provider-identity-selection', 'provider-identity-projection', ${"a".repeat(64)},
+             'provider', 'provider-identity-owner', 'prepared', 2),
+            ('provider-identity-wrong-projection', 'provider-identity-session', 'provider-identity-activity', 2,
+             'provider-identity-selection', 'wrong-projection', ${"a".repeat(64)},
+             'provider', 'provider-identity-owner', 'prepared', 2),
+            ('provider-identity-wrong-provider', 'provider-identity-session', 'provider-identity-activity', 3,
+             'provider-identity-selection', 'provider-identity-projection', ${"a".repeat(64)},
+             'wrong-provider', 'provider-identity-owner', 'prepared', 2),
+            ('provider-identity-wrong-request', 'provider-identity-session', 'provider-identity-activity', 4,
+             'provider-identity-selection', 'provider-identity-projection', ${"f".repeat(64)},
+             'provider', 'provider-identity-owner', 'prepared', 2)
+        `)
+
+        for (const [ordinal, attemptID] of [
+          "provider-identity-wrong-activity",
+          "provider-identity-wrong-projection",
+          "provider-identity-wrong-provider",
+          "provider-identity-wrong-request",
+        ].entries()) {
+          expect(
+            Exit.isFailure(
+              yield* db
+                .run(
+                  sql`
+                  INSERT INTO session_tool_request_receipt (
+                    receipt_id, request_ordinal, session_id, user_message_id,
+                    provider_attempt_id, context_selection_id,
+                    released_knowledge_security_namespace_id, released_knowledge_project_scope_key,
+                    released_knowledge_binding_state, released_knowledge_exact_refs,
+                    released_knowledge_exact_refs_fingerprint,
+                    provider_id, model_id, registry_tool_ids, permission_filtered_tool_ids,
+                    final_offered_tool_ids, call_ids, request_input_hash,
+                    request_state, provider_state, owner_token, created_at
+                  ) VALUES (
+                    ${`receipt-${attemptID}`}, ${ordinal + 1}, 'provider-identity-session',
+                    'provider-identity-input', ${attemptID}, 'provider-identity-selection',
+                    ${receiptNamespace}, ${receiptProjectScope}, 'unavailable', '[]',
+                    ${emptyReleasedRefsFingerprint}, 'provider', 'model', '[]', '[]', '[]', '[]',
+                    ${"a".repeat(64)}, 'prepared', 'preparing', 'provider-identity-owner', 3
+                  )
+                `,
+                )
+                .pipe(Effect.exit),
+            ),
+          ).toBe(true)
+        }
+
+        yield* db.run(sql`
+          INSERT INTO session_tool_request_receipt (
+            receipt_id, request_ordinal, session_id, user_message_id,
+            provider_attempt_id, context_selection_id,
+            context_eligibility, context_readiness, context_activation, context_activation_fingerprint,
+            released_knowledge_security_namespace_id, released_knowledge_project_scope_key,
+            released_knowledge_binding_state, released_knowledge_exact_refs,
+            released_knowledge_exact_refs_fingerprint,
+            provider_id, model_id, registry_tool_ids, permission_filtered_tool_ids,
+            final_offered_tool_ids, call_ids, request_input_hash,
+            prompt_epoch, prompt_window_id, effective_history_hash,
+            request_state, provider_state, owner_token, created_at
+          ) VALUES (
+            'provider-identity-receipt', 10, 'provider-identity-session', 'provider-identity-input',
+            'provider-identity-valid', 'provider-identity-selection',
+            ${JSON.stringify(contextEligibility)}, ${JSON.stringify(contextReadiness)},
+            ${contextActivation(3, "provider-identity-selection", "provider-identity-projection")},
+            lower(hex(zeroblob(32))), ${receiptNamespace}, ${receiptProjectScope},
+            'unavailable', '[]', ${emptyReleasedRefsFingerprint}, 'provider', 'model', '[]', '[]', '[]', '[]',
+            ${"a".repeat(64)}, 0, 'provider-identity-window', 'provider-identity-history',
+            'prepared', 'preparing', 'provider-identity-owner', 3
+          )
+        `)
+        expect(
+          Exit.isFailure(
+            yield* db
+              .run(
+                sql`
+                INSERT INTO session_tool_request_receipt (
+                  receipt_id, request_ordinal, session_id, user_message_id,
+                  provider_attempt_id, context_selection_id,
+                  released_knowledge_security_namespace_id, released_knowledge_project_scope_key,
+                  released_knowledge_binding_state, released_knowledge_exact_refs,
+                  released_knowledge_exact_refs_fingerprint,
+                  provider_id, model_id, registry_tool_ids, permission_filtered_tool_ids,
+                  final_offered_tool_ids, call_ids, request_input_hash,
+                  request_state, provider_state, owner_token, created_at
+                ) VALUES (
+                  'provider-identity-duplicate', 11, 'provider-identity-session', 'provider-identity-input',
+                  'provider-identity-valid', 'provider-identity-selection',
+                  ${receiptNamespace}, ${receiptProjectScope}, 'unavailable', '[]',
+                  ${emptyReleasedRefsFingerprint}, 'provider', 'model', '[]', '[]', '[]', '[]',
+                  ${"a".repeat(64)}, 'prepared', 'preparing', 'provider-identity-owner', 3
+                )
+              `,
+              )
+              .pipe(Effect.exit),
+          ),
+        ).toBe(true)
+        yield* db.run(sql`
+          UPDATE session_tool_request_receipt
+          SET released_knowledge_selected_refs = '[]',
+              released_knowledge_selected_refs_fingerprint = ${emptyReleasedRefsFingerprint}
+          WHERE receipt_id = 'provider-identity-receipt'
+        `)
+        expect(
+          Exit.isFailure(
+            yield* db
+              .run(
+                sql`
+                UPDATE session_provider_attempt
+                SET prepared_turn_hash = ${preparedTurnHash}
+                WHERE attempt_id = 'provider-identity-valid'
+              `,
+              )
+              .pipe(Effect.exit),
+          ),
+        ).toBe(true)
+        expect(
+          Exit.isFailure(
+            yield* db
+              .run(
+                sql`
+                UPDATE session_provider_attempt
+                SET prepared_turn_hash = ${"B".repeat(64)}, wire_request_hash = ${wireRequestHash}
+                WHERE attempt_id = 'provider-identity-valid'
+              `,
+              )
+              .pipe(Effect.exit),
+          ),
+        ).toBe(true)
+        yield* db.run(sql`
+          UPDATE session_provider_attempt
+          SET prepared_turn_hash = ${preparedTurnHash}, wire_request_hash = ${wireRequestHash}
+          WHERE attempt_id = 'provider-identity-valid'
+        `)
+        yield* db.run(sql`
+          UPDATE session_provider_attempt
+          SET prepared_turn_hash = ${preparedTurnHash}, wire_request_hash = ${wireRequestHash}
+          WHERE attempt_id = 'provider-identity-valid'
+        `)
+        expect(
+          Exit.isFailure(
+            yield* db
+              .run(
+                sql`
+                UPDATE session_provider_attempt
+                SET prepared_turn_hash = ${"f".repeat(64)}, wire_request_hash = ${wireRequestHash}
+                WHERE attempt_id = 'provider-identity-valid'
+              `,
+              )
+              .pipe(Effect.exit),
+          ),
+        ).toBe(true)
+        expect(
+          Exit.isFailure(
+            yield* db
+              .run(
+                sql`
+                UPDATE session_tool_request_receipt
+                SET provider_state = 'prepared', final_request_hash = ${wireRequestHash},
+                    provider_request_hash = ${wireRequestHash},
+                    prepared_turn_hash = ${"f".repeat(64)}, system_stable_hash = ${systemStableHash},
+                    system_volatile_hash = ${systemVolatileHash}, wire_request_hash = ${wireRequestHash},
+                    tool_result_reference_ids = '[]', tool_result_reference_count = 0,
+                    tool_definition_hash = ${wireRequestHash}, adapter_prepared_at = 4
+                WHERE receipt_id = 'provider-identity-receipt'
+              `,
+              )
+              .pipe(Effect.exit),
+          ),
+        ).toBe(true)
+        yield* db.run(sql`
+          UPDATE session_tool_request_receipt
+          SET provider_state = 'prepared', final_request_hash = ${wireRequestHash},
+              provider_request_hash = ${wireRequestHash},
+              prepared_turn_hash = ${preparedTurnHash}, system_stable_hash = ${systemStableHash},
+              system_volatile_hash = ${systemVolatileHash}, wire_request_hash = ${wireRequestHash},
+              tool_result_reference_ids = '[]', tool_result_reference_count = 0,
+              tool_definition_hash = ${wireRequestHash}, adapter_prepared_at = 4
+          WHERE receipt_id = 'provider-identity-receipt'
+        `)
+        yield* db.run(sql`
+          UPDATE session_provider_attempt
+          SET state = 'dispatching'
+          WHERE attempt_id = 'provider-identity-valid'
+        `)
+        yield* db.run(sql`
+          UPDATE session_tool_request_receipt
+          SET provider_state = 'dispatching', request_state = 'dispatched', dispatching_at = 5
+          WHERE receipt_id = 'provider-identity-receipt'
+        `)
+        yield* db.run(sql`
+          UPDATE session_provider_attempt
+          SET prepared_turn_hash = ${preparedTurnHash}, wire_request_hash = ${wireRequestHash}
+          WHERE attempt_id = 'provider-identity-wrong-request'
+        `)
+        yield* db.run(sql`
+          UPDATE session_provider_owner_lease
+          SET released_at = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
+          WHERE owner_token = 'provider-identity-owner'
+        `)
+        expect(
+          Exit.isFailure(
+            yield* db
+              .run(
+                sql`
+                UPDATE session_provider_attempt
+                SET state = 'indeterminate_after_crash', error_code = 'caller_supplied_recovery'
+                WHERE attempt_id = 'provider-identity-wrong-request'
+              `,
+              )
+              .pipe(Effect.exit),
+          ),
+        ).toBe(true)
+        expect(
+          Exit.isFailure(
+            yield* db
+              .run(
+                sql`
+                UPDATE session_provider_attempt
+                SET state = 'indeterminate_after_crash', error_code = 'process_recovery'
+                WHERE attempt_id = 'provider-identity-wrong-request'
+              `,
+              )
+              .pipe(Effect.exit),
+          ),
+        ).toBe(true)
+        yield* db.run(sql`
+          INSERT INTO session_provider_owner_lease (
+            owner_token, registered_at, heartbeat_at, lease_expires_at
+          ) VALUES (
+            'provider-identity-recovery-owner',
+            CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),
+            CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),
+            CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) + 10000
+          )
+        `)
+        yield* db.run(sql`
+          UPDATE session_provider_attempt
+          SET state = 'indeterminate_after_crash', error_code = 'process_recovery'
+          WHERE attempt_id = 'provider-identity-wrong-request'
+        `)
+        expect(
+          yield* db.get(sql`
+            SELECT state, error_code, settled_at, prepared_turn_hash, wire_request_hash
+            FROM session_provider_attempt
+            WHERE attempt_id = 'provider-identity-wrong-request'
+          `),
+        ).toEqual({
+          state: "indeterminate_after_crash",
+          error_code: "process_recovery",
+          settled_at: null,
+          prepared_turn_hash: preparedTurnHash,
+          wire_request_hash: wireRequestHash,
+        })
+      }),
+    )
+  })
+
+  test("preserves exact historical receipts but rejects ambiguous and mismatched provider attempt upgrades", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        const migrationIndex = migrations.findIndex(
+          (migration) => migration.id === providerTurnIdentityAuthorityMigration.id,
+        )
+        expect(migrationIndex).toBeGreaterThan(0)
+        yield* DatabaseMigration.applyOnly(db, migrations.slice(0, migrationIndex))
+        yield* seedReceiptScope(db)
+        yield* db.run(sql`
+          INSERT INTO context_location_identity (
+            security_namespace_id, location_key, project_scope_key,
+            canonical_root, observed_project_id, created_at
+          ) VALUES (
+            ${receiptNamespace}, 'provider-upgrade-location', ${receiptProjectScope},
+            '/tmp/provider-upgrade', 'provider-upgrade-project', 1
+          )
+        `)
+        yield* db.run(sql`
+          INSERT INTO project (id, worktree, sandboxes, time_created, time_updated)
+          VALUES ('provider-upgrade-project', '/tmp/provider-upgrade', '[]', 1, 1)
+        `)
+        yield* db.run(sql`
+          INSERT INTO session (id, project_id, slug, directory, title, version, time_created, time_updated)
+          VALUES ('provider-upgrade-session', 'provider-upgrade-project', 'provider-upgrade',
+                  '/tmp/provider-upgrade', 'Provider upgrade', 'test', 1, 1)
+        `)
+        yield* db.run(sql`
+          INSERT INTO session_input (id, session_id, prompt, delivery, admitted_seq, promoted_seq, time_created)
+          VALUES ('provider-upgrade-input', 'provider-upgrade-session', '{"text":"upgrade"}', 'steer', 0, 0, 1)
+        `)
+        yield* db.run(sql`
+          INSERT INTO session_activity (
+            activity_id, session_id, ordinal, trigger_input_id, delivery, state, created_at
+          ) VALUES ('provider-upgrade-activity', 'provider-upgrade-session', 0,
+                    'provider-upgrade-input', 'steer', 'active', 1)
+        `)
+        yield* db.run(sql`
+          INSERT INTO session_context_selection (
+            selection_id, session_id, activity_id, revision, trigger_input_id, location_key,
+            security_namespace_id, project_scope_key,
+            query_fingerprint, authorization_fingerprint, authorization_epoch,
+            execution_fingerprint, selected_source_fingerprint,
+            observed_location_mutation_epoch, next_revalidation_at,
+            released_knowledge_binding_state, released_knowledge_exact_refs,
+            released_knowledge_exact_refs_fingerprint,
+            graph_revisions, graph_statuses, selected_refs, projection,
+            projection_hash, token_count, artifact_write_status, inline_audit, created_at
+          ) VALUES (
+            'provider-upgrade-selection', 'provider-upgrade-session', 'provider-upgrade-activity', 0,
+            'provider-upgrade-input', 'provider-upgrade-location', ${receiptNamespace}, ${receiptProjectScope},
+            'query', 'authorization', 1, 'execution', 'sources', 0, 100,
+            'unavailable', '[]', ${emptyReleasedRefsFingerprint}, '{}', '{}', '[]', 'projection',
+            'provider-upgrade-projection', 1, 'degraded_unavailable', '{}', 1
+          )
+        `)
+        yield* db.run(sql`
+          INSERT INTO session_provider_owner_lease (
+            owner_token, registered_at, heartbeat_at, lease_expires_at
+          ) VALUES ('provider-upgrade-owner', 1, 1, 100)
+        `)
+        yield* db.run(sql`
+          INSERT INTO session_provider_attempt (
+            attempt_id, session_id, activity_id, provider_turn_seq, selection_id,
+            projection_hash, request_hash, provider_id, owner_token, state, created_at
+          ) VALUES ('provider-upgrade-attempt', 'provider-upgrade-session', 'provider-upgrade-activity', 0,
+                    'provider-upgrade-selection', 'provider-upgrade-projection', ${"a".repeat(64)},
+                    'provider', 'provider-upgrade-owner', 'prepared', 2)
+        `)
+        for (const ordinal of [1, 2]) {
+          yield* db.run(sql`
+            INSERT INTO session_tool_request_receipt (
+              receipt_id, request_ordinal, session_id, user_message_id,
+              provider_attempt_id, context_selection_id,
+              released_knowledge_security_namespace_id, released_knowledge_project_scope_key,
+              released_knowledge_binding_state, released_knowledge_exact_refs,
+              released_knowledge_exact_refs_fingerprint,
+              provider_id, model_id, registry_tool_ids, permission_filtered_tool_ids,
+              final_offered_tool_ids, call_ids, request_input_hash,
+              request_state, provider_state, owner_token, created_at
+            ) VALUES (
+              ${`provider-upgrade-receipt-${ordinal}`}, ${ordinal}, 'provider-upgrade-session',
+              'provider-upgrade-input', 'provider-upgrade-attempt', 'provider-upgrade-selection',
+              ${receiptNamespace}, ${receiptProjectScope}, 'unavailable', '[]',
+              ${emptyReleasedRefsFingerprint}, 'provider', 'model', '[]', '[]', '[]', '[]',
+              ${"a".repeat(64)}, 'prepared', 'preparing', 'provider-upgrade-owner', ${ordinal + 2}
+            )
+          `)
+        }
+        expect(
+          Exit.isFailure(
+            yield* DatabaseMigration.applyOnly(db, [providerTurnIdentityAuthorityMigration]).pipe(Effect.exit),
+          ),
+        ).toBe(true)
+        expect(
+          yield* db.all(sql`
+            SELECT name FROM pragma_table_info('session_provider_attempt')
+            WHERE name IN ('prepared_turn_hash', 'wire_request_hash')
+          `),
+        ).toEqual([])
+        yield* db.run(sql`
+          DELETE FROM session_tool_request_receipt
+          WHERE receipt_id IN ('provider-upgrade-receipt-1', 'provider-upgrade-receipt-2')
+        `)
+        yield* db.run(sql`
+          INSERT INTO session_tool_request_receipt (
+            receipt_id, request_ordinal, session_id, user_message_id,
+            provider_attempt_id, context_selection_id,
+            released_knowledge_security_namespace_id, released_knowledge_project_scope_key,
+            released_knowledge_binding_state, released_knowledge_exact_refs,
+            released_knowledge_exact_refs_fingerprint,
+            provider_id, model_id, registry_tool_ids, permission_filtered_tool_ids,
+            final_offered_tool_ids, call_ids, request_input_hash,
+            request_state, provider_state, owner_token, created_at
+          ) VALUES (
+            'provider-upgrade-receipt-1', 1, 'provider-upgrade-session',
+            'provider-upgrade-input', 'provider-upgrade-attempt', 'provider-upgrade-selection',
+            ${receiptNamespace}, ${receiptProjectScope}, 'unavailable', '[]',
+            ${emptyReleasedRefsFingerprint}, 'provider', 'model', '[]', '[]', '[]', '[]',
+            ${"f".repeat(64)}, 'prepared', 'preparing', 'provider-upgrade-owner', 3
+          )
+        `)
+        expect(
+          Exit.isFailure(
+            yield* DatabaseMigration.applyOnly(db, [providerTurnIdentityAuthorityMigration]).pipe(Effect.exit),
+          ),
+        ).toBe(true)
+        expect(
+          yield* db.all(sql`
+            SELECT name FROM pragma_table_info('session_provider_attempt')
+            WHERE name IN ('prepared_turn_hash', 'wire_request_hash')
+          `),
+        ).toEqual([])
+        yield* db.run(sql`
+          DELETE FROM session_tool_request_receipt
+          WHERE receipt_id = 'provider-upgrade-receipt-1'
+        `)
+        yield* db.run(sql`
+          INSERT INTO session_tool_request_receipt (
+            receipt_id, request_ordinal, session_id, user_message_id,
+            provider_attempt_id, context_selection_id,
+            released_knowledge_security_namespace_id, released_knowledge_project_scope_key,
+            released_knowledge_binding_state, released_knowledge_exact_refs,
+            released_knowledge_exact_refs_fingerprint,
+            provider_id, model_id, registry_tool_ids, permission_filtered_tool_ids,
+            final_offered_tool_ids, call_ids, request_input_hash,
+            request_state, provider_state, owner_token, created_at
+          ) VALUES (
+            'provider-upgrade-receipt-1', 1, 'provider-upgrade-session',
+            'provider-upgrade-input', 'provider-upgrade-attempt', 'provider-upgrade-selection',
+            ${receiptNamespace}, ${receiptProjectScope}, 'unavailable', '[]',
+            ${emptyReleasedRefsFingerprint}, 'provider', 'model', '[]', '[]', '[]', '[]',
+            ${"a".repeat(64)}, 'prepared', 'preparing', 'provider-upgrade-owner', 3
+          )
+        `)
+        yield* DatabaseMigration.applyOnly(db, [providerTurnIdentityAuthorityMigration])
+        expect(
+          yield* db.get(sql`
+            SELECT released_at IS NOT NULL AS released
+            FROM session_provider_owner_lease
+            WHERE owner_token = 'provider-upgrade-owner'
+          `),
+        ).toEqual({ released: 1 })
+        expect(
+          yield* db.get(sql`
+            SELECT prepared_turn_hash, wire_request_hash
+            FROM session_provider_attempt
+            WHERE attempt_id = 'provider-upgrade-attempt'
+          `),
+        ).toEqual({ prepared_turn_hash: null, wire_request_hash: null })
+        expect(
+          Exit.isFailure(
+            yield* db
+              .run(
+                sql`
+                UPDATE session_provider_attempt
+                SET state = 'dispatching'
+                WHERE attempt_id = 'provider-upgrade-attempt'
+              `,
+              )
+              .pipe(Effect.exit),
+          ),
+        ).toBe(true)
+        expect(
+          Exit.isFailure(
+            yield* db
+              .run(
+                sql`
+                INSERT INTO session_provider_attempt (
+                  attempt_id, session_id, activity_id, provider_turn_seq, selection_id,
+                  projection_hash, request_hash, provider_id, owner_token, state, created_at
+                ) VALUES (
+                  'provider-upgrade-backdated-attempt', 'provider-upgrade-session',
+                  'provider-upgrade-activity', 1, 'provider-upgrade-selection',
+                  'provider-upgrade-projection', ${"a".repeat(64)}, 'provider',
+                  'provider-upgrade-owner', 'prepared', 1
+                )
+              `,
+              )
+              .pipe(Effect.exit),
+          ),
+        ).toBe(true)
+        expect(
+          Exit.isFailure(
+            yield* db
+              .run(
+                sql`
+                UPDATE session_provider_attempt
+                SET prepared_turn_hash = ${preparedTurnHash}, wire_request_hash = ${wireRequestHash}
+                WHERE attempt_id = 'provider-upgrade-attempt'
+              `,
+              )
+              .pipe(Effect.exit),
+          ),
+        ).toBe(true)
+        yield* db.run(sql`
+          UPDATE session_provider_attempt
+          SET state = 'failed', settled_at = 5, error_code = 'legacy_wire_identity_missing'
+          WHERE attempt_id = 'provider-upgrade-attempt'
+        `)
+        yield* db.run(sql`
+          UPDATE session_tool_request_receipt
+          SET provider_state = 'failed', terminal_at = 5,
+              request_error_code = 'legacy_wire_identity_missing'
+          WHERE receipt_id = 'provider-upgrade-receipt-1'
+        `)
+        expect(
+          yield* db.get(sql`
+            SELECT attempt.state AS attempt_state, receipt.provider_state AS receipt_state
+            FROM session_provider_attempt attempt
+            JOIN session_tool_request_receipt receipt
+              ON receipt.provider_attempt_id = attempt.attempt_id
+            WHERE attempt.attempt_id = 'provider-upgrade-attempt'
+          `),
+        ).toEqual({ attempt_state: "failed", receipt_state: "failed" })
+      }),
+    )
+  })
+
+  test("rejects future and overlong pre-authority provider owner leases", async () => {
+    for (const lease of [
+      {
+        ownerToken: "provider-upgrade-future-owner",
+        registeredAt: Date.now() + 60_000,
+        heartbeatAt: Date.now() + 60_000,
+        leaseExpiresAt: Date.now() + 120_000,
+      },
+      {
+        ownerToken: "provider-upgrade-overlong-owner",
+        registeredAt: 1,
+        heartbeatAt: 1,
+        leaseExpiresAt: 31_536_000_002,
+      },
+    ]) {
+      await run(
+        Effect.gen(function* () {
+          const db = yield* makeDb
+          const migrationIndex = migrations.findIndex(
+            (migration) => migration.id === providerTurnIdentityAuthorityMigration.id,
+          )
+          yield* DatabaseMigration.applyOnly(db, migrations.slice(0, migrationIndex))
+          yield* db.run(sql`
+            INSERT INTO session_provider_owner_lease (
+              owner_token, registered_at, heartbeat_at, lease_expires_at
+            ) VALUES (
+              ${lease.ownerToken}, ${lease.registeredAt}, ${lease.heartbeatAt}, ${lease.leaseExpiresAt}
+            )
+          `)
+          expect(
+            Exit.isFailure(
+              yield* DatabaseMigration.applyOnly(db, [providerTurnIdentityAuthorityMigration]).pipe(Effect.exit),
+            ),
+          ).toBe(true)
+          expect(
+            yield* db.all(sql`
+              SELECT name FROM pragma_table_info('session_provider_attempt')
+              WHERE name IN ('prepared_turn_hash', 'wire_request_hash')
+            `),
+          ).toEqual([])
+        }),
+      )
+    }
+  })
+
+  test("permits only exact physical-start evidence to quarantine an undispatched provider receipt", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* DatabaseMigration.apply(db)
+        yield* DatabaseMigration.applyOnly(db, [providerCrossStateRecoveryMigration])
+        yield* seedReceiptScope(db)
+        yield* db.run(sql`
+          INSERT INTO project (id, worktree, sandboxes, time_created, time_updated)
+          VALUES ('provider-cross-state-project', '/tmp/provider-cross-state', '[]', 1, 1)
+        `)
+        yield* db.run(sql`
+          INSERT INTO session (id, project_id, slug, directory, title, version, time_created, time_updated)
+          VALUES ('provider-cross-state-session', 'provider-cross-state-project', 'provider-cross-state',
+                  '/tmp/provider-cross-state', 'Provider cross state', 'test', 1, 1)
+        `)
+        yield* db.run(sql`
+          INSERT INTO session_input (id, session_id, prompt, delivery, admitted_seq, promoted_seq, time_created)
+          VALUES ('provider-cross-state-input', 'provider-cross-state-session', '{"text":"cross"}', 'steer', 0, 0, 1)
+        `)
+        yield* db.run(sql`
+          INSERT INTO session_activity (
+            activity_id, session_id, ordinal, trigger_input_id, delivery, state, created_at
+          ) VALUES ('provider-cross-state-activity', 'provider-cross-state-session', 0,
+                    'provider-cross-state-input', 'steer', 'active', 1)
+        `)
+        yield* db.run(sql`
+          INSERT INTO context_location_identity (
+            security_namespace_id, location_key, project_scope_key,
+            canonical_root, observed_project_id, created_at
+          ) VALUES (
+            ${receiptNamespace}, 'provider-cross-state-location', ${receiptProjectScope},
+            '/tmp/provider-cross-state', 'provider-cross-state-project', 1
+          )
+        `)
+        yield* db.run(sql`
+          INSERT INTO session_context_selection (
+            selection_id, session_id, activity_id, revision, trigger_input_id, location_key,
+            security_namespace_id, project_scope_key,
+            query_fingerprint, authorization_fingerprint, authorization_epoch,
+            execution_fingerprint, selected_source_fingerprint,
+            observed_location_mutation_epoch, next_revalidation_at,
+            released_knowledge_binding_state, released_knowledge_exact_refs,
+            released_knowledge_exact_refs_fingerprint,
+            graph_revisions, graph_statuses, selected_refs, projection,
+            projection_hash, token_count, artifact_write_status, inline_audit, created_at
+          ) VALUES (
+            'provider-cross-state-selection', 'provider-cross-state-session', 'provider-cross-state-activity', 0,
+            'provider-cross-state-input', 'provider-cross-state-location', ${receiptNamespace}, ${receiptProjectScope},
+            'query', 'authorization', 1, 'execution', 'sources', 0, 100,
+            'unavailable', '[]', ${emptyReleasedRefsFingerprint}, '{}', '{}', '[]', 'projection',
+            'provider-cross-state-projection', 1, 'degraded_unavailable', '{}', 1
+          )
+        `)
+        yield* db.run(sql`
+          INSERT INTO session_provider_owner_lease (
+            owner_token, registered_at, heartbeat_at, lease_expires_at
+          ) VALUES (
+            'provider-cross-state-owner',
+            CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),
+            CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),
+            CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) + 10000
+          )
+        `)
+        yield* db.run(sql`
+          INSERT INTO session_provider_attempt (
+            attempt_id, session_id, activity_id, provider_turn_seq, selection_id,
+            projection_hash, request_hash, provider_id, owner_token, state, created_at
+          ) VALUES (
+            'provider-cross-state-attempt', 'provider-cross-state-session', 'provider-cross-state-activity', 0,
+            'provider-cross-state-selection', 'provider-cross-state-projection', ${wireRequestHash},
+            'provider', 'provider-cross-state-owner', 'prepared', 2
+          )
+        `)
+        yield* db.run(sql`
+          INSERT INTO session_tool_request_receipt (
+            receipt_id, request_ordinal, session_id, user_message_id,
+            provider_attempt_id, context_selection_id,
+            context_eligibility, context_readiness, context_activation, context_activation_fingerprint,
+            released_knowledge_security_namespace_id, released_knowledge_project_scope_key,
+            released_knowledge_binding_state, released_knowledge_exact_refs,
+            released_knowledge_exact_refs_fingerprint,
+            provider_id, model_id, registry_tool_ids, permission_filtered_tool_ids,
+            final_offered_tool_ids, call_ids, request_input_hash,
+            prompt_epoch, prompt_window_id, effective_history_hash,
+            request_state, provider_state, owner_token, created_at
+          ) VALUES (
+            'provider-cross-state-receipt', 1, 'provider-cross-state-session',
+            'provider-cross-state-input', 'provider-cross-state-attempt', 'provider-cross-state-selection',
+            ${JSON.stringify(contextEligibility)}, ${JSON.stringify(contextReadiness)},
+            ${contextActivation(3, "provider-cross-state-selection", "provider-cross-state-projection")},
+            lower(hex(zeroblob(32))),
+            ${receiptNamespace}, ${receiptProjectScope}, 'unavailable', '[]',
+            ${emptyReleasedRefsFingerprint}, 'provider', 'model', '[]', '[]', '[]', '[]',
+            ${wireRequestHash}, 0, 'provider-cross-state-window', 'provider-cross-state-history',
+            'prepared', 'preparing', 'provider-cross-state-owner', 3
+          )
+        `)
+        yield* db.run(sql`
+          UPDATE session_tool_request_receipt
+          SET released_knowledge_selected_refs = '[]',
+              released_knowledge_selected_refs_fingerprint = ${emptyReleasedRefsFingerprint}
+          WHERE receipt_id = 'provider-cross-state-receipt'
+        `)
+        yield* db.run(sql`
+          UPDATE session_provider_attempt
+          SET prepared_turn_hash = ${preparedTurnHash}, wire_request_hash = ${wireRequestHash}
+          WHERE attempt_id = 'provider-cross-state-attempt'
+        `)
+        yield* db.run(sql`
+          UPDATE session_tool_request_receipt
+          SET provider_state = 'prepared', adapter_prepared_at = 4,
+              final_request_hash = ${wireRequestHash}, provider_request_hash = ${wireRequestHash},
+              prepared_turn_hash = ${preparedTurnHash},
+              system_stable_hash = ${systemStableHash}, system_volatile_hash = ${systemVolatileHash},
+              wire_request_hash = ${wireRequestHash}, tool_definition_hash = ${wireRequestHash},
+              tool_result_reference_ids = '[]', tool_result_reference_count = 0
+          WHERE receipt_id = 'provider-cross-state-receipt'
+        `)
+        yield* db.run(sql`
+          UPDATE session_provider_attempt
+          SET state = 'dispatching'
+          WHERE attempt_id = 'provider-cross-state-attempt'
+        `)
+        expect(
+          Exit.isFailure(
+            yield* db
+              .run(
+                sql`
+                  UPDATE session_tool_request_receipt
+                  SET provider_state = 'indeterminate_after_crash', terminal_at = 5,
+                      request_error_code = 'wrong_recovery_reason'
+                  WHERE receipt_id = 'provider-cross-state-receipt'
+                `,
+              )
+              .pipe(Effect.exit),
+          ),
+        ).toBe(true)
+        yield* db.run(sql`
+          UPDATE session_tool_request_receipt
+          SET provider_state = 'indeterminate_after_crash', terminal_at = 5,
+              request_error_code = 'provider_started_outcome_unknown_after_process_restart'
+          WHERE receipt_id = 'provider-cross-state-receipt'
+        `)
+        expect(
+          yield* db.get(sql`
+            SELECT provider_state, request_error_code
+            FROM session_tool_request_receipt
+            WHERE receipt_id = 'provider-cross-state-receipt'
+          `),
+        ).toEqual({
+          provider_state: "indeterminate_after_crash",
+          request_error_code: "provider_started_outcome_unknown_after_process_restart",
+        })
+      }),
+    )
+  })
+
+  test("quarantines exact provider cross-state upgrades but rejects identity mismatches atomically", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        const migrationIndex = migrations.findIndex(
+          (migration) => migration.id === providerCrossStateRecoveryMigration.id,
+        )
+        expect(migrationIndex).toBeGreaterThan(0)
+        yield* DatabaseMigration.applyOnly(db, migrations.slice(0, migrationIndex))
+        yield* seedReceiptScope(db)
+        yield* db.run(sql`
+          INSERT INTO project (id, worktree, sandboxes, time_created, time_updated)
+          VALUES ('provider-cross-upgrade-project', '/tmp/provider-cross-upgrade', '[]', 1, 1)
+        `)
+        yield* db.run(sql`
+          INSERT INTO session (id, project_id, slug, directory, title, version, time_created, time_updated)
+          VALUES ('provider-cross-upgrade-session', 'provider-cross-upgrade-project', 'provider-cross-upgrade',
+                  '/tmp/provider-cross-upgrade', 'Provider cross upgrade', 'test', 1, 1)
+        `)
+        yield* db.run(sql`
+          INSERT INTO session_input (id, session_id, prompt, delivery, admitted_seq, promoted_seq, time_created)
+          VALUES ('provider-cross-upgrade-input', 'provider-cross-upgrade-session',
+                  '{"text":"cross"}', 'steer', 0, 0, 1)
+        `)
+        yield* db.run(sql`
+          INSERT INTO session_prompt_epoch (
+            session_id, epoch, state, reason, created_at, authority_state
+          ) VALUES (
+            'provider-cross-upgrade-session', 0, 'active', 'bootstrap', 1, 'legacy_pending'
+          )
+        `)
+        yield* db.run(sql`
+          INSERT INTO session_activity (
+            activity_id, session_id, ordinal, trigger_input_id, delivery, state, created_at
+          ) VALUES ('provider-cross-upgrade-activity', 'provider-cross-upgrade-session', 0,
+                    'provider-cross-upgrade-input', 'steer', 'active', 1)
+        `)
+        yield* db.run(sql`
+          INSERT INTO context_location_identity (
+            security_namespace_id, location_key, project_scope_key,
+            canonical_root, observed_project_id, created_at
+          ) VALUES (
+            ${receiptNamespace}, 'provider-cross-upgrade-location', ${receiptProjectScope},
+            '/tmp/provider-cross-upgrade', 'provider-cross-upgrade-project', 1
+          )
+        `)
+        yield* db.run(sql`
+          INSERT INTO session_context_selection (
+            selection_id, session_id, activity_id, revision, trigger_input_id, location_key,
+            security_namespace_id, project_scope_key,
+            query_fingerprint, authorization_fingerprint, authorization_epoch,
+            execution_fingerprint, selected_source_fingerprint,
+            observed_location_mutation_epoch, next_revalidation_at,
+            released_knowledge_binding_state, released_knowledge_exact_refs,
+            released_knowledge_exact_refs_fingerprint,
+            graph_revisions, graph_statuses, selected_refs, projection,
+            projection_hash, token_count, artifact_write_status, inline_audit, created_at
+          ) VALUES (
+            'provider-cross-upgrade-selection', 'provider-cross-upgrade-session',
+            'provider-cross-upgrade-activity', 0, 'provider-cross-upgrade-input',
+            'provider-cross-upgrade-location', ${receiptNamespace}, ${receiptProjectScope},
+            'query', 'authorization', 1, 'execution', 'sources', 0, 100,
+            'unavailable', '[]', ${emptyReleasedRefsFingerprint}, '{}', '{}', '[]', 'projection',
+            'provider-cross-upgrade-projection', 1, 'degraded_unavailable', '{}', 1
+          )
+        `)
+        yield* db.run(sql`
+          INSERT INTO session_provider_owner_lease (
+            owner_token, registered_at, heartbeat_at, lease_expires_at
+          ) VALUES (
+            'provider-cross-upgrade-owner',
+            CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),
+            CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),
+            CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) + 10000
+          )
+        `)
+        yield* db.run(sql`
+          INSERT INTO session_provider_attempt (
+            attempt_id, session_id, activity_id, provider_turn_seq, selection_id,
+            projection_hash, request_hash, provider_id, owner_token, state, created_at
+          ) VALUES
+            ('provider-cross-upgrade-attempt-dispatching', 'provider-cross-upgrade-session',
+             'provider-cross-upgrade-activity', 0, 'provider-cross-upgrade-selection',
+             'provider-cross-upgrade-projection', ${wireRequestHash}, 'provider',
+             'provider-cross-upgrade-owner', 'prepared', 2),
+            ('provider-cross-upgrade-attempt-streaming', 'provider-cross-upgrade-session',
+             'provider-cross-upgrade-activity', 1, 'provider-cross-upgrade-selection',
+             'provider-cross-upgrade-projection', ${wireRequestHash}, 'provider',
+             'provider-cross-upgrade-owner', 'prepared', 2),
+            ('provider-cross-upgrade-attempt-settled', 'provider-cross-upgrade-session',
+             'provider-cross-upgrade-activity', 2, 'provider-cross-upgrade-selection',
+             'provider-cross-upgrade-projection', ${wireRequestHash}, 'provider',
+             'provider-cross-upgrade-owner', 'prepared', 2),
+            ('provider-cross-upgrade-attempt-failed', 'provider-cross-upgrade-session',
+             'provider-cross-upgrade-activity', 3, 'provider-cross-upgrade-selection',
+             'provider-cross-upgrade-projection', ${wireRequestHash}, 'provider',
+             'provider-cross-upgrade-owner', 'prepared', 2)
+        `)
+        yield* db.run(sql`
+          INSERT INTO session_tool_request_receipt (
+            receipt_id, request_ordinal, session_id, user_message_id,
+            provider_attempt_id, context_selection_id,
+            context_eligibility, context_readiness, context_activation, context_activation_fingerprint,
+            released_knowledge_security_namespace_id, released_knowledge_project_scope_key,
+            released_knowledge_binding_state, released_knowledge_exact_refs,
+            released_knowledge_exact_refs_fingerprint,
+            provider_id, model_id, registry_tool_ids, permission_filtered_tool_ids,
+            final_offered_tool_ids, call_ids, request_input_hash,
+            prompt_epoch, prompt_window_id, effective_history_hash,
+            request_state, provider_state, owner_token, created_at
+          ) VALUES
+            ('provider-cross-upgrade-receipt-dispatching', 1, 'provider-cross-upgrade-session',
+             'provider-cross-upgrade-input', 'provider-cross-upgrade-attempt-dispatching',
+             'provider-cross-upgrade-selection', '{}', '{}', '{}', lower(hex(zeroblob(32))),
+             ${receiptNamespace}, ${receiptProjectScope}, 'unavailable', '[]',
+             ${emptyReleasedRefsFingerprint}, 'provider', 'model', '[]', '[]', '[]', '[]',
+             ${wireRequestHash}, 0, 'provider-cross-upgrade-window', 'provider-cross-upgrade-history',
+             'prepared', 'preparing', 'provider-cross-upgrade-owner', 3),
+            ('provider-cross-upgrade-receipt-streaming', 2, 'provider-cross-upgrade-session',
+             'provider-cross-upgrade-input', 'provider-cross-upgrade-attempt-streaming',
+             'provider-cross-upgrade-selection', '{}', '{}', '{}', lower(hex(zeroblob(32))),
+             ${receiptNamespace}, ${receiptProjectScope}, 'unavailable', '[]',
+             ${emptyReleasedRefsFingerprint}, 'provider', 'model', '[]', '[]', '[]', '[]',
+             ${wireRequestHash}, 0, 'provider-cross-upgrade-window', 'provider-cross-upgrade-history',
+             'prepared', 'preparing', 'provider-cross-upgrade-owner', 3),
+            ('provider-cross-upgrade-receipt-settled', 3, 'provider-cross-upgrade-session',
+             'provider-cross-upgrade-input', 'provider-cross-upgrade-attempt-settled',
+             'provider-cross-upgrade-selection', '{}', '{}', '{}', lower(hex(zeroblob(32))),
+             ${receiptNamespace}, ${receiptProjectScope}, 'unavailable', '[]',
+             ${emptyReleasedRefsFingerprint}, 'provider', 'model', '[]', '[]', '[]', '[]',
+             ${wireRequestHash}, 0, 'provider-cross-upgrade-window', 'provider-cross-upgrade-history',
+             'prepared', 'preparing', 'provider-cross-upgrade-owner', 3),
+            ('provider-cross-upgrade-receipt-failed', 4, 'provider-cross-upgrade-session',
+             'provider-cross-upgrade-input', 'provider-cross-upgrade-attempt-failed',
+             'provider-cross-upgrade-selection', '{}', '{}', '{}', lower(hex(zeroblob(32))),
+             ${receiptNamespace}, ${receiptProjectScope}, 'unavailable', '[]',
+             ${emptyReleasedRefsFingerprint}, 'provider', 'model', '[]', '[]', '[]', '[]',
+             ${wireRequestHash}, 0, 'provider-cross-upgrade-window', 'provider-cross-upgrade-history',
+             'prepared', 'preparing', 'provider-cross-upgrade-owner', 3)
+        `)
+        yield* db.run(sql`
+          UPDATE session_tool_request_receipt
+          SET released_knowledge_selected_refs = '[]',
+              released_knowledge_selected_refs_fingerprint = ${emptyReleasedRefsFingerprint}
+          WHERE receipt_id LIKE 'provider-cross-upgrade-receipt-%'
+        `)
+        yield* db.run(sql`
+          UPDATE session_provider_attempt
+          SET prepared_turn_hash = ${preparedTurnHash}, wire_request_hash = ${wireRequestHash}
+          WHERE attempt_id LIKE 'provider-cross-upgrade-attempt-%'
+        `)
+        yield* db.run(sql`
+          UPDATE session_tool_request_receipt
+          SET provider_state = 'prepared', adapter_prepared_at = 4,
+              final_request_hash = ${wireRequestHash}, provider_request_hash = ${wireRequestHash},
+              prepared_turn_hash = ${preparedTurnHash}, system_stable_hash = ${systemStableHash},
+              system_volatile_hash = ${systemVolatileHash}, wire_request_hash = ${wireRequestHash},
+              tool_definition_hash = ${wireRequestHash}, tool_result_reference_ids = '[]',
+              tool_result_reference_count = 0
+          WHERE receipt_id LIKE 'provider-cross-upgrade-receipt-%'
+        `)
+        yield* db.run(sql`
+          UPDATE session_provider_attempt
+          SET state = 'dispatching'
+          WHERE attempt_id LIKE 'provider-cross-upgrade-attempt-%'
+        `)
+        yield* db.run(sql`
+          UPDATE session_provider_attempt
+          SET state = 'streaming', first_event_at = 5
+          WHERE attempt_id = 'provider-cross-upgrade-attempt-streaming'
+        `)
+        yield* db.run(sql`
+          UPDATE session_provider_attempt
+          SET state = 'settled', settled_at = 6
+          WHERE attempt_id = 'provider-cross-upgrade-attempt-settled'
+        `)
+        yield* db.run(sql`
+          UPDATE session_provider_attempt
+          SET state = 'failed', settled_at = 6, error_code = 'provider_failed'
+          WHERE attempt_id = 'provider-cross-upgrade-attempt-failed'
+        `)
+        yield* db.run(sql`
+          INSERT INTO compaction_run (
+            run_id, session_id, from_prompt_epoch, trigger, state, created_at,
+            source_window_id, source_effective_history_hash, source_message_count,
+            source_projection_version, continuation_wakeup_at,
+            continuation_state, continuation_receipt_id, continuation_admitted_at
+          ) VALUES (
+            'provider-cross-upgrade-continuation', 'provider-cross-upgrade-session', 0,
+            'turn_start', 'committed', 5, 'provider-cross-upgrade-window',
+            'provider-cross-upgrade-history', 1, 1, 5,
+            'admitted', 'provider-cross-upgrade-receipt-dispatching', 5
+          )
+        `)
+
+        const bindingTrigger = yield* db.get<{ sql: string }>(sql`
+          SELECT sql
+          FROM sqlite_master
+          WHERE type = 'trigger' AND name = 'session_tool_request_receipt_binding_immutable'
+        `)
+        expect(bindingTrigger).toBeDefined()
+        yield* db.run(sql`DROP TRIGGER session_tool_request_receipt_binding_immutable`)
+        yield* db.run(sql`
+          UPDATE session_tool_request_receipt
+          SET provider_id = 'mismatched-provider'
+          WHERE receipt_id = 'provider-cross-upgrade-receipt-dispatching'
+        `)
+
+        expect(
+          Exit.isFailure(
+            yield* DatabaseMigration.applyOnly(db, [providerCrossStateRecoveryMigration]).pipe(Effect.exit),
+          ),
+        ).toBe(true)
+        expect(
+          yield* db.get(sql`
+            SELECT provider_state, request_error_code, terminal_at
+            FROM session_tool_request_receipt
+            WHERE receipt_id = 'provider-cross-upgrade-receipt-dispatching'
+          `),
+        ).toEqual({ provider_state: "prepared", request_error_code: null, terminal_at: null })
+        expect(
+          yield* db.get(sql`
+            SELECT continuation_state, continuation_error_code
+            FROM compaction_run
+            WHERE run_id = 'provider-cross-upgrade-continuation'
+          `),
+        ).toEqual({ continuation_state: "admitted", continuation_error_code: null })
+        expect(
+          yield* db.get(sql`
+            SELECT authority_state, recovery_reason
+            FROM session_prompt_epoch
+            WHERE session_id = 'provider-cross-upgrade-session' AND state = 'active'
+          `),
+        ).toEqual({ authority_state: "legacy_pending", recovery_reason: null })
+        expect(
+          yield* db.get(sql`
+            SELECT name FROM sqlite_master
+            WHERE type = 'trigger' AND name = 'session_tool_request_receipt_cross_state_recovery_guard'
+          `),
+        ).toBeUndefined()
+
+        yield* db.run(sql`
+          UPDATE session_tool_request_receipt
+          SET provider_id = 'provider'
+          WHERE receipt_id = 'provider-cross-upgrade-receipt-dispatching'
+        `)
+        yield* db.run(sql.raw(bindingTrigger!.sql))
+        yield* DatabaseMigration.applyOnly(db, [providerCrossStateRecoveryMigration])
+        expect(
+          yield* db.all(sql`
+            SELECT provider_state, request_error_code, terminal_at
+            FROM session_tool_request_receipt
+            WHERE receipt_id LIKE 'provider-cross-upgrade-receipt-%'
+            ORDER BY request_ordinal
+          `),
+        ).toEqual(
+          Array.from({ length: 4 }, () => ({
+            provider_state: "indeterminate_after_crash",
+            request_error_code: "provider_started_outcome_unknown_after_process_restart",
+            terminal_at: expect.any(Number),
+          })),
+        )
+        expect(
+          yield* db.all(sql`
+            SELECT state, error_code, settled_at, first_event_at
+            FROM session_provider_attempt
+            WHERE attempt_id LIKE 'provider-cross-upgrade-attempt-%'
+            ORDER BY provider_turn_seq
+          `),
+        ).toEqual([
+          { state: "dispatching", error_code: null, settled_at: null, first_event_at: null },
+          { state: "streaming", error_code: null, settled_at: null, first_event_at: 5 },
+          { state: "settled", error_code: null, settled_at: 6, first_event_at: null },
+          { state: "failed", error_code: "provider_failed", settled_at: 6, first_event_at: null },
+        ])
+        expect(
+          yield* db.get(sql`
+            SELECT continuation_state, continuation_receipt_id, continuation_error_code,
+                   continuation_dispatching_at, continuation_terminal_at
+            FROM compaction_run
+            WHERE run_id = 'provider-cross-upgrade-continuation'
+          `),
+        ).toEqual({
+          continuation_state: "indeterminate",
+          continuation_receipt_id: "provider-cross-upgrade-receipt-dispatching",
+          continuation_error_code: "provider_started_outcome_unknown_after_process_restart",
+          continuation_dispatching_at: expect.any(Number),
+          continuation_terminal_at: expect.any(Number),
+        })
+        expect(
+          yield* db.get(sql`
+            SELECT authority_state, recovery_reason
+            FROM session_prompt_epoch
+            WHERE session_id = 'provider-cross-upgrade-session' AND state = 'active'
+          `),
+        ).toEqual({
+          authority_state: "recovery_required",
+          recovery_reason: "provider outcome is unknown after process restart",
+        })
+        expect(
+          yield* db.get(sql`
+            SELECT state, reason
+            FROM session_history_state
+            WHERE session_id = 'provider-cross-upgrade-session'
+          `),
+        ).toEqual({
+          state: "recovery_required",
+          reason: "provider outcome is unknown after process restart",
+        })
       }),
     )
   })
@@ -1208,6 +3268,595 @@ describe("DatabaseMigration", () => {
           "WHERE state IN ('admitted', 'provisioning', 'running', 'researching', 'finalizing')",
         )
         expect(activeIndex?.sql).not.toContain("'queued'")
+      }),
+    )
+  })
+
+  test("preserves unknown historical structured transport and backfills only exact receipts", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(sql`CREATE TABLE session (id TEXT PRIMARY KEY)`)
+        yield* db.run(sql`CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, data TEXT NOT NULL)`)
+        yield* db.run(sql`INSERT INTO session (id) VALUES ('ses_structured_parent')`)
+        yield* DatabaseMigration.applyOnly(db, [taskRunDeliveryMigration, subagentControlPlaneMigration])
+        yield* db.run(sql`
+          INSERT INTO task_run (
+            run_id, root_run_id, request_hash, parent_session_id, parent_message_id,
+            tool_call_id, child_session_id, generation, delivery_mode, phase, state,
+            reason, attempts, raw_result_message_id, structured_result_message_id, output,
+            time_created, time_updated, time_settled
+          ) VALUES
+          (
+            'run_structured', 'run_structured', 'request-structured', 'ses_structured_parent',
+            'msg-structured-parent', 'call-structured', 'ses-structured-child', 1, 'foreground',
+            'settled', 'completed', 'structured_output_valid', 1, 'msg-structured-research',
+            'msg-structured-result',
+            '{"result":"ok"}', 100, 110, 110
+          ),
+          (
+            'run_text_fallback', 'run_text_fallback', 'request-text', 'ses_structured_parent',
+            'msg-text-parent', 'call-text', 'ses-text-child', 1, 'foreground',
+            'settled', 'completed', 'structured_output_text_fallback', 2, 'msg-text-research', 'msg-text-result',
+            '{"result":"ok"}', 100, 120, 120
+          ),
+          (
+            'run_degraded', 'run_degraded', 'request-degraded', 'ses_structured_parent',
+            'msg-degraded-parent', 'call-degraded', 'ses-degraded-child', 1, 'foreground',
+            'settled', 'completed', 'structured_output_degraded_text', 2, 'msg-degraded-research', NULL,
+            '{"_degraded":true,"_reason":"structured_output_invalid","_attempts":2,"_raw":"research"}',
+            100, 130, 130
+          )
+        `)
+        yield* db.run(sql`
+          INSERT INTO message (id, session_id, data) VALUES
+            ('msg-text-research', 'ses-text-child', '{"role":"assistant"}'),
+            ('msg-text-result', 'ses-text-child', '{"role":"assistant"}'),
+            ('msg-degraded-research', 'ses-degraded-child', '{"role":"assistant"}')
+        `)
+
+        yield* DatabaseMigration.applyOnly(db, [
+          taskStructuredOutputReceiptSchemaMigration,
+          taskStructuredOutputReceiptMigration,
+        ])
+
+        expect(
+          yield* db.all(sql`
+            SELECT run_id, structured_output_receipt
+            FROM task_run
+            ORDER BY run_id
+          `),
+        ).toEqual([
+          {
+            run_id: "run_degraded",
+            structured_output_receipt: '{"attempt":2,"transport":"degraded_text","reason":"structured_output_invalid"}',
+          },
+          { run_id: "run_structured", structured_output_receipt: null },
+          { run_id: "run_text_fallback", structured_output_receipt: '{"attempt":2,"transport":"text_fallback"}' },
+        ])
+        expect(
+          Exit.isFailure(
+            yield* db
+              .run(
+                sql`
+                UPDATE task_run
+                SET structured_output_receipt = '{"attempt":1,"transport":"structured"}'
+                WHERE run_id = 'run_degraded'
+              `,
+              )
+              .pipe(Effect.exit),
+          ),
+        ).toBe(true)
+        expect(
+          Exit.isFailure(
+            yield* db
+              .run(
+                sql`
+                UPDATE task_run
+                SET output = '{"result":"changed"}'
+                WHERE run_id = 'run_structured'
+              `,
+              )
+              .pipe(Effect.exit),
+          ),
+        ).toBe(true)
+        expect(
+          Exit.isFailure(
+            yield* db
+              .run(
+                sql`
+                UPDATE task_run
+                SET time_updated = time_updated + 1
+                WHERE run_id = 'run_structured'
+              `,
+              )
+              .pipe(Effect.exit),
+          ),
+        ).toBe(false)
+        expect(
+          Exit.isFailure(
+            yield* db
+              .run(
+                sql`
+                UPDATE task_run
+                SET reason = 'structured_output_text_fallback'
+                WHERE run_id = 'run_structured'
+              `,
+              )
+              .pipe(Effect.exit),
+          ),
+        ).toBe(true)
+        expect(
+          Exit.isFailure(
+            yield* db
+              .run(
+                sql`
+                INSERT INTO task_run (
+                  run_id, root_run_id, request_hash, parent_session_id, parent_message_id,
+                  tool_call_id, child_session_id, generation, delivery_mode, phase, state,
+                  reason, attempts, structured_result_message_id, structured_output_receipt,
+                  time_created, time_updated, time_settled
+                ) VALUES (
+                  'run_invalid_receipt', 'run_invalid_receipt', 'request-invalid',
+                  'ses_structured_parent', 'msg-invalid-parent', 'call-invalid',
+                  'ses-invalid-child', 1, 'foreground', 'settled', 'completed',
+                  'structured_output_text_fallback', 2, 'msg-invalid-result',
+                  '{"attempt":1,"transport":"text_fallback"}', 100, 140, 140
+                )
+              `,
+              )
+              .pipe(Effect.exit),
+          ),
+        ).toBe(true)
+      }),
+    )
+  })
+
+  test("rejects ambiguous historical task structured output receipts", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(sql`CREATE TABLE session (id TEXT PRIMARY KEY)`)
+        yield* db.run(sql`CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, data TEXT NOT NULL)`)
+        yield* db.run(sql`INSERT INTO session (id) VALUES ('ses_ambiguous_structured_parent')`)
+        yield* DatabaseMigration.applyOnly(db, [taskRunDeliveryMigration, subagentControlPlaneMigration])
+        yield* db.run(sql`
+          INSERT INTO task_run (
+            run_id, root_run_id, request_hash, parent_session_id, parent_message_id,
+            tool_call_id, child_session_id, generation, delivery_mode, phase, state,
+            reason, attempts, structured_result_message_id, output,
+            time_created, time_updated, time_settled
+          ) VALUES (
+            'run_ambiguous_degraded', 'run_ambiguous_degraded', 'request-ambiguous',
+            'ses_ambiguous_structured_parent', 'msg-ambiguous-parent', 'call-ambiguous',
+            'ses-ambiguous-child', 1, 'foreground', 'settled', 'completed',
+            'structured_output_degraded_text', 2, NULL,
+            '{"_degraded":true,"_attempts":2,"_raw":"research"}', 100, 110, 110
+          )
+        `)
+
+        yield* DatabaseMigration.applyOnly(db, [taskStructuredOutputReceiptSchemaMigration])
+        expect(
+          Exit.isFailure(
+            yield* DatabaseMigration.applyOnly(db, [taskStructuredOutputReceiptMigration]).pipe(Effect.exit),
+          ),
+        ).toBe(true)
+        expect(
+          yield* db.all(sql`
+            SELECT name FROM pragma_table_info('task_run')
+            WHERE name = 'structured_output_receipt'
+          `),
+        ).toEqual([{ name: "structured_output_receipt" }])
+        expect(
+          yield* db.get(sql`
+            SELECT structured_output_receipt
+            FROM task_run
+            WHERE run_id = 'run_ambiguous_degraded'
+          `),
+        ).toEqual({ structured_output_receipt: null })
+      }),
+    )
+  })
+
+  test("freezes durable task structured contracts and binds new terminal receipts", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(sql`CREATE TABLE session (id TEXT PRIMARY KEY)`)
+        yield* db.run(sql`CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, data TEXT NOT NULL)`)
+        yield* db.run(sql`INSERT INTO session (id) VALUES ('ses_execution_spec_parent')`)
+        yield* DatabaseMigration.applyOnly(db, [taskRunDeliveryMigration, subagentControlPlaneMigration])
+        yield* db.run(sql`
+          INSERT INTO task_run (
+            run_id, root_run_id, request_hash, parent_session_id, parent_message_id,
+            tool_call_id, child_session_id, generation, delivery_mode, phase, state,
+            execution_spec, time_created, time_updated
+          ) VALUES (
+            'run_invalid_execution_spec', 'run_invalid_execution_spec', 'request-invalid-spec',
+            'ses_execution_spec_parent', 'msg-invalid-spec-parent', 'call-invalid-spec',
+            'ses-invalid-spec-child', 1, 'foreground', 'admission', 'admitted',
+            '{"structuredOutput":{"schema":{},"allowTextFallback":true,"receiptVersion":1,"maxAttempts":3}}',
+            100, 100
+          )
+        `)
+        yield* DatabaseMigration.applyOnly(db, [taskStructuredOutputReceiptSchemaMigration])
+        yield* DatabaseMigration.applyOnly(db, [taskStructuredOutputReceiptMigration])
+
+        expect(
+          Exit.isFailure(
+            yield* DatabaseMigration.applyOnly(db, [taskExecutionSpecAuthorityMigration]).pipe(Effect.exit),
+          ),
+        ).toBe(true)
+        expect(
+          yield* db.get(sql`
+            SELECT json_extract(execution_spec, '$.structuredOutput.maxAttempts') AS max_attempts
+            FROM task_run
+            WHERE run_id = 'run_invalid_execution_spec'
+          `),
+        ).toEqual({ max_attempts: 3 })
+        expect(
+          yield* db.get(sql`
+            SELECT name
+            FROM sqlite_master
+            WHERE type = 'trigger' AND name = 'task_run_execution_spec_immutable'
+          `),
+        ).toBeUndefined()
+
+        yield* db.run(sql`
+          UPDATE task_run
+          SET execution_spec = '{"agent":"researcher","model":{"providerID":"test","modelID":"test"},"structuredOutput":{"schema":{"type":"object"},"allowTextFallback":true,"receiptVersion":1,"maxAttempts":2}}'
+          WHERE run_id = 'run_invalid_execution_spec'
+        `)
+        yield* db.run(sql`
+          INSERT INTO message (id, session_id, data) VALUES
+            ('msg-valid-research', 'ses-invalid-spec-child', '{"role":"assistant"}'),
+            ('msg-valid-result', 'ses-invalid-spec-child', '{"role":"assistant"}'),
+            ('msg-fallback-research', 'ses-no-fallback-child', '{"role":"assistant"}'),
+            ('msg-fallback-result', 'ses-no-fallback-child', '{"role":"assistant"}')
+        `)
+        yield* db.run(sql`
+          INSERT INTO task_run (
+            run_id, root_run_id, request_hash, parent_session_id, parent_message_id,
+            tool_call_id, child_session_id, generation, delivery_mode, phase, state,
+            execution_spec, time_created, time_updated
+          ) VALUES
+          (
+            'run_contract_requires_receipt', 'run_contract_requires_receipt', 'request-contract-receipt',
+            'ses_execution_spec_parent', 'msg-contract-parent', 'call-contract-receipt',
+            'ses-contract-child', 1, 'foreground', 'admission', 'admitted',
+            '{"agent":"researcher","model":{"providerID":"test","modelID":"test"},"structuredOutput":{"schema":{"type":"object"},"allowTextFallback":true,"receiptVersion":1,"maxAttempts":2}}',
+            100, 100
+          ),
+          (
+            'run_contract_disallows_fallback', 'run_contract_disallows_fallback', 'request-no-fallback',
+            'ses_execution_spec_parent', 'msg-no-fallback-parent', 'call-no-fallback',
+            'ses-no-fallback-child', 1, 'foreground', 'admission', 'admitted',
+            '{"agent":"researcher","model":{"providerID":"test","modelID":"test"},"structuredOutput":{"schema":{"type":"object"},"allowTextFallback":false,"receiptVersion":1,"maxAttempts":2}}',
+            100, 100
+          ),
+          (
+            'run_historical_contract', 'run_historical_contract', 'request-historical-contract',
+            'ses_execution_spec_parent', 'msg-historical-parent', 'call-historical-contract',
+            'ses-historical-child', 1, 'foreground', 'settled', 'completed',
+            '{"agent":"researcher","model":{"providerID":"test","modelID":"test"},"structuredOutput":{"schema":{"type":"object"},"allowTextFallback":true,"receiptVersion":1,"maxAttempts":2}}',
+            100, 200
+          )
+        `)
+        yield* db.run(sql`
+          UPDATE task_run
+          SET reason = 'text_output_valid', attempts = 1, time_settled = 200
+          WHERE run_id = 'run_historical_contract'
+        `)
+        yield* DatabaseMigration.applyOnly(db, [taskExecutionSpecAuthorityMigration])
+
+        expect(
+          Exit.isFailure(
+            yield* db
+              .run(
+                sql`
+                UPDATE task_run
+                SET execution_spec = '{"agent":"researcher","model":{"providerID":"test","modelID":"test"},"structuredOutput":{"schema":{"type":"array"},"allowTextFallback":true,"receiptVersion":1,"maxAttempts":2}}'
+                WHERE run_id = 'run_invalid_execution_spec'
+              `,
+              )
+              .pipe(Effect.exit),
+          ),
+        ).toBe(true)
+        expect(
+          Exit.isFailure(
+            yield* db
+              .run(
+                sql`
+                UPDATE task_run
+                SET phase = 'settled', state = 'completed', reason = 'text_output_valid',
+                  attempts = 1, output = 'plain text', time_settled = 200, time_updated = 200
+                WHERE run_id = 'run_contract_requires_receipt'
+              `,
+              )
+              .pipe(Effect.exit),
+          ),
+        ).toBe(true)
+        expect(
+          Exit.isFailure(
+            yield* db
+              .run(
+                sql`
+                UPDATE task_run
+                SET phase = 'settled', state = 'completed', reason = 'structured_output_text_fallback',
+                  attempts = 2, raw_result_message_id = 'msg-fallback-research',
+                  structured_result_message_id = 'msg-fallback-result',
+                  structured_output_receipt = '{"attempt":2,"transport":"text_fallback"}',
+                  time_settled = 200, time_updated = 200
+                WHERE run_id = 'run_contract_disallows_fallback'
+              `,
+              )
+              .pipe(Effect.exit),
+          ),
+        ).toBe(true)
+        expect(
+          Exit.isFailure(
+            yield* db
+              .run(
+                sql`
+                UPDATE task_run SET time_updated = 201
+                WHERE run_id = 'run_historical_contract'
+              `,
+              )
+              .pipe(Effect.exit),
+          ),
+        ).toBe(false)
+        expect(
+          Exit.isFailure(
+            yield* db
+              .run(
+                sql`
+                UPDATE task_run
+                SET output = 'historical terminal payload cannot be rewritten'
+                WHERE run_id = 'run_historical_contract'
+              `,
+              )
+              .pipe(Effect.exit),
+          ),
+        ).toBe(true)
+        expect(
+          Exit.isFailure(
+            yield* db
+              .run(
+                sql`
+                UPDATE task_run
+                SET reason = 'structured_output_valid', structured_result_message_id = 'msg-inferred',
+                  structured_output_receipt = '{"attempt":1,"transport":"structured"}'
+                WHERE run_id = 'run_historical_contract'
+              `,
+              )
+              .pipe(Effect.exit),
+          ),
+        ).toBe(true)
+        expect(
+          Exit.isFailure(
+            yield* db
+              .run(
+                sql`
+                UPDATE task_run
+                SET phase = 'settled', state = 'completed', reason = 'structured_output_valid',
+                  attempts = 1, raw_result_message_id = 'msg-valid-research',
+                  structured_result_message_id = 'msg-valid-result',
+                  structured_output_receipt = '{"attempt":1,"transport":"structured"}',
+                  time_settled = 200, time_updated = 200
+                WHERE run_id = 'run_invalid_execution_spec'
+              `,
+              )
+              .pipe(Effect.exit),
+          ),
+        ).toBe(false)
+        expect(
+          Exit.isFailure(
+            yield* db
+              .run(
+                sql`
+                UPDATE task_run
+                SET output = '{"result":"rewritten"}'
+                WHERE run_id = 'run_invalid_execution_spec'
+              `,
+              )
+              .pipe(Effect.exit),
+          ),
+        ).toBe(true)
+        expect(
+          Exit.isFailure(
+            yield* db
+              .run(
+                sql`
+                INSERT INTO task_run (
+                  run_id, root_run_id, request_hash, parent_session_id, parent_message_id,
+                  tool_call_id, child_session_id, generation, delivery_mode, phase, state,
+                  reason, attempts, structured_result_message_id, structured_output_receipt,
+                  time_created, time_updated, time_settled
+                ) VALUES (
+                  'run_unbound_receipt', 'run_unbound_receipt', 'request-unbound-receipt',
+                  'ses_execution_spec_parent', 'msg-unbound-parent', 'call-unbound-receipt',
+                  'ses-unbound-child', 1, 'foreground', 'settled', 'completed',
+                  'structured_output_valid', 1, 'msg-unbound-result',
+                  '{"attempt":1,"transport":"structured"}', 100, 200, 200
+                )
+              `,
+              )
+              .pipe(Effect.exit),
+          ),
+        ).toBe(true)
+        expect(
+          Exit.isFailure(
+            yield* db
+              .run(
+                sql`
+                INSERT INTO task_run (
+                  run_id, root_run_id, request_hash, parent_session_id, parent_message_id,
+                  tool_call_id, child_session_id, generation, delivery_mode, phase, state,
+                  execution_spec, time_created, time_updated
+                ) VALUES (
+                  'run_invalid_new_spec', 'run_invalid_new_spec', 'request-invalid-new-spec',
+                  'ses_execution_spec_parent', 'msg-invalid-new-parent', 'call-invalid-new-spec',
+                  'ses-invalid-new-child', 1, 'foreground', 'admission', 'admitted',
+                  '{"structuredOutput":{"schema":{},"allowTextFallback":1,"receiptVersion":1,"maxAttempts":2}}',
+                  300, 300
+                )
+              `,
+              )
+              .pipe(Effect.exit),
+          ),
+        ).toBe(true)
+        expect(
+          Exit.isFailure(
+            yield* db
+              .run(
+                sql`
+                INSERT INTO task_run (
+                  run_id, root_run_id, request_hash, parent_session_id, parent_message_id,
+                  tool_call_id, child_session_id, generation, delivery_mode, phase, state,
+                  execution_spec, time_created, time_updated
+                ) VALUES (
+                  'run_missing_structured_identity', 'run_missing_structured_identity',
+                  'request-missing-structured-identity', 'ses_execution_spec_parent',
+                  'msg-missing-structured-identity-parent', 'call-missing-structured-identity',
+                  'ses-missing-structured-identity-child', 1, 'foreground', 'admission', 'admitted',
+                  '{"structuredOutput":{"schema":{},"allowTextFallback":true,"receiptVersion":1,"maxAttempts":2}}',
+                  300, 300
+                )
+              `,
+              )
+              .pipe(Effect.exit),
+          ),
+        ).toBe(true)
+      }),
+    )
+  })
+
+  test("rejects pre-authority structured evidence and binds exact material snapshots", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        const authorityIndex = migrations.findIndex(
+          (migration) => migration.id === taskStructuredOutputEvidenceAuthorityMigration.id,
+        )
+        expect(authorityIndex).toBeGreaterThan(0)
+        yield* DatabaseMigration.applyOnly(db, migrations.slice(0, authorityIndex))
+        const now = Date.now()
+        yield* db.run(sql`
+          INSERT INTO project (id, worktree, sandboxes, time_created, time_updated)
+          VALUES ('project-evidence', '/project-evidence', '[]', ${now}, ${now})
+        `)
+        yield* db.run(sql`
+          INSERT INTO session (
+            id, project_id, slug, directory, title, version, time_created, time_updated
+          ) VALUES
+            ('session-evidence-parent', 'project-evidence', 'parent', '/project-evidence', 'parent', 'test', ${now}, ${now}),
+            ('session-evidence-child', 'project-evidence', 'child', '/project-evidence', 'child', 'test', ${now}, ${now})
+        `)
+        yield* db.run(sql`
+          INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES
+            ('message-evidence-raw', 'session-evidence-child', ${now}, ${now}, '{"role":"assistant"}'),
+            ('message-evidence-result', 'session-evidence-child', ${now}, ${now}, '{"role":"assistant"}')
+        `)
+        yield* db.run(sql`
+          INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES
+            ('part-evidence-raw', 'message-evidence-raw', 'session-evidence-child', ${now}, ${now},
+              '{"type":"text","text":"research"}'),
+            ('part-evidence-result', 'message-evidence-result', 'session-evidence-child', ${now}, ${now},
+              '{"type":"text","text":"{\\"result\\":\\"ok\\"}"}')
+        `)
+        const contract = '{"schema":{"type":"object"},"allowTextFallback":true,"receiptVersion":1,"maxAttempts":2}'
+        yield* db.run(sql`
+          INSERT INTO task_run (
+            run_id, root_run_id, request_hash, parent_session_id, parent_message_id,
+            tool_call_id, child_session_id, generation, delivery_mode, phase, state,
+            attempts, execution_owner, lease_expires_at, execution_spec, version,
+            time_created, time_updated
+          ) VALUES (
+            'run-evidence', 'run-evidence', 'request-evidence', 'session-evidence-parent',
+            'message-evidence-parent', 'call-evidence', 'session-evidence-child', 1,
+            'foreground', 'finalize', 'finalizing', 1, 'evidence-owner', ${now + 60_000},
+            ${`{"prompt":{"text":"inspect"},"agent":"researcher","model":{"providerID":"test","modelID":"test"},"structuredOutput":${contract}}`},
+            3, ${now}, ${now}
+          )
+        `)
+        const preAuthorityInsert = yield* db
+          .run(
+            sql`
+          INSERT INTO task_structured_output_evidence (
+            run_id, child_session_id, owner_token, claim_generation, expected_version,
+            terminal_state, attempts, contract_json, raw_result_message_id, raw_message_json,
+            raw_parts_json, result_message_id, result_message_json, result_parts_json,
+            output, structured_output_receipt, failure_code, created_at
+          ) VALUES (
+            'run-evidence', 'session-evidence-child', 'evidence-owner', 0, 3,
+            'completed', 1, ${contract}, 'message-evidence-raw', '{"role":"assistant"}',
+            '[]', 'message-evidence-result', '{"role":"assistant"}', '[]',
+            '{"result":"ok"}', '{"attempt":1,"transport":"structured"}', NULL, ${now}
+          )
+        `,
+          )
+          .pipe(Effect.exit)
+        expect(Exit.isSuccess(preAuthorityInsert)).toBe(true)
+
+        expect(
+          Exit.isFailure(
+            yield* DatabaseMigration.applyOnly(db, [taskStructuredOutputEvidenceAuthorityMigration]).pipe(Effect.exit),
+          ),
+        ).toBe(true)
+        expect(
+          yield* db.get(sql`
+            SELECT name FROM sqlite_master
+            WHERE type = 'trigger' AND name = 'task_structured_output_evidence_insert_guard'
+          `),
+        ).toBeUndefined()
+
+        yield* db.run(sql`DELETE FROM task_structured_output_evidence WHERE run_id = 'run-evidence'`)
+        yield* DatabaseMigration.applyOnly(db, [taskStructuredOutputEvidenceAuthorityMigration])
+        yield* db.run(sql`
+          INSERT INTO task_structured_output_evidence (
+            run_id, child_session_id, owner_token, claim_generation, expected_version,
+            terminal_state, attempts, contract_json, raw_result_message_id, raw_message_json,
+            raw_parts_json, result_message_id, result_message_json, result_parts_json,
+            output, structured_output_receipt, failure_code, created_at
+          ) VALUES (
+            'run-evidence', 'session-evidence-child', 'evidence-owner', 0, 3,
+            'completed', 1, ${contract}, 'message-evidence-raw', '{"role":"assistant"}',
+            '[]', 'message-evidence-result', '{"role":"assistant"}', '[]',
+            '{"result":"ok"}', '{"attempt":1,"transport":"structured"}', NULL, ${now}
+          )
+        `)
+        yield* db.run(sql`
+          INSERT INTO task_structured_output_evidence_part (
+            run_id, role, ordinal, part_id, message_id, session_id, part_json
+          ) VALUES
+            ('run-evidence', 'raw', 0, 'part-evidence-raw', 'message-evidence-raw',
+              'session-evidence-child', '{"type":"text","text":"research"}'),
+            ('run-evidence', 'result', 0, 'part-evidence-result', 'message-evidence-result',
+              'session-evidence-child', '{"type":"text","text":"{\\"result\\":\\"ok\\"}"}')
+        `)
+        expect(
+          Exit.isFailure(
+            yield* db
+              .run(
+                sql`
+                UPDATE task_run SET
+                  phase = 'settled', state = 'completed', reason = 'structured_output_valid', attempts = 1,
+                  raw_result_message_id = 'message-evidence-raw',
+                  structured_result_message_id = 'message-evidence-result',
+                  structured_output_receipt = '{"attempt":1,"transport":"structured"}',
+                  output = '{"result":"ok"}', execution_owner = NULL, lease_expires_at = NULL,
+                  version = 4, time_updated = ${now + 1}, time_settled = ${now + 1}
+                WHERE run_id = 'run-evidence'
+              `,
+              )
+              .pipe(Effect.exit),
+          ),
+        ).toBe(true)
+        expect(yield* db.get(sql`SELECT state, phase, version FROM task_run WHERE run_id = 'run-evidence'`)).toEqual({
+          state: "finalizing",
+          phase: "finalize",
+          version: 3,
+        })
       }),
     )
   })
@@ -1995,3 +4644,33 @@ describe("DatabaseMigration", () => {
     )
   })
 })
+
+function seedReceiptScope(db: Database.Interface["db"]) {
+  return Effect.gen(function* () {
+    yield* db.run(sql`
+      INSERT INTO context_security_namespace (id, kind, binding_hash, created_at)
+      VALUES (${receiptNamespace}, 'implicit_local', 'receipt-namespace-binding', 1)
+    `)
+    yield* db.run(sql`
+      INSERT INTO context_project_scope_identity (
+        security_namespace_id, project_scope_key, project_kind, project_identity_hash, created_at
+      ) VALUES (
+        ${receiptNamespace}, ${receiptProjectScope}, 'registered_root', 'receipt-project-identity', 1
+      )
+    `)
+  })
+}
+
+function contextActivation(recordedAt: number, selectionId?: string, projectionHash?: string) {
+  return JSON.stringify({
+    schemaVersion: 1,
+    recordedAt,
+    readinessAgeMs: recordedAt,
+    readinessExpiresInMs: contextReadiness.expiresAt - recordedAt,
+    outcome: "not_requested",
+    enabledCapabilities: [],
+    fallbackReasons: [],
+    decision: contextEligibility,
+    ...(selectionId && projectionHash ? { selection: { selectionId, projectionHash } } : {}),
+  })
+}
