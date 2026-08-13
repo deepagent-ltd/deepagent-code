@@ -11,6 +11,7 @@ import {
   listEnvFacts,
   decideEnvFact,
   modifyEnvFact,
+  reviewAuthorityKey,
   type KnowledgeItem,
   type ReviewClient,
   type EnvFactItem,
@@ -25,6 +26,7 @@ export {
   listEnvFacts,
   decideEnvFact,
   modifyEnvFact,
+  reviewAuthorityKey,
   type KnowledgeItem,
   type ReviewClient,
   type EnvFactBody,
@@ -187,33 +189,36 @@ export const DialogReview: Component<{ client: ReviewClient }> = (props) => {
     setCollapsed(next)
   }
 
-  const toggle = (id: string) => {
+  const toggle = (item: KnowledgeItem) => {
+    const id = reviewAuthorityKey(item)
     const next = new Set<string>(selected())
     if (next.has(id)) next.delete(id)
     else next.add(id)
     setSelected(next)
   }
-  const selectAll = () => setSelected(new Set(pending().map((i) => i.id)))
+  const selectAll = () => setSelected(new Set(pending().map(reviewAuthorityKey)))
   const invert = () => {
     const cur = selected()
     setSelected(
       new Set(
         pending()
-          .map((i) => i.id)
+          .map(reviewAuthorityKey)
           .filter((id) => !cur.has(id)),
       ),
     )
   }
 
   const apply = async (action: "approve" | "reject-ids") => {
-    const ids = [...selected()]
-    if (ids.length === 0 || busy()) return
+    const decisions = (items() ?? []).filter((item) => selected().has(reviewAuthorityKey(item)))
+    if (decisions.length === 0 || busy()) return
     setBusy(true)
     try {
-      await setStatus(props.client, action, ids)
+      await Promise.all(decisions.map((item) => setStatus(props.client, action, item)))
       setSelected(new Set<string>())
       await refetch()
     } catch (error) {
+      setSelected(new Set<string>())
+      await refetch()
       showToast({
         variant: "error",
         title: language.t("review.title"),
@@ -225,14 +230,14 @@ export const DialogReview: Component<{ client: ReviewClient }> = (props) => {
   }
 
   const Row = (item: KnowledgeItem) => {
-    const checked = createMemo(() => selected().has(item.id))
+    const checked = createMemo(() => selected().has(reviewAuthorityKey(item)))
     return (
       <label
         data-action="review-item"
         data-status={item.approval_status}
         class="flex cursor-pointer items-start gap-3 border-b border-v2-border-border-muted px-3 py-2.5 last:border-b-0 hover:bg-v2-background-bg-layer-01"
       >
-        <input type="checkbox" class="mt-0.5" checked={checked()} onChange={() => toggle(item.id)} />
+        <input type="checkbox" class="mt-0.5" checked={checked()} onChange={() => toggle(item)} />
         <div class="flex min-w-0 flex-1 flex-col gap-0.5">
           <span class="break-words text-13-medium text-v2-text-text-base">{item.summary}</span>
           <span class="break-words text-11-regular text-v2-text-text-faint">
@@ -393,7 +398,9 @@ export const DialogReview: Component<{ client: ReviewClient }> = (props) => {
                     </label>
                   </div>
                   <span class="text-11-regular text-v2-text-text-faint">
-                    {language.t(d.mode === "global" ? "review.envFacts.scope.globalHint" : "review.envFacts.scope.projectHint")}
+                    {language.t(
+                      d.mode === "global" ? "review.envFacts.scope.globalHint" : "review.envFacts.scope.projectHint",
+                    )}
                   </span>
                 </div>
                 <div class="flex items-center justify-end gap-2">
