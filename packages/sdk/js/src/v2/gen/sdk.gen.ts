@@ -88,6 +88,8 @@ import type {
   DeepagentKnowledgeRejectIdsErrors,
   DeepagentKnowledgeRejectIdsResponses,
   DeepagentKnowledgeRejectResponses,
+  DeepagentKnowledgeReleaseBaselineErrors,
+  DeepagentKnowledgeReleaseBaselineResponses,
   DeepagentKnowledgeReviewSummaryErrors,
   DeepagentKnowledgeReviewSummaryResponses,
   DeepagentKnowledgeShipGateErrors,
@@ -2406,15 +2408,21 @@ export class Knowledge extends HeyApiClient {
   }
 
   /**
-   * Approve DeepAgent knowledge by id
+   * Approve an exact DeepAgent knowledge revision
    *
-   * Flag durable knowledge entries as approved (retrievable). Reversible; does not move files.
+   * Append an approved governance revision only when the selected store, document revision, candidate identity, fingerprint, and governance revision still match.
    */
   public approve<ThrowOnError extends boolean = false>(
     parameters: {
       directory?: string
       workspace?: string
-      ids: Array<string>
+      sourceStore: "user_global" | "project"
+      id: string
+      version: number
+      hash: string
+      candidateId: string
+      fingerprint: string
+      expectedGovernanceRevision: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -2425,7 +2433,13 @@ export class Knowledge extends HeyApiClient {
           args: [
             { in: "query", key: "directory" },
             { in: "query", key: "workspace" },
-            { in: "body", key: "ids" },
+            { in: "body", key: "sourceStore" },
+            { in: "body", key: "id" },
+            { in: "body", key: "version" },
+            { in: "body", key: "hash" },
+            { in: "body", key: "candidateId" },
+            { in: "body", key: "fingerprint" },
+            { in: "body", key: "expectedGovernanceRevision" },
           ],
         },
       ],
@@ -2447,15 +2461,21 @@ export class Knowledge extends HeyApiClient {
   }
 
   /**
-   * Reject DeepAgent knowledge by id
+   * Reject an exact DeepAgent knowledge revision
    *
-   * Flag durable knowledge entries as rejected (not retrievable). Reversible; does not move files.
+   * Append a rejected governance revision only when the exact review authority still matches, then publish a new released head without that exact revision when it was released.
    */
   public rejectIds<ThrowOnError extends boolean = false>(
     parameters: {
       directory?: string
       workspace?: string
-      ids: Array<string>
+      sourceStore: "user_global" | "project"
+      id: string
+      version: number
+      hash: string
+      candidateId: string
+      fingerprint: string
+      expectedGovernanceRevision: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -2466,7 +2486,13 @@ export class Knowledge extends HeyApiClient {
           args: [
             { in: "query", key: "directory" },
             { in: "query", key: "workspace" },
-            { in: "body", key: "ids" },
+            { in: "body", key: "sourceStore" },
+            { in: "body", key: "id" },
+            { in: "body", key: "version" },
+            { in: "body", key: "hash" },
+            { in: "body", key: "candidateId" },
+            { in: "body", key: "fingerprint" },
+            { in: "body", key: "expectedGovernanceRevision" },
           ],
         },
       ],
@@ -2488,23 +2514,25 @@ export class Knowledge extends HeyApiClient {
   }
 
   /**
-   * Run the ablation regression ship gate
+   * Create the initial released knowledge baseline
    *
-   * CI/eval posts measured per-group/per-task metrics; if MAX regresses vs HIGH the candidate refs are demoted (rejected) so misleading knowledge cannot ship (docs/30 §7).
+   * One-time explicit cutover that binds exact durable document revisions. It fails when a released head already exists.
    */
-  public shipGate<ThrowOnError extends boolean = false>(
+  public releaseBaseline<ThrowOnError extends boolean = false>(
     parameters: {
       directory?: string
       workspace?: string
-      tasks: Array<string>
-      metrics: Array<{
-        group: "general" | "high" | "max"
-        task: string
-        metric: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      snapshotId: string
+      evaluationId: string
+      candidateRefs: Array<{
+        sourceStore: "user_global" | "project"
+        id: string
+        version: number
+        hash: string
+        type: "knowledge" | "strategy" | "methodology" | "memory" | "skill"
+        scope: string
       }>
-      candidateRefs: Array<string>
-      tolerance?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-      repeats?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      baselineRef: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -2515,6 +2543,75 @@ export class Knowledge extends HeyApiClient {
           args: [
             { in: "query", key: "directory" },
             { in: "query", key: "workspace" },
+            { in: "body", key: "snapshotId" },
+            { in: "body", key: "evaluationId" },
+            { in: "body", key: "candidateRefs" },
+            { in: "body", key: "baselineRef" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      DeepagentKnowledgeReleaseBaselineResponses,
+      DeepagentKnowledgeReleaseBaselineErrors,
+      ThrowOnError
+    >({
+      url: "/deepagent/knowledge/release-baseline",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Run the ablation regression ship gate
+   *
+   * CI/eval posts measured per-group/per-task metrics; PASS advances the immutable release head, while FAIL preserves the previous passed snapshot and document governance.
+   */
+  public shipGate<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      snapshotId: string
+      evaluationId: string
+      expectedParent: {
+        snapshotId: string
+        generation: number
+        membershipHash: string
+      }
+      tasks: Array<string>
+      metrics: Array<{
+        group: "general" | "high" | "max"
+        task: string
+        metric: number
+      }>
+      candidateRefs: Array<{
+        sourceStore: "user_global" | "project"
+        id: string
+        version: number
+        hash: string
+        type: "knowledge" | "strategy" | "methodology" | "memory" | "skill"
+        scope: string
+      }>
+      tolerance?: number
+      repeats?: 1
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "snapshotId" },
+            { in: "body", key: "evaluationId" },
+            { in: "body", key: "expectedParent" },
             { in: "body", key: "tasks" },
             { in: "body", key: "metrics" },
             { in: "body", key: "candidateRefs" },

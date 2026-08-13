@@ -50,6 +50,22 @@ export type Event =
   | EventSessionNextCompactionStarted
   | EventSessionNextCompactionDelta
   | EventSessionNextCompactionEnded
+  | EventAccountAdded
+  | EventAccountRemoved
+  | EventAccountSwitched
+  | EventPermissionV2Asked
+  | EventPermissionV2Replied
+  | EventFileEdited
+  | EventFileWatcherUpdated
+  | EventFileWatcherOverflow
+  | EventPtyCreated
+  | EventPtyUpdated
+  | EventPtyExited
+  | EventPtyDeleted
+  | EventQuestionV2Asked
+  | EventQuestionV2Replied
+  | EventQuestionV2Rejected
+  | EventTodoUpdated
   | EventMessagePartDelta
   | EventTuiPromptAppend2
   | EventTuiCommandExecute2
@@ -57,8 +73,6 @@ export type Event =
   | EventTuiSessionSelect2
   | EventMcpToolsChanged
   | EventMcpBrowserOpenFailed
-  | EventPermissionV2Asked
-  | EventPermissionV2Replied
   | EventPermissionAsked
   | EventPermissionReplied
   | EventCommandExecuted
@@ -70,20 +84,6 @@ export type Event =
   | EventSessionError
   | EventInstallationUpdated
   | EventInstallationUpdateAvailable
-  | EventFileEdited
-  | EventAccountAdded
-  | EventAccountRemoved
-  | EventAccountSwitched
-  | EventFileWatcherUpdated
-  | EventFileWatcherOverflow
-  | EventPtyCreated
-  | EventPtyUpdated
-  | EventPtyExited
-  | EventPtyDeleted
-  | EventQuestionV2Asked
-  | EventQuestionV2Replied
-  | EventQuestionV2Rejected
-  | EventTodoUpdated
   | EventLspUpdated
   | EventQuestionAsked
   | EventQuestionReplied
@@ -1355,6 +1355,142 @@ export type GlobalEvent = {
       }
     | {
         id: string
+        type: "account.added"
+        properties: {
+          account: AuthInfo
+        }
+      }
+    | {
+        id: string
+        type: "account.removed"
+        properties: {
+          account: AuthInfo
+        }
+      }
+    | {
+        id: string
+        type: "account.switched"
+        properties: {
+          serviceID: string
+          from?: string
+          to?: string
+        }
+      }
+    | {
+        id: string
+        type: "permission.v2.asked"
+        properties: {
+          id: string
+          sessionID: string
+          action: string
+          resources: Array<string>
+          save?: Array<string>
+          metadata?: {
+            [key: string]: unknown
+          }
+          source?: PermissionV2Source
+        }
+      }
+    | {
+        id: string
+        type: "permission.v2.replied"
+        properties: {
+          sessionID: string
+          requestID: string
+          reply: PermissionV2Reply
+        }
+      }
+    | {
+        id: string
+        type: "file.edited"
+        properties: {
+          file: string
+        }
+      }
+    | {
+        id: string
+        type: "file.watcher.updated"
+        properties: {
+          file: string
+          event: "add" | "change" | "unlink"
+        }
+      }
+    | {
+        id: string
+        type: "file.watcher.overflow"
+        properties: {
+          reason: string
+        }
+      }
+    | {
+        id: string
+        type: "pty.created"
+        properties: {
+          info: Pty
+        }
+      }
+    | {
+        id: string
+        type: "pty.updated"
+        properties: {
+          info: Pty
+        }
+      }
+    | {
+        id: string
+        type: "pty.exited"
+        properties: {
+          id: string
+          exitCode: number
+        }
+      }
+    | {
+        id: string
+        type: "pty.deleted"
+        properties: {
+          id: string
+        }
+      }
+    | {
+        id: string
+        type: "question.v2.asked"
+        properties: {
+          id: string
+          sessionID: string
+          /**
+           * Questions to ask
+           */
+          questions: Array<QuestionV2Info>
+          tool?: QuestionV2Tool
+        }
+      }
+    | {
+        id: string
+        type: "question.v2.replied"
+        properties: {
+          sessionID: string
+          requestID: string
+          answers: Array<QuestionV2Answer>
+        }
+      }
+    | {
+        id: string
+        type: "question.v2.rejected"
+        properties: {
+          sessionID: string
+          requestID: string
+        }
+      }
+    | {
+        id: string
+        type: "todo.updated"
+        properties: {
+          sessionID: string
+          todos: Array<Todo>
+        }
+      }
+    | {
+        id: string
         type: "message.part.delta"
         properties: {
           sessionID: string
@@ -1428,30 +1564,6 @@ export type GlobalEvent = {
         properties: {
           mcpName: string
           url: string
-        }
-      }
-    | {
-        id: string
-        type: "permission.v2.asked"
-        properties: {
-          id: string
-          sessionID: string
-          action: string
-          resources: Array<string>
-          save?: Array<string>
-          metadata?: {
-            [key: string]: unknown
-          }
-          source?: PermissionV2Source
-        }
-      }
-    | {
-        id: string
-        type: "permission.v2.replied"
-        properties: {
-          sessionID: string
-          requestID: string
-          reply: PermissionV2Reply
         }
       }
     | {
@@ -1600,118 +1712,6 @@ export type GlobalEvent = {
         type: "installation.update-available"
         properties: {
           version: string
-        }
-      }
-    | {
-        id: string
-        type: "file.edited"
-        properties: {
-          file: string
-        }
-      }
-    | {
-        id: string
-        type: "account.added"
-        properties: {
-          account: AuthInfo
-        }
-      }
-    | {
-        id: string
-        type: "account.removed"
-        properties: {
-          account: AuthInfo
-        }
-      }
-    | {
-        id: string
-        type: "account.switched"
-        properties: {
-          serviceID: string
-          from?: string
-          to?: string
-        }
-      }
-    | {
-        id: string
-        type: "file.watcher.updated"
-        properties: {
-          file: string
-          event: "add" | "change" | "unlink"
-        }
-      }
-    | {
-        id: string
-        type: "file.watcher.overflow"
-        properties: {
-          reason: string
-        }
-      }
-    | {
-        id: string
-        type: "pty.created"
-        properties: {
-          info: Pty
-        }
-      }
-    | {
-        id: string
-        type: "pty.updated"
-        properties: {
-          info: Pty
-        }
-      }
-    | {
-        id: string
-        type: "pty.exited"
-        properties: {
-          id: string
-          exitCode: number
-        }
-      }
-    | {
-        id: string
-        type: "pty.deleted"
-        properties: {
-          id: string
-        }
-      }
-    | {
-        id: string
-        type: "question.v2.asked"
-        properties: {
-          id: string
-          sessionID: string
-          /**
-           * Questions to ask
-           */
-          questions: Array<QuestionV2Info>
-          tool?: QuestionV2Tool
-        }
-      }
-    | {
-        id: string
-        type: "question.v2.replied"
-        properties: {
-          sessionID: string
-          requestID: string
-          answers: Array<QuestionV2Answer>
-        }
-      }
-    | {
-        id: string
-        type: "question.v2.rejected"
-        properties: {
-          sessionID: string
-          requestID: string
-        }
-      }
-    | {
-        id: string
-        type: "todo.updated"
-        properties: {
-          sessionID: string
-          todos: Array<Todo>
         }
       }
     | {
@@ -2659,6 +2659,12 @@ export type ProfileHotspot = {
 
 export type DeepAgentPromotionError = {
   message: string
+}
+
+export type DeepAgentKnowledgeReviewConflictError = {
+  message: string
+  sourceStore: "user_global" | "project"
+  id: string
 }
 
 export type DeepAgentGoalPlanValidationError = {
@@ -4589,14 +4595,6 @@ export type SessionNextRetryError = {
   }
 }
 
-export type PermissionV2Source = {
-  type: "tool"
-  messageID: string
-  callID: string
-}
-
-export type PermissionV2Reply = "once" | "always" | "reject"
-
 export type AuthOAuthCredential = {
   type: "oauth"
   refresh: string
@@ -4620,6 +4618,14 @@ export type AuthInfo = {
   description: string
   credential: AuthCredential
 }
+
+export type PermissionV2Source = {
+  type: "tool"
+  messageID: string
+  callID: string
+}
+
+export type PermissionV2Reply = "once" | "always" | "reject"
 
 export type QuestionV2Option = {
   /**
@@ -6556,32 +6562,29 @@ export type EventSessionNextCompactionEnded = {
   }
 }
 
-export type EventMessagePartDelta = {
+export type EventAccountAdded = {
   id: string
-  type: "message.part.delta"
+  type: "account.added"
   properties: {
-    sessionID: string
-    messageID: string
-    partID: string
-    field: string
-    delta: string
+    account: AuthInfo
   }
 }
 
-export type EventMcpToolsChanged = {
+export type EventAccountRemoved = {
   id: string
-  type: "mcp.tools.changed"
+  type: "account.removed"
   properties: {
-    server: string
+    account: AuthInfo
   }
 }
 
-export type EventMcpBrowserOpenFailed = {
+export type EventAccountSwitched = {
   id: string
-  type: "mcp.browser.open.failed"
+  type: "account.switched"
   properties: {
-    mcpName: string
-    url: string
+    serviceID: string
+    from?: string
+    to?: string
   }
 }
 
@@ -6608,6 +6611,135 @@ export type EventPermissionV2Replied = {
     sessionID: string
     requestID: string
     reply: PermissionV2Reply
+  }
+}
+
+export type EventFileEdited = {
+  id: string
+  type: "file.edited"
+  properties: {
+    file: string
+  }
+}
+
+export type EventFileWatcherUpdated = {
+  id: string
+  type: "file.watcher.updated"
+  properties: {
+    file: string
+    event: "add" | "change" | "unlink"
+  }
+}
+
+export type EventFileWatcherOverflow = {
+  id: string
+  type: "file.watcher.overflow"
+  properties: {
+    reason: string
+  }
+}
+
+export type EventPtyCreated = {
+  id: string
+  type: "pty.created"
+  properties: {
+    info: Pty
+  }
+}
+
+export type EventPtyUpdated = {
+  id: string
+  type: "pty.updated"
+  properties: {
+    info: Pty
+  }
+}
+
+export type EventPtyExited = {
+  id: string
+  type: "pty.exited"
+  properties: {
+    id: string
+    exitCode: number
+  }
+}
+
+export type EventPtyDeleted = {
+  id: string
+  type: "pty.deleted"
+  properties: {
+    id: string
+  }
+}
+
+export type EventQuestionV2Asked = {
+  id: string
+  type: "question.v2.asked"
+  properties: {
+    id: string
+    sessionID: string
+    /**
+     * Questions to ask
+     */
+    questions: Array<QuestionV2Info>
+    tool?: QuestionV2Tool
+  }
+}
+
+export type EventQuestionV2Replied = {
+  id: string
+  type: "question.v2.replied"
+  properties: {
+    sessionID: string
+    requestID: string
+    answers: Array<QuestionV2Answer>
+  }
+}
+
+export type EventQuestionV2Rejected = {
+  id: string
+  type: "question.v2.rejected"
+  properties: {
+    sessionID: string
+    requestID: string
+  }
+}
+
+export type EventTodoUpdated = {
+  id: string
+  type: "todo.updated"
+  properties: {
+    sessionID: string
+    todos: Array<Todo>
+  }
+}
+
+export type EventMessagePartDelta = {
+  id: string
+  type: "message.part.delta"
+  properties: {
+    sessionID: string
+    messageID: string
+    partID: string
+    field: string
+    delta: string
+  }
+}
+
+export type EventMcpToolsChanged = {
+  id: string
+  type: "mcp.tools.changed"
+  properties: {
+    server: string
+  }
+}
+
+export type EventMcpBrowserOpenFailed = {
+  id: string
+  type: "mcp.browser.open.failed"
+  properties: {
+    mcpName: string
+    url: string
   }
 }
 
@@ -6767,132 +6899,6 @@ export type EventInstallationUpdateAvailable = {
   type: "installation.update-available"
   properties: {
     version: string
-  }
-}
-
-export type EventFileEdited = {
-  id: string
-  type: "file.edited"
-  properties: {
-    file: string
-  }
-}
-
-export type EventAccountAdded = {
-  id: string
-  type: "account.added"
-  properties: {
-    account: AuthInfo
-  }
-}
-
-export type EventAccountRemoved = {
-  id: string
-  type: "account.removed"
-  properties: {
-    account: AuthInfo
-  }
-}
-
-export type EventAccountSwitched = {
-  id: string
-  type: "account.switched"
-  properties: {
-    serviceID: string
-    from?: string
-    to?: string
-  }
-}
-
-export type EventFileWatcherUpdated = {
-  id: string
-  type: "file.watcher.updated"
-  properties: {
-    file: string
-    event: "add" | "change" | "unlink"
-  }
-}
-
-export type EventFileWatcherOverflow = {
-  id: string
-  type: "file.watcher.overflow"
-  properties: {
-    reason: string
-  }
-}
-
-export type EventPtyCreated = {
-  id: string
-  type: "pty.created"
-  properties: {
-    info: Pty
-  }
-}
-
-export type EventPtyUpdated = {
-  id: string
-  type: "pty.updated"
-  properties: {
-    info: Pty
-  }
-}
-
-export type EventPtyExited = {
-  id: string
-  type: "pty.exited"
-  properties: {
-    id: string
-    exitCode: number
-  }
-}
-
-export type EventPtyDeleted = {
-  id: string
-  type: "pty.deleted"
-  properties: {
-    id: string
-  }
-}
-
-export type EventQuestionV2Asked = {
-  id: string
-  type: "question.v2.asked"
-  properties: {
-    id: string
-    sessionID: string
-    /**
-     * Questions to ask
-     */
-    questions: Array<QuestionV2Info>
-    tool?: QuestionV2Tool
-  }
-}
-
-export type EventQuestionV2Replied = {
-  id: string
-  type: "question.v2.replied"
-  properties: {
-    sessionID: string
-    requestID: string
-    answers: Array<QuestionV2Answer>
-  }
-}
-
-export type EventQuestionV2Rejected = {
-  id: string
-  type: "question.v2.rejected"
-  properties: {
-    sessionID: string
-    requestID: string
-  }
-}
-
-export type EventTodoUpdated = {
-  id: string
-  type: "todo.updated"
-  properties: {
-    sessionID: string
-    todos: Array<Todo>
   }
 }
 
@@ -8248,7 +8254,13 @@ export type DeepagentKnowledgePendingResponses = {
    */
   200: {
     items: Array<{
+      sourceStore: "user_global" | "project"
       id: string
+      version: number
+      hash: string
+      candidateId: string
+      fingerprint: string
+      governanceRevision: string
       type: "knowledge" | "strategy" | "methodology" | "memory" | "skill" | "failure_dossier"
       summary: string
       evidence_strength: "strong" | "medium" | "weak" | "none"
@@ -8296,7 +8308,13 @@ export type DeepagentKnowledgeReviewSummaryResponse =
 
 export type DeepagentKnowledgeApproveData = {
   body?: {
-    ids: Array<string>
+    sourceStore: "user_global" | "project"
+    id: string
+    version: number
+    hash: string
+    candidateId: string
+    fingerprint: string
+    expectedGovernanceRevision: string
   }
   path?: never
   query?: {
@@ -8311,16 +8329,47 @@ export type DeepagentKnowledgeApproveErrors = {
    * DeepAgentPromotionError | InvalidRequestError
    */
   400: DeepAgentPromotionError | InvalidRequestError
+  /**
+   * DeepAgentKnowledgeReviewConflictError
+   */
+  409: DeepAgentKnowledgeReviewConflictError
 }
 
 export type DeepagentKnowledgeApproveError = DeepagentKnowledgeApproveErrors[keyof DeepagentKnowledgeApproveErrors]
 
 export type DeepagentKnowledgeApproveResponses = {
   /**
-   * Ids that were marked approved (accessible)
+   * Exact knowledge revision marked approved
    */
   200: {
-    updated: Array<string>
+    updated: {
+      sourceStore: "user_global" | "project"
+      id: string
+      version: number
+      hash: string
+      candidateId: string
+      fingerprint: string
+      governanceRevision: string
+      type: "knowledge" | "strategy" | "methodology" | "memory" | "skill" | "failure_dossier"
+      summary: string
+      evidence_strength: "strong" | "medium" | "weak" | "none"
+      evidence_refs: Array<string>
+      approval_status: "pending" | "approved" | "rejected"
+      scope?: string
+    }
+    release_revocation?:
+      | {
+          state: "revoked" | "already_revoked"
+          previous_snapshot_id: string
+          active_snapshot_id: string
+          generation: number
+          membership_hash: string
+          manifest_hash: string
+          document_count: number
+        }
+      | {
+          state: "not_released"
+        }
   }
 }
 
@@ -8329,7 +8378,13 @@ export type DeepagentKnowledgeApproveResponse =
 
 export type DeepagentKnowledgeRejectIdsData = {
   body?: {
-    ids: Array<string>
+    sourceStore: "user_global" | "project"
+    id: string
+    version: number
+    hash: string
+    candidateId: string
+    fingerprint: string
+    expectedGovernanceRevision: string
   }
   path?: never
   query?: {
@@ -8344,6 +8399,10 @@ export type DeepagentKnowledgeRejectIdsErrors = {
    * DeepAgentPromotionError | InvalidRequestError
    */
   400: DeepAgentPromotionError | InvalidRequestError
+  /**
+   * DeepAgentKnowledgeReviewConflictError
+   */
+  409: DeepAgentKnowledgeReviewConflictError
 }
 
 export type DeepagentKnowledgeRejectIdsError =
@@ -8351,27 +8410,117 @@ export type DeepagentKnowledgeRejectIdsError =
 
 export type DeepagentKnowledgeRejectIdsResponses = {
   /**
-   * Ids that were marked rejected (inaccessible)
+   * Exact knowledge revision marked rejected
    */
   200: {
-    updated: Array<string>
+    updated: {
+      sourceStore: "user_global" | "project"
+      id: string
+      version: number
+      hash: string
+      candidateId: string
+      fingerprint: string
+      governanceRevision: string
+      type: "knowledge" | "strategy" | "methodology" | "memory" | "skill" | "failure_dossier"
+      summary: string
+      evidence_strength: "strong" | "medium" | "weak" | "none"
+      evidence_refs: Array<string>
+      approval_status: "pending" | "approved" | "rejected"
+      scope?: string
+    }
+    release_revocation?:
+      | {
+          state: "revoked" | "already_revoked"
+          previous_snapshot_id: string
+          active_snapshot_id: string
+          generation: number
+          membership_hash: string
+          manifest_hash: string
+          document_count: number
+        }
+      | {
+          state: "not_released"
+        }
   }
 }
 
 export type DeepagentKnowledgeRejectIdsResponse =
   DeepagentKnowledgeRejectIdsResponses[keyof DeepagentKnowledgeRejectIdsResponses]
 
+export type DeepagentKnowledgeReleaseBaselineData = {
+  body?: {
+    snapshotId: string
+    evaluationId: string
+    candidateRefs: Array<{
+      sourceStore: "user_global" | "project"
+      id: string
+      version: number
+      hash: string
+      type: "knowledge" | "strategy" | "methodology" | "memory" | "skill"
+      scope: string
+    }>
+    baselineRef: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/deepagent/knowledge/release-baseline"
+}
+
+export type DeepagentKnowledgeReleaseBaselineErrors = {
+  /**
+   * DeepAgentPromotionError | InvalidRequestError
+   */
+  400: DeepAgentPromotionError | InvalidRequestError
+}
+
+export type DeepagentKnowledgeReleaseBaselineError =
+  DeepagentKnowledgeReleaseBaselineErrors[keyof DeepagentKnowledgeReleaseBaselineErrors]
+
+export type DeepagentKnowledgeReleaseBaselineResponses = {
+  /**
+   * Explicit initial released-knowledge baseline
+   */
+  200: {
+    release_snapshot_id: string
+    active_snapshot_id: string
+    generation: number
+    membership_hash: string
+    manifest_hash: string
+    document_count: number
+  }
+}
+
+export type DeepagentKnowledgeReleaseBaselineResponse =
+  DeepagentKnowledgeReleaseBaselineResponses[keyof DeepagentKnowledgeReleaseBaselineResponses]
+
 export type DeepagentKnowledgeShipGateData = {
   body?: {
+    snapshotId: string
+    evaluationId: string
+    expectedParent: {
+      snapshotId: string
+      generation: number
+      membershipHash: string
+    }
     tasks: Array<string>
     metrics: Array<{
       group: "general" | "high" | "max"
       task: string
-      metric: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      metric: number
     }>
-    candidateRefs: Array<string>
-    tolerance?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-    repeats?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    candidateRefs: Array<{
+      sourceStore: "user_global" | "project"
+      id: string
+      version: number
+      hash: string
+      type: "knowledge" | "strategy" | "methodology" | "memory" | "skill"
+      scope: string
+    }>
+    tolerance?: number
+    repeats?: 1
   }
   path?: never
   query?: {
@@ -8392,7 +8541,7 @@ export type DeepagentKnowledgeShipGateError = DeepagentKnowledgeShipGateErrors[k
 
 export type DeepagentKnowledgeShipGateResponses = {
   /**
-   * Ablation ship-gate verdict; offending refs demoted on failure
+   * Ablation ship-gate verdict and durable snapshot result
    */
   200: {
     ship: boolean
@@ -8405,6 +8554,12 @@ export type DeepagentKnowledgeShipGateResponses = {
       high: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
       max: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
     }
+    release_snapshot_id: string
+    active_snapshot_id: string
+    generation: number
+    membership_hash: string
+    manifest_hash: string
+    document_count: number
   }
 }
 
@@ -14688,6 +14843,7 @@ export type SessionContextDiagnosticsResponses = {
                     | "partial_sources"
                     | "source_disabled"
                     | "link_refresh_pending"
+                    | "released_snapshot_unavailable"
                 }
             >
             capabilities?: Array<string>
@@ -14724,6 +14880,7 @@ export type SessionContextDiagnosticsResponses = {
                     | "partial_sources"
                     | "source_disabled"
                     | "link_refresh_pending"
+                    | "released_snapshot_unavailable"
                 }
             >
             capabilities?: Array<string>
@@ -14761,6 +14918,7 @@ export type SessionContextDiagnosticsResponses = {
                     | "partial_sources"
                     | "source_disabled"
                     | "link_refresh_pending"
+                    | "released_snapshot_unavailable"
                 }
             >
             capabilities?: Array<string>
@@ -14784,6 +14942,7 @@ export type SessionContextDiagnosticsResponses = {
               | "partial_sources"
               | "source_disabled"
               | "link_refresh_pending"
+              | "released_snapshot_unavailable"
           }
         | {
             graph: "code" | "knowledge" | "memory" | "documents"
@@ -14814,6 +14973,7 @@ export type SessionContextDiagnosticsResponses = {
                     | "partial_sources"
                     | "source_disabled"
                     | "link_refresh_pending"
+                    | "released_snapshot_unavailable"
                 }
             >
             capabilities?: Array<string>
@@ -14837,6 +14997,7 @@ export type SessionContextDiagnosticsResponses = {
               | "partial_sources"
               | "source_disabled"
               | "link_refresh_pending"
+              | "released_snapshot_unavailable"
           }
         | {
             graph: "code" | "knowledge" | "memory" | "documents"
@@ -14967,6 +15128,7 @@ export type SessionContextDiagnosticsResponses = {
                       | "partial_sources"
                       | "source_disabled"
                       | "link_refresh_pending"
+                      | "released_snapshot_unavailable"
                   }
               >
               capabilities?: Array<string>
@@ -15003,6 +15165,7 @@ export type SessionContextDiagnosticsResponses = {
                       | "partial_sources"
                       | "source_disabled"
                       | "link_refresh_pending"
+                      | "released_snapshot_unavailable"
                   }
               >
               capabilities?: Array<string>
@@ -15040,6 +15203,7 @@ export type SessionContextDiagnosticsResponses = {
                       | "partial_sources"
                       | "source_disabled"
                       | "link_refresh_pending"
+                      | "released_snapshot_unavailable"
                   }
               >
               capabilities?: Array<string>
@@ -15063,6 +15227,7 @@ export type SessionContextDiagnosticsResponses = {
                 | "partial_sources"
                 | "source_disabled"
                 | "link_refresh_pending"
+                | "released_snapshot_unavailable"
             }
           | {
               graph: "code" | "knowledge" | "memory" | "documents"
@@ -15093,6 +15258,7 @@ export type SessionContextDiagnosticsResponses = {
                       | "partial_sources"
                       | "source_disabled"
                       | "link_refresh_pending"
+                      | "released_snapshot_unavailable"
                   }
               >
               capabilities?: Array<string>
@@ -15116,6 +15282,7 @@ export type SessionContextDiagnosticsResponses = {
                 | "partial_sources"
                 | "source_disabled"
                 | "link_refresh_pending"
+                | "released_snapshot_unavailable"
             }
           | {
               graph: "code" | "knowledge" | "memory" | "documents"
