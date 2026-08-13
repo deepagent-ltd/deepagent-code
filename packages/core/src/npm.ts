@@ -83,22 +83,30 @@ export const layer = Layer.effect(
         const { Arborist } = yield* Effect.promise(() => import("@npmcli/arborist"))
         const add = input.add ?? []
         const npmOptions = yield* NpmConfig.load(input.dir)
+        const retry = { retries: 0, factor: 1, minTimeout: 0, maxTimeout: 0 }
+        const reifyOptions = {
+          ...npmOptions,
+          add,
+          fetchRetries: 0,
+          retry,
+          save: true,
+          saveType: "prod" as const,
+        }
         return yield* Effect.tryPromise({
           try: (signal) =>
             new Arborist({
               ...npmOptions,
               path: input.dir,
               binLinks: true,
+              // Scoped installs are retried on the next config load. npm's internal retry timers do not
+              // observe AbortSignal and can otherwise keep a disposed desktop process alive for 10s+.
+              fetchRetries: 0,
+              retry,
               progress: false,
               savePrefix: "",
               ignoreScripts: true,
               signal,
-            }).reify({
-              ...npmOptions,
-              add,
-              save: true,
-              saveType: "prod",
-            }),
+            }).reify(reifyOptions),
           catch: (cause) =>
             new InstallFailedError({
               cause,

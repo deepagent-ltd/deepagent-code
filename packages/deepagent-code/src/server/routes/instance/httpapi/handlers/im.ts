@@ -74,9 +74,14 @@ const toAttachmentResponse = (a: IMAttachment) => ({
 // Simple in-memory rate limiter
 class RateLimiter {
   private buckets = new Map<string, { count: number; resetAt: number }>()
+  private nextCleanupAt = Date.now() + 5 * 60 * 1000
 
   check(key: string, limit: number, windowMs: number): boolean {
     const now = Date.now()
+    if (now >= this.nextCleanupAt) {
+      this.cleanup(now)
+      this.nextCleanupAt = now + 5 * 60 * 1000
+    }
     const bucket = this.buckets.get(key)
 
     if (!bucket || now >= bucket.resetAt) {
@@ -92,8 +97,7 @@ class RateLimiter {
     return true
   }
 
-  cleanup() {
-    const now = Date.now()
+  private cleanup(now: number) {
     for (const [key, bucket] of this.buckets.entries()) {
       if (now >= bucket.resetAt) {
         this.buckets.delete(key)
@@ -103,8 +107,6 @@ class RateLimiter {
 }
 
 const rateLimiter = new RateLimiter()
-// Cleanup every 5 minutes
-setInterval(() => rateLimiter.cleanup(), 5 * 60 * 1000)
 
 const mapRepositoryError = <A, E, R>(effect: Effect.Effect<A, E | IMRepositoryError, R>) =>
   effect.pipe(
