@@ -1,11 +1,14 @@
 import { describe, expect, test } from "bun:test"
-import { mkdtemp, readdir, readFile, rm } from "node:fs/promises"
+import { mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:fs/promises"
+import { createHash } from "node:crypto"
 import path from "node:path"
 import { tmpdir } from "node:os"
 import { Effect, Stream } from "effect"
 import { LLM, LLMEvent, Model } from "@deepagent-code/llm"
 import { AgentGateway } from "../src/agent-gateway"
+import { DeepAgentDurableLearning } from "../src/deepagent/durable-learning"
 import * as OpenAIChat from "@deepagent-code/llm/protocols/openai-chat"
+import { releasedUserGlobalSelection } from "./deepagent/released-selection-fixture"
 
 const deepagentRunInput = {
   callKind: "session_turn" as const,
@@ -60,6 +63,394 @@ describe("AgentGateway", () => {
     } finally {
       AgentGateway.configure({ enabled: false, runsDir: undefined })
       await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("flag-gated durable learning finalization admits one immutable background job", async () => {
+    const root = await tempRunsDir()
+    const runsDir = path.join(root, "runs")
+    const admissions: Array<Parameters<AgentGateway.LearningAuthority["enqueue"]>[0]> = []
+    const runStatesAtAdmission: string[] = []
+    const runStatesAtEnqueue: string[] = []
+    try {
+      AgentGateway.setLearningAuthority({
+        record: async (admission) => {
+          const runs = await readdir(runsDir)
+          const state = await readJson(path.join(runsDir, runs[0]!), "DEEPAGENT_RUN_STATE.json")
+          runStatesAtAdmission.push(state.state as string)
+          admissions.push(admission)
+        },
+        enqueue: async (admission) => {
+          const content = await readFile(admission.terminalArtifact.path, "utf8")
+          runStatesAtEnqueue.push((JSON.parse(content) as { state: string }).state)
+          expect(createHash("sha256").update(content).digest("hex")).toBe(admission.terminalArtifact.sha256)
+        },
+      })
+      AgentGateway.configure({
+        enabled: true,
+        agentMode: "high",
+        baseDir: root,
+        runsDir,
+        durableLearning: true,
+        selfLearning: "auto",
+        allowProviderExecutedTools: false,
+      })
+
+      await Effect.runPromise(
+        AgentGateway.manageStream(
+          { ...deepagentRunInput, workspaceID: path.join(root, "workspace") },
+          Stream.make(LLMEvent.finish({ reason: "stop" })),
+        ).pipe(Stream.runCollect),
+      )
+
+      expect(admissions).toHaveLength(1)
+      expect(runStatesAtAdmission).toEqual(["completed"])
+      expect(runStatesAtEnqueue).toEqual(["completed"])
+      expect(admissions[0]).toMatchObject({
+        baseDir: root,
+        workspacePath: path.join(root, "workspace"),
+        rejectedBufferDir: path.join(root, "memory"),
+        terminalArtifact: {
+          schema_version: "deepagent-code.learning_terminal_artifact.v1",
+          path: expect.stringContaining("DEEPAGENT_RUN_STATE.json"),
+          sha256: expect.stringMatching(/^[0-9a-f]{64}$/),
+        },
+        input: {
+          sessionID: "ses_test",
+          finalStatus: "completed",
+          trigger: "session_finalization",
+          policy: "auto_merge_safe_project",
+        },
+      })
+      expect(admissions[0]?.input.roundState).not.toBe(AgentGateway.DeepAgentSessionState.get("ses_test")?.roundState)
+      expect(await readJson(await readOnlyRunDir(runsDir), "DEEPAGENT_RUN_STATE.json")).toMatchObject({
+        state: "completed",
+      })
+      expect(await readJson(await readOnlyRunDir(runsDir), AgentGateway.LEARNING_ADMISSION_RECEIPT_FILE)).toMatchObject(
+        {
+          schema_version: "deepagent-code.learning_admission_receipt.v1",
+          state: "submitted",
+          last_error: null,
+        },
+      )
+    } finally {
+      AgentGateway.setLearningAuthority(undefined)
+      AgentGateway.configure({ enabled: false, agentMode: "high", runsDir: undefined, durableLearning: false })
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  test("keeps provider success terminal when the durable learning authority is unavailable", async () => {
+    const root = await tempRunsDir()
+    const runsDir = path.join(root, "runs")
+    const workspace = path.join(root, "workspace")
+    try {
+      AgentGateway.setLearningAuthority(undefined)
+      AgentGateway.configure({
+        enabled: true,
+        agentMode: "high",
+        baseDir: root,
+        runsDir,
+        durableLearning: true,
+        selfLearning: "manual",
+        allowProviderExecutedTools: false,
+      })
+
+      const events = await Effect.runPromise(
+        AgentGateway.manageStream(
+          { ...deepagentRunInput, workspaceID: workspace },
+          Stream.make(LLMEvent.finish({ reason: "stop" })),
+        ).pipe(Stream.runCollect),
+      )
+      const runDir = await readOnlyRunDir(runsDir)
+
+      expect(Array.from(events).map((event) => event.type)).toEqual(["finish"])
+      expect(await readJson(runDir, "DEEPAGENT_RUN_STATE.json")).toMatchObject({ state: "completed" })
+      expect(await readJson(runDir, AgentGateway.LEARNING_ADMISSION_RECEIPT_FILE)).toMatchObject({
+        state: "local_pending",
+        last_error: {
+          code: "authority_unavailable",
+          detail: "Durable learning authority is unavailable",
+        },
+        admission_intent: {
+          session_id: "ses_test",
+          final_status: "completed",
+          terminal_artifact: { path: path.join(runDir, "DEEPAGENT_RUN_STATE.json") },
+        },
+      })
+      await AgentGateway.flushLearning()
+      expect(await Bun.file(path.join(root, "project")).exists()).toBe(false)
+    } finally {
+      AgentGateway.setLearningAuthority(undefined)
+      AgentGateway.configure({ enabled: false, agentMode: "high", runsDir: undefined, durableLearning: false })
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  test("isolates durable learning record failures from provider success and recovers the exact receipt", async () => {
+    const root = await tempRunsDir()
+    const runsDir = path.join(root, "runs")
+    const workspace = path.join(root, "workspace")
+    const recovered: Array<Parameters<AgentGateway.LearningAuthority["enqueue"]>[0]> = []
+    try {
+      AgentGateway.setLearningAuthority({
+        record: async () => {
+          throw new Error("record storage unavailable")
+        },
+        enqueue: async () => {
+          throw new Error("enqueue must not run after record failure")
+        },
+      })
+      AgentGateway.configure({
+        enabled: true,
+        agentMode: "high",
+        baseDir: root,
+        runsDir,
+        durableLearning: true,
+        selfLearning: "manual",
+        allowProviderExecutedTools: false,
+      })
+
+      const events = await Effect.runPromise(
+        AgentGateway.manageStream(
+          { ...deepagentRunInput, workspaceID: workspace },
+          Stream.make(LLMEvent.finish({ reason: "stop" })),
+        ).pipe(Stream.runCollect),
+      )
+      const runDir = await readOnlyRunDir(runsDir)
+      expect(Array.from(events).map((event) => event.type)).toEqual(["finish"])
+      expect(await readJson(runDir, "DEEPAGENT_RUN_STATE.json")).toMatchObject({ state: "completed" })
+      expect(await readJson(runDir, AgentGateway.LEARNING_ADMISSION_RECEIPT_FILE)).toMatchObject({
+        state: "local_pending",
+        last_error: { code: "record_failed", detail: "record storage unavailable" },
+      })
+      await AgentGateway.flushLearning()
+      expect(await Bun.file(path.join(root, "project")).exists()).toBe(false)
+
+      const authority: AgentGateway.LearningAuthority = {
+        record: async (admission) => {
+          recovered.push(admission)
+        },
+        enqueue: async (admission) => {
+          recovered.push(admission)
+        },
+      }
+      AgentGateway.setLearningAuthority(authority)
+      await AgentGateway.flushLearningAdmissionRecovery()
+      expect(await AgentGateway.recoverLearningAdmissions(authority, runsDir)).toEqual([])
+      expect(recovered).toHaveLength(2)
+      expect(recovered[0]).toEqual(recovered[1])
+      expect(recovered[0]).toMatchObject({
+        terminalArtifact: { path: path.join(runDir, "DEEPAGENT_RUN_STATE.json") },
+        input: { sessionID: "ses_test", finalStatus: "completed" },
+      })
+      expect(await readJson(runDir, AgentGateway.LEARNING_ADMISSION_RECEIPT_FILE)).toMatchObject({
+        state: "submitted",
+        last_error: null,
+      })
+    } finally {
+      AgentGateway.setLearningAuthority(undefined)
+      AgentGateway.configure({ enabled: false, agentMode: "high", runsDir: undefined, durableLearning: false })
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  test("rejects a forged local learning receipt whose admission no longer matches the terminal fingerprint", async () => {
+    const root = await tempRunsDir()
+    const runsDir = path.join(root, "runs")
+    const calls: string[] = []
+    try {
+      AgentGateway.setLearningAuthority({
+        record: async () => {
+          throw new Error("record storage unavailable")
+        },
+        enqueue: async () => undefined,
+      })
+      AgentGateway.configure({
+        enabled: true,
+        agentMode: "high",
+        baseDir: root,
+        runsDir,
+        durableLearning: true,
+        selfLearning: "manual",
+        allowProviderExecutedTools: false,
+      })
+      await Effect.runPromise(
+        AgentGateway.manageStream(
+          { ...deepagentRunInput, workspaceID: path.join(root, "workspace") },
+          Stream.make(LLMEvent.finish({ reason: "stop" })),
+        ).pipe(Stream.runCollect),
+      )
+      const runDir = await readOnlyRunDir(runsDir)
+      const receipt = await readJson(runDir, AgentGateway.LEARNING_ADMISSION_RECEIPT_FILE)
+      receipt.admission_intent.policy = "auto_merge_safe_project"
+      receipt.admission_intent.terminal_artifact.learning_admission_fingerprint =
+        DeepAgentDurableLearning.admissionFingerprint(
+          DeepAgentDurableLearning.admissionFromLocalReceipt(receipt)!.admission,
+        )
+      await writeFile(
+        path.join(runDir, AgentGateway.LEARNING_ADMISSION_RECEIPT_FILE),
+        `${JSON.stringify(receipt, null, 2)}\n`,
+      )
+
+      const authority: AgentGateway.LearningAuthority = {
+        record: async () => {
+          calls.push("record")
+        },
+        enqueue: async () => {
+          calls.push("enqueue")
+        },
+      }
+      expect(await AgentGateway.recoverLearningAdmissions(authority, runsDir)).toEqual([])
+      expect(calls).toEqual([])
+    } finally {
+      AgentGateway.setLearningAuthority(undefined)
+      AgentGateway.configure({ enabled: false, agentMode: "high", runsDir: undefined, durableLearning: false })
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  test("rejects a local learning receipt moved under a different run directory", async () => {
+    const root = await tempRunsDir()
+    const runsDir = path.join(root, "runs")
+    const calls: string[] = []
+    try {
+      AgentGateway.setLearningAuthority({
+        record: async () => {
+          throw new Error("record storage unavailable")
+        },
+        enqueue: async () => undefined,
+      })
+      AgentGateway.configure({
+        enabled: true,
+        agentMode: "high",
+        baseDir: root,
+        runsDir,
+        durableLearning: true,
+        selfLearning: "manual",
+        allowProviderExecutedTools: false,
+      })
+      await Effect.runPromise(
+        AgentGateway.manageStream(
+          { ...deepagentRunInput, workspaceID: path.join(root, "workspace") },
+          Stream.make(LLMEvent.finish({ reason: "stop" })),
+        ).pipe(Stream.runCollect),
+      )
+      const runDir = await readOnlyRunDir(runsDir)
+      const forgedRunDir = path.join(runsDir, "run_forged")
+      await mkdir(forgedRunDir)
+      await rename(
+        path.join(runDir, AgentGateway.LEARNING_ADMISSION_RECEIPT_FILE),
+        path.join(forgedRunDir, AgentGateway.LEARNING_ADMISSION_RECEIPT_FILE),
+      )
+
+      const authority: AgentGateway.LearningAuthority = {
+        record: async () => {
+          calls.push("record")
+        },
+        enqueue: async () => {
+          calls.push("enqueue")
+        },
+      }
+      expect(await AgentGateway.recoverLearningAdmissions(authority, runsDir)).toEqual([])
+      expect(calls).toEqual([])
+    } finally {
+      AgentGateway.setLearningAuthority(undefined)
+      AgentGateway.configure({ enabled: false, agentMode: "high", runsDir: undefined, durableLearning: false })
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  test("preserves the original provider failure when durable learning record fails", async () => {
+    const root = await tempRunsDir()
+    const runsDir = path.join(root, "runs")
+    try {
+      AgentGateway.setLearningAuthority({
+        record: async () => {
+          throw new Error("learning record failed")
+        },
+        enqueue: async () => {
+          throw new Error("enqueue must not run after record failure")
+        },
+      })
+      AgentGateway.configure({
+        enabled: true,
+        agentMode: "high",
+        baseDir: root,
+        runsDir,
+        durableLearning: true,
+        selfLearning: "manual",
+        allowProviderExecutedTools: false,
+      })
+
+      await expect(
+        Effect.runPromise(
+          AgentGateway.manageStream(
+            { ...deepagentRunInput, workspaceID: path.join(root, "workspace") },
+            Stream.fail(new Error("provider stream failed")),
+          ).pipe(Stream.runCollect),
+        ),
+      ).rejects.toThrow("provider stream failed")
+      const runDir = await readOnlyRunDir(runsDir)
+      expect(await readJson(runDir, "DEEPAGENT_RUN_STATE.json")).toMatchObject({ state: "failed" })
+      expect(await readJson(runDir, AgentGateway.LEARNING_ADMISSION_RECEIPT_FILE)).toMatchObject({
+        state: "local_pending",
+        last_error: { code: "record_failed", detail: "learning record failed" },
+        admission_intent: { final_status: "failed" },
+      })
+      await AgentGateway.flushLearning()
+      expect(await Bun.file(path.join(root, "project")).exists()).toBe(false)
+    } finally {
+      AgentGateway.setLearningAuthority(undefined)
+      AgentGateway.configure({ enabled: false, agentMode: "high", runsDir: undefined, durableLearning: false })
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  test("leaves a durable pending receipt when learning admission reconciliation fails", async () => {
+    const root = await tempRunsDir()
+    const runsDir = path.join(root, "runs")
+    const recorded: Array<Parameters<AgentGateway.LearningAuthority["enqueue"]>[0]> = []
+    try {
+      AgentGateway.setLearningAuthority({
+        record: async (admission) => {
+          recorded.push(admission)
+        },
+        enqueue: async () => {
+          throw new Error("learning admission failed")
+        },
+      })
+      AgentGateway.configure({
+        enabled: true,
+        agentMode: "high",
+        baseDir: root,
+        runsDir,
+        durableLearning: true,
+        selfLearning: "manual",
+        allowProviderExecutedTools: false,
+      })
+
+      const events = await Effect.runPromise(
+        AgentGateway.manageStream(
+          { ...deepagentRunInput, workspaceID: path.join(root, "workspace") },
+          Stream.make(LLMEvent.finish({ reason: "stop" })),
+        ).pipe(Stream.runCollect),
+      )
+      const runDir = await readOnlyRunDir(runsDir)
+      expect(Array.from(events).map((event) => event.type)).toEqual(["finish"])
+      expect(recorded).toHaveLength(1)
+      expect(await readJson(runDir, "DEEPAGENT_RUN_STATE.json")).toMatchObject({ state: "completed" })
+      expect(await readJson(runDir, AgentGateway.LEARNING_ADMISSION_RECEIPT_FILE)).toMatchObject({
+        state: "durable_pending",
+        last_error: { code: "enqueue_failed", detail: "learning admission failed" },
+      })
+      expect(await AgentGateway.recoverLearningAdmissions(undefined, runsDir)).toEqual([])
+      await AgentGateway.flushLearning()
+      expect(await Bun.file(path.join(root, "project")).exists()).toBe(false)
+    } finally {
+      AgentGateway.setLearningAuthority(undefined)
+      AgentGateway.configure({ enabled: false, agentMode: "high", runsDir: undefined, durableLearning: false })
+      await rm(root, { recursive: true, force: true })
     }
   })
 
@@ -409,14 +800,22 @@ describe("AgentGateway", () => {
   })
 
   test("max mode synchronizes context-selected knowledge refs into work package", async () => {
-    const dir = await tempRunsDir()
+    const root = await tempRunsDir()
+    const runsDir = path.join(root, "runs")
     try {
-      AgentGateway.configure({ enabled: true, agentMode: "max", runsDir: dir, allowProviderExecutedTools: false })
+      AgentGateway.configure({
+        enabled: true,
+        agentMode: "max",
+        baseDir: root,
+        runsDir,
+        allowProviderExecutedTools: false,
+      })
 
       await Effect.runPromise(
         AgentGateway.manageStream(
           {
             ...deepagentRunInput,
+            releasedKnowledgeSelection: releasedUserGlobalSelection(root),
             metadata: {
               deepagent: {
                 tool_capabilities: [{ name: "github:list_issues", source: "mcp_or_namespaced_tool" }],
@@ -427,7 +826,7 @@ describe("AgentGateway", () => {
         ).pipe(Stream.runCollect),
       )
 
-      const runDir = await readOnlyRunDir(dir)
+      const runDir = await readOnlyRunDir(runsDir)
       const knowledge = await readJson(runDir, "KNOWLEDGE_RETRIEVAL_RESULT.json")
       const workPackage = await readJson(runDir, "MODEL_WORK_PACKAGE.json")
       const refIDs = knowledge.selected_refs.map((ref: { ref_id: string }) => ref.ref_id)
@@ -448,9 +847,21 @@ describe("AgentGateway", () => {
         },
       })
       expect(knowledge.candidate_refs.length).toBeGreaterThanOrEqual(knowledge.selected_refs.length)
-      expect(knowledge.rejected_refs).toEqual(
-        expect.arrayContaining([{ reason: expect.any(String), ref_id: expect.any(String) }]),
+      const candidateAuthorityRefs = new Set(
+        knowledge.candidate_refs.map((ref: { authority_ref: string }) => ref.authority_ref),
       )
+      expect(
+        knowledge.selected_refs.every((ref: { authority_ref: string }) =>
+          candidateAuthorityRefs.has(ref.authority_ref),
+        ),
+      ).toBe(true)
+      expect(knowledge.rejected_refs.length).toBeGreaterThan(0)
+      expect(
+        knowledge.rejected_refs.every(
+          (ref: { authority_ref: string; reason: string; ref_id: string }) =>
+            ref.authority_ref.length > 0 && ref.reason.length > 0 && ref.ref_id.length > 0,
+        ),
+      ).toBe(true)
       expect(workPackage.knowledge_retrieval.selected_refs).toEqual(refIDs)
       expect(workPackage.knowledge_retrieval.selected_ref_details.map((ref: { ref_id: string }) => ref.ref_id)).toEqual(
         refIDs,
@@ -459,7 +870,7 @@ describe("AgentGateway", () => {
       expect(knowledge.synthesis).toContain("MCP tools extend capabilities")
     } finally {
       AgentGateway.configure({ enabled: false, agentMode: "high", runsDir: undefined })
-      await rm(dir, { recursive: true, force: true })
+      await rm(root, { recursive: true, force: true })
     }
   })
 
