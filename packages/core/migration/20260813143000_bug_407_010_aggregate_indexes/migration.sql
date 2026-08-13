@@ -1,0 +1,2 @@
+CREATE INDEX `event_snapshot_attempt_aggregate_idx` ON `event_snapshot_attempt` (`aggregate_id`);--> statement-breakpoint
+CREATE INDEX `event_snapshot_row_aggregate_idx` ON `event_snapshot_row` (`aggregate_id`);

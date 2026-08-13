@@ -9,6 +9,7 @@ import type { EventV2 } from "./event"
 import {
   FilePartArtifactBindingTable,
   FilePartArtifactChunkTable,
+  FilePartArtifactDiscardTable,
   FilePartArtifactImportTable,
   FilePartArtifactTable,
 } from "./file-part-artifact.sql"
@@ -488,6 +489,7 @@ export function importChunk(input: {
                 })
                 .run()
                 .pipe(Effect.orDie)
+            yield* stageReceipt(db, input.metadata)
             const storedChunk = yield* db
               .select({ hash: FilePartArtifactChunkTable.chunk_hash, data: FilePartArtifactChunkTable.data })
               .from(FilePartArtifactChunkTable)
@@ -534,6 +536,65 @@ export function importChunk(input: {
 export function stageImport(metadata: Metadata) {
   return Database.Service.use(({ db }) =>
     db.transaction(() => stage(db, metadata), { behavior: "immediate" }).pipe(Effect.orDie),
+  )
+}
+
+export function discardImport(input: {
+  readonly eventID: EventV2.ID
+  readonly aggregateID: string
+  readonly artifactID: ID
+}) {
+  return Database.Service.use(({ db }) =>
+    db.transaction(
+      () =>
+        Effect.gen(function* () {
+          const imported = yield* db
+            .select()
+            .from(FilePartArtifactImportTable)
+            .where(
+              and(
+                eq(FilePartArtifactImportTable.event_id, input.eventID),
+                eq(FilePartArtifactImportTable.aggregate_id, input.aggregateID),
+                eq(FilePartArtifactImportTable.artifact_id, input.artifactID),
+              ),
+            )
+            .get()
+            .pipe(Effect.orDie)
+          if (!imported) return false
+          const binding = yield* db
+            .select({ id: FilePartArtifactBindingTable.event_id })
+            .from(FilePartArtifactBindingTable)
+            .where(eq(FilePartArtifactBindingTable.event_id, input.eventID))
+            .get()
+            .pipe(Effect.orDie)
+          if (binding) return yield* fail(input.artifactID, "Bound artifact imports cannot be discarded")
+          yield* db.insert(FilePartArtifactDiscardTable).values({
+            event_id: imported.event_id,
+            aggregate_id: imported.aggregate_id,
+            seq: imported.seq,
+            artifact_id: imported.artifact_id,
+            original_data_hash: imported.original_data_hash,
+            canonical_data_hash: imported.canonical_data_hash,
+            canonical_data: imported.canonical_data,
+            created_at: Date.now(),
+          }).onConflictDoNothing().run().pipe(Effect.orDie)
+          yield* db.delete(FilePartArtifactImportTable)
+            .where(eq(FilePartArtifactImportTable.event_id, input.eventID)).run().pipe(Effect.orDie)
+          yield* db.delete(FilePartArtifactTable).where(and(
+            eq(FilePartArtifactTable.artifact_id, input.artifactID),
+            sql`NOT EXISTS (
+              SELECT 1 FROM ${FilePartArtifactBindingTable} binding
+              WHERE binding.artifact_id = ${input.artifactID}
+            )`,
+            sql`NOT EXISTS (
+              SELECT 1 FROM ${FilePartArtifactImportTable} imported
+              WHERE imported.artifact_id = ${input.artifactID}
+            )`,
+          )).run().pipe(Effect.orDie)
+          return true
+        }),
+      { behavior: "immediate" },
+    ).pipe(Effect.orDie),
   )
 }
 
@@ -614,6 +675,28 @@ export function bindSnapshotRef(input: { readonly metadata: Metadata; readonly p
           Effect.gen(function* () {
             if (!input.partID.startsWith("prt"))
               return yield* fail(input.metadata.descriptor.id, "Snapshot artifact part identity is invalid")
+            const canonicalBinding = descriptorFromData("message.part.updated", input.metadata.canonicalData)
+            if (
+              !canonicalBinding ||
+              canonicalBinding.aggregateID !== input.metadata.aggregateID ||
+              canonicalBinding.partID !== input.partID ||
+              !isDeepStrictEqual(canonicalBinding.descriptor, input.metadata.descriptor)
+            )
+              return yield* fail(input.metadata.descriptor.id, "Snapshot artifact canonical data does not match its descriptor")
+            const projected = yield* db
+              .select()
+              .from(PartTable)
+              .where(eq(PartTable.id, input.partID as typeof PartTable.$inferSelect.id))
+              .get()
+              .pipe(Effect.orDie)
+            if (!projected || projected.session_id !== input.metadata.aggregateID || projected.message_id !== (input.metadata.canonicalData.part as Record<string, unknown>).messageID)
+              return yield* fail(input.metadata.descriptor.id, "Snapshot artifact has no matching projected part")
+            const canonicalPart = input.metadata.canonicalData.part as Record<string, unknown>
+            const projectedData = Object.fromEntries(
+              Object.entries(canonicalPart).filter(([key]) => key !== "id" && key !== "sessionID" && key !== "messageID"),
+            )
+            if (!isDeepStrictEqual(projected.data, projectedData))
+              return yield* fail(input.metadata.descriptor.id, "Snapshot artifact projected part diverges from its binding")
             yield* stage(db, input.metadata)
             const existing = yield* db
               .select()
@@ -851,6 +934,15 @@ function stage(db: Database.Interface["db"], metadata: Metadata) {
     )
       return yield* fail(metadata.descriptor.id, "Artifact import metadata does not match durable chunks")
     yield* validate(metadata.descriptor, chunks.map((chunk) => chunk.data))
+    yield* stageReceipt(db, metadata)
+  })
+}
+
+function stageReceipt(db: Database.Interface["db"], metadata: Metadata) {
+  return Effect.gen(function* () {
+    if (!matchesDataHash(metadata.canonicalDataHash, metadata.canonicalData))
+      return yield* fail(metadata.descriptor.id, "Artifact import metadata canonical hash is invalid")
+    const canonicalData = JSON.parse(CanonicalJson.stringify(metadata.canonicalData)) as Record<string, unknown>
     const existing = yield* db
       .select()
       .from(FilePartArtifactImportTable)

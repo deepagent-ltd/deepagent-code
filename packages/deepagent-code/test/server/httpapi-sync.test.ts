@@ -130,8 +130,72 @@ describe("sync HttpApi", () => {
           body: JSON.stringify({ version: 1, cursor: firstPage.nextCursor }),
         })
         expect(resync.status, yield* resync.text).toBe(200)
-        expect(((yield* resync.json) as { items: { kind: string; snapshot?: { snapshotID: string } }[] }).items).toEqual([
+        const resyncPage = (yield* resync.json) as {
+          items: { kind: string; snapshot?: { snapshotID: string } }[]
+          nextCursor: string
+        }
+        expect(resyncPage.items).toEqual([
           { kind: "resync_required", snapshot: expect.objectContaining({ snapshotID: snapshot.snapshotID }) },
+        ])
+
+        const { db } = yield* Database.Service
+        yield* db.update(SessionTable).set({ mutation_epoch: sql`${SessionTable.mutation_epoch} + 1` })
+          .where(eq(SessionTable.id, session.id)).run().pipe(Effect.orDie)
+        const replacementPrepared = yield* requestInDirectory(SyncPaths.checkpointPrepare, tmp.directory, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ aggregateID: session.id }),
+        })
+        expect(replacementPrepared.status, yield* replacementPrepared.text).toBe(200)
+        const replacementAttempt = Schema.decodeUnknownSync(
+          Schema.Struct({ snapshotID: Schema.String, state: Schema.String, hasMore: Schema.Boolean }),
+        )(yield* replacementPrepared.json)
+        expect(replacementAttempt.snapshotID).not.toBe(snapshot.snapshotID)
+        let replacementState = replacementAttempt.state
+        while (replacementState === "prepared") {
+          const staged = yield* requestInDirectory(SyncPaths.checkpointStage, tmp.directory, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ snapshotID: replacementAttempt.snapshotID, limit: 1 }),
+          })
+          expect(staged.status, yield* staged.text).toBe(200)
+          replacementState = String(((yield* staged.json) as Record<string, unknown>).state)
+        }
+        const replacementFinalized = yield* requestInDirectory(SyncPaths.checkpointFinalize, tmp.directory, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ snapshotID: replacementAttempt.snapshotID }),
+        })
+        expect(replacementFinalized.status, yield* replacementFinalized.text).toBe(200)
+        const later = yield* Session.use.create({ title: "event after replacement snapshot", workspaceID: syncWorkspaceID })
+
+        const replacementHistory = yield* requestInDirectory(SyncPaths.history, tmp.directory, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            version: 1,
+            cursor: resyncPage.nextCursor,
+            known: { [session.id]: snapshot.throughSeq },
+          }),
+        })
+        expect(replacementHistory.status, yield* replacementHistory.text).toBe(200)
+        const replacementPage = (yield* replacementHistory.json) as {
+          items: { kind: string; snapshot?: { snapshotID: string } }[]
+          nextCursor: string
+          complete: boolean
+        }
+        expect(replacementPage.items).toEqual([
+          { kind: "resync_required", snapshot: expect.objectContaining({ snapshotID: replacementAttempt.snapshotID }) },
+        ])
+        expect(replacementPage.complete).toBe(false)
+        const afterReplacement = yield* requestInDirectory(SyncPaths.history, tmp.directory, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ version: 1, cursor: replacementPage.nextCursor }),
+        })
+        expect(afterReplacement.status, yield* afterReplacement.text).toBe(200)
+        expect(((yield* afterReplacement.json) as HistoryResponse).items).toEqual([
+          expect.objectContaining({ kind: "event", aggregate_id: later.id }),
         ])
 
         let compacted = false
@@ -144,7 +208,6 @@ describe("sync HttpApi", () => {
           expect(response.status, yield* response.text).toBe(200)
           compacted = Boolean(((yield* response.json) as { complete: boolean }).complete)
         }
-        const { db } = yield* Database.Service
         expect(
           yield* db
             .select({ count: sql<number>`count(*)` })
@@ -210,7 +273,7 @@ describe("sync HttpApi", () => {
           .pipe(Effect.orDie)
         yield* db
           .insert(EventSnapshotRowTable)
-          .values({ snapshot_id: snapshot.snapshotID, row_index: 0, table_name: "session", row_key: session.id, row_hash: rowHash, row_bytes: 2, chunk_count: 1, chain_hash: "2".repeat(64) })
+          .values({ snapshot_id: snapshot.snapshotID, aggregate_id: snapshot.aggregateID, row_index: 0, table_name: "session", row_key: session.id, row_hash: rowHash, row_bytes: 2, chunk_count: 1, chain_hash: "2".repeat(64) })
           .run()
           .pipe(Effect.orDie)
         yield* db

@@ -29,7 +29,10 @@ import partIntegrityBackfillMigration from "@deepagent-code/core/database/migrat
 import legacyActivityProgressMigration from "@deepagent-code/core/database/migration/20260811090000_legacy_activity_progress"
 import legacyActivityOwnerMigration from "@deepagent-code/core/database/migration/20260811100000_legacy_activity_owner"
 import eventSnapshotAuthorityMigration from "@deepagent-code/core/database/migration/20260813100000_event_snapshot_authority"
+import filePartArtifactMigration from "@deepagent-code/core/database/migration/20260813130000_file_part_artifact"
+import eventSnapshotChunksMigration from "@deepagent-code/core/database/migration/20260813131000_event_snapshot_chunks"
 import eventImmutableMigration from "@deepagent-code/core/database/migration/20260813135000_event_immutable"
+import eventSidecarCompactionMigration from "@deepagent-code/core/database/migration/20260813140000_event_sidecar_compaction"
 import type { SqlClient as SqlClientService } from "effect/unstable/sql/SqlClient"
 import { Database } from "@deepagent-code/core/database/database"
 import { tmpdir } from "./fixture/tmpdir"
@@ -128,6 +131,353 @@ describe("DatabaseMigration", () => {
           .run(sql`UPDATE file_part_artifact SET body_hash = 'hash-b' WHERE artifact_id = 'artifact-a'`)
           .pipe(Effect.exit)
         expect(String(artifactUpdated)).toContain("file_part_artifact_update_immutable")
+      }),
+    )
+  })
+  test("keeps compacted replay and snapshot authorities append-only", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(sql`PRAGMA foreign_keys = ON`)
+        yield* db.run(sql`CREATE TABLE event_sequence (aggregate_id TEXT PRIMARY KEY)`)
+        yield* db.run(sql`CREATE TABLE event (
+          id TEXT PRIMARY KEY, aggregate_id TEXT NOT NULL, seq INTEGER NOT NULL,
+          type TEXT NOT NULL, data TEXT NOT NULL
+        )`)
+        yield* db.run(sql`CREATE TABLE event_artifact (
+          event_id TEXT PRIMARY KEY, aggregate_id TEXT NOT NULL, seq INTEGER NOT NULL,
+          original_data_hash TEXT NOT NULL
+        )`)
+        yield* db.run(sql`CREATE TABLE event_dedupe (
+          aggregate_id TEXT NOT NULL REFERENCES event_sequence(aggregate_id) ON DELETE CASCADE,
+          seq INTEGER NOT NULL, event_id TEXT NOT NULL, type TEXT NOT NULL,
+          data_hash TEXT NOT NULL, source_data TEXT, compacted_at INTEGER NOT NULL
+        )`)
+        yield* db.run(sql`CREATE TABLE event_snapshot (
+          snapshot_id TEXT PRIMARY KEY,
+          aggregate_id TEXT NOT NULL REFERENCES event_sequence(aggregate_id) ON DELETE CASCADE,
+          snapshot_hash TEXT NOT NULL, body TEXT NOT NULL
+        )`)
+        yield* db.run(sql`CREATE TABLE file_part_artifact (
+          artifact_id TEXT PRIMARY KEY, body_hash TEXT NOT NULL
+        )`)
+        yield* db.run(sql`CREATE TABLE file_part_artifact_binding (
+          event_id TEXT PRIMARY KEY, aggregate_id TEXT NOT NULL, seq INTEGER NOT NULL,
+          artifact_id TEXT NOT NULL, original_data_hash TEXT NOT NULL,
+          canonical_data_hash TEXT NOT NULL, canonical_data TEXT NOT NULL
+        )`)
+        yield* db.run(sql`CREATE TABLE file_part_artifact_import (
+          event_id TEXT PRIMARY KEY, aggregate_id TEXT NOT NULL, seq INTEGER NOT NULL,
+          artifact_id TEXT NOT NULL REFERENCES file_part_artifact(artifact_id) ON DELETE CASCADE,
+          original_data_hash TEXT NOT NULL, canonical_data_hash TEXT NOT NULL,
+          canonical_data TEXT NOT NULL, created_at INTEGER NOT NULL
+        )`)
+        yield* db.run(sql`CREATE TABLE file_part_artifact_discard (
+          event_id TEXT PRIMARY KEY, aggregate_id TEXT NOT NULL, seq INTEGER NOT NULL,
+          artifact_id TEXT NOT NULL REFERENCES file_part_artifact(artifact_id) ON DELETE CASCADE,
+          original_data_hash TEXT NOT NULL, canonical_data_hash TEXT NOT NULL,
+          canonical_data TEXT NOT NULL, created_at INTEGER NOT NULL
+        )`)
+        yield* DatabaseMigration.applyOnly(db, [eventSidecarCompactionMigration])
+        yield* db.run(sql`INSERT INTO event_sequence VALUES ('session-a')`)
+        yield* db.run(sql`INSERT INTO event_dedupe VALUES (
+          'session-a', 0, 'event-a', 'test.1', '${"a".repeat(64)}', '{}', 1
+        )`)
+        yield* db.run(sql`INSERT INTO event_snapshot VALUES ('snapshot-a', 'session-a', '${"b".repeat(64)}', '{}')`)
+
+        expect(String(yield* db.run(sql`
+          UPDATE event_dedupe SET data_hash = '${"c".repeat(64)}' WHERE event_id = 'event-a'
+        `).pipe(Effect.exit))).toContain("event_dedupe_update_immutable")
+        expect(String(yield* db.run(sql`DELETE FROM event_dedupe WHERE event_id = 'event-a'`).pipe(Effect.exit)))
+          .toContain("event_dedupe_delete_immutable")
+        yield* db.run(sql`UPDATE event_dedupe SET source_data = NULL WHERE event_id = 'event-a'`)
+        expect(String(yield* db.run(sql`
+          UPDATE event_snapshot SET snapshot_hash = '${"c".repeat(64)}' WHERE snapshot_id = 'snapshot-a'
+        `).pipe(Effect.exit))).toContain("event_snapshot_update_immutable")
+
+        yield* db.run(sql`DELETE FROM event_sequence WHERE aggregate_id = 'session-a'`)
+        expect(yield* db.all(sql`SELECT * FROM event_dedupe`)).toEqual([])
+        expect(yield* db.all(sql`SELECT * FROM event_snapshot`)).toEqual([])
+
+        yield* db.run(sql`INSERT INTO file_part_artifact VALUES ('file-a', '${"a".repeat(64)}')`)
+        yield* db.run(sql`INSERT INTO file_part_artifact_import VALUES (
+          'file-event-a', 'session-file', 1, 'file-a', '${"b".repeat(64)}',
+          '${"c".repeat(64)}', '{}', 1
+        )`)
+        expect(String(yield* db.run(sql`
+          UPDATE file_part_artifact_import SET original_data_hash = '${"d".repeat(64)}'
+        `).pipe(Effect.exit))).toContain("file_part_artifact_import_update_immutable")
+        expect(String(yield* db.run(sql`DELETE FROM file_part_artifact_import`).pipe(Effect.exit)))
+          .toContain("file_part_artifact_import_not_consumed")
+        yield* db.run(sql`INSERT INTO file_part_artifact_binding VALUES (
+          'file-event-a', 'session-file', 1, 'file-a', '${"b".repeat(64)}', '${"c".repeat(64)}', '{}'
+        )`)
+        yield* db.run(sql`DELETE FROM file_part_artifact_import`)
+        yield* db.run(sql`INSERT INTO file_part_artifact_import VALUES (
+          'file-event-b', 'session-file', 2, 'file-a', '${"b".repeat(64)}',
+          '${"c".repeat(64)}', '{}', 1
+        )`)
+        yield* db.run(sql`DELETE FROM file_part_artifact WHERE artifact_id = 'file-a'`)
+        expect(yield* db.all(sql`SELECT * FROM file_part_artifact_import`)).toEqual([])
+      }),
+    )
+  })
+  test("upgrades the exact legacy snapshot candidate schema without losing rows or chunks", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(sql`PRAGMA foreign_keys = ON`)
+        yield* db.run(sql`CREATE TABLE event_sequence (
+          aggregate_id TEXT PRIMARY KEY, seq INTEGER NOT NULL, owner_id TEXT
+        )`)
+        yield* db.run(sql`CREATE TABLE event (
+          id TEXT PRIMARY KEY,
+          aggregate_id TEXT NOT NULL REFERENCES event_sequence(aggregate_id) ON DELETE CASCADE,
+          seq INTEGER NOT NULL, type TEXT NOT NULL, data TEXT NOT NULL
+        )`)
+        yield* DatabaseMigration.applyOnly(db, [
+          eventSnapshotAuthorityMigration,
+          filePartArtifactMigration,
+          eventSnapshotChunksMigration,
+        ])
+        yield* db.run(sql`DROP TABLE file_part_artifact_discard`)
+        yield* db.run(sql`INSERT INTO event_sequence(aggregate_id, seq) VALUES ('session-legacy-snapshot', 0)`)
+        yield* db.run(sql`INSERT INTO event_snapshot_attempt(
+          snapshot_id, aggregate_id, through_seq, expected_latest, owner_id, codec, schema_version,
+          projection_revision, cursor, row_count, encoded_bytes, content_hash, tables, state, created_at, updated_at
+        ) VALUES (
+          'snapshot-legacy', 'session-legacy-snapshot', 0, 0, NULL, 'session-projection', 1,
+          'revision-legacy', NULL, 1, 2, ${"a".repeat(64)}, '{"session":1}', 'complete', 1, 1
+        )`)
+        yield* db.run(sql`INSERT INTO event_snapshot(
+          snapshot_id, aggregate_id, through_seq, sync_seq, codec, schema_version,
+          snapshot_hash, body, owner_id, created_at
+        ) VALUES (
+          'snapshot-legacy', 'session-legacy-snapshot', 0, 1, 'session-projection', 1,
+          ${"b".repeat(64)}, '{}', NULL, 1
+        )`)
+        yield* db.run(sql`INSERT INTO event_snapshot_chunk(row_hash, chunk_index, data, chunk_hash)
+          VALUES (${"c".repeat(64)}, 0, X'7B7D', ${"d".repeat(64)})`)
+        yield* db.run(sql`INSERT INTO event_snapshot_row(
+          snapshot_id, aggregate_id, row_index, table_name, row_key,
+          row_hash, row_bytes, chunk_count, chain_hash
+        ) VALUES (
+          'snapshot-legacy', 'session-legacy-snapshot', 0, 'session', 'session-legacy-snapshot',
+          ${"c".repeat(64)}, 2, 1, ${"e".repeat(64)}
+        )`)
+        yield* db.run(sql`UPDATE event_sequence SET retention_floor_seq = 0, snapshot_id = 'snapshot-legacy'
+          WHERE aggregate_id = 'session-legacy-snapshot'`)
+
+        yield* db.run(sql`DROP TRIGGER event_sequence_snapshot_validate_update`)
+        yield* db.run(sql`DROP TRIGGER event_snapshot_delete_active_guard`)
+        yield* db.run(sql`ALTER TABLE event_snapshot RENAME TO event_snapshot_current`)
+        yield* db.run(sql`CREATE TABLE event_snapshot (
+          snapshot_id TEXT NOT NULL PRIMARY KEY,
+          aggregate_id TEXT NOT NULL REFERENCES event_sequence(aggregate_id) ON DELETE CASCADE,
+          through_seq INTEGER NOT NULL CHECK (through_seq >= 0),
+          sync_seq INTEGER NOT NULL UNIQUE CHECK (sync_seq >= 0),
+          codec TEXT NOT NULL CHECK (length(codec) > 0),
+          schema_version INTEGER NOT NULL CHECK (schema_version >= 1),
+          snapshot_hash TEXT NOT NULL CHECK (length(snapshot_hash) = 64),
+          body TEXT NOT NULL CHECK (json_valid(body)),
+          owner_id TEXT, created_at INTEGER NOT NULL,
+          UNIQUE (aggregate_id, through_seq)
+        )`)
+        yield* db.run(sql`INSERT INTO event_snapshot SELECT * FROM event_snapshot_current`)
+        yield* db.run(sql`DROP TABLE event_snapshot_current`)
+
+        yield* db.run(sql`DROP TRIGGER event_snapshot_row_immutable`)
+        yield* db.run(sql`DROP TRIGGER event_snapshot_row_delete_guard`)
+        yield* db.run(sql`DROP TRIGGER event_snapshot_row_chunk_cleanup`)
+        yield* db.run(sql`DROP TRIGGER event_snapshot_aggregate_cleanup`)
+        yield* db.run(sql`DROP TRIGGER event_snapshot_chunk_delete_guard`)
+        yield* db.run(sql`ALTER TABLE event_snapshot_row RENAME TO event_snapshot_row_current`)
+        yield* db.run(sql`CREATE TABLE event_snapshot_row (
+          snapshot_id TEXT NOT NULL,
+          row_index INTEGER NOT NULL CHECK (row_index >= 0),
+          table_name TEXT NOT NULL CHECK (length(table_name) > 0),
+          row_key TEXT NOT NULL CHECK (length(row_key) > 0),
+          row_hash TEXT NOT NULL CHECK (length(row_hash) = 64),
+          row_bytes INTEGER NOT NULL CHECK (row_bytes > 0),
+          chunk_count INTEGER NOT NULL CHECK (chunk_count > 0),
+          chain_hash TEXT NOT NULL CHECK (length(chain_hash) = 64),
+          PRIMARY KEY (snapshot_id, row_index),
+          UNIQUE (snapshot_id, table_name, row_key)
+        )`)
+        yield* db.run(sql`INSERT INTO event_snapshot_row(
+          snapshot_id, row_index, table_name, row_key, row_hash, row_bytes, chunk_count, chain_hash
+        ) SELECT snapshot_id, row_index, table_name, row_key, row_hash, row_bytes, chunk_count, chain_hash
+          FROM event_snapshot_row_current`)
+        yield* db.run(sql`DROP TABLE event_snapshot_row_current`)
+
+        yield* db.run(sql`ALTER TABLE event_snapshot_attempt RENAME TO event_snapshot_attempt_current`)
+        yield* db.run(sql`CREATE TABLE event_snapshot_attempt (
+          snapshot_id TEXT NOT NULL PRIMARY KEY,
+          aggregate_id TEXT NOT NULL,
+          through_seq INTEGER NOT NULL CHECK (through_seq >= 0),
+          expected_latest INTEGER NOT NULL CHECK (expected_latest >= 0),
+          owner_id TEXT,
+          codec TEXT NOT NULL CHECK (length(codec) > 0),
+          schema_version INTEGER NOT NULL CHECK (schema_version > 0),
+          projection_revision TEXT NOT NULL,
+          cursor TEXT,
+          row_count INTEGER NOT NULL CHECK (row_count >= 0),
+          encoded_bytes INTEGER NOT NULL CHECK (encoded_bytes >= 0),
+          content_hash TEXT NOT NULL CHECK (length(content_hash) = 64),
+          tables TEXT NOT NULL CHECK (json_valid(tables)),
+          state TEXT NOT NULL CHECK (state IN ('prepared', 'staged', 'complete')),
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        )`)
+        yield* db.run(sql`INSERT INTO event_snapshot_attempt SELECT * FROM event_snapshot_attempt_current`)
+        yield* db.run(sql`DROP TABLE event_snapshot_attempt_current`)
+        yield* db.run(sql`INSERT INTO event_snapshot_attempt(
+          snapshot_id, aggregate_id, through_seq, expected_latest, codec, schema_version,
+          projection_revision, row_count, encoded_bytes, content_hash, tables, state, created_at, updated_at
+        ) VALUES (
+          'snapshot-orphan-attempt', 'session-missing', 0, 0, 'session-projection', 1,
+          'revision-orphan', 1, 2, ${"f".repeat(64)}, '{}', 'staged', 1, 1
+        )`)
+        yield* db.run(sql`INSERT INTO event_snapshot_chunk(row_hash, chunk_index, data, chunk_hash)
+          VALUES (${"4".repeat(64)}, 0, X'7B7D', ${"5".repeat(64)})`)
+        yield* db.run(sql`INSERT INTO event_snapshot_row(
+          snapshot_id, row_index, table_name, row_key, row_hash, row_bytes, chunk_count, chain_hash
+        ) VALUES (
+          'snapshot-orphan-attempt', 0, 'session', 'session-missing',
+          ${"4".repeat(64)}, 2, 1, ${"6".repeat(64)}
+        )`)
+        yield* db.run(sql`INSERT INTO event_snapshot_chunk(row_hash, chunk_index, data, chunk_hash)
+          VALUES (${"1".repeat(64)}, 0, X'7B7D', ${"2".repeat(64)})`)
+        yield* db.run(sql`INSERT INTO event_snapshot_row(
+          snapshot_id, row_index, table_name, row_key, row_hash, row_bytes, chunk_count, chain_hash
+        ) VALUES (
+          'snapshot-crash-staged', 0, 'session', 'session-crash-staged',
+          ${"1".repeat(64)}, 2, 1, ${"3".repeat(64)}
+        )`)
+
+        yield* DatabaseMigration.applyOnly(db, [eventSidecarCompactionMigration])
+        expect((yield* db.all<{ name: string }>(sql`PRAGMA table_info('event_snapshot_row')`)).map((row) => row.name))
+          .toEqual([
+            "snapshot_id", "aggregate_id", "row_index", "table_name", "row_key",
+            "row_hash", "row_bytes", "chunk_count", "chain_hash",
+          ])
+        expect(yield* db.get(sql`SELECT aggregate_id, row_key, row_bytes FROM event_snapshot_row`)).toEqual({
+          aggregate_id: "session-legacy-snapshot",
+          row_key: "session-legacy-snapshot",
+          row_bytes: 2,
+        })
+        expect(yield* db.get(sql`SELECT hex(data) AS data, chunk_hash FROM event_snapshot_chunk`)).toEqual({
+          data: "7B7D",
+          chunk_hash: "d".repeat(64),
+        })
+        expect(yield* db.all(sql`SELECT * FROM event_snapshot_row WHERE snapshot_id = 'snapshot-crash-staged'`))
+          .toEqual([])
+        expect(yield* db.all(sql`SELECT * FROM event_snapshot_chunk WHERE row_hash = ${"1".repeat(64)}`))
+          .toEqual([])
+        expect(yield* db.all(sql`SELECT * FROM event_snapshot_attempt WHERE snapshot_id = 'snapshot-orphan-attempt'`)).toEqual([])
+        expect(yield* db.all(sql`SELECT * FROM event_snapshot_row WHERE snapshot_id = 'snapshot-orphan-attempt'`)).toEqual([])
+        expect(yield* db.all(sql`SELECT * FROM event_snapshot_chunk WHERE row_hash = ${"4".repeat(64)}`)).toEqual([])
+        expect((yield* db.all<{ name: string; unique: number }>(sql`PRAGMA index_list('event_snapshot')`))
+          .filter((index) => index.unique === 1)).toHaveLength(2)
+        expect(yield* db.get(sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'file_part_artifact_discard'`))
+          .toEqual({ name: "file_part_artifact_discard" })
+        expect(yield* db.all(sql`PRAGMA foreign_key_list('event_snapshot_attempt')`)).toContainEqual(
+          expect.objectContaining({ table: "event_sequence", from: "aggregate_id", to: "aggregate_id", on_delete: "CASCADE" }),
+        )
+        expect(yield* db.get(sql`
+          SELECT name FROM sqlite_master
+          WHERE type = 'index' AND name = 'event_snapshot_row_hash_idx'
+        `)).toEqual({ name: "event_snapshot_row_hash_idx" })
+        expect(yield* db.get(sql`
+          SELECT name FROM sqlite_master
+          WHERE type = 'index' AND name = 'event_snapshot_row_aggregate_idx'
+        `)).toEqual({ name: "event_snapshot_row_aggregate_idx" })
+        expect(yield* db.get(sql`
+          SELECT name FROM sqlite_master
+          WHERE type = 'index' AND name = 'event_snapshot_attempt_aggregate_idx'
+        `)).toEqual({ name: "event_snapshot_attempt_aggregate_idx" })
+        expect((yield* db.run(sql`INSERT INTO event_snapshot_attempt(
+          snapshot_id, aggregate_id, through_seq, expected_latest, codec, schema_version,
+          projection_revision, row_count, encoded_bytes, content_hash, tables, state, created_at, updated_at
+        ) VALUES (
+          'snapshot-orphan', 'session-missing', 0, 0, 'session-projection', 1,
+          'revision-orphan', 0, 0, ${"f".repeat(64)}, '{}', 'prepared', 1, 1
+        )`).pipe(Effect.exit))._tag).toBe("Failure")
+
+        yield* db.run(sql`DELETE FROM event_sequence WHERE aggregate_id = 'session-legacy-snapshot'`)
+        expect(yield* db.all(sql`SELECT * FROM event_snapshot`)).toEqual([])
+        expect(yield* db.all(sql`SELECT * FROM event_snapshot_attempt`)).toEqual([])
+        expect(yield* db.all(sql`SELECT * FROM event_snapshot_row`)).toEqual([])
+        expect(yield* db.all(sql`SELECT * FROM event_snapshot_chunk`)).toEqual([])
+      }),
+    )
+  })
+  test("rejects conflicting legacy snapshot authorities without mutating staged rows", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(sql`PRAGMA foreign_keys = ON`)
+        yield* db.run(sql`CREATE TABLE event_sequence (aggregate_id TEXT PRIMARY KEY, seq INTEGER NOT NULL, owner_id TEXT)`)
+        yield* db.run(sql`CREATE TABLE event (
+          id TEXT PRIMARY KEY, aggregate_id TEXT NOT NULL REFERENCES event_sequence(aggregate_id) ON DELETE CASCADE,
+          seq INTEGER NOT NULL, type TEXT NOT NULL, data TEXT NOT NULL
+        )`)
+        yield* DatabaseMigration.applyOnly(db, [
+          eventSnapshotAuthorityMigration,
+          filePartArtifactMigration,
+          eventSnapshotChunksMigration,
+        ])
+        yield* db.run(sql`DROP TABLE file_part_artifact_discard`)
+        yield* db.run(sql`INSERT INTO event_sequence(aggregate_id, seq) VALUES ('session-a', 0), ('session-b', 0)`)
+        yield* db.run(sql`INSERT INTO event_snapshot_attempt(
+          snapshot_id, aggregate_id, through_seq, expected_latest, codec, schema_version,
+          projection_revision, row_count, encoded_bytes, content_hash, tables, state, created_at, updated_at
+        ) VALUES (
+          'snapshot-conflict', 'session-a', 0, 0, 'session-projection', 1,
+          'revision-conflict', 1, 2, ${"a".repeat(64)}, '{"session":1}', 'complete', 1, 1
+        )`)
+        yield* db.run(sql`INSERT INTO event_snapshot(
+          snapshot_id, aggregate_id, through_seq, sync_seq, codec, schema_version,
+          snapshot_hash, body, created_at
+        ) VALUES (
+          'snapshot-conflict', 'session-b', 0, 1, 'session-projection', 1,
+          ${"b".repeat(64)}, '{}', 1
+        )`)
+        yield* db.run(sql`INSERT INTO event_snapshot_chunk(row_hash, chunk_index, data, chunk_hash)
+          VALUES (${"c".repeat(64)}, 0, X'7B7D', ${"d".repeat(64)})`)
+        yield* db.run(sql`INSERT INTO event_snapshot_row(
+          snapshot_id, aggregate_id, row_index, table_name, row_key,
+          row_hash, row_bytes, chunk_count, chain_hash
+        ) VALUES (
+          'snapshot-conflict', 'session-a', 0, 'session', 'session-a',
+          ${"c".repeat(64)}, 2, 1, ${"e".repeat(64)}
+        )`)
+        yield* db.run(sql`DROP TRIGGER event_snapshot_row_immutable`)
+        yield* db.run(sql`DROP TRIGGER event_snapshot_row_delete_guard`)
+        yield* db.run(sql`DROP TRIGGER event_snapshot_row_chunk_cleanup`)
+        yield* db.run(sql`DROP TRIGGER event_snapshot_aggregate_cleanup`)
+        yield* db.run(sql`DROP TRIGGER event_snapshot_chunk_delete_guard`)
+        yield* db.run(sql`ALTER TABLE event_snapshot_row RENAME TO event_snapshot_row_current`)
+        yield* db.run(sql`CREATE TABLE event_snapshot_row (
+          snapshot_id TEXT NOT NULL, row_index INTEGER NOT NULL, table_name TEXT NOT NULL,
+          row_key TEXT NOT NULL, row_hash TEXT NOT NULL, row_bytes INTEGER NOT NULL,
+          chunk_count INTEGER NOT NULL, chain_hash TEXT NOT NULL,
+          PRIMARY KEY (snapshot_id, row_index), UNIQUE (snapshot_id, table_name, row_key)
+        )`)
+        yield* db.run(sql`INSERT INTO event_snapshot_row
+          SELECT snapshot_id, row_index, table_name, row_key, row_hash, row_bytes, chunk_count, chain_hash
+          FROM event_snapshot_row_current`)
+        yield* db.run(sql`DROP TABLE event_snapshot_row_current`)
+
+        const before = yield* db.get(sql`SELECT snapshot_id, row_key, row_hash FROM event_snapshot_row`)
+        const result = yield* DatabaseMigration.applyOnly(db, [eventSidecarCompactionMigration]).pipe(Effect.exit)
+        expect(result._tag).toBe("Failure")
+        expect(String(result)).toContain("conflicting aggregate authorities")
+        expect(yield* db.get(sql`SELECT snapshot_id, row_key, row_hash FROM event_snapshot_row`)).toEqual(before)
+        expect(yield* db.get(sql`SELECT hex(data) AS data FROM event_snapshot_chunk`)).toEqual({ data: "7B7D" })
+        expect(yield* db.get(sql`
+          SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'file_part_artifact_discard'
+        `)).toBeUndefined()
       }),
     )
   })
