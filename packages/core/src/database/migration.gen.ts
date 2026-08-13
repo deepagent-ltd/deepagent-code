@@ -138,5 +138,6 @@ export const migrations = (
     import("./migration/20260813120346_v2_provider_parity_campaign"),
     import("./migration/20260813121129_v2_provider_parity_response_fingerprint"),
     import("./migration/20260813121200_v2_provider_parity_campaign_authority"),
+    import("./migration/20260813150000_single_authority_snapshot_merge"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]
