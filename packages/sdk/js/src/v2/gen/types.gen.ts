@@ -280,7 +280,7 @@ export type OutputFormat = OutputFormatText | OutputFormatJsonSchema
 export type SnapshotDiffArtifactDescriptor = {
   id: string
   hash: string
-  codec: "legacy-message-diff.v1"
+  codec: "legacy-message-diff.v1" | "legacy-message-diff.v2"
   fileCount: number
 }
 

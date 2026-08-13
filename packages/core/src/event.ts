@@ -18,6 +18,7 @@ import { externalID, type ExternalID, NonNegativeInt, withStatics } from "./sche
 import { Identifier } from "./util/identifier"
 import { isDeepStrictEqual } from "node:util"
 import { Hash } from "./util/hash"
+import { createHash } from "node:crypto"
 
 export const ID = Schema.String.check(Schema.isStartsWith("evt_")).pipe(
   Schema.brand("Event.ID"),
@@ -108,7 +109,7 @@ export const MAX_ENCODED_PAYLOAD_BYTES = 4 * 1024 * 1024
 export const AGGREGATE_READ_BATCH_EVENTS = 100
 export const AGGREGATE_READ_BATCH_BYTES = 4 * 1024 * 1024
 export const SNAPSHOT_MAX_ENCODED_BYTES = 16 * 1024 * 1024
-export const LEGACY_ARTIFACT_BATCH_EVENTS = 8
+export const LEGACY_ARTIFACT_BATCH_EVENTS = 1
 export const LEGACY_DIFF_DESCRIPTOR_FILES = 200
 export const ARTIFACT_CHUNK_BYTES = 256 * 1024
 
@@ -173,48 +174,6 @@ function stableJson(value: unknown): string {
 
 function hashJson(value: unknown) {
   return Hash.sha256(stableJson(value))
-}
-
-function canonicalizeLegacyMessageDiff(eventID: ID, type: string, data: Record<string, unknown>) {
-  if (type !== versionedType("message.updated", 1)) return
-  if (!data.info || typeof data.info !== "object" || Array.isArray(data.info)) return
-  const info = data.info as Record<string, unknown>
-  if (!info.summary || typeof info.summary !== "object" || Array.isArray(info.summary)) return
-  const summary = info.summary as Record<string, unknown>
-  if (!Array.isArray(summary.diffs) || summary.diffs.length === 0) return
-  const originalDataHash = hashJson(data)
-  const body = { diffs: summary.diffs }
-  const bodyHash = hashJson(body)
-  const artifactID = `evtart_${Hash.sha256(`legacy-message-diff.v1:${eventID}:${originalDataHash}:${bodyHash}`)}`
-  const diffs = summary.diffs.slice(0, LEGACY_DIFF_DESCRIPTOR_FILES).flatMap((item) => {
-    if (!item || typeof item !== "object" || Array.isArray(item)) return []
-    const { patch: _, ...descriptor } = item as Record<string, unknown>
-    return [descriptor]
-  })
-  const canonicalData = {
-    ...data,
-    info: {
-      ...info,
-      summary: {
-        ...summary,
-        diffs,
-        diffArtifact: {
-          id: artifactID,
-          hash: bodyHash,
-          codec: "legacy-message-diff.v1",
-          fileCount: summary.diffs.length,
-        },
-      },
-    },
-  }
-  return {
-    kind: "legacy_message_diff" as const,
-    artifactID,
-    originalDataHash,
-    canonicalDataHash: hashJson(canonicalData),
-    canonicalData,
-    body,
-  }
 }
 
 // Synchronized events cross a JSON boundary, so their data schemas must encode and decode without services.
@@ -452,6 +411,7 @@ export const layerWith = (layerOptions?: LayerOptions) =>
                                   .select({
                                     originalDataHash: EventArtifactTable.original_data_hash,
                                     canonicalData: EventArtifactTable.canonical_data,
+                                    codecVersion: EventArtifactTable.codec_version,
                                   })
                                   .from(EventArtifactTable)
                                   .where(eq(EventArtifactTable.event_id, stored.id))
@@ -476,7 +436,11 @@ export const layerWith = (layerOptions?: LayerOptions) =>
                                 stored.type === versionedType(definition.type, sync.version) &&
                                 (isDeepStrictEqual(stored.data, encoded) ||
                                   isDeepStrictEqual(artifact?.canonicalData, encoded) ||
-                                  artifact?.originalDataHash === hashJson(encoded))) ||
+                                  (artifact &&
+                                    artifact.originalDataHash ===
+                                      (artifact.codecVersion >= 2
+                                        ? Hash.sha256(JSON.stringify(encoded))
+                                        : hashJson(encoded))))) ||
                                 (dedupe?.event_id === event.id &&
                                   dedupe.type === versionedType(definition.type, sync.version) &&
                                   dedupe.data_hash === hashJson(encoded)))
@@ -1132,18 +1096,50 @@ export const layerWith = (layerOptions?: LayerOptions) =>
       }
 
       function canonicalizeLegacyArtifacts(input?: { readonly afterID?: ID; readonly limit?: number; readonly now?: number }) {
+        const bodyData = sql`json_object('diffs', json_extract(${EventTable.data}, '$.info.summary.diffs'))`
+        const chunk = (eventID: ID, kind: "source" | "body", index: number) =>
+          db
+            .select({
+              data: kind === "source"
+                ? sql<Buffer>`substr(CAST(${EventTable.data} AS BLOB), ${index * ARTIFACT_CHUNK_BYTES + 1}, ${ARTIFACT_CHUNK_BYTES})`
+                : sql<Buffer>`substr(CAST(${bodyData} AS BLOB), ${index * ARTIFACT_CHUNK_BYTES + 1}, ${ARTIFACT_CHUNK_BYTES})`,
+            })
+            .from(EventTable)
+            .where(eq(EventTable.id, eventID))
+            .get()
+            .pipe(Effect.orDie)
+        const hash = (eventID: ID, kind: "source" | "body", bytes: number) =>
+          Effect.gen(function* () {
+            const digest = createHash("sha256")
+            yield* Effect.forEach(
+              Array.from({ length: Math.ceil(bytes / ARTIFACT_CHUNK_BYTES) }, (_, index) => index),
+              (index) => chunk(eventID, kind, index).pipe(Effect.tap((value) => Effect.sync(() => digest.update(value!.data)))),
+              { discard: true },
+            )
+            return digest.digest("hex")
+          })
         return db
           .transaction(
             () =>
               Effect.gen(function* () {
                 const rows = yield* db
-                  .select()
+                  .select({
+                    id: EventTable.id,
+                    aggregateID: EventTable.aggregate_id,
+                    seq: EventTable.seq,
+                    fileCount: sql<number>`json_array_length(${EventTable.data}, '$.info.summary.diffs')`,
+                    sourceBytes: sql<number>`length(CAST(${EventTable.data} AS BLOB))`,
+                    bodyBytes: sql<number>`length(CAST(${bodyData} AS BLOB))`,
+                  })
                   .from(EventTable)
                   .leftJoin(EventArtifactTable, eq(EventArtifactTable.event_id, EventTable.id))
                   .where(
                     and(
                       eq(EventTable.type, versionedType("message.updated", 1)),
                       sql`length(CAST(${EventTable.data} AS BLOB)) > ${MAX_ENCODED_PAYLOAD_BYTES}`,
+                      sql`json_valid(${EventTable.data})`,
+                      sql`json_type(${EventTable.data}, '$.info.summary.diffs') = 'array'`,
+                      sql`json_array_length(${EventTable.data}, '$.info.summary.diffs') > 0`,
                       input?.afterID ? gt(EventTable.id, input.afterID) : undefined,
                       sql`${EventArtifactTable.event_id} is null`,
                     ),
@@ -1152,69 +1148,75 @@ export const layerWith = (layerOptions?: LayerOptions) =>
                   .limit(Math.min(Math.max(input?.limit ?? LEGACY_ARTIFACT_BATCH_EVENTS, 1), LEGACY_ARTIFACT_BATCH_EVENTS))
                   .all()
                   .pipe(Effect.orDie)
-                const candidates = rows.flatMap((row) => {
-                  const artifact = canonicalizeLegacyMessageDiff(row.event.id, row.event.type, row.event.data)
-                  return artifact
-                    ? [{
-                        eventID: row.event.id,
-                        aggregateID: row.event.aggregate_id,
-                        seq: row.event.seq,
-                        artifact,
-                      }]
-                    : []
-                })
                 yield* Effect.forEach(
-                  candidates,
-                  ({ eventID, aggregateID, seq, artifact }) => {
-                    const bytes = Buffer.from(JSON.stringify(artifact.body))
-                    const chunks = Array.from(
-                      { length: Math.ceil(bytes.length / ARTIFACT_CHUNK_BYTES) || 1 },
-                      (_, index) => bytes.subarray(index * ARTIFACT_CHUNK_BYTES, (index + 1) * ARTIFACT_CHUNK_BYTES),
-                    )
-                    return db
-                      .insert(EventArtifactTable)
-                      .values({
-                        artifact_id: artifact.artifactID,
-                        event_id: eventID,
-                        aggregate_id: aggregateID,
-                        seq,
-                        kind: artifact.kind,
-                        original_data_hash: artifact.originalDataHash,
-                        canonical_data_hash: artifact.canonicalDataHash,
-                        canonical_data: artifact.canonicalData,
-                        body_hash: hashJson(artifact.body),
-                        body_bytes: bytes.length,
-                        chunk_count: chunks.length,
-                        codec_version: 1,
-                        created_at: input?.now ?? Date.now(),
+                  rows,
+                  (row) => Effect.gen(function* () {
+                    const originalDataHash = yield* hash(row.id, "source", row.sourceBytes)
+                    const bodyHash = yield* hash(row.id, "body", row.bodyBytes)
+                    const artifactID = `evtart_${Hash.sha256(`legacy-message-diff.v2:${row.id}:${originalDataHash}:${bodyHash}`)}`
+                    const canonicalData = db
+                      .select({
+                        data: sql<string>`json_set(
+                          ${EventTable.data},
+                          '$.info.summary.diffs',
+                          json(COALESCE((
+                            SELECT json_group_array(json_remove(value, '$.patch'))
+                            FROM (
+                              SELECT value
+                              FROM json_each(json_extract(${EventTable.data}, '$.info.summary.diffs'))
+                              LIMIT ${LEGACY_DIFF_DESCRIPTOR_FILES}
+                            )
+                          ), '[]')),
+                          '$.info.summary.diffArtifact',
+                          json_object(
+                            'id', ${artifactID},
+                            'hash', ${bodyHash},
+                            'codec', 'legacy-message-diff.v2',
+                            'fileCount', ${row.fileCount}
+                          )
+                        )`,
                       })
-                      .onConflictDoNothing()
-                      .run()
-                      .pipe(
-                        Effect.orDie,
-                        Effect.andThen(
-                          Effect.forEach(
-                            chunks,
-                            (chunk, index) =>
-                              db
-                                .insert(EventArtifactChunkTable)
-                                .values({
-                                  artifact_id: artifact.artifactID,
-                                  chunk_index: index,
-                                  data: chunk,
-                                  chunk_hash: Hash.sha256(chunk),
-                                })
-                                .onConflictDoNothing()
-                                .run()
-                                .pipe(Effect.orDie),
-                            { discard: true },
+                      .from(EventTable)
+                      .where(eq(EventTable.id, row.id))
+                      .get()
+                      .pipe(Effect.orDie)
+                    return yield* canonicalData.pipe(
+                      Effect.flatMap((canonical) => {
+                        if (!canonical) return Effect.die(new Error(`Missing artifact source event ${row.id}`))
+                        const chunks = Math.ceil(row.bodyBytes / ARTIFACT_CHUNK_BYTES) || 1
+                        return db.run(sql`
+                          INSERT INTO event_artifact (
+                            artifact_id, event_id, aggregate_id, seq, kind,
+                            original_data_hash, canonical_data_hash, canonical_data,
+                            body_hash, body_bytes, chunk_count, codec_version, created_at
+                          ) VALUES (
+                            ${artifactID}, ${row.id}, ${row.aggregateID}, ${row.seq}, 'legacy_message_diff',
+                            ${originalDataHash}, ${Hash.sha256(canonical.data)}, ${canonical.data},
+                            ${bodyHash}, ${row.bodyBytes}, ${chunks}, 2, ${input?.now ?? Date.now()}
+                          ) ON CONFLICT DO NOTHING
+                        `).pipe(
+                          Effect.orDie,
+                          Effect.andThen(
+                            Effect.forEach(
+                              Array.from({ length: chunks }, (_, index) => index),
+                              (index) => chunk(row.id, "body", index).pipe(
+                                Effect.flatMap((value) => db.run(sql`
+                                  INSERT INTO event_artifact_chunk (artifact_id, chunk_index, data, chunk_hash)
+                                  VALUES (${artifactID}, ${index}, ${value!.data}, ${Hash.sha256(value!.data)})
+                                  ON CONFLICT DO NOTHING
+                                `)),
+                                Effect.orDie,
+                              ),
+                              { discard: true },
+                            ),
                           ),
-                        ),
-                      )
-                  },
+                        )
+                      }),
+                    )
+                  }),
                   { discard: true },
                 )
-                return { processed: candidates.length, next: rows.at(-1)?.event.id }
+                return { processed: rows.length, next: rows.at(-1)?.id }
               }),
             { behavior: "immediate" },
           )
