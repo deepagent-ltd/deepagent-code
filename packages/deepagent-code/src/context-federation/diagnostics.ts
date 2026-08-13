@@ -11,16 +11,19 @@ import { GraphKind } from "@deepagent-code/core/context-federation/contract"
 import { GraphQueryStatus } from "@deepagent-code/core/context-federation/federation"
 import { Sensitivity } from "@deepagent-code/core/context-federation/authorization"
 import { SessionProviderAttempt } from "@deepagent-code/core/context-federation/provider-attempt"
+import { SessionProviderOwner } from "@deepagent-code/core/context-federation/provider-owner"
 import { Database } from "@deepagent-code/core/database/database"
 import { SessionSchema } from "@deepagent-code/core/session/schema"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { SessionToolRequestResolutionTable } from "@deepagent-code/core/session/sql"
 import { SessionToolRequestReceiptTable } from "../session/tool-request-receipt.sql"
 import { and, desc, eq, inArray, isNull } from "drizzle-orm"
-import { Context, Effect, Layer, Schema } from "effect"
+import { Cause, Context, Effect, Layer, Ref, Schema } from "effect"
+import { randomUUID } from "node:crypto"
 import { Session } from "../session/session"
 import { SessionFederatedContext } from "./session-context-runtime"
 import { ContextFederationObservability } from "./observability"
+import { ContextFederationProviderOwnerRuntime } from "./provider-owner-runtime"
 
 const StoredSelectedRef = Schema.Struct({
   ref: Schema.Struct({ graph: GraphKind, revision: Schema.String }),
@@ -71,9 +74,32 @@ export const layer = Layer.effect(
     const sessions = yield* Session.Service
     const attempts = yield* SessionProviderAttempt.Service
     const federation = yield* SessionFederatedContext.Service
+    const owners = yield* SessionProviderOwner.Service
+    const recoveryOwnerToken = `${process.pid}:diagnostics:${randomUUID()}`
+    yield* owners.register({ ownerToken: recoveryOwnerToken, leaseMs: SessionProviderOwner.LeaseMs }).pipe(Effect.orDie)
+    const ownerHealthy = yield* Ref.make(true)
+    yield* Effect.addFinalizer(() => owners.release({ ownerToken: recoveryOwnerToken }).pipe(Effect.ignore))
+    yield* Effect.gen(function* () {
+      while (yield* Ref.get(ownerHealthy)) {
+        const continued = yield* ContextFederationProviderOwnerRuntime.tick({
+          owners,
+          ownerToken: recoveryOwnerToken,
+          leaseMs: SessionProviderOwner.LeaseMs,
+          healthy: ownerHealthy,
+          label: "provider diagnostics",
+        })
+        if (!continued) return
+        yield* Effect.sleep(10_000)
+      }
+    }).pipe(
+      Effect.catchCause((cause) => Effect.logError(`provider diagnostics heartbeat failed: ${Cause.pretty(cause)}`)),
+      Effect.forkScoped,
+    )
 
     const get: Interface["get"] = (sessionId, now = Date.now()) =>
       Effect.gen(function* () {
+        if (!(yield* Ref.get(ownerHealthy)))
+          return yield* new DiagnosticsError({ reason: "provider_owner_runtime_unhealthy" })
         const selectionRows = yield* database.db
           .select()
           .from(SessionContextSelectionTable)
@@ -155,6 +181,8 @@ export const layer = Layer.effect(
 
     const resolveAttempt: Interface["resolveAttempt"] = (input) =>
       Effect.gen(function* () {
+        if (!(yield* Ref.get(ownerHealthy)))
+          return yield* new DiagnosticsError({ reason: "provider_owner_runtime_unhealthy" })
         const attempt = yield* attempts.get(input.attemptId)
         if (!attempt || attempt.sessionId !== input.session.id) {
           return yield* new DiagnosticsError({ reason: "provider_attempt_not_found" })
@@ -187,6 +215,7 @@ export const layer = Layer.effect(
             actorId: input.actorId,
             reason: input.reason,
             riskAcknowledged: input.riskAcknowledged,
+            recoveryOwnerToken,
             now: input.now,
           })
           return attemptView(resolved.replay, undefined, false, input.now ?? Date.now())
@@ -202,6 +231,7 @@ export const layer = Layer.effect(
         }
         const resolved = yield* attempts.resolve({
           attemptId: input.attemptId,
+          recoveryOwnerToken,
           actor: {
             type: "user",
             id: input.actorId,
@@ -213,7 +243,7 @@ export const layer = Layer.effect(
             ? {
                 providerEvidence: {
                   kind: "persisted_terminal_event" as const,
-                  requestHash: attempt.requestHash,
+                  requestHash: attempt.wireRequestHash ?? attempt.requestHash,
                   eventId: terminal.info.id,
                   observedAt: terminal.info.role === "assistant" ? terminal.info.time.completed! : Date.now(),
                 },
@@ -231,6 +261,7 @@ export const layer = Layer.effect(
 )
 
 export const defaultLayer = layer.pipe(
+  Layer.provide(SessionProviderOwner.layer.pipe(Layer.provide(Database.defaultLayer))),
   Layer.provide(SessionProviderAttempt.layer.pipe(Layer.provide(Database.defaultLayer))),
   Layer.provide(SessionFederatedContext.defaultLayer),
   Layer.provide(Database.defaultLayer),

@@ -65,7 +65,24 @@ afterEach(async () => {
   originalEnv.clear()
   // Reset any SettingsStore official-transport override written by a test so it can't leak into the
   // next (the store is backed by a shared global file + in-memory cache).
-  await SettingsStore.update({ providers: { openai: {}, anthropic: {} } }).catch(() => {})
+  await SettingsStore.update({
+    providers: {
+      openai: {
+        baseURL: undefined as never,
+        headerTimeout: undefined as never,
+        chunkTimeout: undefined as never,
+        timeout: undefined as never,
+        maxRetries: undefined as never,
+      },
+      anthropic: {
+        baseURL: undefined as never,
+        headerTimeout: undefined as never,
+        chunkTimeout: undefined as never,
+        timeout: undefined as never,
+        maxRetries: undefined as never,
+      },
+    },
+  }).catch(() => {})
   SettingsStore.invalidate()
   await disposeAllInstances()
 })

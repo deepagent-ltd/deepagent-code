@@ -11,6 +11,11 @@ import { ContextTokenCodec } from "@deepagent-code/core/context-federation/token
 import { Hash } from "@deepagent-code/core/util/hash"
 import { Context, Effect, Exit, Layer, Schema } from "effect"
 import { Database } from "@deepagent-code/core/database/database"
+import { DeepAgentReleasedSnapshot } from "@deepagent-code/core/deepagent/released-snapshot"
+import { projectIdForWorkspace } from "@deepagent-code/core/deepagent/durable-knowledge-store"
+import { SessionActivityTable, SessionContextSelectionTable } from "@deepagent-code/core/context-federation/session-sql"
+import type { Identity } from "@deepagent-code/core/context-federation/identity"
+import { and, desc, eq } from "drizzle-orm"
 import { LiveContextArtifactStore } from "./artifact-service"
 import { LiveFederatedContextQuery } from "./federated-query-service"
 import { LiveContextQueryAuthorization } from "./query-authorization"
@@ -54,12 +59,17 @@ export class ArtifactUnavailableError extends Schema.TaggedErrorClass<ArtifactUn
   "ContextQueryFacade.ArtifactUnavailableError",
   {},
 ) {}
+export class ReleasedKnowledgeUnavailableError extends Schema.TaggedErrorClass<ReleasedKnowledgeUnavailableError>()(
+  "ContextQueryFacade.ReleasedKnowledgeUnavailableError",
+  {},
+) {}
 
 export type Error =
   | AuthorizationUnavailableError
   | LocationUnavailableError
   | TokenError
   | ArtifactUnavailableError
+  | ReleasedKnowledgeUnavailableError
   | FederatedContextQuery.InvalidQueryError
 
 export interface Interface {
@@ -81,6 +91,70 @@ export const layer = Layer.effect(
     const codec = yield* ContextTokenCodec.Service
     const runtime = yield* LocationIndexRuntime.Service
     const artifacts = yield* ContextArtifactStore.Service
+    const database = yield* Database.Service
+
+    const releasedKnowledgeForSession = Effect.fn("ContextQueryFacade.releasedKnowledgeForSession")(function* (
+      sessionId: string,
+      identity: Identity,
+    ) {
+      const row = yield* database.db
+        .select({
+          securityNamespaceId: SessionContextSelectionTable.security_namespace_id,
+          projectScopeKey: SessionContextSelectionTable.project_scope_key,
+          state: SessionContextSelectionTable.released_knowledge_binding_state,
+          snapshotId: SessionContextSelectionTable.released_knowledge_snapshot_id,
+          generation: SessionContextSelectionTable.released_knowledge_generation,
+          membershipHash: SessionContextSelectionTable.released_knowledge_membership_hash,
+          manifestHash: SessionContextSelectionTable.released_knowledge_manifest_hash,
+          exactRefs: SessionContextSelectionTable.released_knowledge_exact_refs,
+          exactRefsFingerprint: SessionContextSelectionTable.released_knowledge_exact_refs_fingerprint,
+        })
+        .from(SessionContextSelectionTable)
+        .innerJoin(SessionActivityTable, eq(SessionActivityTable.activity_id, SessionContextSelectionTable.activity_id))
+        .where(
+          and(
+            eq(SessionContextSelectionTable.session_id, sessionId),
+            eq(SessionActivityTable.state, "active"),
+          ),
+        )
+        .orderBy(desc(SessionContextSelectionTable.revision))
+        .get()
+        .pipe(Effect.mapError(() => new ReleasedKnowledgeUnavailableError()))
+      if (!row) return undefined
+      if (
+        row.securityNamespaceId !== identity.securityNamespaceId ||
+        row.projectScopeKey !== identity.projectScopeKey
+      ) return yield* new ReleasedKnowledgeUnavailableError()
+      const binding = row.state === "unavailable"
+        ? DeepAgentReleasedSnapshot.binding(undefined)
+        : row.state === "bound" && row.snapshotId && row.generation && row.membershipHash && row.manifestHash &&
+            row.exactRefs && row.exactRefsFingerprint
+          ? {
+              state: "bound" as const,
+              snapshotId: row.snapshotId,
+              generation: row.generation,
+              membershipHash: row.membershipHash,
+              manifestHash: row.manifestHash,
+              exactRefs: row.exactRefs,
+              exactRefsFingerprint: row.exactRefsFingerprint,
+            }
+          : undefined
+      if (!binding) return yield* new ReleasedKnowledgeUnavailableError()
+      if (binding.state === "unavailable") return undefined
+      const selection = yield* DeepAgentReleasedSnapshot.get(
+        database.db,
+        {
+          securityNamespaceId: identity.securityNamespaceId,
+          projectScopeKey: identity.projectScopeKey,
+          legacyProjectId: identity.observedProjectId ?? projectIdForWorkspace(identity.canonicalRoot),
+        },
+        binding.snapshotId,
+      ).pipe(Effect.mapError(() => new ReleasedKnowledgeUnavailableError()))
+      if (!DeepAgentReleasedSnapshot.matchesBinding(selection, binding)) {
+        return yield* new ReleasedKnowledgeUnavailableError()
+      }
+      return selection
+    })
 
     const execute: Interface["execute"] = (input) =>
       Effect.gen(function* () {
@@ -115,6 +189,7 @@ export const layer = Layer.effect(
         const offset = cursor?.page.offset ?? 0
         const limit = Math.min(input.request.limit ?? 20, 100)
         if (offset < 0 || offset > 99) return yield* new TokenError()
+        const releasedKnowledgeSelection = yield* releasedKnowledgeForSession(input.sessionId, handle.identity)
         const raw = yield* query.query({
           intent: input.request.intent,
           ...(input.request.query === undefined ? {} : { query: input.request.query }),
@@ -127,6 +202,7 @@ export const layer = Layer.effect(
           egress: envelope.egress,
           sessionId: input.sessionId,
           toolCall: true,
+          releasedKnowledgeSelection,
         })
         if (
           cursor &&
@@ -233,6 +309,7 @@ export const defaultLayer = layer.pipe(
     LiveFederatedContextQuery.productionLayer,
     LiveContextQueryAuthorization.defaultLayer,
     LiveContextArtifactStore.defaultLayer.pipe(Layer.provide(Database.defaultLayer)),
+    Database.defaultLayer,
   )),
   Layer.provide(LiveContextTokenCodec.defaultLayer),
   Layer.provide(LocationIndexRuntime.defaultLayer),
