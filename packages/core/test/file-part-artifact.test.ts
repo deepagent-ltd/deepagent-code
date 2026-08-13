@@ -91,7 +91,8 @@ describe("FilePartArtifact", () => {
           message_id: messageID,
           session_id: sessionID,
           time_created: 1,
-          data: { type: "file", mime: "application/octet-stream", url: data.part.url },
+          // v4.0.4 kept this runtime marker in Part while its FilePart event schema dropped it.
+          data: { type: "file", mime: "application/octet-stream", url: data.part.url, synthetic: true },
         } as typeof PartTable.$inferInsert)
         .run()
         .pipe(Effect.orDie)
@@ -143,7 +144,11 @@ describe("FilePartArtifact", () => {
       expect(Buffer.byteLength(JSON.stringify(binding!.canonical_data))).toBeLessThan(2_000)
       const projected = yield* db.select().from(PartTable).where(eq(PartTable.id, partID)).get().pipe(Effect.orDie)
       expect(Buffer.byteLength(JSON.stringify(projected!.data))).toBeLessThan(1_000)
-      expect(projected!.data).toMatchObject({ url: `artifact:${descriptor.id}`, artifact: descriptor })
+      expect(projected!.data).toMatchObject({
+        url: `artifact:${descriptor.id}`,
+        artifact: descriptor,
+        synthetic: true,
+      })
       expect(
         yield* FilePartArtifact.read({ aggregateID: sessionID, descriptor }).pipe(Effect.provide(source)),
       ).toEqual(body)

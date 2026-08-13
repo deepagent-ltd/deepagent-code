@@ -189,6 +189,7 @@ export const FilePart = Schema.Struct({
   mime: Schema.String,
   filename: Schema.optional(Schema.String),
   url: Schema.String,
+  synthetic: Schema.optional(Schema.Boolean),
   artifact: Schema.optional(
     Schema.Struct({
       codec: Schema.Literal("file-part.v1"),
