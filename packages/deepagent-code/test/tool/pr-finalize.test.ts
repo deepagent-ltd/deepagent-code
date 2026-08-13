@@ -182,7 +182,8 @@ describe("tool.pr_finalize", () => {
                     yield* Effect.promise(() => Bun.write(path.join(directory, "senior-fix.txt"), "senior fixed\n"))
                   }
                 }
-                if (!input.format) return reply(input, `Reviewed ${incoming.sha}; no findings.`)
+                if (!input.format && input.metadata?.deepagent?.structured_direct === undefined)
+                  return reply(input, `Reviewed ${incoming.sha}; no findings.`)
               }
 
               const assignment = reviewAssignments.get(input.sessionID)
@@ -192,14 +193,18 @@ describe("tool.pr_finalize", () => {
               expect(finalizer).toContain(`Set reviewer.role to exactly ${assignment.role}.`)
               expect(finalizer).toContain(`Set round to exactly ${assignment.round}.`)
               expect(finalizer).toContain(`Set implementationCommitSha to exactly ${assignment.sha}.`)
-              return reply(input, "approved", {
+              const verdict = {
                 reviewer: { id: assignment.reviewerID, role: assignment.role },
                 round: assignment.round,
                 implementationCommitSha: assignment.sha,
                 verdict: "approve",
                 rationale: "No findings after exact-SHA review.",
                 findings: [],
-              })
+              }
+              const directAttempt = input.metadata?.deepagent?.structured_direct?.attempt
+              if (directAttempt === 1) return reply(input, "not json")
+              if (directAttempt === 2) return reply(input, JSON.stringify(verdict))
+              return reply(input, "approved", verdict)
             }),
         }
 
@@ -234,16 +239,16 @@ describe("tool.pr_finalize", () => {
         const finalize = yield* PRFinalizeTool
         const finalizeDef = yield* finalize.init()
         const finalizeContext = (callID: string) => ({
-            sessionID: chat.id,
-            messageID: assistant.id,
-            callID,
-            agent: "build",
-            abort: new AbortController().signal,
-            extra: { promptOps },
-            messages: [],
-            metadata: () => Effect.void,
-            ask: () => Effect.void,
-          })
+          sessionID: chat.id,
+          messageID: assistant.id,
+          callID,
+          agent: "build",
+          abort: new AbortController().signal,
+          extra: { promptOps },
+          messages: [],
+          metadata: () => Effect.void,
+          ask: () => Effect.void,
+        })
         const interruptedStageReview = yield* Effect.exit(
           finalizeDef.execute({}, finalizeContext("tool_pr_finalize_first")),
         )
@@ -285,6 +290,15 @@ describe("tool.pr_finalize", () => {
         )
         expect((yield* sessions.children(chat.id)).filter((child) => child.agent === "reviewer")).toHaveLength(1)
         expect((yield* sessions.children(chat.id)).filter((child) => child.agent === "senior-reviewer")).toHaveLength(1)
+        expect(
+          (yield* sessions.children(chat.id)).find((child) => child.agent === "reviewer")?.metadata?.deepagent
+            ?.subagent,
+        ).toMatchObject({
+          state: "completed",
+          reason: "structured_output_text_fallback",
+          attempts: 2,
+          structured_output: { attempt: 2, transport: "text_fallback" },
+        })
         expect(yield* worktree.list()).toEqual([])
         expect((yield* git.porcelainStatus(directory))?.clean).toBe(true)
         expect(
