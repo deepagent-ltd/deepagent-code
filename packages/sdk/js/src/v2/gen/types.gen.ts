@@ -568,6 +568,7 @@ export type FilePart = {
   mime: string
   filename?: string
   url: string
+  synthetic?: boolean
   artifact?: {
     codec: "file-part.v1"
     id: string

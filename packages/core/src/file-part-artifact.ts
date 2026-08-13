@@ -713,16 +713,24 @@ export function canonicalizeLegacy(
                 const sourceData = Object.fromEntries(
                   Object.entries(sourcePart).filter(([key]) => key !== "id" && key !== "sessionID" && key !== "messageID"),
                 )
-                if (!isDeepStrictEqual(projected.data, sourceData))
+                // Older FilePart event schemas dropped the runtime-owned synthetic marker while
+                // the local Part projection retained it. Accept only that exact historical skew.
+                const legacySynthetic =
+                  !("synthetic" in sourceData) && "synthetic" in projected.data && projected.data.synthetic === true
+                const expectedData = legacySynthetic ? { ...sourceData, synthetic: true } : sourceData
+                if (!isDeepStrictEqual(projected.data, expectedData))
                   return yield* fail(
                     prepared.artifacts[0]!.descriptor.id,
                     `Legacy file-part event ${row.id} no longer matches its projected part`,
                   )
-                const canonicalData = Object.fromEntries(
-                  Object.entries(canonicalPart as Record<string, unknown>).filter(
-                    ([key]) => key !== "id" && key !== "sessionID" && key !== "messageID",
+                const canonicalData = {
+                  ...Object.fromEntries(
+                    Object.entries(canonicalPart as Record<string, unknown>).filter(
+                      ([key]) => key !== "id" && key !== "sessionID" && key !== "messageID",
+                    ),
                   ),
-                ) as typeof PartTable.$inferInsert.data
+                  ...(legacySynthetic ? { synthetic: true } : {}),
+                } as typeof PartTable.$inferInsert.data
                 yield* db
                   .update(PartTable)
                   .set({ data: canonicalData })
