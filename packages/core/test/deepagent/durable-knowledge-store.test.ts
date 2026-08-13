@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import {
+  CandidateIdentityConflictError,
   DurableKnowledgeStore,
   type KnowledgeDocInput,
   isVisibleToWorkspace,
@@ -49,12 +50,12 @@ describe("S0 DurableKnowledgeStore", () => {
     expect(store.retrieve({ types: ["memory"], limit: 5 })).toHaveLength(0)
   })
 
-  test("approve flips in place to active (same id) and becomes retrievable", () => {
+  test("approve appends governance on the same id and becomes retrievable", () => {
     const doc = store.stageCandidate(mem())
     expect(store.approve(doc.id)).toBe(true)
     const after = store.documentStore.get(doc.id)!
     expect(after.id).toBe(doc.id) // no new id (docs/34 §7.1)
-    expect(after.version).toBe(doc.version) // in-place, no supersede
+    expect(after.version).toBe(doc.version + 1)
     expect(after.status).toBe("active")
     const hits = store.retrieve({ types: ["memory"], limit: 5 })
     expect(hits.map((h) => h.doc.id)).toContain(doc.id)
@@ -97,7 +98,7 @@ describe("S0 DurableKnowledgeStore", () => {
     expect(() => store.stageCandidate(mem({ scope: "session-private" }))).toThrow(/session-private/)
   })
 
-  test("setStatus flip keeps INV-2 hash integrity (verify ok)", () => {
+  test("governance revisions keep hash integrity (verify ok)", () => {
     const doc = store.stageCandidate(mem())
     store.approve(doc.id)
     store.reject(doc.id)
@@ -195,6 +196,137 @@ describe("S0 durable store root resolution (docs/34 §7.2)", () => {
     expect(reworded.id).toBe(first.id)
     expect(store.documentStore.list({ type: "memory" })).toHaveLength(1)
     expect(reworded.confidence?.support_count).toBe((first.confidence?.support_count ?? 0) + 1)
+  })
+
+  test("manual review exact retry completes a durable draft without reinforcing support", () => {
+    const input = mem({
+      idSlug: "candidate-exact",
+      description: "persist exact candidate before review",
+      body: "persist exact candidate before review",
+      confidence: { evidence_strength: "medium", support_count: 2 },
+    })
+    const draft = store.documentStore.create({
+      type: input.type,
+      scope: scopeStringFor(input.scope, input.projectId),
+      body: input.body,
+      description: input.description,
+      domain: input.domain,
+      tags: [...(input.tags ?? []), "risk:low", "sensitivity:public"],
+      links: input.links ?? [],
+      provenance: input.provenance,
+      confidence: input.confidence,
+      idSlug: input.idSlug,
+      extensions: {
+        candidate_id: input.idSlug,
+        pack_id: null,
+        risk: input.risk,
+        sensitivity: input.sensitivity,
+        knowledge_scope: input.scope,
+      },
+    })
+    const staged = store.stageCandidate(input, { allowActiveReinforcement: false, requireExactCandidate: true })
+    const retried = store.stageCandidate(input, { allowActiveReinforcement: false, requireExactCandidate: true })
+
+    expect(staged.id).toBe(draft.id)
+    expect(staged.version).toBe(2)
+    expect(staged.status).toBe("candidate")
+    expect(staged.confidence).toEqual(draft.confidence)
+    expect(retried).toEqual(staged)
+  })
+
+  test("manual review does not bind a new candidate ID to a near-duplicate pending candidate", () => {
+    store.stageCandidate(
+      mem({
+        idSlug: "candidate-first",
+        description: "cache the user session in redis to speed up auth",
+        body: "cache the user session in redis to speed up auth",
+      }),
+      { allowActiveReinforcement: false, requireExactCandidate: true },
+    )
+
+    expect(() =>
+      store.stageCandidate(
+        mem({
+          idSlug: "candidate-second",
+          description: "cache the user session in redis to speed auth up",
+          body: "cache the user session in redis to speed auth up",
+        }),
+        { allowActiveReinforcement: false, requireExactCandidate: true },
+      ),
+    ).toThrow(CandidateIdentityConflictError)
+    expect(
+      store.findCandidate("candidate-second", "memory", "cache the user session in redis to speed auth up"),
+    ).toBeNull()
+  })
+
+  test("manual review does not bind a new candidate ID to a near-duplicate draft", () => {
+    const first = mem({
+      idSlug: "candidate-draft-first",
+      description: "draft candidate exact identity",
+      body: "draft candidate exact identity",
+    })
+    store.documentStore.create({
+      type: first.type,
+      scope: scopeStringFor(first.scope, first.projectId),
+      body: first.body,
+      description: first.description,
+      domain: first.domain,
+      tags: [...(first.tags ?? []), "risk:low", "sensitivity:public"],
+      links: first.links ?? [],
+      provenance: first.provenance,
+      confidence: first.confidence,
+      idSlug: first.idSlug,
+      extensions: {
+        candidate_id: first.idSlug,
+        pack_id: null,
+        risk: first.risk,
+        sensitivity: first.sensitivity,
+        knowledge_scope: first.scope,
+      },
+    })
+
+    expect(() =>
+      store.stageCandidate(
+        mem({
+          idSlug: "candidate-draft-second",
+          description: "draft candidate exact identity",
+          body: "draft candidate exact identity",
+        }),
+        { allowActiveReinforcement: false, requireExactCandidate: true },
+      ),
+    ).toThrow(CandidateIdentityConflictError)
+    expect(store.documentStore.list({ type: "memory" })).toHaveLength(1)
+    expect(store.documentStore.get(store.documentStore.list({ type: "memory" })[0]!.id)).toMatchObject({
+      version: 1,
+      status: "draft",
+    })
+  })
+
+  test("stages a distinct review proposal without reinforcing near-duplicate active knowledge", () => {
+    const existing = store.stageCandidate(
+      mem({
+        idSlug: "existing-active",
+        description: "cache the user session in redis to speed up auth",
+        body: "cache the user session in redis to speed up auth",
+      }),
+    )
+    store.approve(existing.id)
+    const active = store.documentStore.get(existing.id)!
+
+    const proposal = store.stageReviewCandidate(
+      mem({
+        idSlug: "candidate-review",
+        description: "cache the user session in redis to speed auth up",
+        body: "cache the user session in redis to speed auth up",
+      }),
+    )
+
+    expect(proposal).toMatchObject({ status: "candidate", version: 2 })
+    expect(proposal.id).not.toBe(active.id)
+    expect(store.documentStore.get(active.id)).toEqual(active)
+    expect(
+      store.findCandidate("candidate-review", "memory", "cache the user session in redis to speed auth up"),
+    ).toEqual(proposal)
   })
 
   test("stageCandidate keeps unrelated knowledge as separate rows", () => {
