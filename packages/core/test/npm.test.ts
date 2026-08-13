@@ -2,7 +2,7 @@ import fs from "fs/promises"
 import path from "path"
 import { describe, expect, test } from "bun:test"
 import { NodeFileSystem } from "@effect/platform-node"
-import { Effect, Layer, Option } from "effect"
+import { Deferred, Effect, Fiber, Layer, Option } from "effect"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import { Global } from "@deepagent-code/core/global"
 import { Npm } from "@deepagent-code/core/npm"
@@ -87,5 +87,44 @@ describe("Npm.install", () => {
 
     await expect(fs.stat(path.join(tmp.path, "node_modules", "prod-pkg"))).resolves.toBeDefined()
     await expect(fs.stat(path.join(tmp.path, "node_modules", "dev-pkg"))).rejects.toThrow()
+  })
+
+  test("aborts registry requests when the install fiber is interrupted", async () => {
+    await using tmp = await tmpdir()
+    const started = Deferred.makeUnsafe<void>()
+    const aborted = Deferred.makeUnsafe<void>()
+    const server = Bun.serve({
+      port: 0,
+      fetch: (request) => {
+        Deferred.doneUnsafe(started, Effect.void)
+        return new Promise<Response>((resolve) => {
+          request.signal.addEventListener(
+            "abort",
+            () => {
+              Deferred.doneUnsafe(aborted, Effect.void)
+              resolve(new Response(null, { status: 499 }))
+            },
+            { once: true },
+          )
+        })
+      },
+    })
+
+    try {
+      await writePackage(tmp.path, { name: "abort-fixture" })
+      await Bun.write(path.join(tmp.path, ".npmrc"), `registry=${server.url.origin}/\n`)
+
+      await Effect.gen(function* () {
+        const npm = yield* Npm.Service
+        const fiber = yield* npm
+          .install(tmp.path, { add: [{ name: "abort-fixture-package", version: "1.0.0" }] })
+          .pipe(Effect.forkScoped)
+        yield* Deferred.await(started).pipe(Effect.timeout("2 seconds"))
+        yield* Fiber.interrupt(fiber).pipe(Effect.timeout("2 seconds"))
+        yield* Deferred.await(aborted).pipe(Effect.timeout("2 seconds"))
+      }).pipe(Effect.scoped, Effect.provide(npmLayer(path.join(tmp.path, "cache"))), Effect.runPromise)
+    } finally {
+      server.stop(true)
+    }
   })
 })

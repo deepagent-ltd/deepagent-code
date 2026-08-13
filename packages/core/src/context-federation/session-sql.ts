@@ -178,7 +178,7 @@ export const SessionProviderAttemptResolutionTable = sqliteTable(
     resolution_id: text().primaryKey(),
     attempt_id: text()
       .notNull()
-      .references(() => SessionProviderAttemptTable.attempt_id),
+      .references(() => SessionProviderAttemptTable.attempt_id, { onDelete: "cascade" }),
     actor_type: text().$type<"user" | "administrator" | "system">().notNull(),
     actor_id: text().notNull(),
     decision: text().$type<"abandoned" | "settled" | "replayed">().notNull(),
@@ -189,6 +189,17 @@ export const SessionProviderAttemptResolutionTable = sqliteTable(
   },
   (table) => [uniqueIndex("session_provider_attempt_resolution_attempt_idx").on(table.attempt_id)],
 )
+
+export const SessionProviderAttemptRecoveryBridgeTable = sqliteTable("session_provider_attempt_recovery_bridge", {
+  resolution_id: text().primaryKey(),
+  attempt_id: text()
+    .notNull()
+    .unique()
+    .references(() => SessionProviderAttemptTable.attempt_id, { onDelete: "cascade" }),
+  receipt_id: text().notNull().unique(),
+  command_id: text().notNull().unique(),
+  created_at: integer().notNull(),
+})
 
 export const ContextArtifactTable = sqliteTable(
   "context_artifact",

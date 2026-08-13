@@ -769,10 +769,11 @@ describe("SessionPromptIntent", () => {
       const first = yield* claim({ intentID: "intent_progress", messageID: MessageID.make("msg_progress_user") })
       expect(first.kind).toBe("claimed")
       if (first.kind !== "claimed") return
-      yield* SessionPromptIntent.materializeTurn({
+      const materialized = yield* SessionPromptIntent.materializeTurn({
         receipt: first.receipt,
         message: message(first.receipt.messageID),
       })
+      if (!("run" in materialized) || !materialized.run) return
       const activity = yield* SessionPromptIntent.activityForMessage({
         sessionID,
         messageID: first.receipt.messageID,
@@ -850,6 +851,7 @@ describe("SessionPromptIntent", () => {
         assistantMessageID: assistantID,
         providerReceiptID: "receipt-progress-final",
       })
+      yield* SessionPromptIntent.markRunFinalizing(materialized.run)
 
       expect(yield* SessionPromptIntent.recoverActiveActivities()).toEqual([])
       expect(yield* SessionPromptIntent.recoverActiveActivities("next-process-owner")).toEqual([

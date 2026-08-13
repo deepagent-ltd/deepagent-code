@@ -26,6 +26,12 @@ import { SessionToolRequestReceiptTable } from "./tool-request-receipt.sql"
 import { EventV2Bridge } from "../event-v2-bridge"
 import { WorldStateSlot } from "@deepagent-code/core/deepagent/context/world-state"
 import {
+  SessionActivityTable,
+  SessionProviderAttemptRecoveryBridgeTable,
+  SessionProviderAttemptResolutionTable,
+  SessionProviderAttemptTable,
+} from "@deepagent-code/core/context-federation/session-sql"
+import {
   renderSessionWorldStateBaseline,
   sessionWorldStateBaselineHash,
   type SessionWorldStateBaselineSection,
@@ -53,22 +59,61 @@ export const ResolveInput = Schema.Struct({
   riskAcknowledged: Schema.optional(Schema.Boolean),
 })
 
-export const Descriptor = Schema.Struct({
+export const UnsupportedReason = Schema.Literals([
+  "legacy_receipt_authority_incomplete",
+  "source_prompt_epoch_missing",
+  "source_prompt_epoch_not_recovery_required",
+  "source_prompt_epoch_binding_mismatch",
+  "provider_attempt_authority_incomplete",
+  "provider_attempt_resolution_requires_reconciliation",
+  "compaction_continuation_requires_maintenance",
+  "workspace_recovery_requires_coordination",
+  "source_world_state_baseline_missing",
+  "source_world_state_baseline_invalid",
+])
+
+const DescriptorBase = {
   receiptID: Schema.String,
   sessionID: SessionID,
-  assistantMessageID: MessageID,
   providerID: Schema.String,
   modelID: Schema.String,
   providerState: Schema.Literal("indeterminate_after_crash"),
+  sessionMutationEpoch: NonNegativeInt,
+} as const
+
+const ResolvableDescriptor = Schema.Struct({
+  ...DescriptorBase,
+  resolutionSupported: Schema.Literal(true),
+  unsupportedReasons: Schema.Tuple([]),
+  assistantMessageID: MessageID,
   promptEpoch: NonNegativeInt,
   promptWindowID: Schema.String,
   historyHash: Schema.String,
   requestHash: Schema.String,
-  sessionMutationEpoch: NonNegativeInt,
+  continuationRecoverySupported: Schema.Boolean,
+  workspaceRecoverySupported: Schema.Boolean,
+  sourceWorldStateBaselineStatus: Schema.Literal("available"),
+  worldStateBaselineHash: Schema.String,
+})
+
+const MaintenanceDescriptor = Schema.Struct({
+  ...DescriptorBase,
+  resolutionSupported: Schema.Literal(false),
+  unsupportedReasons: Schema.NonEmptyArray(UnsupportedReason),
+  assistantMessageID: Schema.optional(MessageID),
+  promptEpoch: Schema.optional(NonNegativeInt),
+  promptWindowID: Schema.optional(Schema.String),
+  historyHash: Schema.optional(Schema.String),
+  requestHash: Schema.optional(Schema.String),
   continuationRecoverySupported: Schema.Boolean,
   workspaceRecoverySupported: Schema.Boolean,
   sourceWorldStateBaselineStatus: Schema.Literals(["available", "missing", "invalid"]),
   worldStateBaselineHash: Schema.optional(Schema.String),
+})
+
+export const Descriptor = Schema.Union([ResolvableDescriptor, MaintenanceDescriptor]).annotate({
+  discriminator: "resolutionSupported",
+  identifier: "SessionLegacyProviderResolution.Descriptor",
 })
 
 export const Resolution = Schema.Struct({
@@ -184,17 +229,31 @@ const service = Effect.gen(function* () {
       .pipe(Effect.orDie)
     if (!session) return yield* new NotFound({ reason: "session was not found" })
     const rows = yield* db
-      .select({ receipt: SessionToolRequestReceiptTable })
+      .select({
+        receipt: SessionToolRequestReceiptTable,
+        providerAttemptID: SessionProviderAttemptTable.attempt_id,
+        providerAttemptSessionID: SessionProviderAttemptTable.session_id,
+        providerAttemptProviderID: SessionProviderAttemptTable.provider_id,
+        providerAttemptState: SessionProviderAttemptTable.state,
+        providerAttemptResolutionID: SessionProviderAttemptResolutionTable.resolution_id,
+      })
       .from(SessionToolRequestReceiptTable)
       .leftJoin(
         SessionToolRequestResolutionTable,
         eq(SessionToolRequestResolutionTable.receipt_id, SessionToolRequestReceiptTable.receipt_id),
       )
+      .leftJoin(
+        SessionProviderAttemptTable,
+        eq(SessionProviderAttemptTable.attempt_id, SessionToolRequestReceiptTable.provider_attempt_id),
+      )
+      .leftJoin(
+        SessionProviderAttemptResolutionTable,
+        eq(SessionProviderAttemptResolutionTable.attempt_id, SessionToolRequestReceiptTable.provider_attempt_id),
+      )
       .where(
         and(
           eq(SessionToolRequestReceiptTable.session_id, sessionID),
           eq(SessionToolRequestReceiptTable.provider_state, "indeterminate_after_crash"),
-          isNull(SessionToolRequestReceiptTable.provider_attempt_id),
           isNull(SessionToolRequestResolutionTable.resolution_id),
         ),
       )
@@ -209,14 +268,6 @@ const service = Effect.gen(function* () {
         )
         const promptEpoch =
           receipt.prompt_epoch !== null && receipt.prompt_epoch >= 0 ? receipt.prompt_epoch : undefined
-        if (
-          !assistantMessageID ||
-          promptEpoch === undefined ||
-          !receipt.prompt_window_id ||
-          !receipt.effective_history_hash ||
-          !request
-        )
-          return
         const continuation = yield* db
           .select({ runID: CompactionRunTable.run_id })
           .from(CompactionRunTable)
@@ -228,28 +279,39 @@ const service = Effect.gen(function* () {
           )
           .get()
           .pipe(Effect.orDie)
-        const epoch = yield* db
-          .select({ baselineHash: SessionPromptEpochTable.world_state_baseline_hash })
-          .from(SessionPromptEpochTable)
-          .where(
-            and(
-              eq(SessionPromptEpochTable.session_id, sessionID),
-              eq(SessionPromptEpochTable.epoch, promptEpoch),
-            ),
-          )
-          .get()
-          .pipe(Effect.orDie)
-        const baseline = yield* db
-          .select()
-          .from(SessionWorldStateBaselineTable)
-          .where(
-            and(
-              eq(SessionWorldStateBaselineTable.session_id, sessionID),
-              eq(SessionWorldStateBaselineTable.prompt_epoch, promptEpoch),
-            ),
-          )
-          .all()
-          .pipe(Effect.orDie)
+        const epoch =
+          promptEpoch === undefined
+            ? undefined
+            : yield* db
+                .select({
+                  baselineHash: SessionPromptEpochTable.world_state_baseline_hash,
+                  state: SessionPromptEpochTable.state,
+                  authorityState: SessionPromptEpochTable.authority_state,
+                  windowID: SessionPromptEpochTable.window_id,
+                })
+                .from(SessionPromptEpochTable)
+                .where(
+                  and(
+                    eq(SessionPromptEpochTable.session_id, sessionID),
+                    eq(SessionPromptEpochTable.epoch, promptEpoch),
+                  ),
+                )
+                .get()
+                .pipe(Effect.orDie)
+        const baseline =
+          promptEpoch === undefined
+            ? []
+            : yield* db
+                .select()
+                .from(SessionWorldStateBaselineTable)
+                .where(
+                  and(
+                    eq(SessionWorldStateBaselineTable.session_id, sessionID),
+                    eq(SessionWorldStateBaselineTable.prompt_epoch, promptEpoch),
+                  ),
+                )
+                .all()
+                .pipe(Effect.orDie)
         const sections = baseline.flatMap((row) => {
           const snapshot = Option.getOrUndefined(Schema.decodeUnknownOption(WorldStateSlot)(row.snapshot))
           if (!snapshot) return []
@@ -265,27 +327,84 @@ const service = Effect.gen(function* () {
             : computed !== epoch.baselineHash
               ? ("invalid" as const)
               : ("available" as const)
-        return {
+        const incomplete =
+          !assistantMessageID ||
+          promptEpoch === undefined ||
+          !receipt.prompt_window_id ||
+          !receipt.effective_history_hash ||
+          !request
+        const providerAttemptIncomplete =
+          receipt.provider_attempt_id !== null &&
+          (item.providerAttemptID !== receipt.provider_attempt_id ||
+            item.providerAttemptSessionID !== sessionID ||
+            item.providerAttemptProviderID !== receipt.provider_id ||
+            item.providerAttemptState !== "indeterminate_after_crash")
+        const reasons: (typeof UnsupportedReason.Type)[] = [
+          ...(incomplete ? (["legacy_receipt_authority_incomplete"] as const) : []),
+          ...(!incomplete && !epoch ? (["source_prompt_epoch_missing"] as const) : []),
+          ...(!incomplete && epoch && (epoch.state !== "active" || epoch.authorityState !== "recovery_required")
+            ? (["source_prompt_epoch_not_recovery_required"] as const)
+            : []),
+          ...(!incomplete && epoch && epoch.windowID !== receipt.prompt_window_id
+            ? (["source_prompt_epoch_binding_mismatch"] as const)
+            : []),
+          ...(providerAttemptIncomplete ? (["provider_attempt_authority_incomplete"] as const) : []),
+          ...(item.providerAttemptResolutionID
+            ? (["provider_attempt_resolution_requires_reconciliation"] as const)
+            : []),
+          ...(continuation ? (["compaction_continuation_requires_maintenance"] as const) : []),
+          ...(session.workspaceID !== null ? (["workspace_recovery_requires_coordination"] as const) : []),
+          ...(baselineStatus === "missing" ? (["source_world_state_baseline_missing"] as const) : []),
+          ...(baselineStatus === "invalid" ? (["source_world_state_baseline_invalid"] as const) : []),
+        ]
+        const common = {
           receiptID: receipt.receipt_id,
           sessionID,
-          assistantMessageID,
           providerID: receipt.provider_id,
           modelID: receipt.model_id,
           providerState: "indeterminate_after_crash" as const,
-          promptEpoch,
-          promptWindowID: receipt.prompt_window_id,
-          historyHash: receipt.effective_history_hash,
-          requestHash: request,
           sessionMutationEpoch: session.mutationEpoch,
           continuationRecoverySupported: !continuation,
           workspaceRecoverySupported: session.workspaceID === null,
           sourceWorldStateBaselineStatus: baselineStatus,
+          ...(assistantMessageID ? { assistantMessageID } : {}),
+          ...(promptEpoch !== undefined ? { promptEpoch } : {}),
+          ...(receipt.prompt_window_id ? { promptWindowID: receipt.prompt_window_id } : {}),
+          ...(receipt.effective_history_hash ? { historyHash: receipt.effective_history_hash } : {}),
+          ...(request ? { requestHash: request } : {}),
           ...(baselineStatus === "available" && epoch?.baselineHash
             ? { worldStateBaselineHash: epoch.baselineHash }
             : {}),
         }
+        if (reasons.length > 0)
+          return {
+            ...common,
+            resolutionSupported: false as const,
+            unsupportedReasons: reasons as [typeof UnsupportedReason.Type, ...(typeof UnsupportedReason.Type)[]],
+          }
+        if (
+          !assistantMessageID ||
+          promptEpoch === undefined ||
+          !receipt.prompt_window_id ||
+          !receipt.effective_history_hash ||
+          !request ||
+          !epoch?.baselineHash
+        )
+          return yield* Effect.die(new Error(`provider recovery descriptor invariant failed: ${receipt.receipt_id}`))
+        return {
+          ...common,
+          resolutionSupported: true as const,
+          unsupportedReasons: [] as const,
+          assistantMessageID,
+          promptEpoch,
+          promptWindowID: receipt.prompt_window_id,
+          historyHash: receipt.effective_history_hash,
+          requestHash: request,
+          sourceWorldStateBaselineStatus: "available" as const,
+          worldStateBaselineHash: epoch.baselineHash,
+        }
       }),
-    ).pipe(Effect.map((items) => items.filter((item): item is NonNullable<typeof item> => item !== undefined)))
+    )
   })
 
   const resolve: Interface["resolve"] = Effect.fn("SessionLegacyProviderResolution.resolve")(function* (input) {
@@ -295,11 +414,77 @@ const service = Effect.gen(function* () {
         reason: "the Incident Hotfix only supports abandoned",
       })
     const hash = requestHash(input)
+    const admission = yield* Effect.exit(
+      db.transaction(
+        (tx) =>
+          Effect.gen(function* () {
+            const receipt = yield* tx
+              .select({ receiptID: SessionToolRequestReceiptTable.receipt_id })
+              .from(SessionToolRequestReceiptTable)
+              .where(
+                and(
+                  eq(SessionToolRequestReceiptTable.receipt_id, input.receiptID),
+                  eq(SessionToolRequestReceiptTable.session_id, input.sessionID),
+                ),
+              )
+              .get()
+            if (!receipt) return yield* new NotFound({ reason: "provider receipt was not found" })
+            const inserted = yield* tx
+              .insert(SessionToolRequestResolutionCommandTable)
+              .values({
+                command_id: input.commandID,
+                request_hash: hash,
+                session_id: input.sessionID,
+                receipt_id: input.receiptID,
+                result_resolution_id: null,
+                created_at: Date.now(),
+              })
+              .onConflictDoNothing()
+              .returning()
+              .get()
+            const command =
+              inserted ??
+              (yield* tx
+                .select()
+                .from(SessionToolRequestResolutionCommandTable)
+                .where(eq(SessionToolRequestResolutionCommandTable.command_id, input.commandID))
+                .get())
+            if (
+              !command ||
+              command.request_hash !== hash ||
+              command.session_id !== input.sessionID ||
+              command.receipt_id !== input.receiptID
+            )
+              return yield* new Conflict({
+                code: "command_id_conflict",
+                reason: "command ID was reused with different recovery input",
+              })
+            return command
+          }),
+        { behavior: "immediate" },
+      ),
+    )
+    if (Exit.isFailure(admission)) {
+      const failure = Cause.squash(admission.cause)
+      if (failure instanceof Conflict || failure instanceof NotFound) return yield* failure
+      return yield* Effect.die(failure)
+    }
+    if (admission.value.result_resolution_id) {
+      const result = yield* db
+        .select()
+        .from(SessionToolRequestResolutionTable)
+        .where(eq(SessionToolRequestResolutionTable.resolution_id, admission.value.result_resolution_id))
+        .get()
+        .pipe(Effect.orDie)
+      if (!result)
+        return yield* Effect.die(new Error(`resolution result disappeared: ${admission.value.result_resolution_id}`))
+      return fromResolution(input.commandID, result)
+    }
     const proposed = {
       resolutionID: resolutionID(input),
       successorPromptEpoch: input.expected.promptEpoch + 1,
       successorMutationEpoch: input.expected.sessionMutationEpoch + 1,
-      createdAt: Date.now(),
+      createdAt: admission.value.created_at,
     }
     const transaction = yield* Effect.exit(
       db.transaction(
@@ -441,7 +626,6 @@ const service = Effect.gen(function* () {
             if (
               !source ||
               source.authority_state !== "recovery_required" ||
-              receipt.provider_attempt_id !== null ||
               receipt.provider_state !== input.expected.providerState ||
               receipt.prompt_epoch !== input.expected.promptEpoch ||
               receipt.prompt_window_id !== source.window_id ||
@@ -536,6 +720,36 @@ const service = Effect.gen(function* () {
             const safeHistoryHash = HistoryAuthority.hash(safeMessages)
             const successorWindowID = HistoryAuthority.windowID()
             const highWater = MessageID.make(chronological.at(-1)?.info.id ?? receipt.assistant_message_id)
+            const providerAttempt = receipt.provider_attempt_id
+              ? yield* tx
+                  .select()
+                  .from(SessionProviderAttemptTable)
+                  .where(eq(SessionProviderAttemptTable.attempt_id, receipt.provider_attempt_id))
+                  .get()
+              : undefined
+            if (
+              receipt.provider_attempt_id &&
+              (!providerAttempt ||
+                providerAttempt.session_id !== input.sessionID ||
+                providerAttempt.provider_id !== receipt.provider_id ||
+                providerAttempt.state !== "indeterminate_after_crash")
+            )
+              return yield* new Conflict({
+                code: "stale_recovery_state",
+                reason: "provider attempt recovery authority changed",
+              })
+            const providerAttemptResolution = providerAttempt
+              ? yield* tx
+                  .select()
+                  .from(SessionProviderAttemptResolutionTable)
+                  .where(eq(SessionProviderAttemptResolutionTable.attempt_id, providerAttempt.attempt_id))
+                  .get()
+              : undefined
+            if (providerAttemptResolution)
+              return yield* new Conflict({
+                code: "stale_recovery_state",
+                reason: "provider attempt was independently resolved and requires Maintenance reconciliation",
+              })
             const activity = yield* tx
               .select({ activityID: SessionActivityProgressTable.activity_id })
               .from(SessionActivityProgressTable)
@@ -566,6 +780,18 @@ const service = Effect.gen(function* () {
               .returning({ epoch: SessionPromptEpochTable.epoch })
               .get()
             if (!retired) return yield* Effect.die(new Error("provider recovery epoch retirement CAS failed"))
+            if (providerAttempt) {
+              yield* tx
+                .insert(SessionProviderAttemptRecoveryBridgeTable)
+                .values({
+                  resolution_id: proposed.resolutionID,
+                  attempt_id: providerAttempt.attempt_id,
+                  receipt_id: input.receiptID,
+                  command_id: input.commandID,
+                  created_at: proposed.createdAt,
+                })
+                .run()
+            }
             const resolution = yield* tx
               .insert(SessionToolRequestResolutionTable)
               .values({
@@ -599,6 +825,47 @@ const service = Effect.gen(function* () {
               .returning()
               .get()
             if (!resolution) return yield* Effect.die(new Error("provider recovery resolution insert failed"))
+            if (providerAttempt) {
+              yield* tx
+                .insert(SessionProviderAttemptResolutionTable)
+                .values({
+                  resolution_id: proposed.resolutionID,
+                  attempt_id: providerAttempt.attempt_id,
+                  actor_type: "user",
+                  actor_id: input.actorID,
+                  decision: "abandoned",
+                  provider_evidence: null,
+                  risk_acknowledged: false,
+                  reason: input.reason ?? DEFAULT_REASON,
+                  created_at: proposed.createdAt,
+                })
+                .run()
+              const terminalAttempt = yield* tx
+                .update(SessionProviderAttemptTable)
+                .set({ state: "resolved_abandoned", settled_at: proposed.createdAt })
+                .where(
+                  and(
+                    eq(SessionProviderAttemptTable.attempt_id, providerAttempt.attempt_id),
+                    eq(SessionProviderAttemptTable.state, "indeterminate_after_crash"),
+                  ),
+                )
+                .returning({ attemptID: SessionProviderAttemptTable.attempt_id })
+                .get()
+              if (!terminalAttempt) return yield* Effect.die(new Error("provider attempt recovery CAS failed"))
+              const terminalActivity = yield* tx
+                .update(SessionActivityTable)
+                .set({ state: "interrupted", settled_at: proposed.createdAt })
+                .where(
+                  and(
+                    eq(SessionActivityTable.activity_id, providerAttempt.activity_id),
+                    eq(SessionActivityTable.session_id, input.sessionID),
+                    eq(SessionActivityTable.state, "active"),
+                  ),
+                )
+                .returning({ activityID: SessionActivityTable.activity_id })
+                .get()
+              if (!terminalActivity) return yield* Effect.die(new Error("provider activity recovery CAS failed"))
+            }
             yield* tx
               .insert(SessionPromptEpochTable)
               .values({
@@ -738,28 +1005,25 @@ const service = Effect.gen(function* () {
       if (failure instanceof Conflict || failure instanceof NotFound) return yield* failure
       return yield* Effect.die(failure)
     }
-    const committed = transaction.value
-    const result =
-      committed ??
-      (yield* db
-        .select()
-        .from(SessionToolRequestResolutionTable)
-        .where(eq(SessionToolRequestResolutionTable.resolution_id, proposed.resolutionID))
-        .get()
-        .pipe(Effect.orDie))
+    const result = yield* db
+      .select()
+      .from(SessionToolRequestResolutionTable)
+      .where(eq(SessionToolRequestResolutionTable.resolution_id, proposed.resolutionID))
+      .get()
+      .pipe(Effect.orDie)
     if (!result) return yield* Effect.die(new Error(`resolution result disappeared: ${proposed.resolutionID}`))
     yield* events
       .publish(Event.Completed, {
         sessionID: input.sessionID,
-        resolutionID: result.resolution_id,
+        resolutionID: proposed.resolutionID,
         commandID: input.commandID,
-        receiptID: result.receipt_id,
+        receiptID: input.receiptID,
         decision: "abandoned",
-        sourcePromptEpoch: result.source_prompt_epoch,
-        successorPromptEpoch: result.successor_prompt_epoch,
-        sourceMutationEpoch: result.source_mutation_epoch,
-        successorMutationEpoch: result.successor_mutation_epoch,
-        createdAt: result.created_at,
+        sourcePromptEpoch: input.expected.promptEpoch,
+        successorPromptEpoch: proposed.successorPromptEpoch,
+        sourceMutationEpoch: input.expected.sessionMutationEpoch,
+        successorMutationEpoch: proposed.successorMutationEpoch,
+        createdAt: proposed.createdAt,
       })
       .pipe(Effect.catchCause(() => Effect.void))
     return fromResolution(input.commandID, result)

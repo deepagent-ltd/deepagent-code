@@ -1,14 +1,15 @@
 import { describe, expect, test } from "bun:test"
-import type { ProviderRecovery } from "./session-provider-recovery-dock"
+import type { ResolvableProviderRecovery } from "./session-provider-recovery-dock"
 import {
   providerRecoveryCommandID,
   providerRecoveryFingerprint,
   providerRecoveryPending,
   providerRecoveryResolveInput,
+  isResolvableProviderRecovery,
   resolveProviderRecovery,
 } from "./session-provider-recovery-dock"
 
-const recovery = (overrides: Partial<ProviderRecovery> = {}): ProviderRecovery => ({
+const recovery = (overrides: Partial<ResolvableProviderRecovery> = {}): ResolvableProviderRecovery => ({
   receiptID: "receipt-1",
   sessionID: "session-1",
   assistantMessageID: "message-1",
@@ -24,6 +25,8 @@ const recovery = (overrides: Partial<ProviderRecovery> = {}): ProviderRecovery =
   workspaceRecoverySupported: true,
   sourceWorldStateBaselineStatus: "available",
   worldStateBaselineHash: "wsb1-baseline",
+  resolutionSupported: true,
+  unsupportedReasons: [],
   ...overrides,
 })
 
@@ -69,6 +72,25 @@ describe("provider recovery command", () => {
 })
 
 describe("provider recovery admission", () => {
+  test("allows command construction only for a complete resolvable descriptor", () => {
+    expect(isResolvableProviderRecovery(recovery())).toBe(true)
+    expect(
+      isResolvableProviderRecovery({
+        receiptID: "orphan",
+        sessionID: "session-1",
+        providerID: "provider",
+        modelID: "model",
+        providerState: "indeterminate_after_crash",
+        sessionMutationEpoch: 7,
+        resolutionSupported: false,
+        unsupportedReasons: ["legacy_receipt_authority_incomplete"],
+        continuationRecoverySupported: true,
+        workspaceRecoverySupported: true,
+        sourceWorldStateBaselineStatus: "missing",
+      }),
+    ).toBe(false)
+  })
+
   test("fails closed while loading or after a list failure", () => {
     expect(providerRecoveryPending({ loading: true, error: undefined, recoveries: undefined })).toBe(true)
     expect(providerRecoveryPending({ loading: false, error: new Error("offline"), recoveries: undefined })).toBe(true)
@@ -84,6 +106,34 @@ describe("provider recovery admission", () => {
 })
 
 describe("provider recovery settlement", () => {
+  test("never dispatches a maintenance-only recovery descriptor", async () => {
+    let dispatched = false
+    const result = await resolveProviderRecovery({
+      sessionID: "session-1",
+      recovery: {
+        receiptID: "orphan",
+        sessionID: "session-1",
+        providerID: "provider",
+        modelID: "model",
+        providerState: "indeterminate_after_crash",
+        sessionMutationEpoch: 7,
+        resolutionSupported: false,
+        unsupportedReasons: ["legacy_receipt_authority_incomplete"],
+        continuationRecoverySupported: true,
+        workspaceRecoverySupported: true,
+        sourceWorldStateBaselineStatus: "missing",
+      },
+      resolve: async () => {
+        dispatched = true
+        return {}
+      },
+      refresh: async () => "retained",
+    })
+
+    expect(result).toEqual({ status: "unsupported" })
+    expect(dispatched).toBe(false)
+  })
+
   test("uses the exact idempotent request and refreshes after success", async () => {
     const requests: unknown[] = []
     let refreshes = 0

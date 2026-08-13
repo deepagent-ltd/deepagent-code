@@ -379,6 +379,13 @@ const DiffManifestDescriptor = Schema.Struct({
   truncatedFiles: NonNegativeInt,
 }).annotate({ identifier: "SnapshotDiffManifestDescriptor" })
 
+const DiffArtifactDescriptor = Schema.Struct({
+  id: Schema.String,
+  hash: Schema.String,
+  codec: Schema.Literal("legacy-message-diff.v1"),
+  fileCount: NonNegativeInt,
+}).annotate({ identifier: "SnapshotDiffArtifactDescriptor" })
+
 export const User = Schema.Struct({
   ...messageBase,
   role: Schema.Literal("user"),
@@ -392,6 +399,7 @@ export const User = Schema.Struct({
       body: Schema.optional(Schema.String),
       diffs: Schema.Array(FileDiff),
       diffManifest: optionalOmitUndefined(DiffManifestDescriptor),
+      diffArtifact: optionalOmitUndefined(DiffArtifactDescriptor),
     }),
   ),
   agent: Schema.String,

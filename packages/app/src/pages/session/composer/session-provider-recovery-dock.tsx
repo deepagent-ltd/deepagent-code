@@ -13,20 +13,40 @@ import { formatServerError } from "@/utils/server-errors"
 import { showToast } from "@/utils/toast"
 
 export type ProviderRecovery = SessionProviderResolutionListResponse[number]
+export type ResolvableProviderRecovery = Extract<ProviderRecovery, { resolutionSupported: true }>
 
-export function providerRecoveryFingerprint(item: ProviderRecovery) {
-  return JSON.stringify([
-    item.receiptID,
-    item.providerState,
-    item.promptEpoch,
-    item.sessionMutationEpoch,
-    item.requestHash,
-    item.historyHash,
-    item.worldStateBaselineHash,
-  ])
+export function isResolvableProviderRecovery(item: ProviderRecovery): item is ResolvableProviderRecovery {
+  return (
+    item.resolutionSupported === true &&
+    item.unsupportedReasons.length === 0 &&
+    item.sourceWorldStateBaselineStatus === "available" &&
+    typeof item.assistantMessageID === "string" &&
+    typeof item.promptEpoch === "number" &&
+    typeof item.promptWindowID === "string" &&
+    typeof item.historyHash === "string" &&
+    typeof item.requestHash === "string" &&
+    typeof item.worldStateBaselineHash === "string"
+  )
 }
 
-export async function providerRecoveryCommandID(item: ProviderRecovery) {
+export function providerRecoveryFingerprint(item: ResolvableProviderRecovery) {
+  return JSON.stringify({
+    version: 1,
+    sessionID: item.sessionID,
+    receiptID: item.receiptID,
+    decision: "abandoned",
+    expected: {
+      providerState: item.providerState,
+      promptEpoch: item.promptEpoch,
+      sessionMutationEpoch: item.sessionMutationEpoch,
+      requestHash: item.requestHash,
+      historyHash: item.historyHash,
+      worldStateBaselineHash: item.worldStateBaselineHash,
+    },
+  })
+}
+
+export async function providerRecoveryCommandID(item: ResolvableProviderRecovery) {
   return `provider-recovery-${await hash(providerRecoveryFingerprint(item))}`
 }
 
@@ -39,7 +59,7 @@ export function providerRecoveryPending(input: {
   return input.loading || input.error !== undefined || input.settlementFailed === true || (input.recoveries?.length ?? 0) > 0
 }
 
-export async function providerRecoveryResolveInput(item: ProviderRecovery) {
+export async function providerRecoveryResolveInput(item: ResolvableProviderRecovery) {
   return {
     commandID: await providerRecoveryCommandID(item),
     receiptID: item.receiptID,
@@ -50,7 +70,7 @@ export async function providerRecoveryResolveInput(item: ProviderRecovery) {
       sessionMutationEpoch: item.sessionMutationEpoch,
       requestHash: item.requestHash,
       historyHash: item.historyHash,
-      worldStateBaselineHash: item.worldStateBaselineHash!,
+      worldStateBaselineHash: item.worldStateBaselineHash,
     },
   }
 }
@@ -64,6 +84,7 @@ export async function resolveProviderRecovery(input: {
   }>
   refresh: () => Promise<"cleared" | "retained" | "failed">
 }) {
+  if (!isResolvableProviderRecovery(input.recovery)) return { status: "unsupported" as const }
   const request = await providerRecoveryResolveInput(input.recovery)
   const outcome = await input
     .resolve({ sessionID: input.sessionID, ...request })
@@ -144,7 +165,7 @@ export function SessionProviderRecoveryDock(props: {
   }
 
   const abandon = async (item: ProviderRecovery) => {
-    if (store.resolving) return
+    if (store.resolving || !isResolvableProviderRecovery(item)) return
     const sessionID = props.sessionID
     setStore({ resolving: item.receiptID, status: "idle", detail: undefined })
     const outcome = await resolveProviderRecovery({
@@ -195,6 +216,7 @@ export function SessionProviderRecoveryDock(props: {
   }
 
   const confirm = (item: ProviderRecovery) =>
+    isResolvableProviderRecovery(item) &&
     dialog.show(() => (
       <Dialog title={language.t("session.providerRecovery.confirmTitle")} transition>
         <div class="flex w-[480px] max-w-[calc(100vw-32px)] flex-col gap-4 px-6 pb-6">
@@ -249,10 +271,7 @@ export function SessionProviderRecoveryDock(props: {
       }
     >
       {(item) => {
-        const supported = () =>
-          item.continuationRecoverySupported &&
-          item.workspaceRecoverySupported &&
-          item.sourceWorldStateBaselineStatus === "available"
+        const supported = () => isResolvableProviderRecovery(item)
         return (
           <div
             class="mb-2 border-l-2 border-icon-warning-base bg-surface-raised-base px-3 py-2.5"
@@ -293,6 +312,11 @@ export function SessionProviderRecoveryDock(props: {
             <Show when={item.sourceWorldStateBaselineStatus !== "available"}>
               <div class="mt-2 text-11-regular text-text-critical">
                 {language.t("session.providerRecovery.baselineUnsupported")}
+              </div>
+            </Show>
+            <Show when={!item.resolutionSupported}>
+              <div class="mt-2 text-11-regular text-text-critical">
+                {language.t("session.providerRecovery.maintenanceUnsupported")}
               </div>
             </Show>
             <Show when={store.status !== "idle"}>

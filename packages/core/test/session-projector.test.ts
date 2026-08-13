@@ -3,7 +3,7 @@ import { DateTime, Effect, Layer, Schema } from "effect"
 import { asc, eq } from "drizzle-orm"
 import { Database } from "@deepagent-code/core/database/database"
 import { EventV2 } from "@deepagent-code/core/event"
-import { EventTable } from "@deepagent-code/core/event/sql"
+import { EventSequenceTable, EventTable } from "@deepagent-code/core/event/sql"
 import { ModelV2 } from "@deepagent-code/core/model"
 import { Project } from "@deepagent-code/core/project"
 import { ProjectTable } from "@deepagent-code/core/project/sql"
@@ -21,6 +21,8 @@ import { SessionInput } from "@deepagent-code/core/session/input"
 import { SessionStore } from "@deepagent-code/core/session/store"
 import { MessageTable, SessionInputTable, SessionMessageTable, SessionTable } from "@deepagent-code/core/session/sql"
 import { testEffect } from "./lib/effect"
+import { WorkspaceTable } from "@deepagent-code/core/control-plane/workspace.sql"
+import { WorkspaceV2 } from "@deepagent-code/core/workspace"
 
 const database = Database.layerFromPath(":memory:")
 const events = EventV2.layer.pipe(Layer.provide(database))
@@ -458,6 +460,117 @@ describe("SessionProjector", () => {
       expect(
         yield* db.select().from(SessionInputTable).where(eq(SessionInputTable.id, id)).get().pipe(Effect.orDie),
       ).toMatchObject({ promoted_seq: null })
+    }),
+  )
+
+  it.effect("keeps legacy Prompted exact replay idempotent while enforcing workspace owner authority", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      const workspaceID = WorkspaceV2.ID.make("wrk_prompt_exact")
+      yield* db
+        .insert(ProjectTable)
+        .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
+        .run()
+        .pipe(Effect.orDie)
+      yield* db
+        .insert(WorkspaceTable)
+        .values({ id: workspaceID, type: "test", project_id: Project.ID.global })
+        .run()
+        .pipe(Effect.orDie)
+      yield* db
+        .insert(SessionTable)
+        .values({
+          id: sessionID,
+          project_id: Project.ID.global,
+          workspace_id: workspaceID,
+          slug: "test",
+          directory: "/project",
+          title: "test",
+          version: "test",
+        })
+        .run()
+        .pipe(Effect.orDie)
+      const events = yield* EventV2.Service
+      const eventID = EventV2.ID.make("evt_prompted_exact_replay")
+      const messageID = SessionMessage.ID.make("msg_prompted_exact_replay")
+      yield* events.publish(
+        SessionEvent.Prompted,
+        {
+          sessionID,
+          messageID,
+          timestamp: created,
+          prompt: new Prompt({ text: "exact" }),
+          delivery: "steer",
+        },
+        { id: eventID },
+      )
+      const stored = yield* db
+        .select()
+        .from(EventTable)
+        .where(eq(EventTable.id, eventID))
+        .get()
+        .pipe(Effect.orDie)
+      expect(stored).toBeDefined()
+      const serialized = {
+        id: stored!.id,
+        aggregateID: stored!.aggregate_id,
+        seq: stored!.seq,
+        type: stored!.type,
+        data: stored!.data,
+      }
+      const beforeEvents = yield* db
+        .select()
+        .from(EventTable)
+        .where(eq(EventTable.aggregate_id, sessionID))
+        .all()
+        .pipe(Effect.orDie)
+      const beforeInputs = yield* db
+        .select()
+        .from(SessionInputTable)
+        .where(eq(SessionInputTable.session_id, sessionID))
+        .all()
+        .pipe(Effect.orDie)
+      const beforeMessages = yield* db
+        .select()
+        .from(SessionMessageTable)
+        .where(eq(SessionMessageTable.session_id, sessionID))
+        .all()
+        .pipe(Effect.orDie)
+
+      yield* events.replay(serialized)
+      yield* events.replay(serialized, { ownerID: workspaceID, strictOwner: true })
+
+      expect(
+        yield* db
+          .select({ ownerID: EventSequenceTable.owner_id })
+          .from(EventSequenceTable)
+          .where(eq(EventSequenceTable.aggregate_id, sessionID))
+          .get()
+          .pipe(Effect.orDie),
+      ).toEqual({ ownerID: workspaceID })
+      expect(yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, sessionID)).all()).toEqual(
+        beforeEvents,
+      )
+      expect(yield* db.select().from(SessionInputTable).where(eq(SessionInputTable.session_id, sessionID)).all()).toEqual(
+        beforeInputs,
+      )
+      expect(
+        yield* db.select().from(SessionMessageTable).where(eq(SessionMessageTable.session_id, sessionID)).all(),
+      ).toEqual(beforeMessages)
+
+      const wrongOwner = yield* events
+        .replay(serialized, { ownerID: "wrk_wrong", strictOwner: true })
+        .pipe(Effect.catchDefect(Effect.succeed))
+      expect(wrongOwner).toBeInstanceOf(EventV2.InvalidSyncEventError)
+      expect((wrongOwner as EventV2.InvalidSyncEventError).message).toContain("Replay owner mismatch")
+      expect(
+        yield* db
+          .select({ ownerID: EventSequenceTable.owner_id })
+          .from(EventSequenceTable)
+          .where(eq(EventSequenceTable.aggregate_id, sessionID))
+          .get()
+          .pipe(Effect.orDie),
+      ).toEqual({ ownerID: workspaceID })
     }),
   )
 
