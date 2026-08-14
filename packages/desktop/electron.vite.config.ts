@@ -30,7 +30,7 @@ const sentry =
       })
     : false
 
-export default defineConfig(({ command }) => ({
+export default defineConfig({
   main: {
     define: {
       "import.meta.env.DEEPAGENT_CODE_CHANNEL": JSON.stringify(channel),
@@ -47,8 +47,7 @@ export default defineConfig(({ command }) => ({
         enforce: "pre",
         resolveId(id) {
           if (id !== "virtual:deepagent-code-server") return
-          if (command === "build") return { id: "./chunks/node.js", external: true }
-          return this.resolve(`${DEEPAGENT_CODE_SERVER_DIST}/node.js`)
+          return { id: "./chunks/node.js", external: true }
         },
       },
       {
@@ -56,10 +55,7 @@ export default defineConfig(({ command }) => ({
         async writeBundle() {
           await mkdir("./out/main/chunks", { recursive: true })
           for (const file of await readdir(DEEPAGENT_CODE_SERVER_DIST)) {
-            if (
-              !file.endsWith(".wasm") &&
-              (command !== "build" || !["node.js", "node.js.map", "models-dev.build.json"].includes(file))
-            )
+            if (!file.endsWith(".wasm") && !["node.js", "node.js.map", "models-dev.build.json"].includes(file))
               continue
             await copyFile(`${DEEPAGENT_CODE_SERVER_DIST}/${file}`, `./out/main/chunks/${file}`)
           }
@@ -93,4 +89,4 @@ export default defineConfig(({ command }) => ({
       },
     },
   },
-}))
+})
