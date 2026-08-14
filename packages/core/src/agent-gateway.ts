@@ -315,8 +315,8 @@ export const recoverLearningAdmissions = async (
     .reduce<Promise<readonly string[]>>(async (result, entry) => {
       const recovered = await result
       const file = path.join(runsDir, entry.name, LEARNING_ADMISSION_RECEIPT_FILE)
-      const value = await Bun.file(file)
-        .json()
+      const value = await readFile(file, "utf8")
+        .then((content) => JSON.parse(content) as unknown)
         .catch(() => undefined)
       const decoded = DeepAgentDurableLearning.admissionFromLocalReceipt(value)
       if (!decoded || decoded.receipt.state !== "local_pending") return recovered
