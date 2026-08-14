@@ -156,14 +156,15 @@ export const SessionToolCapability = {
       const registryDefs = yield* registry.all()
       const registryTools: ToolCapability[] = registryDefs.map((def) => {
         const source = def.provenance?.source ?? "builtin"
+        const custom = source === "custom"
         return {
           toolID: def.id,
           source: source === "mcp" ? "custom" : source, // registry only has builtin/custom
           definitionHash: hashToolDef(def.id, def.description, def.jsonSchema ?? null),
-          workspaceMutation: toolWorkspaceMutation(def.id),
-          permissionKeys: [] as string[], // builtin tools manage their own auth
-          hostEnforced: source === "builtin",
-          evidence: source === "custom" ? `custom:${def.id}` : `builtin:${def.id}`,
+          workspaceMutation: custom ? "possible" : toolWorkspaceMutation(def.id),
+          permissionKeys: custom ? [def.id] : [],
+          hostEnforced: true,
+          evidence: custom ? `custom:${def.id}:host_permission` : `builtin:${def.id}`,
         } satisfies ToolCapability
       })
 
@@ -250,7 +251,16 @@ export const SessionToolCapability = {
 
       // --- Aggregate hash ---
       const hashInput = JSON.stringify({
-        tools: allTools.map((t) => ({ id: t.toolID, hash: t.definitionHash, mutation: t.workspaceMutation })).sort((a, b) => a.id.localeCompare(b.id)),
+        tools: allTools
+          .map((tool) => ({
+            id: tool.toolID,
+            source: tool.source,
+            hash: tool.definitionHash,
+            mutation: tool.workspaceMutation,
+            permissionKeys: tool.permissionKeys,
+            hostEnforced: tool.hostEnforced,
+          }))
+          .sort((a, b) => a.id.localeCompare(b.id)),
         interceptors: sortedInterceptors.map((i) => ({ plugin: i.pluginID, hook: i.hook, mutation: i.workspaceMutation })),
         enabledToolIDs,
       })

@@ -70,7 +70,7 @@ export const layer = Layer.effectDiscard(
       .register({
         [name]: Tool.make({
           description:
-            "Search file contents by regular expression within the active Location, a named project reference, or an absolute managed tool-output file. Use a path to narrow the search, include to filter files by glob, and limit to bound the match count. Returns concise file resources, line numbers, and bounded line previews.",
+            "Search file contents by regular expression within the active Location, a named project reference, or an absolute managed tool-output file. A Location path may be relative or absolute within that Location. Use a path to narrow the search, include to filter files by glob, and limit to bound the match count. Returns concise file resources, line numbers, and bounded line previews.",
           input: Input,
           output: LocationSearch.GrepResult,
           toModelOutput: ({ output }) => [toolText({ type: "text", text: toModelOutput(output) })],

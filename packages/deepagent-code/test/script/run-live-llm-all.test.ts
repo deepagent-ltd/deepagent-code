@@ -323,13 +323,12 @@ describe("all real LLM test runner", () => {
     )
 
     const artifact: unknown = await Bun.file(path.join(directory.path, "provenance.json")).json()
+    const provenance =
+      artifact && typeof artifact === "object" && "provenance" in artifact ? artifact.provenance : undefined
     expect(artifact).toMatchObject({
       status: "passed",
       provenance: {
         schema: "deepagent-live-evidence-v1",
-        sourceCommit: expect.any(String),
-        sourceTree: expect.any(String),
-        sourceDirty: expect.any(Boolean),
         oracleVersion: "provenance-test-v1",
         oracleHash: expect.stringMatching(/^[a-f0-9]{64}$/),
         routeManifestHash: expect.stringMatching(/^[a-f0-9]{64}$/),
@@ -342,6 +341,19 @@ describe("all real LLM test runner", () => {
         ]),
       },
     })
+    expect(provenance).toBeDefined()
+    if (!provenance || typeof provenance !== "object") return
+    const sourceCommit = "sourceCommit" in provenance ? provenance.sourceCommit : undefined
+    const sourceTree = "sourceTree" in provenance ? provenance.sourceTree : undefined
+    const sourceDirty = "sourceDirty" in provenance ? provenance.sourceDirty : undefined
+    if (sourceCommit === null) {
+      expect(sourceTree).toBeNull()
+      expect(sourceDirty).toBeNull()
+      return
+    }
+    expect(sourceCommit).toEqual(expect.any(String))
+    expect(sourceTree).toEqual(expect.any(String))
+    expect(sourceDirty).toEqual(expect.any(Boolean))
   })
 
   test("suite manifest itself has no duplicate IDs", () => {

@@ -1,4 +1,4 @@
-import { sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core"
+import { integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core"
 import { Timestamps } from "../database/schema.sql"
 import { ProjectV2 } from "../project"
 import { ProjectTable } from "../project/sql"
@@ -18,3 +18,12 @@ export const PermissionTable = sqliteTable(
   },
   (table) => [uniqueIndex("permission_project_action_resource_idx").on(table.project_id, table.action, table.resource)],
 )
+
+export const PermissionSavedEpochTable = sqliteTable("permission_saved_epoch", {
+  project_id: text()
+    .$type<ProjectV2.ID>()
+    .primaryKey()
+    .references(() => ProjectTable.id, { onDelete: "cascade" }),
+  epoch: integer().notNull(),
+  updated_at: integer().notNull(),
+})

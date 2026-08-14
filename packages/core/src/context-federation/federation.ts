@@ -21,6 +21,7 @@ export const GraphQueryReasonCode = Schema.Literals([
   "partial_sources",
   "source_disabled",
   "link_refresh_pending",
+  "released_snapshot_unavailable",
 ])
 export type GraphQueryReasonCode = typeof GraphQueryReasonCode.Type
 

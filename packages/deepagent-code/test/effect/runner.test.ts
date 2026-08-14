@@ -12,6 +12,29 @@ describe("Runner", () => {
   // --- ensureRunning semantics ---
 
   it.live(
+    "startRunning reserves idle atomically and rejects a concurrent start",
+    Effect.gen(function* () {
+      const s = yield* Scope.Scope
+      const runner = Runner.make<string>(s)
+      const started = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      const first = yield* runner
+        .startRunning(
+          Deferred.succeed(started, undefined).pipe(Effect.andThen(Deferred.await(release)), Effect.as("first")),
+        )
+        .pipe(Effect.forkChild)
+
+      yield* Deferred.await(started)
+      const second = yield* runner.startRunning(Effect.succeed("second")).pipe(Effect.exit)
+
+      expect(Exit.isFailure(second)).toBe(true)
+      expect(runner.state._tag).toBe("Running")
+      yield* Deferred.succeed(release, undefined)
+      expect(yield* Fiber.join(first)).toBe("first")
+    }),
+  )
+
+  it.live(
     "ensureRunning starts work and returns result",
     Effect.gen(function* () {
       const s = yield* Scope.Scope
@@ -41,10 +64,7 @@ describe("Runner", () => {
       const runner = Runner.make<string>(s)
       const ready = yield* Deferred.make<void>()
       const fiber = yield* runner
-        .ensureRunning(
-          Effect.never.pipe(Effect.as("never")),
-          Deferred.succeed(ready, undefined).pipe(Effect.asVoid),
-        )
+        .ensureRunning(Effect.never.pipe(Effect.as("never")), Deferred.succeed(ready, undefined).pipe(Effect.asVoid))
         .pipe(Effect.forkChild)
 
       yield* Deferred.await(ready).pipe(Effect.timeout("250 millis"))
@@ -52,6 +72,33 @@ describe("Runner", () => {
       yield* runner.cancel
       expect(runner.state._tag).toBe("Idle")
       yield* Fiber.await(fiber)
+    }),
+  )
+
+  it.live(
+    "keeps one busy owner while a run moves through finalizing and back to running",
+    Effect.gen(function* () {
+      const s = yield* Scope.Scope
+      const runner = Runner.make<string>(s)
+      const started = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      const fiber = yield* runner
+        .startRunning(
+          Deferred.succeed(started, undefined).pipe(Effect.andThen(Deferred.await(release)), Effect.as("done")),
+        )
+        .pipe(Effect.forkChild)
+
+      yield* Deferred.await(started)
+      yield* runner.markFinalizing
+      expect(runner.state._tag).toBe("Finalizing")
+      expect(runner.busy).toBe(true)
+      yield* runner.markRunning
+      expect(runner.state._tag).toBe("Running")
+      expect(runner.busy).toBe(true)
+
+      yield* Deferred.succeed(release, undefined)
+      expect(yield* Fiber.join(fiber)).toBe("done")
+      expect(runner.state._tag).toBe("Idle")
     }),
   )
 
@@ -268,6 +315,46 @@ describe("Runner", () => {
           ),
         ),
       )
+    }),
+  )
+
+  it.live(
+    "keeps finalizing busy until cancellation teardown exits",
+    Effect.gen(function* () {
+      const s = yield* Scope.Scope
+      const interrupted = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      const idle = yield* Deferred.make<void>()
+      const runner = Runner.make<string>(s, { onIdle: Deferred.succeed(idle, undefined).pipe(Effect.asVoid) })
+      const run = yield* runner
+        .ensureRunning(
+          Effect.never.pipe(
+            Effect.onInterrupt(() => Deferred.succeed(interrupted, undefined).pipe(Effect.andThen(Deferred.await(release)))),
+            Effect.as("done"),
+          ),
+        )
+        .pipe(Effect.forkChild)
+
+      yield* waitForState(runner, "Running")
+      yield* runner.markFinalizing
+      const cancel = yield* runner.cancel.pipe(Effect.forkChild)
+      yield* Deferred.await(interrupted).pipe(Effect.timeout("250 millis"))
+      expect(runner.state._tag).toBe("Finalizing")
+      expect(runner.busy).toBe(true)
+      expect(yield* Deferred.isDone(idle)).toBe(false)
+
+      const replacementWhileFinalizing = yield* runner.startRunning(Effect.succeed("replacement")).pipe(Effect.exit)
+      expect(Exit.isFailure(replacementWhileFinalizing)).toBe(true)
+      if (Exit.isFailure(replacementWhileFinalizing))
+        expect(Cause.squash(replacementWhileFinalizing.cause)).toBeInstanceOf(Runner.Busy)
+
+      yield* Deferred.succeed(release, undefined)
+      yield* Fiber.join(cancel).pipe(Effect.timeout("250 millis"))
+      yield* Fiber.await(run)
+      expect(yield* Deferred.isDone(idle)).toBe(true)
+      expect(runner.state._tag).toBe("Idle")
+      expect(runner.busy).toBe(false)
+      expect(yield* runner.startRunning(Effect.succeed("replacement"))).toBe("replacement")
     }),
   )
 

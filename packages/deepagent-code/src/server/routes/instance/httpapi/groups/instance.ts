@@ -72,6 +72,20 @@ export class ApiVcsApplyError extends Schema.ErrorClass<ApiVcsApplyError>("VcsAp
   { httpApiStatus: 400 },
 ) {}
 
+export class ApiVcsRawDiffError extends Schema.ErrorClass<ApiVcsRawDiffError>("VcsRawDiffError")(
+  {
+    name: Schema.Literal("VcsRawDiffError"),
+    data: Schema.Struct({
+      message: Schema.String,
+      reason: Vcs.RawDiffError.fields.reason,
+      limit: Vcs.RawDiffError.fields.limit,
+      actual: Vcs.RawDiffError.fields.actual,
+      file: Vcs.RawDiffError.fields.file,
+    }),
+  },
+  { httpApiStatus: 503 },
+) {}
+
 export const InstancePaths = {
   dispose: "/instance/dispose",
   path: "/path",
@@ -149,6 +163,7 @@ export const InstanceApi = HttpApi.make("instance")
             Schema.String.pipe(HttpApiSchema.asText({ contentType: "text/x-diff; charset=utf-8" })),
             "Raw VCS diff",
           ),
+          error: ApiVcsRawDiffError,
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "vcs.diff.raw",

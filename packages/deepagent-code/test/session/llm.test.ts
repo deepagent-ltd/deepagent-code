@@ -807,6 +807,7 @@ describe("session.llm.ai-sdk adapter", () => {
 type Capture = {
   url: URL
   headers: Headers
+  bodyText: string
   body: Record<string, unknown>
 }
 
@@ -895,15 +896,16 @@ beforeAll(() => {
       }
 
       const url = new URL(req.url)
-      const body = (await req.json()) as Record<string, unknown>
-      next.resolve({ url, headers: req.headers, body })
+      const bodyText = await req.text()
+      const body = JSON.parse(bodyText) as Record<string, unknown>
+      next.resolve({ url, headers: req.headers, bodyText, body })
 
       if (!url.pathname.endsWith(next.path)) {
         return new Response("not found", { status: 404 })
       }
 
       return typeof next.response === "function"
-        ? next.response(req, { url, headers: req.headers, body })
+        ? next.response(req, { url, headers: req.headers, bodyText, body })
         : next.response
     },
   })
@@ -1577,6 +1579,187 @@ describe("session.llm.stream", () => {
           },
         ])
         expect(executed).toEqual({ args: { query: "weather" }, toolCallId: "call-injected-tool" })
+      }),
+    { config: () => officialGatewayOffConfig },
+  )
+
+  it.instance(
+    "limits one durable native attempt to one physical request on retryable status",
+    () =>
+      Effect.gen(function* () {
+        const model = loadFixture("openai", "gpt-5.2").model
+        const retryable = new Response("temporarily unavailable", { status: 503 })
+        waitRequest("/responses", retryable)
+        waitRequest("/responses", retryable.clone())
+        waitRequest("/responses", retryable.clone())
+        waitRequest("/responses", retryable.clone())
+        const sessionID = SessionID.make("session-test-native-durable-single-request")
+        const agent = {
+          name: "test",
+          mode: "primary",
+          options: {},
+          permission: [{ permission: "*", pattern: "*", action: "allow" }],
+        } satisfies Agent.Info
+
+        yield* officialProviderRun(
+          "openai",
+          "test-openai-key",
+          `${state.server!.url.origin}/v1`,
+          (provider) =>
+            Effect.gen(function* () {
+              const resolved = yield* provider.getModel(ProviderV2.ID.openai, ModelV2.ID.make(model.id))
+              yield* drain({
+                user: {
+                  id: MessageID.make("msg_user-native-durable-single-request"),
+                  sessionID,
+                  role: "user",
+                  time: { created: Date.now() },
+                  agent: agent.name,
+                  model: { providerID: ProviderV2.ID.openai, modelID: resolved.id },
+                } satisfies SessionV1.User,
+                sessionID,
+                model: resolved,
+                agent,
+                system: [],
+                messages: [{ role: "user", content: "Hello" }],
+                tools: {},
+                durableAttempt: true,
+              }).pipe(Effect.exit)
+              expect(state.queue).toHaveLength(3)
+            }),
+          { experimentalNativeLlm: true },
+        )
+      }),
+    { config: () => officialGatewayOffConfig },
+  )
+
+  it.instance(
+    "seals the final provider HTTP request across AI SDK and native production callers",
+    () =>
+      Effect.gen(function* () {
+        const model = loadFixture("openai", "gpt-5.2").model
+        const preparedTurns: Parameters<NonNullable<LLM.StreamInput["requestReceipt"]>["adapterPrepared"]>[0][] = []
+        const captures: Capture[] = []
+        const queueDepthsAtSeal: number[] = []
+        const receipt = (suffix: string): NonNullable<LLM.StreamInput["requestReceipt"]> => ({
+          identity: {
+            receiptID: `receipt-${suffix}`,
+            requestOrdinal: 1,
+            providerAttemptID: `attempt-${suffix}`,
+            assistantMessageID: `assistant-${suffix}`,
+            promptEpoch: 1,
+            historySourceEndMessageID: "history-1",
+            contextSelectionID: null,
+            contextProjectionHash: null,
+            contextReadiness: "unavailable",
+            contextSelectedRefs: [],
+            registryToolIDs: ["lookup"],
+          },
+          prepared: () => Effect.void,
+          adapterPrepared: (input) =>
+            Effect.sync(() => {
+              queueDepthsAtSeal.push(state.queue.length)
+              preparedTurns.push(input)
+            }),
+          dispatched: () => Effect.void,
+          streaming: () => Effect.void,
+          observed: () => Effect.void,
+          settled: () => Effect.void,
+          failed: () => Effect.void,
+          rejected: () => Effect.void,
+          aiSdkInput: () => Effect.void,
+          rawFrame: () => Effect.void,
+          adapterAssembly: () => Effect.void,
+          processorDecoded: () => Effect.void,
+          processorValidation: () => Effect.void,
+        })
+        const run = (native: boolean) => {
+          const suffix = native ? "native" : "ai-sdk"
+          const request = waitRequest(
+            "/responses",
+            createEventResponse(
+              [
+                { type: "response.created", response: { id: `response-${suffix}` } },
+                {
+                  type: "response.output_item.added",
+                  output_index: 0,
+                  item: { type: "message", id: `item-${suffix}`, status: "in_progress" },
+                },
+                {
+                  type: "response.content_part.added",
+                  item_id: `item-${suffix}`,
+                  output_index: 0,
+                  content_index: 0,
+                  part: { type: "output_text", text: "", annotations: [] },
+                },
+                { type: "response.output_text.delta", item_id: `item-${suffix}`, delta: "done" },
+                {
+                  type: "response.completed",
+                  response: { incomplete_details: null, usage: { input_tokens: 1, output_tokens: 1 } },
+                },
+              ],
+              true,
+            ),
+          )
+          return officialProviderRun(
+            "openai",
+            "test-openai-key",
+            `${state.server!.url.origin}/v1`,
+            (provider) =>
+              Effect.gen(function* () {
+                const resolved = yield* provider.getModel(ProviderV2.ID.openai, ModelV2.ID.make(model.id))
+                yield* drain({
+                  user: {
+                    id: MessageID.make("msg_user-prepared-turn-parity"),
+                    sessionID: SessionID.make("session-prepared-turn-parity"),
+                    role: "user",
+                    time: { created: 1 },
+                    agent: "test",
+                    model: { providerID: ProviderV2.ID.openai, modelID: resolved.id },
+                  } satisfies SessionV1.User,
+                  sessionID: "session-prepared-turn-parity",
+                  model: resolved,
+                  agent: {
+                    name: "test",
+                    mode: "primary",
+                    options: {},
+                    permission: [{ permission: "*", pattern: "*", action: "allow" }],
+                  },
+                  system: ["provider turn parity"],
+                  messages: [{ role: "user", content: "Hello" }],
+                  tools: {
+                    lookup: tool({
+                      description: "Lookup data",
+                      inputSchema: z.object({ query: z.string() }),
+                    }),
+                  },
+                  durableAttempt: true,
+                  requestReceipt: receipt(suffix),
+                })
+                captures.push(yield* Effect.promise(() => request))
+              }),
+            { experimentalNativeLlm: native },
+          )
+        }
+
+        yield* run(false)
+        yield* run(true)
+
+        expect(preparedTurns).toHaveLength(2)
+        expect(queueDepthsAtSeal).toEqual([1, 1])
+        captures.forEach((capture, index) => {
+          const wireHash = RequestExecutor.wireRequestHash({
+            method: "POST",
+            url: capture.url.toString(),
+            contentType: capture.headers.get("content-type") ?? undefined,
+            bodyText: capture.bodyText,
+          })
+          expect(preparedTurns[index]?.finalRequestHash).toBe(wireHash)
+          expect(preparedTurns[index]?.preparedTurn.wire_request_hash).toBe(wireHash)
+        })
+        expect(preparedTurns[0]?.finalOfferedToolIds).toEqual(["lookup"])
+        expect(preparedTurns[0]?.finalOfferedToolIds).toEqual(preparedTurns[1]?.finalOfferedToolIds)
+        expect(preparedTurns[0]?.toolDefinitionHash).toBe(preparedTurns[1]?.toolDefinitionHash)
       }),
     { config: () => officialGatewayOffConfig },
   )

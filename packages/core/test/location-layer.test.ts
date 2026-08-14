@@ -3,6 +3,7 @@ import path from "path"
 import { afterAll, beforeAll, describe, expect } from "bun:test"
 import { Effect, Layer, Schema } from "effect"
 import { Tool } from "@deepagent-code/core/public"
+import { AgentV2 } from "@deepagent-code/core/agent"
 import { Catalog } from "@deepagent-code/core/catalog"
 import { LocationServiceMap } from "@deepagent-code/core/location-layer"
 import { PluginBoot } from "@deepagent-code/core/plugin/boot"
@@ -88,11 +89,16 @@ describe("LocationServiceMap", () => {
               yield* ProjectReference.Service
               yield* LocationSearch.Service
               const catalog = yield* Catalog.Service
+              const agents = yield* AgentV2.Service
+              const tools = yield* ToolRegistry.Service
               const transform = yield* catalog.transform()
               yield* transform((editor) => editor.provider.update(ProviderV2.ID.make("test"), () => {}))
               return {
                 providers: yield* catalog.provider.all(),
-                tools: yield* toolDefinitions(yield* ToolRegistry.Service),
+                tools: yield* toolDefinitions(tools),
+                researcherTools: yield* tools
+                  .materialize((yield* agents.get(AgentV2.ID.make("researcher")))?.permissions)
+                  .pipe(Effect.map((tools) => tools.definitions.map((tool) => tool.name).sort())),
               }
             }).pipe(Effect.scoped, Effect.provide(LocationServiceMap.get({ directory: AbsolutePath.make(directory) })))
 
@@ -112,6 +118,7 @@ describe("LocationServiceMap", () => {
             "websearch",
             "write",
           ])
+          expect(blockedState.researcherTools).toEqual(["glob", "grep", "read", "webfetch", "websearch"])
           const allowedState = yield* update(allowed.path)
           expect(allowedState.providers.some((provider) => provider.id === ProviderV2.ID.make("test"))).toBe(true)
           expect(allowedState.tools.map((tool) => tool.name).sort()).toEqual([
@@ -128,6 +135,7 @@ describe("LocationServiceMap", () => {
             "websearch",
             "write",
           ])
+          expect(allowedState.researcherTools).toEqual(["glob", "grep", "read", "webfetch", "websearch"])
         }),
       ),
     ),

@@ -90,17 +90,18 @@ export function layer(config: { readonly perGraphTimeoutMs: number; readonly fre
             egress: request.egress,
           }
           const stores = legacyStores.forWorkspace(handle.identity.canonicalRoot)
+          const releasedSelection = request.releasedKnowledgeSelection
           const adapters = sources.map((source) => {
             if (source === "code") return codeAdapter({ code, request })
             if (source === "knowledge") {
-              return stores.length > 0
-                ? ContextAdapters.knowledge({ stores, scope })
-                : unavailableAdapter("knowledge", "durable_knowledge")
+              return stores.length > 0 && releasedSelection
+                ? ContextAdapters.knowledge({ stores, scope, releasedSelection })
+                : unavailableAdapter("knowledge", "released_snapshot", "released_snapshot_unavailable")
             }
             if (source === "memory") {
-              return stores.length > 0
-                ? ContextAdapters.memory({ stores, scope })
-                : unavailableAdapter("memory", "durable_memory")
+              return stores.length > 0 && releasedSelection
+                ? ContextAdapters.memory({ stores, scope, releasedSelection })
+                : unavailableAdapter("memory", "released_snapshot", "released_snapshot_unavailable")
             }
             return ContextAdapters.documents([
               repoDocumentsAdapter({
@@ -356,7 +357,11 @@ function repoDocumentsAdapter(input: {
   }
 }
 
-function unavailableAdapter(graph: "knowledge" | "memory" | "documents", source: string): ContextAdapters.Adapter {
+function unavailableAdapter(
+  graph: "knowledge" | "memory" | "documents",
+  source: string,
+  reasonCode: ContextFederation.GraphQueryReasonCode = "source_error",
+): ContextAdapters.Adapter {
   return {
     graph,
     source,
@@ -365,8 +370,8 @@ function unavailableAdapter(graph: "knowledge" | "memory" | "documents", source:
       status: ContextFederation.status.blocked({
         graph,
         state: "unavailable",
-        reasonCode: "source_error",
-        revisions: [{ source, state: "unavailable", reasonCode: "source_error" }],
+        reasonCode,
+        revisions: [{ source, state: "unavailable", reasonCode }],
       }),
     }),
   }

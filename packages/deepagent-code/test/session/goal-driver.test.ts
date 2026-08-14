@@ -17,6 +17,7 @@ import type {
   RollbackPort,
   GoalStatus,
 } from "@deepagent-code/core/deepagent/goal-loop"
+import { DeepAgentLearningLifecycleTrigger } from "@deepagent-code/core/deepagent/learning-lifecycle-trigger"
 import {
   materializePlanDoc,
   startGoal,
@@ -40,7 +41,10 @@ beforeEach(() => {
   root = mkdtempSync(path.join(tmpdir(), "goal-driver-"))
   store = new DocumentStore(root)
 })
-afterEach(() => rmSync(root, { recursive: true, force: true }))
+afterEach(() => {
+  DeepAgentLearningLifecycleTrigger.setRuntimeObserver(undefined)
+  rmSync(root, { recursive: true, force: true })
+})
 
 const clock = () => {
   let t = 1_000
@@ -193,6 +197,13 @@ describe("startGoal + runToCompletion", () => {
     const deps = controllerDeps()
     let paused = true
     const ports: GoalDriverPorts = { ...noopPorts, shouldPause: () => Effect.succeed(paused) }
+    const boundaries: DeepAgentLearningLifecycleTrigger.ObserveInput[] = []
+    DeepAgentLearningLifecycleTrigger.setRuntimeObserver({
+      observe: async (input) => {
+        boundaries.push(input)
+        return { state: "skipped", reason: "no_exact_settled_run" }
+      },
+    })
     const { handle } = await Effect.runPromise(
       startGoal({
         deps,
@@ -204,11 +215,23 @@ describe("startGoal + runToCompletion", () => {
     // Paused ⇒ the driver returns "continue" without marking terminal.
     const first = await Effect.runPromise(runToCompletion({ deps, handle, ports }))
     expect(first).toBe("continue")
+    expect(boundaries).toEqual([
+      expect.objectContaining({
+        trigger: "pause",
+        sessionID: SESSION,
+        match: "parent",
+        goalID: handle.goalId,
+      }),
+    ])
+    expect((boundaries[0] as DeepAgentLearningLifecycleTrigger.SessionBoundary).boundaryKey).toBe(
+      `goal-pause:${handle.goalId}`,
+    )
     // Unpause + complete the plan ⇒ resuming drives to done.
     paused = false
     store.update(planDocId, JSON.stringify(plan([step("a", "done")])))
     const second = await Effect.runPromise(runToCompletion({ deps, handle, ports }))
     expect(second).toBe("done")
+    DeepAgentLearningLifecycleTrigger.setRuntimeObserver(undefined)
   })
 })
 
@@ -312,10 +335,11 @@ describe("V4.1 §S2 — goal plan hot-edit port (durable command settlement)", (
         })
         return Effect.succeed(pending)
       },
-      settlePlanEdit: (_command, value) => Effect.sync(() => {
-        settlement = value
-        pending = null
-      }),
+      settlePlanEdit: (_command, value) =>
+        Effect.sync(() => {
+          settlement = value
+          pending = null
+        }),
     }
 
     const started = await Effect.runPromise(

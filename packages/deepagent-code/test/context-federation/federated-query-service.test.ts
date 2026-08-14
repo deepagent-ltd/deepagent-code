@@ -10,11 +10,18 @@ import {
   SecurityNamespaceID,
 } from "@deepagent-code/core/context-federation/reference"
 import type { ContextRef, ProjectionSnapshotRevision } from "@deepagent-code/core/context-federation/reference"
+import { Database } from "@deepagent-code/core/database/database"
 import { AbsolutePath } from "@deepagent-code/core/schema"
+import { DocumentStore, documentRevision } from "@deepagent-code/core/deepagent/document-store"
+import { DeepAgentReleasedSnapshot } from "@deepagent-code/core/deepagent/released-snapshot"
+import { projectIdForWorkspace } from "@deepagent-code/core/deepagent/durable-knowledge-store"
+import { CanonicalJson } from "@deepagent-code/core/util/canonical-json"
+import { Hash } from "@deepagent-code/core/util/hash"
 import { Effect, Layer } from "effect"
 import { LegacyContextStores, layer } from "../../src/context-federation/federated-query-service"
 import { LocationIndexCoordinator } from "../../src/location-index/coordinator"
 import { LocationIndexRuntime } from "../../src/location-index/runtime"
+import { tmpdir } from "../fixture/fixture"
 
 const namespace = SecurityNamespaceID.make("sec_federated_query")
 const location = LocationKey.make("loc_federated_query")
@@ -71,12 +78,82 @@ describe("LiveFederatedContextQuery", () => {
       sessionId: "session",
     })).rejects.toMatchObject({ _tag: "FederatedContextQuery.InvalidQueryError", reason: "ref" })
   })
+
+  test("uses only the provider-turn released selection and blocks active-document fallback", async () => {
+    await using tmp = await tmpdir()
+    const store = new DocumentStore(tmp.path)
+    const released = store.create({
+      type: "knowledge",
+      scope: `durable:project:${projectIdForWorkspace(identity.canonicalRoot)}`,
+      description: "Released provider retry guidance",
+      body: "Retry only before provider dispatch.",
+      idSlug: "released-retry",
+      provenance: { source: "human" },
+      confidence: { evidence_strength: "strong", support_count: 1 },
+      extensions: { sensitivity: "public" },
+    })
+    store.setStatus(released.id, "active", documentRevision(released))
+    const unreleased = store.create({
+      type: "knowledge",
+      scope: `durable:project:${projectIdForWorkspace(identity.canonicalRoot)}`,
+      description: "Unreleased provider retry guidance",
+      body: "This must stay invisible.",
+      idSlug: "unreleased-retry",
+      provenance: { source: "human" },
+      confidence: { evidence_strength: "strong", support_count: 1 },
+      extensions: { sensitivity: "public" },
+    })
+    store.setStatus(unreleased.id, "active", documentRevision(unreleased))
+    const documents = [DeepAgentReleasedSnapshot.documentRef(store.get(released.id)!, "project")]
+    const selection = {
+      snapshotId: "snapshot-federated-query",
+      securityNamespaceId: namespace,
+      projectScopeKey: project,
+      legacyProjectId: projectIdForWorkspace(identity.canonicalRoot),
+      parentSnapshotId: null,
+      generation: 1,
+      membershipHash: Hash.sha256(CanonicalJson.stringify(documents)),
+      manifestHash: Hash.sha256("manifest-federated-query"),
+      documents,
+    }
+    const service = await makeService(documentRef(location), codeRef(), [store, store])
+    const result = await service.query({
+      intent: "search",
+      query: "provider retry guidance",
+      sources: ["knowledge"],
+      limit: 10,
+      consistency: "stale_ok",
+      principal: principal(location),
+      egress: knowledgeEgress,
+      sessionId: "session",
+      releasedKnowledgeSelection: selection,
+    })
+    expect(result.hits.map((hit) => hit.ref.entityId)).toEqual([released.id])
+
+    const blocked = await service.query({
+      intent: "search",
+      query: "provider retry guidance",
+      sources: ["knowledge"],
+      limit: 10,
+      consistency: "stale_ok",
+      principal: principal(location),
+      egress: knowledgeEgress,
+      sessionId: "session",
+    })
+    expect(blocked.hits).toEqual([])
+    expect(blocked.statuses).toContainEqual(expect.objectContaining({
+      graph: "knowledge",
+      kind: "blocked",
+      reasonCode: "released_snapshot_unavailable",
+    }))
+  })
 })
 
-async function makeService(doc: ContextRef, codeRefValue: ContextRef) {
+async function makeService(doc: ContextRef, codeRefValue: ContextRef, stores: readonly DocumentStore[] = []) {
   const coordinator = coordinatorFor(doc)
   const app = layer({ perGraphTimeoutMs: 100, freshTimeoutMs: 100 }).pipe(
-    Layer.provide(Layer.succeed(LegacyContextStores, LegacyContextStores.of({ forWorkspace: () => [] }))),
+    Layer.provide(Database.layerFromPath(":memory:")),
+    Layer.provide(Layer.succeed(LegacyContextStores, LegacyContextStores.of({ forWorkspace: () => stores }))),
     Layer.provide(Layer.succeed(LocationIndexRuntime.Service, LocationIndexRuntime.Service.of({
       init: () => Effect.void,
       current: () => Effect.succeed({ identity, coordinator }),
@@ -221,4 +298,11 @@ const egress = {
   epoch: 1,
   graphs: ["code", "documents"] as const,
   sensitivities: ["source_code"] as const,
+}
+
+const knowledgeEgress = {
+  policyId: "test-knowledge",
+  epoch: 1,
+  graphs: ["knowledge"] as const,
+  sensitivities: ["public"] as const,
 }

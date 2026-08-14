@@ -4,7 +4,13 @@
 // for back-compat. Keep this file free of any solid-js/UI imports.
 
 export type KnowledgeItem = {
+  sourceStore: "user_global" | "project"
   id: string
+  version: number
+  hash: string
+  candidateId: string
+  fingerprint: string
+  governanceRevision: string
   type: "knowledge" | "strategy" | "methodology" | "memory" | "skill" | "failure_dossier"
   summary: string
   evidence_strength: "strong" | "medium" | "weak" | "none"
@@ -47,15 +53,34 @@ export const reviewSummary = async (client: ReviewClient): Promise<{ pendingCoun
 export const setStatus = async (
   client: ReviewClient,
   action: "approve" | "reject-ids",
-  ids: string[],
+  item: KnowledgeItem,
 ): Promise<void> => {
-  await client.client.request<{ updated: string[] }>({
+  await client.client.request<{ updated: KnowledgeItem }>({
     method: "POST",
     url: `/deepagent/knowledge/${action}`,
-    body: { ids },
+    body: {
+      sourceStore: item.sourceStore,
+      id: item.id,
+      version: item.version,
+      hash: item.hash,
+      candidateId: item.candidateId,
+      fingerprint: item.fingerprint,
+      expectedGovernanceRevision: item.governanceRevision,
+    },
     headers: { "Content-Type": "application/json" },
   })
 }
+
+export const reviewAuthorityKey = (item: KnowledgeItem) =>
+  JSON.stringify([
+    item.sourceStore,
+    item.id,
+    item.version,
+    item.hash,
+    item.candidateId,
+    item.fingerprint,
+    item.governanceRevision,
+  ])
 
 // V3.8.1 §G environment-fact use-gate. Provisional user-global environment facts surface here so the
 // user decides, per project, whether to adopt them (§G.5). Credentials never appear — only secret_ref

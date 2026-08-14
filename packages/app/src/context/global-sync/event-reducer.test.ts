@@ -27,6 +27,27 @@ const userMessage = (id: string, sessionID: string) =>
     model: { providerID: "openai", modelID: "gpt" },
   }) as Message
 
+const assistantMessage = (
+  id: string,
+  sessionID: string,
+  activityProgress?: Extract<Message, { role: "assistant" }>["activityProgress"],
+) =>
+  ({
+    id,
+    sessionID,
+    role: "assistant",
+    parentID: "msg_user",
+    time: { created: 1 },
+    modelID: "gpt",
+    providerID: "openai",
+    mode: "build",
+    agent: "assistant",
+    path: { cwd: "/tmp", root: "/tmp" },
+    cost: 0,
+    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+    activityProgress,
+  }) as Extract<Message, { role: "assistant" }>
+
 const textPart = (id: string, sessionID: string, messageID: string) =>
   ({
     id,
@@ -405,7 +426,7 @@ describe("applyDirectoryEvent", () => {
           info: {
             ...userMessage("msg_2", sessionID),
             role: "assistant",
-          } as Message,
+          } as unknown as Message,
         },
       },
       store,
@@ -465,6 +486,128 @@ describe("applyDirectoryEvent", () => {
     expect(store.message[sessionID]).toHaveLength(1)
     expect(store.part[clientMessageID]).toBeUndefined()
     expect(store.part_text_accum_delta[clientPart.id]).toBeUndefined()
+  })
+
+  test("preserves server-owned activity progress when a stale message update omits it", () => {
+    const sessionID = "ses_1"
+    const current = assistantMessage("msg_assistant", sessionID, {
+      activityID: "activity-1",
+      revision: 2,
+      state: "final",
+    })
+    const [store, setStore] = createStore(baseState({ message: { [sessionID]: [current] } }))
+
+    applyDirectoryEvent({
+      event: { type: "message.updated", properties: { info: { ...current, activityProgress: undefined } } },
+      store,
+      setStore,
+      push() {},
+      directory: "/tmp",
+      loadLsp() {},
+    })
+
+    expect((store.message[sessionID]?.[0] as Extract<Message, { role: "assistant" }>).activityProgress).toEqual(
+      current.activityProgress,
+    )
+  })
+
+  test("rejects conflicting progress identity and requests a canonical session refresh", () => {
+    const sessionID = "ses_1"
+    const current = assistantMessage("msg_assistant", sessionID, {
+      activityID: "activity-1",
+      revision: 2,
+      state: "progress",
+    })
+    const [store, setStore] = createStore(baseState({ message: { [sessionID]: [current] } }))
+    const refreshed: string[] = []
+
+    applyDirectoryEvent({
+      event: {
+        type: "message.updated",
+        properties: {
+          info: assistantMessage(current.id, sessionID, {
+            activityID: "activity-other",
+            revision: 0,
+            state: "final",
+          }),
+        },
+      },
+      store,
+      setStore,
+      push() {},
+      directory: "/tmp",
+      loadLsp() {},
+      refetchSession: (id) => refreshed.push(id),
+    })
+
+    expect((store.message[sessionID]?.[0] as Extract<Message, { role: "assistant" }>).activityProgress).toEqual(
+      current.activityProgress,
+    )
+    expect(refreshed).toEqual([sessionID])
+  })
+
+  test("allows a same-revision activity marker to advance but never regress", () => {
+    const sessionID = "ses_1"
+    const provisional = assistantMessage("msg_assistant", sessionID, {
+      activityID: "activity-1",
+      revision: 0,
+      state: "provisional",
+    })
+    const [store, setStore] = createStore(baseState({ message: { [sessionID]: [provisional] } }))
+    const apply = (state: "progress" | "final" | "provisional") =>
+      applyDirectoryEvent({
+        event: {
+          type: "message.updated",
+          properties: {
+            info: assistantMessage(provisional.id, sessionID, {
+              activityID: "activity-1",
+              revision: 0,
+              state,
+            }),
+          },
+        },
+        store,
+        setStore,
+        push() {},
+        directory: "/tmp",
+        loadLsp() {},
+      })
+
+    apply("progress")
+    apply("final")
+    apply("provisional")
+
+    expect((store.message[sessionID]?.[0] as Extract<Message, { role: "assistant" }>).activityProgress?.state).toBe(
+      "final",
+    )
+  })
+
+  test("rejects an invalid activity marker and requests a canonical session refresh", () => {
+    const sessionID = "ses_1"
+    const current = assistantMessage("msg_assistant", sessionID)
+    const [store, setStore] = createStore(baseState({ message: { [sessionID]: [current] } }))
+    const refreshed: string[] = []
+
+    applyDirectoryEvent({
+      event: {
+        type: "message.updated",
+        properties: {
+          info: {
+            ...current,
+            activityProgress: { activityID: "", revision: -1, state: "terminal" },
+          } as unknown as Message,
+        },
+      },
+      store,
+      setStore,
+      push() {},
+      directory: "/tmp",
+      loadLsp() {},
+      refetchSession: (id) => refreshed.push(id),
+    })
+
+    expect((store.message[sessionID]?.[0] as Extract<Message, { role: "assistant" }>).activityProgress).toBeUndefined()
+    expect(refreshed).toEqual([sessionID])
   })
 
   test("upserts and prunes message parts", () => {

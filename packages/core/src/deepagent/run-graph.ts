@@ -1,4 +1,4 @@
-import { DocumentStore } from "./document-store"
+import { DocumentStore, documentRevision } from "./document-store"
 
 // V3 run working memory (docs/28/29): materialize a run as a typed-document graph so the
 // document store is the run's working-memory substrate (not just flat JSON artifacts).
@@ -131,7 +131,7 @@ export const buildRunGraph = (store: DocumentStore, s: RunSummary): RunGraphRefs
       },
       links: [{ rel: "derived_from", to: candidate.id }],
     })
-    store.setStatus(doc.id, learning.status === "staged" ? "candidate" : "rejected")
+    store.setStatus(doc.id, learning.status === "staged" ? "candidate" : "rejected", documentRevision(doc))
   }
 
   return { candidateId: candidate.id, runContextId: runContext.id, runStateId: runState.id }

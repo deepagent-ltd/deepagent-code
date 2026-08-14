@@ -23,7 +23,7 @@ import { TestLLMServer } from "../lib/llm-server"
 import path from "path"
 import { resetDatabase } from "../fixture/db"
 import { disposeAllInstances, TestInstance, tmpdirScoped } from "../fixture/fixture"
-import { awaitWithTimeout, testEffect } from "../lib/effect"
+import { awaitWithTimeout, pollWithTimeout, testEffect } from "../lib/effect"
 import { testProviderConfig } from "../lib/test-provider"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { ModelV2 } from "@deepagent-code/core/model"
@@ -88,10 +88,7 @@ function client(
   )
 }
 
-function serverFetch(
-  serverPath: ServerPath,
-  input?: { onRequest?: (request: Request) => void },
-) {
+function serverFetch(serverPath: ServerPath, input?: { onRequest?: (request: Request) => void }) {
   return HttpServer.HttpServer.use((server) =>
     Effect.sync(() => {
       void serverPath
@@ -443,19 +440,18 @@ describe("HttpApi SDK", () => {
             approval: { approver: "sdk-test", approved: true, note: "generated client route" },
           }),
         )
-        expect(promoted.response?.status).toBe(200)
-        expect(promoted.data).toMatchObject({
-          promoted: expect.objectContaining({ source_candidate_id: candidate.candidate_id }),
-        })
+        expect(promoted.response?.status).toBe(400)
+        expect(promoted.error).toMatchObject({ message: expect.stringContaining("durable candidate") })
 
+        const rejectedCandidate = { ...candidate, candidate_id: "strategy_candidate:sdk:reject" }
         const rejected = yield* call(() =>
           sdk.deepagent.knowledge.reject({
-            candidate: { ...candidate, candidate_id: "strategy_candidate:sdk:reject" },
+            candidate: rejectedCandidate,
             reason: "sdk reject test",
           }),
         )
-        expect(rejected.response?.status).toBe(200)
-        expect(rejected.data).toMatchObject({ rejected: expect.objectContaining({ reason: "sdk reject test" }) })
+        expect(rejected.response?.status).toBe(400)
+        expect(rejected.error).toMatchObject({ message: expect.stringContaining("durable candidate") })
       }),
   )
 
@@ -858,9 +854,11 @@ describe("HttpApi SDK", () => {
             parts: [{ type: "text", text: "hello" }],
           }),
         )
+        const asyncSession = yield* capture(() => sdk.session.create({ title: "async prompt" }))
+        const asyncSessionID = String(record(asyncSession.data).id)
         const asyncPrompt = yield* capture(() =>
           sdk.session.promptAsync({
-            sessionID,
+            sessionID: asyncSessionID,
             intentID: "intent_http_async_admission",
             intentSource: "composer",
             intentVariant: "original",
@@ -870,7 +868,8 @@ describe("HttpApi SDK", () => {
           }),
         )
         const messages = yield* capture(() => sdk.session.messages({ sessionID }))
-        const messageTexts = array(messages.data)
+        const asyncMessages = yield* capture(() => sdk.session.messages({ sessionID: asyncSessionID }))
+        const messageTexts = [...array(messages.data), ...array(asyncMessages.data)]
           .flatMap((item) => array(record(item).parts))
           .map((part) => record(part).text)
           .filter((text): text is string => typeof text === "string")
@@ -882,7 +881,7 @@ describe("HttpApi SDK", () => {
         expect(messageTexts).toEqual(["async hello", "hello"])
 
         return {
-          statuses: statuses({ session, prompt, asyncPrompt, messages }),
+          statuses: statuses({ session, prompt, asyncSession, asyncPrompt, messages, asyncMessages }),
           promptRole: record(record(prompt.data).info).role,
           messageCount: array(messages.data).length,
           messageTexts,
@@ -891,40 +890,50 @@ describe("HttpApi SDK", () => {
     ),
   )
 
-  serverPathParity("acknowledges async prompts after admission without waiting for model completion", (serverPath) =>
-    withFakeLlm(serverPath, ({ sdk, llm }) =>
-      Effect.gen(function* () {
-        const gate = yield* Deferred.make<void>()
-        yield* Effect.addFinalizer(() => Deferred.succeed(gate, undefined).pipe(Effect.ignore))
-        yield* llm.hold("delayed response", Effect.runPromise(Deferred.await(gate)))
-        const session = yield* capture(() =>
-          sdk.session.create({
-            title: "async admission",
-            permission: [{ permission: "*", pattern: "*", action: "allow" }],
-          }),
-        )
-        const sessionID = String(record(session.data).id)
+  serverPathParity(
+    "acknowledges async prompts after admission without waiting for model completion",
+    (serverPath) =>
+      withFakeLlm(serverPath, ({ sdk, llm }) =>
+        Effect.gen(function* () {
+          let responseReleased = false
+          const responseDelay = Bun.sleep(2_000).then(() => {
+            responseReleased = true
+          })
+          yield* llm.hold("delayed response", responseDelay)
+          const session = yield* capture(() =>
+            sdk.session.create({
+              title: "async admission",
+              permission: [{ permission: "*", pattern: "*", action: "allow" }],
+            }),
+          )
+          const sessionID = String(record(session.data).id)
 
-        const prompt = yield* capture(() =>
-          sdk.session.promptAsync({
-            sessionID,
-            agent: "build",
-            model: { providerID: "test", modelID: "test-model" },
-            parts: [{ type: "text", text: "persist before acknowledging" }],
-          }),
-        ).pipe(Effect.timeout("2 seconds"))
-        const messages = yield* capture(() => sdk.session.messages({ sessionID }))
-        yield* llm.wait(1).pipe(Effect.timeout("2 seconds"))
-        const abort = yield* capture(() => sdk.session.abort({ sessionID }))
-        yield* Deferred.succeed(gate, undefined).pipe(Effect.ignore)
+          const prompt = yield* capture(() =>
+            sdk.session.promptAsync({
+              sessionID,
+              agent: "build",
+              model: { providerID: "test", modelID: "test-model" },
+              parts: [{ type: "text", text: "persist before acknowledging" }],
+            }),
+          ).pipe(Effect.timeout("2 seconds"))
+          const messages = yield* capture(() => sdk.session.messages({ sessionID }))
+          yield* llm.wait(1).pipe(Effect.timeout("2 seconds"))
 
-        expect(prompt.status).toBe(200)
-        expect(prompt.data).toMatchObject({ delivery: "turn" })
-        expect(abort.status).toBe(200)
-        expect(JSON.stringify(messages.data)).toContain("persist before acknowledging")
-      }),
-    ),
-    15_000,
+          expect(prompt.status).toBe(200)
+          expect(prompt.data).toMatchObject({ delivery: "turn" })
+          expect(JSON.stringify(messages.data)).toContain("persist before acknowledging")
+          expect(responseReleased).toBe(false)
+          yield* Effect.promise(() => responseDelay)
+          yield* pollWithTimeout(
+            capture(() => sdk.session.status()).pipe(
+              Effect.map((response) => (sessionID in record(response.data) ? undefined : true)),
+            ),
+            "async prompt runner did not become idle after the delayed response completed",
+            "15 seconds",
+          )
+        }),
+      ),
+    60_000,
   )
 
   serverPathParity("matches generated SDK prompt streaming through fake LLM", (serverPath) =>

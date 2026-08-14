@@ -25,6 +25,11 @@ const input = MoveSession.Input.make({
   destination: { directory: AbsolutePath.make("/destination") },
   moveChanges: true,
 })
+const unsupported = MoveSession.Input.make({
+  sessionID: SessionV2.ID.make("ses_move_unsupported"),
+  destination: { directory: AbsolutePath.make("/unsupported") },
+  moveChanges: true,
+})
 const called = Ref.makeUnsafe<MoveSession.Input | undefined>(undefined)
 
 const apiLayer = HttpRouter.serve(
@@ -43,7 +48,17 @@ const apiLayer = HttpRouter.serve(
   Layer.provide(Layer.mock(Installation.Service)({})),
   Layer.provide(
     Layer.mock(MoveSession.Service)({
-      moveSession: (value) => Ref.set(called, value),
+      moveSession: (value) =>
+        value.destination.directory === unsupported.destination.directory
+          ? Effect.fail(
+              new MoveSession.TransferUnsupportedError({
+                sessionID: value.sessionID,
+                source: AbsolutePath.make("/source"),
+                destination: value.destination.directory,
+                message: "durable transfer is unavailable",
+              }),
+            )
+          : Ref.set(called, value),
     }),
   ),
   Layer.provide(ServerAuth.Config.layer({ password: Option.none(), username: "deepagent-code" })),
@@ -62,6 +77,22 @@ describe("control-plane HttpApi", () => {
 
       expect(response.status).toBe(204)
       expect(yield* Ref.get(called)).toEqual(input)
+    }),
+  )
+
+  it.live("returns a declared conflict while durable session transfer is unavailable", () =>
+    Effect.gen(function* () {
+      const response = yield* HttpClientRequest.post("/experimental/control-plane/move-session").pipe(
+        HttpClientRequest.setBody(HttpBody.jsonUnsafe(unsupported)),
+        HttpClient.execute,
+      )
+
+      expect(response.status).toBe(409)
+      expect(yield* response.json).toEqual({
+        _tag: "ConflictError",
+        message: "durable transfer is unavailable",
+        resource: `session:${unsupported.sessionID}`,
+      })
     }),
   )
 })

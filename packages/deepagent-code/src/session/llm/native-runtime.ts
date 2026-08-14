@@ -45,6 +45,7 @@ type StreamInput = {
   readonly abort: AbortSignal
   readonly metadata?: Record<string, unknown>
   readonly durableAttempt?: boolean
+  readonly requestSeal?: RequestExecutor.RequestSeal["seal"]
 }
 
 export function status(input: Pick<StreamInput, "model" | "provider" | "auth">): RuntimeStatus {
@@ -163,6 +164,9 @@ export function stream(input: StreamInput): StreamResult {
     ...current,
     stream: (fetch ? stream.pipe(Stream.provideService(FetchHttpClient.Fetch, fetch)) : stream).pipe(
       input.durableAttempt ? Stream.provideService(RequestExecutor.CurrentRetryLimit, 0) : (value) => value,
+      input.requestSeal
+        ? Stream.provideService(RequestExecutor.CurrentRequestSeal, { seal: input.requestSeal })
+        : (value) => value,
     ),
   }
 }
