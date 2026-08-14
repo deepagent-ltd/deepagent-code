@@ -2,7 +2,7 @@ export * as DeepAgentDurableLearning from "./durable-learning"
 
 import path from "node:path"
 import { existsSync } from "node:fs"
-import { realpath } from "node:fs/promises"
+import { readFile, realpath } from "node:fs/promises"
 import { eq } from "drizzle-orm"
 import { Cause, Effect, Option, Schema } from "effect"
 import { Database } from "../database/database"
@@ -310,9 +310,7 @@ export const validateLocalAdmissionReceipt = async (admission: Admission, expect
   ])
   if (!runReal || terminalReal !== path.join(runReal, "DEEPAGENT_RUN_STATE.json")) return false
 
-  const content = await Bun.file(terminalPath)
-    .text()
-    .catch(() => undefined)
+  const content = await readFile(terminalPath, "utf8").catch(() => undefined)
   if (content === undefined || Hash.sha256(content) !== admission.terminalArtifact.sha256) return false
   const decoded = decodeJson(content)
   if (Option.isNone(decoded) || typeof decoded.value !== "object" || decoded.value === null) return false
@@ -1242,7 +1240,7 @@ export function applyGovernanceAction(
     }
     await assertContainedPath(authorityRoot, payload.path)
     if (existsSync(payload.path)) {
-      const existing = await Bun.file(payload.path).text()
+      const existing = await readFile(payload.path, "utf8")
       if (existing !== payload.content) throw new Error(`Learning governance inbox conflict at ${payload.path}`)
     } else {
       writeFileAtomic(payload.path, payload.content)
@@ -1285,7 +1283,7 @@ export function applyGovernanceCompensation(
       })
       return { ref: `${payload.path}.absent`, hash: Hash.sha256(content) }
     }
-    if ((await Bun.file(payload.path).text()) !== payload.content)
+    if ((await readFile(payload.path, "utf8")) !== payload.content)
       throw new Error(`Learning governance inbox material changed before compensation: ${payload.path}`)
     const marker = `${payload.path}.revoked`
     const content = CanonicalJson.stringify({
@@ -1296,7 +1294,7 @@ export function applyGovernanceCompensation(
       source_hash: payload.content_hash,
     })
     if (existsSync(marker)) {
-      if ((await Bun.file(marker).text()) !== content)
+      if ((await readFile(marker, "utf8")) !== content)
         throw new Error(`Learning governance inbox revocation conflict: ${marker}`)
     } else writeFileAtomic(marker, content)
     await assertContainedPath(authorityRoot, marker)
@@ -1428,11 +1426,10 @@ const verifyTerminalArtifact = Effect.fn("DeepAgentDurableLearning.verifyTermina
   if (!/^[0-9a-f]{64}$/.test(intent.terminal_artifact.sha256)) {
     return yield* Effect.fail(new Error("Learning terminal artifact has an invalid SHA-256"))
   }
-  const file = Bun.file(intent.terminal_artifact.path)
-  if (!(yield* Effect.promise(() => file.exists()))) {
+  if (!existsSync(intent.terminal_artifact.path)) {
     return yield* new TerminalArtifactPendingError({ intentId, path: intent.terminal_artifact.path })
   }
-  const content = yield* Effect.promise(() => file.text())
+  const content = yield* Effect.promise(() => readFile(intent.terminal_artifact.path, "utf8"))
   const state = decodeJson(content)
   if (Option.isNone(state) || typeof state.value !== "object" || state.value === null) {
     return yield* Effect.fail(new Error("Learning terminal artifact is not a JSON object"))
@@ -1486,22 +1483,19 @@ const verifyLifecycleTriggerArtifact = Effect.fn("DeepAgentDurableLearning.verif
   ) {
     return yield* Effect.fail(new Error("Learning lifecycle artifact contains an invalid SHA-256"))
   }
-  const lifecycleFile = Bun.file(artifact.path)
-  const terminalFile = Bun.file(artifact.source_terminal_path)
-  const sourceAdmissionFile = Bun.file(artifact.source_admission_path)
-  if (!(yield* Effect.promise(() => lifecycleFile.exists()))) {
+  if (!existsSync(artifact.path)) {
     return yield* new TerminalArtifactPendingError({ intentId, path: artifact.path })
   }
-  if (!(yield* Effect.promise(() => terminalFile.exists()))) {
+  if (!existsSync(artifact.source_terminal_path)) {
     return yield* new TerminalArtifactPendingError({ intentId, path: artifact.source_terminal_path })
   }
-  if (!(yield* Effect.promise(() => sourceAdmissionFile.exists()))) {
+  if (!existsSync(artifact.source_admission_path)) {
     return yield* new TerminalArtifactPendingError({ intentId, path: artifact.source_admission_path })
   }
   const [content, terminalContent, sourceAdmissionContent] = yield* Effect.all([
-    Effect.promise(() => lifecycleFile.text()),
-    Effect.promise(() => terminalFile.text()),
-    Effect.promise(() => sourceAdmissionFile.text()),
+    Effect.promise(() => readFile(artifact.path, "utf8")),
+    Effect.promise(() => readFile(artifact.source_terminal_path, "utf8")),
+    Effect.promise(() => readFile(artifact.source_admission_path, "utf8")),
   ])
   if (Hash.sha256(content) !== artifact.sha256 || Hash.sha256(terminalContent) !== artifact.source_terminal_sha256) {
     return yield* Effect.fail(new Error("Learning lifecycle artifact hash does not match its immutable source"))
@@ -1668,19 +1662,19 @@ function artifactPlan(authorityRoot: string, directory: string, kind: string, va
 
 async function publishArtifact(artifact: ArtifactPlan) {
   await assertContainedPath(artifact.authorityRoot, artifact.path)
-  if (await Bun.file(artifact.path).exists()) {
-    if ((await Bun.file(artifact.path).text()) !== artifact.content) {
+  if (existsSync(artifact.path)) {
+    if ((await readFile(artifact.path, "utf8")) !== artifact.content) {
       throw new Error(`Learning artifact collision at ${artifact.path}`)
     }
   } else {
     try {
       writeFileExclusive(artifact.path, artifact.content)
     } catch (error) {
-      if (!isAlreadyExists(error) || (await Bun.file(artifact.path).text()) !== artifact.content) throw error
+      if (!isAlreadyExists(error) || (await readFile(artifact.path, "utf8")) !== artifact.content) throw error
     }
   }
   await assertContainedPath(artifact.authorityRoot, artifact.path)
-  if ((await Bun.file(artifact.path).text()) !== artifact.content) {
+  if ((await readFile(artifact.path, "utf8")) !== artifact.content) {
     throw new Error(`Learning artifact collision at ${artifact.path}`)
   }
   return artifact.ref
@@ -1866,7 +1860,7 @@ function readArtifact<A>(ref: string, expectedBaseDir: string | undefined, decod
     if (relative.startsWith("..") || path.isAbsolute(relative)) {
       throw new Error(`Learning artifact escapes its authority root: ${artifact.path}`)
     }
-    const content = await Bun.file(artifactPath).text()
+    const content = await readFile(artifactPath, "utf8")
     if (Hash.sha256(content) !== artifact.sha256) throw new Error(`Learning artifact hash mismatch: ${artifact.path}`)
     return { artifact, value: decode(decoder, content) }
   })

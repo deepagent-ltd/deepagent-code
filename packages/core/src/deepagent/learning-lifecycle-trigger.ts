@@ -1,7 +1,8 @@
 export * as DeepAgentLearningLifecycleTrigger from "./learning-lifecycle-trigger"
 
 import path from "node:path"
-import { readdir, realpath } from "node:fs/promises"
+import { existsSync } from "node:fs"
+import { readFile, readdir, realpath } from "node:fs/promises"
 import { and, asc, eq } from "drizzle-orm"
 import { Effect, Schema } from "effect"
 import { Database } from "../database/database"
@@ -275,9 +276,7 @@ async function latestSource(runsDir: string, input: ObserveInput): Promise<Sourc
 
 async function sourceFromRun(runDir: string, input: ObserveInput): Promise<Source | undefined> {
   const receiptPath = path.join(runDir, "LEARNING_ADMISSION_RECEIPT.json")
-  const receiptContent = await Bun.file(receiptPath)
-    .text()
-    .catch(() => undefined)
+  const receiptContent = await readFile(receiptPath, "utf8").catch(() => undefined)
   if (!receiptContent) return undefined
   const parsed = (() => {
     try {
@@ -291,9 +290,7 @@ async function sourceFromRun(runDir: string, input: ObserveInput): Promise<Sourc
     return undefined
   }
   if (!(await DeepAgentDurableLearning.validateLocalAdmissionReceipt(decoded.admission, runDir))) return undefined
-  const terminalContent = await Bun.file(decoded.admission.terminalArtifact.path)
-    .text()
-    .catch(() => undefined)
+  const terminalContent = await readFile(decoded.admission.terminalArtifact.path, "utf8").catch(() => undefined)
   if (!terminalContent) return undefined
   const terminal = (() => {
     try {
@@ -377,15 +374,15 @@ async function publishArtifact(authorityRoot: string, artifactPath: string, cont
   const relative = path.relative(root, parent)
   if (relative.startsWith("..") || path.isAbsolute(relative))
     throw new Error("Learning lifecycle artifact escapes authority root")
-  if (await Bun.file(artifactPath).exists()) {
-    if ((await Bun.file(artifactPath).text()) !== content)
+  if (existsSync(artifactPath)) {
+    if ((await readFile(artifactPath, "utf8")) !== content)
       throw new Error("Learning lifecycle artifact identity conflict")
     return
   }
   try {
     writeFileExclusive(artifactPath, content)
   } catch (error) {
-    if (!(await Bun.file(artifactPath).exists()) || (await Bun.file(artifactPath).text()) !== content) throw error
+    if (!existsSync(artifactPath) || (await readFile(artifactPath, "utf8")) !== content) throw error
   }
 }
 
