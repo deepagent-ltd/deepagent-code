@@ -64,8 +64,16 @@ describe("live LLM route manifest", () => {
         runs: ["live:session-v2:v2-provider-loop"],
       },
       {
+        path: "packages/core/src/plugin/agent.ts",
+        runs: ["live:legacy-session:subagent-control-plane", "live:session-v2:v2-provider-loop"],
+      },
+      {
         path: "packages/core/src/tool/edit.ts",
         runs: ["live:session-v2:file-mutations"],
+      },
+      {
+        path: "packages/core/src/tool/read-failure.ts",
+        runs: ["live:legacy-session:subagent-control-plane", "live:session-v2:file-read-search"],
       },
       {
         path: "packages/deepagent-code/src/tool/edit.ts",
@@ -390,9 +398,7 @@ describe("live LLM route manifest", () => {
       "packages/app/src/pages/session/composer/session-question-dock.tsx",
       "packages/desktop/scripts/live-llm/long-session.ts",
     ]) {
-      const run = selectRoutes([path]).runs.find(
-        (item) => modelRunKey(item) === "ext:renderer-ui:long-session",
-      )
+      const run = selectRoutes([path]).runs.find((item) => modelRunKey(item) === "ext:renderer-ui:long-session")
       expect(run).toBeDefined()
       expect(commandForModelRun(run!)).toEqual({
         cwd: "packages/desktop",
@@ -623,7 +629,10 @@ describe("pushed OID resolution", () => {
     })
 
     expect(plan.paths).toEqual(["packages/core/src/tool/read.ts"])
-    expect(plan.selection.runs.map(modelRunKey)).toEqual(["live:session-v2:file-read-search"])
+    expect(plan.selection.runs.map(modelRunKey)).toEqual([
+      "live:legacy-session:subagent-control-plane",
+      "live:session-v2:file-read-search",
+    ])
   })
 
   test("peels lightweight and annotated tags and records non-commit tags", async () => {

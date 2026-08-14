@@ -52,23 +52,41 @@ function withTmp<A, E, R>(f: (directory: string) => Effect.Effect<A, E, R>) {
 }
 
 describe("FileSystem", () => {
-  it.live("accepts generated managed output paths and rejects other absolute paths", () =>
+  it.live("normalizes Location absolute paths without weakening managed output authority", () =>
     withTmp((directory) => {
       const worktree = directory
       const data = path.join(directory, "data")
+      const outside = `${directory}-outside.txt`
       return Effect.gen(function* () {
         const managed = path.join(data, "tool-output")
         const output = path.join(managed, "tool_123")
-        const unrelated = path.join(directory, "secret.txt")
+        const unmanagedOutput = path.join(managed, "report.txt")
+        const internal = path.join(directory, "fixtures", "input.txt")
+        const escapingLink = path.join(directory, "fixtures", "outside.txt")
         yield* Effect.promise(() => fs.mkdir(managed, { recursive: true }))
+        yield* Effect.promise(() => fs.mkdir(path.dirname(internal), { recursive: true }))
         yield* Effect.promise(() => fs.writeFile(output, "failure here"))
-        yield* Effect.promise(() => fs.writeFile(unrelated, "secret"))
+        yield* Effect.promise(() => fs.writeFile(unmanagedOutput, "not managed output"))
+        yield* Effect.promise(() => fs.writeFile(internal, "workspace input"))
+        yield* Effect.promise(() => fs.writeFile(outside, "outside"))
+        if (process.platform !== "win32") yield* Effect.promise(() => fs.symlink(outside, escapingLink))
         const service = yield* FileSystem.Service
 
-        expect(yield* service.read({ path: output })).toMatchObject({ type: "text", content: "failure here" })
+        expect(yield* service.readTool({ path: internal })).toMatchObject({ type: "text", content: "workspace input" })
+        expect(yield* service.resolveReadPath({ path: internal })).toEqual({
+          type: "file",
+          resource: "fixtures/input.txt",
+        })
+        expect(yield* Effect.exit(service.resolveReadPath({ path: outside }))).toMatchObject({ _tag: "Failure" })
+        if (process.platform !== "win32")
+          expect(yield* Effect.exit(service.resolveReadPath({ path: escapingLink }))).toMatchObject({ _tag: "Failure" })
+        expect(yield* service.readTool({ path: output })).toMatchObject({ type: "text", content: "failure here" })
         expect((yield* service.resolveRoot({ path: output })).real).toBe(output)
-        expect(yield* Effect.exit(service.read({ path: unrelated }))).toMatchObject({ _tag: "Failure" })
+        expect(yield* Effect.exit(service.resolveReadPath({ path: unmanagedOutput }))).toMatchObject({
+          _tag: "Failure",
+        })
         expect(yield* Effect.exit(service.read({ path: managed }))).toMatchObject({ _tag: "Failure" })
+        yield* Effect.promise(() => fs.rm(outside, { force: true }))
       }).pipe(provide(worktree, inertReferences, FSUtil.defaultLayer, data))
     }),
   )

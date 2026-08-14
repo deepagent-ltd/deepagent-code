@@ -516,6 +516,7 @@ export const routeManifest = [
       "packages/core/src/session/execution/**",
       "packages/core/src/session/run-coordinator.ts",
       "packages/core/src/session/store.ts",
+      "packages/core/src/session/transfer.sql.ts",
       "packages/core/src/session/history.ts",
       "packages/core/src/session/context-epoch.ts",
       "packages/core/src/location-layer.ts",
@@ -546,6 +547,16 @@ export const routeManifest = [
     checks: ["session-v2"],
   },
   {
+    id: "core-agent-runtime",
+    paths: [
+      "packages/core/src/agent.ts",
+      "packages/core/src/plugin/agent.ts",
+      "packages/core/src/config/plugin/agent.ts",
+    ],
+    checks: ["session-v2"],
+    runs: [v2Provider, subagentControlPlane],
+  },
+  {
     id: "core-tool-registry",
     paths: [
       "packages/core/src/tool/registry.ts",
@@ -559,9 +570,14 @@ export const routeManifest = [
   },
   {
     id: "core-tool-read-search",
-    paths: ["packages/core/src/tool/read.ts", "packages/core/src/tool/glob.ts", "packages/core/src/tool/grep.ts"],
+    paths: [
+      "packages/core/src/tool/read.ts",
+      "packages/core/src/tool/read-failure.ts",
+      "packages/core/src/tool/glob.ts",
+      "packages/core/src/tool/grep.ts",
+    ],
     checks: ["tool-files"],
-    runs: [v2FileRead],
+    runs: [v2FileRead, subagentControlPlane],
   },
   {
     id: "core-tool-mutations",
@@ -1073,6 +1089,9 @@ export const routeManifest = [
       "packages/deepagent-code/src/session/compaction-sql.ts",
       "packages/deepagent-code/src/session/compaction.ts",
       "packages/deepagent-code/src/session/context-ledger.ts",
+      "packages/deepagent-code/src/session/diff-artifact-schema.ts",
+      "packages/deepagent-code/src/session/diff-artifact.sql.ts",
+      "packages/deepagent-code/src/session/diff-artifact.ts",
       "packages/deepagent-code/src/session/history-authority.ts",
       "packages/deepagent-code/src/session/message-v2.ts",
       "packages/deepagent-code/src/session/prompt-epoch.sql.ts",

@@ -46,6 +46,7 @@ import { AgentV2 } from "@deepagent-code/core/agent"
 import { Config } from "@deepagent-code/core/config"
 import { ConfigCompaction } from "@deepagent-code/core/config/compaction"
 import { Tool } from "@deepagent-code/core/tool/tool"
+import { recoverReadDefect } from "@deepagent-code/core/tool/read-failure"
 import {
   SessionContextEpochTable,
   SessionInputTable,
@@ -60,6 +61,7 @@ import { ModelV2 } from "@deepagent-code/core/model"
 import { Location } from "@deepagent-code/core/location"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { Cause, DateTime, Deferred, Effect, Exit, Fiber, Layer, Schema, Stream } from "effect"
+import { systemError } from "effect/PlatformError"
 import { asc, eq, sql } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
 
@@ -3082,17 +3084,34 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
-  it.effect("durably settles local tool failures before continuing", () =>
+  it.effect("durably settles a missing read before continuing the provider turn", () =>
     Effect.gen(function* () {
       yield* setup
       const session = yield* SessionV2.Service
-      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Call missing" }), resume: false })
+      const registry = yield* ToolRegistry.Service
+      yield* registry.register({
+        read: Tool.make({
+          description: "Read a file",
+          input: Schema.Struct({ path: Schema.String }),
+          output: Schema.String,
+          execute: ({ path }) =>
+            Effect.die(
+              systemError({
+                _tag: "NotFound",
+                module: "FileSystem",
+                method: "realPath",
+                pathOrDescriptor: `/project/${path}`,
+              }),
+            ).pipe(Effect.catchDefect((defect) => recoverReadDefect(path, defect))),
+        }),
+      })
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Read README then recover" }), resume: false })
 
       requests.length = 0
       responses = [
         [
           LLMEvent.stepStart({ index: 0 }),
-          LLMEvent.toolCall({ id: "call-missing", name: "missing", input: {} }),
+          LLMEvent.toolCall({ id: "call-missing-read", name: "read", input: { path: "README.md" } }),
           LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
           LLMEvent.finish({ reason: "tool-calls" }),
         ],
@@ -3112,14 +3131,14 @@ describe("SessionRunnerLLM", () => {
 
       expect(requests).toHaveLength(2)
       expect(yield* session.context(sessionID)).toMatchObject([
-        { type: "user", text: "Call missing" },
+        { type: "user", text: "Read README then recover" },
         {
           type: "assistant",
           content: [
             {
               type: "tool",
-              id: "call-missing",
-              state: { status: "error", error: { message: "Unknown tool: missing" } },
+              id: "call-missing-read",
+              state: { status: "error", error: { message: "Unable to read README.md" } },
             },
           ],
         },

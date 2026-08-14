@@ -79,19 +79,15 @@ if (child01.parentID !== cp01.sessionID || child01.agent !== "researcher") {
 // DB-oracle: child session metadata — set by settleSubagentRun in task.ts
 const subagent01 = nestedRecord(child01.metadata, ["deepagent", "subagent"])
 if (subagent01.finished !== true || subagent01.state !== "completed") {
-  throw new Error(
-    `REAL-CP-01: Child durable metadata state incorrect: ${JSON.stringify(subagent01)}`,
-  )
+  throw new Error(`REAL-CP-01: Child durable metadata state incorrect: ${JSON.stringify(subagent01)}`)
 }
 if (typeof subagent01.run_id !== "string" || subagent01.run_id.length === 0) {
   throw new Error("REAL-CP-01: Child durable metadata missing run_id — legacy path was used, not durable")
 }
 
 // mutation_capability=read_only fence: child must NOT have successfully called mutating tools
-const childTools01 = child01.assistants.flatMap((a) => a.tools)
-const mutating01 = childTools01.filter(
-  (t) => t.status === "completed" && ["write", "edit", "bash"].includes(t.name),
-)
+const childTools01 = [...child01.assistants.flatMap((a) => a.tools), ...child01.v2Tools]
+const mutating01 = childTools01.filter((t) => t.status === "completed" && ["write", "edit", "bash"].includes(t.name))
 if (mutating01.length > 0) {
   throw new Error(
     `REAL-CP-01: Read-only subagent completed mutating tool calls: ${mutating01.map((t) => t.name).join(", ")}`,
@@ -214,7 +210,7 @@ if (typeof subagent02.generation !== "number") {
 }
 
 // Child must have read the fixture through a completed read tool
-const childTools02 = child02.assistants.flatMap((a) => a.tools)
+const childTools02 = [...child02.assistants.flatMap((a) => a.tools), ...child02.v2Tools]
 if (!childTools02.some((t) => t.name === "read" && t.status === "completed" && t.output?.includes(marker02))) {
   throw new Error("REAL-CP-02: Child did not obtain the marker through a completed read tool")
 }
@@ -242,12 +238,17 @@ console.log(`${result02.suite}: passed (${result02.fingerprint.providerID}/${res
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function nestedRecord(value: unknown, keys: string[]) {
-  const result = keys.reduce<Record<string, unknown> | undefined>((current, key) => {
-    if (!current) return undefined
-    const next = current[key]
-    if (typeof next !== "object" || next === null || Array.isArray(next)) return undefined
-    return next as Record<string, unknown>
-  }, typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined)
+  const result = keys.reduce<Record<string, unknown> | undefined>(
+    (current, key) => {
+      if (!current) return undefined
+      const next = current[key]
+      if (typeof next !== "object" || next === null || Array.isArray(next)) return undefined
+      return next as Record<string, unknown>
+    },
+    typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : undefined,
+  )
   if (!result) throw new Error(`Missing object path ${keys.join(".")}`)
   return result
 }

@@ -1663,6 +1663,7 @@ describe("session.llm.stream", () => {
             }),
           dispatched: () => Effect.void,
           streaming: () => Effect.void,
+          observed: () => Effect.void,
           settled: () => Effect.void,
           failed: () => Effect.void,
           rejected: () => Effect.void,
