@@ -3,6 +3,9 @@ import path from "path"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { Database } from "@deepagent-code/core/database/database"
 import { EventV2 } from "@deepagent-code/core/event"
+import { EventTable } from "@deepagent-code/core/event/sql"
+import { ModelV2 } from "@deepagent-code/core/model"
+import { ProviderV2 } from "@deepagent-code/core/provider"
 import { SessionProjector } from "@deepagent-code/core/session/projector"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import { Deferred, Effect, Exit, Layer } from "effect"
@@ -23,6 +26,8 @@ import { Worktree } from "@/worktree"
 import { Git } from "../../src/git"
 import { DeepAgentContext, DeepAgentDocumentStore } from "@deepagent-code/core/deepagent/index"
 import { contextStoreRoot, loadForkOrigin, forwardLedgerOnFork } from "@/session/context-ledger"
+import { WorkspaceV2 } from "@deepagent-code/core/workspace"
+import { eq } from "drizzle-orm"
 
 void Log.init({ print: false })
 
@@ -36,6 +41,7 @@ const it = testEffect(
       Layer.provide(RuntimeFlags.layer({ experimentalWorkspaces: false })),
       Layer.provide(BackgroundJob.defaultLayer),
     ),
+    Database.defaultLayer,
     CrossSpawnSpawner.defaultLayer,
     testInstanceStoreLayer,
   ),
@@ -335,6 +341,66 @@ describe("Session", () => {
     }),
   )
 
+  it.instance("hashes the same sanitized history that fork persistence and delivery project", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionNs.Service
+      const source = yield* Effect.acquireRelease(session.create({ title: "fork-progress-sanitization" }), (info) =>
+        session.remove(info.id).pipe(Effect.ignore),
+      )
+      const userID = MessageID.ascending()
+      yield* session.updateMessage({
+        id: userID,
+        sessionID: source.id,
+        role: "user",
+        time: { created: Date.now() },
+        agent: "build",
+        model: { providerID: ProviderV2.ID.make("test"), modelID: ModelV2.ID.make("test") },
+      })
+      const assistantID = MessageID.ascending()
+      yield* session.updateMessage({
+        id: assistantID,
+        sessionID: source.id,
+        role: "assistant",
+        parentID: userID,
+        time: { created: Date.now() },
+        mode: "build",
+        agent: "build",
+        cost: 0,
+        path: { cwd: source.directory, root: source.directory },
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        modelID: ModelV2.ID.make("test"),
+        providerID: ProviderV2.ID.make("test"),
+        activityProgress: { activityID: "activity-fork-progress", revision: 1, state: "progress" },
+      })
+      yield* session.updatePart({
+        id: PartID.ascending(),
+        sessionID: source.id,
+        messageID: assistantID,
+        type: "text",
+        text: "durable assistant content",
+        metadata: {
+          deepagent_activity_progress: {
+            activity_id: "activity-fork-progress",
+            revision: 1,
+            state: "progress",
+          },
+        },
+      })
+
+      const fork = yield* Effect.acquireRelease(
+        session.fork({ sessionID: source.id, intentID: "session-progress-sanitized-fork" }),
+        (info) => session.remove(info.id).pipe(Effect.ignore),
+      )
+      yield* session.assertRunnable(fork.id)
+      const messages = yield* session.messages({ sessionID: fork.id })
+      expect(messages).toHaveLength(2)
+      expect(messages[1]?.info).not.toHaveProperty("activityProgress")
+      const part = messages[1]?.parts[0]
+      expect(part?.type).toBe("text")
+      expect(part?.type === "text" ? part.metadata : undefined).not.toHaveProperty("deepagent_activity_progress")
+    }),
+  )
+
   it.instance("durably relocates a Session through the moved-event projector", () =>
     Effect.gen(function* () {
       const sessions = yield* SessionNs.Service
@@ -350,6 +416,65 @@ describe("Session", () => {
         directory,
       })
       expect((yield* sessions.get(created.id)).path).toBeUndefined()
+    }),
+  )
+
+  it.instance("rejects workspace placement changes without writing Session or EventV2 state", () =>
+    Effect.gen(function* () {
+      const sessions = yield* SessionNs.Service
+      const { db } = yield* Database.Service
+      const workspaceID = WorkspaceV2.ID.make("wrk_session_placement_guard")
+      const workspaceSession = yield* Effect.acquireRelease(
+        sessions.create({ title: "workspace placement guard", workspaceID }),
+        (info) => sessions.remove(info.id).pipe(Effect.ignore),
+      )
+      const localSession = yield* Effect.acquireRelease(sessions.create({ title: "local placement guard" }), (info) =>
+        sessions.remove(info.id).pipe(Effect.ignore),
+      )
+      const beforeWorkspace = yield* sessions.get(workspaceSession.id)
+      const beforeLocal = yield* sessions.get(localSession.id)
+      const beforeWorkspaceEvents = yield* db
+        .select()
+        .from(EventTable)
+        .where(eq(EventTable.aggregate_id, workspaceSession.id))
+        .all()
+        .pipe(Effect.orDie)
+      const beforeLocalEvents = yield* db
+        .select()
+        .from(EventTable)
+        .where(eq(EventTable.aggregate_id, localSession.id))
+        .all()
+        .pipe(Effect.orDie)
+
+      const directoryError = yield* sessions
+        .setDirectory({ sessionID: workspaceSession.id, directory: path.join(workspaceSession.directory, "other") })
+        .pipe(Effect.flip)
+      const workspaceError = yield* sessions
+        .setWorkspace({ sessionID: localSession.id, workspaceID })
+        .pipe(Effect.flip)
+
+      expect(directoryError).toBeInstanceOf(SessionNs.PlacementChangeUnsupportedError)
+      expect(directoryError.operation).toBe("directory")
+      expect(workspaceError).toBeInstanceOf(SessionNs.PlacementChangeUnsupportedError)
+      expect(workspaceError.operation).toBe("workspace")
+      expect(yield* sessions.get(workspaceSession.id)).toEqual(beforeWorkspace)
+      expect(yield* sessions.get(localSession.id)).toEqual(beforeLocal)
+      expect(
+        yield* db
+          .select()
+          .from(EventTable)
+          .where(eq(EventTable.aggregate_id, workspaceSession.id))
+          .all()
+          .pipe(Effect.orDie),
+      ).toEqual(beforeWorkspaceEvents)
+      expect(
+        yield* db
+          .select()
+          .from(EventTable)
+          .where(eq(EventTable.aggregate_id, localSession.id))
+          .all()
+          .pipe(Effect.orDie),
+      ).toEqual(beforeLocalEvents)
     }),
   )
 

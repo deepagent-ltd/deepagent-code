@@ -46,6 +46,8 @@ import {
   stripsOpenAIItemMetadata,
   type BundledSDK,
 } from "./compatibility"
+import { ProviderWireSeal } from "@/session/llm/provider-wire-seal"
+import { RequestExecutor } from "@deepagent-code/llm/route"
 
 const log = Log.create({ service: "provider" })
 
@@ -876,17 +878,6 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
           baseURL,
           apiKey: pat,
           fetch: async (url: RequestInfo | URL, init?: RequestInit) => {
-            if (init?.body && typeof init.body === "string") {
-              try {
-                const body = JSON.parse(init.body)
-                if ("max_tokens" in body) {
-                  body.max_completion_tokens = body.max_tokens
-                  delete body.max_tokens
-                  init = { ...init, body: JSON.stringify(body) }
-                }
-              } catch {}
-            }
-
             const response = await fetch(url, init)
 
             // Cortex returns 400 "conversation complete" as a normal stop condition
@@ -2202,6 +2193,17 @@ export const layer = Layer.effect(
           const combined = signals.length === 0 ? null : signals.length === 1 ? signals[0] : AbortSignal.any(signals)
           if (combined) opts.signal = combined
 
+          if (model.providerID === "snowflake-cortex" && typeof opts.body === "string") {
+            try {
+              const body = JSON.parse(opts.body)
+              if ("max_tokens" in body) {
+                body.max_completion_tokens = body.max_tokens
+                delete body.max_tokens
+                opts.body = JSON.stringify(body)
+              }
+            } catch {}
+          }
+
           // Strip openai itemId metadata following what codex does
           if (stripsOpenAIItemMetadata(model) && opts.body && opts.method === "POST") {
             const body = JSON.parse(opts.body as string)
@@ -2214,6 +2216,26 @@ export const layer = Layer.effect(
               }
               opts.body = JSON.stringify(body)
             }
+          }
+
+          const requestSeal = ProviderWireSeal.current()
+          if (requestSeal) {
+            if (typeof opts.body !== "string") throw new Error("Durable provider request body is not sealable")
+            const url = input instanceof Request ? input.url : String(input)
+            const headers = new Headers(opts.headers)
+            await Effect.runPromise(
+              requestSeal({
+                wireHash: RequestExecutor.wireRequestHash({
+                  method: opts.method ?? "POST",
+                  url,
+                  contentType: headers.get("content-type") ?? undefined,
+                  bodyText: opts.body,
+                }),
+                bodyHash: Hash.sha256(opts.body),
+                bodyLength: new TextEncoder().encode(opts.body).length,
+                contentType: headers.get("content-type") ?? undefined,
+              }),
+            )
           }
 
           const res = await fetchFn(input, {

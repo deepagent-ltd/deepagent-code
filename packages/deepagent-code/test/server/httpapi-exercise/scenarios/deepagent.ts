@@ -21,17 +21,30 @@ export const deepagentScenarios: Scenario[] = [
     .post("/deepagent/knowledge/approve", "deepagent.knowledge.approve")
     .mutating()
     .at((ctx) => ({ path: "/deepagent/knowledge/approve", headers: ctx.headers(), body: { ids: [] } }))
-    .json(200, (body) => {
-      object(body)
-      check(Array.isArray(body.updated) && body.updated.length === 0, "empty knowledge approval should be idempotent")
-    }),
+    .json(400, object, "status"),
   http.protected
     .post("/deepagent/knowledge/reject-ids", "deepagent.knowledge.rejectIds")
     .mutating()
     .at((ctx) => ({ path: "/deepagent/knowledge/reject-ids", headers: ctx.headers(), body: { ids: [] } }))
+    .json(400, object, "status"),
+  http.protected
+    .post("/deepagent/knowledge/release-baseline", "deepagent.knowledge.releaseBaseline")
+    .mutating()
+    .at((ctx) => ({
+      path: "/deepagent/knowledge/release-baseline",
+      headers: ctx.headers(),
+      body: {
+        snapshotId: "httpapi-baseline",
+        evaluationId: "httpapi-baseline-evaluation",
+        candidateRefs: [],
+        baselineRef: "httpapi-exercise",
+      },
+    }))
     .json(200, (body) => {
       object(body)
-      check(Array.isArray(body.updated) && body.updated.length === 0, "empty knowledge rejection should be idempotent")
+      check(body.release_snapshot_id === "httpapi-baseline", "baseline should return its durable release id")
+      check(body.generation === 1, "baseline should establish generation one")
+      check(body.document_count === 0, "explicit empty baseline should remain explicit")
     }),
   http.protected
     .post("/deepagent/knowledge/ship-gate", "deepagent.knowledge.shipGate")
@@ -39,6 +52,9 @@ export const deepagentScenarios: Scenario[] = [
       path: "/deepagent/knowledge/ship-gate",
       headers: ctx.headers(),
       body: {
+        snapshotId: "httpapi-evaluated",
+        evaluationId: "httpapi-evaluated-evaluation",
+        expectedParent: { snapshotId: null, generation: 0, membershipHash: null },
         tasks: ["httpapi"],
         metrics: [
           { group: "general", task: "httpapi", metric: 1 },
@@ -48,11 +64,9 @@ export const deepagentScenarios: Scenario[] = [
         candidateRefs: [],
       },
     }))
-    .json(200, (body) => {
+    .json(400, (body) => {
       object(body)
-      check(body.ship === true, "equal measured metrics should pass the knowledge ship gate")
-      array(body.offenders)
-      object(body.per_group)
+      check(typeof body.message === "string", "evaluated release should require an explicit baseline")
     }),
   http.protected.get("/deepagent/packs/active", "deepagent.packs.active").json(200, (body) => {
     object(body)

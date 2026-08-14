@@ -5,7 +5,13 @@ import { ProviderV2 } from "@deepagent-code/core/provider"
 import { Effect } from "effect"
 import type { SessionPrompt } from "@/session/prompt"
 import { MessageID, PartID, SessionID } from "@/session/schema"
-import { runSubagentPrompt, type SubagentPromptInput, type TaskPromptOps } from "@/tool/task"
+import {
+  runDurableStructuredFinalizer,
+  runSubagentPrompt,
+  type StructuredOutputReceipt,
+  type SubagentPromptInput,
+  type TaskPromptOps,
+} from "@/tool/task"
 
 const model = {
   modelID: ModelV2.ID.make("test-model"),
@@ -81,8 +87,73 @@ function ops(prompt: TaskPromptOps["prompt"]): TaskPromptOps {
 }
 
 describe("task structured finalizer", () => {
-  test("direct structured output uses one schema-bound prompt", async () => {
+  test("durable production finalizer uses the frozen run contract and returns its exact receipt", async () => {
     const calls: SessionPrompt.PromptInput[] = []
+    const result = await Effect.runPromise(
+      runDurableStructuredFinalizer({
+        ops: ops((prompt) =>
+          Effect.sync(() => {
+            calls.push(prompt)
+            return response(prompt, { structured: { result: "frozen" } })
+          }),
+        ),
+        run: {
+          runID: "run_durable_finalizer",
+          childSessionID: sessionID,
+          executionSpec: {
+            prompt: { text: "frozen research prompt" },
+            agent: "reviewer",
+            model: { providerID: "frozen-provider", modelID: "frozen-model", variant: "precise" },
+            tools: { read: true, edit: false },
+            structuredOutput: {
+              schema,
+              allowTextFallback: true,
+              receiptVersion: 1,
+              maxAttempts: 2,
+            },
+          },
+        },
+        research: response(
+          {
+            sessionID,
+            agent: "researcher",
+            model,
+            parts: [],
+          },
+          { text: "durable research" },
+        ),
+        contract: {
+          schema,
+          allowTextFallback: true,
+          receiptVersion: 1,
+          maxAttempts: 2,
+        },
+        onFinalizing: () => Effect.void,
+      }),
+    )
+
+    expect(result).toMatchObject({
+      output: '{"result":"frozen"}',
+      structuredResultMessageID: expect.any(String),
+      receipt: { attempt: 1, transport: "structured" },
+    })
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toMatchObject({
+      sessionID,
+      agent: "reviewer",
+      model: { providerID: "frozen-provider", modelID: "frozen-model" },
+      variant: "precise",
+      format: { type: "json_schema", schema },
+    })
+    expect(calls[0]?.metadata?.deepagent?.structured_finalizer).toMatchObject({
+      attempt: 1,
+      source_message_id: expect.any(String),
+    })
+  })
+
+  test("direct structured output records a first-attempt structured receipt", async () => {
+    const calls: SessionPrompt.PromptInput[] = []
+    let receipt: StructuredOutputReceipt | undefined
     const request = input(
       ops((prompt) =>
         Effect.sync(() => {
@@ -93,6 +164,10 @@ describe("task structured finalizer", () => {
     )
     request.directStructuredOutput = true
     request.finalizerInstructions = ["Preserve the assigned identity."]
+    request.onFinalized = (_messageID, settled) =>
+      Effect.sync(() => {
+        receipt = settled
+      })
 
     const result = await Effect.runPromise(runSubagentPrompt(request))
 
@@ -100,8 +175,101 @@ describe("task structured finalizer", () => {
     expect(calls).toHaveLength(1)
     expect(calls[0]?.format?.type).toBe("json_schema")
     expect(calls[0]?.tools).toEqual({ task: false })
-    expect(calls[0]?.metadata?.deepagent).toEqual({ structured_direct: true })
+    expect(calls[0]?.metadata?.deepagent).toEqual({ structured_direct: { attempt: 1, allow_text: false } })
     expect(calls[0]?.parts.at(-1)).toMatchObject({ type: "text", text: "Preserve the assigned identity." })
+    expect(receipt).toEqual({ attempt: 1, transport: "structured" })
+  })
+
+  test("direct structured output retries once after invalid structured output", async () => {
+    const calls: SessionPrompt.PromptInput[] = []
+    const request = input(
+      ops((prompt) =>
+        Effect.sync(() => {
+          calls.push(prompt)
+          return response(prompt, { structured: calls.length === 1 ? { wrong: "field" } : { result: "recovered" } })
+        }),
+      ),
+    )
+    request.directStructuredOutput = true
+    request.allowTextFallback = false
+
+    const result = await Effect.runPromise(runSubagentPrompt(request))
+
+    expect(result).toBe('{"result":"recovered"}')
+    expect(calls).toHaveLength(2)
+    expect(calls.map((call) => call.metadata?.deepagent?.structured_direct?.attempt)).toEqual([1, 2])
+    expect(calls.every((call) => call.format?.type === "json_schema")).toBe(true)
+  })
+
+  test("direct structured output stops after two invalid attempts", async () => {
+    const calls: SessionPrompt.PromptInput[] = []
+    const request = input(
+      ops((prompt) =>
+        Effect.sync(() => {
+          calls.push(prompt)
+          return response(prompt, { structured: { wrong: "field" } })
+        }),
+      ),
+    )
+    request.directStructuredOutput = true
+    request.allowTextFallback = false
+
+    const error = await Effect.runPromise(runSubagentPrompt(request)).then(
+      () => undefined,
+      (cause) => cause,
+    )
+
+    expect(String(error)).toContain("[structured_output_invalid]")
+    expect(String(error)).toContain("Attempts: 2")
+    expect(calls).toHaveLength(2)
+    expect(calls.map((call) => call.metadata?.deepagent?.structured_direct?.attempt)).toEqual([1, 2])
+  })
+
+  test("direct structured output accepts schema-valid JSON text on the bounded second attempt", async () => {
+    const calls: SessionPrompt.PromptInput[] = []
+    let receipt: StructuredOutputReceipt | undefined
+    const request = input(
+      ops((prompt) =>
+        Effect.sync(() => {
+          calls.push(prompt)
+          return response(prompt, { text: '{"result":"fallback"}' })
+        }),
+      ),
+    )
+    request.directStructuredOutput = true
+    request.onFinalized = (_messageID, settled) =>
+      Effect.sync(() => {
+        receipt = settled
+      })
+
+    const result = await Effect.runPromise(runSubagentPrompt(request))
+
+    expect(result).toBe('{"result":"fallback"}')
+    expect(calls).toHaveLength(2)
+    expect(calls[0]?.format?.type).toBe("json_schema")
+    expect(calls[1]?.format).toBeUndefined()
+    expect(calls[1]?.metadata?.deepagent?.structured_direct).toEqual({ attempt: 2, allow_text: true })
+    expect(calls[1]?.parts.at(-1)).toMatchObject({
+      type: "text",
+      text: expect.stringContaining('<output_schema>{"type":"object"'),
+    })
+    expect(receipt).toEqual({ attempt: 2, transport: "text_fallback" })
+  })
+
+  test("direct structured output rejects invalid JSON text without a third attempt", async () => {
+    const calls: SessionPrompt.PromptInput[] = []
+    const request = input(
+      ops((prompt) =>
+        Effect.sync(() => {
+          calls.push(prompt)
+          return response(prompt, { text: calls.length === 1 ? "not json" : '{"wrong":"field"}' })
+        }),
+      ),
+    )
+    request.directStructuredOutput = true
+
+    await expect(Effect.runPromise(runSubagentPrompt(request))).rejects.toThrow("[structured_output_invalid]")
+    expect(calls).toHaveLength(2)
   })
 
   test("schema-less tasks preserve the last-text compatibility path", async () => {
@@ -167,29 +335,39 @@ describe("task structured finalizer", () => {
     )
   })
 
-  test("plain-text finalizer outcomes consume the two-attempt budget", async () => {
+  test("plain-text finalizer exhaustion returns the bounded research result as degraded text", async () => {
     const calls: SessionPrompt.PromptInput[] = []
-    const effect = runSubagentPrompt(
-      input(
-        ops((request) =>
-          Effect.sync(() => {
-            calls.push(request)
-            return response(request, { text: calls.length === 1 ? "persisted research" : "plain text" })
-          }),
-        ),
+    let receipt: Parameters<NonNullable<SubagentPromptInput["onFinalized"]>>[1] | undefined
+    const request = input(
+      ops((prompt) =>
+        Effect.sync(() => {
+          calls.push(prompt)
+          return response(prompt, { text: calls.length === 1 ? "persisted research" : "plain text" })
+        }),
       ),
     )
+    request.onFinalized = (_messageID, settled) =>
+      Effect.sync(() => {
+        receipt = settled
+      })
+    const effect = runSubagentPrompt(request)
 
-    await expect(Effect.runPromise(effect)).rejects.toThrow("[structured_output_missing]")
+    expect(JSON.parse(await Effect.runPromise(effect))).toEqual({
+      _degraded: true,
+      _reason: "structured_output_missing",
+      _attempts: 2,
+      _raw: "persisted research",
+    })
     expect(calls).toHaveLength(3)
     expect(calls.slice(1).map((call) => call.metadata?.deepagent?.structured_finalizer?.attempt)).toEqual([1, 2])
     expect(calls[1]?.format?.type).toBe("json_schema")
     expect(calls[1]?.metadata?.deepagent?.structured_finalizer?.allow_text).toBe(false)
     expect(calls[2]?.format).toBeUndefined()
     expect(calls[2]?.metadata?.deepagent?.structured_finalizer?.allow_text).toBe(true)
+    expect(receipt).toEqual({ attempt: 2, transport: "degraded_text", reason: "structured_output_missing" })
   })
 
-  test("accepts schema-valid JSON text when a forced-tool finalizer degrades", async () => {
+  test("ignores JSON text from the forced-tool attempt and accepts it only on the text fallback", async () => {
     const calls: SessionPrompt.PromptInput[] = []
     const result = await Effect.runPromise(
       runSubagentPrompt(
@@ -198,13 +376,15 @@ describe("task structured finalizer", () => {
             Effect.sync(() => {
               calls.push(request)
               if (calls.length === 1) return response(request, { text: "persisted research" })
-              return response(request, {
-                text: 'The result is:\n```json\n{"result":"recovered"}\n```',
-                error: new SessionV1.StructuredOutputError({
-                  message: "Finalizer did not produce valid structured output",
-                  retries: 1,
-                }).toObject(),
-              })
+              if (calls.length === 2)
+                return response(request, {
+                  text: 'The result is:\n```json\n{"result":"ignored"}\n```',
+                  error: new SessionV1.StructuredOutputError({
+                    message: "Finalizer did not produce valid structured output",
+                    retries: 1,
+                  }).toObject(),
+                })
+              return response(request, { text: '{"result":"recovered"}' })
             }),
           ),
         ),
@@ -212,7 +392,9 @@ describe("task structured finalizer", () => {
     )
 
     expect(result).toBe('{"result":"recovered"}')
-    expect(calls).toHaveLength(2)
+    expect(calls).toHaveLength(3)
+    expect(calls[1]?.format?.type).toBe("json_schema")
+    expect(calls[2]?.format).toBeUndefined()
   })
 
   test("uses a text-only finalizer for the bounded second attempt", async () => {
@@ -242,7 +424,7 @@ describe("task structured finalizer", () => {
     })
   })
 
-  test("keeps explicit schema callers on the strict transport contract", async () => {
+  test("callers that disable JSON text fallback still receive the Level-2 research receipt", async () => {
     const calls: SessionPrompt.PromptInput[] = []
     const request = input(
       ops((prompt) =>
@@ -254,7 +436,12 @@ describe("task structured finalizer", () => {
     )
     request.allowTextFallback = false
 
-    await expect(Effect.runPromise(runSubagentPrompt(request))).rejects.toThrow("[structured_output_missing]")
+    expect(JSON.parse(await Effect.runPromise(runSubagentPrompt(request)))).toEqual({
+      _degraded: true,
+      _reason: "structured_output_missing",
+      _attempts: 2,
+      _raw: "persisted research",
+    })
     expect(calls).toHaveLength(3)
     expect(calls[2]?.format?.type).toBe("json_schema")
     expect(calls[2]?.metadata?.deepagent?.structured_finalizer?.allow_text).toBe(false)
@@ -285,7 +472,7 @@ describe("task structured finalizer", () => {
     expect(calls).toHaveLength(1)
   })
 
-  test("controller rejects structured values that fail the boundary schema", async () => {
+  test("schema-invalid finalizer exhaustion degrades without accepting the invalid value", async () => {
     const calls: SessionPrompt.PromptInput[] = []
     const effect = runSubagentPrompt(
       input(
@@ -300,8 +487,78 @@ describe("task structured finalizer", () => {
       ),
     )
 
-    await expect(Effect.runPromise(effect)).rejects.toThrow("[structured_output_invalid]")
+    expect(JSON.parse(await Effect.runPromise(effect))).toEqual({
+      _degraded: true,
+      _reason: "structured_output_invalid",
+      _attempts: 2,
+      _raw: "persisted research",
+    })
     expect(calls).toHaveLength(3)
+  })
+
+  test("Level-2 research output is bounded to 80,000 Unicode characters", async () => {
+    const raw = `${"a".repeat(79_999)}😀tail`
+    const result = await Effect.runPromise(
+      runSubagentPrompt(
+        input(
+          ops((request) =>
+            Effect.succeed(
+              response(request, {
+                text: request.metadata?.deepagent?.task_activity ? raw : "not json",
+              }),
+            ),
+          ),
+        ),
+      ),
+    )
+    const degraded = JSON.parse(result) as { _raw: string }
+
+    expect(Array.from(degraded._raw)).toHaveLength(80_000)
+    expect(degraded._raw.endsWith("😀")).toBe(true)
+  })
+
+  test("provider transport errors are outside schema retries and fail after one physical call", async () => {
+    const calls: SessionPrompt.PromptInput[] = []
+    const request = input(
+      ops((prompt) =>
+        Effect.sync(() => {
+          calls.push(prompt)
+          return response(prompt, {
+            error: {
+              name: "APIError",
+              data: { message: "upstream unavailable", isRetryable: true },
+            },
+          })
+        }),
+      ),
+    )
+    request.directStructuredOutput = true
+
+    await expect(Effect.runPromise(runSubagentPrompt(request))).rejects.toThrow("[provider_error]")
+    expect(calls).toHaveLength(1)
+  })
+
+  test("standard finalizer transport failure does not trigger another finalizer call", async () => {
+    const calls: SessionPrompt.PromptInput[] = []
+    const effect = runSubagentPrompt(
+      input(
+        ops((prompt) =>
+          Effect.sync(() => {
+            calls.push(prompt)
+            if (calls.length === 1) return response(prompt, { text: "persisted research" })
+            return response(prompt, {
+              error: {
+                name: "APIError",
+                data: { message: "upstream unavailable", isRetryable: true },
+              },
+            })
+          }),
+        ),
+      ),
+    )
+
+    await expect(Effect.runPromise(effect)).rejects.toThrow("[provider_error]")
+    expect(calls).toHaveLength(2)
   })
 
   test("research wall-time exhaustion returns a recoverable typed task error", async () => {

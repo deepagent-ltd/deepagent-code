@@ -5,7 +5,7 @@ import { HttpClientResponse } from "effect/unstable/http"
 import { Session as SessionNs } from "@/session/session"
 import { MessageV2 } from "../../src/session/message-v2"
 
-import { MessageID, PartID, type SessionID } from "../../src/session/schema"
+import { MessageID, type SessionID } from "../../src/session/schema"
 import * as Log from "@deepagent-code/core/util/log"
 import { disposeAllInstances, TestInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
@@ -55,27 +55,18 @@ const fill = Effect.fn("SessionMessagesTest.fill")(function* (
   const session = yield* SessionNs.Service
   return yield* Effect.forEach(
     Array.from({ length: count }, (_, i) => i),
-    (i) =>
-      Effect.gen(function* () {
-        const id = MessageID.ascending()
-        yield* session.updateMessage({
-          id,
-          sessionID,
-          role: "user",
-          time: { created: time(i) },
-          agent: "test",
-          model,
-          tools: {},
-        } satisfies SessionV1.User)
-        yield* session.updatePart({
-          id: PartID.ascending(),
-          sessionID,
-          messageID: id,
-          type: "text",
-          text: `m${i}`,
-        } satisfies SessionV1.TextPart)
-        return id
-      }),
+    (i) => {
+      const id = MessageID.ascending()
+      return session.updateMessage({
+        id,
+        sessionID,
+        role: "user" as const,
+        time: { created: time(i) },
+        agent: "test",
+        model,
+        tools: {},
+      }).pipe(Effect.as(id))
+    },
   )
 })
 
@@ -113,19 +104,21 @@ describe("session messages endpoint", () => {
   )
 
   it.instance(
-    "keeps full-history responses when limit is omitted",
+    "uses a bounded default when limit is omitted",
     withoutWatcher(
       Effect.gen(function* () {
         const session = yield* sessionScoped
-        const ids = yield* fill(session.id, 3)
+        const ids = yield* fill(session.id, 110)
 
         const res = yield* request(`/session/${session.id}/message`)
         expect(res.status).toBe(200)
         const body = yield* json<SessionV1.WithParts[]>(res)
-        expect(body.map((item) => item.info.id)).toEqual(ids)
+        expect(body.map((item) => item.info.id)).toEqual(ids.slice(-MessageV2.ClientMessageLimits.page))
+        expect(res.headers["x-next-cursor"]).toBeTruthy()
       }),
     ),
     { git: true },
+    15_000,
   )
 
   it.instance(
@@ -145,16 +138,14 @@ describe("session messages endpoint", () => {
   )
 
   it.instance(
-    "does not truncate large legacy limit requests",
+    "rejects message pages above the bounded server limit",
     withoutWatcher(
       Effect.gen(function* () {
         const session = yield* sessionScoped
         yield* fill(session.id, 520)
 
         const res = yield* request(`/session/${session.id}/message?limit=510`)
-        expect(res.status).toBe(200)
-        const body = yield* json<SessionV1.WithParts[]>(res)
-        expect(body).toHaveLength(510)
+        expect(res.status).toBe(400)
       }),
     ),
     { git: true },

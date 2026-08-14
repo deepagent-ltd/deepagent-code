@@ -7,10 +7,13 @@ import { openUserGlobalStore } from "../../src/deepagent/durable-knowledge-store
 import { evaluateSnapshot } from "../../src/deepagent/knowledge-gate"
 import { retrieve, invalidateCache } from "../../src/deepagent/knowledge-retriever"
 import type { TaskContext, ToolContext } from "../../src/deepagent/prompt-policy"
+import { DeepAgentReleasedSnapshot } from "../../src/deepagent/released-snapshot"
+import { Hash } from "../../src/util/hash"
+import { documentRevision } from "../../src/deepagent/document-store"
 
 // docs/34: the ablation ship gate has TEETH. evaluateSnapshot consumes a REAL measured metric
-// matrix; on a regression verdict the candidate refs are demoted via setApprovalForWorkspace
-// (DocStatus=rejected), making them immediately unretrievable through the single knowledge body.
+// matrix. Governance status and model visibility are separate: a released revision remains replayable
+// until a later passed snapshot changes the exact manifest.
 const task: TaskContext = {
   userRequest: "optimize the matmul kernel",
   taskType: "code_modification",
@@ -51,7 +54,7 @@ describe("docs/34 ablation ship gate enforcement", () => {
     expect(decision.offenders).toContain("t2")
   })
 
-  test("teeth: a demoted candidate ref becomes unretrievable", () => {
+  test("teeth: governance demotion preserves the old release until a new manifest removes the ref", () => {
     const store = openUserGlobalStore(base)
     const doc = store.stageCandidate({
       type: "memory",
@@ -66,15 +69,40 @@ describe("docs/34 ablation ship gate enforcement", () => {
       provenance: { source: "runner", run_ref: "run1", evidence_refs: [] },
     })
     store.approve(doc.id)
+    const active = store.documentStore.get(doc.id)!
+    const released = selection([DeepAgentReleasedSnapshot.documentRef(active, "user_global")])
     invalidateCache()
-    const before = retrieve({ mode: "max", task, tools, round: 1, previousFailures: 0 })
+    const before = retrieve({ mode: "max", task, tools, round: 1, previousFailures: 0, releasedSelection: released })
     expect((before?.memoryRefs ?? []).includes(doc.id)).toBe(true)
 
     // Gate FAIL demotes it (what the ship-gate handler does on a blocking verdict).
-    expect(knowledgeSource.setApprovalForWorkspace("/any/workspace", doc.id, "rejected")).toBe(true)
+    store.rejectCandidate(doc.id, documentRevision(active), { type: "system", id: "ship-gate-test" }, "regression")
     invalidateCache()
 
-    const after = retrieve({ mode: "max", task, tools, round: 1, previousFailures: 0 })
+    const replay = retrieve({ mode: "max", task, tools, round: 1, previousFailures: 0, releasedSelection: released })
+    expect((replay?.memoryRefs ?? []).includes(doc.id)).toBe(true)
+    const after = retrieve({
+      mode: "max",
+      task,
+      tools,
+      round: 1,
+      previousFailures: 0,
+      releasedSelection: selection([]),
+    })
     expect((after?.memoryRefs ?? []).includes(doc.id)).toBe(false)
   })
 })
+
+function selection(documents: readonly DeepAgentReleasedSnapshot.DocumentRef[]) {
+  return {
+    snapshotId: `ship-gate:${documents.length}`,
+    securityNamespaceId: "ship-gate-namespace",
+    projectScopeKey: "ship-gate-project",
+    legacyProjectId: "global",
+    parentSnapshotId: null,
+    generation: 1,
+    membershipHash: DeepAgentReleasedSnapshot.exactRefsFingerprint(documents),
+    manifestHash: Hash.sha256(`ship-gate:${documents.length}`),
+    documents: DeepAgentReleasedSnapshot.normalizeDocumentRefs(documents),
+  }
+}

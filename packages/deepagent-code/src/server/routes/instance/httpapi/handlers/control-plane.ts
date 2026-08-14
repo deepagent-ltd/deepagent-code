@@ -3,6 +3,7 @@ import { SessionV2 } from "@deepagent-code/core/session"
 import { Effect } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { RootHttpApi } from "../api"
+import { ConflictError } from "../errors"
 import { ApiMoveSessionError, MoveSessionPayload } from "../groups/control-plane"
 
 export const controlPlaneHandlers = HttpApiBuilder.group(RootHttpApi, "controlPlane", (handlers) =>
@@ -13,12 +14,13 @@ export const controlPlaneHandlers = HttpApiBuilder.group(RootHttpApi, "controlPl
       payload: typeof MoveSessionPayload.Type
     }) {
       yield* service.moveSession(ctx.payload).pipe(
-        Effect.mapError(
-          (error) =>
-            new ApiMoveSessionError({
-              name: "MoveSessionError",
-              data: { message: message(error) },
-            }),
+        Effect.mapError((error) =>
+          error instanceof MoveSession.TransferUnsupportedError
+            ? new ConflictError({ message: error.message, resource: `session:${error.sessionID}` })
+            : new ApiMoveSessionError({
+                name: "MoveSessionError",
+                data: { message: message(error) },
+              }),
         ),
       )
     })

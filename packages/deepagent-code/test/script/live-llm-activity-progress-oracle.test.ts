@@ -32,6 +32,21 @@ describe("activity progress live oracle", () => {
       }),
     ).toThrow("lacked the durable progress marker")
   })
+
+  test("rejects settled progress without one matching terminal receipt", () => {
+    const value = observation()
+    value.durability.legacyActivityTerminals = []
+    expect(() =>
+      assertActivityProgressObservation({
+        caseName: "missing-terminal",
+        triggerText,
+        steerText,
+        marker: "MARKER",
+        expectedTools: ["read", "read"],
+        observation: value,
+      }),
+    ).toThrow("lacked one matching run and terminal receipt")
+  })
 })
 
 function observation() {
@@ -62,7 +77,28 @@ function observation() {
           activity_id: "activity_1",
           owner_token: "123:owner",
           state: "settled",
-          terminal_reason: "stop",
+          terminal_reason: "assistant_completed",
+        },
+      ],
+      legacyActivityRuns: [
+        {
+          run_id: "run_1",
+          activity_id: "activity_1",
+          owner_token: "123:owner",
+          state: "completed",
+          terminal_reason: "assistant_completed",
+        },
+      ],
+      legacyActivityTerminals: [
+        {
+          activity_id: "activity_1",
+          state: "settled",
+          reason_code: "assistant_completed",
+          source: "provider_final",
+          run_id: "run_1",
+          progress_revision: 2,
+          membership_ordinal: 1,
+          owner_token: "123:owner",
         },
       ],
       legacyActivityAdmissions: [
@@ -84,6 +120,7 @@ function observation() {
         revision,
         assistant_message_id: `assistant_${revision}`,
         provider_receipt_id: `receipt_${revision}`,
+        input_membership_ordinal: revision === 0 ? 0 : 1,
         state: revision === 2 ? "final" : "progress",
       })),
       activityTextParts: [0, 1, 2].flatMap((revision) =>

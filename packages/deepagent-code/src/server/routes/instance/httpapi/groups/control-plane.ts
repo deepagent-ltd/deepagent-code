@@ -1,6 +1,7 @@
 import { MoveSession } from "@deepagent-code/core/control-plane/move-session"
 import { Schema } from "effect"
 import { HttpApi, HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
+import { ConflictError } from "../errors"
 import { described } from "./metadata"
 
 const root = "/experimental/control-plane"
@@ -22,12 +23,12 @@ export const ControlPlaneApi = HttpApi.make("controlPlane").add(
       HttpApiEndpoint.post("moveSession", `${root}/move-session`, {
         payload: MoveSessionPayload,
         success: described(HttpApiSchema.NoContent, "Session moved"),
-        error: ApiMoveSessionError,
+        error: [ApiMoveSessionError, ConflictError],
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "experimental.controlPlane.moveSession",
           summary: "Move session",
-          description: "Move a session to another project directory, optionally transferring local changes.",
+          description: "Move a session when a durable transfer implementation is available.",
         }),
       ),
     )

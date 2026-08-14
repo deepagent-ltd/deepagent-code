@@ -1,5 +1,5 @@
 import { AppProcess } from "@deepagent-code/core/process"
-import { Effect, Layer, Context, Stream } from "effect"
+import { Duration, Effect, Layer, Context, Stream } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 
 const cfg = [
@@ -123,8 +123,10 @@ export interface Result {
 export interface Options {
   readonly cwd: string
   readonly env?: Record<string, string>
+  readonly maxErrorBytes?: number
   readonly maxOutputBytes?: number
   readonly stdin?: ChildProcess.CommandInput
+  readonly timeout?: Duration.Input
 }
 
 export interface Interface {
@@ -192,7 +194,11 @@ export const layer = Layer.effect(
             stdout: "pipe",
             stderr: "pipe",
           }),
-          { maxOutputBytes: opts.maxOutputBytes },
+          {
+            maxErrorBytes: opts.maxErrorBytes,
+            maxOutputBytes: opts.maxOutputBytes,
+            timeout: opts.timeout,
+          },
         )
         return {
           exitCode: result.exitCode,

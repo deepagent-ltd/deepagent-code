@@ -99,6 +99,7 @@ const { ProviderV2 } = await import("../../src/provider")
 const { AbsolutePath } = await import("../../src/schema")
 const { SessionV2 } = await import("../../src/session")
 const { SessionEvent } = await import("../../src/session/event")
+const { V2ProviderTurnReceiptTable } = await import("../../src/session/runner/v2-provider-turn.sql")
 const sessionExecutionLocal = await import("../../src/session/execution/local")
 const { Prompt } = await import("../../src/session/prompt")
 const { SessionProjector } = await import("../../src/session/projector")
@@ -225,7 +226,8 @@ const program = Effect.gen(function* () {
   if (session.tokens.input <= 0 || session.tokens.output <= 0) {
     throw new Error("V2 Session projection did not aggregate provider usage")
   }
-  const rows = yield* (yield* Database.Service).db
+  const db = (yield* Database.Service).db
+  const rows = yield* db
     .select({ type: EventTable.type })
     .from(EventTable)
     .where(eq(EventTable.aggregate_id, created.id))
@@ -238,6 +240,40 @@ const program = Effect.gen(function* () {
   if (providerTurns !== 2) throw new Error(`Expected two durable provider turns, received ${providerTurns}`)
   if (!eventTypes.includes(EventV2.versionedType(SessionEvent.Tool.Success.type, 1))) {
     throw new Error("V2 event stream is missing durable tool completion")
+  }
+  const receipts = yield* db
+    .select()
+    .from(V2ProviderTurnReceiptTable)
+    .where(eq(V2ProviderTurnReceiptTable.session_id, created.id))
+    .all()
+    .pipe(Effect.orDie)
+  if (
+    receipts.length !== 2 ||
+    receipts.some(
+      (receipt) =>
+        receipt.owner_mode !== "v2" ||
+        receipt.state !== "settled" ||
+        !receipt.prepared_turn_hash ||
+        !receipt.wire_request_hash ||
+        !receipt.prepared_turn ||
+        !receipt.outcome_hash ||
+        !receipt.outcome_artifact,
+    )
+  ) {
+    throw new Error(
+      `V2 live provider turns did not seal and settle exact durable receipts: ${JSON.stringify(
+        receipts.map((receipt) => ({
+          ordinal: receipt.request_ordinal,
+          ownerMode: receipt.owner_mode,
+          state: receipt.state,
+          preparedTurnHash: Boolean(receipt.prepared_turn_hash),
+          wireRequestHash: Boolean(receipt.wire_request_hash),
+          preparedTurn: Boolean(receipt.prepared_turn),
+          outcomeHash: Boolean(receipt.outcome_hash),
+          outcomeArtifact: Boolean(receipt.outcome_artifact),
+        })),
+      )}`,
+    )
   }
 
   return {
@@ -252,6 +288,14 @@ const program = Effect.gen(function* () {
       messageCount: messages.length,
       assistantTurns: assistants.length,
       providerTurns,
+      providerReceipts: receipts.map((receipt) => ({
+        ordinal: receipt.request_ordinal,
+        ownerMode: receipt.owner_mode,
+        state: receipt.state,
+        preparedTurnHash: receipt.prepared_turn_hash,
+        wireRequestHash: receipt.wire_request_hash,
+        outcomeHash: receipt.outcome_hash,
+      })),
       toolExecutions,
       toolCallIDLength: tool.id.length,
       markerHash: Bun.hash(issuedMarker).toString(16),

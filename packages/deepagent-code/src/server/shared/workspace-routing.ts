@@ -4,6 +4,8 @@ type Rule = { method?: string; path: string; exact?: boolean; action: "local" | 
 
 const RULES: Array<Rule> = [
   { path: "/experimental/workspace", action: "local" },
+  { method: "POST", path: "/sync/replay", exact: true, action: "local" },
+  { method: "POST", path: "/sync/steal", exact: true, action: "local" },
   { path: "/session/status", action: "forward" },
   { method: "GET", path: "/session", action: "local" },
 ]

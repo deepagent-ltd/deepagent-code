@@ -3,6 +3,7 @@ import { Effect } from "effect"
 import { ProviderTransform } from "@/provider/transform"
 import { LLMRequestPrep } from "@/session/llm/request"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
+import { InstanceRef } from "../../src/effect/instance-ref"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { ModelV2 } from "@deepagent-code/core/model"
 
@@ -385,7 +386,13 @@ describe("ProviderTransform.options - gpt-5 textVerbosity", () => {
         } as any,
         flags: { outputTokenMax: 32_000, client: "test" } as any,
         isWorkflow: false,
-      }),
+      }).pipe(
+        Effect.provideService(InstanceRef, {
+          directory: process.cwd(),
+          worktree: process.cwd(),
+          project: { id: "project-provider-transform" },
+        } as never),
+      ),
     )
     expect(result.params.options.reasoningEffort).toBe("high")
     expect(result.params.options.reasoningSummary).toBeUndefined()

@@ -139,6 +139,7 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
   const sessionLoads = new Map<string, Promise<void>>()
   const planLoads = new Map<string, Promise<void>>()
   const planReloads = new Set<string>()
+  const sessionReloaders = new Map<string, (sessionID: string) => Promise<void>>()
   const sessionMeta = new Map<string, { limit: number }>()
 
   const sdkFor = (directory: string) => {
@@ -414,6 +415,7 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
       queue.clear(key)
       sessionMeta.delete(key)
       sdkCache.delete(key)
+      sessionReloaders.delete(key)
       clearProviderRev(serverSDK.scope, key)
       clearSessionPrefetchDirectory(serverSDK.scope, key)
     },
@@ -597,6 +599,13 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
         }
       },
       setSessionGoal,
+      refetchSession: (sessionID) => {
+        const reload = sessionReloaders.get(key)
+        if (reload)
+          void reload(sessionID).catch((error) => {
+            console.error("Failed to recalibrate session progress", error)
+          })
+      },
       retainedLimit: sessionMeta.get(key)?.limit,
       vcsCache: children.vcsCache.get(key),
       loadLsp: () => {
@@ -754,6 +763,12 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
     goal: {
       set: setSessionGoal,
     },
+    registerSessionReloader(directory: string, reload: (sessionID: string) => Promise<void>) {
+      sessionReloaders.set(directoryKey(directory), reload)
+    },
+    unregisterSessionReloader(directory: string) {
+      sessionReloaders.delete(directoryKey(directory))
+    },
     mcp: {
       toggle: async (directory: string, name: string) => {
         const key = directoryKey(directory)
@@ -791,7 +806,10 @@ export function createServerSyncContext(_serverSDK?: ServerSDK) {
   return Object.assign(inner, {
     createDirSyncContext: createRefCountMap(
       (dir) => createDirSyncContext(dir, inner, _serverSDK),
-      (dir) => inner.disableMcp(dir),
+      (dir) => {
+        inner.disableMcp(dir)
+        inner.unregisterSessionReloader(dir)
+      },
       directoryKey,
     ),
   })

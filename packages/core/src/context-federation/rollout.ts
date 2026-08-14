@@ -1,6 +1,7 @@
 export * as ContextFederationRollout from "./rollout"
 
 import { Hash } from "../util/hash"
+import type { ProjectionSnapshotRevision } from "./reference"
 
 export type Requested = {
   readonly contextFederationShadow: boolean
@@ -14,7 +15,17 @@ export type Requested = {
 // authorities; never writable independently.  Consumers call readinessFromAuthorities() to build it.
 export type ReadinessState = "uninitialized" | "building" | "ready" | "degraded" | "blocked"
 
+export type ReadinessReason =
+  | "identity_unavailable"
+  | "index_building"
+  | "index_degraded"
+  | "index_unavailable"
+  | "journal_unavailable"
+  | "storage_unavailable"
+
 export type DerivedContextDataReadiness = {
+  /** Stable hash of the authority evidence used to derive this snapshot. */
+  readonly revision: string
   /** Overall data-plane state for the owning security namespace / project / location. */
   readonly state: ReadinessState
   /** True when a canonical Project/Location identity row has been registered. */
@@ -23,6 +34,13 @@ export type DerivedContextDataReadiness = {
   readonly indexAvailable: boolean
   /** True when durable selection/artifact/attempt storage probe succeeded. */
   readonly storageHealthy: boolean
+  /** Opaque scope and index evidence used to reconstruct why this state was derived. */
+  readonly projectScopeKey?: string
+  readonly locationKey?: string
+  readonly indexRevision?: ProjectionSnapshotRevision
+  readonly indexGeneration?: number
+  readonly journalHighWater?: number
+  readonly reasons: readonly ReadinessReason[]
   /** Unix ms when this snapshot was derived. */
   readonly observedAt: number
   /** Unix ms after which this snapshot must be re-derived. */
@@ -34,10 +52,12 @@ export type DerivedContextDataReadiness = {
  * Use only in tests; production code must derive from real authorities.
  */
 export const READINESS_READY_STUB: DerivedContextDataReadiness = {
+  revision: Hash.sha256("context-readiness-ready-stub-v1"),
   state: "ready",
   identityBound: true,
   indexAvailable: true,
   storageHealthy: true,
+  reasons: [],
   observedAt: 0,
   expiresAt: Number.MAX_SAFE_INTEGER,
 }
@@ -146,9 +166,14 @@ export function resolve(requested: Requested, evidence: Evidence): Decision {
  * NOTE: core V2 execution owner has its own independent parity gate and is never
  * activated by readiness alone — it must also pass `evidence.coreV2ParityVerified`.
  */
-export function activate(eligibility: Decision, readiness: DerivedContextDataReadiness): Decision {
-  const now = Date.now()
-  const expired = now > readiness.expiresAt
+export function activate(
+  eligibility: Decision,
+  readiness: DerivedContextDataReadiness,
+  observedAt = Date.now(),
+): Decision {
+  // The expiry instant is exclusive: once the TTL reaches its boundary, model-facing
+  // capabilities must be blocked until a fresh readiness snapshot is derived.
+  const expired = observedAt >= readiness.expiresAt
   const identityMissing = !readiness.identityBound
 
   // Hard safety gates: fail closed for model-facing owners.
@@ -175,8 +200,8 @@ export function activate(eligibility: Decision, readiness: DerivedContextDataRea
     }
   }
 
-  // Degraded readiness: shadow can continue (availability/timeout), projection/tools blocked.
-  if (readiness.state === "degraded" || !readiness.indexAvailable || !readiness.storageHealthy) {
+  // Any non-ready data plane keeps shadow diagnostics available but blocks context delivery.
+  if (readiness.state !== "ready" || !readiness.indexAvailable || !readiness.storageHealthy) {
     return {
       ...eligibility,
       enabled: {
