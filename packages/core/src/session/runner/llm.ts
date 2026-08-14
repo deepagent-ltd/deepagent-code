@@ -3,6 +3,8 @@ import {
   LLMClient,
   LLMError,
   LLMEvent,
+  LLMRequest,
+  Model as LLMModel,
   SystemPart,
   isContextOverflowFailure,
   type ProviderErrorEvent,
@@ -31,8 +33,12 @@ import { SessionSchema } from "../schema"
 import { SessionStore } from "../store"
 import { type RunError, Service, StepLimitExceededError } from "./index"
 import { SessionRunnerModel } from "./model"
+import { PreparedProviderTurn } from "./prepared-provider-turn"
 import { createLLMEventPublisher } from "./publish-llm-event"
 import { toLLMMessages } from "./to-llm-message"
+import { V2ProviderTurn } from "./v2-provider-turn"
+import { CanonicalJson } from "../../util/canonical-json"
+import { Hash } from "../../util/hash"
 
 /**
  * Runs one durable coding-agent Session until it settles.
@@ -100,6 +106,7 @@ export const layer = Layer.effect(
     const systemContext = yield* SystemContextRegistry.Service
     const skillGuidance = yield* SkillGuidance.Service
     const config = yield* Config.Service
+    const providerTurns = yield* V2ProviderTurn.Service
     const db = (yield* Database.Service).db
     const compaction = SessionCompaction.make({ events, llm, config: yield* config.entries() })
     const getSession = Effect.fn("SessionRunner.getSession")(function* (sessionID: SessionSchema.ID) {
@@ -176,6 +183,12 @@ export const layer = Layer.effect(
       promotion: SessionInput.Delivery | undefined,
       recoverOverflow?: typeof compaction.compactAfterOverflow,
     ) {
+      const parityCampaign = (yield* V2ProviderTurn.CurrentCampaign) ?? V2ProviderTurn.campaignFromEnv()
+      const ownerCampaign = (yield* V2ProviderTurn.CurrentOwnerCampaign) ?? V2ProviderTurn.ownerCampaignFromEnv()
+      if (parityCampaign && ownerCampaign)
+        return yield* new V2ProviderTurn.ConflictError({ reason: "v2_owner_cannot_record_shadow_parity" })
+      if (!parityCampaign && !(yield* V2ProviderTurn.ownerQualified(db, ownerCampaign)))
+        return yield* new V2ProviderTurn.ConflictError({ reason: "v2_owner_campaign_not_verified" })
       const session = yield* getSession(sessionID)
       if (session.location.directory !== location.directory || session.location.workspaceID !== location.workspaceID)
         return yield* Effect.interrupt
@@ -216,13 +229,6 @@ export const layer = Layer.effect(
       const userMessageID = context.findLast((message) => message.type === "user")?.id
       const toolMaterialization = yield* tools.materialize(agent.info?.permissions)
       const promptCacheKey = /^ses_[0-9a-f]{64}$/.test(session.id) ? session.id.slice(4) : session.id
-      // T4.5 GUARD — potential system-prompt fork, harmless TODAY. This V2 core runner assembles its
-      // own system prompt: the DeepAgent prompt when AgentGateway.systemPrompt is non-empty, else the
-      // agent/baseline fallback. Production does NOT reach this branch — deepagent-code's own
-      // LLM.Service split path (packages/deepagent-code/src/session/llm) owns the live turn and builds
-      // the cache-stable prefix + volatile tail (prompt-policy.ts). If this runner ever becomes a live
-      // turn path, reconcile it with that split (build the same stable prefix here) or the two will
-      // diverge and this one will bust the prompt cache. Keep the two in sync when touching either.
       const deepagentSystem = AgentGateway.systemPrompt(model.provider)
       const requestSystem =
         deepagentSystem.length > 0
@@ -248,6 +254,27 @@ export const layer = Layer.effect(
       })
       if (yield* compaction.compactIfNeeded({ sessionID: session.id, entries, model, request }))
         return yield* Effect.die(rebuildPreparedTurn())
+      const providerReceipt = userMessageID
+        ? yield* providerTurns.admit({
+            sessionId: session.id,
+            userMessageId: userMessageID,
+            historyPromptEpoch: system.revision,
+            historySourceEndMessageId: context.at(-1)?.id,
+            requestInputHash: Hash.sha256(
+              CanonicalJson.stringify({
+                ...LLMRequest.input(request),
+                model: {
+                  id: request.model.id,
+                  provider: request.model.provider,
+                },
+              }),
+            ),
+            providerId: model.provider,
+            modelId: model.id,
+            protocol: model.route.protocol,
+            ownerMode: parityCampaign ? "shadow_v2" : "v2",
+          })
+        : undefined
       const publisher = createLLMEventPublisher(events, {
         sessionID: session.id,
         agent: agent.id,
@@ -261,9 +288,43 @@ export const layer = Layer.effect(
       const publish = (event: LLMEvent, outputPaths: ReadonlyArray<string> = []) =>
         withPublication(publisher.publish(event, outputPaths))
       let overflowFailure: ProviderErrorEvent | undefined
+      const providerEvents: LLMEvent[] = []
       if (!(yield* SessionContextEpoch.current(db, session.id, agent.id, system.revision)))
         return yield* Effect.die(rebuildPreparedTurn())
-      const providerStream = llm.stream(request).pipe(
+      const providerStream = providerReceipt
+        ? V2ProviderTurn.stream({
+            service: providerTurns,
+            receipt: providerReceipt,
+            prepare: (wireRequestHash) =>
+              V2ProviderTurn.prepare(
+                {
+                  receipt: providerReceipt,
+                  stableSystemParts: [system.baseline],
+                  volatileSystemParts: PreparedProviderTurn.mergeSystemParts([agent.info?.system], deepagentSystem),
+                  historyMessages: context,
+                  toolDefinitions: toolMaterialization.definitions,
+                  toolIDs: toolMaterialization.definitions.map((tool) => tool.name),
+                  toolResultReferences: context.flatMap((message) =>
+                    message.type === "assistant"
+                      ? message.content.flatMap((part) =>
+                          part.type === "tool" && (part.state.status === "completed" || part.state.status === "error")
+                            ? [part.id]
+                            : [],
+                        )
+                      : [],
+                  ),
+                  samplingMaxOutputTokens: request.generation?.maxTokens,
+                  budget: providerBudget(model),
+                  userMessageID: userMessageID!,
+                },
+                wireRequestHash,
+              ),
+            stream: llm.stream(request).pipe(Stream.tap((event) => Effect.sync(() => providerEvents.push(event)))),
+            outcomeArtifact: () => providerEvents,
+            errorCode: (error) => `provider_stream_failed:${Hash.sha256(String(error)).slice(0, 16)}`,
+          })
+        : llm.stream(request).pipe(Stream.tap((event) => Effect.sync(() => providerEvents.push(event))))
+      const settledProviderStream = providerStream.pipe(
         Stream.runForEach((event) =>
           Effect.gen(function* () {
             if (overflowFailure || publisher.hasProviderError()) return
@@ -306,7 +367,7 @@ export const layer = Layer.effect(
 
       return yield* Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
-          const stream = yield* restore(providerStream).pipe(Effect.exit)
+          const stream = yield* restore(settledProviderStream).pipe(Effect.exit)
           const failure =
             stream._tag === "Failure" ? Option.getOrUndefined(Cause.findErrorOption(stream.cause)) : undefined
           if (
@@ -354,6 +415,8 @@ export const layer = Layer.effect(
             yield* withPublication(publisher.failUnsettledTools("Provider did not return a tool result", true))
           if (stream._tag === "Failure") return yield* Effect.failCause(stream.cause)
           if (settled._tag === "Failure") return yield* Effect.failCause(settled.cause)
+          if (parityCampaign && providerReceipt)
+            yield* providerTurns.recordParityForReceipt({ campaign: parityCampaign, receipt: providerReceipt })
           return !publisher.hasProviderError() && needsContinuation
         }),
       )
@@ -421,5 +484,28 @@ export const layer = Layer.effect(
     })
   }),
 )
+
+function providerBudget(model: LLMModel): PreparedProviderTurn.Budget {
+  const context = model.route.defaults.limits?.input ?? model.route.defaults.limits?.context
+  const output = model.route.defaults.limits?.output ?? 0
+  if (!context || !Number.isFinite(context) || context <= 0)
+    return {
+      decision: "unavailable",
+      reason: context === undefined ? "context_limit_unknown" : "context_limit_invalid",
+      estimatedFullRequestTokens: 0,
+      physicalInputBudget: 0,
+      reservedOutputTokens: output,
+      safetyMargin: 0,
+      provenance: "host_guard",
+    }
+  return {
+    decision: "ok",
+    estimatedFullRequestTokens: 0,
+    physicalInputBudget: context,
+    reservedOutputTokens: output,
+    safetyMargin: 0,
+    provenance: "model_limit",
+  }
+}
 
 export const defaultLayer = layer

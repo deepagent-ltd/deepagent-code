@@ -8,6 +8,7 @@ import { openUserGlobalStore } from "../../src/deepagent/durable-knowledge-store
 import * as Registry from "../../src/deepagent/domain-pack-registry"
 import { retrieve } from "../../src/deepagent/knowledge-retriever"
 import type { TaskContext, ToolContext } from "../../src/deepagent/prompt-policy"
+import { releasedUserGlobalSelection } from "./released-selection-fixture"
 
 // V3.2.1 decision-B: old in-code gpuPack / activate / domainKnowledge / registeredDomains
 // deleted. Domain activation now goes through DomainPackRegistry (reads manifests from
@@ -91,7 +92,14 @@ describe("V3 domain pack activation (registry-based, docs/35)", () => {
   })
 
   test("retrieve: gpu task returns gpu-domain strategies for max mode", () => {
-    const r = retrieve({ mode: "max", task: gpuTask, tools, round: 1, previousFailures: 0 })
+    const r = retrieve({
+      mode: "max",
+      task: gpuTask,
+      tools,
+      round: 1,
+      previousFailures: 0,
+      releasedSelection: releasedUserGlobalSelection(base),
+    })
     expect(r).not.toBeNull()
     // gpu strategies are in DocumentStore via seed; they should appear in selected refs
     const refs = r?.strategyRefs ?? []

@@ -126,7 +126,7 @@ describe("ReadTool", () => {
           ...toolIdentity,
           call: { type: "tool-call", id: "call-read", name: "read", input: { path: "README.md" } },
         }),
-      ).toEqual({ type: "json", value: { type: "text", content: "hello", mime: "text/plain" } })
+      ).toEqual({ type: "text", value: "hello" })
       expect(assertions).toMatchObject([{ sessionID, action: "read", resources: ["README.md"], save: ["*"] }])
       expect(readCalls).toEqual([{ input: { path: "README.md" }, page: {} }])
     }),
@@ -513,10 +513,7 @@ describe("ReadTool", () => {
             input: { path: "large.txt", offset: 2, limit: 1 },
           },
         }),
-      ).toEqual({
-        type: "json",
-        value: { type: "text-page", content: "hello", mime: "text/plain", offset: 2, truncated: true, next: 3 },
-      })
+      ).toEqual({ type: "text", value: "hello\n\n... continue reading at offset 3 ..." })
       expect(readCalls).toEqual([{ input: { path: "large.txt", offset: 2, limit: 1 }, page: { offset: 2, limit: 1 } }])
     }),
   )

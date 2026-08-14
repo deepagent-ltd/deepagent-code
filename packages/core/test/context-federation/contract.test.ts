@@ -185,6 +185,7 @@ describe("context federation rollout dependencies", () => {
     )
     const now = Date.now()
     const missingIdentity = ContextFederationRollout.activate(eligible, {
+      ...ContextFederationRollout.READINESS_READY_STUB,
       state: "uninitialized",
       identityBound: false,
       indexAvailable: false,
@@ -204,6 +205,7 @@ describe("context federation rollout dependencies", () => {
     expect(expired.blocked.contextQueryToolsV2).toContain("data_readiness_expired")
 
     const degraded = ContextFederationRollout.activate(eligible, {
+      ...ContextFederationRollout.READINESS_READY_STUB,
       state: "degraded",
       identityBound: true,
       indexAvailable: false,
@@ -215,12 +217,34 @@ describe("context federation rollout dependencies", () => {
     expect(degraded.enabled.contextQueryToolsV2).toBe(false)
     expect(degraded.enabled.contextFederationShadow).toBe(true)
 
+    const building = ContextFederationRollout.activate(eligible, {
+      ...ContextFederationRollout.READINESS_READY_STUB,
+      state: "building",
+      identityBound: true,
+      indexAvailable: true,
+      storageHealthy: true,
+      observedAt: now,
+      expiresAt: now + 1_000,
+    })
+    expect(building.enabled.contextProjectionV2).toBe(false)
+    expect(building.enabled.contextQueryToolsV2).toBe(false)
+    expect(building.blocked.contextProjectionV2).toContain("data_readiness_blocked")
+
     expect(
       ContextFederationRollout.activate(eligible, {
         ...ContextFederationRollout.READINESS_READY_STUB,
         observedAt: now,
       }).enabled,
     ).toEqual(allRequested)
+
+    const atExpiry = ContextFederationRollout.activate(eligible, {
+      ...ContextFederationRollout.READINESS_READY_STUB,
+      observedAt: now - 1_000,
+      expiresAt: now,
+    })
+    expect(atExpiry.enabled.contextProjectionV2).toBe(false)
+    expect(atExpiry.enabled.contextQueryToolsV2).toBe(false)
+    expect(atExpiry.blocked.contextProjectionV2).toContain("data_readiness_expired")
   })
 
   test("rollback rehearsal fails on durable loss or indeterminate requeue", () => {

@@ -10,6 +10,7 @@ import {
   SecurityNamespaceID,
 } from "@deepagent-code/core/context-federation/reference"
 import { ContextTokenCodec } from "@deepagent-code/core/context-federation/token-codec"
+import { Database } from "@deepagent-code/core/database/database"
 import { AbsolutePath } from "@deepagent-code/core/schema"
 import { Effect, Exit, Layer } from "effect"
 import { randomBytes } from "node:crypto"
@@ -37,6 +38,7 @@ describe("ContextQueryFacade", () => {
         current: () => Effect.succeed({ identity, coordinator: {} as never }),
       }))),
       Layer.provide(Layer.succeed(ContextArtifactStore.Service, artifactStore(codec))),
+      Layer.provide(Database.layerFromPath(":memory:")),
     )
     const run = (request: Parameters<ContextQueryFacade.Interface["execute"]>[0]["request"]) => Effect.runPromise(
       Effect.gen(function* () {

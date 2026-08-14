@@ -11,6 +11,8 @@ import {
 } from "../../src/deepagent/durable-knowledge-store"
 import { retrieve, invalidateCache } from "../../src/deepagent/knowledge-retriever"
 import type { TaskContext, ToolContext } from "../../src/deepagent/prompt-policy"
+import { DeepAgentReleasedSnapshot } from "../../src/deepagent/released-snapshot"
+import { Hash } from "../../src/util/hash"
 
 // V3.2.1 decision B (docs/34 §8): workspace isolation must be ENFORCED on the durable read path.
 // The retriever reads the DocumentStore via knowledge-source, which unions user-global with THIS
@@ -45,23 +47,39 @@ const memInput = (summary: string, over: Partial<KnowledgeDocInput> = {}): Knowl
 })
 
 // Seed an approved memory into the right durable store for the given workspace, return its doc id.
-const seedProjectMemory = (workspacePath: string, summary: string): string => {
+const seedProjectMemory = (workspacePath: string, summary: string, idSlug?: string): string => {
   const store = openProjectStore(base, workspacePath)
   const doc = store.stageCandidate(
-    memInput(summary, { scope: "project-shared", projectId: projectIdForWorkspace(workspacePath) }),
+    memInput(summary, {
+      scope: "project-shared",
+      projectId: projectIdForWorkspace(workspacePath),
+      ...(idSlug ? { idSlug } : {}),
+    }),
   )
   store.approve(doc.id)
   return doc.id
 }
-const seedGlobalMemory = (summary: string): string => {
+const seedGlobalMemory = (summary: string, idSlug?: string): string => {
   const store = openUserGlobalStore(base)
-  const doc = store.stageCandidate(memInput(summary, { scope: "user-global" }))
+  const doc = store.stageCandidate(memInput(summary, { scope: "user-global", ...(idSlug ? { idSlug } : {}) }))
   store.approve(doc.id)
   return doc.id
 }
 
 const memoryRefsFor = (workspacePath?: string): readonly string[] => {
   invalidateCache()
+  const userGlobal = openUserGlobalStore(base)
+  const project = workspacePath ? openProjectStore(base, workspacePath) : undefined
+  const documents = DeepAgentReleasedSnapshot.normalizeDocumentRefs([
+    ...userGlobal
+      .listByStatus("active")
+      .map((doc) => DeepAgentReleasedSnapshot.documentRef(userGlobal.documentStore.get(doc.id)!, "user_global")),
+    ...(project
+      ? project
+          .listByStatus("active")
+          .map((doc) => DeepAgentReleasedSnapshot.documentRef(project.documentStore.get(doc.id)!, "project"))
+      : []),
+  ])
   const r = retrieve({
     mode: "max",
     task,
@@ -69,6 +87,17 @@ const memoryRefsFor = (workspacePath?: string): readonly string[] => {
     round: 1,
     previousFailures: 0,
     ...(workspacePath ? { workspacePath } : {}),
+    releasedSelection: {
+      snapshotId: `workspace-isolation:${workspacePath ?? "global"}`,
+      securityNamespaceId: "workspace-isolation-namespace",
+      projectScopeKey: `workspace-isolation:${workspacePath ?? "global"}`,
+      legacyProjectId: workspacePath ? projectIdForWorkspace(workspacePath) : "global",
+      parentSnapshotId: null,
+      generation: 1,
+      membershipHash: DeepAgentReleasedSnapshot.exactRefsFingerprint(documents),
+      manifestHash: Hash.sha256(`workspace-isolation:${workspacePath ?? "global"}:${documents.length}`),
+      documents,
+    },
   })
   return r?.memoryRefs ?? []
 }
@@ -105,6 +134,57 @@ describe("docs/34 §8: workspace isolation enforced at durable retrieval", () =>
   test("user-global memory is visible even with no workspace path", () => {
     const idG = seedGlobalMemory("matmul kernel global tip")
     expect(memoryRefsFor(undefined)).toContain(idG)
+  })
+
+  test("preserves user-global and project released refs when their store-local ids collide", () => {
+    const globalId = seedGlobalMemory("matmul kernel shared id global tip", "same-memory")
+    const projectId = seedProjectMemory(WORK_A, "matmul kernel shared id project tip", "same-memory")
+    expect(globalId).toBe(projectId)
+
+    const globalStore = openUserGlobalStore(base)
+    const projectStore = openProjectStore(base, WORK_A)
+    const globalDoc = globalStore.documentStore.get(globalId)!
+    const projectDoc = projectStore.documentStore.get(projectId)!
+    const documents = DeepAgentReleasedSnapshot.normalizeDocumentRefs([
+      DeepAgentReleasedSnapshot.documentRef(globalDoc, "user_global"),
+      DeepAgentReleasedSnapshot.documentRef(projectDoc, "project"),
+    ])
+    const selection = {
+      snapshotId: "collision-selection",
+      securityNamespaceId: "collision-namespace",
+      projectScopeKey: "collision-project-scope",
+      legacyProjectId: projectIdForWorkspace(WORK_A),
+      parentSnapshotId: null,
+      generation: 1,
+      membershipHash: DeepAgentReleasedSnapshot.exactRefsFingerprint(documents),
+      manifestHash: Hash.sha256("collision-manifest"),
+      documents,
+    } as const
+    const results = knowledgeSource.queryKnowledge({
+      types: ["memory"],
+      workspacePath: WORK_A,
+      releasedSelection: selection,
+      limit: 10,
+    })
+
+    expect(results.map((result) => result.documentRef.sourceStore).sort()).toEqual(["project", "user_global"])
+    expect(results.map((result) => result.doc.description).sort()).toEqual([
+      "matmul kernel shared id global tip",
+      "matmul kernel shared id project tip",
+    ])
+    expect(
+      retrieve({
+        mode: "max",
+        task,
+        tools,
+        round: 1,
+        previousFailures: 0,
+        workspacePath: WORK_A,
+        releasedSelection: selection,
+      })
+        ?.selectedDocumentRefs?.map((ref) => ref.sourceStore)
+        .sort(),
+    ).toEqual(["project", "user_global"])
   })
 
   test("a candidate (unapproved) memory is never retrieved", () => {

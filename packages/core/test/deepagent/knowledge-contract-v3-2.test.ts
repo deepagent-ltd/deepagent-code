@@ -3,10 +3,15 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import * as knowledgeSource from "../../src/deepagent/knowledge-source"
-import { openUserGlobalStore, type KnowledgeDocInput } from "../../src/deepagent/durable-knowledge-store"
+import {
+  openUserGlobalStore,
+  projectIdForWorkspace,
+  type KnowledgeDocInput,
+} from "../../src/deepagent/durable-knowledge-store"
 import { seedCoreKnowledge } from "../../src/deepagent/knowledge-seed"
 import { retrieve, invalidateCache } from "../../src/deepagent/knowledge-retriever"
 import type { TaskContext, ToolContext } from "../../src/deepagent/prompt-policy"
+import { releasedUserGlobalSelection } from "./released-selection-fixture"
 
 // V3.2.1 decision B (docs/34) regression guards for the knowledge-retrieval contract:
 //   P1-4 dynamic global cap of selected refs across all types (docs/review_38 §八: 5/8/12 by
@@ -63,7 +68,14 @@ describe("docs/34 knowledge retrieval contract", () => {
       seedApproved(memInput(`optimize matmul kernel tip ${i}`, { idSlug: `matmul-${i}` }))
     }
     invalidateCache()
-    const result = retrieve({ mode: "max", task, tools, round: 1, previousFailures: 0 })
+    const result = retrieve({
+      mode: "max",
+      task,
+      tools,
+      round: 1,
+      previousFailures: 0,
+      releasedSelection: releasedUserGlobalSelection(base),
+    })
     expect(result).not.toBeNull()
     if (!result) throw new Error("expected retrieval result")
     // dynamic cap: never exceeds the hard ceiling of 12 regardless of task complexity
@@ -75,7 +87,14 @@ describe("docs/34 knowledge retrieval contract", () => {
   test("P0-2: failure_dossier (negative knowledge) is never injected as a positive memory", () => {
     seedApproved(memInput("optimize matmul kernel by unrolling everything (this failed)", { type: "failure_dossier" }))
     invalidateCache()
-    const result = retrieve({ mode: "max", task, tools, round: 1, previousFailures: 0 })
+    const result = retrieve({
+      mode: "max",
+      task,
+      tools,
+      round: 1,
+      previousFailures: 0,
+      releasedSelection: releasedUserGlobalSelection(base),
+    })
     // failure_dossier is not a knowledge doc type → never in memoryRefs/selectedRefs
     expect(result?.memoryRefs ?? []).toHaveLength(0)
   })
@@ -84,7 +103,14 @@ describe("docs/34 knowledge retrieval contract", () => {
     const store = openUserGlobalStore(base)
     store.stageCandidate(memInput("optimize matmul kernel pending tip")) // left as candidate
     invalidateCache()
-    const result = retrieve({ mode: "max", task, tools, round: 1, previousFailures: 0 })
+    const result = retrieve({
+      mode: "max",
+      task,
+      tools,
+      round: 1,
+      previousFailures: 0,
+      releasedSelection: releasedUserGlobalSelection(base),
+    })
     expect(result?.memoryRefs ?? []).toHaveLength(0)
   })
 
@@ -108,5 +134,97 @@ describe("docs/34 knowledge retrieval contract", () => {
     expect(ids).toContain(approvedId)
     expect(queue.some((item) => item.approval_status === "pending")).toBe(true)
     expect(queue.some((item) => item.approval_status === "approved")).toBe(true)
+  })
+
+  test("review decisions use exact store and reject a stale page without writing", () => {
+    const workspace = path.join(base, "workspace")
+    const candidate = memInput("same bare id in two authorities", { idSlug: "same-review-id" })
+    const userGlobalStore = knowledgeSource.userGlobalStoreFor()
+    const userGlobal = userGlobalStore.stageCandidate(candidate, { requireExactCandidate: true })
+    const projectStore = knowledgeSource.projectStoreFor(workspace)
+    const project = projectStore.stageCandidate(
+      {
+        ...candidate,
+        scope: "project-shared",
+        projectId: projectIdForWorkspace(workspace),
+      },
+      { requireExactCandidate: true },
+    )
+    expect(project.id).toBe(userGlobal.id)
+
+    const listed = knowledgeSource.listAllForWorkspace(workspace)
+    expect(listed.filter((item) => item.id === project.id)).toHaveLength(2)
+    const projectRef = listed.find((item) => item.sourceStore === "project")!
+    const userGlobalRef = listed.find((item) => item.sourceStore === "user_global")!
+    const projectVersionBeforeDecision = projectStore.documentStore.get(project.id)!.version
+    for (const mismatch of [
+      { ...projectRef, hash: "sha256:mismatched" },
+      { ...projectRef, candidateId: "different-candidate" },
+      { ...projectRef, fingerprint: "sha256:mismatched" },
+      { ...projectRef, governanceRevision: "sha256:mismatched" },
+    ]) {
+      expect(() =>
+        knowledgeSource.commitReviewDecisionForWorkspace(workspace, mismatch, "approve", {
+          type: "human",
+          id: "reviewer",
+        }),
+      ).toThrow(knowledgeSource.ReviewAuthorityConflictError)
+      expect(projectStore.documentStore.get(project.id)!.version).toBe(projectVersionBeforeDecision)
+    }
+    const updated = knowledgeSource.commitReviewDecisionForWorkspace(workspace, projectRef, "approve", {
+      type: "human",
+      id: "reviewer",
+    })
+
+    expect(updated.approval_status).toBe("approved")
+    expect(projectStore.documentStore.get(project.id)?.status).toBe("active")
+    expect(userGlobalStore.documentStore.get(userGlobal.id)?.status).toBe("candidate")
+    const projectVersion = projectStore.documentStore.get(project.id)!.version
+    const userGlobalVersion = userGlobalStore.documentStore.get(userGlobal.id)!.version
+
+    expect(() =>
+      knowledgeSource.commitReviewDecisionForWorkspace(workspace, projectRef, "reject", {
+        type: "human",
+        id: "reviewer",
+      }),
+    ).toThrow(knowledgeSource.ReviewAuthorityConflictError)
+    expect(() =>
+      knowledgeSource.commitReviewDecisionForWorkspace(
+        workspace,
+        { ...userGlobalRef, fingerprint: "sha256:mismatched" },
+        "approve",
+        { type: "human", id: "reviewer" },
+      ),
+    ).toThrow(knowledgeSource.ReviewAuthorityConflictError)
+    expect(projectStore.documentStore.get(project.id)!.version).toBe(projectVersion)
+    expect(userGlobalStore.documentStore.get(userGlobal.id)!.version).toBe(userGlobalVersion)
+  })
+
+  test("replays only the exact original human rejection without another document revision", () => {
+    const workspace = path.join(base, "rejection-replay-workspace")
+    const store = knowledgeSource.projectStoreFor(workspace)
+    const staged = store.stageCandidate(
+      {
+        ...memInput("rejection replay", { idSlug: "rejection-replay" }),
+        scope: "project-shared",
+        projectId: projectIdForWorkspace(workspace),
+      },
+      { requireExactCandidate: true },
+    )
+    const expected = knowledgeSource
+      .listAllForWorkspace(workspace)
+      .find((item) => item.sourceStore === "project" && item.id === staged.id)!
+    const actor = { type: "human" as const, id: "reviewer" }
+    const first = knowledgeSource.commitReviewDecisionForWorkspace(workspace, expected, "reject", actor)
+    const replay = knowledgeSource.commitReviewDecisionForWorkspace(workspace, expected, "reject", actor)
+
+    expect(replay).toEqual(first)
+    expect(store.documentStore.get(staged.id)?.version).toBe(expected.version + 1)
+    expect(() =>
+      knowledgeSource.commitReviewDecisionForWorkspace(workspace, expected, "reject", {
+        type: "human",
+        id: "different-reviewer",
+      }),
+    ).toThrow(knowledgeSource.ReviewAuthorityConflictError)
   })
 })

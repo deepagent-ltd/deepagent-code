@@ -3,6 +3,13 @@ import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { Effect } from "effect"
 import { LLMRequestPrep } from "../../src/session/llm/request"
 import { ToolProvenance } from "../../src/tool/provenance"
+import { InstanceRef } from "../../src/effect/instance-ref"
+
+const instance = {
+  directory: process.cwd(),
+  worktree: process.cwd(),
+  project: { id: "project-mcp-provenance" },
+} as never
 
 // M2 (S1-v3.4): MCP provenance must be carried as explicit metadata, not guessed
 // from the tool name string. The old code used `name.includes(":")` to decide the
@@ -63,7 +70,7 @@ async function prepareWithTools(sessionID: string, tools: Record<string, any>) {
       plugin,
       flags: { outputTokenMax: 32_000, client: "test" } as any,
       isWorkflow: false,
-    }),
+    }).pipe(Effect.provideService(InstanceRef, instance)),
   )
 }
 

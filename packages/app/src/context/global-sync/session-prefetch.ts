@@ -4,6 +4,9 @@ const key = (scope: ServerScope, directory: string, sessionID: string) => Scoped
 
 export const SESSION_PREFETCH_TTL = 15_000
 
+// Keep every client page request within the server's bounded MessageV2 contract.
+export const SESSION_MESSAGE_PAGE_LIMIT = 100
+
 type Meta = {
   limit: number
   cursor?: string

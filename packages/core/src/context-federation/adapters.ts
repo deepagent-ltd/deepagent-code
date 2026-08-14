@@ -7,6 +7,7 @@ import { ContextAuthorization, Sensitivity, type EgressPolicy, type Principal } 
 import { candidate, status, type ContextCandidate, type GraphQueryStatus, type GraphSourceRevision } from "./federation"
 import { type ContextRef, type ContextScopeBinding, type ProjectScopeKey, type SecurityNamespaceID } from "./reference"
 import type { GraphKind } from "./contract"
+import { DeepAgentReleasedSnapshot, SnapshotIntegrityError } from "../deepagent/released-snapshot"
 
 const KnowledgeTypes: ReadonlySet<DocType> = new Set(["knowledge", "strategy", "methodology", "skill"])
 const DocumentTypes: ReadonlySet<DocType> = new Set([
@@ -57,18 +58,39 @@ export type Scope = {
   readonly egress: EgressPolicy
 }
 
-export function knowledge(input: { readonly stores: readonly DocumentStore[]; readonly scope: Scope }): Adapter {
-  return legacy({ graph: "knowledge", source: "durable_knowledge", stores: input.stores, scope: input.scope })
+export function knowledge(input: {
+  readonly stores: readonly DocumentStore[]
+  readonly scope: Scope
+  readonly releasedSelection: DeepAgentReleasedSnapshot.Selection
+}): Adapter {
+  return legacy({
+    graph: "knowledge",
+    source: "durable_knowledge",
+    stores: input.stores,
+    scope: input.scope,
+    releasedSelection: input.releasedSelection,
+  })
 }
 
-export function memory(input: { readonly stores: readonly DocumentStore[]; readonly scope: Scope }): Adapter {
-  return legacy({ graph: "memory", source: "durable_memory", stores: input.stores, scope: input.scope })
+export function memory(input: {
+  readonly stores: readonly DocumentStore[]
+  readonly scope: Scope
+  readonly releasedSelection: DeepAgentReleasedSnapshot.Selection
+}): Adapter {
+  return legacy({
+    graph: "memory",
+    source: "durable_memory",
+    stores: input.stores,
+    scope: input.scope,
+    releasedSelection: input.releasedSelection,
+  })
 }
 
 export function executionDocuments(input: {
   readonly source: string
   readonly stores: readonly DocumentStore[]
   readonly scope: Scope
+  readonly releasedSelection?: DeepAgentReleasedSnapshot.Selection
 }): Adapter {
   return legacy({ graph: "documents", source: input.source, stores: input.stores, scope: input.scope })
 }
@@ -119,6 +141,7 @@ function legacy(input: {
   readonly source: string
   readonly stores: readonly DocumentStore[]
   readonly scope: Scope
+  readonly releasedSelection?: DeepAgentReleasedSnapshot.Selection
 }): Adapter {
   return {
     graph: input.graph,
@@ -162,15 +185,18 @@ function queryLegacy(
     readonly source: string
     readonly stores: readonly DocumentStore[]
     readonly scope: Scope
+    readonly releasedSelection?: DeepAgentReleasedSnapshot.Selection
   },
   query: Query,
 ): Result {
-  const entries = input.stores.flatMap((store, storeIndex) =>
-    store.list().flatMap((ref) => {
-      const doc = store.get(ref.id)
-      return doc ? [{ key: `${storeIndex}:${doc.id}`, storeIndex, doc }] : []
-    }),
-  )
+  const entries = input.releasedSelection
+    ? releasedEntries(input.stores, input.scope, input.releasedSelection)
+    : input.stores.flatMap((store, storeIndex) =>
+        store.list().flatMap((ref) => {
+          const doc = store.get(ref.id)
+          return doc ? [{ key: `${storeIndex}:${doc.id}`, storeIndex, doc }] : []
+        }),
+      )
   const allowed = new Map<
     string,
     { readonly doc: Doc; readonly ref: ContextRef; readonly sensitivity: Sensitivity; readonly storeIndex: number }
@@ -254,6 +280,47 @@ function queryLegacy(
     candidates,
     status: candidates.length > 0 ? status.matched(input.graph, [revision]) : status.empty(input.graph, [revision]),
   }
+}
+
+function releasedEntries(
+  stores: readonly DocumentStore[],
+  scope: Scope,
+  selection: DeepAgentReleasedSnapshot.Selection,
+) {
+  if (
+    selection.securityNamespaceId !== scope.securityNamespaceId ||
+    selection.projectScopeKey !== scope.projectScopeKey ||
+    selection.legacyProjectId !== scope.legacyProjectId
+  ) {
+    throw new SnapshotIntegrityError({
+      snapshotId: selection.snapshotId,
+      docId: "<selection>",
+      reason: "released snapshot scope does not match the federated context scope",
+    })
+  }
+  return selection.documents.map((ref) => {
+    const storeIndex = ref.sourceStore === "user_global" ? 0 : 1
+    const doc = stores[storeIndex]?.get(ref.id, ref.version)
+    const expectedScope = ref.sourceStore === "user_global" ? "durable" : `durable:project:${scope.legacyProjectId}`
+    if (
+      ref.scope !== expectedScope ||
+      !doc ||
+      doc.hash !== ref.hash ||
+      doc.type !== ref.type ||
+      doc.scope !== ref.scope
+    ) {
+      throw new SnapshotIntegrityError({
+        snapshotId: selection.snapshotId,
+        docId: ref.id,
+        reason: ref.scope !== expectedScope
+          ? `${ref.sourceStore} document scope does not match the released authority`
+          : !doc
+          ? `${ref.sourceStore} document revision is missing`
+          : "document hash, type, or scope does not match the released snapshot",
+      })
+    }
+    return { key: `${storeIndex}:${doc.id}`, storeIndex, doc }
+  })
 }
 
 function eligible(graph: "knowledge" | "memory" | "documents", doc: Doc) {

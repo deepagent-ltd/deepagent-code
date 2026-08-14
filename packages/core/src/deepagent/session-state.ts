@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto"
 import path from "node:path"
 import { writeFileAtomic } from "./atomic-write"
 import * as PlanStore from "./plan-store"
-import { DocumentStore } from "./document-store"
+import { DocumentStore, documentRevision } from "./document-store"
 import type { AgentMode } from "./mode"
 import {
   createInitialRoundState,
@@ -62,6 +62,7 @@ export type SessionRunState = {
   lastValidationResults: ValidationResult[]
   lastValidationOutput: string | null
   knowledgeSynthesis: KnowledgeSynthesis | null
+  knowledgeSnapshotId: string | null
   userRequest: string | null
   workspacePath: string | null
   runId: string
@@ -159,6 +160,7 @@ export const getOrCreate = (sessionId: string, mode: AgentMode): SessionRunState
     lastValidationResults: [],
     lastValidationOutput: null,
     knowledgeSynthesis: null,
+    knowledgeSnapshotId: null,
     userRequest: null,
     workspacePath: null,
     runId: `run_${randomUUID()}`,
@@ -484,6 +486,7 @@ export const observeUserAdmission = (
     state.lastValidationResults = []
     state.lastValidationOutput = null
     state.knowledgeSynthesis = null
+    state.knowledgeSnapshotId = null
     state.runId = `run_${randomUUID()}`
     state.planLatch = initialPlanLatch()
     state.mutationsSinceReport = 0
@@ -644,6 +647,7 @@ function normalizeState(state: SessionRunState): SessionRunState {
     // Backfill: sessions persisted before U10 have no counter on disk.
     mutationsSinceReport: state.mutationsSinceReport ?? 0,
     validationPassedSinceReport: state.validationPassedSinceReport ?? false,
+    knowledgeSnapshotId: state.knowledgeSnapshotId ?? null,
     // Backfill/migration: sessions persisted before v4.0.4 have no suppressedValidations field;
     // sessions persisted between v4.0.4 and this change carry the OLD `suppressedFingerprints:
     // string[]` format. Migrate both cases into the new SuppressedValidation[] shape.
@@ -767,5 +771,5 @@ const writeLegacyPlanMigrationDiagnostic = (sessionId: string, plan: PlanDoc | n
     provenance: { source: "runner", run_ref: PlanStore.planScope(sessionId) },
     tags: ["bug-010", "plan-migration", "quarantined"],
   })
-  store.setStatus(doc.id, "quarantined")
+  store.setStatus(doc.id, "quarantined", documentRevision(doc))
 }

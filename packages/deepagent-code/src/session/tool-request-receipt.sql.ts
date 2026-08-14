@@ -1,6 +1,10 @@
 // BUG-009: drizzle-orm type bindings for session_tool_request_receipt.
 // One row per physical Provider dispatch — maps the registry→filter→wire pipeline.
 import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core"
+import { ContextFederationRollout } from "@deepagent-code/core/context-federation/rollout"
+import type { ContextActivationReceipt } from "@/context-federation/activation-receipt"
+import type { DocumentRef, StoredBindingState } from "@deepagent-code/core/deepagent/released-snapshot"
+import type { ProjectScopeKey, SecurityNamespaceID } from "@deepagent-code/core/context-federation/reference"
 
 export type RequestReceiptState = "prepared" | "dispatched" | "rejected"
 export type ProviderReceiptState =
@@ -21,6 +25,22 @@ export const SessionToolRequestReceiptTable = sqliteTable("session_tool_request_
   user_message_id: text().notNull(),
   assistant_message_id: text(),
   provider_attempt_id: text(),
+  context_selection_id: text(),
+  context_eligibility: text({ mode: "json" }).$type<ContextFederationRollout.ProjectDecision>(),
+  context_readiness: text({ mode: "json" }).$type<ContextFederationRollout.DerivedContextDataReadiness>(),
+  context_activation: text({ mode: "json" }).$type<ContextActivationReceipt.Receipt>(),
+  context_activation_fingerprint: text(),
+  released_knowledge_security_namespace_id: text().$type<SecurityNamespaceID>(),
+  released_knowledge_project_scope_key: text().$type<ProjectScopeKey>(),
+  released_knowledge_binding_state: text().$type<StoredBindingState>(),
+  released_knowledge_snapshot_id: text(),
+  released_knowledge_generation: integer(),
+  released_knowledge_membership_hash: text(),
+  released_knowledge_manifest_hash: text(),
+  released_knowledge_exact_refs: text({ mode: "json" }).$type<readonly DocumentRef[]>(),
+  released_knowledge_exact_refs_fingerprint: text(),
+  released_knowledge_selected_refs: text({ mode: "json" }).$type<readonly DocumentRef[]>(),
+  released_knowledge_selected_refs_fingerprint: text(),
   provider_id: text().notNull(),
   model_id: text().notNull(),
   protocol: text(),
@@ -47,6 +67,12 @@ export const SessionToolRequestReceiptTable = sqliteTable("session_tool_request_
   response_chain_refusal_reason: text(),
   request_input_hash: text(),
   final_request_hash: text(),
+  prepared_turn_hash: text(),
+  system_stable_hash: text(),
+  system_volatile_hash: text(),
+  wire_request_hash: text(),
+  tool_result_reference_ids: text({ mode: "json" }).$type<readonly string[]>().notNull().default([]),
+  tool_result_reference_count: integer().notNull().default(0),
   provider_state: text().$type<ProviderReceiptState>().notNull().default("preparing"),
   adapter_prepared_at: integer(),
   dispatching_at: integer(),

@@ -15,6 +15,7 @@ import { TaskRecoveryTool } from "./task_recovery"
 import { PRFinalizeTool } from "./pr_finalize"
 import { DismissValidationTool } from "./dismiss_validation"
 import { Database } from "@deepagent-code/core/database/database"
+import { V2ProviderTurn } from "@deepagent-code/core/session/runner/v2-provider-turn"
 import { WebFetchTool } from "./webfetch"
 import { WriteTool } from "./write"
 import { InvalidTool } from "./invalid"
@@ -106,6 +107,7 @@ export interface Interface {
     modelID: ModelV2.ID
     agent: Agent.Info
     projectScopeKey?: string
+    contextFederationRollout?: ContextFederationRollout.Decision
   }) => Effect.Effect<Tool.Def[]>
 }
 
@@ -147,6 +149,11 @@ const layerWithFacades: Layer.Layer<
     const agents = yield* Agent.Service
     const truncate = yield* Truncate.Service
     const flags = yield* RuntimeFlags.Service
+    const parityCampaign = yield* V2ProviderTurn.CurrentCampaign
+    const database = (yield* Database.Service).db
+    const coreV2ParityVerified = parityCampaign
+      ? yield* V2ProviderTurn.campaignVerified(database, parityCampaign.id)
+      : yield* V2ProviderTurn.ownerQualified(database, V2ProviderTurn.ownerCampaignFromEnv())
     const federationReadiness = Option.getOrUndefined(yield* Effect.serviceOption(ContextFederationReadiness.Service))
     yield* EffectFlock.Service
 
@@ -182,7 +189,7 @@ const layerWithFacades: Layer.Layer<
         contextQueryToolsV2: flags.contextQueryToolsV2,
         coreV2ExecutionOwner: flags.coreV2ExecutionOwner,
       },
-      { coreV2ParityVerified: false },
+      { coreV2ParityVerified },
     )
     const codeIntelV1 = yield* Tool.init(yield* CodeIntelTool)
     const codeIntelV2 = yield* Tool.init(yield* CodeIntelV2Tool)
@@ -217,6 +224,16 @@ const layerWithFacades: Layer.Layer<
             provenance: { source: "custom" as const },
             execute: (args, toolCtx) =>
               Effect.gen(function* () {
+                // SessionTools records the outer admission before plugin hooks. Direct registry
+                // callers do not have that marker and must still fail closed here.
+                if (!toolCtx.hostPermissionAdmissions?.has(id)) {
+                  yield* toolCtx.ask({
+                    permission: id,
+                    patterns: ["*"],
+                    metadata: { args },
+                    always: ["*"],
+                  })
+                }
                 // Bridge the host's Effect-based `ask` into a Promise-returning
                 // function for the plugin to make sure context persists
                 const bridge = yield* EffectBridge.make()
@@ -394,15 +411,17 @@ const layerWithFacades: Layer.Layer<
 
     const tools: Interface["tools"] = Effect.fn("ToolRegistry.tools")(function* (input) {
       const registryState = yield* InstanceState.get(state)
-      const projectRollout = ContextFederationRollout.activate(
-        ContextFederationRollout.resolveProject(rollout, input.projectScopeKey ?? "project_scope_unbound", {
-          stage: flags.contextFederationRolloutStage,
-          percentage: flags.contextFederationRolloutPercent,
-          internalProjectScopeKeys: flags.contextFederationInternalProjects,
-          killSwitch: flags.contextFederationKillSwitch,
-        }),
-        yield* federationReadiness?.snapshot() ?? Effect.succeed(ContextFederationReadiness.unavailableSnapshot()),
-      )
+      const projectRollout =
+        input.contextFederationRollout ??
+        ContextFederationRollout.activate(
+          ContextFederationRollout.resolveProject(rollout, input.projectScopeKey ?? "project_scope_unbound", {
+            stage: flags.contextFederationRolloutStage,
+            percentage: flags.contextFederationRolloutPercent,
+            internalProjectScopeKeys: flags.contextFederationInternalProjects,
+            killSwitch: flags.contextFederationKillSwitch,
+          }),
+          yield* federationReadiness?.snapshot() ?? Effect.succeed(ContextFederationReadiness.unavailableSnapshot()),
+        )
       const filtered = [...registryState.builtin, ...registryState.custom].flatMap((tool) => {
         if (tool.id === PRFinalizeTool.id && input.agent.mode !== "primary") return []
         if (tool.id === CodeIntelTool.id) {

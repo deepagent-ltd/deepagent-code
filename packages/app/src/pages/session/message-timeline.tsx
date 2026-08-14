@@ -45,6 +45,9 @@ import type {
   AssistantMessage,
   Message as MessageType,
   Part as PartType,
+  SessionDiffArtifactFileResponse,
+  SessionDiffArtifactManifestResponse,
+  SnapshotDiffArtifactDescriptor,
   ToolPart,
   UserMessage,
 } from "@deepagent-code/sdk/v2"
@@ -180,17 +183,85 @@ function TimelineThinkingRow(props: { reasoningHeading?: string; showReasoningSu
   )
 }
 
-function TimelineDiffSummaryRow(props: { diffs: SummaryDiff[] }) {
+function TimelineDiffSummaryRow(props: {
+  messageID: string
+  diffs: SummaryDiff[]
+  artifact?: SnapshotDiffArtifactDescriptor
+}) {
   const language = useLanguage()
+  const sdk = useSDK()
+  const { params } = useSessionKey()
   const maxFiles = 10
   const [state, setState] = createStore({
     showAll: false,
     expanded: [] as string[],
+    artifactOpen: false,
+    artifactLoading: false,
+    artifactFiles: [] as SummaryDiff[],
+    artifactCursor: undefined as string | undefined,
+    artifactComplete: false,
   })
+  let manifestRequest: AbortController | undefined
+  onCleanup(() => manifestRequest?.abort())
+  const loadManifest = async () => {
+    if (!props.artifact || state.artifactLoading || state.artifactComplete) return
+    const sessionID = params.id
+    if (!sessionID) return
+    manifestRequest?.abort()
+    manifestRequest = new AbortController()
+    setState("artifactLoading", true)
+    await sdk.client.session
+      .diffArtifactManifest(
+        {
+          sessionID,
+          messageID: props.messageID,
+          artifactID: props.artifact.id,
+          ...(state.artifactCursor ? { cursor: state.artifactCursor } : {}),
+          limit: "100",
+        },
+        { signal: manifestRequest.signal },
+      )
+      .then((result) => {
+        const data = result.data as SessionDiffArtifactManifestResponse | undefined
+        if (!data || data.artifact.hash !== props.artifact?.hash) throw new Error("diff artifact hash mismatch")
+        const existing = new Set(state.artifactFiles.map((file) => file.file))
+        setState({
+          artifactFiles: [
+            ...state.artifactFiles,
+            ...data.files.filter((file) => !existing.has(file.file)).map((file) => ({
+              file: file.file,
+              additions: file.additions,
+              deletions: file.deletions,
+              ...(file.status ? { status: file.status } : {}),
+            })),
+          ],
+          artifactCursor: data.nextCursor,
+          artifactComplete: data.complete,
+        })
+      })
+      .catch((error) => {
+        if (error instanceof DOMException && error.name === "AbortError") return
+        showToast({ title: language.t("common.requestFailed") })
+      })
+      .finally(() => setState("artifactLoading", false))
+  }
+  const toggleArtifact = () => {
+    if (!props.artifact) return
+    const open = !state.artifactOpen
+    setState("artifactOpen", open)
+    if (open) {
+      void loadManifest()
+      return
+    }
+    manifestRequest?.abort()
+    setState("expanded", [])
+  }
   const showAll = () => state.showAll
   const expanded = () => state.expanded
-  const overflow = createMemo(() => Math.max(0, props.diffs.length - maxFiles))
-  const visible = createMemo(() => (showAll() ? props.diffs : props.diffs.slice(0, maxFiles)))
+  const diffs = createMemo(() => (props.artifact ? state.artifactFiles : props.diffs))
+  const count = createMemo(() => props.artifact?.fileCount ?? props.diffs.length)
+  const overflow = createMemo(() => Math.max(0, diffs().length - maxFiles))
+  const visible = createMemo(() => (showAll() ? diffs() : diffs().slice(0, maxFiles)))
 
   return (
     <div
@@ -200,22 +271,39 @@ function TimelineDiffSummaryRow(props: { diffs: SummaryDiff[] }) {
     >
       <div data-slot="session-turn-diffs-header">
         <span data-slot="session-turn-diffs-label">
-          {props.diffs.length} {language.t("ui.sessionTurn.diffs.changed")}{" "}
-          {language.t(props.diffs.length === 1 ? "ui.common.file.one" : "ui.common.file.other")}
+          {count()} {language.t("ui.sessionTurn.diffs.changed")}{" "}
+          {language.t(count() === 1 ? "ui.common.file.one" : "ui.common.file.other")}
         </span>
-        <DiffChanges changes={props.diffs} />
+        <DiffChanges changes={diffs()} />
+        <Show when={props.artifact}>
+          <IconButton
+            icon="chevron-down"
+            variant="ghost"
+            size="small"
+            aria-label={
+              state.artifactOpen
+                ? language.t("ui.sessionTurn.diffs.showLess")
+                : language.t("ui.sessionTurn.diffs.showAll")
+            }
+            onClick={toggleArtifact}
+          />
+        </Show>
         <Show when={overflow() > 0}>
           <span data-slot="session-turn-diffs-toggle" onClick={() => setState("showAll", !showAll())}>
             {showAll() ? language.t("ui.sessionTurn.diffs.showLess") : language.t("ui.sessionTurn.diffs.showAll")}
           </span>
         </Show>
       </div>
+      <Show when={!props.artifact || state.artifactOpen}>
       <div data-component="session-turn-diffs-content">
         <Accordion
           multiple
           style={{ "--sticky-accordion-offset": "44px" }}
           value={expanded()}
-          onChange={(value) => setState("expanded", Array.isArray(value) ? value : value ? [value] : [])}
+          onChange={(value) => {
+            const next = Array.isArray(value) ? value : value ? [value] : []
+            setState("expanded", next.slice(-3))
+          }}
         >
           <For each={visible()}>
             {(diff) => {
@@ -250,7 +338,15 @@ function TimelineDiffSummaryRow(props: { diffs: SummaryDiff[] }) {
                   </StickyAccordionHeader>
                   <Accordion.Content>
                     <Show when={opened()}>
-                      <TimelineDiffView diff={diff} />
+                      <Show when={props.artifact} fallback={<TimelineDiffView diff={diff} />}>
+                        {(artifact) => (
+                          <TimelineArtifactDiffView
+                            messageID={props.messageID}
+                            artifact={artifact()}
+                            diff={diff}
+                          />
+                        )}
+                      </Show>
                     </Show>
                   </Accordion.Content>
                 </Accordion.Item>
@@ -263,8 +359,74 @@ function TimelineDiffSummaryRow(props: { diffs: SummaryDiff[] }) {
             {language.t("ui.sessionTurn.diffs.more", { count: String(overflow()) })}
           </div>
         </Show>
+        <Show when={props.artifact && !state.artifactComplete && !state.artifactLoading}>
+          <div data-slot="session-turn-diffs-more" onClick={() => void loadManifest()}>
+            {language.t("ui.sessionTurn.diffs.showAll")}
+          </div>
+        </Show>
+        <Show when={state.artifactLoading}>
+          <div data-slot="session-turn-diffs-more"><Spinner /></div>
+        </Show>
       </div>
+      </Show>
     </div>
+  )
+}
+
+function TimelineArtifactDiffView(props: {
+  messageID: string
+  artifact: SnapshotDiffArtifactDescriptor
+  diff: SummaryDiff
+}) {
+  const language = useLanguage()
+  const sdk = useSDK()
+  const { params } = useSessionKey()
+  const [state, setState] = createStore({
+    loading: true,
+    value: undefined as SessionDiffArtifactFileResponse | undefined,
+  })
+  const controller = new AbortController()
+  onCleanup(() => controller.abort())
+  createEffect(() => {
+    const sessionID = params.id
+    if (!sessionID) return
+    void sdk.client.session
+      .diffArtifactFile(
+        {
+          sessionID,
+          messageID: props.messageID,
+          artifactID: props.artifact.id,
+          path: props.diff.file,
+          maxBytes: String(1024 * 1024),
+        },
+        { signal: controller.signal },
+      )
+      .then((result) => {
+        const data = result.data as SessionDiffArtifactFileResponse | undefined
+        if (!data || data.artifactID !== props.artifact.id || data.file !== props.diff.file)
+          throw new Error("diff artifact file identity mismatch")
+        setState("value", data)
+      })
+      .catch((error) => {
+        if (error instanceof DOMException && error.name === "AbortError") return
+        showToast({ title: language.t("common.requestFailed") })
+      })
+      .finally(() => setState("loading", false))
+  })
+  return (
+    <Show when={state.value} fallback={<Show when={state.loading}><Spinner /></Show>}>
+      {(value) => (
+        <TimelineDiffView
+          diff={{
+            file: value().file,
+            additions: value().additions,
+            deletions: value().deletions,
+            ...(value().status ? { status: value().status } : {}),
+            patch: value().patch,
+          }}
+        />
+      )}
+    </Show>
   )
 }
 
@@ -1414,7 +1576,11 @@ export function MessageTimeline(props: {
         return (
           <TimelineRowFrame row={diffSummaryRow}>
             <div data-slot="session-turn-message-container" class="w-full px-4 md:px-5">
-              <TimelineDiffSummaryRow diffs={diffSummaryRow().diffs} />
+              <TimelineDiffSummaryRow
+                messageID={diffSummaryRow().userMessageID}
+                diffs={diffSummaryRow().diffs}
+                artifact={diffSummaryRow().artifact}
+              />
             </div>
           </TimelineRowFrame>
         )

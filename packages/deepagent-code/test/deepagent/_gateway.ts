@@ -63,7 +63,7 @@ export const runDeepAgentStream = async (
     }),
   ),
   mode: "high" | "max" = "high",
-  input = deepagentRunInput,
+  input: AgentGateway.RunInput = deepagentRunInput,
 ) => {
   AgentGateway.configure({ enabled: true, agentMode: mode, runsDir: dir, allowProviderExecutedTools: false })
   await Effect.runPromise(AgentGateway.manageStream(input, events).pipe(Stream.runCollect))

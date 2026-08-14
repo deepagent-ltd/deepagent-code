@@ -15739,6 +15739,28 @@
         "required": ["name", "data"],
         "additionalProperties": false
       },
+      "ActivityProgress": {
+        "type": "object",
+        "properties": {
+          "activityID": {
+            "type": "string",
+            "minLength": 1
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "state": {
+            "type": "string",
+            "enum": ["provisional", "progress", "final", "interrupted", "recovery_required", "failed"]
+          },
+          "terminalReason": {
+            "type": "string"
+          }
+        },
+        "required": ["activityID", "revision", "state"],
+        "additionalProperties": false
+      },
       "AssistantMessage": {
         "type": "object",
         "properties": {
@@ -15867,6 +15889,9 @@
           },
           "finish": {
             "type": "string"
+          },
+          "activityProgress": {
+            "$ref": "#/components/schemas/ActivityProgress"
           }
         },
         "required": [

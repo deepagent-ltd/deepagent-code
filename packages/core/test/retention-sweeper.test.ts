@@ -1,5 +1,6 @@
 import { describe, expect } from "bun:test"
 import { Effect, Layer } from "effect"
+import { eq, sql } from "drizzle-orm"
 import { RetentionSweeper } from "@deepagent-code/core/deepagent/retention-sweeper"
 import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
 import { DeepAgentEvent } from "@deepagent-code/core/deepagent/deepagent-event"
@@ -9,6 +10,12 @@ import { DeepAgentEventDeliveryTable } from "@deepagent-code/core/deepagent/deep
 import { ApprovalQueueTable } from "@deepagent-code/core/deepagent/approval-queue-sql"
 import { AgentPushLogTable } from "@deepagent-code/core/im/push-log-sql"
 import { EventSequenceTable, EventTable } from "@deepagent-code/core/event/sql"
+import { EventV2 } from "@deepagent-code/core/event"
+import {
+  FilePartArtifactChunkTable,
+  FilePartArtifactImportTable,
+  FilePartArtifactTable,
+} from "@deepagent-code/core/file-part-artifact.sql"
 import { SessionTable } from "@deepagent-code/core/session/sql"
 import { testEffect } from "./lib/effect"
 
@@ -336,14 +343,20 @@ describe("RetentionSweeper", () => {
         .run(`INSERT OR IGNORE INTO event_sequence (aggregate_id, seq) VALUES ('${opts.sessionID}', 1)`)
         .pipe(Effect.orDie)
       yield* db
+        .run("UPDATE event_sync_sequence SET seq = seq + 1 WHERE id = 1")
+        .pipe(Effect.orDie)
+      yield* db
         .run(
-          `INSERT OR IGNORE INTO event (id, aggregate_id, seq, type, data)
-           VALUES ('${opts.eventID}', '${opts.sessionID}', 1, 'message.part.updated.1', '{}')`,
+          `INSERT OR IGNORE INTO event (id, aggregate_id, seq, type, data, sync_seq)
+           VALUES (
+             '${opts.eventID}', '${opts.sessionID}', 1, 'message.part.updated.1', '{}',
+             (SELECT seq FROM event_sync_sequence WHERE id = 1)
+           )`,
         )
         .pipe(Effect.orDie)
     })
 
-  it.effect("§EventV2-retention: prunes event_sequence + events for archived sessions past retentionDays", () =>
+  it.effect("§EventV2-retention: preserves archived EventV2 roots until explicit removal", () =>
     Effect.gen(function* () {
       const { db } = yield* Database.Service
       const b = yield* DeepAgentEventBus.Service
@@ -359,13 +372,220 @@ describe("RetentionSweeper", () => {
 
       setNow(100 * DAY)
       const summary = yield* s.sweepOnce()
-      expect(summary.deletedEventV2Sequences).toBe(1)
+      expect(summary.deletedEventV2Sequences).toBe(0)
 
-      // Both the event_sequence header and the event row (cascaded) must be gone.
+      // Archived roots remain readable; Session/EventV2.remove owns the explicit cascade.
       const seqs = yield* db.select().from(EventSequenceTable).all().pipe(Effect.orDie)
-      expect(seqs.find((r) => r.aggregate_id === "ses_old")).toBeUndefined()
+      expect(seqs.find((r) => r.aggregate_id === "ses_old")).toBeDefined()
       const evts = yield* db.select().from(EventTable).all().pipe(Effect.orDie)
-      expect(evts.find((r) => r.id === "evt_old")).toBeUndefined()
+      expect(evts.find((r) => r.id === "evt_old")).toBeDefined()
+    }),
+  )
+
+  it.effect("§EventV2-retention: discovers archived Session workspaces without a DeepAgent event", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      const c = yield* WorkspaceConfig.Service
+      const s = yield* RetentionSweeper.Service
+      yield* c.set("wrk_session_only", { retentionDays: 30 })
+      yield* insertArchivedSession({ sessionID: "ses_session_only", workspaceID: "wrk_session_only", timeArchived: 1_000 })
+      yield* insertEventV2({ sessionID: "ses_session_only", eventID: "evt_session_only" })
+
+      setNow(100 * DAY)
+      const summary = yield* s.sweepOnce()
+      expect(summary.workspacesSwept).toBe(1)
+      expect(summary.deletedEventV2Sequences).toBe(0)
+      expect(yield* db.select().from(EventSequenceTable)
+        .where(eq(EventSequenceTable.aggregate_id, "ses_session_only")).get()).toBeDefined()
+    }),
+  )
+
+  it.effect("§EventV2-retention: preserves sidecar authorities without blocking other archived sessions", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      const b = yield* DeepAgentEventBus.Service
+      const c = yield* WorkspaceConfig.Service
+      const s = yield* RetentionSweeper.Service
+      yield* c.set("wrk_1", { retentionDays: 30 })
+      yield* publishAt(b, 1_000)
+
+      yield* insertArchivedSession({ sessionID: "ses_artifact", workspaceID: "wrk_1", timeArchived: 1_000 })
+      yield* insertEventV2({ sessionID: "ses_artifact", eventID: "evt_artifact" })
+      yield* db.run(`
+        INSERT INTO message (id, session_id, time_created, time_updated, data)
+        VALUES ('msg_artifact', 'ses_artifact', 1, 1, '{"role":"user","time":{"created":1}}')
+      `).pipe(Effect.orDie)
+      yield* db.run(`
+        INSERT INTO event_artifact (
+          artifact_id, event_id, aggregate_id, seq, kind, original_data_hash,
+          canonical_data_hash, canonical_data, body_hash, body_bytes, chunk_count,
+          codec_version, created_at
+        ) VALUES (
+          'evtart_retention', 'evt_artifact', 'ses_artifact', 1, 'legacy_message_diff',
+          '${"a".repeat(64)}', '${"b".repeat(64)}', '{}', '${"c".repeat(64)}', 0, 1, 2, 1
+        )
+      `).pipe(Effect.orDie)
+      yield* db.run(`
+        INSERT INTO session_diff_migration_receipt (
+          message_id, session_id, artifact_id, source_event_id,
+          expected_message_data_hash, committed_message_data_hash,
+          expected_session_summary_hash, committed_session_summary_hash,
+          canonicalizer_version, canonicalization_version, epoch_hashes, state,
+          failure_reason, created_at, updated_at, committed_at
+        ) VALUES (
+          'msg_artifact', 'ses_artifact', 'evtart_retention', 'evt_artifact',
+          '${"d".repeat(64)}', '${"e".repeat(64)}', '${"f".repeat(64)}', '${"0".repeat(64)}',
+          1, 1, '[]', 'committed', NULL, 1, 1, 1
+        )
+      `).pipe(Effect.orDie)
+      yield* insertArchivedSession({ sessionID: "ses_prunable", workspaceID: "wrk_1", timeArchived: 1_000 })
+      yield* insertEventV2({ sessionID: "ses_prunable", eventID: "evt_prunable" })
+
+      setNow(100 * DAY)
+      const summary = yield* s.sweepOnce()
+      expect(summary.deletedEventV2Sequences).toBe(0)
+      expect(
+        yield* db.select().from(EventSequenceTable)
+          .where(eq(EventSequenceTable.aggregate_id, "ses_artifact")).get().pipe(Effect.orDie),
+      ).toBeDefined()
+      expect(
+        yield* db.select().from(EventSequenceTable)
+          .where(eq(EventSequenceTable.aggregate_id, "ses_prunable")).get().pipe(Effect.orDie),
+      ).toBeDefined()
+      expect(yield* db.all<{ state: string }>(sql`
+        SELECT state FROM session_diff_migration_receipt WHERE message_id = 'msg_artifact'
+      `).pipe(Effect.orDie)).toEqual([{ state: "committed" }])
+    }),
+  )
+
+  it.effect("§EventV2-retention: invokes bounded compaction for sidecar sessions instead of leaking raw history", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      const b = yield* DeepAgentEventBus.Service
+      const c = yield* WorkspaceConfig.Service
+      yield* c.set("wrk_1", { retentionDays: 30 })
+      yield* publishAt(b, 1_000)
+      yield* insertArchivedSession({ sessionID: "ses_compact", workspaceID: "wrk_1", timeArchived: 1_000 })
+      yield* insertEventV2({ sessionID: "ses_compact", eventID: "evt_compact" })
+      yield* db.run(`
+        INSERT INTO event_artifact (
+          artifact_id, event_id, aggregate_id, seq, kind, original_data_hash,
+          canonical_data_hash, canonical_data, body_hash, body_bytes, chunk_count,
+          codec_version, created_at
+        ) VALUES (
+          'evtart_compact', 'evt_compact', 'ses_compact', 1, 'legacy_message_diff',
+          '${"a".repeat(64)}', '${"b".repeat(64)}', '{}', '${"c".repeat(64)}', 0, 1, 2, 1
+        )
+      `).pipe(Effect.orDie)
+      setNow(100 * DAY)
+      const invoked: string[] = []
+      const compacting = RetentionSweeper.layerWith({
+        now,
+        runLoop: false,
+        compactSession: (sessionID) =>
+          Effect.sync(() => invoked.push(sessionID)).pipe(Effect.as(true)),
+      }).pipe(
+        Layer.provide(Layer.succeed(DeepAgentEventBus.Service)(b)),
+        Layer.provide(Layer.succeed(WorkspaceConfig.Service)(c)),
+        Layer.provide(Layer.succeed(Database.Service)({ db })),
+      )
+      const summary = yield* Effect.gen(function* () {
+        const service = yield* RetentionSweeper.Service
+        return yield* service.sweepOnce()
+      }).pipe(Effect.provide(Layer.fresh(compacting)))
+      expect(summary.deletedEventV2Sequences).toBe(0)
+      expect(invoked).toEqual(["ses_compact"])
+      expect(yield* db.select().from(EventSequenceTable).where(eq(EventSequenceTable.aggregate_id, "ses_compact")).get()).toBeDefined()
+    }),
+  )
+
+  it.effect("§EventV2-retention: sidecar compaction cannot starve an independent prunable batch", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      const b = yield* DeepAgentEventBus.Service
+      const c = yield* WorkspaceConfig.Service
+      yield* c.set("wrk_1", { retentionDays: 30 })
+      yield* publishAt(b, 1_000)
+      yield* Effect.forEach(
+        Array.from({ length: 101 }, (_, index) => String(index).padStart(3, "0")),
+        (suffix) => Effect.gen(function* () {
+          const sessionID = `ses_sidecar_${suffix}`
+          const eventID = `evt_sidecar_${suffix}`
+          yield* insertArchivedSession({ sessionID, workspaceID: "wrk_1", timeArchived: 1_000 })
+          yield* insertEventV2({ sessionID, eventID })
+          yield* db.run(sql`
+            INSERT INTO event_artifact (
+              artifact_id, event_id, aggregate_id, seq, kind, original_data_hash,
+              canonical_data_hash, canonical_data, body_hash, body_bytes, chunk_count,
+              codec_version, created_at
+            ) VALUES (
+              ${`evtart_sidecar_${suffix}`}, ${eventID}, ${sessionID}, 1, 'legacy_message_diff',
+              ${"a".repeat(64)}, ${"b".repeat(64)}, '{}', ${"c".repeat(64)}, 0, 1, 2, 1
+            )
+          `).pipe(Effect.orDie)
+        }),
+        { discard: true },
+      )
+      yield* insertArchivedSession({ sessionID: "ses_zz_prunable", workspaceID: "wrk_1", timeArchived: 1_000 })
+      yield* insertEventV2({ sessionID: "ses_zz_prunable", eventID: "evt_zz_prunable" })
+
+      setNow(100 * DAY)
+      const invoked: string[] = []
+      const compacting = RetentionSweeper.layerWith({
+        now,
+        runLoop: false,
+        compactSession: (sessionID) => Effect.sync(() => invoked.push(sessionID)).pipe(Effect.as(false)),
+      }).pipe(
+        Layer.provide(Layer.succeed(DeepAgentEventBus.Service)(b)),
+        Layer.provide(Layer.succeed(WorkspaceConfig.Service)(c)),
+        Layer.provide(Layer.succeed(Database.Service)({ db })),
+      )
+      const summary = yield* Effect.gen(function* () {
+        const service = yield* RetentionSweeper.Service
+        return yield* service.sweepOnce()
+      }).pipe(Effect.provide(Layer.fresh(compacting)))
+      expect(summary.deletedEventV2Sequences).toBe(0)
+      expect(invoked).toHaveLength(100)
+      expect(yield* db.select().from(EventSequenceTable)
+        .where(eq(EventSequenceTable.aggregate_id, "ses_zz_prunable")).get()).toBeDefined()
+    }),
+  )
+
+  it.effect("§EventV2-retention: reclaims an expired abandoned FilePart import", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      const s = yield* RetentionSweeper.Service
+      yield* db.insert(FilePartArtifactTable).values({
+        artifact_id: "fpart_abandoned",
+        body_hash: "a".repeat(64),
+        body_bytes: 1,
+        chunk_bytes: 262_144,
+        chunk_count: 1,
+        codec_version: 1,
+        complete: true,
+        created_at: 1,
+      }).run().pipe(Effect.orDie)
+      yield* db.insert(FilePartArtifactChunkTable).values({
+        artifact_id: "fpart_abandoned",
+        chunk_index: 0,
+        data: Buffer.from("x"),
+        chunk_hash: "b".repeat(64),
+      }).run().pipe(Effect.orDie)
+      yield* db.insert(FilePartArtifactImportTable).values({
+        event_id: EventV2.ID.make("evt_abandoned"),
+        aggregate_id: "ses_abandoned",
+        seq: 1,
+        artifact_id: "fpart_abandoned",
+        original_data_hash: "c".repeat(64),
+        canonical_data_hash: "d".repeat(64),
+        canonical_data: {},
+        created_at: 1,
+      }).run().pipe(Effect.orDie)
+
+      yield* s.sweepOnce(2 * DAY)
+      expect(yield* db.select().from(FilePartArtifactImportTable).all()).toEqual([])
+      expect(yield* db.select().from(FilePartArtifactTable).all()).toEqual([])
+      expect(yield* db.select().from(FilePartArtifactChunkTable).all()).toEqual([])
     }),
   )
 

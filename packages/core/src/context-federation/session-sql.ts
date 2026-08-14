@@ -1,6 +1,9 @@
 import { blob, index, integer, primaryKey, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core"
 import { sql } from "drizzle-orm"
 import { SessionInputTable, SessionTable } from "../session/sql"
+import { ReleasedKnowledgeSnapshotTable } from "../deepagent/released-snapshot.sql"
+import type { DocumentRef, StoredBindingState } from "../deepagent/released-snapshot"
+import type { ProjectScopeKey, SecurityNamespaceID } from "./reference"
 
 export const SessionActivityTable = sqliteTable(
   "session_activity",
@@ -60,6 +63,8 @@ export const SessionContextSelectionTable = sqliteTable(
     revision: integer().notNull(),
     trigger_input_id: text().notNull(),
     location_key: text().notNull(),
+    security_namespace_id: text().$type<SecurityNamespaceID>(),
+    project_scope_key: text().$type<ProjectScopeKey>(),
     query_fingerprint: text().notNull(),
     authorization_fingerprint: text().notNull(),
     authorization_epoch: integer().notNull(),
@@ -67,6 +72,13 @@ export const SessionContextSelectionTable = sqliteTable(
     selected_source_fingerprint: text().notNull(),
     observed_location_mutation_epoch: integer().notNull(),
     next_revalidation_at: integer().notNull(),
+    released_knowledge_binding_state: text().$type<StoredBindingState>(),
+    released_knowledge_snapshot_id: text().references(() => ReleasedKnowledgeSnapshotTable.snapshot_id),
+    released_knowledge_generation: integer(),
+    released_knowledge_membership_hash: text(),
+    released_knowledge_manifest_hash: text(),
+    released_knowledge_exact_refs: text({ mode: "json" }).$type<readonly DocumentRef[]>(),
+    released_knowledge_exact_refs_fingerprint: text(),
     graph_revisions: text().notNull(),
     graph_statuses: text().notNull(),
     selected_refs: text().notNull(),
@@ -81,6 +93,9 @@ export const SessionContextSelectionTable = sqliteTable(
   (table) => [
     uniqueIndex("session_context_selection_revision_idx").on(table.session_id, table.activity_id, table.revision),
     index("session_context_selection_activity_idx").on(table.session_id, table.activity_id, table.created_at),
+    index("session_context_selection_released_snapshot_idx")
+      .on(table.released_knowledge_snapshot_id, table.released_knowledge_generation)
+      .where(sql`${table.released_knowledge_snapshot_id} IS NOT NULL`),
   ],
 )
 
@@ -129,6 +144,18 @@ export const SessionContextValidationTable = sqliteTable(
   ],
 )
 
+export const SessionProviderOwnerLeaseTable = sqliteTable(
+  "session_provider_owner_lease",
+  {
+    owner_token: text().primaryKey(),
+    registered_at: integer().notNull(),
+    heartbeat_at: integer().notNull(),
+    lease_expires_at: integer().notNull(),
+    released_at: integer(),
+  },
+  (table) => [index("session_provider_owner_lease_expiry_idx").on(table.lease_expires_at, table.owner_token)],
+)
+
 export const SessionProviderAttemptTable = sqliteTable(
   "session_provider_attempt",
   {
@@ -145,7 +172,10 @@ export const SessionProviderAttemptTable = sqliteTable(
       .references(() => SessionContextSelectionTable.selection_id),
     projection_hash: text().notNull(),
     request_hash: text().notNull(),
+    prepared_turn_hash: text(),
+    wire_request_hash: text(),
     provider_id: text().notNull(),
+    owner_token: text().references(() => SessionProviderOwnerLeaseTable.owner_token),
     parent_attempt_id: text(),
     idempotency_key: text(),
     state: text()
@@ -169,6 +199,7 @@ export const SessionProviderAttemptTable = sqliteTable(
   (table) => [
     uniqueIndex("session_provider_attempt_turn_idx").on(table.session_id, table.provider_turn_seq),
     index("session_provider_attempt_activity_idx").on(table.session_id, table.activity_id, table.state),
+    index("session_provider_attempt_owner_state_idx").on(table.state, table.owner_token, table.created_at),
   ],
 )
 
@@ -178,7 +209,7 @@ export const SessionProviderAttemptResolutionTable = sqliteTable(
     resolution_id: text().primaryKey(),
     attempt_id: text()
       .notNull()
-      .references(() => SessionProviderAttemptTable.attempt_id),
+      .references(() => SessionProviderAttemptTable.attempt_id, { onDelete: "cascade" }),
     actor_type: text().$type<"user" | "administrator" | "system">().notNull(),
     actor_id: text().notNull(),
     decision: text().$type<"abandoned" | "settled" | "replayed">().notNull(),
@@ -189,6 +220,17 @@ export const SessionProviderAttemptResolutionTable = sqliteTable(
   },
   (table) => [uniqueIndex("session_provider_attempt_resolution_attempt_idx").on(table.attempt_id)],
 )
+
+export const SessionProviderAttemptRecoveryBridgeTable = sqliteTable("session_provider_attempt_recovery_bridge", {
+  resolution_id: text().primaryKey(),
+  attempt_id: text()
+    .notNull()
+    .unique()
+    .references(() => SessionProviderAttemptTable.attempt_id, { onDelete: "cascade" }),
+  receipt_id: text().notNull().unique(),
+  command_id: text().notNull().unique(),
+  created_at: integer().notNull(),
+})
 
 export const ContextArtifactTable = sqliteTable(
   "context_artifact",

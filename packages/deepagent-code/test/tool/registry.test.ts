@@ -2,7 +2,7 @@ import { afterEach, describe, expect } from "bun:test"
 import path from "path"
 import fs from "fs/promises"
 import { fileURLToPath, pathToFileURL } from "url"
-import { Effect, Layer, Result, Schema } from "effect"
+import { Effect, Exit, Layer, Result, Schema } from "effect"
 import { CrossSpawnSpawner } from "@deepagent-code/core/cross-spawn-spawner"
 import { Database } from "@deepagent-code/core/database/database"
 import { ToolRegistry } from "@/tool/registry"
@@ -200,6 +200,7 @@ const itContextToolsV2Degraded = testEffect(
         contextQueryToolsV2: true,
       },
       readiness: {
+        ...ContextFederationRollout.READINESS_READY_STUB,
         state: "degraded",
         identityBound: true,
         indexAvailable: false,
@@ -684,6 +685,141 @@ describe("tool.registry", () => {
     }),
   )
 
+  it.instance("host admits an exact custom tool call before code without its own ask can run", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const customTools = path.join(test.directory, ".deepagent-code", "tools")
+      const marker = path.join(test.directory, "custom-side-effect.txt")
+      yield* Effect.promise(() => fs.mkdir(customTools, { recursive: true }))
+      yield* Effect.promise(() =>
+        Bun.write(
+          path.join(customTools, "host_guarded.ts"),
+          [
+            "export default {",
+            "  description: 'host guarded custom tool',",
+            "  args: { value: { type: 'string' } },",
+            `  execute: async ({ value }) => { await Bun.write(${JSON.stringify(marker)}, value); return value },`,
+            "}",
+            "",
+          ].join("\n"),
+        ),
+      )
+      const registry = yield* ToolRegistry.Service
+      const loaded = (yield* registry.all()).find((tool) => tool.id === "host_guarded")
+      if (!loaded) throw new Error("host guarded custom tool was not loaded")
+      const agents = yield* Agent.Service
+      const requests: Array<{
+        sessionID: string
+        messageID: string
+        callID: string | undefined
+        permission: string
+        patterns: readonly string[]
+        metadata: Record<string, unknown>
+        always: readonly string[]
+      }> = []
+      const identity = {
+        sessionID: SessionID.make("ses_custom_host_guard"),
+        messageID: MessageID.make("msg_custom_host_guard"),
+        callID: "call-custom-host-guard",
+      }
+      const context = {
+        ...identity,
+        agent: (yield* agents.defaultInfo()).name,
+        abort: new AbortController().signal,
+        messages: [],
+        metadata: () => Effect.void,
+        ask: (request) =>
+          Effect.sync(() => {
+            requests.push({
+              sessionID: context.sessionID,
+              messageID: context.messageID,
+              callID: context.callID,
+              ...request,
+            })
+            throw new Error("permission rejected")
+          }),
+      } satisfies Tool.Context
+
+      const denied = yield* loaded.execute({ value: "must-not-run" }, context).pipe(Effect.exit)
+      expect(Exit.isFailure(denied)).toBe(true)
+      expect(yield* Effect.promise(() => Bun.file(marker).exists())).toBe(false)
+      expect(requests).toEqual([
+        {
+          sessionID: identity.sessionID,
+          messageID: identity.messageID,
+          callID: "call-custom-host-guard",
+          permission: "host_guarded",
+          patterns: ["*"],
+          metadata: { args: { value: "must-not-run" } },
+          always: ["*"],
+        },
+      ])
+    }),
+  )
+
+  it.instance("plugin code can add its own permission after the host custom-tool admission", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const customTools = path.join(test.directory, ".deepagent-code", "tools")
+      yield* Effect.promise(() => fs.mkdir(customTools, { recursive: true }))
+      yield* Effect.promise(() =>
+        Bun.write(
+          path.join(customTools, "double_guarded.ts"),
+          [
+            "export default {",
+            "  description: 'custom tool with an internal permission',",
+            "  args: { value: { type: 'string' } },",
+            "  execute: async ({ value }, context) => {",
+            "    await context.ask({ permission: 'plugin_network', patterns: [value], metadata: { value }, always: [value] })",
+            "    return value",
+            "  },",
+            "}",
+            "",
+          ].join("\n"),
+        ),
+      )
+      const registry = yield* ToolRegistry.Service
+      const loaded = (yield* registry.all()).find((tool) => tool.id === "double_guarded")
+      if (!loaded) throw new Error("double guarded custom tool was not loaded")
+      const agents = yield* Agent.Service
+      const requests: Array<{
+        permission: string
+        patterns: readonly string[]
+        metadata: Record<string, unknown>
+        always: readonly string[]
+      }> = []
+      const result = yield* loaded.execute({ value: "https://example.test" }, {
+        sessionID: SessionID.make("ses_custom_double_guard"),
+        messageID: MessageID.make("msg_custom_double_guard"),
+        callID: "call-custom-double-guard",
+        agent: (yield* agents.defaultInfo()).name,
+        abort: new AbortController().signal,
+        messages: [],
+        metadata: () => Effect.void,
+        ask: (request) =>
+          Effect.sync(() => {
+            requests.push(request)
+          }),
+      } satisfies Tool.Context)
+
+      expect(result.output).toBe("https://example.test")
+      expect(requests).toEqual([
+        {
+          permission: "double_guarded",
+          patterns: ["*"],
+          metadata: { args: { value: "https://example.test" } },
+          always: ["*"],
+        },
+        {
+          permission: "plugin_network",
+          patterns: ["https://example.test"],
+          metadata: { value: "https://example.test" },
+          always: ["https://example.test"],
+        },
+      ])
+    }),
+  )
+
   // M2 (S1-v3.4) acceptance (e): the `tools()` projection must carry provenance
   // through. It previously returned only {id,description,parameters,jsonSchema,execute,
   // formatValidationError}, dropping provenance and forcing request.ts to guess.
@@ -815,6 +951,45 @@ describe("tool.registry", () => {
         modelID: ModelV2.ID.make("test"),
         agent: yield* agents.defaultInfo(),
         projectScopeKey: "project_scope_internal",
+      })
+
+      expect(tools.map((tool) => tool.id)).not.toContain("context_query")
+      expect(tools.filter((tool) => tool.id === "code_intel")).toHaveLength(1)
+    }),
+  )
+
+  itContextToolsV2.instance("uses the provider turn activation decision instead of resampling readiness", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const agents = yield* Agent.Service
+      const eligibility = ContextFederationRollout.resolveProject(
+        ContextFederationRollout.resolve(
+          {
+            contextFederationShadow: true,
+            locationIndexesV2Shadow: true,
+            contextProjectionV2: true,
+            contextQueryToolsV2: true,
+            coreV2ExecutionOwner: false,
+          },
+          { coreV2ParityVerified: false },
+        ),
+        "project_scope_internal",
+        { stage: "all", percentage: 100, internalProjectScopeKeys: [], killSwitch: false },
+      )
+      const tools = yield* registry.tools({
+        providerID: ProviderV2.ID.make("deepagent-code"),
+        modelID: ModelV2.ID.make("test"),
+        agent: yield* agents.defaultInfo(),
+        projectScopeKey: "project_scope_internal",
+        contextFederationRollout: ContextFederationRollout.activate(eligibility, {
+          ...ContextFederationRollout.READINESS_READY_STUB,
+          state: "degraded",
+          identityBound: true,
+          indexAvailable: false,
+          storageHealthy: true,
+          observedAt: Date.now(),
+          expiresAt: Number.MAX_SAFE_INTEGER,
+        }),
       })
 
       expect(tools.map((tool) => tool.id)).not.toContain("context_query")

@@ -224,6 +224,10 @@ const modelCommands = new Map<string, DispatcherCommand>([
     command("packages/desktop", "bun", "run", "test:llm-release:activity-progress-package"),
   ],
   [
+    "ext:renderer-ui:long-session",
+    command("packages/desktop", "bun", "run", "test:llm-release:long-session"),
+  ],
+  [
     "ext:legacy-session:subagent-worktree-routing",
     command("packages/deepagent-code", "bun", "run", "test:llm-ext:subagent-worktree"),
   ],
