@@ -586,12 +586,6 @@ export function MessageTimeline(props: {
   })
   const parentTitle = createMemo(() => sessionTitle(parent()?.title) ?? language.t("command.session.new"))
   const getMsgParts = (msgId: string) => sync.data.part[msgId] ?? emptyParts
-  const activityProgressVisibility = createMemo(() =>
-    Timeline.activityProgressVisibility(
-      sessionMessages().filter((message): message is AssistantMessage => message.role === "assistant"),
-      getMsgParts,
-    ),
-  )
   const childTaskDescription = createMemo(() => {
     const id = sessionID()
     if (!id) return
@@ -622,7 +616,6 @@ export function MessageTimeline(props: {
             settings.general.showReasoningSummaries(),
             sessionStatus().type,
             activeMessageID() === userMessage.id,
-            activityProgressVisibility(),
           )
 
           return reuseTimelineRows(previous, rows)
