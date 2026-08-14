@@ -29,6 +29,7 @@ import { SessionProcessor } from "@/session/processor"
 import { SessionCompaction } from "@/session/compaction"
 import { SessionRevert } from "@/session/revert"
 import { SessionSummary } from "@/session/summary"
+import { SessionProjection } from "@/session/session-projector"
 import { SessionPrompt } from "@/session/prompt"
 import { GoalManager } from "@/session/goal-manager"
 import { Instruction } from "@/session/instruction"
@@ -54,6 +55,7 @@ import { memoMap } from "@deepagent-code/core/effect/memo-map"
 import { BackgroundJob } from "@/background/job"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
+import { DurableLearningRuntime } from "@/deepagent/learning-runtime"
 
 export const AppLayer = Layer.mergeAll(
   Npm.defaultLayer,
@@ -82,6 +84,8 @@ export const AppLayer = Layer.mergeAll(
   BackgroundJob.defaultLayer,
   RuntimeFlags.defaultLayer,
   EventV2Bridge.defaultLayer,
+  SessionProjection.defaultLayer,
+  DurableLearningRuntime.defaultLayer,
   SessionRunState.defaultLayer,
   SessionProcessor.defaultLayer,
   SessionCompaction.defaultLayer,

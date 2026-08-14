@@ -64,14 +64,18 @@ describe("WikiService — §B.2 editable boundary", () => {
     const d = store.create(designInput())
     const exit = runExit(service.editKnowledge({ docId: d.id, body: "x", editor: { id: "u1" } }))
     expect(exit._tag).toBe("Failure")
-    const err = Effect.runSync(service.editKnowledge({ docId: d.id, body: "x", editor: { id: "u1" } }).pipe(Effect.flip))
+    const err = Effect.runSync(
+      service.editKnowledge({ docId: d.id, body: "x", editor: { id: "u1" } }).pipe(Effect.flip),
+    )
     expect(err).toBeInstanceOf(WikiReadOnlyError)
   })
 
   test("editKnowledge on a read-only code_symbol → WikiReadOnlyError", () => {
     const { store, service } = svc()
     const c = store.create(codeFileInput())
-    const err = Effect.runSync(service.editKnowledge({ docId: c.id, body: "x", editor: { id: "u1" } }).pipe(Effect.flip))
+    const err = Effect.runSync(
+      service.editKnowledge({ docId: c.id, body: "x", editor: { id: "u1" } }).pipe(Effect.flip),
+    )
     expect(err).toBeInstanceOf(WikiReadOnlyError)
   })
 })
@@ -89,17 +93,21 @@ describe("WikiService — §B.3 editKnowledge governance", () => {
     expect(latest.provenance.source).toBe("human")
     expect(latest.provenance.evidence_refs?.[0]).toContain("human:alice")
     expect(latest.body).toBe("v2 edited")
-    // append-only: v1 superseded, confidence preserved (knowledge invariant intact)
+    // Append-only means the authority revision itself is immutable. Supersession is represented by
+    // the newer revision and must not rewrite v1 after publication.
     const v1 = store.get(k.id, 1)!
-    expect(v1.status).toBe("superseded")
-    expect(v1.superseded_by).toBe(`${k.id}@v2`)
+    expect(v1.status).toBe(k.status)
+    expect(v1.superseded_by).toBe(k.superseded_by)
+    expect(v1.hash).toBe(k.hash)
     expect(latest.confidence?.evidence_strength).toBe("medium")
   })
 
   test("gate rejection → GateRejectedError (empty body blanks a page)", () => {
     const { store, service } = svc()
     const k = store.create(knowledgeInput())
-    const err = Effect.runSync(service.editKnowledge({ docId: k.id, body: "   ", editor: { id: "u1" } }).pipe(Effect.flip))
+    const err = Effect.runSync(
+      service.editKnowledge({ docId: k.id, body: "   ", editor: { id: "u1" } }).pipe(Effect.flip),
+    )
     expect(err).toBeInstanceOf(GateRejectedError)
     // page unchanged (still v1)
     expect(store.get(k.id)!.version).toBe(1)
@@ -110,7 +118,9 @@ describe("WikiService — §B.3 editKnowledge governance", () => {
     roots.push(root)
     const service = new WikiService(new WikiGraph([store]), () => ({ pass: false, reason: "policy denies" }))
     const k = store.create(knowledgeInput())
-    const err = Effect.runSync(service.editKnowledge({ docId: k.id, body: "new", editor: { id: "u1" } }).pipe(Effect.flip))
+    const err = Effect.runSync(
+      service.editKnowledge({ docId: k.id, body: "new", editor: { id: "u1" } }).pipe(Effect.flip),
+    )
     expect(err).toBeInstanceOf(GateRejectedError)
     expect((err as GateRejectedError).reason).toBe("policy denies")
   })
@@ -134,7 +144,9 @@ describe("WikiService — §B.7 sealed never projected (INV-7)", () => {
   test("editKnowledge on a sealed doc → WikiNotFoundError (never editable)", () => {
     const { store, service } = svc()
     const sealed = store.create(knowledgeInput({ scope: "sealed" }))
-    const err = Effect.runSync(service.editKnowledge({ docId: sealed.id, body: "x", editor: { id: "u1" } }).pipe(Effect.flip))
+    const err = Effect.runSync(
+      service.editKnowledge({ docId: sealed.id, body: "x", editor: { id: "u1" } }).pipe(Effect.flip),
+    )
     expect(err).toBeInstanceOf(WikiNotFoundError)
   })
 })

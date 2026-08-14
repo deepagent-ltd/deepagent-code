@@ -1,5 +1,6 @@
 import type { NotFoundError as StorageNotFoundError } from "@/storage/storage"
 import { Session } from "@/session/session"
+import { SessionRevert } from "@/session/revert"
 import { Effect } from "effect"
 import * as ApiError from "../errors"
 
@@ -24,6 +25,27 @@ export function mapBusy<A, R>(self: Effect.Effect<A, Session.BusyError, R>) {
         new ApiError.SessionBusyError({
           sessionID: error.sessionID,
           message: `Session is busy: ${error.sessionID}`,
+        }),
+      ),
+    ),
+  )
+}
+
+export function mapRevert<A, R>(self: Effect.Effect<A, Session.BusyError | SessionRevert.LimitError, R>) {
+  return self.pipe(
+    Effect.catchTag("SessionBusyError", (error) =>
+      Effect.fail(
+        new ApiError.SessionBusyError({
+          sessionID: error.sessionID,
+          message: `Session is busy: ${error.sessionID}`,
+        }),
+      ),
+    ),
+    Effect.catchTag("SessionRevertLimitError", (error) =>
+      Effect.fail(
+        new ApiError.ServiceUnavailableError({
+          service: "session.revert",
+          message: `Session revert exceeds the bounded ${error.maxFiles}-file safety limit`,
         }),
       ),
     ),

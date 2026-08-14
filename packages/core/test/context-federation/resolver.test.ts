@@ -11,7 +11,7 @@ import {
   type ContextRef,
 } from "../../src/context-federation/reference"
 import { Database } from "../../src/database/database"
-import { DocumentStore } from "../../src/deepagent/document-store"
+import { DocumentStore, documentRevision } from "../../src/deepagent/document-store"
 import { tmpdir } from "../fixture/tmpdir"
 
 const namespace = SecurityNamespaceID.make("sec_resolver_test")
@@ -54,7 +54,7 @@ describe("FederatedContextResolver shadow mode", () => {
       confidence: { evidence_strength: "strong", support_count: 1 },
       extensions: { sensitivity: "public" },
     })
-    store.setStatus(knowledge.id, "active")
+    store.setStatus(knowledge.id, "active", documentRevision(knowledge))
     const scope = {
       securityNamespaceId: namespace,
       projectScopeKey: project,
@@ -66,8 +66,8 @@ describe("FederatedContextResolver shadow mode", () => {
     }
     const harness = makeHarness([
       codeAdapter(),
-      ContextAdapters.knowledge({ stores: [store], scope }),
-      ContextAdapters.memory({ stores: [store], scope }),
+      ContextAdapters.knowledge({ stores: [store, store], scope, releasedSelection: selection([store.get(knowledge.id)!]) }),
+      ContextAdapters.memory({ stores: [store, store], scope, releasedSelection: selection([]) }),
       ContextAdapters.documents([
         ContextAdapters.executionDocuments({ source: "execution_documents", stores: [store], scope }),
       ]),
@@ -145,8 +145,8 @@ describe("FederatedContextResolver shadow mode", () => {
     const harness = makeHarness(
       [
         timeout,
-        ContextAdapters.knowledge({ stores: [store], scope }),
-        ContextAdapters.memory({ stores: [store], scope }),
+        ContextAdapters.knowledge({ stores: [store, store], scope, releasedSelection: selection([]) }),
+        ContextAdapters.memory({ stores: [store, store], scope, releasedSelection: selection([]) }),
         ContextAdapters.documents([
           ContextAdapters.executionDocuments({ source: "execution_documents", stores: [store], scope }),
         ]),
@@ -221,5 +221,26 @@ function input(text: string) {
     text,
     toolCall: true,
     now: 100,
+  }
+}
+
+function selection(documents: readonly NonNullable<ReturnType<DocumentStore["get"]>>[]) {
+  return {
+    snapshotId: "snapshot_resolver_test",
+    securityNamespaceId: namespace,
+    projectScopeKey: project,
+    legacyProjectId: "legacy-project",
+    parentSnapshotId: null,
+    generation: 1,
+    membershipHash: `sha256:${"0".repeat(64)}`,
+    manifestHash: `sha256:${"1".repeat(64)}`,
+    documents: documents.map((doc) => ({
+      sourceStore: "project" as const,
+      id: doc.id,
+      version: doc.version,
+      hash: doc.hash,
+      type: doc.type,
+      scope: doc.scope,
+    })),
   }
 }

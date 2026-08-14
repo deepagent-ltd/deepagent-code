@@ -73,6 +73,29 @@ const expectLLMError = (error: unknown) => {
 const errorHttp = (error: LLMError) => ("http" in error.reason ? error.reason.http : undefined)
 
 describe("RequestExecutor", () => {
+  it.effect("does not start HTTP transport when the durable request seal fails", () =>
+    Effect.gen(function* () {
+      const attempts = yield* Ref.make(0)
+      return yield* Effect.gen(function* () {
+        const executor = yield* RequestExecutor.Service
+        const sealed = HttpClientRequest.post("https://provider.test/v1/chat").pipe(
+          HttpClientRequest.bodyText('{"model":"test"}', "application/json"),
+        )
+
+        expect(
+          yield* executor
+            .execute(sealed)
+            .pipe(Effect.exit)
+            .pipe(Effect.map((exit) => exit._tag)),
+        ).toBe("Failure")
+        expect(yield* Ref.get(attempts)).toBe(0)
+      }).pipe(
+        Effect.provideService(RequestExecutor.CurrentRequestSeal, { seal: () => Effect.die("receipt write failed") }),
+        Effect.provide(countedResponsesLayer(attempts, [new Response("must not be consumed")])),
+      )
+    }),
+  )
+
   it.effect("classifies context overflow responses", () =>
     Effect.gen(function* () {
       const executor = yield* RequestExecutor.Service

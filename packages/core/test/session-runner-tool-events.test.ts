@@ -33,6 +33,11 @@ const capture = () => {
     project: () => Effect.void,
     replay: () => Effect.void,
     replayAll: () => Effect.succeed(undefined),
+    snapshot: () => Effect.succeed(undefined),
+    checkpoint: () => Effect.die("unused"),
+    importSnapshot: () => Effect.die("unused"),
+    compact: () => Effect.die("unused"),
+    canonicalizeLegacyArtifacts: () => Effect.succeed({ processed: 0 }),
     remove: () => Effect.void,
     claim: () => Effect.void,
   })

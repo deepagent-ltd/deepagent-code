@@ -2,6 +2,7 @@ import { describe, expect } from "bun:test"
 import { Deferred, Effect, Layer } from "effect"
 import { Project } from "@/project/project"
 import { Session as SessionNs } from "@/session/session"
+import { SessionProjector } from "@deepagent-code/core/session/projector"
 import { CrossSpawnSpawner } from "@deepagent-code/core/cross-spawn-spawner"
 import * as Log from "@deepagent-code/core/util/log"
 import { provideInstance, TestInstance, tmpdirScoped } from "../fixture/fixture"
@@ -9,7 +10,14 @@ import { testEffect } from "../lib/effect"
 
 void Log.init({ print: false })
 
-const it = testEffect(Layer.mergeAll(SessionNs.defaultLayer, Project.defaultLayer, CrossSpawnSpawner.defaultLayer))
+const it = testEffect(
+  Layer.mergeAll(
+    SessionNs.defaultLayer,
+    SessionProjector.defaultLayer,
+    Project.defaultLayer,
+    CrossSpawnSpawner.defaultLayer,
+  ),
+)
 
 const withSession = (input?: Parameters<SessionNs.Interface["create"]>[0]) =>
   Effect.acquireRelease(SessionNs.use.create(input), (created) =>

@@ -68,8 +68,10 @@ const execInput = (
   ...over,
 })
 
-const reviewTurn = (result: ReviewResult): SubagentTurnRunner => () =>
-  Effect.succeed(turnFrom({ structured: result }))
+const reviewTurn =
+  (result: ReviewResult): SubagentTurnRunner =>
+  () =>
+    Effect.succeed(turnFrom({ structured: result }))
 
 const panelQuestion = (): PanelQuestionInput => ({
   question: "approve the migration?",
@@ -95,7 +97,10 @@ describe("makeTaskSubagentRunner capability boundary", () => {
 
   const run = async (
     input: { readonly allowPlanWriteCapability?: boolean; readonly purpose?: "goal-loop" | "panel" | "generic" },
-    turn: { readonly outputSchema?: Record<string, unknown> } = {},
+    turn: {
+      readonly outputSchema?: Record<string, unknown>
+      readonly finalizer?: "structured" | "text_fallback" | "degraded"
+    } = {},
   ) => {
     const created: Array<NonNullable<Session.CreateInput>> = []
     const prompted: SessionPrompt.PromptInput[] = []
@@ -116,17 +121,29 @@ describe("makeTaskSubagentRunner capability boundary", () => {
       cancel: () => Effect.void,
       prompt: (promptInput: SessionPrompt.PromptInput) => {
         prompted.push(promptInput)
+        const structured =
+          promptInput.metadata?.deepagent?.structured_finalizer?.attempt === 1 && turn.finalizer !== undefined
+            ? undefined
+            : promptInput.format
+              ? { verdict: "revise" }
+              : undefined
+        const text =
+          promptInput.metadata?.deepagent?.structured_finalizer?.attempt === 2 && turn.finalizer === "degraded"
+            ? "not json"
+            : promptInput.metadata?.deepagent?.structured_finalizer?.attempt === 2 && turn.finalizer === "text_fallback"
+              ? '{"verdict":"revise"}'
+              : promptInput.format
+                ? undefined
+                : "grounded review draft"
         const assistant = {
           info: {
             role: "assistant",
             id: `msg_${prompted.length}`,
             tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } },
             cost: 0,
-            ...(promptInput.format ? { structured: { verdict: "revise" } } : {}),
+            ...(structured === undefined ? {} : { structured }),
           },
-          parts: promptInput.format
-            ? []
-            : [{ type: "text", text: "grounded review draft", synthetic: false, ignored: false }],
+          parts: text === undefined ? [] : [{ type: "text", text, synthetic: false, ignored: false }],
         } as unknown as SessionV1.WithParts
         assistants.push(assistant)
         return Effect.succeed(assistant)
@@ -142,7 +159,7 @@ describe("makeTaskSubagentRunner capability boundary", () => {
     })
 
     const result = await Effect.runPromise(
-      runner({ agentType: worker.name, prompt: "run", outputSchema: turn.outputSchema }),
+      runner({ agentType: worker.name, prompt: "run", goalId: "goal-exact", outputSchema: turn.outputSchema }),
     )
     return { result, createInput: created[0], prompted }
   }
@@ -155,10 +172,12 @@ describe("makeTaskSubagentRunner capability boundary", () => {
   })
 
   test("goal-loop callers explicitly opt in and receive the capability grant", async () => {
-    const { result, createInput } = await run({ allowPlanWriteCapability: true, purpose: "goal-loop" })
+    const { result, createInput, prompted } = await run({ allowPlanWriteCapability: true, purpose: "goal-loop" })
     expect(result.ok).toBe(true)
     expect(createInput?.title).toBe("goal-worker (goal-loop)")
     expect(Permission.evaluate("plan", "*", createInput?.permission ?? []).action).toBe("allow")
+    expect(createInput?.metadata).toMatchObject({ goalID: "goal-exact" })
+    expect(prompted[0]?.metadata).toMatchObject({ deepagent: { goal_id: "goal-exact" } })
   })
 
   test("panel callers remain opted out and use a panel child title", async () => {
@@ -186,6 +205,54 @@ describe("makeTaskSubagentRunner capability boundary", () => {
     expect(prompted[0]?.format).toBeUndefined()
     expect(prompted[1]?.format?.type).toBe("json_schema")
     expect(prompted[1]?.metadata?.deepagent?.structured_finalizer).toBeDefined()
+  })
+
+  test("explicit-schema panel caller accepts validated JSON text as structured output", async () => {
+    const { result, prompted } = await run(
+      { purpose: "panel" },
+      {
+        outputSchema: {
+          type: "object",
+          properties: { verdict: { type: "string" } },
+          required: ["verdict"],
+        },
+        finalizer: "text_fallback",
+      },
+    )
+
+    expect(result.structured).toEqual({ verdict: "revise" })
+    expect(result.structuredOutput).toEqual({ attempt: 2, transport: "text_fallback" })
+    expect(prompted).toHaveLength(3)
+    expect(prompted[2]?.format).toBeUndefined()
+  })
+
+  test("Level-2 text remains fail-closed for structured grader consumers", async () => {
+    const { result, prompted } = await run(
+      { purpose: "panel" },
+      {
+        outputSchema: {
+          type: "object",
+          properties: { verdict: { type: "string" } },
+          required: ["verdict"],
+        },
+        finalizer: "degraded",
+      },
+    )
+
+    expect(result.ok).toBe(true)
+    expect(result.structured).toBeUndefined()
+    expect(result.structuredOutput).toEqual({
+      attempt: 2,
+      transport: "degraded_text",
+      reason: "structured_output_missing",
+    })
+    expect(JSON.parse(result.text)).toEqual({
+      _degraded: true,
+      _reason: "structured_output_missing",
+      _attempts: 2,
+      _raw: "grounded review draft",
+    })
+    expect(prompted).toHaveLength(3)
   })
 })
 
@@ -343,10 +410,7 @@ describe("V3.9 §D wiring — buildStepExecutor", () => {
     await Effect.runPromise(
       exec(
         execInput({
-          graderFeedback: [
-            "plan_complete: outstanding steps [a]",
-            "tests_pass: one or more of [bun test] failed",
-          ],
+          graderFeedback: ["plan_complete: outstanding steps [a]", "tests_pass: one or more of [bun test] failed"],
         }),
       ),
     )
@@ -401,7 +465,9 @@ describe("V3.9 §D wiring — buildStepExecutor", () => {
   // V4.0.1 P2 §4.4 — the real turn runner surfaces the granular breakdown feeding the NET-token ledger.
   test("surfaces granular net-token fields (input/output/carriedPrefix) from a turn", async () => {
     const exec = buildStepExecutor(() =>
-      Effect.succeed(turnFrom({ ok: true, tokensUsed: 100, inputTokens: 80, outputTokens: 20, carriedPrefixTokens: 60 })),
+      Effect.succeed(
+        turnFrom({ ok: true, tokensUsed: 100, inputTokens: 80, outputTokens: 20, carriedPrefixTokens: 60 }),
+      ),
     )
     const res = await Effect.runPromise(exec(execInput()))
     expect(res.tokensUsed).toBe(100)

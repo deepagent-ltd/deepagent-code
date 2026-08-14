@@ -2,7 +2,13 @@ import { describe, expect, test, beforeEach, afterEach } from "bun:test"
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { DocumentStore, DocumentConflictError, knowledgeSimilarity, tokenizeForSimilarity } from "../../src/deepagent/document-store"
+import {
+  DocumentStore,
+  DocumentConflictError,
+  documentRevision,
+  knowledgeSimilarity,
+  tokenizeForSimilarity,
+} from "../../src/deepagent/document-store"
 import { writeFileAtomic, writeFileExclusive } from "../../src/deepagent/atomic-write"
 import { DurableKnowledgeStore } from "../../src/deepagent/durable-knowledge-store"
 
@@ -33,13 +39,16 @@ describe("V3 DocumentStore", () => {
     expect(store.create(design()).id).not.toBe(a.id) // distinct logical docs
   })
 
-  test("update is append-only with supersede chain", () => {
+  test("update appends an immutable revision without rewriting v1", () => {
     const a = store.create(design("v1"))
+    const file = path.join(root, "docs", "design", `${a.id.replaceAll(":", "__")}@v1.json`)
+    const before = readFileSync(file, "utf8")
     const a2 = store.update(a.id, "v2")
     expect(a2.version).toBe(2)
     const old = store.get(a.id, 1)!
-    expect(old.status).toBe("superseded")
-    expect(old.superseded_by).toBe(`${a.id}@v2`)
+    expect(old.status).toBe("draft")
+    expect(old.superseded_by).toBeNull()
+    expect(readFileSync(file, "utf8")).toBe(before)
     expect(store.get(a.id)!.version).toBe(2)
     expect(store.update(a.id, "v2").version).toBe(2) // no-op on identical content
   })
@@ -159,10 +168,10 @@ describe("V3 DocumentStore", () => {
     expect(edited.body).toBe("v2 body edited by human")
     // knowledge confidence preserved (assertKnowledgeConfidence satisfied)
     expect(edited.confidence?.evidence_strength).toBe("weak")
-    // append-only: old version superseded, latest resolves to v2
+    // append-only: old bytes and metadata remain unchanged; latest resolves to v2
     const old = store.get(k.id, 1)!
-    expect(old.status).toBe("superseded")
-    expect(old.superseded_by).toBe(`${k.id}@v2`)
+    expect(old.status).toBe("draft")
+    expect(old.superseded_by).toBeNull()
     expect(store.get(k.id)!.version).toBe(2)
     // provenance is part of the fingerprint → identical body+provenance is an INV-4 no-op
     expect(store.updateWithProvenance(k.id, "v2 body edited by human", { source: "human" }).version).toBe(2)
@@ -170,9 +179,7 @@ describe("V3 DocumentStore", () => {
 })
 
 // F30-1 (deepagentcore-v4.0.3 storage prereq): DocumentStore is the single crash-safe, concurrency-
-// safe durable body. persist() writes append-only version files with exclusive-create CAS; replace()
-// overwrites the same version atomically (temp+fsync+rename). These tests pin the CAS + durability
-// behavior that H32-1 (v4.0.4) builds on.
+// safe durable body. Every semantic mutation writes a new version through exclusive-create CAS.
 describe("F30-1 DocumentStore CAS + atomic durability", () => {
   test("recoverable built-in seeds retain active status and exclusive-create CAS", () => {
     const h1 = new DocumentStore(root)
@@ -202,8 +209,8 @@ describe("F30-1 DocumentStore CAS + atomic durability", () => {
     // reopened from files only — every version file was written exactly once via exclusive create
     const reopened = new DocumentStore(root)
     expect(reopened.get(a.id)!.body).toBe("v3")
-    expect(reopened.get(a.id, 1)!.status).toBe("superseded")
-    expect(reopened.get(a.id, 2)!.status).toBe("superseded")
+    expect(reopened.get(a.id, 1)!.body).toBe("v1")
+    expect(reopened.get(a.id, 2)!.body).toBe("v2")
     expect(reopened.verify().ok).toBe(true)
   })
 
@@ -235,16 +242,18 @@ describe("F30-1 DocumentStore CAS + atomic durability", () => {
     expect(new DocumentStore(root).get(a.id)!.body).toBe("same body")
   })
 
-  test("setStatus/replace rewrites the same version file in place without a version bump", () => {
+  test("setStatus appends a new revision and preserves the old version bytes", () => {
     const a = store.create(design("body"))
     expect(a.version).toBe(1)
-    store.setStatus(a.id, "active")
+    const file = path.join(root, "docs", "design", `${a.id.replaceAll(":", "__")}@v1.json`)
+    const before = readFileSync(file, "utf8")
+    store.setStatus(a.id, "active", documentRevision(a))
     expect(store.get(a.id)!.status).toBe("active")
-    expect(store.get(a.id)!.version).toBe(1) // in-place rewrite, not a new version
-    // exactly one version file on disk for this doc (no orphan versions from the rewrite)
+    expect(store.get(a.id)!.version).toBe(2)
+    expect(readFileSync(file, "utf8")).toBe(before)
     const dir = path.join(root, "docs", "design")
     const files = readdirSync(dir).filter((f) => f.endsWith(".json"))
-    expect(files.length).toBe(1)
+    expect(files.length).toBe(2)
     expect(new DocumentStore(root).get(a.id)!.status).toBe("active")
   })
 

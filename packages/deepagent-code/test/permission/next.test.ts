@@ -13,11 +13,16 @@ import { testEffect } from "../lib/effect"
 import { MessageID, SessionID } from "../../src/session/schema"
 import { EventRouteRef, WorkspaceRef } from "../../src/effect/instance-ref"
 import { WorkspaceV2 } from "@deepagent-code/core/workspace"
+import { RuntimeFlags } from "../../src/effect/runtime-flags"
 
 const events = EventV2Bridge.defaultLayer
 const noopBootstrap = Layer.succeed(InstanceBootstrap.Service, InstanceBootstrap.Service.of({ run: Effect.void }))
 const env = Layer.mergeAll(
-  Permission.layer.pipe(Layer.provide(Database.defaultLayer), Layer.provide(events)),
+  Permission.layer.pipe(
+    Layer.provide(Database.defaultLayer),
+    Layer.provide(events),
+    Layer.provide(RuntimeFlags.defaultLayer),
+  ),
   events,
   CrossSpawnSpawner.defaultLayer,
   InstanceStore.defaultLayer.pipe(Layer.provide(noopBootstrap)),
@@ -449,6 +454,30 @@ test("evaluate - merges multiple rulesets", () => {
   const approved: PermissionV1.Ruleset = [{ permission: "bash", pattern: "rm", action: "deny" }]
   const result = Permission.evaluate("bash", "rm", config, approved)
   expect(result.action).toBe("deny")
+})
+
+test("evaluateDurable - saved grants cannot override an explicit current-policy deny", () => {
+  expect(
+    Permission.evaluateDurable(
+      "bash",
+      "ls",
+      [{ permission: "bash", pattern: "*", action: "deny" }],
+      [],
+      [{ permission: "bash", pattern: "*", action: "allow" }],
+    ).action,
+  ).toBe("deny")
+})
+
+test("evaluateDurable - saved grants may resolve a current-policy ask", () => {
+  expect(
+    Permission.evaluateDurable(
+      "bash",
+      "ls",
+      [{ permission: "bash", pattern: "*", action: "ask" }],
+      [],
+      [{ permission: "bash", pattern: "*", action: "allow" }],
+    ).action,
+  ).toBe("allow")
 })
 
 // disabled tests

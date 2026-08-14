@@ -27,13 +27,21 @@ import {
 } from "@deepagent-code/core/session/sql"
 import { and, eq, gt, inArray, isNull } from "drizzle-orm"
 import { Identifier } from "@/id/id"
-import { SessionID, MessageID } from "@/session/schema"
+import { MessageID, SessionID } from "@/session/schema"
 import type { ClaimResult } from "@/session/task-dispatcher"
 import type { Run } from "@/tool/task-run"
+import type { StructuredOutputReceipt } from "@/tool/task-run"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { Hash } from "@deepagent-code/core/util/hash"
 import type { SubmittedPR } from "@/session/task-pr-submission"
 import type { Worktree } from "@/worktree"
+import { decodeFinalizerFailure } from "@/tool/task-finalizer-failure"
+import {
+  isStructuredOutputContract,
+  persistDegradedStructuredOutput,
+  persistStructuredFinalizerResponse,
+  persistStructuredOutputEvidenceInTransaction,
+} from "@/tool/task-structured-output-evidence"
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -120,6 +128,121 @@ export function startExecution(input: {
               .pipe(Effect.orDie)
 
             return updated
+          }),
+        { behavior: "immediate" },
+      ),
+    )
+  })
+}
+
+export function markStructuredFinalizerAttempt(input: {
+  readonly runID: string
+  readonly ownerToken: string
+  readonly claimGeneration: number
+  readonly attempt: 1 | 2
+  readonly sourceMessageID: MessageID
+  readonly now?: number
+}) {
+  return Effect.gen(function* () {
+    const { db } = yield* Database.Service
+    const now = input.now ?? Date.now()
+    return yield* Effect.uninterruptible(
+      db.transaction(
+        (tx) =>
+          Effect.gen(function* () {
+            const current = yield* tx
+              .select({
+                version: TaskRunTable.version,
+                state: TaskRunTable.state,
+                attempts: TaskRunTable.attempts,
+                rawResultMessageID: TaskRunTable.raw_result_message_id,
+                finalizerInputMessageID: TaskRunTable.finalizer_input_message_id,
+                finalizerStartedAt: TaskRunTable.finalizer_started_at,
+              })
+              .from(TaskRunTable)
+              .where(
+                and(
+                  eq(TaskRunTable.run_id, input.runID),
+                  eq(TaskRunTable.execution_owner, input.ownerToken),
+                  eq(TaskRunTable.claim_generation, input.claimGeneration),
+                  inArray(TaskRunTable.state, ["running", "researching", "finalizing"]),
+                  eq(TaskRunTable.control_state, "open"),
+                  isNull(TaskRunTable.interrupt_requested_at),
+                  gt(TaskRunTable.lease_expires_at, now),
+                ),
+              )
+              .get()
+              .pipe(Effect.orDie)
+            if (!current) {
+              return yield* Effect.fail(
+                new ExecutorClaimLostError({
+                  runID: input.runID,
+                  reason: "structured_finalizer_attempt_claim_lost",
+                }),
+              )
+            }
+            const expectedAttempt = current.state === "finalizing" ? current.attempts + 1 : 1
+            if (
+              input.attempt !== expectedAttempt ||
+              (current.rawResultMessageID !== null && current.rawResultMessageID !== input.sourceMessageID) ||
+              (current.finalizerInputMessageID !== null && current.finalizerInputMessageID !== input.sourceMessageID)
+            ) {
+              return yield* Effect.fail(
+                new ExecutorClaimLostError({
+                  runID: input.runID,
+                  reason: "structured_finalizer_attempt_conflict",
+                }),
+              )
+            }
+            const updated = yield* tx
+              .update(TaskRunTable)
+              .set({
+                state: "finalizing",
+                phase: "finalize",
+                attempts: input.attempt,
+                raw_result_message_id: input.sourceMessageID,
+                finalizer_input_message_id: input.sourceMessageID,
+                finalizer_started_at: current.finalizerStartedAt ?? now,
+                version: current.version + 1,
+                time_updated: now,
+              })
+              .where(
+                and(
+                  eq(TaskRunTable.run_id, input.runID),
+                  eq(TaskRunTable.version, current.version),
+                  eq(TaskRunTable.state, current.state),
+                  eq(TaskRunTable.execution_owner, input.ownerToken),
+                  eq(TaskRunTable.claim_generation, input.claimGeneration),
+                  eq(TaskRunTable.control_state, "open"),
+                  isNull(TaskRunTable.interrupt_requested_at),
+                  gt(TaskRunTable.lease_expires_at, now),
+                ),
+              )
+              .returning({ version: TaskRunTable.version })
+              .get()
+              .pipe(Effect.orDie)
+            if (!updated) {
+              return yield* Effect.fail(
+                new ExecutorClaimLostError({
+                  runID: input.runID,
+                  reason: "structured_finalizer_attempt_version_race",
+                }),
+              )
+            }
+            yield* tx
+              .insert(TaskRunEventTable)
+              .values({
+                event_id: Identifier.ascending("event"),
+                run_id: input.runID,
+                version: updated.version,
+                type: "structured_finalizer_attempt_started",
+                from_state: current.state,
+                to_state: "finalizing",
+                reason: `attempt:${input.attempt}`,
+                time_created: now,
+              })
+              .run()
+              .pipe(Effect.orDie)
           }),
         { behavior: "immediate" },
       ),
@@ -512,6 +635,14 @@ export function settleRun(input: {
   readonly reason: string
   readonly output?: string
   readonly rawResultMessageID?: string
+  readonly structuredResultMessageID?: string
+  readonly structuredOutputReceipt?: StructuredOutputReceipt
+  readonly attempts?: number
+  readonly error?: {
+    readonly code: string
+    readonly message: string
+    readonly data?: Record<string, unknown>
+  }
   // P1-8: the stable public identity for user-facing task_read calls is child_session_id,
   // not the internal run_id. Pass this from RunInput so the outbox payload is correct.
   readonly childSessionID?: string
@@ -532,7 +663,12 @@ export function settleRun(input: {
                 control_state: TaskRunTable.control_state,
                 interrupt_requested_at: TaskRunTable.interrupt_requested_at,
                 version: TaskRunTable.version,
+                attempts: TaskRunTable.attempts,
                 effective_delivery_mode: TaskRunTable.effective_delivery_mode,
+                child_session_id: TaskRunTable.child_session_id,
+                execution_spec: TaskRunTable.execution_spec,
+                close_reason: TaskRunTable.close_reason,
+                interrupt_reason: TaskRunTable.interrupt_reason,
               })
               .from(TaskRunTable)
               .where(
@@ -550,11 +686,40 @@ export function settleRun(input: {
             if (!current) return { won: false as const, reason: "claim_lost" as const }
 
             // Concurrent-priority: close > interrupt > normal
-            let finalState = input.state
-            if (current.control_state === "close_requested" || current.control_state === "closed") {
-              finalState = "closed"
-            } else if (current.interrupt_requested_at && input.state !== "completed") {
-              finalState = "interrupted"
+            const closeWon = current.control_state === "close_requested" || current.control_state === "closed"
+            const interruptWon = !closeWon && current.interrupt_requested_at !== null && input.state !== "completed"
+            const finalState = closeWon ? "closed" : interruptWon ? "interrupted" : input.state
+            const finalReason = closeWon
+              ? (current.close_reason ?? "close_requested")
+              : interruptWon
+                ? (current.interrupt_reason ?? "human_interrupted")
+                : input.reason
+
+            const structuredOutput = current.execution_spec?.structuredOutput
+            const structuredFailure = finalState === "failed" && input.error?.code.startsWith("structured_finalizer_")
+            const evidenceState = finalState === "completed" ? "completed" : structuredFailure ? "failed" : undefined
+            const structuredOutputReceipt = finalState === "completed" ? input.structuredOutputReceipt : undefined
+            const structuredResultMessageID = finalState === "completed" ? input.structuredResultMessageID : undefined
+            const attempts = evidenceState
+              ? (structuredOutputReceipt?.attempt ?? input.attempts ?? 0)
+              : current.attempts
+            if (isStructuredOutputContract(structuredOutput) && evidenceState) {
+              yield* persistStructuredOutputEvidenceInTransaction(tx, {
+                runID: input.runID,
+                childSessionID: current.child_session_id,
+                ownerToken: input.ownerToken,
+                claimGeneration: input.claimGeneration,
+                expectedVersion: current.version,
+                terminalState: evidenceState,
+                attempts,
+                contract: structuredOutput,
+                rawResultMessageID: input.rawResultMessageID,
+                structuredResultMessageID,
+                output: input.output,
+                structuredOutputReceipt,
+                failureCode: input.error?.code,
+                now,
+              })
             }
 
             const updated = yield* tx
@@ -563,10 +728,20 @@ export function settleRun(input: {
                 state: finalState,
                 phase: "settled",
                 control_state: "closed",
-                output: input.output,
+                output: closeWon || interruptWon ? null : input.output,
                 raw_result_message_id: input.rawResultMessageID ? MessageID.make(input.rawResultMessageID) : null,
-                reason: input.reason,
-                error: finalState === "completed" ? null : { code: finalState, message: input.reason },
+                structured_result_message_id: structuredResultMessageID
+                  ? MessageID.make(structuredResultMessageID)
+                  : null,
+                structured_output_receipt: structuredOutputReceipt,
+                attempts,
+                reason: finalReason,
+                error:
+                  finalState === "completed"
+                    ? null
+                    : closeWon || interruptWon
+                      ? { code: finalState, message: finalReason }
+                      : (input.error ?? { code: finalState, message: finalReason }),
                 execution_owner: null,
                 lease_expires_at: null,
                 version: current.version + 1,
@@ -598,7 +773,7 @@ export function settleRun(input: {
                 type: "run_settled",
                 from_state: current.state,
                 to_state: finalState,
-                reason: input.reason,
+                reason: finalReason,
                 time_created: now,
               })
               .run()
@@ -672,7 +847,62 @@ export type RunInput = {
   readonly leaseMs?: number
   /** Injected execution function. All services must be pre-provided by the caller. */
   readonly loopFn: (sessionID: SessionID) => Effect.Effect<SessionV1.WithParts, unknown, never>
+  readonly finalizeFn?: (input: {
+    readonly run: Run
+    readonly research: SessionV1.WithParts
+    readonly contract: NonNullable<NonNullable<Run["executionSpec"]>["structuredOutput"]>
+    readonly onFinalizing: (input: {
+      readonly attempt: 1 | 2
+      readonly sourceMessageID: MessageID
+    }) => Effect.Effect<void, unknown, never>
+    readonly onPrepared: (
+      input: {
+        readonly attempt: 1 | 2
+        readonly sourceMessageID: MessageID
+        readonly output: string
+      } & (
+        | {
+            readonly receipt: Extract<StructuredOutputReceipt, { readonly transport: "degraded_text" }>
+          }
+        | {
+            readonly responseMessageID: MessageID
+            readonly receipt: Exclude<StructuredOutputReceipt, { readonly transport: "degraded_text" }>
+          }
+      ),
+    ) => Effect.Effect<void, unknown, never>
+  }) => Effect.Effect<
+    {
+      readonly output: string
+      readonly structuredResultMessageID?: MessageID
+      readonly receipt: StructuredOutputReceipt
+    },
+    unknown,
+    never
+  >
 }
+
+type ExecutionOutcome =
+  | {
+      readonly ok: true
+      readonly rawResultMessageID: MessageID
+      readonly output: string
+      readonly structuredResultMessageID?: MessageID
+      readonly structuredOutputReceipt?: StructuredOutputReceipt
+    }
+  | {
+      readonly ok: false
+      readonly rawResultMessageID?: MessageID
+      readonly error: string
+      readonly failure?: {
+        readonly reason: string
+        readonly attempts: number
+        readonly error: {
+          readonly code: string
+          readonly message: string
+          readonly data: Record<string, unknown>
+        }
+      }
+    }
 
 /**
  * Execute one provisioned run end-to-end.
@@ -688,6 +918,7 @@ export type RunInput = {
  */
 export function run(input: RunInput): Effect.Effect<void, never, Database.Service> {
   return Effect.gen(function* () {
+    const database = yield* Database.Service
     const leaseMs = input.leaseMs ?? 30_000
     const now = Date.now()
 
@@ -713,16 +944,98 @@ export function run(input: RunInput): Effect.Effect<void, never, Database.Servic
     // never keep producing tools or provider output after another process may take ownership.
     const renewInterval = Math.max(10, Math.floor(leaseMs / 3))
     const loopOutcome = input.loopFn(input.childSessionID).pipe(
-      Effect.map((message) => {
+      Effect.flatMap((message): Effect.Effect<ExecutionOutcome, unknown, never> => {
         if (message.info.role !== "assistant") {
-          return { ok: false as const, messageID: undefined, error: "provider returned a non-assistant message" }
+          return Effect.succeed({
+            ok: false as const,
+            rawResultMessageID: undefined,
+            error: "provider returned a non-assistant message",
+            failure: undefined,
+          })
         }
         if (message.info.error) {
-          return {
+          return Effect.succeed({
             ok: false as const,
-            messageID: message.info.id,
+            rawResultMessageID: message.info.id,
             error: `${message.info.error.name}: ${JSON.stringify(message.info.error.data)}`,
+            failure: undefined,
+          })
+        }
+        const contract = input.run.executionSpec?.structuredOutput
+        if (contract) {
+          const frozenModel = input.run.executionSpec?.model
+          const frozenAgent = input.run.executionSpec?.agent
+          if (!input.finalizeFn || !frozenModel?.providerID || !frozenModel.modelID || !frozenAgent) {
+            const failureMessage = !input.finalizeFn
+              ? "durable structured finalizer is unavailable"
+              : "durable structured finalizer is unavailable: frozen model identity is missing"
+            return Effect.succeed({
+              ok: false as const,
+              rawResultMessageID: message.info.id,
+              error: failureMessage,
+              failure: {
+                reason: "structured_finalizer_unavailable",
+                attempts: 0,
+                error: {
+                  code: "structured_finalizer_unavailable",
+                  message: failureMessage,
+                  data: { phase: "finalize", attempt: 0, failure_class: "unavailable" },
+                },
+              },
+            })
           }
+          return input
+            .finalizeFn({
+              run: input.run,
+              research: message,
+              contract,
+              onFinalizing: (attempt) =>
+                markStructuredFinalizerAttempt({
+                  runID: input.run.runID,
+                  ownerToken: input.ownerToken,
+                  claimGeneration: input.claimGeneration,
+                  ...attempt,
+                }).pipe(Effect.provideService(Database.Service, database)),
+              onPrepared: (prepared) => {
+                if (prepared.receipt.transport === "degraded_text") {
+                  return persistDegradedStructuredOutput({
+                    runID: input.run.runID,
+                    childSessionID: input.childSessionID,
+                    ownerToken: input.ownerToken,
+                    claimGeneration: input.claimGeneration,
+                    contract,
+                    sourceMessageID: prepared.sourceMessageID,
+                    receipt: prepared.receipt,
+                    output: prepared.output,
+                  }).pipe(Effect.provideService(Database.Service, database))
+                }
+                if (!("responseMessageID" in prepared)) {
+                  return Effect.die("structured finalizer response is missing its message identity")
+                }
+                return persistStructuredFinalizerResponse({
+                  runID: input.run.runID,
+                  childSessionID: input.childSessionID,
+                  ownerToken: input.ownerToken,
+                  claimGeneration: input.claimGeneration,
+                  contract,
+                  attempt: prepared.attempt,
+                  sourceMessageID: prepared.sourceMessageID,
+                  responseMessageID: prepared.responseMessageID,
+                  receipt: prepared.receipt,
+                  output: prepared.output,
+                }).pipe(Effect.provideService(Database.Service, database))
+              },
+            })
+            .pipe(
+              Effect.map((finalized) => ({
+                ok: true as const,
+                rawResultMessageID: message.info.id,
+                structuredResultMessageID: finalized.structuredResultMessageID,
+                structuredOutputReceipt: finalized.receipt,
+                output: finalized.output,
+              })),
+              Effect.catchCause((cause) => Effect.succeed(finalizerFailure(message.info.id, cause))),
+            )
         }
         const text = message.parts
           .filter(
@@ -735,15 +1048,21 @@ export function run(input: RunInput): Effect.Effect<void, never, Database.Servic
         const output =
           text || (message.info.structured === undefined ? undefined : JSON.stringify(message.info.structured))
         if (!output) {
-          return { ok: false as const, messageID: message.info.id, error: "assistant output is empty" }
+          return Effect.succeed({
+            ok: false as const,
+            rawResultMessageID: message.info.id,
+            error: "assistant output is empty",
+            failure: undefined,
+          })
         }
-        return { ok: true as const, messageID: message.info.id, output }
+        return Effect.succeed({ ok: true as const, rawResultMessageID: message.info.id, output })
       }),
       Effect.catchCause((cause) =>
         Effect.succeed({
           ok: false as const,
-          messageID: undefined,
+          rawResultMessageID: undefined,
           error: Cause.squash(cause) instanceof Error ? String(Cause.squash(cause)) : Cause.pretty(cause),
+          failure: undefined,
         }),
       ),
     )
@@ -876,14 +1195,20 @@ export function run(input: RunInput): Effect.Effect<void, never, Database.Servic
 
     const settleReason =
       settleState === "completed"
-        ? "text_output_valid"
+        ? outcome.result.ok && outcome.result.structuredOutputReceipt
+          ? outcome.result.structuredOutputReceipt.transport === "structured"
+            ? "structured_output_valid"
+            : outcome.result.structuredOutputReceipt.transport === "text_fallback"
+              ? "structured_output_text_fallback"
+              : "structured_output_degraded_text"
+          : "text_output_valid"
         : settleState === "interrupted"
           ? (interruptStatus.reason ?? "human_interrupted")
           : settleState === "closed"
             ? "close_requested"
             : outcome.result.ok
               ? "loop_error"
-              : outcome.result.error
+              : (outcome.result.failure?.reason ?? outcome.result.error)
 
     // ── 6. Settle run (concurrent-priority CAS + optional outbox) ────────────
     // A-3 (P0-5): check CAS result — if won=false the run is in an inconsistent state;
@@ -899,7 +1224,14 @@ export function run(input: RunInput): Effect.Effect<void, never, Database.Servic
       state: settleState,
       reason: settleReason,
       output: outcome.result.ok ? outcome.result.output : undefined,
-      rawResultMessageID: outcome.result.messageID,
+      rawResultMessageID: outcome.result.rawResultMessageID,
+      structuredResultMessageID:
+        outcome.result.ok && outcome.result.structuredOutputReceipt?.transport !== "degraded_text"
+          ? outcome.result.structuredResultMessageID
+          : undefined,
+      structuredOutputReceipt: outcome.result.ok ? outcome.result.structuredOutputReceipt : undefined,
+      attempts: outcome.result.ok ? undefined : outcome.result.failure?.attempts,
+      error: outcome.result.ok ? undefined : outcome.result.failure?.error,
       childSessionID: input.childSessionID.toString(),
       now: Date.now(),
     })
@@ -923,6 +1255,18 @@ export function run(input: RunInput): Effect.Effect<void, never, Database.Servic
   )
 }
 
+function finalizerFailure(rawResultMessageID: MessageID, cause: Cause.Cause<unknown>): ExecutionOutcome {
+  const error = Cause.squash(cause)
+  const message = error instanceof Error ? error.message : Cause.pretty(cause)
+  const failure = decodeFinalizerFailure(message)
+  return {
+    ok: false,
+    rawResultMessageID,
+    error: message,
+    failure,
+  }
+}
+
 // ---------------------------------------------------------------------------
 // runFromClaim — convenience wrapper: read full Run from DB + call run()
 // Called by the TaskDispatcher onClaimed callback.
@@ -933,6 +1277,7 @@ export function runFromClaim(input: {
   readonly ownerToken: string
   readonly leaseMs?: number
   readonly loopFn: (sessionID: SessionID) => Effect.Effect<SessionV1.WithParts, unknown, never>
+  readonly finalizeFn: NonNullable<RunInput["finalizeFn"]>
   readonly submitWorktree?: (info: Worktree.Info) => Effect.Effect<SubmittedPR | undefined, unknown, never>
 }): Effect.Effect<void, never, Database.Service> {
   return Effect.gen(function* () {
@@ -987,6 +1332,7 @@ export function runFromClaim(input: {
       startAttempts: row.start_attempts ?? 0,
       claimGeneration: row.claim_generation ?? input.claim.claimGeneration,
       availableAt: row.available_at ?? row.time_created,
+      executionSpec: row.execution_spec as Run["executionSpec"],
     }
 
     // Resolve parent session directory for outbox routing
@@ -1040,6 +1386,7 @@ export function runFromClaim(input: {
         : {}),
       leaseMs: input.leaseMs,
       loopFn: input.loopFn,
+      finalizeFn: input.finalizeFn,
     })
   })
 }

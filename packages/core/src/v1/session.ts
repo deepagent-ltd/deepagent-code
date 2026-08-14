@@ -189,6 +189,17 @@ export const FilePart = Schema.Struct({
   mime: Schema.String,
   filename: Schema.optional(Schema.String),
   url: Schema.String,
+  synthetic: Schema.optional(Schema.Boolean),
+  artifact: Schema.optional(
+    Schema.Struct({
+      codec: Schema.Literal("file-part.v1"),
+      id: Schema.String.check(Schema.isPattern(/^fpart_[a-f0-9]{64}$/)),
+      hash: Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/)),
+      bytes: NonNegativeInt.check(Schema.isLessThanOrEqualTo(32 * 1024 * 1024)),
+      chunkBytes: Schema.Literal(262_144 as const),
+      chunks: NonNegativeInt.check(Schema.isGreaterThanOrEqualTo(1), Schema.isLessThanOrEqualTo(128)),
+    }),
+  ),
   source: Schema.optional(FilePartSource),
 }).annotate({ identifier: "FilePart" })
 export type FilePart = Types.DeepMutable<Schema.Schema.Type<typeof FilePart>>
@@ -355,6 +366,47 @@ const FileDiff = Schema.Struct({
   status: Schema.optional(Schema.Literals(["added", "deleted", "modified"])),
 }).annotate({ identifier: "SnapshotFileDiff" })
 
+const DiffManifestDescriptor = Schema.Struct({
+  completeness: Schema.Literals(["complete", "truncated"]),
+  truncationReasons: Schema.Array(
+    Schema.Literals([
+      "candidate_file_limit",
+      "discovery_output_limit",
+      "discovery_failed",
+      "manifest_bytes_limit",
+      "source_file_limit",
+      "source_total_limit",
+      "patch_file_limit",
+      "patch_total_limit",
+      "materialization_failed",
+      "time_limit",
+    ]),
+  ),
+  manifestHash: Schema.String,
+  totalFiles: NonNegativeInt,
+  totalFilesExact: Schema.Boolean,
+  statisticsExact: optionalOmitUndefined(Schema.Boolean),
+  includedFiles: NonNegativeInt,
+  truncatedFiles: NonNegativeInt,
+}).annotate({ identifier: "SnapshotDiffManifestDescriptor" })
+
+const DiffArtifactDescriptor = Schema.Union([
+  Schema.Struct({
+    id: Schema.String,
+    hash: Schema.String,
+    codec: Schema.Literal("legacy-message-diff.v1"),
+    fileCount: NonNegativeInt,
+  }),
+  Schema.Struct({
+    id: Schema.String,
+    hash: Schema.String,
+    codec: Schema.Literal("legacy-message-diff.v2"),
+    fileCount: NonNegativeInt,
+    previewFileCount: NonNegativeInt,
+    previewTruncated: Schema.Boolean,
+  }),
+]).annotate({ identifier: "SnapshotDiffArtifactDescriptor" })
+
 export const User = Schema.Struct({
   ...messageBase,
   role: Schema.Literal("user"),
@@ -367,6 +419,8 @@ export const User = Schema.Struct({
       title: Schema.optional(Schema.String),
       body: Schema.optional(Schema.String),
       diffs: Schema.Array(FileDiff),
+      diffManifest: optionalOmitUndefined(DiffManifestDescriptor),
+      diffArtifact: optionalOmitUndefined(DiffArtifactDescriptor),
     }),
   ),
   agent: Schema.String,
@@ -480,6 +534,21 @@ export const SubtaskPartInput = Schema.Struct({
 }).annotate({ identifier: "SubtaskPartInput" })
 export type SubtaskPartInput = Types.DeepMutable<Schema.Schema.Type<typeof SubtaskPartInput>>
 
+export const ActivityProgress = Schema.Struct({
+  activityID: Schema.NonEmptyString,
+  revision: NonNegativeInt,
+  state: Schema.Literals([
+    "provisional",
+    "progress",
+    "final",
+    "interrupted",
+    "recovery_required",
+    "failed",
+  ]),
+  terminalReason: Schema.optional(Schema.String),
+}).annotate({ identifier: "ActivityProgress" })
+export type ActivityProgress = Types.DeepMutable<Schema.Schema.Type<typeof ActivityProgress>>
+
 export const Assistant = Schema.Struct({
   ...messageBase,
   role: Schema.Literal("assistant"),
@@ -513,6 +582,7 @@ export const Assistant = Schema.Struct({
   structured: Schema.optional(Schema.Any),
   variant: Schema.optional(Schema.String),
   finish: Schema.optional(Schema.String),
+  activityProgress: Schema.optional(ActivityProgress),
 }).annotate({ identifier: "AssistantMessage" })
 export type Assistant = Omit<Types.DeepMutable<Schema.Schema.Type<typeof Assistant>>, "error"> & {
   error?: AssistantError
@@ -542,6 +612,7 @@ const SessionSummary = Schema.Struct({
   deletions: Schema.Finite,
   files: Schema.Finite,
   diffs: optionalOmitUndefined(Schema.Array(FileDiff)),
+  diffManifest: optionalOmitUndefined(DiffManifestDescriptor),
 })
 
 const SessionTokens = Schema.Struct({

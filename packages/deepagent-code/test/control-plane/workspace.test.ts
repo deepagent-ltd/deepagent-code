@@ -4,9 +4,9 @@ import fs from "node:fs/promises"
 import Http from "node:http"
 import path from "node:path"
 import { NodeHttpServer } from "@effect/platform-node"
-import { Effect, Exit, Fiber, Layer, Schema } from "effect"
+import { Cause, Effect, Exit, Fiber, Layer, Schema, Stream } from "effect"
 import { FetchHttpClient, HttpServer, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
-import { eq } from "drizzle-orm"
+import { and, eq, sql } from "drizzle-orm"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import * as Log from "@deepagent-code/core/util/log"
 import { GlobalBus, type GlobalEvent } from "@/bus/global"
@@ -17,7 +17,8 @@ import { AbsolutePath } from "@deepagent-code/core/schema"
 import { Session as SessionNs } from "@/session/session"
 import { SessionID } from "@/session/schema"
 import { SessionTable } from "@deepagent-code/core/session/sql"
-import { EventSequenceTable } from "@deepagent-code/core/event/sql"
+import { EventSequenceTable, EventSyncSequenceTable, EventTable, WorkspaceSyncCursorTable } from "@deepagent-code/core/event/sql"
+import { SessionToolRequestReceiptTable } from "@/session/tool-request-receipt.sql"
 import { resetDatabase } from "../fixture/db"
 import { disposeAllInstances, provideTmpdirInstance, requireInstance, TestInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
@@ -34,6 +35,11 @@ import { Project } from "@/project/project"
 import { Vcs } from "@/project/vcs"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
+import { EventV2 } from "@deepagent-code/core/event"
+import { SessionV1 } from "@deepagent-code/core/v1/session"
+import { SyncReplayLimits } from "@/sync/replay-protocol"
+import { Hash } from "@deepagent-code/core/util/hash"
+import { FilePartArtifact } from "@deepagent-code/core/file-part-artifact"
 
 void Log.init({ print: false })
 
@@ -724,7 +730,8 @@ describe("workspace CRUD", () => {
           calls.push(call)
           if (call.url.pathname === "/base/global/event")
             return HttpServerResponse.fromWeb(eventStreamResponse([], false))
-          if (call.url.pathname === "/base/sync/history") return yield* HttpServerResponse.json([])
+          if (call.url.pathname === "/base/sync/history")
+            return yield* HttpServerResponse.json({ version: 1, items: [], nextCursor: "cursor-empty", complete: true })
           return HttpServerResponse.text("unexpected", { status: 500 })
         }),
       )
@@ -743,7 +750,7 @@ describe("workspace CRUD", () => {
             expect(
               calls.map((call) => `${call.method} ${call.url.pathname}${call.url.search}${call.url.hash}`),
             ).toEqual(["GET /base/global/event", "POST /base/sync/history"])
-            expect(calls[1].json).toEqual({})
+            expect(calls[1].json).toEqual({ version: 1 })
             expect((yield* workspace.status()).find((item) => item.workspaceID === info.id)?.status).toBe("connected")
             expect(yield* workspace.isSyncing(info.id)).toBe(true)
 
@@ -832,7 +839,7 @@ describe("workspace CRUD", () => {
   )
 
   it.instance(
-    "sessionWarp moves a session into a local workspace and claims ownership",
+    "sessionWarp rejects a local placement change before ownership or workspace changes",
     () => {
       return Effect.gen(function* () {
         const { directory: dir } = yield* TestInstance
@@ -850,9 +857,125 @@ describe("workspace CRUD", () => {
         const session = yield* sessionSvc.create({})
         yield* attachSessionToWorkspace(session.id, previous.id)
 
-        yield* workspace.sessionWarp({ workspaceID: target.id, sessionID: session.id })
+        const owner = yield* sessionSequenceOwner(session.id)
+        const error = yield* workspace.sessionWarp({ workspaceID: target.id, sessionID: session.id }).pipe(Effect.flip)
 
+        expect(error).toBeInstanceOf(Workspace.SessionWarpTransferUnsupportedError)
+        if (!(error instanceof Workspace.SessionWarpTransferUnsupportedError)) return
+        expect(error.reason).toBe("placement_change")
+        expect((yield* sessionSvc.get(session.id)).workspaceID).toBe(previous.id)
+        expect(yield* sessionSequenceOwner(session.id)).toBe(owner)
+      })
+    },
+    { git: true },
+  )
+
+  it.instance(
+    "sessionWarp treats an exact placement retry as a zero-write no-op",
+    () =>
+      Effect.gen(function* () {
+        const instance = yield* requireInstance
+        const workspace = yield* Workspace.Service
+        const sessionSvc = yield* SessionNs.Service
+        const current = workspaceInfo(instance.project.id, unique("warp-no-op"))
+        yield* insertWorkspace(current)
+        const session = yield* sessionSvc.create({})
+        yield* attachSessionToWorkspace(session.id, current.id)
         const { db } = yield* Database.Service
+        const beforeSession = yield* db
+          .select()
+          .from(SessionTable)
+          .where(eq(SessionTable.id, session.id))
+          .get()
+          .pipe(Effect.orDie)
+        const beforeSequence = yield* db
+          .select()
+          .from(EventSequenceTable)
+          .where(eq(EventSequenceTable.aggregate_id, session.id))
+          .get()
+          .pipe(Effect.orDie)
+        const beforeEvents = yield* db
+          .select()
+          .from(EventTable)
+          .where(eq(EventTable.aggregate_id, session.id))
+          .all()
+          .pipe(Effect.orDie)
+
+        yield* workspace.sessionWarp({ workspaceID: current.id, sessionID: session.id })
+
+        expect(
+          yield* db.select().from(SessionTable).where(eq(SessionTable.id, session.id)).get().pipe(Effect.orDie),
+        ).toEqual(beforeSession)
+        expect(
+          yield* db
+            .select()
+            .from(EventSequenceTable)
+            .where(eq(EventSequenceTable.aggregate_id, session.id))
+            .get()
+            .pipe(Effect.orDie),
+        ).toEqual(beforeSequence)
+        expect(
+          yield* db
+            .select()
+            .from(EventTable)
+            .where(eq(EventTable.aggregate_id, session.id))
+            .all()
+            .pipe(Effect.orDie),
+        ).toEqual(beforeEvents)
+      }),
+    { git: true },
+  )
+
+  it.instance(
+    "sessionWarp rejects unresolved provider recovery before ownership or workspace changes",
+    () => {
+      return Effect.gen(function* () {
+        const { directory: dir } = yield* TestInstance
+        const instance = yield* requireInstance
+        const workspace = yield* Workspace.Service
+        const sessionSvc = yield* SessionNs.Service
+        const previousType = unique("warp-recovery-prev")
+        const targetType = unique("warp-recovery-target")
+        const previous = workspaceInfo(instance.project.id, previousType)
+        const target = workspaceInfo(instance.project.id, targetType)
+        yield* insertWorkspace(previous)
+        yield* insertWorkspace(target)
+        const previousAdapter = localAdapter(path.join(dir, "warp-recovery-prev"))
+        const targetAdapter = localAdapter(path.join(dir, "warp-recovery-target"))
+        registerAdapter(instance.project.id, previousType, previousAdapter.adapter)
+        registerAdapter(instance.project.id, targetType, targetAdapter.adapter)
+        const session = yield* sessionSvc.create({})
+        yield* attachSessionToWorkspace(session.id, previous.id)
+        const { db } = yield* Database.Service
+        yield* db
+          .insert(SessionToolRequestReceiptTable)
+          .values({
+            receipt_id: "receipt-warp-recovery-required",
+            request_ordinal: 1,
+            session_id: session.id,
+            user_message_id: "message-user",
+            assistant_message_id: "message-assistant",
+            provider_attempt_id: null,
+            provider_id: "test",
+            model_id: "test",
+            registry_tool_ids: [],
+            permission_filtered_tool_ids: [],
+            final_offered_tool_ids: [],
+            call_ids: [],
+            provider_state: "indeterminate_after_crash",
+            terminal_at: Date.now(),
+            request_state: "dispatched",
+            created_at: Date.now(),
+          })
+          .run()
+          .pipe(Effect.orDie)
+        const owner = yield* sessionSequenceOwner(session.id)
+
+        const error = yield* workspace
+          .sessionWarp({ workspaceID: target.id, sessionID: session.id, copyChanges: true })
+          .pipe(Effect.flip)
+
+        expect(error).toBeInstanceOf(Workspace.SessionWarpRecoveryProjectionError)
         expect(
           (yield* db
             .select({ workspaceID: SessionTable.workspace_id })
@@ -860,15 +983,18 @@ describe("workspace CRUD", () => {
             .where(eq(SessionTable.id, session.id))
             .get()
             .pipe(Effect.orDie))?.workspaceID,
-        ).toBe(target.id)
-        expect(yield* sessionSequenceOwner(session.id)).toBe(target.id)
+        ).toBe(previous.id)
+        expect(yield* sessionSequenceOwner(session.id)).toBe(owner)
+        expect(previousAdapter.calls.target).toEqual([])
+        expect(targetAdapter.calls.target).toEqual([])
       })
     },
     { git: true },
+    30_000,
   )
 
   it.instance(
-    "sessionWarp applies source workspace patch to local target workspace",
+    "sessionWarp rejects local copyChanges before target files, ownership, or workspace change",
     () => {
       return Effect.gen(function* () {
         const { directory: dir } = yield* TestInstance
@@ -892,18 +1018,34 @@ describe("workspace CRUD", () => {
         registerAdapter(instance.project.id, targetType, localAdapter(targetDir, { createDir: false }).adapter)
         const session = yield* sessionSvc.create({})
         yield* attachSessionToWorkspace(session.id, previous.id)
+        const owner = yield* sessionSequenceOwner(session.id)
 
-        yield* workspace.sessionWarp({ workspaceID: target.id, sessionID: session.id, copyChanges: true })
+        const error = yield* workspace
+          .sessionWarp({ workspaceID: target.id, sessionID: session.id, copyChanges: true })
+          .pipe(Effect.flip)
 
-        expect(yield* Effect.promise(() => fs.readFile(path.join(targetDir, "tracked.txt"), "utf8"))).toBe("changed\n")
-        expect(yield* Effect.promise(() => fs.readFile(path.join(targetDir, "new.txt"), "utf8"))).toBe("new\n")
+        expect(error).toBeInstanceOf(Workspace.SessionWarpTransferUnsupportedError)
+        if (!(error instanceof Workspace.SessionWarpTransferUnsupportedError)) return
+        expect(error.reason).toBe("copy_changes")
+        expect(yield* Effect.promise(() => fs.readFile(path.join(targetDir, "tracked.txt"), "utf8"))).toBe("base\n")
+        expect(
+          yield* Effect.promise(() =>
+            fs.stat(path.join(targetDir, "new.txt")).then(
+              () => true,
+              () => false,
+            ),
+          ),
+        ).toBe(false)
+        expect((yield* sessionSvc.get(session.id)).workspaceID).toBe(previous.id)
+        expect(yield* sessionSequenceOwner(session.id)).toBe(owner)
       })
     },
     { git: true },
+    30_000,
   )
 
   it.instance(
-    "sessionWarp detaches a session to the local project and claims project ownership",
+    "sessionWarp rejects detaching a session before ownership or workspace changes",
     () => {
       return Effect.gen(function* () {
         const { directory: dir } = yield* TestInstance
@@ -917,18 +1059,14 @@ describe("workspace CRUD", () => {
         const session = yield* sessionSvc.create({})
         yield* attachSessionToWorkspace(session.id, previous.id)
 
-        yield* workspace.sessionWarp({ workspaceID: null, sessionID: session.id })
+        const owner = yield* sessionSequenceOwner(session.id)
+        const error = yield* workspace.sessionWarp({ workspaceID: null, sessionID: session.id }).pipe(Effect.flip)
 
-        const { db } = yield* Database.Service
-        expect(
-          (yield* db
-            .select({ workspaceID: SessionTable.workspace_id })
-            .from(SessionTable)
-            .where(eq(SessionTable.id, session.id))
-            .get()
-            .pipe(Effect.orDie))?.workspaceID,
-        ).toBeNull()
-        expect(yield* sessionSequenceOwner(session.id)).toBe(instance.project.id)
+        expect(error).toBeInstanceOf(Workspace.SessionWarpTransferUnsupportedError)
+        if (!(error instanceof Workspace.SessionWarpTransferUnsupportedError)) return
+        expect(error.reason).toBe("placement_change")
+        expect((yield* sessionSvc.get(session.id)).workspaceID).toBe(previous.id)
+        expect(yield* sessionSequenceOwner(session.id)).toBe(owner)
       })
     },
     { git: true },
@@ -936,7 +1074,7 @@ describe("workspace CRUD", () => {
 
   const itCrossInstance = process.platform === "win32" ? it.instance.skip : it.instance
   itCrossInstance(
-    "sessionWarp detaches to the source project when invoked from a workspace instance",
+    "sessionWarp rejects detach from a workspace instance before ownership changes",
     () =>
       Effect.gen(function* () {
         const instance = yield* requireInstance
@@ -949,34 +1087,28 @@ describe("workspace CRUD", () => {
         const session = yield* sessionSvc.create({})
         yield* attachSessionToWorkspace(session.id, previous.id)
 
-        const workspaceProjectID = yield* provideTmpdirInstance(
+        const owner = yield* sessionSequenceOwner(session.id)
+        yield* provideTmpdirInstance(
           (workspaceDir) =>
             Effect.gen(function* () {
               registerAdapter(projectID, previousType, localAdapter(workspaceDir, { createDir: false }).adapter)
               const workspaceCtx = yield* requireInstance
               expect(workspaceCtx.project.id).not.toBe(projectID)
-              yield* workspace.sessionWarp({ workspaceID: null, sessionID: session.id })
-              return workspaceCtx.project.id
+              const error = yield* workspace.sessionWarp({ workspaceID: null, sessionID: session.id }).pipe(Effect.flip)
+              expect(error).toBeInstanceOf(Workspace.SessionWarpTransferUnsupportedError)
+              if (!(error instanceof Workspace.SessionWarpTransferUnsupportedError)) return
+              expect(error.reason).toBe("placement_change")
             }),
           { git: true },
         )
 
-        const { db } = yield* Database.Service
-        expect(
-          (yield* db
-            .select({ workspaceID: SessionTable.workspace_id })
-            .from(SessionTable)
-            .where(eq(SessionTable.id, session.id))
-            .get()
-            .pipe(Effect.orDie))?.workspaceID,
-        ).toBeNull()
-        expect(yield* sessionSequenceOwner(session.id)).toBe(projectID)
-        expect(yield* sessionSequenceOwner(session.id)).not.toBe(workspaceProjectID)
+        expect((yield* sessionSvc.get(session.id)).workspaceID).toBe(previous.id)
+        expect(yield* sessionSequenceOwner(session.id)).toBe(owner)
       }),
     { git: true },
   )
 
-  it.live("sessionWarp syncs previous remote history, replays it, steals, and claims the sequence", () => {
+  it.live("sessionWarp rejects a remote source before patch, sync, replay, steal, or ownership side effects", () => {
     const calls: FetchCall[] = []
     let historySessionID: SessionID | undefined
     let historySession: SessionNs.Info | undefined
@@ -995,6 +1127,8 @@ describe("workspace CRUD", () => {
           }
           calls.push(call)
           if (call.url.pathname === "/warp-source/sync/history") {
+            if ((call.json as Record<string, number>)[historySessionID!] >= historyNextSeq)
+              return yield* HttpServerResponse.json([])
             return yield* HttpServerResponse.json([
               {
                 id: `evt_${unique("warp-source-history")}`,
@@ -1035,35 +1169,229 @@ describe("workspace CRUD", () => {
             historySession = { ...session, workspaceID: previous.id, title: "from source history" }
             historyNextSeq = ((yield* sessionSequence(session.id)) ?? -1) + 1
 
-            yield* workspace.sessionWarp({ workspaceID: target.id, sessionID: session.id, copyChanges: true })
+            const owner = yield* sessionSequenceOwner(session.id)
+            const error = yield* workspace
+              .sessionWarp({ workspaceID: target.id, sessionID: session.id, copyChanges: true })
+              .pipe(Effect.flip)
 
-            expect(calls.map((call) => `${call.method} ${call.url.pathname}`)).toEqual([
-              "POST /warp-source/sync/history",
-              "GET /warp-source/vcs/diff/raw",
-              "POST /warp-target/vcs/apply",
-              "POST /warp-target/sync/replay",
-              "POST /warp-target/sync/steal",
-            ])
-            expect(calls[0].json).toEqual({ [session.id]: historyNextSeq - 1 })
-            expect(calls[2].json).toEqual({ patch: "remote patch" })
-            expect(calls[3].json).toMatchObject({
-              directory: "remote-target-dir",
-              events: [
-                {
-                  aggregateID: session.id,
-                  seq: 0,
-                  type: "session.created.1",
-                },
-                {
-                  aggregateID: session.id,
-                  seq: historyNextSeq,
-                  type: "session.updated.1",
-                },
-              ],
+            expect(error).toBeInstanceOf(Workspace.SessionWarpTransferUnsupportedError)
+            if (!(error instanceof Workspace.SessionWarpTransferUnsupportedError)) return
+            expect(error.reason).toBe("copy_changes")
+            expect(calls).toEqual([])
+            expect((yield* sessionSvc.get(session.id)).workspaceID).toBe(previous.id)
+            expect((yield* sessionSvc.get(session.id)).title).not.toBe("from source history")
+            expect(yield* sessionSequenceOwner(session.id)).toBe(owner)
+          }),
+        { git: true },
+      )
+    })
+  })
+
+  it.live("sessionWarp rejects a remote target before replay, steal, ownership, or workspace side effects", () => {
+    const calls: FetchCall[] = []
+    return Effect.gen(function* () {
+      yield* HttpServer.serveEffect()(
+        Effect.gen(function* () {
+          const req = yield* HttpServerRequest.HttpServerRequest
+          calls.push({
+            url: new URL(req.url, "http://localhost"),
+            method: req.method,
+            headers: new Headers(req.headers),
+          })
+          return HttpServerResponse.text("unexpected", { status: 500 })
+        }),
+      )
+      const url = yield* serverUrl()
+      yield* provideTmpdirInstance(
+        (dir) =>
+          Effect.gen(function* () {
+            const workspace = yield* Workspace.Service
+            const sessionSvc = yield* SessionNs.Service
+            const instance = yield* requireInstance
+            const previousType = unique("warp-local-source")
+            const targetType = unique("warp-remote-target")
+            const previous = workspaceInfo(instance.project.id, previousType)
+            const target = workspaceInfo(instance.project.id, targetType, { directory: "remote-target-dir" })
+            yield* insertWorkspace(previous)
+            yield* insertWorkspace(target)
+            registerAdapter(
+              instance.project.id,
+              previousType,
+              localAdapter(path.join(dir, "warp-local-source")).adapter,
+            )
+            registerAdapter(instance.project.id, targetType, remoteAdapter(`${url}/warp-target`).adapter)
+            const session = yield* sessionSvc.create({})
+            yield* attachSessionToWorkspace(session.id, previous.id)
+            const owner = yield* sessionSequenceOwner(session.id)
+
+            const error = yield* workspace
+              .sessionWarp({ workspaceID: target.id, sessionID: session.id })
+              .pipe(Effect.flip)
+
+            expect(error).toBeInstanceOf(Workspace.SessionWarpTransferUnsupportedError)
+            if (!(error instanceof Workspace.SessionWarpTransferUnsupportedError)) return
+            expect(error.reason).toBe("placement_change")
+            expect(calls).toEqual([])
+            expect((yield* sessionSvc.get(session.id)).workspaceID).toBe(previous.id)
+            expect(yield* sessionSequenceOwner(session.id)).toBe(owner)
+          }),
+        { git: true },
+      )
+    })
+  })
+
+  it.live(
+    "sessionWarp rejects a remote target before reading or replaying maximum admitted events",
+    () => {
+      const calls: FetchCall[] = []
+      return Effect.gen(function* () {
+        yield* HttpServer.serveEffect()(
+          Effect.gen(function* () {
+            const req = yield* HttpServerRequest.HttpServerRequest
+            const bodyText = yield* req.text
+            calls.push({
+              url: new URL(req.url, "http://localhost"),
+              method: req.method,
+              headers: new Headers(req.headers),
+              bodyText,
+              json: bodyText ? JSON.parse(bodyText) : undefined,
             })
-            expect(calls[4].json).toEqual({ sessionID: session.id })
-            expect((yield* sessionSvc.get(session.id)).title).toBe("from source history")
-            expect(yield* sessionSequenceOwner(session.id)).toBe(target.id)
+            if (req.url.endsWith("/sync/replay")) return yield* HttpServerResponse.json({ sessionID: "ok" })
+            if (req.url.endsWith("/sync/steal")) return yield* HttpServerResponse.json({ sessionID: "ok" })
+            return HttpServerResponse.text("unexpected", { status: 500 })
+          }),
+        )
+        const url = yield* serverUrl()
+        yield* provideTmpdirInstance(
+          () =>
+            Effect.gen(function* () {
+              const workspace = yield* Workspace.Service
+              const sessionSvc = yield* SessionNs.Service
+              const instance = yield* requireInstance
+              const type = unique("warp-max-event")
+              const target = workspaceInfo(instance.project.id, type, { directory: "remote-target-dir" })
+              yield* insertWorkspace(target)
+              registerAdapter(instance.project.id, type, remoteAdapter(`${url}/warp-target`).adapter)
+              const session = yield* sessionSvc.create({})
+              const { db } = yield* Database.Service
+              const sequence = (yield* sessionSequence(session.id))!
+              const base = {
+                sessionID: session.id,
+                info: {
+                  id: SessionV1.MessageID.ascending(),
+                  sessionID: session.id,
+                  role: "user" as const,
+                  time: { created: Date.now() },
+                  agent: "build",
+                  model: { providerID: "test", modelID: "model" },
+                  system: "",
+                },
+              }
+              const data = {
+                ...base,
+                info: {
+                  ...base.info,
+                  system: "x".repeat(EventV2.MAX_ENCODED_PAYLOAD_BYTES - Buffer.byteLength(JSON.stringify(base))),
+                },
+              }
+              expect(Buffer.byteLength(JSON.stringify(data))).toBe(EventV2.MAX_ENCODED_PAYLOAD_BYTES)
+              const sync = yield* db
+                .update(EventSyncSequenceTable)
+                .set({ seq: sql`${EventSyncSequenceTable.seq} + 1` })
+                .where(eq(EventSyncSequenceTable.id, 1))
+                .returning({ seq: EventSyncSequenceTable.seq })
+                .get()
+                .pipe(Effect.orDie)
+              yield* db
+                .insert(EventTable)
+                .values({
+                  id: EventV2.ID.make("evt_warp_max_admitted"),
+                  aggregate_id: session.id,
+                  seq: sequence + 1,
+                  type: EventV2.versionedType(SessionV1.Event.MessageUpdated.type, 1),
+                  data,
+                  sync_seq: sync!.seq,
+                })
+                .run()
+                .pipe(Effect.orDie)
+              yield* db
+                .update(EventSequenceTable)
+                .set({ seq: sequence + 1 })
+                .where(eq(EventSequenceTable.aggregate_id, session.id))
+                .run()
+                .pipe(Effect.orDie)
+
+              const owner = yield* sessionSequenceOwner(session.id)
+              const error = yield* workspace
+                .sessionWarp({ workspaceID: target.id, sessionID: session.id })
+                .pipe(Effect.flip)
+
+              expect(error).toBeInstanceOf(Workspace.SessionWarpTransferUnsupportedError)
+              if (!(error instanceof Workspace.SessionWarpTransferUnsupportedError)) return
+              expect(error.reason).toBe("placement_change")
+              expect(calls).toEqual([])
+              expect((yield* sessionSvc.get(session.id)).workspaceID).toBeUndefined()
+              expect(yield* sessionSequenceOwner(session.id)).toBe(owner)
+            }),
+          { git: true },
+        )
+      })
+    },
+    30_000,
+  )
+
+  it.live("sessionWarp rejects a remote source before reading an oversized patch or changing ownership", () => {
+    const calls: FetchCall[] = []
+    return Effect.gen(function* () {
+      yield* HttpServer.serveEffect()(
+        Effect.gen(function* () {
+          const req = yield* HttpServerRequest.HttpServerRequest
+          const bodyText = yield* req.text
+          const call = {
+            url: new URL(req.url, "http://localhost"),
+            method: req.method,
+            headers: new Headers(req.headers),
+            bodyText,
+            json: bodyText ? JSON.parse(bodyText) : undefined,
+          }
+          calls.push(call)
+          if (call.url.pathname === "/raw-limit-source/vcs/diff/raw")
+            return HttpServerResponse.stream(
+              Stream.make(new Uint8Array(Vcs.RawDiffLimits.patchBytes), new Uint8Array([120])),
+              { contentType: "text/x-diff" },
+            )
+          return HttpServerResponse.text("unexpected", { status: 500 })
+        }),
+      )
+      const url = yield* serverUrl()
+      yield* provideTmpdirInstance(
+        () =>
+          Effect.gen(function* () {
+            const workspace = yield* Workspace.Service
+            const sessionSvc = yield* SessionNs.Service
+            const instance = yield* requireInstance
+            const previousType = unique("raw-limit-remote-source")
+            const targetType = unique("raw-limit-remote-target")
+            const previous = workspaceInfo(instance.project.id, previousType)
+            const target = workspaceInfo(instance.project.id, targetType, { directory: "remote-target-dir" })
+            yield* insertWorkspace(previous)
+            yield* insertWorkspace(target)
+            registerAdapter(instance.project.id, previousType, remoteAdapter(`${url}/raw-limit-source`).adapter)
+            registerAdapter(instance.project.id, targetType, remoteAdapter(`${url}/raw-limit-target`).adapter)
+            const session = yield* sessionSvc.create({})
+            yield* attachSessionToWorkspace(session.id, previous.id)
+            const owner = yield* sessionSequenceOwner(session.id)
+
+            const error = yield* workspace
+              .sessionWarp({ workspaceID: target.id, sessionID: session.id, copyChanges: true })
+              .pipe(Effect.flip)
+
+            expect(error).toBeInstanceOf(Workspace.SessionWarpTransferUnsupportedError)
+            if (!(error instanceof Workspace.SessionWarpTransferUnsupportedError)) return
+            expect(error.reason).toBe("copy_changes")
+            expect(calls).toEqual([])
+            expect((yield* sessionSvc.get(session.id)).workspaceID).toBe(previous.id)
+            expect(yield* sessionSequenceOwner(session.id)).toBe(owner)
           }),
         { git: true },
       )
@@ -1344,7 +1672,7 @@ describe("workspace sync state", () => {
     }),
   )
 
-  it.live("sync history sends the local sequence fence and replays returned events in workspace context", () => {
+  it.live("sync history advances its durable cursor and replays returned events in workspace context", () => {
     const historyBodies: unknown[] = []
     let historySessionID: SessionID | undefined
     let historySession: SessionNs.Info | undefined
@@ -1357,17 +1685,28 @@ describe("workspace sync state", () => {
           const url = new URL(req.url, "http://localhost")
           if (url.pathname === "/history/global/event") return HttpServerResponse.fromWeb(eventStreamResponse())
           if (url.pathname === "/history/sync/history") {
-            historyBodies.push(bodyText ? JSON.parse(bodyText) : undefined)
+            const body = bodyText ? JSON.parse(bodyText) : undefined
+            historyBodies.push(body)
+            if (body?.cursor === "cursor-history-1")
+              return HttpServerResponse.fromWeb(
+                Response.json({ version: 1, items: [], nextCursor: "cursor-history-1", complete: true }),
+              )
             return HttpServerResponse.fromWeb(
-              Response.json([
-                {
-                  id: `evt_${unique("history")}`,
-                  aggregate_id: historySessionID!,
-                  seq: historyNextSeq,
-                  type: "session.updated.1",
-                  data: { sessionID: historySessionID!, info: historySession! },
-                },
-              ]),
+              Response.json({
+                version: 1,
+                items: [
+                  {
+                    kind: "event",
+                    id: `evt_${unique("history")}`,
+                    aggregate_id: historySessionID!,
+                    seq: historyNextSeq,
+                    type: "session.updated.1",
+                    data: { sessionID: historySessionID!, info: historySession! },
+                  },
+                ],
+                nextCursor: "cursor-history-1",
+                complete: false,
+              }),
             )
           }
           return HttpServerResponse.text("unexpected", { status: 500 })
@@ -1399,7 +1738,19 @@ describe("workspace sync state", () => {
                   expect((yield* sessionSvc.get(session.id).pipe(Effect.orDie)).title).toBe("from history")
                 }),
               )
-              expect(historyBodies).toEqual([{ [session.id]: historyNextSeq - 1 }])
+              expect(historyBodies).toEqual([
+                { version: 1 },
+                { version: 1, cursor: "cursor-history-1" },
+              ])
+              expect(
+                yield* Database.Service.use(({ db }) =>
+                  db
+                    .select({ workspaceID: WorkspaceSyncCursorTable.workspace_id, cursor: WorkspaceSyncCursorTable.cursor })
+                    .from(WorkspaceSyncCursorTable)
+                    .where(eq(WorkspaceSyncCursorTable.workspace_id, info.id))
+                    .get(),
+                ),
+              ).toEqual({ workspaceID: info.id, cursor: "cursor-history-1" })
               expect(
                 captured.events.some(
                   (event) =>
@@ -1417,7 +1768,401 @@ describe("workspace sync state", () => {
         { git: true },
       )
     })
-  })
+  }, 30_000)
+
+  it.live("does not advance its durable cursor when a history page fails replay", () => {
+    return Effect.gen(function* () {
+      yield* HttpServer.serveEffect()(
+        Effect.gen(function* () {
+          const req = yield* HttpServerRequest.HttpServerRequest
+          const url = new URL(req.url, "http://localhost")
+          if (url.pathname === "/history-replay-fail/global/event")
+            return HttpServerResponse.fromWeb(eventStreamResponse([], false))
+          if (url.pathname === "/history-replay-fail/sync/history")
+            return HttpServerResponse.fromWeb(
+              Response.json({
+                version: 1,
+                items: [{ kind: "event", id: `evt_${unique("bad-history")}`, aggregate_id: "ses_missing", seq: 1, type: "unknown.sync.1", data: {} }],
+                nextCursor: "must-not-commit",
+                complete: true,
+              }),
+            )
+          return HttpServerResponse.text("unexpected", { status: 500 })
+        }),
+      )
+      const url = yield* serverUrl()
+      yield* provideTmpdirInstance(
+        () =>
+          Effect.gen(function* () {
+            const workspace = yield* Workspace.Service
+            const instance = yield* requireInstance
+            const type = unique("history-replay-fail")
+            const info = workspaceInfo(instance.project.id, type)
+            yield* insertWorkspace(info)
+            registerAdapter(instance.project.id, type, remoteAdapter(`${url}/history-replay-fail`).adapter)
+            yield* workspace.startWorkspaceSyncing(instance.project.id)
+            yield* Effect.sleep("100 millis")
+            expect(
+              yield* Database.Service.use(({ db }) =>
+                db.select().from(WorkspaceSyncCursorTable).where(eq(WorkspaceSyncCursorTable.workspace_id, info.id)).get(),
+              ),
+            ).toBeUndefined()
+            yield* workspace.remove(info.id)
+          }),
+        { git: true },
+      )
+    })
+  }, 30_000)
+
+  it.live("does not advance its durable cursor when file artifact import fails", () => {
+    let chunkRequests = 0
+    let historyRequests = 0
+    let metadataRequests = 0
+    let sourceEvent: {
+      id: EventV2.ID
+      aggregateID: SessionID
+      seq: number
+      data: Record<string, unknown>
+      metadata: FilePartArtifact.Metadata
+    }
+    return Effect.gen(function* () {
+      yield* HttpServer.serveEffect()(
+        Effect.gen(function* () {
+          const req = yield* HttpServerRequest.HttpServerRequest
+          const url = new URL(req.url, "http://localhost")
+          if (url.pathname === "/history-artifact-fail/global/event")
+            return HttpServerResponse.fromWeb(eventStreamResponse())
+          if (url.pathname === "/history-artifact-fail/sync/history")
+            return (
+              historyRequests++,
+              HttpServerResponse.fromWeb(
+                Response.json({
+                  version: 1,
+                  items: [
+                    {
+                      kind: "event",
+                      id: sourceEvent.id,
+                      aggregate_id: sourceEvent.aggregateID,
+                      seq: sourceEvent.seq,
+                      type: "message.part.updated.1",
+                      data: sourceEvent.data,
+                    },
+                  ],
+                  nextCursor: "must-not-commit-artifact",
+                  complete: true,
+                }),
+              )
+            )
+          if (url.pathname === "/history-artifact-fail/sync/artifact/file/metadata")
+            return (metadataRequests++, HttpServerResponse.fromWeb(Response.json(sourceEvent.metadata)))
+          if (url.pathname === "/history-artifact-fail/sync/artifact/file/chunk")
+            return yield* Effect.gen(function* () {
+              chunkRequests += 1
+              return HttpServerResponse.fromWeb(
+                Response.json({
+                  artifactID: sourceEvent.metadata.descriptor.id,
+                  index: 0,
+                  hash: sourceEvent.metadata.chunkHashes[0],
+                  data: Buffer.from("corrupt").toString("base64"),
+                }),
+              )
+            })
+          return HttpServerResponse.text("unexpected", { status: 500 })
+        }),
+      )
+      const url = yield* serverUrl()
+      yield* provideTmpdirInstance(
+        () =>
+          Effect.gen(function* () {
+            const workspace = yield* Workspace.Service
+            const sessionSvc = yield* SessionNs.Service
+            const { db } = yield* Database.Service
+            const instance = yield* requireInstance
+            const type = unique("history-artifact-fail")
+            const info = workspaceInfo(instance.project.id, type)
+            yield* insertWorkspace(info)
+            registerAdapter(instance.project.id, type, remoteAdapter(`${url}/history-artifact-fail`).adapter)
+            const session = yield* sessionSvc.create({ title: "artifact target" })
+            yield* attachSessionToWorkspace(session.id, info.id)
+            const messageID = SessionV1.MessageID.ascending()
+            yield* sessionSvc.updateMessage({
+              id: messageID,
+              sessionID: session.id,
+              role: "user",
+              time: { created: Date.now() },
+              agent: "build",
+              model: { providerID: "test" as never, modelID: "model" as never },
+            })
+            const nextSeq = ((yield* sessionSequence(session.id)) ?? -1) + 1
+            const body = Buffer.alloc(FilePartArtifact.CHUNK_BYTES + 1, 0x71)
+            const prepared = FilePartArtifact.prepare(
+              SessionV1.Event.PartUpdated.type,
+              {
+                sessionID: session.id,
+                part: {
+                  id: SessionV1.PartID.ascending(),
+                  sessionID: session.id,
+                  messageID,
+                  type: "file",
+                  mime: "application/octet-stream",
+                  url: `data:application/octet-stream;base64,${body.toString("base64")}`,
+                },
+                time: Date.now(),
+              },
+              EventV2.MAX_ENCODED_PAYLOAD_BYTES + 1,
+              EventV2.MAX_ENCODED_PAYLOAD_BYTES,
+            )
+            const descriptor = prepared.artifacts[0]!.descriptor
+            const eventID = EventV2.ID.create()
+            sourceEvent = {
+              id: eventID,
+              aggregateID: session.id,
+              seq: nextSeq,
+              data: prepared.data,
+              metadata: FilePartArtifact.Metadata.make({
+                eventID,
+                aggregateID: session.id,
+                seq: nextSeq,
+                originalDataHash: FilePartArtifact.dataHash(prepared.data),
+                canonicalDataHash: FilePartArtifact.dataHash(prepared.data),
+                canonicalData: prepared.data,
+                descriptor,
+                chunkHashes: prepared.artifacts[0]!.chunks.map((chunk) => Hash.sha256(chunk)),
+              }),
+            }
+
+            yield* workspace.startWorkspaceSyncing(instance.project.id)
+            yield* eventuallyEffect(Effect.sync(() => expect(chunkRequests).toBeGreaterThanOrEqual(1)), 5_000)
+            expect(historyRequests).toBeGreaterThanOrEqual(1)
+            expect(metadataRequests).toBeGreaterThanOrEqual(1)
+            expect(
+              yield* db.select().from(WorkspaceSyncCursorTable).where(eq(WorkspaceSyncCursorTable.workspace_id, info.id)).get(),
+            ).toBeUndefined()
+            expect(yield* sessionSequence(session.id)).toBe(nextSeq - 1)
+            expect(yield* db.select().from(EventTable).where(eq(EventTable.id, eventID)).get()).toBeUndefined()
+          }),
+        { git: true },
+      )
+    })
+  }, 30_000)
+
+  it.live("resumes from its durable cursor after reconnecting", () => {
+    const historyBodies = new Array<{ version: 1; cursor?: string }>()
+    return Effect.gen(function* () {
+      yield* HttpServer.serveEffect()(
+        Effect.gen(function* () {
+          const req = yield* HttpServerRequest.HttpServerRequest
+          const url = new URL(req.url, "http://localhost")
+          if (url.pathname === "/history-reconnect/global/event")
+            return HttpServerResponse.fromWeb(eventStreamResponse([], false))
+          if (url.pathname === "/history-reconnect/sync/history") {
+            const body = JSON.parse(yield* req.text) as { version: 1; cursor?: string }
+            historyBodies.push(body)
+            return HttpServerResponse.fromWeb(
+              Response.json({
+                version: 1,
+                items: [],
+                nextCursor: body.cursor ? "cursor-reconnect-2" : "cursor-reconnect-1",
+                complete: true,
+              }),
+            )
+          }
+          return HttpServerResponse.text("unexpected", { status: 500 })
+        }),
+      )
+      const url = yield* serverUrl()
+      yield* provideTmpdirInstance(
+        () =>
+          Effect.gen(function* () {
+            const workspace = yield* Workspace.Service
+            const instance = yield* requireInstance
+            const type = unique("history-reconnect")
+            const info = workspaceInfo(instance.project.id, type)
+            yield* insertWorkspace(info)
+            registerAdapter(instance.project.id, type, remoteAdapter(`${url}/history-reconnect`).adapter)
+
+            yield* workspace.startWorkspaceSyncing(instance.project.id)
+            yield* eventuallyEffect(Effect.sync(() => expect(historyBodies.length).toBeGreaterThanOrEqual(2)), 3_000)
+
+            expect(historyBodies.slice(0, 2)).toEqual([
+              { version: 1 },
+              { version: 1, cursor: "cursor-reconnect-1" },
+            ])
+            expect(
+              yield* Database.Service.use(({ db }) =>
+                db
+                  .select({ cursor: WorkspaceSyncCursorTable.cursor })
+                  .from(WorkspaceSyncCursorTable)
+                  .where(eq(WorkspaceSyncCursorTable.workspace_id, info.id))
+                  .get(),
+              ),
+            ).toEqual({ cursor: "cursor-reconnect-2" })
+            yield* workspace.remove(info.id)
+          }),
+        { git: true },
+      )
+    })
+  }, 30_000)
+
+  it.live("resets a stale cursor once and preserves it for unrelated conflicts", () => {
+    const historyBodies = new Array<{ version: 1; cursor?: string }>()
+    return Effect.gen(function* () {
+      yield* HttpServer.serveEffect()(
+        Effect.gen(function* () {
+          const req = yield* HttpServerRequest.HttpServerRequest
+          const url = new URL(req.url, "http://localhost")
+          if (url.pathname.endsWith("/global/event")) return HttpServerResponse.fromWeb(eventStreamResponse())
+          if (url.pathname === "/history-stale/sync/history") {
+            const body = JSON.parse(yield* req.text) as { version: 1; cursor?: string }
+            historyBodies.push(body)
+            if (body.cursor)
+              return HttpServerResponse.fromWeb(
+                Response.json(
+                  {
+                    _tag: "ConflictError",
+                    message: "stale cursor",
+                    resource: `sync-cursor-reset:${staleWorkspaceID}`,
+                  },
+                  { status: 409 },
+                ),
+              )
+            return HttpServerResponse.fromWeb(
+              Response.json({ version: 1, items: [], nextCursor: "cursor-stale-reset", complete: true }),
+            )
+          }
+          if (url.pathname === "/history-bad-request/sync/history") {
+            historyBodies.push(JSON.parse(yield* req.text) as { version: 1; cursor?: string })
+            return HttpServerResponse.fromWeb(
+              Response.json(
+                { _tag: "ConflictError", message: "not a cursor reset", resource: "another-conflict" },
+                { status: 409 },
+              ),
+            )
+          }
+          return HttpServerResponse.text("unexpected", { status: 500 })
+        }),
+      )
+      const url = yield* serverUrl()
+      let staleWorkspaceID = ""
+      yield* provideTmpdirInstance(
+        () =>
+          Effect.gen(function* () {
+            const workspace = yield* Workspace.Service
+            const instance = yield* requireInstance
+            const staleType = unique("history-stale")
+            const stale = workspaceInfo(instance.project.id, staleType)
+            staleWorkspaceID = stale.id
+            const staleTarget = `${url}/history-stale`
+            yield* insertWorkspace(stale)
+            registerAdapter(instance.project.id, staleType, remoteAdapter(staleTarget).adapter)
+            yield* Database.Service.use(({ db }) =>
+              db.insert(WorkspaceSyncCursorTable).values({
+                workspace_id: stale.id,
+                remote_fingerprint: Hash.sha256(`${new URL(staleTarget).toString()}:workspace:${stale.id}`),
+                cursor: "cursor-stale-old-generation",
+                updated_at: 1,
+              }),
+            )
+
+            yield* workspace.startWorkspaceSyncing(instance.project.id)
+            yield* eventuallyEffect(Effect.sync(() => expect(historyBodies.length).toBe(2)) )
+            expect(historyBodies).toEqual([
+              { version: 1, cursor: "cursor-stale-old-generation" },
+              { version: 1 },
+            ])
+            expect(
+              yield* Database.Service.use(({ db }) =>
+                db
+                  .select({ cursor: WorkspaceSyncCursorTable.cursor })
+                  .from(WorkspaceSyncCursorTable)
+                  .where(eq(WorkspaceSyncCursorTable.workspace_id, stale.id))
+                  .get(),
+              ),
+            ).toEqual({ cursor: "cursor-stale-reset" })
+            yield* workspace.remove(stale.id)
+
+            historyBodies.length = 0
+            const badType = unique("history-bad-request")
+            const bad = workspaceInfo(instance.project.id, badType)
+            const badTarget = `${url}/history-bad-request`
+            yield* insertWorkspace(bad)
+            registerAdapter(instance.project.id, badType, remoteAdapter(badTarget).adapter)
+            yield* Database.Service.use(({ db }) =>
+              db.insert(WorkspaceSyncCursorTable).values({
+                workspace_id: bad.id,
+                remote_fingerprint: Hash.sha256(`${new URL(badTarget).toString()}:workspace:${bad.id}`),
+                cursor: "cursor-preserved-on-400",
+                updated_at: 1,
+              }),
+            )
+
+            yield* workspace.startWorkspaceSyncing(instance.project.id)
+            yield* eventuallyEffect(
+              Effect.gen(function* () {
+                expect((yield* workspace.status()).find((item) => item.workspaceID === bad.id)?.status).toBe("error")
+              }),
+            )
+            expect(historyBodies[0]).toEqual({ version: 1, cursor: "cursor-preserved-on-400" })
+            expect(
+              yield* Database.Service.use(({ db }) =>
+                db
+                  .select({ cursor: WorkspaceSyncCursorTable.cursor })
+                  .from(WorkspaceSyncCursorTable)
+                  .where(eq(WorkspaceSyncCursorTable.workspace_id, bad.id))
+                  .get(),
+              ),
+            ).toEqual({ cursor: "cursor-preserved-on-400" })
+            yield* workspace.remove(bad.id)
+          }),
+        { git: true },
+      )
+    })
+  }, 30_000)
+
+  it.effect("allows only one concurrent durable cursor compare-and-swap winner", () =>
+    Effect.gen(function* () {
+      const workspaceID = WorkspaceV2.ID.make("wrk_cursor_cas")
+      const fingerprint = Hash.sha256("cursor-cas-fingerprint")
+      const { db } = yield* Database.Service
+      yield* db
+        .insert(WorkspaceSyncCursorTable)
+        .values({ workspace_id: workspaceID, remote_fingerprint: fingerprint, cursor: "cursor-base", updated_at: 1 })
+        .run()
+        .pipe(Effect.orDie)
+      const winners = yield* Effect.all(
+        ["cursor-left", "cursor-right"].map((cursor) =>
+          db
+            .update(WorkspaceSyncCursorTable)
+            .set({ cursor, updated_at: 2 })
+            .where(
+              and(
+                eq(WorkspaceSyncCursorTable.workspace_id, workspaceID),
+                eq(WorkspaceSyncCursorTable.remote_fingerprint, fingerprint),
+                eq(WorkspaceSyncCursorTable.cursor, "cursor-base"),
+              ),
+            )
+            .returning({ cursor: WorkspaceSyncCursorTable.cursor })
+            .get()
+            .pipe(Effect.orDie),
+        ),
+        { concurrency: "unbounded" },
+      )
+
+      expect(winners.filter(Boolean)).toHaveLength(1)
+      expect(
+        yield* db
+          .select({ cursor: WorkspaceSyncCursorTable.cursor })
+          .from(WorkspaceSyncCursorTable)
+          .where(
+            and(
+              eq(WorkspaceSyncCursorTable.workspace_id, workspaceID),
+              eq(WorkspaceSyncCursorTable.remote_fingerprint, fingerprint),
+            ),
+          )
+          .get(),
+      ).toEqual(winners.find(Boolean))
+    }),
+  )
 
   it.live("SSE forwards non-heartbeat events and ignores heartbeats", () =>
     Effect.gen(function* () {

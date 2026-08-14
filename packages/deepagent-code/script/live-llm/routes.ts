@@ -27,6 +27,7 @@ export const modelSuites = [
   "packaged-sidecar",
   "desktop-ui",
   "desktop-subagents",
+  "long-session",
   "shell-exit-contract",
   "stale-validation",
   "continuation-repetition",
@@ -112,6 +113,7 @@ const degeneration = modelRun("live", "legacy-session", "degeneration")
 const activityProgressLifecycle = modelRun("live", "legacy-session", "activity-progress-lifecycle")
 const activityProgressRestart = modelRun("live", "packaged-sidecar", "activity-progress-restart")
 const activityProgressPackage = modelRun("ext", "renderer-ui", "activity-progress-package")
+const longSession = modelRun("ext", "renderer-ui", "long-session")
 const finalizerIsolation = modelRun("ext", "legacy-session", "subagent-finalizer-isolation")
 const steerBoundary = modelRun("live", "legacy-session", "steer-boundary")
 const worktreeRouting = modelRun("ext", "legacy-session", "subagent-worktree-routing")
@@ -151,6 +153,7 @@ const allHarnessRuns = [
   activityProgressLifecycle,
   activityProgressRestart,
   activityProgressPackage,
+  longSession,
   finalizerIsolation,
   steerBoundary,
   worktreeRouting,
@@ -458,7 +461,8 @@ export const routeManifest = [
   {
     id: "live-llm-long-session-harness",
     paths: ["packages/desktop/scripts/live-llm/long-session.ts"],
-    checks: ["desktop-runtime"],
+    checks: ["desktop-runtime", "prompt-intent", "session-continuation"],
+    runs: [longSession],
   },
   {
     id: "live-llm-headless-long-session-harness",
@@ -512,6 +516,7 @@ export const routeManifest = [
       "packages/core/src/session/execution/**",
       "packages/core/src/session/run-coordinator.ts",
       "packages/core/src/session/store.ts",
+      "packages/core/src/session/transfer.sql.ts",
       "packages/core/src/session/history.ts",
       "packages/core/src/session/context-epoch.ts",
       "packages/core/src/location-layer.ts",
@@ -542,6 +547,16 @@ export const routeManifest = [
     checks: ["session-v2"],
   },
   {
+    id: "core-agent-runtime",
+    paths: [
+      "packages/core/src/agent.ts",
+      "packages/core/src/plugin/agent.ts",
+      "packages/core/src/config/plugin/agent.ts",
+    ],
+    checks: ["session-v2"],
+    runs: [v2Provider, subagentControlPlane],
+  },
+  {
     id: "core-tool-registry",
     paths: [
       "packages/core/src/tool/registry.ts",
@@ -555,9 +570,14 @@ export const routeManifest = [
   },
   {
     id: "core-tool-read-search",
-    paths: ["packages/core/src/tool/read.ts", "packages/core/src/tool/glob.ts", "packages/core/src/tool/grep.ts"],
+    paths: [
+      "packages/core/src/tool/read.ts",
+      "packages/core/src/tool/read-failure.ts",
+      "packages/core/src/tool/glob.ts",
+      "packages/core/src/tool/grep.ts",
+    ],
     checks: ["tool-files"],
-    runs: [v2FileRead],
+    runs: [v2FileRead, subagentControlPlane],
   },
   {
     id: "core-tool-mutations",
@@ -656,18 +676,24 @@ export const routeManifest = [
     id: "activity-progress-lifecycle-production",
     paths: [
       "packages/app/src/pages/session/message-timeline.data.ts",
+      "packages/app/src/pages/session/composer/session-question-dock.tsx",
       "packages/core/src/database/migration/20260811090000_legacy_activity_progress.ts",
       "packages/core/src/database/migration/20260811100000_legacy_activity_owner.ts",
+      "packages/core/src/database/migration/20260812130000_legacy_activity_lifecycle_expand.ts",
       "packages/deepagent-code/src/session/activity-crash-test.ts",
       "packages/deepagent-code/src/session/activity-owner.ts",
       "packages/deepagent-code/src/session/activity-sql.ts",
+      "packages/deepagent-code/src/session/legacy-provider-resolution.ts",
+      "packages/deepagent-code/src/session/processor.ts",
+      "packages/deepagent-code/src/session/recovery-transfer-guard.ts",
+      "packages/deepagent-code/src/session/run-state.ts",
       "packages/deepagent-code/src/session/message-v2.ts",
       "packages/deepagent-code/src/session/prompt-intent.ts",
       "packages/deepagent-code/src/session/prompt.ts",
       "packages/deepagent-code/src/session/steer.ts",
     ],
     checks: ["live-llm-routes", "prompt-intent", "session-continuation", "ui-runtime"],
-    runs: [activityProgressLifecycle, activityProgressRestart, activityProgressPackage],
+    runs: [activityProgressLifecycle, activityProgressRestart, activityProgressPackage, longSession],
   },
   {
     id: "legacy-session-prompt",
@@ -1063,6 +1089,9 @@ export const routeManifest = [
       "packages/deepagent-code/src/session/compaction-sql.ts",
       "packages/deepagent-code/src/session/compaction.ts",
       "packages/deepagent-code/src/session/context-ledger.ts",
+      "packages/deepagent-code/src/session/diff-artifact-schema.ts",
+      "packages/deepagent-code/src/session/diff-artifact.sql.ts",
+      "packages/deepagent-code/src/session/diff-artifact.ts",
       "packages/deepagent-code/src/session/history-authority.ts",
       "packages/deepagent-code/src/session/message-v2.ts",
       "packages/deepagent-code/src/session/prompt-epoch.sql.ts",

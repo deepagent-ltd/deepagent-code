@@ -4,8 +4,8 @@ import { listPending, reviewSummary, setStatus, listEnvFacts, decideEnvFact, mod
 // P1-C route contract: the V3.1 self-learning Review dialog talks to the raw-request escape-hatch
 // routes (NOT the generated SDK). These assertions lock the exact method/url/body so a backend
 // rename of /deepagent/knowledge/{pending,approve,reject-ids} or a payload shape change breaks CI
-// here instead of silently shipping a dead Review UI. Mirrors the backend group schema
-// (DeepAgentKnowledgeStatusInput = { ids: string[] }).
+// here instead of silently shipping a dead Review UI. Review decisions must round-trip the exact
+// immutable authority returned by the list endpoint; a bare id can alias project/global revisions.
 type Recorded = { method: string; url: string; body?: unknown; headers?: Record<string, string> }
 
 function client(calls: Recorded[], data: unknown) {
@@ -24,7 +24,13 @@ describe("DeepAgent review dialog route contract", () => {
     const calls: Recorded[] = []
     const items = [
       {
+        sourceStore: "project" as const,
         id: "memory:1",
+        version: 3,
+        hash: "hash-3",
+        candidateId: "candidate-3",
+        fingerprint: "fingerprint-3",
+        governanceRevision: "governance-3",
         type: "memory" as const,
         summary: "s",
         evidence_strength: "strong" as const,
@@ -49,29 +55,73 @@ describe("DeepAgent review dialog route contract", () => {
     expect(calls).toEqual([{ method: "GET", url: "/deepagent/knowledge/review-summary" }])
   })
 
-  test("approve POSTs /deepagent/knowledge/approve with { ids }", async () => {
+  test("approve POSTs the exact listed authority to /deepagent/knowledge/approve", async () => {
     const calls: Recorded[] = []
-    await setStatus(client(calls, { updated: ["a"] }), "approve", ["a", "b"])
+    const item = {
+      sourceStore: "project" as const,
+      id: "a",
+      version: 2,
+      hash: "hash-a-2",
+      candidateId: "candidate-a",
+      fingerprint: "fingerprint-a",
+      governanceRevision: "governance-a-2",
+      type: "knowledge" as const,
+      summary: "A",
+      evidence_strength: "strong" as const,
+      evidence_refs: [],
+      approval_status: "pending" as const,
+    }
+    await setStatus(client(calls, { updated: item }), "approve", item)
 
     expect(calls).toEqual([
       {
         method: "POST",
         url: "/deepagent/knowledge/approve",
-        body: { ids: ["a", "b"] },
+        body: {
+          sourceStore: "project",
+          id: "a",
+          version: 2,
+          hash: "hash-a-2",
+          candidateId: "candidate-a",
+          fingerprint: "fingerprint-a",
+          expectedGovernanceRevision: "governance-a-2",
+        },
         headers: { "Content-Type": "application/json" },
       },
     ])
   })
 
-  test("reject POSTs /deepagent/knowledge/reject-ids with { ids }", async () => {
+  test("reject POSTs the exact global authority to /deepagent/knowledge/reject-ids", async () => {
     const calls: Recorded[] = []
-    await setStatus(client(calls, { updated: ["a"] }), "reject-ids", ["a"])
+    const item = {
+      sourceStore: "user_global" as const,
+      id: "a",
+      version: 4,
+      hash: "hash-a-4",
+      candidateId: "candidate-a",
+      fingerprint: "fingerprint-a",
+      governanceRevision: "governance-a-4",
+      type: "memory" as const,
+      summary: "A",
+      evidence_strength: "medium" as const,
+      evidence_refs: [],
+      approval_status: "pending" as const,
+    }
+    await setStatus(client(calls, { updated: item }), "reject-ids", item)
 
     expect(calls).toEqual([
       {
         method: "POST",
         url: "/deepagent/knowledge/reject-ids",
-        body: { ids: ["a"] },
+        body: {
+          sourceStore: "user_global",
+          id: "a",
+          version: 4,
+          hash: "hash-a-4",
+          candidateId: "candidate-a",
+          fingerprint: "fingerprint-a",
+          expectedGovernanceRevision: "governance-a-4",
+        },
         headers: { "Content-Type": "application/json" },
       },
     ])

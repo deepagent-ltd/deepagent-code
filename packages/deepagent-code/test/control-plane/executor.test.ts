@@ -9,17 +9,32 @@
  * Design refs: §5 (stale callback), §6.4 (start fence), §6.7 (settle priority), §1.3 #24 (events)
  */
 import { describe, expect } from "bun:test"
-import { Effect, Fiber, Layer } from "effect"
-import { eq } from "drizzle-orm"
+import { Deferred, Effect, Fiber, Layer } from "effect"
+import { and, eq } from "drizzle-orm"
 import { Database } from "@deepagent-code/core/database/database"
 import { ProjectV2 } from "@deepagent-code/core/project"
 import { ProjectTable } from "@deepagent-code/core/project/sql"
 import { AbsolutePath } from "@deepagent-code/core/schema"
-import { SessionTable, TaskRunTable, TaskRunEventTable } from "@deepagent-code/core/session/sql"
+import {
+  MessageTable,
+  PartTable,
+  SessionTable,
+  TaskRunTable,
+  TaskRunEventTable,
+  TaskStructuredFinalizerResponseTable,
+  TaskStructuredOutputEvidenceTable,
+} from "@deepagent-code/core/session/sql"
 import { CrossSpawnSpawner } from "@deepagent-code/core/cross-spawn-spawner"
 import { SessionID, MessageID } from "../../src/session/schema"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
-import { run as runExecutor, startExecution, settleRun } from "../../src/session/task-executor"
+import {
+  markStructuredFinalizerAttempt,
+  run as runExecutor,
+  startExecution,
+  settleRun,
+} from "../../src/session/task-executor"
+import { classifyOnStartup, requestClose, requestInterrupt } from "../../src/tool/task-run"
+import { makeDegradedStructuredOutput } from "../../src/tool/task-structured-output-evidence"
 import { testEffect } from "../lib/effect"
 
 const database = Layer.mergeAll(Database.layerFromPath(":memory:"), CrossSpawnSpawner.defaultLayer)
@@ -62,6 +77,7 @@ const insertProvisioningRun = (
     claimGen?: number
     leaseExpiry?: number
     inputState?: string
+    executionSpec?: Record<string, unknown>
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -107,6 +123,7 @@ const insertProvisioningRun = (
         attempts: 1,
         time_created: now,
         time_updated: now,
+        execution_spec: opts.executionSpec,
       } as any)
       .run()
       .pipe(Effect.orDie)
@@ -117,6 +134,34 @@ const assistantMessage = (id: string, text: string) =>
     info: { id, role: "assistant" },
     parts: [{ type: "text", text, synthetic: false, ignored: false }],
   }) as unknown as SessionV1.WithParts
+
+const structuredExecutionSpec = {
+  prompt: { text: "inspect" },
+  agent: "researcher",
+  model: { providerID: "test", modelID: "test" },
+  structuredOutput: {
+    schema: { type: "object" },
+    allowTextFallback: true,
+    receiptVersion: 1 as const,
+    maxAttempts: 2 as const,
+  },
+}
+
+const insertAssistantEvidence = (sessionID: SessionID, messageID: MessageID) =>
+  Effect.gen(function* () {
+    const { db } = yield* Database.Service
+    yield* db
+      .insert(MessageTable)
+      .values({
+        id: messageID,
+        session_id: sessionID,
+        data: { role: "assistant" },
+        time_created: Date.now(),
+        time_updated: Date.now(),
+      } as any)
+      .run()
+      .pipe(Effect.orDie)
+  })
 
 // ── startExecution ────────────────────────────────────────────────────────────
 
@@ -308,6 +353,89 @@ describe("DET-FENCE-01 settleRun CAS + lease fence", () => {
       expect(row?.version).toBe(1) // version not bumped
     }),
   )
+
+  it.effect("close intent wins a structured completion without writing incompatible terminal evidence", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const runID = "run_settle_structured_close_race"
+      const childSessionID = SessionID.make("ses_exec_settle_structured_close_race")
+      const rawResultMessageID = MessageID.make("msg_settle_structured_close_raw")
+      const structuredResultMessageID = MessageID.make("msg_settle_structured_close_result")
+      yield* insertProvisioningRun(runID, childSessionID, { executionSpec: structuredExecutionSpec })
+      yield* insertAssistantEvidence(childSessionID, rawResultMessageID)
+      yield* insertAssistantEvidence(childSessionID, structuredResultMessageID)
+      const { db } = yield* Database.Service
+      yield* db
+        .update(TaskRunTable)
+        .set({ state: "running", phase: "research", version: 1, execution_started_at: Date.now() })
+        .where(eq(TaskRunTable.run_id, runID))
+        .run()
+        .pipe(Effect.orDie)
+      yield* markStructuredFinalizerAttempt({
+        runID,
+        ownerToken: OWNER,
+        claimGeneration: CLAIM_GEN,
+        attempt: 1,
+        sourceMessageID: rawResultMessageID,
+      })
+      yield* db
+        .update(TaskRunTable)
+        .set({
+          control_state: "close_requested",
+          close_reason: "parent_closed",
+          close_requested_at: Date.now(),
+          version: 3,
+        })
+        .where(and(eq(TaskRunTable.run_id, runID), eq(TaskRunTable.version, 2)))
+        .run()
+        .pipe(Effect.orDie)
+
+      const result = yield* settleRun({
+        ...settleParams(runID),
+        reason: "structured_output_valid",
+        output: '{"result":"done"}',
+        rawResultMessageID,
+        structuredResultMessageID,
+        structuredOutputReceipt: { attempt: 1, transport: "structured" },
+      })
+      expect(result).toEqual({ won: true, finalState: "closed" })
+      expect(
+        yield* db
+          .select({
+            state: TaskRunTable.state,
+            controlState: TaskRunTable.control_state,
+            reason: TaskRunTable.reason,
+            attempts: TaskRunTable.attempts,
+            output: TaskRunTable.output,
+            rawResultMessageID: TaskRunTable.raw_result_message_id,
+            structuredResultMessageID: TaskRunTable.structured_result_message_id,
+            structuredOutputReceipt: TaskRunTable.structured_output_receipt,
+            error: TaskRunTable.error,
+          })
+          .from(TaskRunTable)
+          .where(eq(TaskRunTable.run_id, runID))
+          .get()
+          .pipe(Effect.orDie),
+      ).toEqual({
+        state: "closed",
+        controlState: "closed",
+        reason: "parent_closed",
+        attempts: 1,
+        output: null,
+        rawResultMessageID,
+        structuredResultMessageID: null,
+        structuredOutputReceipt: null,
+        error: { code: "closed", message: "parent_closed" },
+      })
+      expect(
+        yield* db
+          .select({ runID: TaskStructuredOutputEvidenceTable.run_id })
+          .from(TaskStructuredOutputEvidenceTable)
+          .where(eq(TaskStructuredOutputEvidenceTable.run_id, runID))
+          .all(),
+      ).toEqual([])
+    }),
+  )
 })
 
 describe("DET-EXEC-01 executor lifecycle", () => {
@@ -347,6 +475,828 @@ describe("DET-EXEC-01 executor lifecycle", () => {
         output: "verified result",
         messageID: "msg_executor_success",
       })
+    }),
+  )
+
+  it.live("settles the frozen durable structured contract with its exact receipt", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const runID = "run_executor_structured"
+      const childSessionID = SessionID.make("ses_exec_structured")
+      yield* insertProvisioningRun(runID, childSessionID, {
+        executionSpec: {
+          prompt: { text: "inspect" },
+          agent: "researcher",
+          model: { providerID: "test", modelID: "test" },
+          structuredOutput: {
+            schema: { type: "object" },
+            allowTextFallback: true,
+            receiptVersion: 1,
+            maxAttempts: 2,
+          },
+        },
+      })
+      const { db } = yield* Database.Service
+      const rawMessageID = MessageID.make("msg_executor_research")
+      const requestMessageID = MessageID.make("msg_executor_structured_request")
+      const responseMessageID = MessageID.make("msg_executor_structured")
+      yield* db
+        .insert(MessageTable)
+        .values([
+          {
+            id: rawMessageID,
+            session_id: childSessionID,
+            data: { role: "assistant" },
+            time_created: Date.now(),
+            time_updated: Date.now(),
+          },
+          {
+            id: requestMessageID,
+            session_id: childSessionID,
+            data: {
+              role: "user",
+              metadata: {
+                deepagent: {
+                  structured_finalizer: {
+                    run_id: runID,
+                    attempt: 2,
+                    source_message_id: rawMessageID,
+                    allow_text: true,
+                  },
+                },
+              },
+            },
+            time_created: Date.now(),
+            time_updated: Date.now(),
+          },
+          {
+            id: responseMessageID,
+            session_id: childSessionID,
+            data: { role: "assistant", parentID: requestMessageID },
+            time_created: Date.now(),
+            time_updated: Date.now(),
+          },
+        ] as any)
+        .run()
+        .pipe(Effect.orDie)
+      yield* db
+        .insert(PartTable)
+        .values({
+          id: "prt_executor_structured",
+          message_id: responseMessageID,
+          session_id: childSessionID,
+          data: { type: "text", text: '{"result":"object"}' },
+          time_created: Date.now(),
+          time_updated: Date.now(),
+        } as any)
+        .run()
+        .pipe(Effect.orDie)
+
+      yield* runExecutor({
+        run: {
+          runID,
+          version: 0,
+          claimGeneration: CLAIM_GEN,
+          executionSpec: {
+            prompt: { text: "inspect" },
+            agent: "researcher",
+            model: { providerID: "test", modelID: "test" },
+            structuredOutput: {
+              schema: { type: "object" },
+              allowTextFallback: true,
+              receiptVersion: 1,
+              maxAttempts: 2,
+            },
+          },
+        } as any,
+        ownerToken: OWNER,
+        claimGeneration: CLAIM_GEN,
+        childSessionID,
+        parentSessionID: PARENT_SID,
+        deliveryMode: "foreground",
+        directory: DIRECTORY,
+        agentType: "researcher",
+        leaseMs: 300,
+        loopFn: () => Effect.succeed(assistantMessage("msg_executor_research", "research")),
+        finalizeFn: ({ contract, onFinalizing, onPrepared, research }) =>
+          onFinalizing({ attempt: 1, sourceMessageID: research.info.id }).pipe(
+            Effect.andThen(onFinalizing({ attempt: 2, sourceMessageID: research.info.id })),
+            Effect.andThen(
+              onPrepared({
+                attempt: 2,
+                sourceMessageID: rawMessageID,
+                responseMessageID,
+                receipt: { attempt: 2, transport: "text_fallback" },
+                output: JSON.stringify({ result: contract.schema.type }),
+              }),
+            ),
+            Effect.as({
+              output: JSON.stringify({ result: contract.schema.type }),
+              structuredResultMessageID: responseMessageID,
+              receipt: { attempt: 2, transport: "text_fallback" } as const,
+            }),
+          ),
+      })
+
+      const row = yield* db
+        .select({
+          state: TaskRunTable.state,
+          reason: TaskRunTable.reason,
+          attempts: TaskRunTable.attempts,
+          output: TaskRunTable.output,
+          rawResultMessageID: TaskRunTable.raw_result_message_id,
+          structuredResultMessageID: TaskRunTable.structured_result_message_id,
+          structuredOutputReceipt: TaskRunTable.structured_output_receipt,
+        })
+        .from(TaskRunTable)
+        .where(eq(TaskRunTable.run_id, runID))
+        .get()
+        .pipe(Effect.orDie)
+      expect(row).toEqual({
+        state: "completed",
+        reason: "structured_output_text_fallback",
+        attempts: 2,
+        output: '{"result":"object"}',
+        rawResultMessageID: MessageID.make("msg_executor_research"),
+        structuredResultMessageID: MessageID.make("msg_executor_structured"),
+        structuredOutputReceipt: { attempt: 2, transport: "text_fallback" },
+      })
+    }),
+  )
+
+  it.live("persists a first-attempt structured finalizer transport failure without retrying the finalizer", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const runID = "run_executor_finalizer_transport_failure"
+      const childSessionID = SessionID.make("ses_exec_finalizer_transport_failure")
+      const rawResultMessageID = MessageID.make("msg_executor_finalizer_transport_research")
+      yield* insertProvisioningRun(runID, childSessionID, { executionSpec: structuredExecutionSpec })
+      yield* insertAssistantEvidence(childSessionID, rawResultMessageID)
+      let finalizerCalls = 0
+
+      yield* runExecutor({
+        run: { runID, version: 0, claimGeneration: CLAIM_GEN, executionSpec: structuredExecutionSpec } as any,
+        ownerToken: OWNER,
+        claimGeneration: CLAIM_GEN,
+        childSessionID,
+        parentSessionID: PARENT_SID,
+        deliveryMode: "foreground",
+        directory: DIRECTORY,
+        agentType: "researcher",
+        leaseMs: 300,
+        loopFn: () => Effect.succeed(assistantMessage(rawResultMessageID, "durable research")),
+        finalizeFn: ({ onFinalizing, research }) =>
+          onFinalizing({ attempt: 1, sourceMessageID: research.info.id }).pipe(
+            Effect.andThen(
+              Effect.sync(() => {
+                finalizerCalls++
+                throw new Error(
+                  `[provider_error] APIError: provider unavailable Child session: ${childSessionID}. Phase: finalize. Attempts: 1.`,
+                )
+              }),
+            ),
+          ),
+      })
+
+      const { db } = yield* Database.Service
+      const row = yield* db
+        .select({
+          state: TaskRunTable.state,
+          reason: TaskRunTable.reason,
+          attempts: TaskRunTable.attempts,
+          rawResultMessageID: TaskRunTable.raw_result_message_id,
+          receipt: TaskRunTable.structured_output_receipt,
+          error: TaskRunTable.error,
+        })
+        .from(TaskRunTable)
+        .where(eq(TaskRunTable.run_id, runID))
+        .get()
+        .pipe(Effect.orDie)
+
+      expect(finalizerCalls).toBe(1)
+      expect(row).toEqual({
+        state: "failed",
+        reason: "structured_finalizer_transport_error",
+        attempts: 1,
+        rawResultMessageID,
+        receipt: null,
+        error: {
+          code: "structured_finalizer_transport_error",
+          message: expect.stringContaining("provider unavailable"),
+          data: { phase: "finalize", attempt: 1, failure_class: "transport", source_code: "provider_error" },
+        },
+      })
+    }),
+  )
+
+  it.live("settles a normally completed degraded receipt from its pre-sealed raw material", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const runID = "run_executor_degraded_complete"
+      const childSessionID = SessionID.make("ses_exec_degraded_complete")
+      const rawResultMessageID = MessageID.make("msg_executor_degraded_complete_research")
+      const receipt = { attempt: 2, transport: "degraded_text", reason: "structured_output_missing" } as const
+      const output = makeDegradedStructuredOutput("durable degraded research", receipt)
+      yield* insertProvisioningRun(runID, childSessionID, { executionSpec: structuredExecutionSpec })
+      yield* insertAssistantEvidence(childSessionID, rawResultMessageID)
+      const { db } = yield* Database.Service
+      yield* db
+        .insert(PartTable)
+        .values({
+          id: "prt_executor_degraded_complete_research",
+          message_id: rawResultMessageID,
+          session_id: childSessionID,
+          data: { type: "text", text: "durable degraded research" },
+          time_created: Date.now(),
+          time_updated: Date.now(),
+        } as any)
+        .run()
+        .pipe(Effect.orDie)
+
+      yield* runExecutor({
+        run: { runID, version: 0, claimGeneration: CLAIM_GEN, executionSpec: structuredExecutionSpec } as any,
+        ownerToken: OWNER,
+        claimGeneration: CLAIM_GEN,
+        childSessionID,
+        parentSessionID: PARENT_SID,
+        deliveryMode: "foreground",
+        directory: DIRECTORY,
+        agentType: "researcher",
+        loopFn: () => Effect.succeed(assistantMessage(rawResultMessageID, "durable degraded research")),
+        finalizeFn: ({ onFinalizing, onPrepared, research }) =>
+          onFinalizing({ attempt: 1, sourceMessageID: research.info.id }).pipe(
+            Effect.andThen(onFinalizing({ attempt: 2, sourceMessageID: research.info.id })),
+            Effect.andThen(onPrepared({ attempt: 2, sourceMessageID: rawResultMessageID, receipt, output })),
+            Effect.as({ output, receipt }),
+          ),
+      })
+
+      expect(
+        yield* db
+          .select({
+            state: TaskRunTable.state,
+            reason: TaskRunTable.reason,
+            receipt: TaskRunTable.structured_output_receipt,
+            evidence: TaskStructuredOutputEvidenceTable.run_id,
+          })
+          .from(TaskRunTable)
+          .innerJoin(
+            TaskStructuredOutputEvidenceTable,
+            eq(TaskStructuredOutputEvidenceTable.run_id, TaskRunTable.run_id),
+          )
+          .where(eq(TaskRunTable.run_id, runID))
+          .get()
+          .pipe(Effect.orDie),
+      ).toEqual({ state: "completed", reason: "structured_output_degraded_text", receipt, evidence: runID })
+    }),
+  )
+
+  it.live("persists a second-attempt structured validation failure with the raw research identity", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const runID = "run_executor_finalizer_validation_failure"
+      const childSessionID = SessionID.make("ses_exec_finalizer_validation_failure")
+      const rawResultMessageID = MessageID.make("msg_executor_finalizer_validation_research")
+      yield* insertProvisioningRun(runID, childSessionID, { executionSpec: structuredExecutionSpec })
+      yield* insertAssistantEvidence(childSessionID, rawResultMessageID)
+
+      yield* runExecutor({
+        run: { runID, version: 0, claimGeneration: CLAIM_GEN, executionSpec: structuredExecutionSpec } as any,
+        ownerToken: OWNER,
+        claimGeneration: CLAIM_GEN,
+        childSessionID,
+        parentSessionID: PARENT_SID,
+        deliveryMode: "foreground",
+        directory: DIRECTORY,
+        agentType: "researcher",
+        leaseMs: 300,
+        loopFn: () => Effect.succeed(assistantMessage(rawResultMessageID, "durable research")),
+        finalizeFn: ({ onFinalizing, research }) =>
+          onFinalizing({ attempt: 1, sourceMessageID: research.info.id }).pipe(
+            Effect.andThen(onFinalizing({ attempt: 2, sourceMessageID: research.info.id })),
+            Effect.andThen(
+              Effect.fail(
+                new Error(
+                  `[structured_output_invalid] /result is required Child session: ${childSessionID}. Phase: finalize. Attempts: 2.`,
+                ),
+              ),
+            ),
+          ),
+      })
+
+      const { db } = yield* Database.Service
+      const row = yield* db
+        .select({
+          state: TaskRunTable.state,
+          reason: TaskRunTable.reason,
+          attempts: TaskRunTable.attempts,
+          rawResultMessageID: TaskRunTable.raw_result_message_id,
+          receipt: TaskRunTable.structured_output_receipt,
+          error: TaskRunTable.error,
+        })
+        .from(TaskRunTable)
+        .where(eq(TaskRunTable.run_id, runID))
+        .get()
+        .pipe(Effect.orDie)
+
+      expect(row).toEqual({
+        state: "failed",
+        reason: "structured_finalizer_validation_error",
+        attempts: 2,
+        rawResultMessageID,
+        receipt: null,
+        error: {
+          code: "structured_finalizer_validation_error",
+          message: expect.stringContaining("/result is required"),
+          data: {
+            phase: "finalize",
+            attempt: 2,
+            failure_class: "validation",
+            source_code: "structured_output_invalid",
+          },
+        },
+      })
+    }),
+  )
+
+  it.live("persists finalizer-unavailable before attempt one while retaining the raw research identity", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const runID = "run_executor_finalizer_unavailable"
+      const childSessionID = SessionID.make("ses_exec_finalizer_unavailable")
+      const rawResultMessageID = MessageID.make("msg_executor_finalizer_unavailable_research")
+      yield* insertProvisioningRun(runID, childSessionID, { executionSpec: structuredExecutionSpec })
+      yield* insertAssistantEvidence(childSessionID, rawResultMessageID)
+
+      yield* runExecutor({
+        run: { runID, version: 0, claimGeneration: CLAIM_GEN, executionSpec: structuredExecutionSpec } as any,
+        ownerToken: OWNER,
+        claimGeneration: CLAIM_GEN,
+        childSessionID,
+        parentSessionID: PARENT_SID,
+        deliveryMode: "foreground",
+        directory: DIRECTORY,
+        agentType: "researcher",
+        leaseMs: 300,
+        loopFn: () => Effect.succeed(assistantMessage(rawResultMessageID, "durable research")),
+      })
+
+      const { db } = yield* Database.Service
+      const row = yield* db
+        .select({
+          state: TaskRunTable.state,
+          reason: TaskRunTable.reason,
+          attempts: TaskRunTable.attempts,
+          rawResultMessageID: TaskRunTable.raw_result_message_id,
+          receipt: TaskRunTable.structured_output_receipt,
+          error: TaskRunTable.error,
+        })
+        .from(TaskRunTable)
+        .where(eq(TaskRunTable.run_id, runID))
+        .get()
+        .pipe(Effect.orDie)
+
+      expect(row).toEqual({
+        state: "failed",
+        reason: "structured_finalizer_unavailable",
+        attempts: 0,
+        rawResultMessageID,
+        receipt: null,
+        error: {
+          code: "structured_finalizer_unavailable",
+          message: "durable structured finalizer is unavailable",
+          data: { phase: "finalize", attempt: 0, failure_class: "unavailable" },
+        },
+      })
+    }),
+  )
+
+  it.live(
+    "seals the exact structured finalizer attempt before provider work and leaves no terminal evidence on crash",
+    () =>
+      Effect.gen(function* () {
+        yield* setup
+        const runID = "run_executor_finalizer_crash_after_admission"
+        const childSessionID = SessionID.make("ses_exec_finalizer_crash_after_admission")
+        const rawResultMessageID = MessageID.make("msg_executor_finalizer_crash_research")
+        yield* insertProvisioningRun(runID, childSessionID, { executionSpec: structuredExecutionSpec })
+        yield* insertAssistantEvidence(childSessionID, rawResultMessageID)
+        const started = yield* Deferred.make<void>()
+        const execution = yield* runExecutor({
+          run: { runID, version: 0, claimGeneration: CLAIM_GEN, executionSpec: structuredExecutionSpec } as any,
+          ownerToken: OWNER,
+          claimGeneration: CLAIM_GEN,
+          childSessionID,
+          parentSessionID: PARENT_SID,
+          deliveryMode: "foreground",
+          directory: DIRECTORY,
+          agentType: "researcher",
+          leaseMs: 30_000,
+          loopFn: () => Effect.succeed(assistantMessage(rawResultMessageID, "durable research")),
+          finalizeFn: ({ onFinalizing, research }) =>
+            onFinalizing({ attempt: 1, sourceMessageID: research.info.id }).pipe(
+              Effect.tap(() => Deferred.succeed(started, undefined)),
+              Effect.andThen(Effect.never),
+            ),
+        }).pipe(Effect.forkChild)
+
+        yield* Deferred.await(started)
+        const { db } = yield* Database.Service
+        expect(
+          yield* db
+            .select({
+              state: TaskRunTable.state,
+              phase: TaskRunTable.phase,
+              attempts: TaskRunTable.attempts,
+              rawResultMessageID: TaskRunTable.raw_result_message_id,
+              finalizerInputMessageID: TaskRunTable.finalizer_input_message_id,
+              finalizerStartedAt: TaskRunTable.finalizer_started_at,
+            })
+            .from(TaskRunTable)
+            .where(eq(TaskRunTable.run_id, runID))
+            .get()
+            .pipe(Effect.orDie),
+        ).toEqual({
+          state: "finalizing",
+          phase: "finalize",
+          attempts: 1,
+          rawResultMessageID,
+          finalizerInputMessageID: rawResultMessageID,
+          finalizerStartedAt: expect.any(Number),
+        })
+        expect(
+          yield* db
+            .select({ runID: TaskStructuredOutputEvidenceTable.run_id })
+            .from(TaskStructuredOutputEvidenceTable)
+            .where(eq(TaskStructuredOutputEvidenceTable.run_id, runID)),
+        ).toEqual([])
+        expect(
+          yield* db
+            .select({ type: TaskRunEventTable.type, reason: TaskRunEventTable.reason })
+            .from(TaskRunEventTable)
+            .where(eq(TaskRunEventTable.run_id, runID)),
+        ).toContainEqual({ type: "structured_finalizer_attempt_started", reason: "attempt:1" })
+
+        yield* Fiber.interrupt(execution)
+        expect(
+          yield* db
+            .select({ state: TaskRunTable.state, attempts: TaskRunTable.attempts })
+            .from(TaskRunTable)
+            .where(eq(TaskRunTable.run_id, runID))
+            .get()
+            .pipe(Effect.orDie),
+        ).toEqual({ state: "finalizing", attempts: 1 })
+      }),
+  )
+
+  it.live("writes response authority before terminal settlement and recovers it without provider replay", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const runID = "run_executor_response_authority_crash"
+      const childSessionID = SessionID.make("ses_exec_response_authority_crash")
+      const rawResultMessageID = MessageID.make("msg_executor_response_authority_research")
+      const requestMessageID = MessageID.make("msg_executor_response_authority_request")
+      const responseMessageID = MessageID.make("msg_executor_response_authority_response")
+      yield* insertProvisioningRun(runID, childSessionID, { executionSpec: structuredExecutionSpec })
+      yield* insertAssistantEvidence(childSessionID, rawResultMessageID)
+      const { db } = yield* Database.Service
+      yield* db
+        .insert(MessageTable)
+        .values([
+          {
+            id: requestMessageID,
+            session_id: childSessionID,
+            data: {
+              role: "user",
+              metadata: {
+                deepagent: {
+                  structured_finalizer: {
+                    run_id: runID,
+                    attempt: 1,
+                    source_message_id: rawResultMessageID,
+                    allow_text: false,
+                  },
+                },
+              },
+            },
+            time_created: Date.now(),
+            time_updated: Date.now(),
+          },
+          {
+            id: responseMessageID,
+            session_id: childSessionID,
+            data: {
+              role: "assistant",
+              parentID: requestMessageID,
+              structured: { result: "prepared" },
+            },
+            time_created: Date.now(),
+            time_updated: Date.now(),
+          },
+        ] as any)
+        .run()
+        .pipe(Effect.orDie)
+      const prepared = yield* Deferred.make<void>()
+      let finalizerCalls = 0
+      const execution = yield* runExecutor({
+        run: { runID, version: 0, claimGeneration: CLAIM_GEN, executionSpec: structuredExecutionSpec } as any,
+        ownerToken: OWNER,
+        claimGeneration: CLAIM_GEN,
+        childSessionID,
+        parentSessionID: PARENT_SID,
+        deliveryMode: "foreground",
+        directory: DIRECTORY,
+        agentType: "researcher",
+        leaseMs: 30_000,
+        loopFn: () => Effect.succeed(assistantMessage(rawResultMessageID, "durable research")),
+        finalizeFn: ({ onFinalizing, onPrepared, research }) =>
+          onFinalizing({ attempt: 1, sourceMessageID: research.info.id }).pipe(
+            Effect.tap(() =>
+              Effect.sync(() => {
+                finalizerCalls++
+              }),
+            ),
+            Effect.andThen(
+              onPrepared({
+                attempt: 1,
+                sourceMessageID: rawResultMessageID,
+                responseMessageID,
+                receipt: { attempt: 1, transport: "structured" },
+                output: '{"result":"prepared"}',
+              }),
+            ),
+            Effect.tap(() => Deferred.succeed(prepared, undefined)),
+            Effect.andThen(Effect.never),
+          ),
+      }).pipe(Effect.forkChild)
+
+      yield* Deferred.await(prepared)
+      expect(
+        yield* db
+          .select({ runID: TaskStructuredFinalizerResponseTable.run_id })
+          .from(TaskStructuredFinalizerResponseTable)
+          .where(eq(TaskStructuredFinalizerResponseTable.run_id, runID)),
+      ).toEqual([{ runID }])
+      yield* db
+        .update(TaskRunTable)
+        .set({ version: 4, lease_expires_at: Date.now() - 1 })
+        .where(eq(TaskRunTable.run_id, runID))
+        .run()
+        .pipe(Effect.orDie)
+      yield* Fiber.interrupt(execution)
+
+      expect(yield* classifyOnStartup({ directory: DIRECTORY })).toMatchObject({ recovered: 1 })
+      expect(finalizerCalls).toBe(1)
+      expect(
+        yield* db
+          .select({ state: TaskRunTable.state, output: TaskRunTable.output })
+          .from(TaskRunTable)
+          .where(eq(TaskRunTable.run_id, runID))
+          .get()
+          .pipe(Effect.orDie),
+      ).toEqual({ state: "completed", output: '{"result":"prepared"}' })
+      expect(
+        yield* db
+          .select({ runID: TaskStructuredOutputEvidenceTable.run_id })
+          .from(TaskStructuredOutputEvidenceTable)
+          .where(eq(TaskStructuredOutputEvidenceTable.run_id, runID)),
+      ).toEqual([{ runID }])
+    }),
+  )
+
+  it.live("seals degraded raw material before settlement and recovers without another provider turn", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const runID = "run_executor_degraded_authority_crash"
+      const childSessionID = SessionID.make("ses_exec_degraded_authority_crash")
+      const rawResultMessageID = MessageID.make("msg_executor_degraded_authority_research")
+      const receipt = { attempt: 2, transport: "degraded_text", reason: "structured_output_invalid" } as const
+      const output = makeDegradedStructuredOutput("durable research", receipt)
+      yield* insertProvisioningRun(runID, childSessionID, { executionSpec: structuredExecutionSpec })
+      yield* insertAssistantEvidence(childSessionID, rawResultMessageID)
+      const { db } = yield* Database.Service
+      yield* db
+        .insert(PartTable)
+        .values({
+          id: "prt_executor_degraded_authority_research",
+          message_id: rawResultMessageID,
+          session_id: childSessionID,
+          data: { type: "text", text: "durable research" },
+          time_created: Date.now(),
+          time_updated: Date.now(),
+        } as any)
+        .run()
+        .pipe(Effect.orDie)
+      const prepared = yield* Deferred.make<void>()
+      let providerTurns = 0
+      const execution = yield* runExecutor({
+        run: { runID, version: 0, claimGeneration: CLAIM_GEN, executionSpec: structuredExecutionSpec } as any,
+        ownerToken: OWNER,
+        claimGeneration: CLAIM_GEN,
+        childSessionID,
+        parentSessionID: PARENT_SID,
+        deliveryMode: "foreground",
+        directory: DIRECTORY,
+        agentType: "researcher",
+        leaseMs: 30_000,
+        loopFn: () =>
+          Effect.sync(() => {
+            providerTurns++
+            return assistantMessage(rawResultMessageID, "durable research")
+          }),
+        finalizeFn: ({ onFinalizing, onPrepared, research }) =>
+          Effect.sync(() => {
+            providerTurns++
+          }).pipe(
+            Effect.andThen(onFinalizing({ attempt: 1, sourceMessageID: research.info.id })),
+            Effect.andThen(
+              Effect.sync(() => {
+                providerTurns++
+              }),
+            ),
+            Effect.andThen(onFinalizing({ attempt: 2, sourceMessageID: research.info.id })),
+            Effect.andThen(
+              onPrepared({
+                attempt: 2,
+                sourceMessageID: rawResultMessageID,
+                receipt,
+                output,
+              }),
+            ),
+            Effect.tap(() => Deferred.succeed(prepared, undefined)),
+            Effect.andThen(Effect.never),
+          ),
+      }).pipe(Effect.forkChild)
+
+      yield* Deferred.await(prepared)
+      expect(
+        yield* db
+          .select({
+            receipt: TaskStructuredOutputEvidenceTable.structured_output_receipt,
+            output: TaskStructuredOutputEvidenceTable.output,
+            resultMessageID: TaskStructuredOutputEvidenceTable.result_message_id,
+          })
+          .from(TaskStructuredOutputEvidenceTable)
+          .where(eq(TaskStructuredOutputEvidenceTable.run_id, runID))
+          .get()
+          .pipe(Effect.orDie),
+      ).toEqual({ receipt, output, resultMessageID: null })
+      expect(
+        yield* db
+          .select({ runID: TaskStructuredFinalizerResponseTable.run_id })
+          .from(TaskStructuredFinalizerResponseTable)
+          .where(eq(TaskStructuredFinalizerResponseTable.run_id, runID)),
+      ).toEqual([])
+      yield* db
+        .update(TaskRunTable)
+        .set({ version: 5, lease_expires_at: Date.now() - 1 })
+        .where(eq(TaskRunTable.run_id, runID))
+        .run()
+        .pipe(Effect.orDie)
+      yield* Fiber.interrupt(execution)
+
+      expect(yield* classifyOnStartup({ directory: DIRECTORY })).toMatchObject({ recovered: 1 })
+      expect(providerTurns).toBe(3)
+      expect(
+        yield* db
+          .select({
+            state: TaskRunTable.state,
+            reason: TaskRunTable.reason,
+            output: TaskRunTable.output,
+            resultMessageID: TaskRunTable.structured_result_message_id,
+            receipt: TaskRunTable.structured_output_receipt,
+          })
+          .from(TaskRunTable)
+          .where(eq(TaskRunTable.run_id, runID))
+          .get()
+          .pipe(Effect.orDie),
+      ).toEqual({
+        state: "completed",
+        reason: "structured_output_degraded_text",
+        output,
+        resultMessageID: null,
+        receipt,
+      })
+    }),
+  )
+
+  it.live("does not start a structured finalizer after a durable close intent wins", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const runID = "run_executor_finalizer_close_before_attempt"
+      const childSessionID = SessionID.make("ses_exec_finalizer_close_before_attempt")
+      const rawResultMessageID = MessageID.make("msg_executor_finalizer_close_research")
+      yield* insertProvisioningRun(runID, childSessionID, { executionSpec: structuredExecutionSpec })
+      yield* insertAssistantEvidence(childSessionID, rawResultMessageID)
+      const database = yield* Database.Service
+      let providerCalls = 0
+
+      yield* runExecutor({
+        run: { runID, version: 0, claimGeneration: CLAIM_GEN, executionSpec: structuredExecutionSpec } as any,
+        ownerToken: OWNER,
+        claimGeneration: CLAIM_GEN,
+        childSessionID,
+        parentSessionID: PARENT_SID,
+        deliveryMode: "foreground",
+        directory: DIRECTORY,
+        agentType: "researcher",
+        leaseMs: 30_000,
+        loopFn: () =>
+          requestClose({ rootRunID: runID, reason: "parent_closed" }).pipe(
+            Effect.provideService(Database.Service, database),
+            Effect.as(assistantMessage(rawResultMessageID, "durable research")),
+          ),
+        finalizeFn: ({ onFinalizing, research }) =>
+          onFinalizing({ attempt: 1, sourceMessageID: research.info.id }).pipe(
+            Effect.andThen(
+              Effect.sync(() => {
+                providerCalls++
+                return {
+                  output: '{"result":"must not dispatch"}',
+                  receipt: { attempt: 1 as const, transport: "structured" as const },
+                }
+              }),
+            ),
+          ),
+      })
+
+      const { db } = yield* Database.Service
+      expect(providerCalls).toBe(0)
+      expect(
+        yield* db
+          .select({ state: TaskRunTable.state, reason: TaskRunTable.reason })
+          .from(TaskRunTable)
+          .where(eq(TaskRunTable.run_id, runID))
+          .get()
+          .pipe(Effect.orDie),
+      ).toEqual({ state: "closed", reason: "parent_closed" })
+      expect(
+        yield* db
+          .select({ type: TaskRunEventTable.type })
+          .from(TaskRunEventTable)
+          .where(eq(TaskRunEventTable.run_id, runID))
+          .all(),
+      ).not.toContainEqual({ type: "structured_finalizer_attempt_started" })
+    }),
+  )
+
+  it.live("does not start a structured finalizer after a durable interrupt intent wins", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const runID = "run_executor_finalizer_interrupt_before_attempt"
+      const childSessionID = SessionID.make("ses_exec_finalizer_interrupt_before_attempt")
+      const rawResultMessageID = MessageID.make("msg_executor_finalizer_interrupt_research")
+      yield* insertProvisioningRun(runID, childSessionID, { executionSpec: structuredExecutionSpec })
+      yield* insertAssistantEvidence(childSessionID, rawResultMessageID)
+      const database = yield* Database.Service
+      let providerCalls = 0
+
+      yield* runExecutor({
+        run: { runID, version: 0, claimGeneration: CLAIM_GEN, executionSpec: structuredExecutionSpec } as any,
+        ownerToken: OWNER,
+        claimGeneration: CLAIM_GEN,
+        childSessionID,
+        parentSessionID: PARENT_SID,
+        deliveryMode: "foreground",
+        directory: DIRECTORY,
+        agentType: "researcher",
+        leaseMs: 30_000,
+        loopFn: () =>
+          requestInterrupt({ runID, reason: "human_interrupted" }).pipe(
+            Effect.provideService(Database.Service, database),
+            Effect.as(assistantMessage(rawResultMessageID, "durable research")),
+          ),
+        finalizeFn: ({ onFinalizing, research }) =>
+          onFinalizing({ attempt: 1, sourceMessageID: research.info.id }).pipe(
+            Effect.andThen(
+              Effect.sync(() => {
+                providerCalls++
+                return {
+                  output: '{"result":"must not dispatch"}',
+                  receipt: { attempt: 1 as const, transport: "structured" as const },
+                }
+              }),
+            ),
+          ),
+      })
+
+      const { db } = yield* Database.Service
+      expect(providerCalls).toBe(0)
+      expect(
+        yield* db
+          .select({ state: TaskRunTable.state, reason: TaskRunTable.reason })
+          .from(TaskRunTable)
+          .where(eq(TaskRunTable.run_id, runID))
+          .get()
+          .pipe(Effect.orDie),
+      ).toEqual({ state: "interrupted", reason: "human_interrupted" })
+      expect(
+        yield* db
+          .select({ type: TaskRunEventTable.type })
+          .from(TaskRunEventTable)
+          .where(eq(TaskRunEventTable.run_id, runID))
+          .all(),
+      ).not.toContainEqual({ type: "structured_finalizer_attempt_started" })
     }),
   )
 

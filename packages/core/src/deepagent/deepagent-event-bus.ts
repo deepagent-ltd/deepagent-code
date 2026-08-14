@@ -160,6 +160,7 @@ export interface Interface {
   readonly sweep: (input: {
     readonly workspaceID: string
     readonly olderThan: number
+    readonly limit?: number
   }) => Effect.Effect<{ readonly deletedEvents: number }>
   /**
    * §E2 — prune the publish rate-limiter's per-workspace buckets whose fixed window has elapsed as of
@@ -839,6 +840,13 @@ export const layerWith = (options?: LayerOptions) =>
                   noPendingApproval,
                   noLiveDlqAlert,
                 )
+                const limit = Math.min(Math.max(input.limit ?? 100, 1), 100)
+                const candidateIDs = db
+                  .select({ id: DeepAgentEventTable.id })
+                  .from(DeepAgentEventTable)
+                  .where(deletable)
+                  .orderBy(asc(DeepAgentEventTable.id))
+                  .limit(limit)
 
                 // Delete the terminal (delivered/dead) delivery rows of the doomed events FIRST. The FK
                 // cascade already removes them, but doing it explicitly keeps the sweep correct even if a
@@ -847,17 +855,14 @@ export const layerWith = (options?: LayerOptions) =>
                 yield* db
                   .delete(DeepAgentEventDeliveryTable)
                   .where(
-                    sql`${DeepAgentEventDeliveryTable.event_id} in (${db
-                      .select({ id: DeepAgentEventTable.id })
-                      .from(DeepAgentEventTable)
-                      .where(deletable)})`,
+                    sql`${DeepAgentEventDeliveryTable.event_id} in (${candidateIDs})`,
                   )
                   .run()
                   .pipe(Effect.orDie)
 
                 const deleted = yield* db
                   .delete(DeepAgentEventTable)
-                  .where(deletable)
+                  .where(sql`${DeepAgentEventTable.id} in (${candidateIDs})`)
                   .returning({ id: DeepAgentEventTable.id })
                   .all()
                   .pipe(Effect.orDie)

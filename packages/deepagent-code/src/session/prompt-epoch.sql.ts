@@ -9,6 +9,7 @@ export type PromptEpochState = "active" | "retired"
 export type PromptEpochReason =
   | "bootstrap"
   | "compaction"
+  | "recovery"
   | "model"
   | "agent"
   | "directory"
@@ -36,6 +37,7 @@ export const SessionPromptEpochTable = sqliteTable("session_prompt_epoch", {
   world_state_baseline_hash: text(),
   authority_state: text().$type<"legacy_pending" | "ready" | "recovery_required">(),
   recovery_reason: text(),
+  recovery_resolution_id: text(),
   reason: text().$type<PromptEpochReason>().notNull(),
   created_at: integer().notNull(),
   retired_at: integer(),

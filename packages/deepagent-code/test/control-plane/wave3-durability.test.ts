@@ -1,6 +1,6 @@
 import { describe, expect } from "bun:test"
 import { Effect, Layer, Schema } from "effect"
-import { eq } from "drizzle-orm"
+import { eq, sql } from "drizzle-orm"
 import { CrossSpawnSpawner } from "@deepagent-code/core/cross-spawn-spawner"
 import { Database } from "@deepagent-code/core/database/database"
 import { ProjectV2 } from "@deepagent-code/core/project"
@@ -9,16 +9,19 @@ import { AbsolutePath } from "@deepagent-code/core/schema"
 import { SessionTable, TaskNotificationOutboxTable, TaskRunTable } from "@deepagent-code/core/session/sql"
 import { Hash } from "@deepagent-code/core/util/hash"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
-import {
-  acknowledgeDelivery,
-  renewProcessingLease,
-  type OutboxItem,
-} from "../../src/session/task-delivery"
+import { acknowledgeDelivery, renewProcessingLease, type OutboxItem } from "../../src/session/task-delivery"
 import { prepare } from "../../src/session/task-input"
 import { MessageID, SessionID } from "../../src/session/schema"
 import { Session } from "../../src/session/session"
-import { admitTaskRun } from "../../src/tool/task-run"
-import { projectDurableSettledRun } from "../../src/tool/task"
+import {
+  admitTaskRun,
+  claimTaskProvisioning,
+  markTaskFinalizing,
+  settleTaskRun,
+  startTaskRun,
+} from "../../src/tool/task-run"
+import { repairDurableSettledRunProjections } from "../../src/tool/task"
+import { persistStructuredFinalizerResponse } from "../../src/tool/task-structured-output-evidence"
 import { testEffect } from "../lib/effect"
 
 const database = Layer.mergeAll(Database.layerFromPath(":memory:"), CrossSpawnSpawner.defaultLayer)
@@ -184,69 +187,207 @@ describe("wave-3 durable control-plane regressions", () => {
     }),
   )
 
-  it.effect("projects a durable failed run into the matching child session metadata", () =>
-    Effect.gen(function* () {
-      yield* setup
-      const admission = yield* admitTaskRun({
-        parentSessionID,
-        parentMessageID: MessageID.ascending("msg_wave3_projection_parent"),
-        toolCallID: "call_wave3_projection",
-        request: { description: "project terminal state" },
-        deliveryMode: "foreground",
-        now: 1_000,
-      })
-      const { db } = yield* Database.Service
-      yield* db
-        .update(TaskRunTable)
-        .set({ state: "failed", phase: "settled", reason: "provider_error", time_settled: 1_500 })
-        .where(eq(TaskRunTable.run_id, admission.run.runID))
-        .run()
-        .pipe(Effect.orDie)
-
-      const holder: { info: Session.Info } = {
-        info: {
-          id: admission.run.childSessionID,
-          slug: "wave3-child",
-          projectID: ProjectV2.ID.global,
-          directory,
-          parentID: parentSessionID,
-          title: "child",
-          version: "test",
-          metadata: {
-            deepagent: {
-              subagent: {
-                finished: false,
-                state: "researching",
-                phase: "research",
-                run_id: admission.run.runID,
-                generation: admission.run.generation,
+  for (const fixture of [
+    {
+      label: "structured",
+      reason: "structured_output_valid",
+      receipt: { attempt: 1, transport: "structured" } as const,
+      structuredResultMessageID: MessageID.ascending("msg_wave3_structured_result"),
+    },
+    {
+      label: "text fallback",
+      reason: "structured_output_text_fallback",
+      receipt: { attempt: 2, transport: "text_fallback" } as const,
+      structuredResultMessageID: MessageID.ascending("msg_wave3_text_result"),
+    },
+    {
+      label: "degraded text",
+      reason: "structured_output_degraded_text",
+      receipt: { attempt: 2, transport: "degraded_text", reason: "structured_output_invalid" } as const,
+      structuredResultMessageID: undefined,
+    },
+  ] as const) {
+    it.effect(`projects a durable ${fixture.label} receipt after a crash before session metadata`, () =>
+      Effect.gen(function* () {
+        yield* setup
+        const time = Date.now()
+        const admission = yield* admitTaskRun({
+          parentSessionID,
+          parentMessageID: MessageID.ascending(`msg_wave3_projection_parent_${fixture.receipt.transport}`),
+          toolCallID: `call_wave3_projection_${fixture.receipt.transport}`,
+          request: { description: "project terminal state" },
+          deliveryMode: "foreground",
+          executionSpec: {
+            prompt: { text: "project terminal state" },
+            agent: "researcher",
+            model: { providerID: "test-provider", modelID: "test-model" },
+            structuredOutput: {
+              schema: {
+                type: "object",
+                properties: { result: { type: "string" } },
+                required: ["result"],
+                additionalProperties: false,
               },
+              allowTextFallback: true,
+              receiptVersion: 1,
+              maxAttempts: 2,
             },
           },
-          time: { created: 1_000, updated: 1_000 },
-        },
-      }
-      const sessions = {
-        get: () => Effect.succeed(holder.info),
-        setMetadata: (input: { readonly metadata: Session.Info["metadata"] }) =>
-          Effect.sync(() => {
-            holder.info = { ...holder.info, metadata: input.metadata }
-          }),
-      } as unknown as Session.Interface
+          now: time,
+        })
+        const { db } = yield* Database.Service
+        const claimed = yield* claimTaskProvisioning({ run: admission.run, owner: "wave3-owner", now: time + 10 })
+        const running = yield* startTaskRun(claimed!, "wave3-owner", time + 20)
+        const rawMessageID = MessageID.ascending(`msg_wave3_raw_${fixture.receipt.transport}`)
+        yield* db.run(sql`
+        INSERT INTO session (id, project_id, slug, directory, title, version, time_created, time_updated)
+        VALUES (
+          ${admission.run.childSessionID}, ${ProjectV2.ID.global},
+          ${`wave3-${fixture.receipt.transport}`}, ${directory}, 'child', 'test', ${time}, ${time}
+        )
+      `)
+        yield* db.run(sql`
+        INSERT INTO message (id, session_id, time_created, time_updated, data)
+        VALUES (${rawMessageID}, ${admission.run.childSessionID}, ${time + 30}, ${time + 30}, '{"role":"assistant"}')
+      `)
+        yield* db.run(sql`
+        INSERT INTO part (id, message_id, session_id, time_created, time_updated, data)
+        VALUES (
+          ${`prt_wave3_raw_${fixture.receipt.transport}`}, ${rawMessageID}, ${admission.run.childSessionID},
+          ${time + 30}, ${time + 30}, '{"type":"text","text":"persisted research"}'
+        )
+      `)
+        if (fixture.structuredResultMessageID) {
+          yield* db.run(sql`
+          INSERT INTO message (id, session_id, time_created, time_updated, data)
+          VALUES (
+            ${fixture.structuredResultMessageID}, ${admission.run.childSessionID},
+            ${time + 40}, ${time + 40}, '{"role":"assistant"}'
+          )
+        `)
+          yield* db.run(sql`
+          INSERT INTO part (id, message_id, session_id, time_created, time_updated, data)
+          VALUES (
+            ${`prt_wave3_result_${fixture.receipt.transport}`}, ${fixture.structuredResultMessageID},
+            ${admission.run.childSessionID}, ${time + 40}, ${time + 40},
+            '{"type":"text","text":"{\\"result\\":\\"ok\\"}"}'
+          )
+        `)
+        }
+        yield* markTaskFinalizing(running!, "wave3-owner", fixture.receipt.attempt, rawMessageID, time + 100)
+        if (fixture.structuredResultMessageID) {
+          const requestMessageID = MessageID.ascending(`msg_wave3_request_${fixture.receipt.transport}`)
+          yield* db.run(sql`
+            INSERT INTO message (id, session_id, time_created, time_updated, data)
+            VALUES (
+              ${requestMessageID}, ${admission.run.childSessionID}, ${time + 35}, ${time + 35},
+              ${JSON.stringify({
+                role: "user",
+                metadata: {
+                  deepagent: {
+                    structured_finalizer: {
+                      run_id: admission.run.runID,
+                      attempt: fixture.receipt.attempt,
+                      source_message_id: rawMessageID,
+                    },
+                  },
+                },
+              })}
+            )
+          `)
+          yield* db.run(sql`
+            UPDATE message
+            SET data = ${JSON.stringify(
+              fixture.receipt.transport === "structured"
+                ? { role: "assistant", parentID: requestMessageID, structured: { result: "ok" } }
+                : { role: "assistant", parentID: requestMessageID },
+            )}
+            WHERE id = ${fixture.structuredResultMessageID}
+          `)
+          yield* persistStructuredFinalizerResponse({
+            runID: admission.run.runID,
+            childSessionID: admission.run.childSessionID,
+            ownerToken: "wave3-owner",
+            claimGeneration: running!.claimGeneration,
+            attempt: fixture.receipt.attempt,
+            sourceMessageID: rawMessageID,
+            responseMessageID: fixture.structuredResultMessageID,
+            contract: admission.run.executionSpec!.structuredOutput!,
+            receipt: fixture.receipt,
+            output: '{"result":"ok"}',
+            now: time + 200,
+          })
+        }
+        const settled = yield* settleTaskRun({
+          run: running!,
+          owner: "wave3-owner",
+          state: "completed",
+          reason: fixture.reason,
+          output:
+            fixture.receipt.transport === "degraded_text"
+              ? JSON.stringify({
+                  _degraded: true,
+                  _reason: fixture.receipt.reason,
+                  _attempts: fixture.receipt.attempt,
+                  _raw: "persisted research",
+                })
+              : '{"result":"ok"}',
+          structuredResultMessageID: fixture.structuredResultMessageID,
+          structuredOutputReceipt: fixture.receipt,
+          now: time + 500,
+        })
+        expect(settled.won).toBe(true)
+        expect(settled.run.structuredOutputReceipt).toEqual(fixture.receipt)
 
-      yield* projectDurableSettledRun(sessions, admission.run.childSessionID)
+        const holder: { info: Session.Info } = {
+          info: {
+            id: admission.run.childSessionID,
+            slug: "wave3-child",
+            projectID: ProjectV2.ID.global,
+            directory,
+            parentID: parentSessionID,
+            title: "child",
+            version: "test",
+            metadata: {
+              deepagent: {
+                subagent: {
+                  finished: false,
+                  state: "researching",
+                  phase: "research",
+                  run_id: admission.run.runID,
+                  generation: admission.run.generation,
+                },
+              },
+            },
+            time: { created: time, updated: time },
+          },
+        }
+        const sessions = {
+          get: () => Effect.succeed(holder.info),
+          setMetadata: (input: { readonly metadata: Session.Info["metadata"] }) =>
+            Effect.sync(() => {
+              holder.info = { ...holder.info, metadata: input.metadata }
+            }),
+        } as unknown as Session.Interface
 
-      expect(holder.info.metadata?.deepagent).toEqual({
-        subagent: {
-          finished: true,
-          state: "error",
-          phase: "settled",
-          run_id: admission.run.runID,
-          generation: admission.run.generation,
-          settled_at: 1_500,
-          reason: "provider_error",
-        },
-      })
-    }),
-  )
+        expect(yield* repairDurableSettledRunProjections(sessions, { directory })).toBe(1)
+        expect(yield* repairDurableSettledRunProjections(sessions, { directory })).toBe(0)
+
+        expect(holder.info.metadata?.deepagent).toEqual({
+          subagent: {
+            finished: true,
+            state: "completed",
+            phase: "settled",
+            run_id: admission.run.runID,
+            generation: admission.run.generation,
+            settled_at: time + 500,
+            reason: fixture.reason,
+            attempts: fixture.receipt.attempt,
+            raw_result_ref: rawMessageID,
+            structured_output: fixture.receipt,
+          },
+        })
+      }),
+    )
+  }
 })

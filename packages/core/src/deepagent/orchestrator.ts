@@ -11,6 +11,7 @@ import { decideFanout, estimateSignalsFromText, type OrchestrationCaps } from ".
 import * as KnowledgeSource from "./knowledge-source"
 import { projectIdForWorkspace } from "./durable-knowledge-store"
 import { ProjectBridge } from "./context"
+import { DeepAgentReleasedSnapshot } from "./released-snapshot"
 
 export type OrchestratorInput = {
   readonly sessionId: string
@@ -19,6 +20,7 @@ export type OrchestratorInput = {
   readonly tools: ToolContext
   readonly userRequest: string | null
   readonly workspacePath: string | null
+  readonly releasedKnowledgeSelection?: DeepAgentReleasedSnapshot.Selection
   // §5b: configurable (lenient) orchestration caps from config.experimental.orchestration. Unset ⇒
   // lenient defaults. Surfaced only to make the advisory per-round concurrency number in the prompt
   // match the deployment; the HARD cap is the §5a semaphore in task.ts, independent of this.
@@ -57,6 +59,10 @@ export const ensureSession = (sessionId: string, mode: AgentMode): void => {
 
 export const buildPromptContext = (input: OrchestratorInput): PromptContext => {
   const state = SessionState.getOrCreate(input.sessionId, input.mode)
+  const knowledgeSnapshotId = input.releasedKnowledgeSelection?.snapshotId ?? null
+  if (state.knowledgeSnapshotId !== knowledgeSnapshotId) {
+    SessionState.update(input.sessionId, { knowledgeSynthesis: null, knowledgeSnapshotId })
+  }
   const roundState = state.roundState
   const budgetCheck = Budget.check(roundState, state.budget)
 
@@ -106,8 +112,9 @@ export const buildPromptContext = (input: OrchestratorInput): PromptContext => {
       // docs/34 §8: scope durable retrieval to this workspace path (unions user-global +
       // this workspace's project-shared). null workspace => user-global only.
       ...(state.workspacePath ? { workspacePath: state.workspacePath } : {}),
+      ...(input.releasedKnowledgeSelection ? { releasedSelection: input.releasedKnowledgeSelection } : {}),
     })
-    if (knowledge) SessionState.update(input.sessionId, { knowledgeSynthesis: knowledge })
+    if (knowledge) SessionState.update(input.sessionId, { knowledgeSynthesis: knowledge, knowledgeSnapshotId })
   }
 
   const previousResults: PreviousResults | null =

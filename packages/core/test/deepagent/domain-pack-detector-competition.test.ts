@@ -9,6 +9,8 @@ import { openUserGlobalStore } from "../../src/deepagent/durable-knowledge-store
 import { retrieve } from "../../src/deepagent/knowledge-retriever"
 import type { ExtendedProblemProfile } from "../../src/deepagent/domain-pack-registry"
 import type { TaskContext, ToolContext } from "../../src/deepagent/prompt-policy"
+import type { Selection } from "../../src/deepagent/released-snapshot"
+import { releasedUserGlobalSelection } from "./released-selection-fixture"
 
 // docs/review_38 第0轮: lock the detector-tightening (B3) and dynamic-cap + per-pack-quota (B4)
 // wins so they cannot silently regress. These mirror how profileFromInput builds the LIVE profile:
@@ -250,12 +252,12 @@ describe("batch 2/4 new packs activate (review_4 coverage)", () => {
 })
 
 describe("selectedRefs per-pack quota + dynamic cap (docs/review_38 B4)", () => {
-  const withSeed = (fn: () => void) => {
+  const withSeed = (fn: (releasedSelection: Selection) => void) => {
     const dir = mkdtempSync(path.join(tmpdir(), "deepagent-quota-"))
     try {
       knowledgeSource.configure(dir)
       seedCoreKnowledge(openUserGlobalStore(dir))
-      fn()
+      fn(releasedUserGlobalSelection(dir))
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -271,13 +273,14 @@ describe("selectedRefs per-pack quota + dynamic cap (docs/review_38 B4)", () => 
   })
 
   test("multi-domain GPU+typecheck task keeps a representative gpu ref (not starved by core/testing)", () => {
-    withSeed(() => {
+    withSeed((releasedSelection) => {
       const result = retrieve({
         mode: "max",
         task: task("optimize the sgemm cuda kernel for shared memory and fix the failing typecheck"),
         tools,
         round: 1,
         previousFailures: 0,
+        releasedSelection,
       })
       // review_4: the primary-pack guarantee is type-agnostic — gpu-kernel survives as a strategy,
       // methodology, knowledge, or skill ref. Assert across all retrieved types.
@@ -292,13 +295,14 @@ describe("selectedRefs per-pack quota + dynamic cap (docs/review_38 B4)", () => 
   })
 
   test("selected refs never exceed the hard ceiling of 12", () => {
-    withSeed(() => {
+    withSeed((releasedSelection) => {
       const result = retrieve({
         mode: "ultra",
         task: task("optimize the sgemm cuda kernel and fix typecheck and review the migration"),
         tools,
         round: 1,
         previousFailures: 0,
+        releasedSelection,
       })
       expect((result?.selectedRefs ?? []).length).toBeLessThanOrEqual(12)
     })

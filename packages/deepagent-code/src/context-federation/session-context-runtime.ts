@@ -7,10 +7,7 @@ import {
   type Principal,
 } from "@deepagent-code/core/context-federation/authorization"
 import { GraphKind } from "@deepagent-code/core/context-federation/contract"
-import {
-  ContextFederation,
-  type GraphQueryStatus,
-} from "@deepagent-code/core/context-federation/federation"
+import { ContextFederation, type GraphQueryStatus } from "@deepagent-code/core/context-federation/federation"
 import { FederatedContextQuery } from "@deepagent-code/core/context-federation/query"
 import { ContextQueryAuthorization } from "@deepagent-code/core/context-federation/query-authorization"
 import { ContextProjection } from "@deepagent-code/core/context-federation/projection"
@@ -27,6 +24,8 @@ import { ContextTokenCodec } from "@deepagent-code/core/context-federation/token
 import { Database } from "@deepagent-code/core/database/database"
 import { Hash } from "@deepagent-code/core/util/hash"
 import type { Identity } from "@deepagent-code/core/context-federation/identity"
+import { DeepAgentReleasedSnapshot } from "@deepagent-code/core/deepagent/released-snapshot"
+import { projectIdForWorkspace } from "@deepagent-code/core/deepagent/durable-knowledge-store"
 import { SessionSchema } from "@deepagent-code/core/session/schema"
 import { Context, Effect, Layer, Schema } from "effect"
 import { and, desc, eq } from "drizzle-orm"
@@ -51,13 +50,7 @@ export type Resolved = {
   readonly observedLocationMutationEpoch: number
 }
 
-export type AttemptLifecycle = {
-  readonly attemptId: string
-  readonly dispatching: Effect.Effect<void>
-  readonly streaming: Effect.Effect<void>
-  readonly settled: Effect.Effect<void>
-  readonly failed: (error: unknown) => Effect.Effect<void>
-}
+export type AttemptAdmission = Omit<SessionProviderAttempt.PrepareInput, "ownerToken">
 
 export class RuntimeError extends Schema.TaggedErrorClass<RuntimeError>()("SessionFederatedContext.RuntimeError", {
   reason: Schema.String,
@@ -72,6 +65,7 @@ export interface Interface {
     readonly agent: Agent.Info
     readonly model: Provider.Model
     readonly current?: SessionContext.Selection
+    readonly releasedKnowledgeSelection?: DeepAgentReleasedSnapshot.Selection
     readonly now?: number
   }) => Effect.Effect<Resolved, RuntimeError>
   readonly prepareProviderTurn: (input: {
@@ -81,7 +75,7 @@ export interface Interface {
     readonly providerId: string
     readonly observedLocationMutationEpoch: number
     readonly now?: number
-  }) => Effect.Effect<AttemptLifecycle, RuntimeError>
+  }) => Effect.Effect<AttemptAdmission, RuntimeError>
   readonly settleActivity: (
     selection: SessionContext.Selection,
     state: "settled" | "failed" | "interrupted",
@@ -92,11 +86,21 @@ export interface Interface {
     readonly actorId: string
     readonly reason: string
     readonly riskAcknowledged: boolean
+    readonly recoveryOwnerToken: string
     readonly now?: number
-  }) => Effect.Effect<{
-    readonly attempt: SessionProviderAttempt.Attempt
-    readonly replay: SessionProviderAttempt.Attempt
-  }, RuntimeError>
+  }) => Effect.Effect<
+    {
+      readonly attempt: SessionProviderAttempt.Attempt
+      readonly replay: SessionProviderAttempt.Attempt
+    },
+    RuntimeError
+  >
+  readonly releasedKnowledgeForActiveSession: (
+    sessionId: string,
+  ) => Effect.Effect<
+    { readonly pinned: true; readonly selection: DeepAgentReleasedSnapshot.Selection | undefined } | undefined,
+    RuntimeError
+  >
 }
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/SessionFederatedContext") {}
@@ -116,21 +120,13 @@ export const layer = Layer.effect(
       database.db
         .select({ selectionId: SessionContextSelectionTable.selection_id })
         .from(SessionContextSelectionTable)
-        .innerJoin(
-          SessionActivityTable,
-          eq(SessionActivityTable.activity_id, SessionContextSelectionTable.activity_id),
-        )
-        .where(
-          and(
-            eq(SessionContextSelectionTable.session_id, sessionId),
-            eq(SessionActivityTable.state, "active"),
-          ),
-        )
+        .innerJoin(SessionActivityTable, eq(SessionActivityTable.activity_id, SessionContextSelectionTable.activity_id))
+        .where(and(eq(SessionContextSelectionTable.session_id, sessionId), eq(SessionActivityTable.state, "active")))
         .orderBy(desc(SessionContextSelectionTable.revision))
         .get()
         .pipe(
           Effect.orDie,
-          Effect.flatMap((row) => row ? contexts.getSelection(row.selectionId) : Effect.succeed(undefined)),
+          Effect.flatMap((row) => (row ? contexts.getSelection(row.selectionId) : Effect.succeed(undefined))),
           Effect.mapError((error) => runtimeError(error)),
         )
 
@@ -163,9 +159,20 @@ export const layer = Layer.effect(
       })
 
     const recover: Interface["recover"] = (sessionId) =>
-      attempts
-        .recoverIndeterminate(SessionSchema.ID.make(sessionId))
-        .pipe(Effect.mapError((error) => runtimeError(error)))
+      database.db
+        .select({ attemptId: SessionProviderAttemptTable.attempt_id })
+        .from(SessionProviderAttemptTable)
+        .where(
+          and(
+            eq(SessionProviderAttemptTable.session_id, sessionId),
+            eq(SessionProviderAttemptTable.state, "indeterminate_after_crash"),
+          ),
+        )
+        .all()
+        .pipe(
+          Effect.map((rows) => rows.length),
+          Effect.mapError(runtimeError),
+        )
 
     const resolve: Interface["resolve"] = (input) =>
       Effect.gen(function* () {
@@ -183,41 +190,48 @@ export const layer = Layer.effect(
           authorizationEpoch: epochs.authorization,
           egressEpoch: epochs.egress,
         })
-        const envelope = current &&
-            ContextAuthorization.fingerprint(priorEnvelope.principal, priorEnvelope.egress) ===
-              current.authorizationFingerprint
-          ? priorEnvelope
-          : envelopeFor({
-              session: input.session,
-              model: input.model,
-              identity: handle.identity,
-              agent: input.agent,
-              authorizationEpoch: epochs.authorization + 1,
-              egressEpoch: epochs.egress + 1,
-            })
+        const envelope =
+          current &&
+          ContextAuthorization.fingerprint(priorEnvelope.principal, priorEnvelope.egress) ===
+            current.authorizationFingerprint
+            ? priorEnvelope
+            : envelopeFor({
+                session: input.session,
+                model: input.model,
+                identity: handle.identity,
+                agent: input.agent,
+                authorizationEpoch: epochs.authorization + 1,
+                egressEpoch: epochs.egress + 1,
+              })
         yield* authorization.bind({ sessionId: input.session.id, envelope })
-        const executionFingerprint = Hash.sha256(JSON.stringify({
-          agent: input.agent.name,
-          providerId: input.model.providerID,
-          modelId: input.model.id,
-          toolCall: input.model.capabilities.toolcall,
-          resolver: "federated-rrf-v1",
-          projection: ContextProjection.SerializerVersion,
-          tokenizer: ContextProjection.TokenizerVersion,
-          maxRefs: input.model.capabilities.toolcall ? 8 : 14,
-          maxTokens: input.model.capabilities.toolcall ? 1_200 : 3_000,
-        }))
-        const authorizationFingerprint = ContextAuthorization.fingerprint(envelope.principal, envelope.egress)
-        const mutationEpoch = yield* (handle.coordinator.mutationEpoch?.() ?? Effect.succeed(
-          current?.observedLocationMutationEpoch ?? 0,
-        )).pipe(
-          Effect.catch(() => Effect.succeed(current?.observedLocationMutationEpoch ?? 0)),
+        const executionFingerprint = Hash.sha256(
+          JSON.stringify({
+            agent: input.agent.name,
+            providerId: input.model.providerID,
+            modelId: input.model.id,
+            toolCall: input.model.capabilities.toolcall,
+            resolver: "federated-rrf-v1",
+            projection: ContextProjection.SerializerVersion,
+            tokenizer: ContextProjection.TokenizerVersion,
+            maxRefs: input.model.capabilities.toolcall ? 8 : 14,
+            maxTokens: input.model.capabilities.toolcall ? 1_200 : 3_000,
+            releasedKnowledgeSnapshotId: input.releasedKnowledgeSelection?.snapshotId ?? null,
+            releasedKnowledgeMembershipHash: input.releasedKnowledgeSelection?.membershipHash ?? null,
+          }),
         )
+        const authorizationFingerprint = ContextAuthorization.fingerprint(envelope.principal, envelope.egress)
+        const mutationEpoch = yield* (
+          handle.coordinator.mutationEpoch?.() ?? Effect.succeed(current?.observedLocationMutationEpoch ?? 0)
+        ).pipe(Effect.catch(() => Effect.succeed(current?.observedLocationMutationEpoch ?? 0)))
         if (current && inputIds.length === 0) {
           const unchanged =
             current.locationKey === handle.identity.locationKey &&
             current.authorizationFingerprint === authorizationFingerprint &&
             current.executionFingerprint === executionFingerprint &&
+            DeepAgentReleasedSnapshot.matchesBinding(
+              input.releasedKnowledgeSelection,
+              current.releasedKnowledgeBinding,
+            ) &&
             current.observedLocationMutationEpoch === mutationEpoch &&
             now < current.nextRevalidationAt
           if (unchanged) {
@@ -230,12 +244,17 @@ export const layer = Layer.effect(
             envelope,
             sessionId: input.session.id,
             toolCall: input.model.capabilities.toolcall,
+            releasedKnowledgeSelection: input.releasedKnowledgeSelection,
             now,
           })
           const sourceUnchanged = sourceFingerprint(refreshed.hits) === current.selectedSourceFingerprint
           if (
             sourceUnchanged &&
             current.executionFingerprint === executionFingerprint &&
+            DeepAgentReleasedSnapshot.matchesBinding(
+              input.releasedKnowledgeSelection,
+              current.releasedKnowledgeBinding,
+            ) &&
             now < current.nextRevalidationAt
           ) {
             return { selection: current, envelope, observedLocationMutationEpoch: mutationEpoch }
@@ -257,6 +276,7 @@ export const layer = Layer.effect(
               statuses: projectionStatuses(refreshed.statuses),
               sourceStatuses: refreshed.statuses,
               model: input.model,
+              releasedKnowledgeSelection: input.releasedKnowledgeSelection,
               now,
             }),
             envelope,
@@ -282,6 +302,7 @@ export const layer = Layer.effect(
           egress: envelope.egress,
           sessionId: input.session.id,
           toolCall: input.model.capabilities.toolcall,
+          releasedKnowledgeSelection: input.releasedKnowledgeSelection,
         })
         return {
           selection: yield* commit({
@@ -290,12 +311,14 @@ export const layer = Layer.effect(
             triggerInputId: activity.triggerInputId,
             revision: current ? current.revision + 1 : 0,
             inputIds,
-            queryFingerprint: Hash.sha256(JSON.stringify({
-              previous: current?.queryFingerprint,
-              inputIds,
-              query: input.query.trim(),
-              parentSessionId: input.session.parentID,
-            })),
+            queryFingerprint: Hash.sha256(
+              JSON.stringify({
+                previous: current?.queryFingerprint,
+                inputIds,
+                query: input.query.trim(),
+                parentSessionId: input.session.parentID,
+              }),
+            ),
             authorizationFingerprint,
             executionFingerprint,
             mutationEpoch,
@@ -305,12 +328,13 @@ export const layer = Layer.effect(
             statuses: projectionStatuses(resolved.statuses),
             sourceStatuses: resolved.statuses,
             model: input.model,
+            releasedKnowledgeSelection: input.releasedKnowledgeSelection,
             now,
           }),
           envelope,
           observedLocationMutationEpoch: mutationEpoch,
         }
-      }).pipe(Effect.mapError((error) => error instanceof RuntimeError ? error : runtimeError(error)))
+      }).pipe(Effect.mapError((error) => (error instanceof RuntimeError ? error : runtimeError(error))))
 
     const commit = (input: {
       readonly sessionId: string
@@ -328,6 +352,7 @@ export const layer = Layer.effect(
       readonly statuses: readonly ContextProjection.Status[]
       readonly sourceStatuses: readonly GraphQueryStatus[]
       readonly model: Provider.Model
+      readonly releasedKnowledgeSelection?: DeepAgentReleasedSnapshot.Selection
       readonly now: number
     }) => {
       const maxTokens = input.model.capabilities.toolcall ? 1_200 : 3_000
@@ -337,12 +362,15 @@ export const layer = Layer.effect(
         hit,
         token: codec.sealContextRef(hit.ref, lifetime),
         provenanceTokens: hit.provenance
-          .filter((ref) => ContextAuthorization.authorize({
-            ref,
-            principal: input.envelope.principal,
-            egress: input.envelope.egress,
-            sensitivity: hit.sensitivity,
-          }).allowed)
+          .filter(
+            (ref) =>
+              ContextAuthorization.authorize({
+                ref,
+                principal: input.envelope.principal,
+                egress: input.envelope.egress,
+                sensitivity: hit.sensitivity,
+              }).allowed,
+          )
           .map((ref) => codec.sealContextRef(ref, lifetime)),
         relations: (hit.relationPath ?? []).flatMap((item) =>
           ContextAuthorization.authorize({
@@ -360,56 +388,69 @@ export const layer = Layer.effect(
         return ContextProjection.render({
           evidence: next.map(({ hit, token }) => evidence(hit, token)),
           statuses: input.statuses,
-        }).tokenCount <= maxTokens ? next : selected
+        }).tokenCount <= maxTokens
+          ? next
+          : selected
       }, [])
       const rendered = ContextProjection.render({
         evidence: fitted.map(({ hit, token }) => evidence(hit, token)),
         statuses: input.statuses,
       })
       const selectedSourceFingerprint = sourceFingerprint(fitted.map((item) => item.hit))
-      return contexts.commitSelection({
-        securityNamespaceId: input.identity.securityNamespaceId,
-        sessionId: SessionSchema.ID.make(input.sessionId),
-        activityId: input.activityId,
-        revision: input.revision,
-        triggerInputId: input.triggerInputId,
-        locationKey: input.identity.locationKey,
-        promotedInputIds: input.inputIds,
-        queryFingerprint: input.queryFingerprint,
-        authorizationFingerprint: input.authorizationFingerprint,
-        authorizationEpoch: input.envelope.principal.authorizationEpoch,
-        executionFingerprint: input.executionFingerprint,
-        selectedSourceFingerprint,
-        observedLocationMutationEpoch: input.mutationEpoch,
-        nextRevalidationAt: input.now + SelectionLifetimeMs,
-        graphRevisions: graphRevisions(input.sourceStatuses, fitted.map((item) => item.hit)),
-        graphStatuses: input.sourceStatuses,
-        selectedRefs: fitted.map(({ hit, token, provenanceTokens, relations }) => ({
-          ref: hit.ref,
-          token,
-          provenanceTokens,
-          relations,
-          freshness: hit.validity?.state ?? "unknown",
-          sensitivity: hit.sensitivity,
-          score: hit.score,
-          reason: hit.relationPath?.map((item) => item.relation).join(" > ") || "federated_rank",
-          excerpt: (hit.excerpt ?? hit.title).slice(0, 1_000),
-          projectionStart: rendered.offsets[token]!.start,
-          projectionEnd: rendered.offsets[token]!.end,
-        })),
-        rendered,
-        artifact: {
-          rankingVersion: "federated-rrf-v1",
-          rejected: input.sourceStatuses.flatMap((status) =>
-            status.kind === "blocked" || status.kind === "partial"
-              ? [{ graph: status.graph, reasonCode: status.reasonCode }]
-              : [],
+      return contexts
+        .commitSelection({
+          securityNamespaceId: input.identity.securityNamespaceId,
+          projectScopeKey: input.identity.projectScopeKey,
+          sessionId: SessionSchema.ID.make(input.sessionId),
+          activityId: input.activityId,
+          revision: input.revision,
+          triggerInputId: input.triggerInputId,
+          locationKey: input.identity.locationKey,
+          promotedInputIds: input.inputIds,
+          queryFingerprint: input.queryFingerprint,
+          authorizationFingerprint: input.authorizationFingerprint,
+          authorizationEpoch: input.envelope.principal.authorizationEpoch,
+          executionFingerprint: input.executionFingerprint,
+          selectedSourceFingerprint,
+          observedLocationMutationEpoch: input.mutationEpoch,
+          nextRevalidationAt: input.now + SelectionLifetimeMs,
+          releasedKnowledgeBinding: DeepAgentReleasedSnapshot.binding(input.releasedKnowledgeSelection),
+          graphRevisions: graphRevisions(
+            input.sourceStatuses,
+            fitted.map((item) => item.hit),
           ),
-        },
-        now: input.now,
-      }).pipe(Effect.tap((selection) => Effect.sync(() =>
-        ContextFederationObservability.observeSelection(selection.selectionId, selection.tokenCount),
-      )))
+          graphStatuses: input.sourceStatuses,
+          selectedRefs: fitted.map(({ hit, token, provenanceTokens, relations }) => ({
+            ref: hit.ref,
+            token,
+            provenanceTokens,
+            relations,
+            freshness: hit.validity?.state ?? "unknown",
+            sensitivity: hit.sensitivity,
+            score: hit.score,
+            reason: hit.relationPath?.map((item) => item.relation).join(" > ") || "federated_rank",
+            excerpt: (hit.excerpt ?? hit.title).slice(0, 1_000),
+            projectionStart: rendered.offsets[token]!.start,
+            projectionEnd: rendered.offsets[token]!.end,
+          })),
+          rendered,
+          artifact: {
+            rankingVersion: "federated-rrf-v1",
+            rejected: input.sourceStatuses.flatMap((status) =>
+              status.kind === "blocked" || status.kind === "partial"
+                ? [{ graph: status.graph, reasonCode: status.reasonCode }]
+                : [],
+            ),
+          },
+          now: input.now,
+        })
+        .pipe(
+          Effect.tap((selection) =>
+            Effect.sync(() =>
+              ContextFederationObservability.observeSelection(selection.selectionId, selection.tokenCount),
+            ),
+          ),
+        )
     }
 
     const prepareProviderTurn: Interface["prepareProviderTurn"] = (input) =>
@@ -424,9 +465,8 @@ export const layer = Layer.effect(
         if (latest && ["dispatching", "streaming", "indeterminate_after_crash"].includes(latest.state)) {
           return yield* new RuntimeError({ reason: `provider_attempt_blocked:${latest.state}` })
         }
-        const providerTurnSeq = latest?.state === "prepared"
-          ? latest.provider_turn_seq
-          : (latest?.provider_turn_seq ?? -1) + 1
+        const providerTurnSeq =
+          latest?.state === "prepared" ? latest.provider_turn_seq : (latest?.provider_turn_seq ?? -1) + 1
         const now = input.now ?? Date.now()
         const validUntil = Math.min(now + ValidationMs, input.selection.nextRevalidationAt)
         if (validUntil <= now) return yield* new RuntimeError({ reason: "selection_revalidation_required" })
@@ -442,7 +482,7 @@ export const layer = Layer.effect(
           outcome: "valid",
           reasonCode: "selected_sources_current",
         })
-        const attempt = yield* attempts.prepare({
+        return {
           sessionId: input.selection.sessionId,
           activityId: input.selection.activityId,
           providerTurnSeq,
@@ -453,39 +493,21 @@ export const layer = Layer.effect(
           ...(latest?.state === "prepared" && latest.parent_attempt_id
             ? { parentAttemptId: latest.parent_attempt_id }
             : {}),
-          ...(latest?.state === "prepared" && latest.idempotency_key
-            ? { idempotencyKey: latest.idempotency_key }
-            : {}),
+          ...(latest?.state === "prepared" && latest.idempotency_key ? { idempotencyKey: latest.idempotency_key } : {}),
           authorizationEpoch: input.envelope.principal.authorizationEpoch,
           egressEpoch: input.envelope.egress.epoch,
           selectedSourceFingerprint: input.selection.selectedSourceFingerprint,
           observedLocationMutationEpoch: input.observedLocationMutationEpoch,
           now,
-        })
-        return {
-          attemptId: attempt.attemptId,
-          dispatching: attempts.markDispatching(attempt.attemptId).pipe(Effect.asVoid, Effect.orDie),
-          streaming: attempts.markStreaming(attempt.attemptId).pipe(Effect.asVoid, Effect.orDie),
-          settled: attempts.settle({ attemptId: attempt.attemptId, outcome: "settled" }).pipe(
-            Effect.asVoid,
-            Effect.orDie,
-          ),
-          failed: (error: unknown) => attempts.settle({
-            attemptId: attempt.attemptId,
-            outcome: "failed",
-            errorCode: errorCode(error),
-          }).pipe(Effect.asVoid, Effect.orDie),
         }
-      }).pipe(Effect.mapError((error) => error instanceof RuntimeError ? error : runtimeError(error)))
+      }).pipe(Effect.mapError((error) => (error instanceof RuntimeError ? error : runtimeError(error))))
 
     const settleActivity: Interface["settleActivity"] = (selection, state) =>
-      contexts
-        .settleActivity({ activityId: selection.activityId, state })
-        .pipe(
-          Effect.asVoid,
-          Effect.ensuring(authorization.remove(selection.sessionId)),
-          Effect.mapError((error) => runtimeError(error)),
-        )
+      contexts.settleActivity({ activityId: selection.activityId, state }).pipe(
+        Effect.asVoid,
+        Effect.ensuring(authorization.remove(selection.sessionId)),
+        Effect.mapError((error) => runtimeError(error)),
+      )
 
     const replayIndeterminate: Interface["replayIndeterminate"] = (input) =>
       Effect.gen(function* () {
@@ -498,7 +520,12 @@ export const layer = Layer.effect(
           return yield* new RuntimeError({ reason: "selection_unavailable" })
         }
         const handle = yield* runtime.current()
-        if (!handle || handle.identity.locationKey !== selection.locationKey) {
+        if (
+          !handle ||
+          handle.identity.locationKey !== selection.locationKey ||
+          handle.identity.securityNamespaceId !== selection.securityNamespaceId ||
+          handle.identity.projectScopeKey !== selection.projectScopeKey
+        ) {
           return yield* new RuntimeError({ reason: "location_unavailable" })
         }
         const now = input.now ?? Date.now()
@@ -536,6 +563,10 @@ export const layer = Layer.effect(
             sensitivities: [...new Set(selection.selectedRefs.map((selected) => selected.sensitivity))],
           },
         }
+        const replayReleasedKnowledge = yield* requireReleasedKnowledgeBinding({
+          binding: selection.releasedKnowledgeBinding,
+          identity: handle.identity,
+        })
         const refreshed = yield* refreshSelected({
           selected: selection.selectedRefs,
           statuses: selection.graphStatuses,
@@ -543,6 +574,7 @@ export const layer = Layer.effect(
           envelope,
           sessionId: input.session.id,
           toolCall: true,
+          releasedKnowledgeSelection: replayReleasedKnowledge,
           now,
         })
         if (
@@ -573,6 +605,7 @@ export const layer = Layer.effect(
         })
         const resolved = yield* attempts.resolve({
           attemptId: input.attemptId,
+          recoveryOwnerToken: input.recoveryOwnerToken,
           actor: {
             type: "user",
             id: input.actorId,
@@ -594,9 +627,69 @@ export const layer = Layer.effect(
         })
         if (!resolved.replay) return yield* new RuntimeError({ reason: "provider_replay_not_prepared" })
         return { attempt: resolved.attempt, replay: resolved.replay }
-      }).pipe(Effect.mapError((error) => error instanceof RuntimeError ? error : runtimeError(error)))
+      }).pipe(Effect.mapError((error) => (error instanceof RuntimeError ? error : runtimeError(error))))
 
-    return Service.of({ recover, resolve, prepareProviderTurn, settleActivity, replayIndeterminate })
+    const releasedKnowledgeForActiveSession: Interface["releasedKnowledgeForActiveSession"] = (sessionId) =>
+      Effect.gen(function* () {
+        const row = yield* database.db
+          .select({ selectionId: SessionContextSelectionTable.selection_id })
+          .from(SessionContextSelectionTable)
+          .innerJoin(
+            SessionActivityTable,
+            eq(SessionActivityTable.activity_id, SessionContextSelectionTable.activity_id),
+          )
+          .where(and(eq(SessionContextSelectionTable.session_id, sessionId), eq(SessionActivityTable.state, "active")))
+          .orderBy(desc(SessionContextSelectionTable.revision))
+          .get()
+          .pipe(Effect.orDie)
+        if (!row) return undefined
+        const selection = yield* contexts.getSelection(row.selectionId)
+        if (!selection) return yield* new RuntimeError({ reason: "selection_unavailable" })
+        const handle = yield* runtime.current()
+        if (
+          !handle ||
+          handle.identity.locationKey !== selection.locationKey ||
+          handle.identity.securityNamespaceId !== selection.securityNamespaceId ||
+          handle.identity.projectScopeKey !== selection.projectScopeKey
+        ) {
+          return yield* new RuntimeError({ reason: "location_unavailable" })
+        }
+        return {
+          pinned: true as const,
+          selection: yield* requireReleasedKnowledgeBinding({
+            binding: selection.releasedKnowledgeBinding,
+            identity: handle.identity,
+          }),
+        }
+      }).pipe(Effect.mapError((error) => (error instanceof RuntimeError ? error : runtimeError(error))))
+
+    const requireReleasedKnowledgeBinding = Effect.fn("SessionFederatedContext.requireReleasedKnowledgeBinding")(
+      function* (input: { readonly binding: DeepAgentReleasedSnapshot.Binding; readonly identity: Identity }) {
+        if (input.binding.state === "unavailable") return undefined
+        const selection = yield* DeepAgentReleasedSnapshot.get(
+          database.db,
+          {
+            securityNamespaceId: input.identity.securityNamespaceId,
+            projectScopeKey: input.identity.projectScopeKey,
+            legacyProjectId: input.identity.observedProjectId ?? projectIdForWorkspace(input.identity.canonicalRoot),
+          },
+          input.binding.snapshotId,
+        ).pipe(Effect.mapError((error) => new RuntimeError({ reason: error._tag })))
+        if (!DeepAgentReleasedSnapshot.matchesBinding(selection, input.binding)) {
+          return yield* new RuntimeError({ reason: "released_knowledge_binding_mismatch" })
+        }
+        return selection
+      },
+    )
+
+    return Service.of({
+      recover,
+      resolve,
+      prepareProviderTurn,
+      settleActivity,
+      replayIndeterminate,
+      releasedKnowledgeForActiveSession,
+    })
   }),
 )
 
@@ -647,8 +740,9 @@ function envelopeFor(input: {
   const egress: EgressPolicy = {
     policyId: `provider:${input.model.providerID}`,
     epoch: input.egressEpoch,
-    graphs: GraphKind.literals.filter((graph) =>
-      Permission.evaluate("context_query", graph, input.agent.permission, input.session.permission ?? []).action ===
+    graphs: GraphKind.literals.filter(
+      (graph) =>
+        Permission.evaluate("context_query", graph, input.agent.permission, input.session.permission ?? []).action ===
         "allow",
     ),
     sensitivities: Array.isArray(requestedSensitivities)
@@ -664,11 +758,12 @@ function evidence(hit: FederatedContextQuery.Hit, token: string): ContextProject
     ref: token,
     revision: hit.ref.revision,
     freshness: hit.validity?.state === "current" ? "current" : hit.validity ? "historical" : "unknown",
-    trust: hit.graph === "knowledge"
-      ? "governed_guidance"
-      : hit.graph === "memory"
-        ? "historical_evidence"
-        : "repository_evidence",
+    trust:
+      hit.graph === "knowledge"
+        ? "governed_guidance"
+        : hit.graph === "memory"
+          ? "historical_evidence"
+          : "repository_evidence",
     title: hit.title.slice(0, 160),
     evidence: (hit.excerpt ?? hit.title).slice(0, hit.graph === "code" ? 1_200 : 600),
     score: hit.score,
@@ -678,7 +773,8 @@ function evidence(hit: FederatedContextQuery.Hit, token: string): ContextProject
 function projectionStatuses(statuses: readonly GraphQueryStatus[]) {
   return statuses.flatMap((status): readonly ContextProjection.Status[] => {
     if (status.kind === "complete" && status.outcome === "matched") return []
-    if (status.kind === "complete") return [{ graph: status.graph, state: "ready_empty", reasonCode: status.reasonCode ?? "ready_empty" }]
+    if (status.kind === "complete")
+      return [{ graph: status.graph, state: "ready_empty", reasonCode: status.reasonCode ?? "ready_empty" }]
     if (status.kind === "partial") return [{ graph: status.graph, state: status.state, reasonCode: status.reasonCode }]
     if (status.kind === "blocked") return [{ graph: status.graph, state: status.state, reasonCode: status.reasonCode }]
     return [{ graph: status.graph, state: "unavailable", reasonCode: status.reasonCode }]
@@ -689,23 +785,39 @@ function graphRevisions(
   statuses: readonly GraphQueryStatus[],
   hits: readonly FederatedContextQuery.Hit[],
 ): Readonly<Record<typeof GraphKind.Type, string>> {
-  return Object.fromEntries(GraphKind.literals.map((graph) => {
-    const revisions = statuses
-      .find((status) => status.graph === graph)
-      ?.revisions.map((revision) => ({ source: revision.source, revision: revision.revision, state: revision.state }))
-    return [graph, Hash.sha256(JSON.stringify(revisions ?? hits
-      .filter((hit) => hit.graph === graph)
-      .map((hit) => ContextReference.canonicalContextRef(hit.ref))
-      .toSorted()))]
-  })) as Readonly<Record<typeof GraphKind.Type, string>>
+  return Object.fromEntries(
+    GraphKind.literals.map((graph) => {
+      const revisions = statuses
+        .find((status) => status.graph === graph)
+        ?.revisions.map((revision) => ({ source: revision.source, revision: revision.revision, state: revision.state }))
+      return [
+        graph,
+        Hash.sha256(
+          JSON.stringify(
+            revisions ??
+              hits
+                .filter((hit) => hit.graph === graph)
+                .map((hit) => ContextReference.canonicalContextRef(hit.ref))
+                .toSorted(),
+          ),
+        ),
+      ]
+    }),
+  ) as Readonly<Record<typeof GraphKind.Type, string>>
 }
 
 function sourceFingerprint(hits: readonly FederatedContextQuery.Hit[]) {
-  return Hash.sha256(JSON.stringify(hits.map((hit) => ({
-    ref: ContextReference.canonicalContextRef(hit.ref),
-    sensitivity: hit.sensitivity,
-    validity: hit.validity,
-  })).toSorted((a, b) => a.ref.localeCompare(b.ref))))
+  return Hash.sha256(
+    JSON.stringify(
+      hits
+        .map((hit) => ({
+          ref: ContextReference.canonicalContextRef(hit.ref),
+          sensitivity: hit.sensitivity,
+          validity: hit.validity,
+        }))
+        .toSorted((a, b) => a.ref.localeCompare(b.ref)),
+    ),
+  )
 }
 
 function refreshSelected(input: {
@@ -715,6 +827,7 @@ function refreshSelected(input: {
   readonly envelope: ContextQueryAuthorization.Envelope
   readonly sessionId: string
   readonly toolCall: boolean
+  readonly releasedKnowledgeSelection?: DeepAgentReleasedSnapshot.Selection
   readonly now: number
 }) {
   return Effect.forEach(
@@ -738,52 +851,62 @@ function refreshSelected(input: {
           hit: undefined,
         })
       }
-      return input.query.query({
-        intent: "related",
-        ref: selected.ref,
-        sources: [selected.ref.graph],
-        limit: 100,
-        consistency: "stale_ok",
-        principal: input.envelope.principal,
-        egress: input.envelope.egress,
-        sessionId: input.sessionId,
-        toolCall: input.toolCall,
-      }).pipe(
-        Effect.map((result) => ({
-          graph: selected.ref.graph,
-          status: result.statuses.find((status) => status.graph === selected.ref.graph) ??
-            ContextFederation.status.notQueried(selected.ref.graph),
-          hit: result.hits.find((hit) =>
-            hit.ref.graph === selected.ref.graph &&
-            hit.ref.entityId === selected.ref.entityId &&
-            hit.validity?.state !== "expired" &&
-            hit.validity?.state !== "superseded",
-          ),
-        })),
-        Effect.catch(() => Effect.succeed({
-          graph: selected.ref.graph,
-          status: ContextFederation.status.partial({
+      return input.query
+        .query({
+          intent: "related",
+          ref: selected.ref,
+          sources: [selected.ref.graph],
+          limit: 100,
+          consistency: "stale_ok",
+          principal: input.envelope.principal,
+          egress: input.envelope.egress,
+          sessionId: input.sessionId,
+          toolCall: input.toolCall,
+          releasedKnowledgeSelection: input.releasedKnowledgeSelection,
+        })
+        .pipe(
+          Effect.map((result) => ({
             graph: selected.ref.graph,
-            state: "degraded",
-            reasonCode: "source_error",
-            revisions: input.statuses.find((status) => status.graph === selected.ref.graph)?.revisions ?? [],
-          }),
-          hit: undefined,
-        })),
-      )
+            status:
+              result.statuses.find((status) => status.graph === selected.ref.graph) ??
+              ContextFederation.status.notQueried(selected.ref.graph),
+            hit: result.hits.find(
+              (hit) =>
+                hit.ref.graph === selected.ref.graph &&
+                hit.ref.entityId === selected.ref.entityId &&
+                hit.validity?.state !== "expired" &&
+                hit.validity?.state !== "superseded",
+            ),
+          })),
+          Effect.catch(() =>
+            Effect.succeed({
+              graph: selected.ref.graph,
+              status: ContextFederation.status.partial({
+                graph: selected.ref.graph,
+                state: "degraded",
+                reasonCode: "source_error",
+                revisions: input.statuses.find((status) => status.graph === selected.ref.graph)?.revisions ?? [],
+              }),
+              hit: undefined,
+            }),
+          ),
+        )
     },
     { concurrency: 4 },
-  ).pipe(Effect.map((results) => ({
-    hits: results.flatMap((result): readonly FederatedContextQuery.Hit[] => result.hit ? [result.hit] : []),
-    statuses: GraphKind.literals.map((graph) =>
-      results
-        .filter((result) => result.graph === graph)
-        .map((result) => result.status)
-        .toSorted((a, b) => statusPriority(b) - statusPriority(a))[0] ??
-      input.statuses.find((status) => status.graph === graph) ??
-      ContextFederation.status.notQueried(graph),
-    ),
-  })))
+  ).pipe(
+    Effect.map((results) => ({
+      hits: results.flatMap((result): readonly FederatedContextQuery.Hit[] => (result.hit ? [result.hit] : [])),
+      statuses: GraphKind.literals.map(
+        (graph) =>
+          results
+            .filter((result) => result.graph === graph)
+            .map((result) => result.status)
+            .toSorted((a, b) => statusPriority(b) - statusPriority(a))[0] ??
+          input.statuses.find((status) => status.graph === graph) ??
+          ContextFederation.status.notQueried(graph),
+      ),
+    })),
+  )
 }
 
 function statusPriority(status: GraphQueryStatus) {
@@ -795,9 +918,10 @@ function statusPriority(status: GraphQueryStatus) {
 }
 
 function runtimeError(error: unknown) {
-  const reason = error && typeof error === "object" && "_tag" in error
-    ? `${String(error._tag)}${"reason" in error && typeof error.reason === "string" ? `:${error.reason}` : ""}`
-    : errorCode(error)
+  const reason =
+    error && typeof error === "object" && "_tag" in error
+      ? `${String(error._tag)}${"reason" in error && typeof error.reason === "string" ? `:${error.reason}` : ""}`
+      : errorCode(error)
   return new RuntimeError({ reason })
 }
 

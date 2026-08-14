@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import type { SnapshotFileDiff } from "@deepagent-code/sdk/v2"
 import type { Message } from "@deepagent-code/sdk/v2/client"
-import { diffs, message } from "./diffs"
+import { DIFF_PROJECTION_LIMITS, diffs, message } from "./diffs"
 
 const item = {
   file: "src/app.ts",
@@ -28,10 +28,51 @@ describe("diffs", () => {
     expect(
       diffs([
         item,
-        { file: "src/bad.ts", additions: 1, deletions: 1 },
+        { file: "src/metadata-only.ts", additions: 1, deletions: 1 },
         { patch: item.patch, additions: 1, deletions: 1 },
       ]),
-    ).toEqual([item])
+    ).toEqual([item, { file: "src/metadata-only.ts", additions: 1, deletions: 1, patch: "" }])
+  })
+
+  test("keeps metadata-only summary diffs emitted by the server", () => {
+    expect(diffs([{ file: "src/app.ts", additions: 2, deletions: 1, status: "modified" }])).toEqual([
+      { file: "src/app.ts", patch: "", additions: 2, deletions: 1, status: "modified" },
+    ])
+  })
+
+  test("bounds legacy diff arrays and strips oversized patches", () => {
+    const oversized = {
+      ...item,
+      file: "src/oversized.ts",
+      patch: "x".repeat(DIFF_PROJECTION_LIMITS.patchCharsPerFile + 1),
+    }
+    const input = [
+      oversized,
+      ...Array.from({ length: DIFF_PROJECTION_LIMITS.files + 10 }, (_, index) => ({
+        ...item,
+        file: `src/file-${index}.ts`,
+      })),
+    ]
+
+    const result = diffs(input)
+    expect(result).toHaveLength(DIFF_PROJECTION_LIMITS.files)
+    expect(result[0]).toMatchObject({ file: "src/oversized.ts", patch: "" })
+  })
+
+  test("bounds cumulative patch text retained by the client store", () => {
+    const patch = "x".repeat(Math.floor(DIFF_PROJECTION_LIMITS.patchCharsTotal / 3))
+    const result = diffs(
+      Array.from({ length: 5 }, (_, index) => ({
+        ...item,
+        file: `src/file-${index}.ts`,
+        patch,
+      })),
+    )
+
+    expect(result.reduce((total, value) => total + (value.patch?.length ?? 0), 0)).toBeLessThanOrEqual(
+      DIFF_PROJECTION_LIMITS.patchCharsTotal,
+    )
+    expect(result.some((value) => value.patch === "")).toBe(true)
   })
 })
 
