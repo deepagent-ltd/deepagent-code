@@ -366,21 +366,84 @@ describe("legacy provider recovery delete cascade", () => {
         )
       `)
       yield* db.run(`
+        INSERT INTO session_provider_owner_lease (
+          owner_token, registered_at, heartbeat_at, lease_expires_at
+        ) VALUES (
+          'owner-recovery-delete',
+          CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),
+          CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),
+          CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) + 30000
+        )
+      `)
+      yield* db.run(`
+        INSERT INTO context_security_namespace (id, kind, binding_hash, created_at)
+        VALUES ('namespace-recovery-delete', 'implicit_local', 'binding-recovery-delete', 1)
+      `)
+      yield* db.run(`
+        INSERT INTO context_project_scope_identity (
+          security_namespace_id, project_scope_key, project_kind,
+          project_identity_hash, observed_project_id, created_at
+        ) VALUES (
+          'namespace-recovery-delete', 'scope-recovery-delete', 'registered_root',
+          'identity-recovery-delete', 'project-recovery-delete', 1
+        )
+      `)
+      yield* db.run(`
         INSERT INTO session_tool_request_receipt (
           receipt_id, request_ordinal, session_id, user_message_id, assistant_message_id,
           provider_attempt_id, provider_id, model_id, protocol, registry_tool_ids,
           permission_filtered_tool_ids, final_offered_tool_ids, call_ids, prompt_epoch,
           prompt_window_id, effective_history_hash, request_input_hash, final_request_hash,
           provider_state, adapter_prepared_at, dispatching_at, terminal_at, owner_token,
-          request_state, request_error_code, created_at
+          request_state, request_error_code, created_at,
+          context_eligibility, context_readiness, context_activation, context_activation_fingerprint,
+          released_knowledge_security_namespace_id, released_knowledge_project_scope_key,
+          released_knowledge_binding_state, released_knowledge_exact_refs,
+          released_knowledge_exact_refs_fingerprint
         ) VALUES (
           'receipt-recovery-delete', 1, 'ses_recovery_delete', 'msg_recovery_delete_user',
           'msg_recovery_delete_assistant', NULL, 'provider', 'model', 'chat', '[]', '[]',
           '[]', '[]', 0, 'window-recovery-source', 'history-recovery-source',
-          'request-input-recovery-delete', 'request-final-recovery-delete',
-          'indeterminate_after_crash', 1, 1, 2, 'owner-recovery-delete', 'dispatched',
-          'provider_started_outcome_unknown_after_process_restart', 1
+          'request-input-recovery-delete', NULL,
+          'preparing', NULL, NULL, NULL, 'owner-recovery-delete', 'prepared', NULL, 1,
+          '{"requested":false,"project":false,"enabled":{"contextProjectionV2":false,"contextQueryToolsV2":false,"coreV2ExecutionOwner":false}}',
+          '{"observedAt":0,"expiresAt":10000}',
+          '{"schemaVersion":1,"recordedAt":1,"readinessAgeMs":1,"readinessExpiresInMs":9999,"outcome":"not_requested","enabledCapabilities":[],"fallbackReasons":[],"decision":{"requested":false,"project":false,"enabled":{"contextProjectionV2":false,"contextQueryToolsV2":false,"coreV2ExecutionOwner":false}}}',
+          'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+          'namespace-recovery-delete', 'scope-recovery-delete', 'unavailable', '[]',
+          '4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945'
         )
+      `)
+      yield* db.run(`
+        UPDATE session_tool_request_receipt
+        SET released_knowledge_selected_refs = '[]',
+            released_knowledge_selected_refs_fingerprint =
+              '4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945'
+        WHERE receipt_id = 'receipt-recovery-delete'
+      `)
+      yield* db.run(`
+        UPDATE session_tool_request_receipt
+        SET final_request_hash = 'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+            provider_request_hash = 'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+            adapter_prepared_at = 1,
+            tool_definition_hash = 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+            prepared_turn_hash = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            system_stable_hash = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+            system_volatile_hash = 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+            wire_request_hash = 'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+            provider_state = 'prepared'
+        WHERE receipt_id = 'receipt-recovery-delete'
+      `)
+      yield* db.run(`
+        UPDATE session_tool_request_receipt
+        SET provider_state = 'dispatching', request_state = 'dispatched', dispatching_at = 1
+        WHERE receipt_id = 'receipt-recovery-delete'
+      `)
+      yield* db.run(`
+        UPDATE session_tool_request_receipt
+        SET provider_state = 'indeterminate_after_crash', terminal_at = 2,
+            request_error_code = 'provider_started_outcome_unknown_after_process_restart'
+        WHERE receipt_id = 'receipt-recovery-delete'
       `)
       yield* db.run(`
         INSERT INTO session_activity_progress (
@@ -452,7 +515,8 @@ describe("legacy provider recovery delete cascade", () => {
         ) VALUES (
           'resolution-recovery-delete', 'receipt-recovery-delete', 'ses_recovery_delete',
           'activity-recovery-delete', 'msg_recovery_delete_assistant', 0,
-          'window-recovery-source', 'history-recovery-source', 'request-final-recovery-delete',
+          'window-recovery-source', 'history-recovery-source',
+          'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
           0, 'indeterminate_after_crash', 'abandoned', 'user', 'test-user',
           'abandon unknown provider result', 0, 'msg_recovery_delete_user',
           'history-recovery-successor', '["msg_recovery_delete_user"]',

@@ -27,7 +27,8 @@ const locationLayer = Layer.succeed(
     location({ directory: AbsolutePath.make("project"), workspaceID: WorkspaceV2.ID.make("wrk_test") }),
   ),
 )
-const eventLayer = Layer.mergeAll(EventV2.defaultLayer, Database.defaultLayer)
+const database = Database.layerFromPath(":memory:")
+const eventLayer = Layer.mergeAll(EventV2.layer.pipe(Layer.provide(database)), database)
 const it = testEffect(eventLayer.pipe(Layer.provideMerge(locationLayer)))
 const itWithoutLocation = testEffect(eventLayer)
 

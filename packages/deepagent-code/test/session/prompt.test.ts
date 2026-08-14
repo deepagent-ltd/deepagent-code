@@ -286,7 +286,11 @@ type PromptLayerOptions = {
 }
 
 function makePrompt(input?: PromptLayerOptions) {
-  const runtimeFlags = RuntimeFlags.layer({ experimentalEventSystem: true, ...input?.flags })
+  const runtimeFlags = RuntimeFlags.layer({
+    experimentalEventSystem: true,
+    coreV2ExecutionOwner: false,
+    ...input?.flags,
+  })
   const pluginLayer = input?.plugin ? Layer.succeed(Plugin.Service, input.plugin) : Plugin.defaultLayer
   const deps = Layer.mergeAll(
     Session.defaultLayer,
@@ -353,6 +357,7 @@ function makePrompt(input?: PromptLayerOptions) {
   // `deps`) so drained steers are visible to the loop's history reads.
   const steer = SessionSteer.layer.pipe(Layer.provideMerge(deps))
   const promptLayer = SessionPrompt.layer.pipe(
+    Layer.provide(SessionV2.defaultLayer),
     Layer.provide(SessionProviderOwner.layer.pipe(Layer.provide(deps))),
     Layer.provide(testInstanceStoreLayer),
     Layer.provide(SessionRevert.defaultLayer),

@@ -28,7 +28,7 @@ import { SessionStore } from "./session/store"
 import { SessionExecution } from "./session/execution"
 import { SessionExecutionLocal } from "./session/execution/local"
 import { logFailure } from "./session/logging"
-import { MessageDecodeError } from "./session/error"
+import { MessageDecodeError, SessionNotFound } from "./session/error"
 import { SessionEvent } from "./session/event"
 import { SessionInput } from "./session/input"
 
@@ -89,9 +89,8 @@ type LegacyMessageWithParts = {
   parts: SessionV1.Part[]
 }
 
-export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("Session.NotFoundError", {
-  sessionID: SessionSchema.ID,
-}) {}
+export const NotFoundError = SessionNotFound.Error
+export type NotFoundError = SessionNotFound.Error
 
 export class OperationUnavailableError extends Schema.TaggedErrorClass<OperationUnavailableError>()(
   "Session.OperationUnavailableError",
