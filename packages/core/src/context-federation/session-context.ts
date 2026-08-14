@@ -8,12 +8,13 @@ import { Hash } from "../util/hash"
 import { SessionInputTable } from "../session/sql"
 import { SessionMessage } from "../session/message"
 import { SessionSchema } from "../session/schema"
+import { DeepAgentReleasedSnapshot, type Binding } from "../deepagent/released-snapshot"
 import { GraphKind } from "./contract"
 import { ContextArtifactStore, type AuditArtifact } from "./artifact-store"
 import { GraphQueryStatus } from "./federation"
 import { Sensitivity } from "./authorization"
 import type { Rendered } from "./projection"
-import { ContextRef, LocationKey, type SecurityNamespaceID } from "./reference"
+import { ContextRef, LocationKey, ProjectScopeKey, SecurityNamespaceID } from "./reference"
 import {
   SessionActivityInputTable,
   SessionActivityTable,
@@ -111,6 +112,8 @@ export type Selection = {
   readonly revision: number
   readonly triggerInputId: string
   readonly locationKey: LocationKey
+  readonly securityNamespaceId: SecurityNamespaceID
+  readonly projectScopeKey: ProjectScopeKey
   readonly promotedInputIds: readonly string[]
   readonly queryFingerprint: string
   readonly authorizationFingerprint: string
@@ -119,6 +122,7 @@ export type Selection = {
   readonly selectedSourceFingerprint: string
   readonly observedLocationMutationEpoch: number
   readonly nextRevalidationAt: number
+  readonly releasedKnowledgeBinding: Binding
   readonly graphRevisions: Readonly<Record<GraphKind, string>>
   readonly graphStatuses: readonly GraphQueryStatus[]
   readonly selectedRefs: readonly SelectedRef[]
@@ -202,6 +206,7 @@ export class Service extends Context.Service<Service, Interface>()("@deepagent-c
 
 export type CommitSelectionInput = {
   readonly securityNamespaceId: SecurityNamespaceID
+  readonly projectScopeKey: ProjectScopeKey
   readonly sessionId: SessionSchema.ID
   readonly activityId: string
   readonly revision: number
@@ -215,6 +220,7 @@ export type CommitSelectionInput = {
   readonly selectedSourceFingerprint: string
   readonly observedLocationMutationEpoch: number
   readonly nextRevalidationAt: number
+  readonly releasedKnowledgeBinding: Binding
   readonly graphRevisions: Readonly<Record<GraphKind, string>>
   readonly graphStatuses: readonly GraphQueryStatus[]
   readonly selectedRefs: readonly SelectedRef[]
@@ -742,6 +748,8 @@ function selectionRow(
     revision: input.revision,
     trigger_input_id: input.triggerInputId,
     location_key: input.locationKey,
+    security_namespace_id: input.securityNamespaceId,
+    project_scope_key: input.projectScopeKey,
     query_fingerprint: input.queryFingerprint,
     authorization_fingerprint: input.authorizationFingerprint,
     authorization_epoch: input.authorizationEpoch,
@@ -749,6 +757,17 @@ function selectionRow(
     selected_source_fingerprint: input.selectedSourceFingerprint,
     observed_location_mutation_epoch: input.observedLocationMutationEpoch,
     next_revalidation_at: input.nextRevalidationAt,
+    released_knowledge_binding_state: input.releasedKnowledgeBinding.state,
+    released_knowledge_snapshot_id:
+      input.releasedKnowledgeBinding.state === "bound" ? input.releasedKnowledgeBinding.snapshotId : null,
+    released_knowledge_generation:
+      input.releasedKnowledgeBinding.state === "bound" ? input.releasedKnowledgeBinding.generation : null,
+    released_knowledge_membership_hash:
+      input.releasedKnowledgeBinding.state === "bound" ? input.releasedKnowledgeBinding.membershipHash : null,
+    released_knowledge_manifest_hash:
+      input.releasedKnowledgeBinding.state === "bound" ? input.releasedKnowledgeBinding.manifestHash : null,
+    released_knowledge_exact_refs: [...input.releasedKnowledgeBinding.exactRefs],
+    released_knowledge_exact_refs_fingerprint: input.releasedKnowledgeBinding.exactRefsFingerprint,
     graph_revisions: JSON.stringify(input.graphRevisions),
     graph_statuses: JSON.stringify(input.graphStatuses),
     selected_refs: JSON.stringify(input.selectedRefs),
@@ -770,6 +789,8 @@ function matchesSelection(selection: Selection, input: CommitSelectionInput) {
     selection.revision === input.revision &&
     selection.triggerInputId === input.triggerInputId &&
     selection.locationKey === input.locationKey &&
+    selection.securityNamespaceId === input.securityNamespaceId &&
+    selection.projectScopeKey === input.projectScopeKey &&
     JSON.stringify(selection.promotedInputIds) === JSON.stringify(input.promotedInputIds) &&
     selection.queryFingerprint === input.queryFingerprint &&
     selection.authorizationFingerprint === input.authorizationFingerprint &&
@@ -778,6 +799,7 @@ function matchesSelection(selection: Selection, input: CommitSelectionInput) {
     selection.selectedSourceFingerprint === input.selectedSourceFingerprint &&
     selection.observedLocationMutationEpoch === input.observedLocationMutationEpoch &&
     selection.nextRevalidationAt === input.nextRevalidationAt &&
+    JSON.stringify(selection.releasedKnowledgeBinding) === JSON.stringify(input.releasedKnowledgeBinding) &&
     GraphKind.literals.every((graph) => selection.graphRevisions[graph] === input.graphRevisions[graph]) &&
     JSON.stringify(selection.graphStatuses) === JSON.stringify(input.graphStatuses) &&
     JSON.stringify(selection.selectedRefs) === JSON.stringify(input.selectedRefs) &&
@@ -810,6 +832,8 @@ function decodeSelection(
   row: typeof SessionContextSelectionTable.$inferSelect,
 ): Effect.Effect<Selection, StoredDataError> {
   return Effect.gen(function* () {
+    if (!row.security_namespace_id) return yield* new StoredDataError({ field: "security_namespace_id" })
+    if (!row.project_scope_key) return yield* new StoredDataError({ field: "project_scope_key" })
     const inputs = yield* db
       .select({ input_id: SessionContextSelectionInputTable.input_id })
       .from(SessionContextSelectionInputTable)
@@ -824,6 +848,8 @@ function decodeSelection(
       revision: row.revision,
       triggerInputId: row.trigger_input_id,
       locationKey: LocationKey.make(row.location_key),
+      securityNamespaceId: SecurityNamespaceID.make(row.security_namespace_id),
+      projectScopeKey: ProjectScopeKey.make(row.project_scope_key),
       promotedInputIds: inputs.map((input) => input.input_id),
       queryFingerprint: row.query_fingerprint,
       authorizationFingerprint: row.authorization_fingerprint,
@@ -832,6 +858,7 @@ function decodeSelection(
       selectedSourceFingerprint: row.selected_source_fingerprint,
       observedLocationMutationEpoch: row.observed_location_mutation_epoch,
       nextRevalidationAt: row.next_revalidation_at,
+      releasedKnowledgeBinding: yield* decodeReleasedKnowledgeBinding(row),
       graphRevisions: yield* parseStored("graph_revisions", GraphRevisions, row.graph_revisions),
       graphStatuses: yield* parseStored("graph_statuses", Schema.Array(GraphQueryStatus), row.graph_statuses),
       selectedRefs: yield* parseStored("selected_refs", Schema.Array(SelectedRef), row.selected_refs),
@@ -847,6 +874,48 @@ function decodeSelection(
             },
       createdAt: row.created_at,
     }
+  })
+}
+
+function decodeReleasedKnowledgeBinding(row: typeof SessionContextSelectionTable.$inferSelect) {
+  return Effect.try({
+    try: (): Binding => {
+      if (
+        row.released_knowledge_binding_state === "unavailable" &&
+        row.released_knowledge_snapshot_id === null &&
+        row.released_knowledge_generation === null &&
+        row.released_knowledge_membership_hash === null &&
+        row.released_knowledge_manifest_hash === null &&
+        Array.isArray(row.released_knowledge_exact_refs) &&
+        row.released_knowledge_exact_refs.length === 0 &&
+        row.released_knowledge_exact_refs_fingerprint ===
+          DeepAgentReleasedSnapshot.exactRefsFingerprint(row.released_knowledge_exact_refs)
+      ) {
+        return DeepAgentReleasedSnapshot.binding(undefined)
+      }
+      if (
+        row.released_knowledge_binding_state !== "bound" ||
+        !row.released_knowledge_snapshot_id ||
+        !row.released_knowledge_generation ||
+        !row.released_knowledge_membership_hash ||
+        !row.released_knowledge_manifest_hash ||
+        !Array.isArray(row.released_knowledge_exact_refs) ||
+        row.released_knowledge_exact_refs_fingerprint !==
+          DeepAgentReleasedSnapshot.exactRefsFingerprint(row.released_knowledge_exact_refs)
+      ) {
+        throw new Error("invalid released knowledge binding")
+      }
+      return {
+        state: "bound",
+        snapshotId: row.released_knowledge_snapshot_id,
+        generation: row.released_knowledge_generation,
+        membershipHash: row.released_knowledge_membership_hash,
+        manifestHash: row.released_knowledge_manifest_hash,
+        exactRefs: row.released_knowledge_exact_refs,
+        exactRefsFingerprint: row.released_knowledge_exact_refs_fingerprint,
+      }
+    },
+    catch: () => new StoredDataError({ field: "released_knowledge_binding" }),
   })
 }
 

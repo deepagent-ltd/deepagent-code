@@ -8,6 +8,7 @@ import { SessionRunnerModel } from "./model"
 import type { SystemContext } from "../../system-context/index"
 import type { SessionContextEpoch } from "../context-epoch"
 import type { ToolOutputStore } from "../../tool-output-store"
+import type { Error as V2ProviderTurnError } from "./v2-provider-turn"
 
 export class StepLimitExceededError extends Schema.TaggedErrorClass<StepLimitExceededError>()(
   "SessionRunner.StepLimitExceededError",
@@ -26,6 +27,7 @@ export type RunError =
   | SystemContext.InitializationBlocked
   | SessionContextEpoch.AgentReplacementBlocked
   | ToolOutputStore.Error
+  | V2ProviderTurnError
 
 /** Runs one local continuation from already-recorded Session history. */
 export interface Interface {

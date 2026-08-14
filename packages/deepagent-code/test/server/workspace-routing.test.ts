@@ -7,6 +7,14 @@ import {
 import { SessionID } from "../../src/session/schema"
 
 describe("isLocalWorkspaceRoute", () => {
+  test("keeps transfer-sensitive sync mutations local only at their exact POST paths", () => {
+    expect(isLocalWorkspaceRoute("POST", "/sync/replay")).toBe(true)
+    expect(isLocalWorkspaceRoute("POST", "/sync/steal")).toBe(true)
+    expect(isLocalWorkspaceRoute("GET", "/sync/replay")).toBe(false)
+    expect(isLocalWorkspaceRoute("POST", "/sync/replay/child")).toBe(false)
+    expect(isLocalWorkspaceRoute("POST", "/sync/steal/child")).toBe(false)
+  })
+
   test("GET /session is local", () => {
     expect(isLocalWorkspaceRoute("GET", "/session")).toBe(true)
   })

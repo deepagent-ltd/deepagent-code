@@ -1,7 +1,7 @@
 {
   "name": "@deepagent-code/desktop",
   "private": true,
-  "version": "1.4.5",
+  "version": "1.4.6",
   "type": "module",
   "license": "AGPL-3.0-or-later",
   "homepage": "https://deepagent-code.ai",
@@ -28,7 +28,7 @@
     "test:llm-release:ui": "bun run build && node --experimental-strip-types ./scripts/live-llm/desktop-ui.ts",
     "test:llm-live:activity-progress-restart": "bun run build && node --experimental-strip-types ./scripts/live-llm/activity-progress-restart.ts",
     "test:llm-release:activity-progress-package": "bun run build && DEEPAGENT_CODE_ALLOW_UNSIGNED=1 bun run package:mac && node --experimental-strip-types ./scripts/live-llm/activity-progress-package.ts",
-    "test:llm-release:long-session": "bun run build && node --experimental-strip-types ./scripts/live-llm/long-session.ts",
+    "test:llm-release:long-session": "bun run build && DEEPAGENT_CODE_ALLOW_UNSIGNED=1 bun run package:mac && node --experimental-strip-types ./scripts/live-llm/long-session.ts",
     "test:llm-release:observed": "bun run build && node --experimental-strip-types ./scripts/live-llm/desktop-observed.ts",
     "package": "bun ./scripts/package.ts",
     "package:mac": "bun ./scripts/package.ts --mac",

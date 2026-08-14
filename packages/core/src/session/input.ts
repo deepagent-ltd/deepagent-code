@@ -217,6 +217,7 @@ export const guardReservedID = Effect.fn("SessionInput.guardReservedID")(functio
   db: DatabaseService,
   event: EventV2.Payload,
 ) {
+  if (event.replayExact) return
   if (
     Schema.is(SessionEvent.PromptLifecycle.Admitted)(event) ||
     Schema.is(SessionEvent.PromptLifecycle.Promoted)(event)

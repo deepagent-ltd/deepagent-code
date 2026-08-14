@@ -5,7 +5,8 @@ import { makeLocationNode } from "./effect/app-node"
 import { EventV2 } from "./event"
 import { Location } from "./location"
 import { AgentV2 } from "./agent"
-import { SessionV2 } from "./session"
+import { SessionNotFound } from "./session/error"
+import { SessionSchema } from "./session/schema"
 import { SessionStore } from "./session/store"
 import { withStatics } from "./schema"
 import { Identifier } from "./util/identifier"
@@ -35,7 +36,7 @@ export const Source = Schema.Union([
 export type Source = typeof Source.Type
 
 const RequestFields = {
-  sessionID: SessionV2.ID,
+  sessionID: SessionSchema.ID,
   action: Schema.String,
   resources: Schema.Array(Schema.String),
   save: Schema.Array(Schema.String).pipe(Schema.optional),
@@ -77,7 +78,7 @@ export const Event = {
   Replied: EventV2.define({
     type: "permission.v2.replied",
     schema: {
-      sessionID: SessionV2.ID,
+      sessionID: SessionSchema.ID,
       requestID: ID,
       reply: Reply,
     },
@@ -117,11 +118,11 @@ export function merge(...rulesets: Ruleset[]): Ruleset {
 }
 
 export interface Interface {
-  readonly ask: (input: AssertInput) => EffectRuntime.Effect<AskResult, SessionV2.NotFoundError>
-  readonly assert: (input: AssertInput) => EffectRuntime.Effect<void, Error | SessionV2.NotFoundError>
+  readonly ask: (input: AssertInput) => EffectRuntime.Effect<AskResult, SessionNotFound.Error>
+  readonly assert: (input: AssertInput) => EffectRuntime.Effect<void, Error | SessionNotFound.Error>
   readonly reply: (input: ReplyInput) => EffectRuntime.Effect<void, NotFoundError>
   readonly get: (id: ID) => EffectRuntime.Effect<Request | undefined>
-  readonly forSession: (sessionID: SessionV2.ID) => EffectRuntime.Effect<ReadonlyArray<Request>>
+  readonly forSession: (sessionID: SessionSchema.ID) => EffectRuntime.Effect<ReadonlyArray<Request>>
   readonly list: () => EffectRuntime.Effect<ReadonlyArray<Request>>
 }
 
@@ -162,11 +163,11 @@ export const layer = Layer.effect(
     })
 
     const configured = EffectRuntime.fn("PermissionV2.configured")(function* (
-      sessionID: SessionV2.ID,
+      sessionID: SessionSchema.ID,
       agentID?: AgentV2.ID,
     ) {
       const session = yield* sessions.get(sessionID)
-      if (!session) return yield* new SessionV2.NotFoundError({ sessionID })
+      if (!session) return yield* new SessionNotFound.Error({ sessionID })
       const agent = yield* agents.resolve(agentID ?? session.agent)
       return agent?.permissions ?? missingAgentPermissions
     })
@@ -319,7 +320,7 @@ export const layer = Layer.effect(
       return pending.get(id)?.request
     })
 
-    const forSession = EffectRuntime.fn("PermissionV2.forSession")(function* (sessionID: SessionV2.ID) {
+    const forSession = EffectRuntime.fn("PermissionV2.forSession")(function* (sessionID: SessionSchema.ID) {
       return Array.from(pending.values(), (item) => item.request).filter((request) => request.sessionID === sessionID)
     })
 

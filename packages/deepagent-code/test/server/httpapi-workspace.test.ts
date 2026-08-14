@@ -2,6 +2,7 @@ import { afterEach, describe, expect, mock } from "bun:test"
 import { mkdir } from "node:fs/promises"
 import path from "node:path"
 import { Effect, Layer, Stream } from "effect"
+import { eq } from "drizzle-orm"
 import { Flag } from "@deepagent-code/core/flag/flag"
 import { registerAdapter } from "../../src/control-plane/adapters"
 import { WorkspaceV2 } from "@deepagent-code/core/workspace"
@@ -11,6 +12,8 @@ import { WorkspacePaths } from "../../src/server/routes/instance/httpapi/groups/
 import { EventPaths } from "../../src/server/routes/instance/httpapi/groups/event"
 import { Session } from "@/session/session"
 import { Database } from "@deepagent-code/core/database/database"
+import { EventSequenceTable, EventTable } from "@deepagent-code/core/event/sql"
+import { SessionTable } from "@deepagent-code/core/session/sql"
 import * as Log from "@deepagent-code/core/util/log"
 import { Server } from "../../src/server/server"
 import { resetDatabase } from "../fixture/db"
@@ -21,6 +24,7 @@ import { Project } from "../../src/project/project"
 import { InstancePaths } from "../../src/server/routes/instance/httpapi/groups/instance"
 import { testEffect } from "../lib/effect"
 import { httpApiLayer, requestInDirectory } from "./httpapi-layer"
+import { SyncPaths } from "../../src/server/routes/instance/httpapi/groups/sync"
 
 void Log.init({ print: false })
 
@@ -226,12 +230,69 @@ describe("workspace HttpApi", () => {
       expect(workspace).toMatchObject({ type: "local-test", name: "local-test" })
 
       const session = yield* Session.use.create({}).pipe(provideInstance(dir))
+      const { db } = yield* Database.Service
+      const beforeSession = yield* db
+        .select()
+        .from(SessionTable)
+        .where(eq(SessionTable.id, session.id))
+        .get()
+        .pipe(Effect.orDie)
+      const beforeSequence = yield* db
+        .select()
+        .from(EventSequenceTable)
+        .where(eq(EventSequenceTable.aggregate_id, session.id))
+        .get()
+        .pipe(Effect.orDie)
+      const beforeEvents = yield* db
+        .select()
+        .from(EventTable)
+        .where(eq(EventTable.aggregate_id, session.id))
+        .all()
+        .pipe(Effect.orDie)
       const warped = yield* request(WorkspacePaths.warp, dir, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ id: workspace.id, sessionID: session.id }),
       })
-      expect(warped.status).toBe(204)
+      expect(warped.status).toBe(409)
+      expect(yield* warped.json).toMatchObject({
+        _tag: "ConflictError",
+        message: expect.stringContaining("durable transfer admission"),
+        resource: `session:${session.id}`,
+      })
+
+      const stealURL = new URL(`http://localhost${SyncPaths.steal}`)
+      stealURL.searchParams.set("workspace", workspace.id)
+      const stolen = yield* request(stealURL.toString(), dir, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ sessionID: session.id }),
+      })
+      expect(stolen.status).toBe(409)
+      expect(yield* stolen.json).toMatchObject({
+        _tag: "ConflictError",
+        message: expect.stringContaining("durable transfer operation receipt"),
+        resource: `${workspace.id}:${session.id}`,
+      })
+      expect(
+        yield* db.select().from(SessionTable).where(eq(SessionTable.id, session.id)).get().pipe(Effect.orDie),
+      ).toEqual(beforeSession)
+      expect(
+        yield* db
+          .select()
+          .from(EventSequenceTable)
+          .where(eq(EventSequenceTable.aggregate_id, session.id))
+          .get()
+          .pipe(Effect.orDie),
+      ).toEqual(beforeSequence)
+      expect(
+        yield* db
+          .select()
+          .from(EventTable)
+          .where(eq(EventTable.aggregate_id, session.id))
+          .all()
+          .pipe(Effect.orDie),
+      ).toEqual(beforeEvents)
 
       const removed = yield* request(WorkspacePaths.remove.replace(":id", workspace.id), dir, { method: "DELETE" })
       expect(removed.status).toBe(200)
@@ -446,7 +507,7 @@ describe("workspace HttpApi", () => {
     }),
   )
 
-  it.live("proxies remote workspace requests selected from session ownership", () =>
+  it.live("rejects remote workspace placement before proxy or ownership side effects", () =>
     Effect.gen(function* () {
       Flag.DEEPAGENT_CODE_EXPERIMENTAL_WORKSPACES = true
       const dir = yield* tmpdirScoped({ git: true })
@@ -473,39 +534,111 @@ describe("workspace HttpApi", () => {
       const workspace = (yield* created.json) as Workspace.Info
       const sessionResponse = yield* requestDefault("/session", dir, { method: "POST" })
       const session = (yield* sessionResponse.json) as Session.Info
+      const { db } = yield* Database.Service
+      const beforeSession = yield* db
+        .select()
+        .from(SessionTable)
+        .where(eq(SessionTable.id, session.id))
+        .get()
+        .pipe(Effect.orDie)
+      const beforeSequence = yield* db
+        .select()
+        .from(EventSequenceTable)
+        .where(eq(EventSequenceTable.aggregate_id, session.id))
+        .get()
+        .pipe(Effect.orDie)
+      const beforeEvents = yield* db
+        .select()
+        .from(EventTable)
+        .where(eq(EventTable.aggregate_id, session.id))
+        .all()
+        .pipe(Effect.orDie)
       const warped = yield* requestDefault(WorkspacePaths.warp, dir, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ id: workspace.id, sessionID: session.id }),
       })
-      expect(warped.status).toBe(204)
+      expect(warped.status).toBe(409)
+      expect(yield* warped.json).toMatchObject({
+        _tag: "ConflictError",
+        message: expect.stringContaining("durable transfer admission"),
+        resource: `session:${session.id}`,
+      })
+
+      const replayed = yield* requestDefault(`${SyncPaths.replay}?workspace=${workspace.id}`, dir, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          directory: dir,
+          events: [
+            {
+              id: "evt_remote_replay_disabled",
+              aggregateID: session.id,
+              seq: 1,
+              type: "session.next.moved.1",
+              data: {
+                sessionID: session.id,
+                timestamp: 1,
+                location: { directory: path.join(dir, ".remote-session"), workspaceID: workspace.id },
+              },
+            },
+          ],
+        }),
+      })
+      expect(replayed.status).toBe(409)
+      expect(
+        yield* db.select().from(SessionTable).where(eq(SessionTable.id, session.id)).get().pipe(Effect.orDie),
+      ).toEqual(beforeSession)
+      expect(
+        yield* db
+          .select()
+          .from(EventSequenceTable)
+          .where(eq(EventSequenceTable.aggregate_id, session.id))
+          .get()
+          .pipe(Effect.orDie),
+      ).toEqual(beforeSequence)
+      expect(
+        yield* db
+          .select()
+          .from(EventTable)
+          .where(eq(EventTable.aggregate_id, session.id))
+          .all()
+          .pipe(Effect.orDie),
+      ).toEqual(beforeEvents)
+
+      const stolen = yield* requestDefault(`${SyncPaths.steal}?workspace=${workspace.id}`, dir, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ sessionID: session.id }),
+      })
+      expect(stolen.status).toBe(409)
+      expect(
+        yield* db.select().from(SessionTable).where(eq(SessionTable.id, session.id)).get().pipe(Effect.orDie),
+      ).toEqual(beforeSession)
+      expect(
+        yield* db
+          .select()
+          .from(EventSequenceTable)
+          .where(eq(EventSequenceTable.aggregate_id, session.id))
+          .get()
+          .pipe(Effect.orDie),
+      ).toEqual(beforeSequence)
+      expect(
+        yield* db
+          .select()
+          .from(EventTable)
+          .where(eq(EventTable.aggregate_id, session.id))
+          .all()
+          .pipe(Effect.orDie),
+      ).toEqual(beforeEvents)
 
       try {
-        const response = yield* requestDefault(`http://localhost/session/${session.id}/message`, dir, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ parts: [{ type: "text", text: "hello" }] }),
-        })
-
-        const responseBody = yield* response.text
-        expect({ status: response.status, body: responseBody }).toMatchObject({ status: 200 })
-        expect(JSON.parse(responseBody)).toEqual({ proxied: true, path: `/base/session/${session.id}/message` })
-        expect(proxied.filter((item) => new URL(item.url).pathname === `/base/session/${session.id}/message`)).toEqual([
-          expect.objectContaining({
-            url: `http://127.0.0.1:${remote.port}/base/session/${session.id}/message`,
-            method: "POST",
-          }),
-        ])
-
-        const aborted = yield* request(`http://localhost/session/${session.id}/abort`, dir, { method: "POST" })
-        expect(aborted.status).toBe(200)
-        expect(proxied.filter((item) => new URL(item.url).pathname === `/base/session/${session.id}/abort`)).toEqual([
-          expect.objectContaining({
-            url: `http://127.0.0.1:${remote.port}/base/session/${session.id}/abort`,
-            method: "POST",
-            body: "",
-          }),
-        ])
+        expect(
+          proxied.filter((item) =>
+            ["/base/vcs/apply", "/base/sync/replay", "/base/sync/steal"].includes(new URL(item.url).pathname),
+          ),
+        ).toEqual([])
+        expect((yield* Session.use.get(session.id)).workspaceID).toBeUndefined()
       } finally {
         void remote.stop(true)
         yield* requestDefault(WorkspacePaths.remove.replace(":id", workspace.id), dir, { method: "DELETE" })

@@ -18,6 +18,8 @@ import { SessionExecution } from "@deepagent-code/core/session/execution"
 import { SessionRunCoordinator } from "@deepagent-code/core/session/run-coordinator"
 import * as SessionRunnerLLM from "@deepagent-code/core/session/runner/llm"
 import { SessionRunnerModel } from "@deepagent-code/core/session/runner/model"
+import { V2ProviderTurn } from "@deepagent-code/core/session/runner/v2-provider-turn"
+import { SessionProviderOwner } from "@deepagent-code/core/context-federation/provider-owner"
 import { ToolRegistry } from "@deepagent-code/core/tool/registry"
 import { SessionTable } from "@deepagent-code/core/session/sql"
 import { SessionStore } from "@deepagent-code/core/session/store"
@@ -73,6 +75,7 @@ const location = Location.layer({ directory: AbsolutePath.make("/project") }).pi
 const skillGuidance = Layer.mock(SkillGuidance.Service, { load: () => Effect.succeed(SystemContext.empty) })
 const config = Layer.succeed(Config.Service, Config.Service.of({ entries: () => Effect.succeed([]) }))
 const runner = SessionRunnerLLM.defaultLayer.pipe(
+  Layer.provide(V2ProviderTurn.layer.pipe(Layer.provide(SessionProviderOwner.layer), Layer.provide(database))),
   Layer.provide(database),
   Layer.provide(store),
   Layer.provide(events),

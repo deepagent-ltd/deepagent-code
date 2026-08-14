@@ -38,6 +38,7 @@ export interface PromptEpochRow {
   world_state_baseline_hash: string | null
   authority_state: "legacy_pending" | "ready" | "recovery_required" | null
   recovery_reason: string | null
+  recovery_resolution_id: string | null
   reason: PromptEpochReason
   created_at: number
   retired_at: number | null
@@ -140,6 +141,7 @@ export function activateInTransaction(tx: Transaction, input: Parameters<PromptE
       world_state_baseline_hash: input.worldStateBaselineHash ?? null,
       authority_state: "ready",
       recovery_reason: null,
+      recovery_resolution_id: null,
       reason: "compaction",
       created_at: now,
       retired_at: null,
@@ -213,6 +215,7 @@ const layer = Layer.effect(
                 world_state_baseline_hash: null,
                 authority_state: "ready",
                 recovery_reason: null,
+                recovery_resolution_id: null,
                 reason: "bootstrap",
                 created_at: Date.now(),
                 retired_at: null,
