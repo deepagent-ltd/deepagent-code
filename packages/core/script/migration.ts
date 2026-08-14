@@ -31,6 +31,8 @@ await $`bun drizzle-kit generate ${args.values.name ? ["--name", args.values.nam
 const sqlMigrations = await sqlMigrationNames(sqlDir)
 
 for (const name of sqlMigrations) {
+  // Checkpoints seed Drizzle's next schema diff; executable backfills and triggers stay in the TypeScript migration chain.
+  if (await isSchemaCheckpoint(sqlDir, name)) continue
   if (await Bun.file(path.join(tsDir, `${name}.ts`)).exists()) continue
   await Bun.write(
     path.join(tsDir, `${name}.ts`),
@@ -64,6 +66,7 @@ export default { ...config, out: ${JSON.stringify(output)} }
 
     const sqlMigrations = await sqlMigrationNames(output)
     for (const name of sqlMigrations) {
+      if (await isSchemaCheckpoint(output, name)) continue
       if (await Bun.file(path.join(tsDir, `${name}.ts`)).exists()) continue
       throw new Error(
         `Database migration TypeScript wrapper is missing for ${name}. Run \`bun script/migration.ts\` from packages/core.`,
@@ -82,6 +85,10 @@ async function sqlMigrationNames(directory: string) {
     .map((file) => file.split("/")[0])
     .filter((name) => name !== undefined)
     .sort()
+}
+
+function isSchemaCheckpoint(directory: string, name: string) {
+  return Bun.file(path.join(directory, name, "schema-checkpoint")).exists()
 }
 
 async function typescriptMigrationNames() {
