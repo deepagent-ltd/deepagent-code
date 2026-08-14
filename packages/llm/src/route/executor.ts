@@ -1,4 +1,5 @@
 import { Cause, Context, Effect, Layer, Random } from "effect"
+import { createHash } from "node:crypto"
 import {
   FetchHttpClient,
   Headers,
@@ -31,6 +32,41 @@ export interface Interface {
 }
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/LLM/RequestExecutor") {}
+
+export interface RequestSealInput {
+  readonly wireHash: string
+  readonly bodyHash: string
+  readonly bodyLength: number
+  readonly contentType: string | undefined
+}
+
+export interface RequestSeal {
+  readonly seal: (input: RequestSealInput) => Effect.Effect<void>
+}
+
+/** Seals a durable attempt against the exact HTTP body before transport begins. */
+export const CurrentRequestSeal = Context.Reference<RequestSeal | undefined>(
+  "@deepagent-code/LLM/RequestExecutor/CurrentRequestSeal",
+  { defaultValue: () => undefined },
+)
+
+export function wireRequestHash(input: {
+  readonly method: string
+  readonly url: string
+  readonly contentType: string | undefined
+  readonly bodyText: string
+}) {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        method: input.method,
+        url: input.url,
+        contentType: input.contentType,
+        bodyText: input.bodyText,
+      }),
+    )
+    .digest("hex")
+}
 
 const BODY_LIMIT = 16_384
 const MAX_RETRIES = 2
@@ -205,6 +241,25 @@ const responseBody = (body: string | void, request: HttpClientRequest.HttpClient
   if (redacted.length <= BODY_LIMIT) return { body: redacted }
   return { body: redacted.slice(0, BODY_LIMIT), bodyTruncated: true }
 }
+
+const sealRequest = (request: HttpClientRequest.HttpClientRequest) =>
+  Effect.gen(function* () {
+    const seal = yield* CurrentRequestSeal
+    if (!seal) return
+    if (request.body._tag !== "Uint8Array") return yield* Effect.die("Durable provider request body is not sealable")
+    const bodyText = new TextDecoder().decode(request.body.body)
+    yield* seal.seal({
+      wireHash: wireRequestHash({
+        method: request.method,
+        url: request.url,
+        contentType: request.body.contentType,
+        bodyText,
+      }),
+      bodyHash: createHash("sha256").update(request.body.body).digest("hex"),
+      bodyLength: request.body.body.length,
+      contentType: request.body.contentType,
+    })
+  })
 
 // Surface the endpoint host + requestId alongside the upstream body so logs can identify *which*
 // gateway failed and how — many users point baseURL at OpenAI-compatible relays whose error bodies
@@ -400,6 +455,7 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient> = Layer.e
     const executeOnce = (request: HttpClientRequest.HttpClientRequest) =>
       Effect.gen(function* () {
         const redactedNames = yield* Headers.CurrentRedactedNames
+        yield* sealRequest(request)
         return yield* http
           .execute(request)
           .pipe(Effect.mapError(toHttpError(redactedNames)), Effect.flatMap(statusError(request, redactedNames)))

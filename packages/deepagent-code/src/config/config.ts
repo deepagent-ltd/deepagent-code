@@ -776,7 +776,7 @@ export const layer = Layer.effect(
                   : Effect.void,
               ),
               Effect.asVoid,
-              Effect.forkDetach,
+              Effect.forkScoped,
             )
           deps.push(dep)
 

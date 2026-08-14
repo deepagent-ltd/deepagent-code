@@ -64,8 +64,16 @@ describe("live LLM route manifest", () => {
         runs: ["live:session-v2:v2-provider-loop"],
       },
       {
+        path: "packages/core/src/plugin/agent.ts",
+        runs: ["live:legacy-session:subagent-control-plane", "live:session-v2:v2-provider-loop"],
+      },
+      {
         path: "packages/core/src/tool/edit.ts",
         runs: ["live:session-v2:file-mutations"],
+      },
+      {
+        path: "packages/core/src/tool/read-failure.ts",
+        runs: ["live:legacy-session:subagent-control-plane", "live:session-v2:file-read-search"],
       },
       {
         path: "packages/deepagent-code/src/tool/edit.ts",
@@ -152,6 +160,7 @@ describe("live LLM route manifest", () => {
           "ext:legacy-session:subagent-takeover",
           "ext:legacy-session:subagent-worktree-routing",
           "ext:renderer-ui:activity-progress-package",
+          "ext:renderer-ui:long-session",
           "ext:v4-event-runtime:v4-multi-agent-runtime",
           "live:adapter:provider-smoke",
           "live:adapter:structured-output",
@@ -203,7 +212,7 @@ describe("live LLM route manifest", () => {
       },
       {
         path: "packages/desktop/scripts/live-llm/long-session.ts",
-        runs: [],
+        runs: ["ext:renderer-ui:long-session"],
       },
       {
         path: "packages/deepagent-code/script/live-llm/autonomous-eval.ts",
@@ -356,6 +365,7 @@ describe("live LLM route manifest", () => {
 
     expect(selected.runs.map(modelRunKey)).toContain("live:packaged-sidecar:activity-progress-restart")
     expect(selected.runs.map(modelRunKey)).toContain("ext:renderer-ui:activity-progress-package")
+    expect(selected.runs.map(modelRunKey)).toContain("ext:renderer-ui:long-session")
     expect(
       commandForModelRun(
         selected.runs.find((run) => modelRunKey(run) === "live:packaged-sidecar:activity-progress-restart")!,
@@ -372,6 +382,29 @@ describe("live LLM route manifest", () => {
       cwd: "packages/desktop",
       args: ["bun", "run", "test:llm-release:activity-progress-package"],
     })
+    expect(
+      commandForModelRun(selected.runs.find((run) => modelRunKey(run) === "ext:renderer-ui:long-session")!),
+    ).toEqual({
+      cwd: "packages/desktop",
+      args: ["bun", "run", "test:llm-release:long-session"],
+    })
+  })
+
+  test("routes question-rejection and provider-recovery seams through the real Desktop continuation gate", () => {
+    for (const path of [
+      "packages/deepagent-code/src/session/legacy-provider-resolution.ts",
+      "packages/deepagent-code/src/session/processor.ts",
+      "packages/deepagent-code/src/session/recovery-transfer-guard.ts",
+      "packages/app/src/pages/session/composer/session-question-dock.tsx",
+      "packages/desktop/scripts/live-llm/long-session.ts",
+    ]) {
+      const run = selectRoutes([path]).runs.find((item) => modelRunKey(item) === "ext:renderer-ui:long-session")
+      expect(run).toBeDefined()
+      expect(commandForModelRun(run!)).toEqual({
+        cwd: "packages/desktop",
+        args: ["bun", "run", "test:llm-release:long-session"],
+      })
+    }
   })
 
   test("keeps bounded takeover reachable from its harness and supervision seams", () => {
@@ -596,7 +629,10 @@ describe("pushed OID resolution", () => {
     })
 
     expect(plan.paths).toEqual(["packages/core/src/tool/read.ts"])
-    expect(plan.selection.runs.map(modelRunKey)).toEqual(["live:session-v2:file-read-search"])
+    expect(plan.selection.runs.map(modelRunKey)).toEqual([
+      "live:legacy-session:subagent-control-plane",
+      "live:session-v2:file-read-search",
+    ])
   })
 
   test("peels lightweight and annotated tags and records non-commit tags", async () => {

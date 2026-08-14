@@ -1,4 +1,4 @@
-import { Effect } from "effect"
+import { Effect, Option, Schema } from "effect"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import type { DocumentStore } from "@deepagent-code/core/deepagent/document-store"
 import type {
@@ -30,7 +30,7 @@ import { deriveSubagentSessionPermission } from "../agent/subagent-permissions"
 import { MessageID, SessionID } from "./schema"
 import { runValidationCommands } from "../deepagent/validation-exec"
 import type { GoalSteerRelay, PendingGoalSteer } from "./goal-driver"
-import { runSubagentPrompt } from "../tool/task"
+import { runSubagentPrompt, type StructuredOutputReceipt } from "../tool/task"
 
 /**
  * V3.9 §D / §F.3 — Goal Loop production WIRING.
@@ -110,6 +110,8 @@ export type SubagentTurnResult = {
   readonly reason?: string
   /** The structured output object when an output schema was requested and the turn produced one. */
   readonly structured: unknown | undefined
+  /** Finalizer transport receipt. Degraded text is never exposed as a schema-valid structured value. */
+  readonly structuredOutput?: StructuredOutputReceipt
   /** The final text part (free-text turns). */
   readonly text: string
   /** GROSS input+output+reasoning tokens for this turn (0 when unknown). */
@@ -146,6 +148,8 @@ export type SubagentTurnResult = {
 export type SubagentTurnInput = {
   readonly agentType: string
   readonly prompt: string
+  /** Exact durable goal identity for a goal-worker tick. */
+  readonly goalId?: string
   /** Optional JSON Schema forcing a structured final turn (reviewer / panelist). */
   readonly outputSchema?: Record<string, unknown>
   /**
@@ -336,32 +340,33 @@ export type PlanBridge = {
  * the turn and mirrors the worker's edits back after — so the worker maintains its OWN goal's plan
  * (§E.3 acceptance) even though it runs in an isolated, permission-derived child session.
  */
-export const buildStepExecutor = (
-  runTurn: SubagentTurnRunner,
-  planBridgeFor?: (planDocId: string) => PlanBridge,
-  /**
-   * V4.1 §S1.3 — the goal-steer RELAY (shared with the driver). At prompt-build time the executor
-   * `drainForPrompt()`s any staged goal-directed guidance and threads it into the step prompt as a
-   * clearly-marked USER GUIDANCE section. Draining here (not in the driver) is what lets the driver
-   * stamp EXACTLY the steers a real tick threaded — a tick that short-circuits before the executor runs
-   * never drains, so nothing is consumed. Omitted ⇒ no goal-tick steering (base behaviour).
-   */
-  steerRelay?: GoalSteerRelay,
-  /**
-   * V4.0.1 P2 §4.4/§4.5 — the `goalBudgetSoftNotify` flag (default ON in production). When true and the
-   * tick's cost has crossed a `softNotifyFractions` tier, `budgetNotice` is threaded into THIS tick's
-   * step-prompt tail (cache-safe — the step prompt IS the child turn's user message). Omitted ⇒ treated as
-   * off (no notice), i.e. pre-V4.0.1 behaviour.
-   */
-  budgetSoftNotify?: boolean,
-  /**
-   * V4.0.1 P1 §3.3 — the per-tick World State provider. When supplied (production with
-   * `worldStateReinjection` ON), it is invoked once at tick start; its rendered block is threaded into the
-   * step-prompt TAIL (before the budget notice). Omitted / undefined ⇒ no World State (base behaviour),
-   * so `worldStateReinjection=false` is byte-for-byte the pre-V4.0.1 prompt.
-   */
-  worldStateProvider?: WorldStateProvider,
-): StepExecutor =>
+export const buildStepExecutor =
+  (
+    runTurn: SubagentTurnRunner,
+    planBridgeFor?: (planDocId: string) => PlanBridge,
+    /**
+     * V4.1 §S1.3 — the goal-steer RELAY (shared with the driver). At prompt-build time the executor
+     * `drainForPrompt()`s any staged goal-directed guidance and threads it into the step prompt as a
+     * clearly-marked USER GUIDANCE section. Draining here (not in the driver) is what lets the driver
+     * stamp EXACTLY the steers a real tick threaded — a tick that short-circuits before the executor runs
+     * never drains, so nothing is consumed. Omitted ⇒ no goal-tick steering (base behaviour).
+     */
+    steerRelay?: GoalSteerRelay,
+    /**
+     * V4.0.1 P2 §4.4/§4.5 — the `goalBudgetSoftNotify` flag (default ON in production). When true and the
+     * tick's cost has crossed a `softNotifyFractions` tier, `budgetNotice` is threaded into THIS tick's
+     * step-prompt tail (cache-safe — the step prompt IS the child turn's user message). Omitted ⇒ treated as
+     * off (no notice), i.e. pre-V4.0.1 behaviour.
+     */
+    budgetSoftNotify?: boolean,
+    /**
+     * V4.0.1 P1 §3.3 — the per-tick World State provider. When supplied (production with
+     * `worldStateReinjection` ON), it is invoked once at tick start; its rendered block is threaded into the
+     * step-prompt TAIL (before the budget notice). Omitted / undefined ⇒ no World State (base behaviour),
+     * so `worldStateReinjection=false` is byte-for-byte the pre-V4.0.1 prompt.
+     */
+    worldStateProvider?: WorldStateProvider,
+  ): StepExecutor =>
   (input) => {
     const planBridge = planBridgeFor?.(input.planDocId)
     // §S1.3: pull the staged goal-steer into THIS tick's prompt (cache-safe — it becomes the child
@@ -373,45 +378,48 @@ export const buildStepExecutor = (
     const notice = budgetSoftNotify === true ? budgetNotice(input.ledger, input.limits) : null
     // P1 §3.3: refresh + render the World State ONCE at tick start (default-safe ⇒ "" on any defect). It
     // rides the tail (before the budget notice) so it reaches the goal-worker every tick (P3(d) recall).
-    return (worldStateProvider ? worldStateProvider() : Effect.succeed("")).pipe(
-      Effect.flatMap((worldState) =>
-        runTurn({
-          agentType: "goal-worker",
-          prompt: renderStepPrompt({ ...input, steer, budgetNotice: notice, worldState }),
-          ...(planBridge ? { prepareSession: (childId: string) => planBridge.seedChildPlan(childId) } : {}),
-        }),
-      ),
-    ).pipe(
-      Effect.map((turn): StepExecutorResult => {
-        // Mirror the worker's plan-state back into the goal plan doc AFTER the turn (best-effort; a
-        // bridge defect must not fail the tick — the grader simply sees no plan advance and the loop
-        // treats it as no-progress, which stall detection ultimately catches).
-        if (planBridge && turn.sessionID) {
-          try {
-            planBridge.mirrorChildPlan(turn.sessionID)
-          } catch {
-            /* best-effort mirror */
+    return (worldStateProvider ? worldStateProvider() : Effect.succeed(""))
+      .pipe(
+        Effect.flatMap((worldState) =>
+          runTurn({
+            agentType: "goal-worker",
+            goalId: input.goalId,
+            prompt: renderStepPrompt({ ...input, steer, budgetNotice: notice, worldState }),
+            ...(planBridge ? { prepareSession: (childId: string) => planBridge.seedChildPlan(childId) } : {}),
+          }),
+        ),
+      )
+      .pipe(
+        Effect.map((turn): StepExecutorResult => {
+          // Mirror the worker's plan-state back into the goal plan doc AFTER the turn (best-effort; a
+          // bridge defect must not fail the tick — the grader simply sees no plan advance and the loop
+          // treats it as no-progress, which stall detection ultimately catches).
+          if (planBridge && turn.sessionID) {
+            try {
+              planBridge.mirrorChildPlan(turn.sessionID)
+            } catch {
+              /* best-effort mirror */
+            }
           }
-        }
-        return {
-          tokensUsed: turn.tokensUsed,
-          // P2 §4.4: surface the granular breakdown so the loop's NET ledger (budgetTokenScope "net") can
-          // subtract the carried (cached) prefix. Harmless under "gross" (ignored there).
-          ...(turn.inputTokens != null ? { inputTokens: turn.inputTokens } : {}),
-          ...(turn.outputTokens != null ? { outputTokens: turn.outputTokens } : {}),
-          ...(turn.carriedPrefixTokens != null ? { carriedPrefixTokens: turn.carriedPrefixTokens } : {}),
-          cost: turn.cost,
-          // Surface the CHILD session the turn ran in so a critical-failure rollback reverts THAT
-          // session (where the file edits live), not the parent goal session (which has none). Without
-          // this the loop reports `rolled_back` while the child's mutations stay on disk.
-          ...(turn.sessionID ? { executedSessionId: turn.sessionID } : {}),
-          // A turn that could not run at all is a critical failure for THIS tick → the loop rolls back.
-          ...(turn.ok ? {} : { critical: true }),
-        }
-      }),
-      // A defect never propagates: report it as a critical failure (the loop rolls back, not throws).
-      Effect.catchCause(() => Effect.succeed({ tokensUsed: 0, cost: 0, critical: true })),
-    )
+          return {
+            tokensUsed: turn.tokensUsed,
+            // P2 §4.4: surface the granular breakdown so the loop's NET ledger (budgetTokenScope "net") can
+            // subtract the carried (cached) prefix. Harmless under "gross" (ignored there).
+            ...(turn.inputTokens != null ? { inputTokens: turn.inputTokens } : {}),
+            ...(turn.outputTokens != null ? { outputTokens: turn.outputTokens } : {}),
+            ...(turn.carriedPrefixTokens != null ? { carriedPrefixTokens: turn.carriedPrefixTokens } : {}),
+            cost: turn.cost,
+            // Surface the CHILD session the turn ran in so a critical-failure rollback reverts THAT
+            // session (where the file edits live), not the parent goal session (which has none). Without
+            // this the loop reports `rolled_back` while the child's mutations stay on disk.
+            ...(turn.sessionID ? { executedSessionId: turn.sessionID } : {}),
+            // A turn that could not run at all is a critical failure for THIS tick → the loop rolls back.
+            ...(turn.ok ? {} : { critical: true }),
+          }
+        }),
+        // A defect never propagates: report it as a critical failure (the loop rolls back, not throws).
+        Effect.catchCause(() => Effect.succeed({ tokensUsed: 0, cost: 0, critical: true })),
+      )
   }
 
 /**
@@ -614,9 +622,7 @@ export const renderStepPrompt = (input: {
     input.activeStep
       ? `The active step is "${input.activeStep.step_id}": ${input.activeStep.title}`
       : `No step is currently active. Read the plan, pick the next pending step, mark it active, and make progress.`,
-    ...(input.activeStep?.acceptance
-      ? [`Its frozen acceptance criterion is: ${input.activeStep.acceptance}`]
-      : []),
+    ...(input.activeStep?.acceptance ? [`Its frozen acceptance criterion is: ${input.activeStep.acceptance}`] : []),
     input.activeStep
       ? `Do not rewrite the goal or plan structure. Complete this existing step, mark it done, and set the next existing step active.`
       : `Do not rewrite the goal or plan structure.`,
@@ -659,7 +665,8 @@ export type TaskSubagentRunnerDeps = {
  * throws — any failure (unknown agent, prompt defect) resolves to `ok:false` so the Grader / executor
  * degrade safely rather than crashing the loop.
  */
-export const makeTaskSubagentRunner = (deps: TaskSubagentRunnerDeps): SubagentTurnRunner =>
+export const makeTaskSubagentRunner =
+  (deps: TaskSubagentRunnerDeps): SubagentTurnRunner =>
   (input) =>
     Effect.gen(function* () {
       const next = yield* deps.agents.get(input.agentType)
@@ -677,7 +684,14 @@ export const makeTaskSubagentRunner = (deps: TaskSubagentRunnerDeps): SubagentTu
         // .trace reads it back (json_extract) and appends this child as a "session" node, so the trace
         // joins the child's activity back to the event. Omitted when the caller supplies none (goal-loop
         // turns belong to the goal session's own trace).
-        ...(input.correlationID ? { metadata: { correlationID: input.correlationID } } : {}),
+        ...(input.correlationID || deps.purpose === "goal-loop"
+          ? {
+              metadata: {
+                ...(input.correlationID ? { correlationID: input.correlationID } : {}),
+                ...(deps.purpose === "goal-loop" ? { goalID: input.goalId } : {}),
+              },
+            }
+          : {}),
         permission: deriveSubagentSessionPermission({
           parentSessionPermission: parent.permission ?? [],
           parentAgent,
@@ -702,6 +716,7 @@ export const makeTaskSubagentRunner = (deps: TaskSubagentRunnerDeps): SubagentTu
         providerID: ProviderV2.ID.make(deps.model.providerID),
         modelID: ModelV2.ID.make(deps.model.modelID),
       }
+      const structuredOutput = { receipt: undefined as StructuredOutputReceipt | undefined }
       const text = input.outputSchema
         ? yield* runSubagentPrompt({
             ops: {
@@ -716,7 +731,12 @@ export const makeTaskSubagentRunner = (deps: TaskSubagentRunnerDeps): SubagentTu
             agent: next.name,
             agentModeOverride: undefined,
             outputSchema: input.outputSchema,
+            allowTextFallback: true,
             runID: `${deps.purpose ?? "generic"}:${child.id}`,
+            onFinalized: (_messageID, receipt) =>
+              Effect.sync(() => {
+                structuredOutput.receipt = receipt
+              }),
             tools: {},
             worktreeInfo: undefined,
           })
@@ -726,24 +746,22 @@ export const makeTaskSubagentRunner = (deps: TaskSubagentRunnerDeps): SubagentTu
               sessionID: child.id,
               model,
               agent: next.name,
+              metadata: deps.purpose === "goal-loop" ? { deepagent: { goal_id: input.goalId } } : undefined,
               parts: yield* deps.sessionPrompt.resolvePromptParts(input.prompt),
             })
             return result.parts.findLast((part) => part.type === "text")?.text ?? ""
           })
       const assistants = (yield* deps.sessions.messages({ sessionID: child.id })).filter(
-        (message): message is SessionV1.WithParts & { info: SessionV1.Assistant } =>
-          message.info.role === "assistant",
+        (message): message is SessionV1.WithParts & { info: SessionV1.Assistant } => message.info.role === "assistant",
       )
-      const structured = input.outputSchema
-        ? (assistants.findLast((message) => message.info.structured !== undefined)?.info.structured as
-            | unknown
-            | undefined)
+      const decoded = input.outputSchema
+        ? Option.getOrUndefined(Schema.decodeUnknownOption(Schema.UnknownFromJsonString)(text))
         : undefined
+      const structured = structuredOutput.receipt?.transport === "degraded_text" ? undefined : decoded
       // GROSS throughput (input+output+reasoning) — the pre-V4.0.1 figure, always populated.
       const tokens = assistants.reduce(
         (total, message) =>
-          total +
-          Math.max(0, message.info.tokens.input + message.info.tokens.output + message.info.tokens.reasoning),
+          total + Math.max(0, message.info.tokens.input + message.info.tokens.output + message.info.tokens.reasoning),
         0,
       )
       // V4.0.1 P2 §4.4 — the granular breakdown for the goal's NET-token ledger (used only under
@@ -776,6 +794,7 @@ export const makeTaskSubagentRunner = (deps: TaskSubagentRunnerDeps): SubagentTu
       return {
         ok: true,
         structured,
+        structuredOutput: structuredOutput.receipt,
         text,
         tokensUsed: tokens,
         inputTokens: inputFull,
@@ -926,24 +945,23 @@ export const liveDiagnostics = (): Effect.Effect<
     // checked:true. NOTE: an empty map from a healthy LSP that simply has no client for the changed
     // files still reports checked:true → "clean"; hardening that (assert a client covered the edited
     // files) is a follow-up, but the defect path — the unconditional fail-open — is now closed.
-    return yield* lsp
-      .diagnostics()
-      .pipe(
-        Effect.map((diagnostics) => ({ diagnostics, checked: true })),
-        Effect.catchCause(() => Effect.succeed({ diagnostics: {} as Record<string, LSPClient.Diagnostic[]>, checked: false })),
-      )
+    return yield* lsp.diagnostics().pipe(
+      Effect.map((diagnostics) => ({ diagnostics, checked: true })),
+      Effect.catchCause(() =>
+        Effect.succeed({ diagnostics: {} as Record<string, LSPClient.Diagnostic[]>, checked: false }),
+      ),
+    )
   })
 
 /** The production rollback port backed by SessionRevert (best-effort, never fatal). */
-export const liveRollback = (
-  revert: SessionRevert.Interface,
-  latestMessageID: (sessionID: string) => Effect.Effect<string | null>,
-): RollbackPort =>
+export const liveRollback =
+  (
+    revert: SessionRevert.Interface,
+    latestMessageID: (sessionID: string) => Effect.Effect<string | null>,
+  ): RollbackPort =>
   (rbInput) =>
     Effect.gen(function* () {
-      const messageID = yield* latestMessageID(rbInput.sessionId).pipe(
-        Effect.catchCause(() => Effect.succeed(null)),
-      )
+      const messageID = yield* latestMessageID(rbInput.sessionId).pipe(Effect.catchCause(() => Effect.succeed(null)))
       if (messageID == null) return
       yield* revert
         .revert({ sessionID: SessionID.make(rbInput.sessionId), messageID: MessageID.make(messageID) })

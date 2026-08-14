@@ -25,6 +25,7 @@ import {
   ConflictError,
   InvalidRequestError,
   PermissionNotFoundError,
+  ServiceUnavailableError,
   SessionBusyError,
 } from "../errors"
 import { described } from "./metadata"
@@ -34,6 +35,8 @@ import { ModelV2 } from "@deepagent-code/core/model"
 import { GraphKind } from "@deepagent-code/core/context-federation/contract"
 import { GraphQueryStatus } from "@deepagent-code/core/context-federation/federation"
 import { Sensitivity } from "@deepagent-code/core/context-federation/authorization"
+import { SessionLegacyProviderResolution } from "@/session/legacy-provider-resolution"
+import { File as DiffArtifactFile, Limits as DiffArtifactLimits, Manifest as DiffArtifactManifest } from "@/session/diff-artifact-schema"
 
 const root = "/session"
 export const ListQuery = Schema.Struct({
@@ -51,8 +54,49 @@ export const DiffQuery = Schema.Struct({
 })
 export const MessagesQuery = Schema.Struct({
   ...WorkspaceRoutingQueryFields,
-  limit: Schema.optional(Schema.NumberFromString.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0))),
+  limit: Schema.optional(
+    Schema.NumberFromString.check(
+      Schema.isInt(),
+      Schema.isGreaterThanOrEqualTo(1),
+      Schema.isLessThanOrEqualTo(MessageV2.ClientMessageLimits.page),
+    ),
+  ),
   before: Schema.optional(Schema.String),
+})
+export const DiffArtifactMaintenancePayload = Schema.Struct({
+  limit: Schema.optional(
+    Schema.Number.check(
+      Schema.isInt(),
+      Schema.isGreaterThanOrEqualTo(1),
+      Schema.isLessThanOrEqualTo(DiffArtifactLimits.batch),
+    ),
+  ),
+})
+export const DiffArtifactManifestQuery = Schema.Struct({
+  ...WorkspaceRoutingQueryFields,
+  messageID: MessageID,
+  artifactID: Schema.String,
+  cursor: Schema.optional(Schema.String.check(Schema.isMaxLength(512))),
+  limit: Schema.optional(
+    Schema.NumberFromString.check(
+      Schema.isInt(),
+      Schema.isGreaterThanOrEqualTo(1),
+      Schema.isLessThanOrEqualTo(DiffArtifactLimits.manifestFiles),
+    ),
+  ),
+})
+export const DiffArtifactFileQuery = Schema.Struct({
+  ...WorkspaceRoutingQueryFields,
+  messageID: MessageID,
+  artifactID: Schema.String,
+  path: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(4096)),
+  maxBytes: Schema.optional(
+    Schema.NumberFromString.check(
+      Schema.isInt(),
+      Schema.isGreaterThanOrEqualTo(1),
+      Schema.isLessThanOrEqualTo(DiffArtifactLimits.patchBytes),
+    ),
+  ),
 })
 export const StatusMap = Schema.Record(Schema.String, SessionStatus.Info)
 export const UpdatePayload = Schema.Struct({
@@ -273,6 +317,9 @@ export const ContextAttemptResolvePayload = Schema.Struct({
   reason: Schema.String,
   riskAcknowledged: Schema.optional(Schema.Boolean),
 })
+export const ProviderResolutionPayload = Schema.Struct(
+  Struct.omit(SessionLegacyProviderResolution.ResolveInput.fields, ["sessionID"]),
+)
 
 export const SessionPaths = {
   list: root,
@@ -282,6 +329,9 @@ export const SessionPaths = {
   todo: `${root}/:sessionID/todo`,
   plan: `${root}/:sessionID/plan`,
   diff: `${root}/:sessionID/diff`,
+  diffArtifactMaintenance: `${root}/:sessionID/diff-artifact/maintenance`,
+  diffArtifactManifest: `${root}/:sessionID/diff-artifact/manifest`,
+  diffArtifactFile: `${root}/:sessionID/diff-artifact/file`,
   messages: `${root}/:sessionID/message`,
   message: `${root}/:sessionID/message/:messageID`,
   create: root,
@@ -307,6 +357,7 @@ export const SessionPaths = {
   updatePart: `${root}/:sessionID/message/:messageID/part/:partID`,
   contextDiagnostics: `${root}/:sessionID/context`,
   contextAttemptResolve: `${root}/:sessionID/context/attempt/:attemptID/resolve`,
+  providerResolution: `${root}/:sessionID/provider-resolution`,
 } as const
 
 export const SessionApi = HttpApi.make("session")
@@ -338,7 +389,7 @@ export const SessionApi = HttpApi.make("session")
           params: { sessionID: SessionID },
           query: WorkspaceRoutingQuery,
           success: described(Session.Info, "Get session"),
-          error: [HttpApiError.BadRequest, ApiNotFoundError],
+          error: [HttpApiError.BadRequest, ApiNotFoundError, ServiceUnavailableError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "session.get",
@@ -350,7 +401,7 @@ export const SessionApi = HttpApi.make("session")
           params: { sessionID: SessionID },
           query: WorkspaceRoutingQuery,
           success: described(Schema.Array(Session.Info), "List of children"),
-          error: [HttpApiError.BadRequest, ApiNotFoundError],
+          error: [HttpApiError.BadRequest, ApiNotFoundError, ServiceUnavailableError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "session.children",
@@ -391,6 +442,53 @@ export const SessionApi = HttpApi.make("session")
             identifier: "session.diff",
             summary: "Get message diff",
             description: "Get the file changes (diff) that resulted from a specific user message in the session.",
+          }),
+        ),
+        HttpApiEndpoint.post("diffArtifactMaintenance", SessionPaths.diffArtifactMaintenance, {
+          params: { sessionID: SessionID },
+          query: WorkspaceRoutingQuery,
+          payload: DiffArtifactMaintenancePayload,
+          success: described(
+            Schema.Struct({
+              processed: Schema.Number,
+              committed: Schema.Number,
+              failed: Schema.Number,
+            }),
+            "Legacy Session diff migration batch result",
+          ),
+          error: [HttpApiError.BadRequest, ApiNotFoundError, ServiceUnavailableError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.diffArtifactMaintenance",
+            summary: "Migrate one bounded legacy Session diff batch",
+            description:
+              "Build authorized per-file artifact indexes, verify PromptEpoch history hashes, and CAS-rewrite user messages without publishing giant events.",
+            exclude: true,
+          }),
+        ),
+        HttpApiEndpoint.get("diffArtifactManifest", SessionPaths.diffArtifactManifest, {
+          params: { sessionID: SessionID },
+          query: DiffArtifactManifestQuery,
+          success: described(DiffArtifactManifest, "Bounded Session diff artifact manifest page"),
+          error: [HttpApiError.BadRequest, ApiNotFoundError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.diffArtifactManifest",
+            summary: "Get a Session diff artifact manifest page",
+            description: "Read only metadata for an artifact committed to the addressed Session message.",
+          }),
+        ),
+        HttpApiEndpoint.get("diffArtifactFile", SessionPaths.diffArtifactFile, {
+          params: { sessionID: SessionID },
+          query: DiffArtifactFileQuery,
+          success: described(DiffArtifactFile, "Bounded Session diff artifact file patch"),
+          error: [HttpApiError.BadRequest, ApiNotFoundError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.diffArtifactFile",
+            summary: "Get one bounded Session diff artifact file patch",
+            description:
+              "Verify content-addressed chunks and return at most the requested UTF-8 byte budget for one authorized path.",
           }),
         ),
         HttpApiEndpoint.get("messages", SessionPaths.messages, {
@@ -630,7 +728,7 @@ export const SessionApi = HttpApi.make("session")
           query: WorkspaceRoutingQuery,
           payload: RevertPayload,
           success: described(Session.Info, "Updated session"),
-          error: [HttpApiError.BadRequest, ApiNotFoundError, SessionBusyError],
+          error: [HttpApiError.BadRequest, ApiNotFoundError, SessionBusyError, ServiceUnavailableError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "session.revert",
@@ -724,6 +822,34 @@ export const SessionApi = HttpApi.make("session")
             identifier: "session.contextAttemptResolve",
             summary: "Resolve an indeterminate provider attempt",
             description: "Apply an audited abandon, verified-settle, or risk-acknowledged replay decision.",
+          }),
+        ),
+        HttpApiEndpoint.get("providerResolutionList", SessionPaths.providerResolution, {
+          params: { sessionID: SessionID },
+          query: WorkspaceRoutingQuery,
+          success: described(
+            Schema.Array(SessionLegacyProviderResolution.Descriptor),
+            "Pending provider recovery decisions",
+          ),
+          error: [HttpApiError.BadRequest, ApiNotFoundError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.providerResolutionList",
+            summary: "List provider recovery decisions",
+            description: "List unresolved legacy provider outcomes that require explicit recovery.",
+          }),
+        ),
+        HttpApiEndpoint.post("providerResolutionResolve", SessionPaths.providerResolution, {
+          params: { sessionID: SessionID },
+          query: WorkspaceRoutingQuery,
+          payload: ProviderResolutionPayload,
+          success: described(SessionLegacyProviderResolution.Resolution, "Resolved provider outcome"),
+          error: [HttpApiError.BadRequest, ApiNotFoundError, ConflictError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.providerResolutionResolve",
+            summary: "Resolve a provider outcome",
+            description: "Append an audited abandoned resolution and activate a safe successor history epoch.",
           }),
         ),
       )

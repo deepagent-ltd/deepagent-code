@@ -26,6 +26,8 @@ import { SessionReminders } from "../reminders"
 import { ContextFederationObservability } from "@/context-federation/observability"
 import { GlobalBus } from "@/bus/global"
 import { Global } from "@deepagent-code/core/global"
+import type { DocumentRef, Selection } from "@deepagent-code/core/deepagent/released-snapshot"
+import { PreparedProviderTurn } from "@deepagent-code/core/session/runner/prepared-provider-turn"
 
 type PromptContext = AgentGateway.PromptContext
 type EnvironmentContext = AgentGateway.EnvironmentContext
@@ -56,6 +58,7 @@ type PrepareInput = {
   readonly runtimeTail?: string
   readonly federatedProjection?: boolean
   readonly federatedShadow?: Readonly<Record<"code" | "knowledge" | "memory" | "documents", number>>
+  readonly releasedKnowledgeSelection?: Selection
   // §5b: configurable orchestration caps (from config.experimental.orchestration). Unset ⇒ lenient
   // defaults. Only used to surface the concrete per-round concurrency number in the advisory prompt;
   // the hard code-layer cap is enforced by the §5a semaphore in task.ts.
@@ -64,6 +67,9 @@ type PrepareInput = {
 
 export type Prepared = {
   readonly system: string[]
+  readonly stableSystemParts: readonly string[]
+  readonly volatileSystemParts: readonly string[]
+  readonly historyMessages: readonly ModelMessage[]
   readonly messages: ModelMessage[]
   readonly tools: Record<string, Tool>
   readonly metadata: Record<string, unknown>
@@ -76,6 +82,7 @@ export type Prepared = {
   }
   readonly messageTransformOptions: Record<string, any>
   readonly headers: Record<string, string>
+  readonly releasedKnowledgeSelectedRefs: readonly DocumentRef[]
 }
 
 const mergeOptions = (target: Record<string, any>, source: Record<string, any> | undefined): Record<string, any> =>
@@ -105,12 +112,24 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
   let volatileContextKind: "none" | "round" | "continuation" = "none"
   let workflowPlanStatus: string | null = null
   let validationCommands: readonly string[] = []
+  let releasedKnowledgeSelectedRefs: readonly DocumentRef[] = []
 
   if (isDeepAgentActive) {
     const promptContext = yield* buildDeepAgentPromptContext(input, agentMode)
     validationCommands = promptContext.validationCommands
+    releasedKnowledgeSelectedRefs = input.federatedProjection
+      ? []
+      : (promptContext.context.knowledge?.selectedDocumentRefs ?? [])
     const deepagentSystem = AgentGateway.systemPrompt(input.model.providerID, promptContext.context)
-    system = [deepagentSystem.filter((x) => x).join("\n")]
+    system = [
+      PreparedProviderTurn.mergeSystemParts(
+        SystemPrompt.provider(input.model),
+        input.agent.prompt ? [input.agent.prompt] : [],
+        deepagentSystem,
+        input.system,
+        input.user.system ? [input.user.system] : [],
+      ).join("\n"),
+    ]
     const runtimeSystemRequired =
       promptContext.context.round > 1 ||
       promptContext.context.fanoutDecision?.orchestrate === true ||
@@ -182,6 +201,7 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
     system.length = 0
     system.push(header, rest.join("\n"))
   }
+  const stableSystemParts = [...system]
 
   // Compaction summaries use an intentionally isolated agent/system/tool prefix under the same
   // Session ID. Keep that request out of the ordinary conversation baseline so the first request
@@ -304,14 +324,16 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
     })
   }
 
-  const metadata = prepareMetadata(input, tools)
+  const instance = yield* InstanceState.context
+  const metadata = prepareMetadata(input, tools, instance.directory)
 
-  const deepagentCodeProjectID = input.model.providerID.startsWith("deepagent-code")
-    ? (yield* InstanceState.context).project.id
-    : undefined
+  const deepagentCodeProjectID = input.model.providerID.startsWith("deepagent-code") ? instance.project.id : undefined
 
   const prepared = {
     system,
+    stableSystemParts,
+    volatileSystemParts: runtimeTail ? [runtimeTail] : [],
+    historyMessages: input.messages,
     messages,
     tools: Object.fromEntries(Object.entries(tools).toSorted(([a], [b]) => a.localeCompare(b))),
     metadata,
@@ -334,11 +356,25 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
       ...input.model.headers,
       ...headers,
     },
+    releasedKnowledgeSelectedRefs,
   } satisfies Prepared
   if (input.flags.assembledRequestFingerprint)
     emitAssembledRequestFingerprint(input, prepared, validationCommands, volatileContextKind)
   return prepared
 })
+
+export function toolResultReferences(messages: readonly ModelMessage[]) {
+  return [
+    ...new Set(
+      messages.flatMap((message) => {
+        if (message.role !== "tool" || !Array.isArray(message.content)) return []
+        return message.content.flatMap((part) =>
+          part.type === "tool-result" && part.toolCallId.length > 0 ? [part.toolCallId] : [],
+        )
+      }),
+    ),
+  ].toSorted((left, right) => left.localeCompare(right))
+}
 
 const fingerprintKey = randomBytes(32)
 const fingerprintHash = (value: unknown): string =>
@@ -404,7 +440,11 @@ function emitAssembledRequestFingerprint(
 // The non-DeepAgent path no longer inlines a per-turn verdict into the system prompt (it would bust
 // the cache), so no request-side helper is needed here anymore.
 
-const prepareMetadata = (input: PrepareInput, tools: Record<string, Tool>): Record<string, unknown> => {
+const prepareMetadata = (
+  input: PrepareInput,
+  tools: Record<string, Tool>,
+  workspacePath: string,
+): Record<string, unknown> => {
   const agentMode = deepAgentAgentModeOverride(input.user.metadata)
   const deepagent =
     isRecord(input.user.metadata) && isRecord(input.user.metadata.deepagent) ? input.user.metadata.deepagent : {}
@@ -418,11 +458,14 @@ const prepareMetadata = (input: PrepareInput, tools: Record<string, Tool>): Reco
       messageID: input.user.id,
       parentSessionID: input.parentSessionID,
       agent: input.agent.name,
+      workspacePath,
     },
     deepagent: {
+      ...(typeof deepagent.goal_id === "string" ? { goal_id: deepagent.goal_id } : {}),
       ...(agentMode ? { agent_mode_override: agentMode } : {}),
       ...(promptPipeline ? { prompt_pipeline: promptPipeline } : {}),
       ...(userRequest ? { user_request: userRequest } : {}),
+      ...(input.releasedKnowledgeSelection ? { released_knowledge_selection: input.releasedKnowledgeSelection } : {}),
       tool_capabilities: Object.entries(tools)
         .filter(([name]) => name !== "invalid")
         .toSorted(([a], [b]) => a.localeCompare(b))
@@ -605,6 +648,7 @@ const buildDeepAgentPromptContext = Effect.fn("LLMRequestPrep.buildDeepAgentProm
     tools,
     userRequest,
     workspacePath: envCtx.cwd,
+    ...(input.releasedKnowledgeSelection ? { releasedKnowledgeSelection: input.releasedKnowledgeSelection } : {}),
     // §5b: surface the configured (lenient) caps so the DeepAgent-path fan-out decision reflects the
     // deployment's per-round concurrency. Hard enforcement remains the §5a semaphore in task.ts.
     ...(input.orchestrationCaps ? { orchestrationCaps: input.orchestrationCaps } : {}),

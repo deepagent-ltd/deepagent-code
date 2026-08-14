@@ -51,6 +51,7 @@ const summary = Layer.succeed(
     summarize: () => Effect.void,
     diff: () => Effect.succeed([]),
     computeDiff: () => Effect.succeed([]),
+    computeManifest: () => Effect.succeed(SessionSummary.emptyManifest()),
   }),
 )
 
@@ -209,6 +210,7 @@ function fake(
   result: "continue" | "compact",
   session: SessionNs.Interface,
 ) {
+  const decision = { action: result } as const
   const msg = input.assistantMessage
   const processSummary: SessionProcessorModule.SessionProcessor.Handle["processSummary"] = Effect.fn(
     "TestSessionProcessor.processSummary",
@@ -230,7 +232,7 @@ function fake(
       })
     }
     yield* attempt.settled
-    return result
+    return decision
   })
   return {
     get message() {
@@ -238,7 +240,7 @@ function fake(
     },
     updateToolCall: Effect.fn("TestSessionProcessor.updateToolCall")(() => Effect.succeed(undefined)),
     completeToolCall: Effect.fn("TestSessionProcessor.completeToolCall")(() => Effect.void),
-    process: Effect.fn("TestSessionProcessor.process")(() => Effect.succeed(result)),
+    process: Effect.fn("TestSessionProcessor.process")(() => Effect.succeed(decision)),
     processSummary,
   } satisfies SessionProcessorModule.SessionProcessor.Handle
 }

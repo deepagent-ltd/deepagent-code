@@ -6,6 +6,7 @@ import { AppProcess } from "@deepagent-code/core/process"
 import { InstanceState } from "@/effect/instance-state"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import { Hash } from "@deepagent-code/core/util/hash"
+import { NonNegativeInt } from "@deepagent-code/core/schema"
 import { Config } from "@/config/config"
 import { Global } from "@deepagent-code/core/global"
 import * as Log from "@deepagent-code/core/util/log"
@@ -28,6 +29,51 @@ export const FileDiff = Schema.Struct({
 }).annotate({ identifier: "SnapshotFileDiff" })
 export type FileDiff = typeof FileDiff.Type
 
+export const DiffLimits = {
+  candidateFiles: 1_000,
+  captureCandidateFiles: 10_000,
+  discoveryOutputBytes: 4 * 1024 * 1024,
+  manifestBytes: 256 * 1024,
+  captureFileBytes: 8 * 1024 * 1024,
+  captureTotalBytes: 64 * 1024 * 1024,
+  sourceFileBytes: 1 * 1024 * 1024,
+  sourceTotalBytes: 16 * 1024 * 1024,
+  patchFileBytes: 512 * 1024,
+  patchTotalBytes: 4 * 1024 * 1024,
+  fallbackFiles: 2,
+  fallbackWallTime: Duration.seconds(1),
+  wallTime: Duration.seconds(15),
+} as const
+
+export const DiffTruncationReason = Schema.Literals([
+  "candidate_file_limit",
+  "discovery_output_limit",
+  "discovery_failed",
+  "manifest_bytes_limit",
+  "source_file_limit",
+  "source_total_limit",
+  "patch_file_limit",
+  "patch_total_limit",
+  "materialization_failed",
+  "time_limit",
+])
+export type DiffTruncationReason = typeof DiffTruncationReason.Type
+
+export const DiffManifest = Schema.Struct({
+  files: Schema.Array(FileDiff),
+  additions: Schema.Finite,
+  deletions: Schema.Finite,
+  totalFiles: NonNegativeInt,
+  totalFilesExact: Schema.Boolean,
+  statisticsExact: Schema.Boolean,
+  includedFiles: NonNegativeInt,
+  truncatedFiles: NonNegativeInt,
+  manifestHash: Schema.String,
+  completeness: Schema.Literals(["complete", "truncated"]),
+  truncationReasons: Schema.Array(DiffTruncationReason),
+})
+export type DiffManifest = typeof DiffManifest.Type
+
 const log = Log.create({ service: "snapshot" })
 const prune = "7.days"
 const limit = 2 * 1024 * 1024
@@ -38,6 +84,16 @@ interface GitResult {
   readonly code: ChildProcessSpawner.ExitCode
   readonly text: string
   readonly stderr: string
+  readonly stdoutTruncated: boolean
+  readonly timedOut: boolean
+}
+
+type DiffRow = {
+  file: string
+  status: "added" | "deleted" | "modified"
+  binary: boolean
+  additions: number
+  deletions: number
 }
 
 type State = Omit<Interface, "init">
@@ -50,6 +106,8 @@ export interface Interface {
   readonly restore: (snapshot: string) => Effect.Effect<void>
   readonly revert: (patches: Patch[]) => Effect.Effect<void>
   readonly diff: (hash: string) => Effect.Effect<string>
+  readonly diffManifest: (from: string, to: string) => Effect.Effect<DiffManifest>
+  readonly diffFullManifest: (from: string, to: string) => Effect.Effect<DiffManifest>
   readonly diffFull: (from: string, to: string) => Effect.Effect<FileDiff[]>
 }
 
@@ -86,15 +144,32 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
         const feed = (list: string[]) => list.join("\0") + "\0"
 
         const git = Effect.fnUntraced(
-          function* (cmd: string[], opts?: { cwd?: string; env?: Record<string, string>; stdin?: string }) {
+          function* (
+            cmd: string[],
+            opts?: {
+              cwd?: string
+              env?: Record<string, string>
+              stdin?: string
+              maxOutputBytes?: number
+              maxErrorBytes?: number
+              timeout?: Duration.Input
+            },
+          ) {
             const result = yield* appProcess.run(
               ChildProcess.make("git", cmd, { cwd: opts?.cwd, env: opts?.env, extendEnv: true }),
-              { stdin: opts?.stdin },
+              {
+                stdin: opts?.stdin,
+                maxOutputBytes: opts?.maxOutputBytes,
+                maxErrorBytes: opts?.maxErrorBytes ?? DiffLimits.discoveryOutputBytes,
+                timeout: opts?.timeout,
+              },
             )
             return {
               code: ChildProcessSpawner.ExitCode(result.exitCode),
               text: result.stdout.toString("utf8"),
               stderr: result.stderr.toString("utf8"),
+              stdoutTruncated: result.stdoutTruncated,
+              timedOut: false,
             } satisfies GitResult
           },
           Effect.catch((err) =>
@@ -102,12 +177,14 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
               code: ChildProcessSpawner.ExitCode(1),
               text: "",
               stderr: err instanceof Error ? err.message : String(err),
+              stdoutTruncated: false,
+              timedOut: String(err).includes("Timed out"),
             }),
           ),
         )
 
-        const ignore = Effect.fnUntraced(function* (files: string[]) {
-          if (!files.length) return new Set<string>()
+        const ignore = Effect.fnUntraced(function* (files: string[], timeout = DiffLimits.wallTime) {
+          if (!files.length) return { ok: true as const, files: new Set<string>() }
           const check = yield* git(
             [
               ...quote,
@@ -123,15 +200,22 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
             {
               cwd: state.directory,
               stdin: feed(files),
+              maxOutputBytes: DiffLimits.discoveryOutputBytes,
+              timeout,
             },
           )
-          if (check.code !== 0 && check.code !== 1) return new Set<string>()
-          return new Set(check.text.split("\0").filter(Boolean))
+          if (
+            (check.code !== 0 && check.code !== 1) ||
+            check.stdoutTruncated ||
+            check.timedOut
+          )
+            return { ok: false as const, timedOut: check.timedOut, outputLimited: check.stdoutTruncated }
+          return { ok: true as const, files: new Set(check.text.split("\0").filter(Boolean)) }
         })
 
         const drop = Effect.fnUntraced(function* (files: string[]) {
-          if (!files.length) return
-          yield* git(
+          if (!files.length) return true
+          const result = yield* git(
             [
               ...cfg,
               ...args(["rm", "--cached", "-f", "--ignore-unmatch", "--pathspec-from-file=-", "--pathspec-file-nul"]),
@@ -139,24 +223,32 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
             {
               cwd: state.directory,
               stdin: feed(files),
+              maxOutputBytes: DiffLimits.discoveryOutputBytes,
+              timeout: DiffLimits.wallTime,
             },
           )
+          if (result.code === 0 && !result.stdoutTruncated && !result.timedOut) return true
+          log.warn("failed to drop ignored snapshot files", { exitCode: result.code, stderr: result.stderr })
+          return false
         })
 
         const stage = Effect.fnUntraced(function* (files: string[]) {
-          if (!files.length) return
+          if (!files.length) return true
           const result = yield* git(
             [...cfg, ...args(["add", "--all", "--sparse", "--pathspec-from-file=-", "--pathspec-file-nul"])],
             {
               cwd: state.directory,
               stdin: feed(files),
+              maxOutputBytes: DiffLimits.discoveryOutputBytes,
+              timeout: DiffLimits.wallTime,
             },
           )
-          if (result.code === 0) return
+          if (result.code === 0 && !result.stdoutTruncated && !result.timedOut) return true
           log.warn("failed to add snapshot files", {
             exitCode: result.code,
             stderr: result.stderr,
           })
+          return false
         })
 
         const exists = (file: string) => fs.exists(file).pipe(Effect.orDie)
@@ -198,64 +290,111 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
             [
               git([...quote, ...args(["diff-files", "--name-only", "-z", "--", "."])], {
                 cwd: state.directory,
+                maxOutputBytes: DiffLimits.discoveryOutputBytes,
+                timeout: DiffLimits.wallTime,
               }),
               git([...quote, ...args(["ls-files", "--others", "--exclude-standard", "-z", "--", "."])], {
                 cwd: state.directory,
+                maxOutputBytes: DiffLimits.discoveryOutputBytes,
+                timeout: DiffLimits.wallTime,
               }),
             ],
             { concurrency: 2 },
           )
-          if (diff.code !== 0 || other.code !== 0) {
+          if (
+            diff.code !== 0 ||
+            other.code !== 0 ||
+            diff.stdoutTruncated ||
+            other.stdoutTruncated ||
+            diff.timedOut ||
+            other.timedOut
+          ) {
             log.warn("failed to list snapshot files", {
               diffCode: diff.code,
               diffStderr: diff.stderr,
               otherCode: other.code,
               otherStderr: other.stderr,
             })
-            return
+            return false
           }
 
           const tracked = diff.text.split("\0").filter(Boolean)
           const untracked = other.text.split("\0").filter(Boolean)
           const all = Array.from(new Set([...tracked, ...untracked]))
-          if (!all.length) return
+          if (!all.length) return true
+          if (all.length > DiffLimits.captureCandidateFiles) {
+            log.warn("snapshot capture exceeded candidate budget", {
+              files: all.length,
+              limit: DiffLimits.captureCandidateFiles,
+            })
+            return false
+          }
 
           // Resolve source-repo ignore rules against the exact candidate set.
           // --no-index keeps this pattern-based even when a path is already tracked.
           const ignored = yield* ignore(all)
-
-          // Remove newly-ignored files from snapshot index to prevent re-adding
-          if (ignored.size > 0) {
-            const ignoredFiles = Array.from(ignored)
-            log.info("removing gitignored files from snapshot", { count: ignoredFiles.length })
-            yield* drop(ignoredFiles)
+          if (!ignored.ok) {
+            log.warn("failed to resolve snapshot ignore rules", {
+              timedOut: ignored.timedOut,
+              outputLimited: ignored.outputLimited,
+            })
+            return false
           }
 
-          const allow = all.filter((item) => !ignored.has(item))
-          if (!allow.length) return
+          // Remove newly-ignored files from snapshot index to prevent re-adding
+          if (ignored.files.size > 0) {
+            const ignoredFiles = Array.from(ignored.files)
+            log.info("removing gitignored files from snapshot", { count: ignoredFiles.length })
+            if (!(yield* drop(ignoredFiles))) return false
+          }
 
-          const large = new Set(
-            (yield* Effect.all(
-              allow.map((item) =>
-                fs
-                  .stat(path.join(state.directory, item))
-                  .pipe(Effect.catch(() => Effect.void))
-                  .pipe(
-                    Effect.map((stat) => {
-                      if (!stat || stat.type !== "File") return
-                      const size = typeof stat.size === "bigint" ? Number(stat.size) : stat.size
-                      return size > limit ? item : undefined
-                    }),
-                  ),
-              ),
-              { concurrency: 8 },
-            )).filter((item): item is string => Boolean(item)),
-          )
+          const allow = all.filter((item) => !ignored.files.has(item))
+          if (!allow.length) return true
+
+          const sizes = (yield* Effect.all(
+            allow.map((item) =>
+              fs
+                .stat(path.join(state.directory, item))
+                .pipe(Effect.catch(() => Effect.void))
+                .pipe(
+                  Effect.map((stat) => {
+                    if (!stat || stat.type !== "File") return
+                    const size = typeof stat.size === "bigint" ? Number(stat.size) : stat.size
+                    return { item, size }
+                  }),
+                ),
+            ),
+            { concurrency: 8 },
+          )).filter((item): item is { item: string; size: number } => Boolean(item))
+          const large = new Set(sizes.filter((item) => item.size > limit).map((item) => item.item))
           const block = new Set(untracked.filter((item) => large.has(item)))
           yield* sync(Array.from(block))
+          const staged = allow.filter((item) => !block.has(item))
+          const stagedSizes = sizes.filter((item) => !block.has(item.item))
+          const oversized = stagedSizes.find((item) => item.size > DiffLimits.captureFileBytes)
+          const totalBytes = stagedSizes.reduce((total, item) => total + item.size, 0)
+          if (oversized || totalBytes > DiffLimits.captureTotalBytes) {
+            log.warn("snapshot capture exceeded source budget", {
+              files: staged.length,
+              totalBytes,
+              totalLimit: DiffLimits.captureTotalBytes,
+              oversizedFile: oversized?.item,
+              fileLimit: DiffLimits.captureFileBytes,
+            })
+            return false
+          }
           // Stage only the allowed candidate paths so snapshot updates stay scoped.
-          yield* stage(allow.filter((item) => !block.has(item)))
+          return yield* stage(staged)
         })
+
+        const capture = () =>
+          add().pipe(
+            Effect.timeoutOrElse({
+              duration: DiffLimits.wallTime,
+              orElse: () =>
+                Effect.logWarning("snapshot capture exceeded wall-time budget").pipe(Effect.as(false)),
+            }),
+          )
 
         const cleanup = Effect.fnUntraced(function* () {
           return yield* locked(
@@ -291,8 +430,9 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
                 yield* git(["--git-dir", state.gitdir, "config", "core.fsmonitor", "false"])
                 log.info("initialized")
               }
-              yield* add()
+              if (!(yield* capture())) return
               const result = yield* git(args(["write-tree"]), { cwd: state.directory })
+              if (result.code !== 0 || result.timedOut) return
               const hash = result.text.trim()
               log.info("tracking", { hash, cwd: state.directory, git: state.gitdir })
               return hash
@@ -303,14 +443,16 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
         const patch = Effect.fnUntraced(function* (hash: string) {
           return yield* locked(
             Effect.gen(function* () {
-              yield* add()
+              if (!(yield* capture())) return { hash, files: [] }
               const result = yield* git(
                 [...quote, ...args(["diff", "--cached", "--no-ext-diff", "--name-only", hash, "--", "."])],
                 {
                   cwd: state.directory,
+                  maxOutputBytes: DiffLimits.discoveryOutputBytes,
+                  timeout: DiffLimits.wallTime,
                 },
               )
-              if (result.code !== 0) {
+              if (result.code !== 0 || result.stdoutTruncated || result.timedOut) {
                 log.warn("failed to get diff", { hash, exitCode: result.code })
                 return { hash, files: [] }
               }
@@ -322,11 +464,18 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
 
               // Hide ignored-file removals from the user-facing patch output.
               const ignored = yield* ignore(files)
+              if (!ignored.ok) {
+                log.warn("failed to resolve ignored patch files", {
+                  timedOut: ignored.timedOut,
+                  outputLimited: ignored.outputLimited,
+                })
+                return { hash, files: [] }
+              }
 
               return {
                 hash,
                 files: files
-                  .filter((item) => !ignored.has(item))
+                  .filter((item) => !ignored.files.has(item))
                   .map((x) => path.join(state.worktree, x).replaceAll("\\", "/")),
               }
             }),
@@ -477,11 +626,13 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
         const diff = Effect.fnUntraced(function* (hash: string) {
           return yield* locked(
             Effect.gen(function* () {
-              yield* add()
+              if (!(yield* capture())) return ""
               const result = yield* git([...quote, ...args(["diff", "--cached", "--no-ext-diff", hash, "--", "."])], {
                 cwd: state.worktree,
+                maxOutputBytes: DiffLimits.patchTotalBytes,
+                timeout: DiffLimits.wallTime,
               })
-              if (result.code !== 0) {
+              if (result.code !== 0 || result.stdoutTruncated || result.timedOut) {
                 log.warn("failed to get diff", {
                   hash,
                   exitCode: result.code,
@@ -494,149 +645,27 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
           )
         })
 
-        const diffFull = Effect.fnUntraced(function* (from: string, to: string) {
-          return yield* locked(
-            Effect.gen(function* () {
-              type Row = {
-                file: string
-                status: "added" | "deleted" | "modified"
-                binary: boolean
-                additions: number
-                deletions: number
-              }
-
-              type Ref = {
-                file: string
-                side: "before" | "after"
-                ref: string
-              }
-
-              const show = Effect.fnUntraced(function* (row: Row) {
-                if (row.binary) return ["", ""]
-                if (row.status === "added") {
-                  return [
-                    "",
-                    yield* git([...cfg, ...args(["show", `${to}:${row.file}`])]).pipe(Effect.map((item) => item.text)),
-                  ]
-                }
-                if (row.status === "deleted") {
-                  return [
-                    yield* git([...cfg, ...args(["show", `${from}:${row.file}`])]).pipe(
-                      Effect.map((item) => item.text),
-                    ),
-                    "",
-                  ]
-                }
-                return yield* Effect.all(
-                  [
-                    git([...cfg, ...args(["show", `${from}:${row.file}`])]).pipe(Effect.map((item) => item.text)),
-                    git([...cfg, ...args(["show", `${to}:${row.file}`])]).pipe(Effect.map((item) => item.text)),
-                  ],
-                  { concurrency: 2 },
-                )
-              })
-
-              const load = Effect.fnUntraced(
-                function* (rows: Row[]) {
-                  const refs = rows.flatMap((row) => {
-                    if (row.binary) return []
-                    if (row.status === "added")
-                      return [{ file: row.file, side: "after", ref: `${to}:${row.file}` } satisfies Ref]
-                    if (row.status === "deleted") {
-                      return [{ file: row.file, side: "before", ref: `${from}:${row.file}` } satisfies Ref]
-                    }
-                    return [
-                      { file: row.file, side: "before", ref: `${from}:${row.file}` } satisfies Ref,
-                      { file: row.file, side: "after", ref: `${to}:${row.file}` } satisfies Ref,
-                    ]
-                  })
-                  if (!refs.length) return new Map<string, { before: string; after: string }>()
-
-                  const batch = yield* appProcess.run(
-                    ChildProcess.make("git", [...cfg, ...args(["cat-file", "--batch"])], {
-                      cwd: state.directory,
-                      extendEnv: true,
-                    }),
-                    { stdin: refs.map((item) => item.ref).join("\n") + "\n" },
-                  )
-                  if (batch.exitCode !== 0) {
-                    log.info("git cat-file --batch failed during snapshot diff, falling back to per-file git show", {
-                      stderr: batch.stderr.toString("utf8"),
-                      refs: refs.length,
-                    })
-                    return
-                  }
-                  const out = batch.stdout
-
-                  const fail = (msg: string, extra?: Record<string, string>) => {
-                    log.info(msg, { ...extra, refs: refs.length })
-                    return undefined
-                  }
-
-                  const map = new Map<string, { before: string; after: string }>()
-                  const dec = new TextDecoder()
-                  let i = 0
-                  for (const ref of refs) {
-                    let end = i
-                    while (end < out.length && out[end] !== 10) end += 1
-                    if (end >= out.length) {
-                      return fail(
-                        "git cat-file --batch returned a truncated header during snapshot diff, falling back to per-file git show",
-                      )
-                    }
-
-                    const head = dec.decode(out.slice(i, end))
-                    i = end + 1
-                    const hit = map.get(ref.file) ?? { before: "", after: "" }
-                    if (head.endsWith(" missing")) {
-                      map.set(ref.file, hit)
-                      continue
-                    }
-
-                    const match = head.match(/^[0-9a-f]+ blob (\d+)$/)
-                    if (!match) {
-                      return fail(
-                        "git cat-file --batch returned an unexpected header during snapshot diff, falling back to per-file git show",
-                        { head },
-                      )
-                    }
-
-                    const size = Number(match[1])
-                    if (!Number.isInteger(size) || size < 0 || i + size >= out.length || out[i + size] !== 10) {
-                      return fail(
-                        "git cat-file --batch returned truncated content during snapshot diff, falling back to per-file git show",
-                        { head },
-                      )
-                    }
-
-                    const text = dec.decode(out.slice(i, i + size))
-                    if (ref.side === "before") hit.before = text
-                    if (ref.side === "after") hit.after = text
-                    map.set(ref.file, hit)
-                    i += size + 1
-                  }
-
-                  if (i !== out.length) {
-                    return fail(
-                      "git cat-file --batch returned trailing data during snapshot diff, falling back to per-file git show",
-                    )
-                  }
-
-                  return map
-                },
-                Effect.scoped,
-                Effect.catch(() =>
-                  Effect.succeed<Map<string, { before: string; after: string }> | undefined>(undefined),
-                ),
-              )
-
-              const result: FileDiff[] = []
+        const buildDiffManifest = Effect.fnUntraced(function* (from: string, to: string, deadline: number) {
+              const reasons = new Set<DiffTruncationReason>()
               const status = new Map<string, "added" | "deleted" | "modified">()
+              const remaining = () => Duration.millis(Math.max(1, deadline - Date.now()))
 
               const statuses = yield* git(
                 [...quote, ...args(["diff", "--no-ext-diff", "--name-status", "--no-renames", from, to, "--", "."])],
-                { cwd: state.directory },
+                {
+                  cwd: state.directory,
+                  maxOutputBytes: DiffLimits.discoveryOutputBytes,
+                  timeout: remaining(),
+                },
               )
+              if (statuses.code !== 0) reasons.add("discovery_failed")
+              if (statuses.stdoutTruncated) {
+                reasons.add("discovery_output_limit")
+                log.warn("snapshot diff candidate discovery exceeded output budget", {
+                  maxOutputBytes: DiffLimits.discoveryOutputBytes,
+                })
+              }
+              if (statuses.timedOut) reasons.add("time_limit")
 
               for (const line of statuses.text.trim().split("\n")) {
                 if (!line) continue
@@ -649,10 +678,15 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
                 [...quote, ...args(["diff", "--no-ext-diff", "--no-renames", "--numstat", from, to, "--", "."])],
                 {
                   cwd: state.directory,
+                  maxOutputBytes: DiffLimits.discoveryOutputBytes,
+                  timeout: remaining(),
                 },
               )
+              if (numstat.code !== 0) reasons.add("discovery_failed")
+              if (numstat.stdoutTruncated) reasons.add("discovery_output_limit")
+              if (numstat.timedOut) reasons.add("time_limit")
 
-              const rows = numstat.text
+              const discovered = numstat.text
                 .trim()
                 .split("\n")
                 .filter(Boolean)
@@ -669,32 +703,295 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
                       binary,
                       additions: Number.isFinite(additions) ? additions : 0,
                       deletions: Number.isFinite(deletions) ? deletions : 0,
-                    } satisfies Row,
+                    } satisfies DiffRow,
                   ]
                 })
-
               // Hide ignored-file removals from the user-facing diff output.
-              const ignored = yield* ignore(rows.map((r) => r.file))
-              if (ignored.size > 0) {
-                const filtered = rows.filter((r) => !ignored.has(r.file))
-                rows.length = 0
-                rows.push(...filtered)
+              const ignored = yield* ignore(
+                discovered.map((r) => r.file),
+                remaining(),
+              )
+              if (!ignored.ok) {
+                reasons.add(ignored.timedOut ? "time_limit" : "discovery_failed")
+                if (ignored.outputLimited) reasons.add("discovery_output_limit")
+              }
+              const visibleDiscovered = ignored.ok
+                ? discovered.filter((row) => !ignored.files.has(row.file))
+                : discovered
+              if (visibleDiscovered.length > DiffLimits.candidateFiles || numstat.stdoutTruncated)
+                reasons.add("candidate_file_limit")
+              const rows = visibleDiscovered.slice(0, DiffLimits.candidateFiles)
+
+              const files: FileDiff[] = []
+              let manifestBytes = 2
+              for (const row of rows) {
+                const item = {
+                  file: row.file,
+                  ...(row.binary ? { patch: "" } : {}),
+                  additions: row.additions,
+                  deletions: row.deletions,
+                  status: row.status,
+                } satisfies FileDiff
+                const bytes = Buffer.byteLength(JSON.stringify(item)) + (files.length ? 1 : 0)
+                if (manifestBytes + bytes > DiffLimits.manifestBytes) {
+                  reasons.add("manifest_bytes_limit")
+                  break
+                }
+                files.push(item)
+                manifestBytes += bytes
               }
 
+              const totalFilesExact: boolean =
+                numstat.code === 0 && !numstat.stdoutTruncated && !numstat.timedOut && ignored.ok
+              const totalFiles = totalFilesExact
+                ? visibleDiscovered.length
+                : Math.max(visibleDiscovered.length, files.length + 1)
+              const manifest = {
+                files,
+                additions: files.reduce((sum, item) => sum + item.additions, 0),
+                deletions: files.reduce((sum, item) => sum + item.deletions, 0),
+                totalFiles,
+                totalFilesExact,
+                statisticsExact:
+                  totalFilesExact && files.length === totalFiles && reasons.size === 0,
+                includedFiles: files.length,
+                truncatedFiles: Math.max(0, totalFiles - files.length),
+                manifestHash: `sha256:${Hash.sha256(
+                  JSON.stringify({
+                    version: 1,
+                    from,
+                    to,
+                    files,
+                    totalFiles,
+                    totalFilesExact,
+                    reasons: [...reasons].sort(),
+                  }),
+                )}`,
+                completeness:
+                  reasons.size || files.length < totalFiles ? ("truncated" as const) : ("complete" as const),
+                truncationReasons: [...reasons].sort(),
+              } satisfies DiffManifest
+              return manifest
+        })
+
+        const diffManifest = Effect.fnUntraced(function* (from: string, to: string) {
+          const deadline = Date.now() + Duration.toMillis(DiffLimits.wallTime)
+          return yield* locked(buildDiffManifest(from, to, deadline))
+        })
+
+        const materializeDiff = Effect.fnUntraced(function* (
+          from: string,
+          to: string,
+          manifest: DiffManifest,
+          deadline: number,
+        ) {
+          const remaining = () => Duration.millis(Math.max(1, deadline - Date.now()))
+              const result: FileDiff[] = []
+              const reasons = new Set(manifest.truncationReasons)
+              const rows: DiffRow[] = manifest.files.map((item) => ({
+                file: item.file ?? "",
+                status: item.status ?? "modified",
+                binary: item.patch === "",
+                additions: item.additions,
+                deletions: item.deletions,
+              }))
+              type Ref = { file: string; side: "before" | "after"; ref: string }
+              const show = Effect.fnUntraced(function* (row: DiffRow) {
+                if (row.binary) return ["", ""]
+                const read = (ref: string) =>
+                  git([...cfg, ...args(["show", ref])], {
+                    cwd: state.directory,
+                    maxOutputBytes: DiffLimits.sourceFileBytes,
+                    timeout: Duration.millis(
+                      Math.max(
+                        1,
+                        Math.min(Duration.toMillis(DiffLimits.fallbackWallTime), deadline - Date.now()),
+                      ),
+                    ),
+                  })
+                const accept = (result: GitResult) =>
+                  result.code === 0 && !result.stdoutTruncated && !result.timedOut ? result.text : undefined
+                if (row.status === "added") {
+                  const after = accept(yield* read(`${to}:${row.file}`))
+                  return after === undefined ? undefined : (["", after] as const)
+                }
+                if (row.status === "deleted") {
+                  const before = accept(yield* read(`${from}:${row.file}`))
+                  return before === undefined ? undefined : ([before, ""] as const)
+                }
+                const pair = yield* Effect.all([read(`${from}:${row.file}`), read(`${to}:${row.file}`)], {
+                  concurrency: 2,
+                })
+                const before = accept(pair[0])
+                const after = accept(pair[1])
+                return before === undefined || after === undefined ? undefined : ([before, after] as const)
+              })
+
+              const load = Effect.fnUntraced(
+                function* (rows: DiffRow[], remainingSourceBytes: number) {
+                  const refs = rows.flatMap((row) => {
+                    if (row.binary) return []
+                    if (row.status === "added")
+                      return [{ file: row.file, side: "after", ref: `${to}:${row.file}` } satisfies Ref]
+                    if (row.status === "deleted")
+                      return [{ file: row.file, side: "before", ref: `${from}:${row.file}` } satisfies Ref]
+                    return [
+                      { file: row.file, side: "before", ref: `${from}:${row.file}` } satisfies Ref,
+                      { file: row.file, side: "after", ref: `${to}:${row.file}` } satisfies Ref,
+                    ]
+                  })
+                  if (!refs.length) return new Map<string, { before: string; after: string }>()
+                  const batch = yield* appProcess.run(
+                    ChildProcess.make("git", [...cfg, ...args(["cat-file", "--batch"])], {
+                      cwd: state.directory,
+                      extendEnv: true,
+                    }),
+                    {
+                      stdin: refs.map((item) => item.ref).join("\n") + "\n",
+                      maxOutputBytes:
+                        Math.max(1, Math.min(DiffLimits.sourceTotalBytes, remainingSourceBytes)) + refs.length * 128,
+                      maxErrorBytes: DiffLimits.discoveryOutputBytes,
+                      timeout: remaining(),
+                    },
+                  )
+                  if (batch.exitCode !== 0 || batch.stdoutTruncated || batch.stderrTruncated) return
+                  const map = new Map<string, { before: string; after: string }>()
+                  const decoder = new TextDecoder()
+                  let offset = 0
+                  for (const ref of refs) {
+                    let end = offset
+                    while (end < batch.stdout.length && batch.stdout[end] !== 10) end += 1
+                    if (end >= batch.stdout.length) return
+                    const head = decoder.decode(batch.stdout.slice(offset, end))
+                    offset = end + 1
+                    const hit = map.get(ref.file) ?? { before: "", after: "" }
+                    if (head.endsWith(" missing")) {
+                      map.set(ref.file, hit)
+                      continue
+                    }
+                    const match = head.match(/^[0-9a-f]+ blob (\d+)$/)
+                    const size = Number(match?.[1])
+                    if (!match || !Number.isInteger(size) || size < 0) return
+                    if (size > DiffLimits.sourceFileBytes) {
+                      reasons.add("source_file_limit")
+                      return
+                    }
+                    if (offset + size >= batch.stdout.length || batch.stdout[offset + size] !== 10) return
+                    const text = decoder.decode(batch.stdout.slice(offset, offset + size))
+                    if (ref.side === "before") hit.before = text
+                    if (ref.side === "after") hit.after = text
+                    map.set(ref.file, hit)
+                    offset += size + 1
+                  }
+                  return offset === batch.stdout.length ? map : undefined
+                },
+                Effect.scoped,
+                Effect.catch(() =>
+                  Effect.succeed<Map<string, { before: string; after: string }> | undefined>(undefined),
+                ),
+              )
+
               const step = 100
+              let sourceBytes = 0
+              let patchBytes = 0
+              let fallbackFiles = 0
               const patch = (file: string, before: string, after: string) =>
                 formatPatch(structuredPatch(file, file, before, after, "", "", { context: Number.MAX_SAFE_INTEGER }))
 
               for (let i = 0; i < rows.length; i += step) {
                 const run = rows.slice(i, i + step)
-                const text = yield* load(run)
+                if (
+                  Date.now() >= deadline ||
+                  sourceBytes >= DiffLimits.sourceTotalBytes ||
+                  patchBytes >= DiffLimits.patchTotalBytes
+                ) {
+                  if (Date.now() >= deadline) reasons.add("time_limit")
+                  if (sourceBytes >= DiffLimits.sourceTotalBytes) reasons.add("source_total_limit")
+                  if (patchBytes >= DiffLimits.patchTotalBytes) reasons.add("patch_total_limit")
+                  result.push(...rows.slice(i).map(({ file, additions, deletions, status }) => ({ file, additions, deletions, status })))
+                  break
+                }
+                const text = yield* load(run, DiffLimits.sourceTotalBytes - sourceBytes)
 
                 for (const row of run) {
-                  const hit = text?.get(row.file) ?? { before: "", after: "" }
-                  const [before, after] = row.binary ? ["", ""] : text ? [hit.before, hit.after] : yield* show(row)
+                  if (
+                    Date.now() >= deadline ||
+                    sourceBytes >= DiffLimits.sourceTotalBytes ||
+                    patchBytes >= DiffLimits.patchTotalBytes
+                  ) {
+                    if (Date.now() >= deadline) reasons.add("time_limit")
+                    if (sourceBytes >= DiffLimits.sourceTotalBytes) reasons.add("source_total_limit")
+                    if (patchBytes >= DiffLimits.patchTotalBytes) reasons.add("patch_total_limit")
+                    result.push(
+                      ...run
+                        .slice(run.indexOf(row))
+                        .map(({ file, additions, deletions, status }) => ({ file, additions, deletions, status })),
+                    )
+                    break
+                  }
+                  if (text && !text.has(row.file) && !row.binary) {
+                    reasons.add("materialization_failed")
+                    result.push({
+                      file: row.file,
+                      patch: "",
+                      additions: row.additions,
+                      deletions: row.deletions,
+                      status: row.status,
+                    })
+                    continue
+                  }
+                  const hit = text?.get(row.file)
+                  const canFallback = !text && !row.binary && fallbackFiles < DiffLimits.fallbackFiles
+                  if (canFallback) fallbackFiles += 1
+                  const contents = row.binary
+                    ? (["", ""] as const)
+                    : hit
+                      ? ([hit.before, hit.after] as const)
+                      : canFallback
+                        ? yield* show(row)
+                        : undefined
+                  if (!contents) {
+                    reasons.add("materialization_failed")
+                    result.push({
+                      file: row.file,
+                      patch: "",
+                      additions: row.additions,
+                      deletions: row.deletions,
+                      status: row.status,
+                    })
+                    continue
+                  }
+                  const [before, after] = contents
+                  const observedSourceBytes = Buffer.byteLength(before) + Buffer.byteLength(after)
+                  if (
+                    observedSourceBytes > DiffLimits.sourceFileBytes ||
+                    sourceBytes + observedSourceBytes > DiffLimits.sourceTotalBytes
+                  ) {
+                    reasons.add(
+                      observedSourceBytes > DiffLimits.sourceFileBytes ? "source_file_limit" : "source_total_limit",
+                    )
+                    result.push({
+                      file: row.file,
+                      patch: "",
+                      additions: row.additions,
+                      deletions: row.deletions,
+                      status: row.status,
+                    })
+                    continue
+                  }
+                  sourceBytes += observedSourceBytes
+                  const body = row.binary ? "" : patch(row.file, before, after)
+                  const patchSize = Buffer.byteLength(body)
+                  const bounded =
+                    patchSize > DiffLimits.patchFileBytes || patchBytes + patchSize > DiffLimits.patchTotalBytes
+                      ? ""
+                      : body
+                  if (patchSize > DiffLimits.patchFileBytes) reasons.add("patch_file_limit")
+                  else if (patchBytes + patchSize > DiffLimits.patchTotalBytes) reasons.add("patch_total_limit")
+                  patchBytes += Buffer.byteLength(bounded)
                   result.push({
                     file: row.file,
-                    patch: row.binary ? "" : patch(row.file, before, after),
+                    patch: bounded,
                     additions: row.additions,
                     deletions: row.deletions,
                     status: row.status,
@@ -702,9 +999,33 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
                 }
               }
 
-              return result
+              const truncationReasons = [...reasons].sort()
+              return {
+                ...manifest,
+                files: result,
+                statisticsExact: manifest.statisticsExact,
+                completeness: truncationReasons.length > 0 ? ("truncated" as const) : manifest.completeness,
+                truncationReasons,
+              } satisfies DiffManifest
+        })
+
+        const diffFullManifest = Effect.fnUntraced(function* (from: string, to: string) {
+          const deadline = Date.now() + Duration.toMillis(DiffLimits.wallTime)
+          return yield* locked(
+            Effect.gen(function* () {
+              const manifest = yield* buildDiffManifest(from, to, deadline)
+              if (Date.now() < deadline) return yield* materializeDiff(from, to, manifest, deadline)
+              return {
+                ...manifest,
+                completeness: "truncated" as const,
+                truncationReasons: [...new Set([...manifest.truncationReasons, "time_limit" as const])].sort(),
+              }
             }),
           )
+        })
+
+        const diffFull = Effect.fnUntraced(function* (from: string, to: string) {
+          return (yield* diffFullManifest(from, to)).files
         })
 
         yield* cleanup().pipe(
@@ -717,7 +1038,7 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
           Effect.forkScoped,
         )
 
-        return { cleanup, track, patch, restore, revert, diff, diffFull }
+        return { cleanup, track, patch, restore, revert, diff, diffManifest, diffFullManifest, diffFull }
       }),
     )
 
@@ -742,6 +1063,12 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
       }),
       diff: Effect.fn("Snapshot.diff")(function* (hash: string) {
         return yield* InstanceState.useEffect(state, (s) => s.diff(hash))
+      }),
+      diffManifest: Effect.fn("Snapshot.diffManifest")(function* (from: string, to: string) {
+        return yield* InstanceState.useEffect(state, (s) => s.diffManifest(from, to))
+      }),
+      diffFullManifest: Effect.fn("Snapshot.diffFullManifest")(function* (from: string, to: string) {
+        return yield* InstanceState.useEffect(state, (s) => s.diffFullManifest(from, to))
       }),
       diffFull: Effect.fn("Snapshot.diffFull")(function* (from: string, to: string) {
         return yield* InstanceState.useEffect(state, (s) => s.diffFull(from, to))

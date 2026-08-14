@@ -18,6 +18,7 @@ import { SessionRevert } from "@/session/revert"
 import { SessionRunState } from "@/session/run-state"
 import { SessionStatus } from "@/session/status"
 import { SessionSummary } from "@/session/summary"
+import { SessionLegacyProviderResolution } from "@/session/legacy-provider-resolution"
 import { Todo } from "@/session/todo"
 import { MessageID, PartID, SessionID } from "@/session/schema"
 import { NamedError } from "@deepagent-code/core/util/error"
@@ -30,6 +31,9 @@ import { InstanceHttpApi } from "../api"
 import {
   CommandPayload,
   ContextAttemptResolvePayload,
+  DiffArtifactFileQuery,
+  DiffArtifactMaintenancePayload,
+  DiffArtifactManifestQuery,
   DiffQuery,
   ForkPayload,
   InitPayload,
@@ -39,14 +43,17 @@ import {
   PermissionResponsePayload,
   PromptPreparePayload,
   PromptPayload,
+  ProviderResolutionPayload,
   RevertPayload,
   ShellPayload,
   SummarizePayload,
   UpdatePayload,
 } from "../groups/session"
-import { ConflictError, PermissionNotFoundError, notFound } from "../errors"
+import { ConflictError, PermissionNotFoundError, ServiceUnavailableError, notFound } from "../errors"
 import * as SessionError from "./session-errors"
 import { randomUUID } from "node:crypto"
+import { getWorkspaceContext } from "../utils/workspace-context"
+import { SessionDiffArtifact } from "@/session/diff-artifact"
 
 const tryParseJson = (text: string) =>
   Effect.try({
@@ -85,6 +92,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const summary = yield* SessionSummary.Service
     const events = yield* EventV2Bridge.Service
     const contextDiagnosticsSvc = yield* ContextFederationDiagnostics.Service
+    const providerResolutionSvc = yield* SessionLegacyProviderResolution.Service
     const scope = yield* Scope.Scope
 
     const list = Effect.fn("SessionHttpApi.list")(function* (ctx: { query: typeof ListQuery.Type }) {
@@ -150,11 +158,56 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       return yield* summary.diff({ sessionID: ctx.params.sessionID, messageID: ctx.query.messageID })
     })
 
+    const mapDiffArtifactError = (error: SessionDiffArtifact.Invalid | SessionDiffArtifact.NotFound) => {
+      if (error instanceof SessionDiffArtifact.NotFound) return notFound(error.message)
+      return new HttpApiError.BadRequest({})
+    }
+
+    const diffArtifactMaintenance = Effect.fn("SessionHttpApi.diffArtifactMaintenance")(function* (ctx: {
+      params: { sessionID: SessionID }
+      payload: typeof DiffArtifactMaintenancePayload.Type
+    }) {
+      yield* requireSession(ctx.params.sessionID)
+      return yield* SessionDiffArtifact.migrate({
+        sessionID: ctx.params.sessionID,
+        ...(ctx.payload.limit ? { limit: ctx.payload.limit } : {}),
+      }).pipe(Effect.mapError((error) =>
+        new ServiceUnavailableError({ service: "session.diff-artifact", message: error.message }),
+      ))
+    })
+
+    const diffArtifactManifest = Effect.fn("SessionHttpApi.diffArtifactManifest")(function* (ctx: {
+      params: { sessionID: SessionID }
+      query: typeof DiffArtifactManifestQuery.Type
+    }) {
+      yield* requireSession(ctx.params.sessionID)
+      return yield* SessionDiffArtifact.manifest({
+        sessionID: ctx.params.sessionID,
+        messageID: ctx.query.messageID,
+        artifactID: ctx.query.artifactID,
+        ...(ctx.query.cursor ? { cursor: ctx.query.cursor } : {}),
+        ...(ctx.query.limit ? { limit: ctx.query.limit } : {}),
+      }).pipe(Effect.mapError(mapDiffArtifactError))
+    })
+
+    const diffArtifactFile = Effect.fn("SessionHttpApi.diffArtifactFile")(function* (ctx: {
+      params: { sessionID: SessionID }
+      query: typeof DiffArtifactFileQuery.Type
+    }) {
+      yield* requireSession(ctx.params.sessionID)
+      return yield* SessionDiffArtifact.file({
+        sessionID: ctx.params.sessionID,
+        messageID: ctx.query.messageID,
+        artifactID: ctx.query.artifactID,
+        path: ctx.query.path,
+        ...(ctx.query.maxBytes ? { maxBytes: ctx.query.maxBytes } : {}),
+      }).pipe(Effect.mapError(mapDiffArtifactError))
+    })
+
     const messages = Effect.fn("SessionHttpApi.messages")(function* (ctx: {
       params: { sessionID: SessionID }
       query: typeof MessagesQuery.Type
     }) {
-      if (ctx.query.before && ctx.query.limit === undefined) return yield* new HttpApiError.BadRequest({})
       if (ctx.query.before) {
         const before = ctx.query.before
         yield* Effect.try({
@@ -163,26 +216,23 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
         })
       }
       yield* requireSession(ctx.params.sessionID)
-      if (ctx.query.limit === undefined || ctx.query.limit === 0) {
-        return yield* SessionError.mapStorageNotFound(session.messages({ sessionID: ctx.params.sessionID }))
-      }
-
       const page = yield* SessionError.mapStorageNotFound(
-        MessageV2.page({
+        MessageV2.clientPage({
           sessionID: ctx.params.sessionID,
-          limit: ctx.query.limit,
+          limit: ctx.query.limit ?? MessageV2.ClientMessageLimits.page,
           before: ctx.query.before,
         }),
       )
-      if (!page.cursor) return page.items
+      const items = page.items.map((item) => ({ ...item, info: MessageV2.clientProjection(item.info) }))
+      if (!page.cursor) return items
 
       const request = yield* HttpServerRequest.HttpServerRequest
       // toURL() honors the Host + x-forwarded-proto headers, so the Link
       // header echoes the real origin instead of a hard-coded localhost.
       const url = Option.getOrElse(HttpServerRequest.toURL(request), () => new URL(request.url, "http://localhost"))
-      url.searchParams.set("limit", ctx.query.limit.toString())
+      url.searchParams.set("limit", (ctx.query.limit ?? MessageV2.ClientMessageLimits.page).toString())
       url.searchParams.set("before", page.cursor)
-      return HttpServerResponse.jsonUnsafe(page.items, {
+      return HttpServerResponse.jsonUnsafe(items, {
         headers: {
           "Access-Control-Expose-Headers": "Link, X-Next-Cursor",
           Link: `<${url.toString()}>; rel="next"`,
@@ -194,9 +244,10 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const message = Effect.fn("SessionHttpApi.message")(function* (ctx: {
       params: { sessionID: SessionID; messageID: MessageID }
     }) {
-      return yield* SessionError.mapStorageNotFound(
-        MessageV2.get({ sessionID: ctx.params.sessionID, messageID: ctx.params.messageID }),
+      const result = yield* SessionError.mapStorageNotFound(
+        MessageV2.clientGet({ sessionID: ctx.params.sessionID, messageID: ctx.params.messageID }),
       )
+      return result
     })
 
     const create = Effect.fn("SessionHttpApi.create")(function* (ctx: { payload?: Session.CreateInput }) {
@@ -563,7 +614,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       payload: typeof RevertPayload.Type
     }) {
       yield* requireSession(ctx.params.sessionID)
-      return yield* SessionError.mapBusy(revertSvc.revert({ sessionID: ctx.params.sessionID, ...ctx.payload }))
+      return yield* SessionError.mapRevert(revertSvc.revert({ sessionID: ctx.params.sessionID, ...ctx.payload }))
     })
 
     const unrevert = Effect.fn("SessionHttpApi.unrevert")(function* (ctx: { params: { sessionID: SessionID } }) {
@@ -668,6 +719,32 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       return resolved
     })
 
+    const providerResolutionList = Effect.fn("SessionHttpApi.providerResolutionList")(function* (ctx: {
+      params: { sessionID: SessionID }
+    }) {
+      yield* requireSession(ctx.params.sessionID)
+      return yield* providerResolutionSvc
+        .describe(ctx.params.sessionID)
+        .pipe(Effect.mapError((error) => notFound(error.reason)))
+    })
+
+    const providerResolutionResolve = Effect.fn("SessionHttpApi.providerResolutionResolve")(function* (ctx: {
+      params: { sessionID: SessionID }
+      payload: typeof ProviderResolutionPayload.Type
+    }) {
+      yield* requireSession(ctx.params.sessionID)
+      const actor = yield* getWorkspaceContext()
+      return yield* providerResolutionSvc
+        .resolve({ ...ctx.payload, sessionID: ctx.params.sessionID, actorID: actor.userID })
+        .pipe(
+          Effect.mapError((error) =>
+            error instanceof SessionLegacyProviderResolution.NotFound
+              ? notFound(error.reason)
+              : new ConflictError({ message: error.reason, resource: error.code }),
+          ),
+        )
+    })
+
     return handlers
       .handle("list", list)
       .handle("status", status)
@@ -676,6 +753,9 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       .handle("todo", todo)
       .handle("plan", plan)
       .handle("diff", diff)
+      .handle("diffArtifactMaintenance", diffArtifactMaintenance)
+      .handle("diffArtifactManifest", diffArtifactManifest)
+      .handle("diffArtifactFile", diffArtifactFile)
       .handle("messages", messages)
       .handle("message", message)
       .handleRaw("create", createRaw)
@@ -702,5 +782,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       .handle("updatePart", updatePart)
       .handle("contextDiagnostics", contextDiagnostics)
       .handle("contextAttemptResolve", contextAttemptResolve)
+      .handle("providerResolutionList", providerResolutionList)
+      .handle("providerResolutionResolve", providerResolutionResolve)
   }),
 )

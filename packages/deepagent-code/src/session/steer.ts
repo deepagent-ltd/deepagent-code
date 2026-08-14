@@ -20,6 +20,7 @@ import { SessionPromptEpochTable } from "./prompt-epoch.sql"
 import {
   SessionActivityAdmissionTable,
   SessionLegacyActivityAdmissionTable,
+  SessionLegacyActivityRunTable,
   SessionLegacyActivityTable,
 } from "./activity-sql"
 import { SessionActivityOwner } from "./activity-owner"
@@ -242,6 +243,8 @@ export const layer = Layer.effect(
                       admitted_message_id: admitted.id,
                       correlation_id: input.correlationID ?? admitted.id,
                       mutation_epoch: session.mutationEpoch,
+                      execution_mode: delivery === "steer" ? "run_now" : "legacy",
+                      execution_state: delivery === "steer" ? "pending" : "legacy",
                       version: 1,
                       time_created: admitted.timeCreated,
                       time_selected: admitted.timeCreated,
@@ -281,6 +284,7 @@ export const layer = Layer.effect(
                   delivery,
                   payload_fingerprint_kind: "payload_hash",
                   payload_fingerprint: payloadHash,
+                  execution_mode: storedIntent.execution_mode,
                   created_at: storedIntent.time_created,
                 })
                 .onConflictDoNothing()
@@ -574,6 +578,71 @@ export const layer = Layer.effect(
                 .get()
                 .pipe(Effect.orDie)
               if (!row) return false
+              const execution = yield* tx
+                .select({
+                  intentID: SessionIntentTable.intent_id,
+                  executionMode: SessionIntentTable.execution_mode,
+                  executionState: SessionIntentTable.execution_state,
+                  executionClaimID: SessionIntentTable.execution_claim_id,
+                  activityID: SessionLegacyActivityAdmissionTable.activity_id,
+                })
+                .from(SessionIntentTable)
+                .innerJoin(
+                  SessionActivityAdmissionTable,
+                  eq(SessionActivityAdmissionTable.legacy_intent_id, SessionIntentTable.intent_id),
+                )
+                .innerJoin(
+                  SessionLegacyActivityAdmissionTable,
+                  eq(SessionLegacyActivityAdmissionTable.admission_id, SessionActivityAdmissionTable.admission_id),
+                )
+                .innerJoin(
+                  SessionLegacyActivityTable,
+                  eq(SessionLegacyActivityTable.activity_id, SessionLegacyActivityAdmissionTable.activity_id),
+                )
+                .where(
+                  and(
+                    eq(SessionActivityAdmissionTable.admitted_message_id, input.admitted.id),
+                    eq(SessionLegacyActivityTable.state, "active"),
+                  ),
+                )
+                .get()
+                .pipe(Effect.orDie)
+              if (execution?.executionMode === "run_now") {
+                const run = yield* tx
+                  .select({ runID: SessionLegacyActivityRunTable.run_id })
+                  .from(SessionLegacyActivityRunTable)
+                  .where(
+                    and(
+                      eq(SessionLegacyActivityRunTable.activity_id, execution.activityID),
+                      eq(SessionLegacyActivityRunTable.session_id, input.admitted.sessionID),
+                      eq(SessionLegacyActivityRunTable.mutation_epoch, session.mutationEpoch),
+                      inArray(SessionLegacyActivityRunTable.state, ["running", "finalizing"]),
+                    ),
+                  )
+                  .get()
+                  .pipe(Effect.orDie)
+                if (!run) return yield* Effect.die("SessionSteer.materialize: active steer has no live run")
+                if (execution.executionState === "pending")
+                  yield* tx
+                    .update(SessionIntentTable)
+                    .set({
+                      execution_state: "claimed",
+                      execution_claim_id: run.runID,
+                      execution_claimed_at: DateTime.toEpochMillis(yield* DateTime.now),
+                    })
+                    .where(
+                      and(
+                        eq(SessionIntentTable.intent_id, execution.intentID),
+                        eq(SessionIntentTable.execution_mode, "run_now"),
+                        eq(SessionIntentTable.execution_state, "pending"),
+                        isNull(SessionIntentTable.execution_claim_id),
+                      ),
+                    )
+                    .run()
+                    .pipe(Effect.orDie)
+                if (execution.executionState === "claimed" && execution.executionClaimID !== run.runID)
+                  return yield* Effect.die("SessionSteer.materialize: steer run claim conflicts")
+              }
               const { id: _, sessionID: __, ...message } = input.info
               const data = message as Types.DeepMutable<typeof message>
               const storedMessage = yield* tx

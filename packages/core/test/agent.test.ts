@@ -2,6 +2,7 @@ import { describe, expect } from "bun:test"
 import { Effect, Exit, Scope } from "effect"
 import { AgentV2 } from "@deepagent-code/core/agent"
 import { Location } from "@deepagent-code/core/location"
+import { PermissionV2 } from "@deepagent-code/core/permission"
 import { AgentPlugin } from "@deepagent-code/core/plugin/agent"
 import { AbsolutePath } from "@deepagent-code/core/schema"
 import { location } from "./fixture/location"
@@ -120,11 +121,20 @@ describe("AgentV2", () => {
         "explore",
         "general",
         "plan",
+        "researcher",
         "summary",
         "title",
       ])
       for (const item of agents) {
         expect(item.permissions.some((rule) => rule.action === "bash" && rule.effect !== "deny")).toBe(false)
+      }
+
+      const researcher = yield* agent.get(AgentV2.ID.make("researcher"))
+      expect(researcher).toBeDefined()
+      expect(PermissionV2.evaluate("read", "fixtures/cp01.txt", researcher?.permissions ?? []).effect).toBe("allow")
+      expect(PermissionV2.evaluate("grep", "marker", researcher?.permissions ?? []).effect).toBe("allow")
+      for (const action of ["bash", "write", "edit", "task", "question"]) {
+        expect(PermissionV2.evaluate(action, "*", researcher?.permissions ?? []).effect).toBe("deny")
       }
     }),
   )

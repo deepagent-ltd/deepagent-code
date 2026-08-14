@@ -43,6 +43,8 @@ import { RequestExecutor } from "@deepagent-code/llm/route"
 import * as SessionRunnerLLM from "./session/runner/llm"
 import { SessionRunnerModel } from "./session/runner/model"
 import { SystemContextBuiltIns } from "./system-context/builtins"
+import { SessionProviderOwner } from "./context-federation/provider-owner"
+import { V2ProviderTurn } from "./session/runner/v2-provider-turn"
 import { FetchHttpClient } from "effect/unstable/http"
 
 const deepagentEnabledFromEnv = () => process.env.DEEPAGENT_ENABLED !== "false" && process.env.DEEPAGENT_ENABLED !== "0"
@@ -97,6 +99,7 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()(
         Layer.provide(services),
         Layer.provide(model),
         Layer.provide(skillGuidance),
+        Layer.provide(V2ProviderTurn.layer.pipe(Layer.provide(SessionProviderOwner.layer), Layer.provide(services))),
       )
       return Layer.mergeAll(
         services,

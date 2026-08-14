@@ -5,6 +5,7 @@ import * as knowledgeSource from "./knowledge-source"
 import { type ProblemProfile, type ActivateOptions } from "./domain-pack"
 import * as Registry from "./domain-pack-registry"
 import type { ExtendedProblemProfile } from "./domain-pack-registry"
+import { DeepAgentReleasedSnapshot, SnapshotIntegrityError } from "./released-snapshot"
 
 // V3 anti-misleading retrieval (docs/30). Knowledge is advisory and gated so the agent
 // system never drags down the model: mandatory per-type top-k, an evidence-strength gate
@@ -33,7 +34,9 @@ export type RetrievalInput = {
   readonly tools: ToolContext
   readonly round: number
   readonly previousFailures: number
-  readonly blockedRefs?: readonly string[] // diagnosis-blocked refs -> do_not_use
+  // A canonical authority ref blocks one exact released document. A legacy bare ref_id remains
+  // supported and blocks every released document with that store-local id.
+  readonly blockedRefs?: readonly string[]
   readonly profile?: ProblemProfile // V3: activates domain packs (docs/31 §2)
   readonly domainOptions?: ActivateOptions // override / threshold for domain activation
   // V3.2.1 decision B (docs/34 §8): workspace isolation by path. When set, durable retrieval unions
@@ -41,6 +44,7 @@ export type RetrievalInput = {
   // from OTHER workspaces is never read (different on-disk store). Absent => user-global only. The
   // path (not a pre-hashed id) is required because the durable store roots at project/<hash(path)>.
   readonly workspacePath?: string
+  readonly releasedSelection?: DeepAgentReleasedSnapshot.Selection
 }
 
 export type StrategyRef = {
@@ -51,6 +55,7 @@ export type StrategyRef = {
   readonly relevance: number
   readonly summary: string
   readonly evidence_strength: EvidenceStrength
+  readonly document_ref: DeepAgentReleasedSnapshot.DocumentRef
 }
 
 export type MethodologyRef = {
@@ -60,6 +65,7 @@ export type MethodologyRef = {
   readonly relevance: number
   readonly summary: string
   readonly evidence_strength: EvidenceStrength
+  readonly document_ref: DeepAgentReleasedSnapshot.DocumentRef
 }
 
 export type MemoryRef = {
@@ -68,6 +74,7 @@ export type MemoryRef = {
   readonly summary: string
   readonly relevance: number
   readonly evidence_strength: EvidenceStrength
+  readonly document_ref: DeepAgentReleasedSnapshot.DocumentRef
 }
 
 // review_4 M1/M4: knowledge and skill are first-class retrieved types. They carry pack_id so the
@@ -79,6 +86,7 @@ export type KnowledgeRef = {
   readonly relevance: number
   readonly summary: string
   readonly evidence_strength: EvidenceStrength
+  readonly document_ref: DeepAgentReleasedSnapshot.DocumentRef
 }
 export type SkillRef = {
   readonly ref_id: string
@@ -87,6 +95,7 @@ export type SkillRef = {
   readonly relevance: number
   readonly summary: string
   readonly evidence_strength: EvidenceStrength
+  readonly document_ref: DeepAgentReleasedSnapshot.DocumentRef
 }
 
 // Strategies and methodologies are seeded from pack documents/ into DocumentStore at
@@ -118,7 +127,12 @@ export const invalidateCache = (): void => {
 // status=active only). DAP-11: the formerly in-code CORE_STRATEGIES + gpu pack are now SEEDED into
 // the DocumentStore at gateway configure(), so they flow through this single path — no in-code
 // double-injection. The seed/pack docs are NOT excluded anymore (they ARE the curated knowledge).
-const loadDiskStrategies = (workspacePath: string | undefined, activation: KnowledgeActivation): StrategyRef[] => {
+const loadDiskStrategies = (
+  workspacePath: string | undefined,
+  activation: KnowledgeActivation,
+  releasedSelection: DeepAgentReleasedSnapshot.Selection | undefined,
+): StrategyRef[] => {
+  if (!releasedSelection) return []
   let scored
   try {
     scored = knowledgeSource.queryKnowledge({
@@ -126,12 +140,14 @@ const loadDiskStrategies = (workspacePath: string | undefined, activation: Knowl
       activePackIds: activation.activePackIds,
       keywords: activation.keywords,
       ...(workspacePath ? { workspacePath } : {}),
+      releasedSelection,
       limit: 50,
     })
-  } catch {
+  } catch (error) {
+    rethrowSnapshotIntegrity(error)
     return []
   }
-  return scored.map(({ doc, score }) => ({
+  return scored.map(({ doc, score, documentRef }) => ({
     ref_id: doc.id,
     pack_id: packIdOf(doc),
     provenance: doc.provenance.run_ref ? `learned:${doc.provenance.run_ref}` : "durable",
@@ -139,65 +155,86 @@ const loadDiskStrategies = (workspacePath: string | undefined, activation: Knowl
     relevance: rankDoc(score, packIdOf(doc), activation),
     summary: doc.description,
     evidence_strength: doc.confidence?.evidence_strength ?? "none",
+    document_ref: documentRef,
   }))
 }
 
 // DAP-11: the in-code constants are no longer the retrieval source — they are SEEDED into
 // DocumentStore at gateway configure() and read back via loadDiskStrategies.
-const getAllStrategies = (workspacePath: string | undefined, activation: KnowledgeActivation): readonly StrategyRef[] =>
-  loadDiskStrategies(workspacePath, activation)
+const getAllStrategies = (
+  workspacePath: string | undefined,
+  activation: KnowledgeActivation,
+  releasedSelection: DeepAgentReleasedSnapshot.Selection | undefined,
+): readonly StrategyRef[] => loadDiskStrategies(workspacePath, activation, releasedSelection)
 
 // review_4 M1: knowledge docs — durable, seeded from domain-packs documents/knowledge/, max/ultra only.
-const loadDiskKnowledge = (workspacePath: string | undefined, activation: KnowledgeActivation): KnowledgeRef[] => {
+const loadDiskKnowledge = (
+  workspacePath: string | undefined,
+  activation: KnowledgeActivation,
+  releasedSelection: DeepAgentReleasedSnapshot.Selection | undefined,
+): KnowledgeRef[] => {
+  if (!releasedSelection) return []
   try {
     const scored = knowledgeSource.queryKnowledge({
       types: ["knowledge"],
       activePackIds: activation.activePackIds,
       keywords: activation.keywords,
       ...(workspacePath ? { workspacePath } : {}),
+      releasedSelection,
       limit: 40,
     })
-    return scored.map(({ doc, score }) => ({
+    return scored.map(({ doc, score, documentRef }) => ({
       ref_id: doc.id,
       pack_id: packIdOf(doc),
       scope: doc.domain ?? "general",
       relevance: rankDoc(score, packIdOf(doc), activation),
       summary: doc.description,
       evidence_strength: doc.confidence?.evidence_strength ?? "none",
+      document_ref: documentRef,
     }))
-  } catch {
+  } catch (error) {
+    rethrowSnapshotIntegrity(error)
     return []
   }
 }
 
 // review_4 M4: skill docs — durable, seeded from domain-packs documents/skills/, high+ (by design).
-const loadDiskSkills = (workspacePath: string | undefined, activation: KnowledgeActivation): SkillRef[] => {
+const loadDiskSkills = (
+  workspacePath: string | undefined,
+  activation: KnowledgeActivation,
+  releasedSelection: DeepAgentReleasedSnapshot.Selection | undefined,
+): SkillRef[] => {
+  if (!releasedSelection) return []
   try {
     const scored = knowledgeSource.queryKnowledge({
       types: ["skill"],
       activePackIds: activation.activePackIds,
       keywords: activation.keywords,
       ...(workspacePath ? { workspacePath } : {}),
+      releasedSelection,
       limit: 30,
     })
-    return scored.map(({ doc, score }) => ({
+    return scored.map(({ doc, score, documentRef }) => ({
       ref_id: doc.id,
       pack_id: packIdOf(doc),
       scope: doc.domain ?? "general",
       relevance: rankDoc(score, packIdOf(doc), activation),
       summary: doc.description,
       evidence_strength: doc.confidence?.evidence_strength ?? "none",
+      document_ref: documentRef,
     }))
-  } catch {
+  } catch (error) {
+    rethrowSnapshotIntegrity(error)
     return []
   }
 }
 
 export type GapEntry = {
   readonly ref_id: string
+  readonly authority_ref: string
   readonly excluded_by: "relevance" | "evidence" | "topk" | "global_cap"
 }
-export type DoNotUseEntry = { readonly ref_id: string; readonly reason: string }
+export type DoNotUseEntry = { readonly ref_id: string; readonly authority_ref: string; readonly reason: string }
 
 type Gated<T> = {
   readonly selected: readonly T[]
@@ -205,8 +242,18 @@ type Gated<T> = {
   readonly doNotUse: readonly DoNotUseEntry[]
 }
 
+export const releasedDocumentAuthorityKey = (ref: DeepAgentReleasedSnapshot.DocumentRef) =>
+  `${ref.sourceStore}:${ref.id}@${ref.version}:${ref.hash}`
+
+const refAuthorityKey = (ref: {
+  readonly ref_id: string
+  readonly document_ref?: DeepAgentReleasedSnapshot.DocumentRef
+}) => (ref.document_ref ? releasedDocumentAuthorityKey(ref.document_ref) : ref.ref_id)
+
 const strategyProjection = (s: StrategyRef): KnowledgeRefProjection => ({
   ref_id: s.ref_id,
+  authority_ref: refAuthorityKey(s),
+  document_ref: s.document_ref,
   kind: "strategy",
   provenance: s.provenance,
   scope: s.scope,
@@ -218,6 +265,8 @@ const strategyProjection = (s: StrategyRef): KnowledgeRefProjection => ({
 
 const methodologyProjection = (m: MethodologyRef): KnowledgeRefProjection => ({
   ref_id: m.ref_id,
+  authority_ref: refAuthorityKey(m),
+  document_ref: m.document_ref,
   kind: "methodology",
   provenance: "deepagent_methodology_registry",
   scope: m.scope,
@@ -229,6 +278,8 @@ const methodologyProjection = (m: MethodologyRef): KnowledgeRefProjection => ({
 
 const memoryProjection = (m: MemoryRef): KnowledgeRefProjection => ({
   ref_id: m.ref_id,
+  authority_ref: refAuthorityKey(m),
+  document_ref: m.document_ref,
   kind: "memory",
   provenance: m.provenance,
   scope: "learned",
@@ -240,6 +291,8 @@ const memoryProjection = (m: MemoryRef): KnowledgeRefProjection => ({
 
 const knowledgeProjection = (k: KnowledgeRef): KnowledgeRefProjection => ({
   ref_id: k.ref_id,
+  authority_ref: refAuthorityKey(k),
+  document_ref: k.document_ref,
   kind: "knowledge",
   provenance: "durable",
   scope: k.scope,
@@ -251,6 +304,8 @@ const knowledgeProjection = (k: KnowledgeRef): KnowledgeRefProjection => ({
 
 const skillProjection = (s: SkillRef): KnowledgeRefProjection => ({
   ref_id: s.ref_id,
+  authority_ref: refAuthorityKey(s),
+  document_ref: s.document_ref,
   kind: "skill",
   provenance: "durable",
   scope: s.scope,
@@ -279,8 +334,9 @@ export const gateRefs = <T extends { ref_id: string; relevance: number; evidence
   const doNotUse: DoNotUseEntry[] = []
 
   const pool = items.filter((i) => {
-    if (blocked.has(i.ref_id)) {
-      doNotUse.push({ ref_id: i.ref_id, reason: "blocked by diagnosis" })
+    const authorityRef = refAuthorityKey(i)
+    if (blocked.has(authorityRef) || blocked.has(i.ref_id)) {
+      doNotUse.push({ ref_id: i.ref_id, authority_ref: authorityRef, reason: "blocked by diagnosis" })
       return false
     }
     return true
@@ -288,30 +344,32 @@ export const gateRefs = <T extends { ref_id: string; relevance: number; evidence
 
   const passRelevance = pool.filter((i) => {
     if (i.relevance >= relevanceThreshold) return true
-    gaps.push({ ref_id: i.ref_id, excluded_by: "relevance" })
+    gaps.push({ ref_id: i.ref_id, authority_ref: refAuthorityKey(i), excluded_by: "relevance" })
     return false
   })
 
   const passEvidence = passRelevance.filter((i) => {
     if (EVIDENCE_SCORE[i.evidence_strength] >= EVIDENCE_THRESHOLD) return true
-    gaps.push({ ref_id: i.ref_id, excluded_by: "evidence" })
+    gaps.push({ ref_id: i.ref_id, authority_ref: refAuthorityKey(i), excluded_by: "evidence" })
     return false
   })
 
   const k = clampTopK(type, topkOverride)
   // Stable total order: ref_id tiebreaker so the selected top-k set is deterministic across runs
   // (equal-relevance items at the k boundary must not flip with input/file-read order).
-  const sorted = [...passEvidence].sort((a, b) => b.relevance - a.relevance || a.ref_id.localeCompare(b.ref_id))
+  const sorted = [...passEvidence].sort(
+    (a, b) => b.relevance - a.relevance || refAuthorityKey(a).localeCompare(refAuthorityKey(b)),
+  )
   const selected = [...sorted.slice(0, k)]
   // Primary-pack guarantee: if the top-k slice contains no ref from a priority pack that DOES have
   // an eligible ref below the cut, promote that pack's highest-relevance ref (swapping out the
   // lowest-relevance non-priority ref already selected). Keeps narrow packs represented.
   if (priorityPackOf && priorityPackIds && priorityPackIds.size > 0) {
-    const selectedIds = new Set(selected.map((i) => i.ref_id))
+    const selectedIds = new Set(selected.map(refAuthorityKey))
     const packsInSelection = new Set(selected.map((i) => priorityPackOf(i)).filter(Boolean) as string[])
     for (const pid of priorityPackIds) {
       if (packsInSelection.has(pid)) continue
-      const candidate = sorted.find((i) => priorityPackOf(i) === pid && !selectedIds.has(i.ref_id))
+      const candidate = sorted.find((i) => priorityPackOf(i) === pid && !selectedIds.has(refAuthorityKey(i)))
       if (!candidate) continue
       // Pick a victim from an OVER-REPRESENTED pack first (a pack holding >1 selected ref), so every
       // primary pack keeps at least one slot; fall back to the lowest-relevance non-priority ref.
@@ -338,15 +396,17 @@ export const gateRefs = <T extends { ref_id: string; relevance: number; evidence
         }
       }
       if (victimIdx >= 0) {
-        selectedIds.delete(selected[victimIdx].ref_id)
+        selectedIds.delete(refAuthorityKey(selected[victimIdx]))
         selected[victimIdx] = candidate
-        selectedIds.add(candidate.ref_id)
+        selectedIds.add(refAuthorityKey(candidate))
         packsInSelection.add(pid)
       }
     }
   }
-  const selectedSet = new Set(selected.map((i) => i.ref_id))
-  for (const i of sorted) if (!selectedSet.has(i.ref_id)) gaps.push({ ref_id: i.ref_id, excluded_by: "topk" })
+  const selectedSet = new Set(selected.map(refAuthorityKey))
+  for (const i of sorted)
+    if (!selectedSet.has(refAuthorityKey(i)))
+      gaps.push({ ref_id: i.ref_id, authority_ref: refAuthorityKey(i), excluded_by: "topk" })
 
   return { selected, gaps, doNotUse }
 }
@@ -373,7 +433,12 @@ const selectedRefCap = (input: RetrievalInput, activation: KnowledgeActivation):
 // or high-scoring fallback pack starve a correctly-matched primary pack), reserve a slot for each
 // primary pack and each active risk pack first, then fill the rest by relevance with the core/testing
 // fallback contribution capped. Returns the chosen ref_id set. Deterministic (ref_id tiebreaker).
-type ScoredId = { readonly ref_id: string; readonly relevance: number; readonly packId: string | null }
+type ScoredId = {
+  readonly ref_id: string
+  readonly authority_ref: string
+  readonly relevance: number
+  readonly packId: string | null
+}
 const FALLBACK_QUOTA = 2
 
 const selectWithQuota = (
@@ -383,8 +448,10 @@ const selectWithQuota = (
   rescuePool: readonly ScoredId[] = refs,
 ): ReadonlySet<string> => {
   const fallbackSet = new Set<string>(CORE_FALLBACK_PACKS)
-  const sorted = [...refs].sort((a, b) => b.relevance - a.relevance || a.ref_id.localeCompare(b.ref_id))
-  const rescueSorted = [...rescuePool].sort((a, b) => b.relevance - a.relevance || a.ref_id.localeCompare(b.ref_id))
+  const sorted = [...refs].sort((a, b) => b.relevance - a.relevance || a.authority_ref.localeCompare(b.authority_ref))
+  const rescueSorted = [...rescuePool].sort(
+    (a, b) => b.relevance - a.relevance || a.authority_ref.localeCompare(b.authority_ref),
+  )
   const chosen = new Set<string>()
   // 1. Reserve the highest-relevance ref for each primary pack (anti-preemption). review_4: if a
   //    primary was fully starved at the per-type top-k stage (e.g. 5 primaries competing for 3 strategy
@@ -393,27 +460,27 @@ const selectWithQuota = (
   for (const pid of activation.primaryPackIds) {
     if (chosen.size >= cap) break
     const best =
-      sorted.find((r) => r.packId === pid && !chosen.has(r.ref_id)) ??
-      rescueSorted.find((r) => r.packId === pid && !chosen.has(r.ref_id))
-    if (best) chosen.add(best.ref_id)
+      sorted.find((r) => r.packId === pid && !chosen.has(r.authority_ref)) ??
+      rescueSorted.find((r) => r.packId === pid && !chosen.has(r.authority_ref))
+    if (best) chosen.add(best.authority_ref)
   }
   // 2. Reserve one for each active risk/business pack (policy refs must survive).
   for (const pid of activation.activePackIds) {
     if (chosen.size >= cap) break
     if (!isRiskPack(pid)) continue
-    const best = sorted.find((r) => r.packId === pid && !chosen.has(r.ref_id))
-    if (best) chosen.add(best.ref_id)
+    const best = sorted.find((r) => r.packId === pid && !chosen.has(r.authority_ref))
+    if (best) chosen.add(best.authority_ref)
   }
   // 3. Fill remaining slots by relevance, capping core/testing fallback contribution.
   let fallbackCount = 0
   for (const r of sorted) {
     if (chosen.size >= cap) break
-    if (chosen.has(r.ref_id)) continue
+    if (chosen.has(r.authority_ref)) continue
     if (r.packId && fallbackSet.has(r.packId)) {
       if (fallbackCount >= FALLBACK_QUOTA) continue
       fallbackCount++
     }
-    chosen.add(r.ref_id)
+    chosen.add(r.authority_ref)
   }
   return chosen
 }
@@ -454,7 +521,9 @@ export const retrieve = (input: RetrievalInput): KnowledgeSynthesis | null => {
   // review_4 M1/M4: knowledge + skill are now retrieved through the same gate (relevance → evidence →
   // per-type top-k → primary-pack guarantee) so the 682 knowledge/skill docs are no longer dead.
   // docs/39 §3.1: domain knowledge from xhigh onwards; skills from high onwards.
-  const knowledgePool = domainKnowledgeEnabled(input.mode) ? loadDiskKnowledge(input.workspacePath, activation) : []
+  const knowledgePool = domainKnowledgeEnabled(input.mode)
+    ? loadDiskKnowledge(input.workspacePath, activation, input.releasedSelection)
+    : []
   const knowledgeGate = gateRefs(
     knowledgePool,
     "knowledge",
@@ -464,7 +533,7 @@ export const retrieve = (input: RetrievalInput): KnowledgeSynthesis | null => {
     (k) => k.pack_id,
     primaryPackSet,
   )
-  const skillPool = loadDiskSkills(input.workspacePath, activation)
+  const skillPool = loadDiskSkills(input.workspacePath, activation, input.releasedSelection)
   const skillGate = gateRefs(skillPool, "skill", threshold, blocked, undefined, (s) => s.pack_id, primaryPackSet)
   // Read the memory pool once: selectMemory hits disk, and calling it twice risks the store
   // changing between calls (and doubles I/O).
@@ -484,7 +553,7 @@ export const retrieve = (input: RetrievalInput): KnowledgeSynthesis | null => {
     ...skillPool.map(skillProjection),
     ...memoryPool.map(memoryProjection),
   ]
-    .sort((a, b) => b.relevance - a.relevance || a.ref_id.localeCompare(b.ref_id))
+    .sort((a, b) => b.relevance - a.relevance || a.authority_ref.localeCompare(b.authority_ref))
     .slice(0, CANDIDATE_REF_CAP)
   const selectedByType = [
     ...selectedStrategies.map(strategyProjection),
@@ -492,7 +561,7 @@ export const retrieve = (input: RetrievalInput): KnowledgeSynthesis | null => {
     ...selectedKnowledge.map(knowledgeProjection),
     ...selectedSkills.map(skillProjection),
     ...selectedMemory.map(memoryProjection),
-  ].sort((a, b) => b.relevance - a.relevance || a.ref_id.localeCompare(b.ref_id))
+  ].sort((a, b) => b.relevance - a.relevance || a.authority_ref.localeCompare(b.authority_ref))
 
   // B4 (docs/review_38 §八): dynamic global cap + per-pack quota. The cap scales with task
   // complexity (simple 5 / multi-domain 8 / ultra·high-risk 12). Within the cap, selectWithQuota
@@ -501,15 +570,28 @@ export const retrieve = (input: RetrievalInput): KnowledgeSynthesis | null => {
   // primary pack (the top-k preemption failure in docs/review_38 §二 B4). Memory has no pack_id, so
   // it competes in the relevance-fill stage only. Overflow → gap_analysis(excluded_by:"global_cap").
   const cap = selectedRefCap(input, activation)
-  const toScored = <T extends { ref_id: string; relevance: number; pack_id?: string | null }>(
+  const toScored = <
+    T extends {
+      ref_id: string
+      relevance: number
+      document_ref: DeepAgentReleasedSnapshot.DocumentRef
+      pack_id?: string | null
+    },
+  >(
     arr: readonly T[],
-  ): ScoredId[] => arr.map((r) => ({ ref_id: r.ref_id, relevance: r.relevance, packId: r.pack_id ?? null }))
+  ): ScoredId[] =>
+    arr.map((r) => ({
+      ref_id: r.ref_id,
+      authority_ref: refAuthorityKey(r),
+      relevance: r.relevance,
+      packId: r.pack_id ?? null,
+    }))
   const scoredIds: ScoredId[] = [
-    ...selectedStrategies.map((s) => ({ ref_id: s.ref_id, relevance: s.relevance, packId: s.pack_id })),
-    ...selectedMethodologies.map((m) => ({ ref_id: m.ref_id, relevance: m.relevance, packId: m.pack_id })),
-    ...selectedKnowledge.map((k) => ({ ref_id: k.ref_id, relevance: k.relevance, packId: k.pack_id })),
-    ...selectedSkills.map((s) => ({ ref_id: s.ref_id, relevance: s.relevance, packId: s.pack_id })),
-    ...selectedMemory.map((m) => ({ ref_id: m.ref_id, relevance: m.relevance, packId: null })),
+    ...toScored(selectedStrategies),
+    ...toScored(selectedMethodologies),
+    ...toScored(selectedKnowledge),
+    ...toScored(selectedSkills),
+    ...toScored(selectedMemory),
   ]
   // review_4: rescue pool = ALL evidence-passing refs (not just per-type top-k survivors), so a
   // primary starved by per-type contention can still be pulled in by the primary-pack quota.
@@ -522,36 +604,49 @@ export const retrieve = (input: RetrievalInput): KnowledgeSynthesis | null => {
   const cappedRefIds = selectWithQuota(scoredIds, cap, activation, [...scoredIds, ...rescuePool])
   // Build projection lookup for any rescued ref not already in selectedByType.
   const rescuedProjections: KnowledgeRefProjection[] = []
-  const inSelectedByType = new Set(selectedByType.map((r) => r.ref_id))
+  const inSelectedByType = new Set(selectedByType.map((r) => r.authority_ref))
   for (const s of strategyPool)
-    if (cappedRefIds.has(s.ref_id) && !inSelectedByType.has(s.ref_id)) rescuedProjections.push(strategyProjection(s))
+    if (cappedRefIds.has(refAuthorityKey(s)) && !inSelectedByType.has(refAuthorityKey(s)))
+      rescuedProjections.push(strategyProjection(s))
   for (const m of methodologyPool)
-    if (cappedRefIds.has(m.ref_id) && !inSelectedByType.has(m.ref_id)) rescuedProjections.push(methodologyProjection(m))
+    if (cappedRefIds.has(refAuthorityKey(m)) && !inSelectedByType.has(refAuthorityKey(m)))
+      rescuedProjections.push(methodologyProjection(m))
   for (const k of knowledgePool)
-    if (cappedRefIds.has(k.ref_id) && !inSelectedByType.has(k.ref_id)) rescuedProjections.push(knowledgeProjection(k))
+    if (cappedRefIds.has(refAuthorityKey(k)) && !inSelectedByType.has(refAuthorityKey(k)))
+      rescuedProjections.push(knowledgeProjection(k))
   for (const sk of skillPool)
-    if (cappedRefIds.has(sk.ref_id) && !inSelectedByType.has(sk.ref_id)) rescuedProjections.push(skillProjection(sk))
-  const selectedRefs = [...selectedByType.filter((r) => cappedRefIds.has(r.ref_id)), ...rescuedProjections]
-  const globalCapExcluded = selectedByType.filter((r) => !cappedRefIds.has(r.ref_id))
+    if (cappedRefIds.has(refAuthorityKey(sk)) && !inSelectedByType.has(refAuthorityKey(sk)))
+      rescuedProjections.push(skillProjection(sk))
+  const selectedRefs = [...selectedByType.filter((r) => cappedRefIds.has(r.authority_ref)), ...rescuedProjections]
+  const globalCapExcluded = selectedByType.filter((r) => !cappedRefIds.has(r.authority_ref))
 
   // P1-4: filter the per-type selections down to what survived the global cap, so synthesis text,
   // the per-type ref lists, and selectedRefs are all consistent (the work package mirrors these).
   // review_4: union the per-type top-k survivors with any rescued primary refs from the full pool.
-  const rescuedIds = new Set(rescuedProjections.map((r) => r.ref_id))
-  const keptStrategies = [...selectedStrategies, ...strategyPool.filter((s) => rescuedIds.has(s.ref_id))].filter((s) =>
-    cappedRefIds.has(s.ref_id),
-  )
+  const rescuedIds = new Set(rescuedProjections.map((r) => r.authority_ref))
+  const keptStrategies = [
+    ...selectedStrategies,
+    ...strategyPool.filter((s) => rescuedIds.has(refAuthorityKey(s))),
+  ].filter((s) => cappedRefIds.has(refAuthorityKey(s)))
   const keptMethodologies = [
     ...selectedMethodologies,
-    ...methodologyPool.filter((m) => rescuedIds.has(m.ref_id)),
-  ].filter((m) => cappedRefIds.has(m.ref_id))
-  const keptKnowledge = [...selectedKnowledge, ...knowledgePool.filter((k) => rescuedIds.has(k.ref_id))].filter((k) =>
-    cappedRefIds.has(k.ref_id),
+    ...methodologyPool.filter((m) => rescuedIds.has(refAuthorityKey(m))),
+  ].filter((m) => cappedRefIds.has(refAuthorityKey(m)))
+  const keptKnowledge = [
+    ...selectedKnowledge,
+    ...knowledgePool.filter((k) => rescuedIds.has(refAuthorityKey(k))),
+  ].filter((k) => cappedRefIds.has(refAuthorityKey(k)))
+  const keptSkills = [...selectedSkills, ...skillPool.filter((s) => rescuedIds.has(refAuthorityKey(s)))].filter((s) =>
+    cappedRefIds.has(refAuthorityKey(s)),
   )
-  const keptSkills = [...selectedSkills, ...skillPool.filter((s) => rescuedIds.has(s.ref_id))].filter((s) =>
-    cappedRefIds.has(s.ref_id),
-  )
-  const keptMemory = selectedMemory.filter((m) => cappedRefIds.has(m.ref_id))
+  const keptMemory = selectedMemory.filter((m) => cappedRefIds.has(refAuthorityKey(m)))
+  const selectedDocumentRefs = DeepAgentReleasedSnapshot.normalizeDocumentRefs([
+    ...keptStrategies.map((ref) => ref.document_ref),
+    ...keptMethodologies.map((ref) => ref.document_ref),
+    ...keptKnowledge.map((ref) => ref.document_ref),
+    ...keptSkills.map((ref) => ref.document_ref),
+    ...keptMemory.map((ref) => ref.document_ref),
+  ])
 
   const gapAnalysis = [
     ...strategyGate.gaps,
@@ -559,7 +654,11 @@ export const retrieve = (input: RetrievalInput): KnowledgeSynthesis | null => {
     ...knowledgeGate.gaps,
     ...skillGate.gaps,
     ...memoryGate.gaps,
-    ...globalCapExcluded.map((r) => ({ ref_id: r.ref_id, excluded_by: "global_cap" as const })),
+    ...globalCapExcluded.map((r) => ({
+      ref_id: r.ref_id,
+      authority_ref: r.authority_ref,
+      excluded_by: "global_cap" as const,
+    })),
   ]
   const doNotUse = [
     ...strategyGate.doNotUse,
@@ -569,11 +668,14 @@ export const retrieve = (input: RetrievalInput): KnowledgeSynthesis | null => {
     ...memoryGate.doNotUse,
   ]
   const evidenceByRef: Record<string, EvidenceStrength> = {}
-  for (const s of keptStrategies) evidenceByRef[s.ref_id] = s.evidence_strength
-  for (const m of keptMethodologies) evidenceByRef[m.ref_id] = m.evidence_strength
-  for (const k of keptKnowledge) evidenceByRef[k.ref_id] = k.evidence_strength
-  for (const s of keptSkills) evidenceByRef[s.ref_id] = s.evidence_strength
-  for (const m of keptMemory) evidenceByRef[m.ref_id] = m.evidence_strength
+  const evidenceRefCounts = selectedRefs.reduce(
+    (counts, ref) => counts.set(ref.ref_id, (counts.get(ref.ref_id) ?? 0) + 1),
+    new Map<string, number>(),
+  )
+  for (const ref of selectedRefs) {
+    evidenceByRef[ref.authority_ref] = ref.evidence_strength as EvidenceStrength
+    if (evidenceRefCounts.get(ref.ref_id) === 1) evidenceByRef[ref.ref_id] = ref.evidence_strength as EvidenceStrength
+  }
 
   const synthesisParts: string[] = []
   if (keptStrategies.length > 0) {
@@ -613,9 +715,10 @@ export const retrieve = (input: RetrievalInput): KnowledgeSynthesis | null => {
     conflicts: [],
     candidateRefs,
     selectedRefs,
+    selectedDocumentRefs,
     rejectedRefs: [
-      ...gapAnalysis.map((g) => ({ ref_id: g.ref_id, reason: g.excluded_by })),
-      ...doNotUse.map((d) => ({ ref_id: d.ref_id, reason: d.reason })),
+      ...gapAnalysis.map((g) => ({ ref_id: g.ref_id, authority_ref: g.authority_ref, reason: g.excluded_by })),
+      ...doNotUse.map((d) => ({ ref_id: d.ref_id, authority_ref: d.authority_ref, reason: d.reason })),
     ],
     gapAnalysis,
     doNotUse,
@@ -975,6 +1078,7 @@ const rankDoc = (score: number, packId: string | null, activation: KnowledgeActi
 // DAP-11: methodologies are seeded into DocumentStore at configure() and retrieved from there.
 // Scope-based selection is now handled by the DocumentStore query (tags carry scope info).
 const selectMethodologies = (input: RetrievalInput, activation: KnowledgeActivation): MethodologyRef[] => {
+  if (!input.releasedSelection) return []
   let scored
   try {
     scored = knowledgeSource.queryKnowledge({
@@ -982,18 +1086,21 @@ const selectMethodologies = (input: RetrievalInput, activation: KnowledgeActivat
       activePackIds: activation.activePackIds,
       keywords: activation.keywords,
       ...(input.workspacePath ? { workspacePath: input.workspacePath } : {}),
+      releasedSelection: input.releasedSelection,
       limit: 20,
     })
-  } catch {
+  } catch (error) {
+    rethrowSnapshotIntegrity(error)
     return []
   }
-  return scored.map(({ doc, score }) => ({
+  return scored.map(({ doc, score, documentRef }) => ({
     ref_id: doc.id,
     pack_id: packIdOf(doc),
     scope: doc.domain ?? "general",
     relevance: rankDoc(score, packIdOf(doc), activation),
     summary: doc.description,
     evidence_strength: doc.confidence?.evidence_strength ?? "none",
+    document_ref: documentRef,
   }))
 }
 
@@ -1006,7 +1113,7 @@ const isMcpCoordinationStrategy = (refId: string): boolean => refId.endsWith("mc
 
 const contextualStrategies = (input: RetrievalInput, activation: KnowledgeActivation): StrategyRef[] => {
   const hasMcp = input.tools.mcpServers.length > 0 || input.tools.availableTools.some((tool) => tool.source === "mcp")
-  return getAllStrategies(input.workspacePath, activation).map((strategy) => {
+  return getAllStrategies(input.workspacePath, activation, input.releasedSelection).map((strategy) => {
     if (hasMcp && isMcpCoordinationStrategy(strategy.ref_id)) {
       return { ...strategy, relevance: Math.max(strategy.relevance, 0.98) }
     }
@@ -1015,6 +1122,7 @@ const contextualStrategies = (input: RetrievalInput, activation: KnowledgeActiva
 }
 
 const selectMemory = (input: RetrievalInput): MemoryRef[] => {
+  if (!input.releasedSelection) return []
   const keywords: string[] = []
   if (input.task.userRequest) {
     const words = input.task.userRequest
@@ -1034,16 +1142,23 @@ const selectMemory = (input: RetrievalInput): MemoryRef[] => {
       domain: input.task.domain,
       keywords,
       ...(input.workspacePath ? { workspacePath: input.workspacePath } : {}),
+      releasedSelection: input.releasedSelection,
       limit: 5,
     })
-    return results.map(({ doc, score }) => ({
+    return results.map(({ doc, score, documentRef }) => ({
       ref_id: doc.id,
       provenance: `learned:${doc.provenance.run_ref ?? "unknown"}`,
       summary: doc.description,
       relevance: score,
       evidence_strength: doc.confidence?.evidence_strength ?? "none",
+      document_ref: documentRef,
     }))
-  } catch {
+  } catch (error) {
+    rethrowSnapshotIntegrity(error)
     return []
   }
+}
+
+function rethrowSnapshotIntegrity(error: unknown) {
+  if (error instanceof SnapshotIntegrityError) throw error
 }

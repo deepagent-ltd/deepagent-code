@@ -5,6 +5,15 @@ import { LLMRequestPrep } from "../../src/session/llm/request"
 import { ToolProvenance } from "../../src/tool/provenance"
 import { ToolInternal } from "../../src/tool/internal"
 import { GlobalBus, type GlobalEvent } from "../../src/bus/global"
+import { DeepAgentReleasedSnapshot } from "@deepagent-code/core/deepagent/released-snapshot"
+import { Hash } from "@deepagent-code/core/util/hash"
+import { InstanceRef } from "../../src/effect/instance-ref"
+
+const instance = {
+  directory: process.cwd(),
+  worktree: process.cwd(),
+  project: { id: "project-request-prep" },
+} as never
 
 const plugin = {
   trigger: (_name: string, _input: unknown, output: unknown) => Effect.succeed(output),
@@ -78,6 +87,7 @@ async function prepare(
     metadata?: Record<string, unknown>
     runtimeTail?: string
     federatedProjection?: boolean
+    releasedKnowledgeSelection?: DeepAgentReleasedSnapshot.Selection
     assembledRequestFingerprint?: boolean
   } = {},
 ) {
@@ -107,11 +117,24 @@ async function prepare(
       isWorkflow: false,
       runtimeTail: options.runtimeTail,
       federatedProjection: options.federatedProjection,
-    }),
+      releasedKnowledgeSelection: options.releasedKnowledgeSelection,
+    }).pipe(Effect.provideService(InstanceRef, instance)),
   )
 }
 
 describe("DeepAgent request prep", () => {
+  test("binds only the internally captured released selection into provider metadata", async () => {
+    AgentGateway.configure({ enabled: true, agentMode: "high" })
+    const selection = releasedSelection("snapshot-internal")
+    const prepared = await prepare("deepagent", "deepseek-deepseek-v4-flash", "ses_released_selection", {
+      metadata: {
+        deepagent: { released_knowledge_selection: releasedSelection("snapshot-forged-client") },
+      },
+      releasedKnowledgeSelection: selection,
+    })
+    expect((prepared.metadata.deepagent as Record<string, unknown>).released_knowledge_selection).toEqual(selection)
+  })
+
   test("emits opt-in assembled request fingerprint without raw request data", async () => {
     AgentGateway.configure({ enabled: false, agentMode: "general" })
     const secret = "secret-value-that-must-not-escape"
@@ -175,9 +198,8 @@ describe("DeepAgent request prep", () => {
           bashResult("diagnostic", "clean\nexit code: 0"),
         ],
       })
-      const properties = events.find(
-        (item) => item.payload?.type === "session.request.assembled-fingerprint",
-      )?.payload.properties
+      const properties = events.find((item) => item.payload?.type === "session.request.assembled-fingerprint")?.payload
+        .properties
       expect(properties).toMatchObject({
         counts: {
           validations: 3,
@@ -320,7 +342,7 @@ describe("DeepAgent request prep", () => {
         plugin,
         flags: { outputTokenMax: 32_000, client: "test" } as any,
         isWorkflow: false,
-      }),
+      }).pipe(Effect.provideService(InstanceRef, instance)),
     )
 
     expect(Object.keys(prepared.tools)).toEqual(["StructuredOutput"])
@@ -333,7 +355,10 @@ describe("DeepAgent request prep", () => {
       federatedProjection: true,
     })
     const tails = prepared.messages.filter(
-      (message) => message.role === "user" && typeof message.content === "string" && message.content.includes("project-context-json-v1"),
+      (message) =>
+        message.role === "user" &&
+        typeof message.content === "string" &&
+        message.content.includes("project-context-json-v1"),
     )
     expect(tails).toHaveLength(1)
     const tail = tails[0].content as string
@@ -356,8 +381,8 @@ describe("DeepAgent request prep", () => {
     // A simple first-round task has no actionable runtime update.
     expect(deepagent.system[0]).not.toContain("first_fast_design")
     expect(roundContext(deepagent)).toBe("")
-    expect(deepagent.system[0]).not.toContain("generic agent prompt")
-    expect(deepagent.system[0]).not.toContain("You are deepagent-code")
+    expect(deepagent.system[0]).toContain("generic agent prompt")
+    expect(deepagent.system[0]).toContain("You are deepagent-code")
     expect(deepagent.messages[0]).toMatchObject({
       role: "system",
       content: expect.stringContaining("DeepAgent Code"),
@@ -367,8 +392,8 @@ describe("DeepAgent request prep", () => {
     const ordinary = await prepare("deepseek", "deepseek-v4-flash")
     expect(ordinary.system[0]).toContain("DeepAgent Code")
     expect(ordinary.system[0]).toContain("High")
-    expect(ordinary.system[0]).not.toContain("generic agent prompt")
-    expect(ordinary.system[0]).not.toContain("You are deepagent-code")
+    expect(ordinary.system[0]).toContain("generic agent prompt")
+    expect(ordinary.system[0]).toContain("You are deepagent-code")
     expect(ordinary.messages[0]).toMatchObject({
       role: "system",
       content: expect.stringContaining("DeepAgent Code"),
@@ -461,12 +486,9 @@ describe("DeepAgent request prep", () => {
     // autonomous ultra mode. A downgrade ("general") on the same global is still honored.
     AgentGateway.configure({ enabled: true, agentMode: "high" })
 
-    const escalated = await prepare(
-      "deepagent",
-      "deepseek-deepseek-v4-flash",
-      "ses_deepagent_request_prep_escalate",
-      { metadata: { deepagent: { agent_mode_override: "ultra" } } },
-    )
+    const escalated = await prepare("deepagent", "deepseek-deepseek-v4-flash", "ses_deepagent_request_prep_escalate", {
+      metadata: { deepagent: { agent_mode_override: "ultra" } },
+    })
     // Clamped: the escalation is dropped, so no override is re-emitted (falls back to global "high").
     expect((escalated.metadata.deepagent as Record<string, unknown> | undefined)?.agent_mode_override).toBeUndefined()
 
@@ -664,7 +686,7 @@ describe("DeepAgent request prep", () => {
         plugin,
         flags: { outputTokenMax: 32_000, client: "test" } as any,
         isWorkflow: false,
-      }),
+      }).pipe(Effect.provideService(InstanceRef, instance)),
     )
 
     expect(prepared.metadata).toMatchObject({
@@ -694,6 +716,20 @@ describe("DeepAgent request prep", () => {
   })
 })
 
+function releasedSelection(snapshotId: string): DeepAgentReleasedSnapshot.Selection {
+  return {
+    snapshotId,
+    securityNamespaceId: "namespace-request-prep",
+    projectScopeKey: "project-request-prep",
+    legacyProjectId: AgentGateway.DeepAgentDurableKnowledgeStore.projectIdForWorkspace(process.cwd()),
+    parentSnapshotId: null,
+    generation: 1,
+    membershipHash: Hash.sha256("[]"),
+    manifestHash: Hash.sha256(`manifest:${snapshotId}`),
+    documents: [],
+  }
+}
+
 // S41-2: goal-loop scorer false positives. extractValidationResults must only treat outputs of the
 // DECLARED validation commands as validation evidence (diagnostic bash calls like grep/tail of logs
 // must not poison the score), and per declared command the LATEST run must win so a fixed failure
@@ -719,7 +755,7 @@ describe("extractValidationResults (S41-2)", () => {
     const results = LLMRequestPrep.extractValidationResults(
       [
         bashCall("c1", "bun run test"),
-        bashResult("c1", "error: script \"test\" exited with code 1"),
+        bashResult("c1", 'error: script "test" exited with code 1'),
         bashCall("c2", "bun run test >/dev/null 2>&1 && echo done"),
         bashResult("c2", "test validation exit code: 0"),
       ],

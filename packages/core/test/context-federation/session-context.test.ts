@@ -7,6 +7,12 @@ import { ContextFederation } from "../../src/context-federation/federation"
 import { ContextProjection } from "../../src/context-federation/projection"
 import { SessionContext, type CommitSelectionInput } from "../../src/context-federation/session-context"
 import { SessionProviderAttempt } from "../../src/context-federation/provider-attempt"
+import { SessionProviderOwner } from "../../src/context-federation/provider-owner"
+import {
+  LocationIdentityTable,
+  ProjectScopeIdentityTable,
+  SecurityNamespaceTable,
+} from "../../src/context-federation/sql"
 import { ContextTokenCodec } from "../../src/context-federation/token-codec"
 import {
   LocationKey,
@@ -16,6 +22,7 @@ import {
 } from "../../src/context-federation/reference"
 import { ContextArtifactTable, SessionContextSelectionTable } from "../../src/context-federation/session-sql"
 import { Database } from "../../src/database/database"
+import { DeepAgentReleasedSnapshot } from "../../src/deepagent/released-snapshot"
 import { ProjectV2 } from "../../src/project"
 import { ProjectTable } from "../../src/project/sql"
 import { AbsolutePath } from "../../src/schema"
@@ -32,6 +39,8 @@ const sessionId = SessionSchema.ID.make("ses_context_test")
 const triggerId = SessionMessage.ID.make("msg_context_trigger")
 const steerId = SessionMessage.ID.make("msg_context_steer")
 const queueId = SessionMessage.ID.make("msg_context_queue")
+const ownerToken = "provider-owner-test"
+const recoveryOwnerToken = "provider-owner-recovery"
 const ref: ContextRef = {
   graph: "code",
   entityId: "entity-context-test",
@@ -265,6 +274,166 @@ describe("durable activity and context selection", () => {
 })
 
 describe("provider attempt safety", () => {
+  test("fences attempt mutation by exact live owner and never revives an expired token", async () => {
+    const harness = makeHarness()
+    await harness.run(
+      Effect.gen(function* () {
+        yield* seed()
+        const context = yield* SessionContext.Service
+        const attempts = yield* SessionProviderAttempt.Service
+        const owners = yield* SessionProviderOwner.Service
+        const db = (yield* Database.Service).db
+        expect((yield* owners.register({ ownerToken, leaseMs: 100, now: 100 })).registeredAt).not.toBe(100)
+        yield* owners.register({ ownerToken: recoveryOwnerToken, leaseMs: 1_000, now: 100 })
+        const activity = yield* context.openActivity({ sessionId, triggerInputId: triggerId, now: 10 })
+        const selection = yield* context.commitSelection(
+          selectionInput(activity.activityId, harness.codec, [triggerId]),
+        )
+        yield* context.appendValidation({
+          selectionId: selection.selectionId,
+          providerTurnSeq: 0,
+          authorizationEpoch: 2,
+          egressEpoch: 3,
+          observedLocationMutationEpoch: 9,
+          selectedSourceFingerprint: "sources-v1",
+          validatedAt: 100,
+          validUntil: 500,
+          outcome: "valid",
+          reasonCode: "current",
+        })
+        const prepared = yield* attempts.prepare({
+          ...prepareInput(activity.activityId, selection, 0),
+          now: 150,
+        })
+        expect(
+          (yield* attempts
+            .prepare({
+              ...prepareInput(activity.activityId, selection, 0),
+              ownerToken: recoveryOwnerToken,
+              now: 151,
+            })
+            .pipe(Effect.flip))._tag,
+        ).toBe("SessionProviderAttempt.ConflictError")
+        expect(
+          (yield* attempts.prepare({
+            ...prepareInput(activity.activityId, selection, 0),
+            now: 151,
+          })).attemptId,
+        ).toBe(prepared.attemptId)
+        expect(
+          yield* attempts
+            .markDispatching({
+              attemptId: prepared.attemptId,
+              expectedOwnerToken: recoveryOwnerToken,
+              now: 151,
+            })
+            .pipe(Effect.flip),
+        ).toMatchObject({ _tag: "SessionProviderAttempt.ConflictError", reason: "provider_attempt_owner_mismatch" })
+        expect(
+          yield* attempts
+            .markDispatching({ attemptId: prepared.attemptId, expectedOwnerToken: ownerToken, now: 200 })
+            .pipe(Effect.flip),
+        ).toMatchObject({
+          _tag: "SessionProviderAttempt.ConflictError",
+          reason: "provider_attempt_wire_identity_not_sealed",
+        })
+        yield* owners.release({ ownerToken, now: 0 })
+        expect((yield* owners.heartbeat({ ownerToken, leaseMs: 100, now: 200 }).pipe(Effect.flip)).reason).toBe(
+          "provider_owner_lease_not_live",
+        )
+        expect(
+          yield* db
+            .transaction((tx) =>
+              SessionProviderAttempt.recoverExactInTransaction(tx, {
+                sessionId,
+                staleOwnerToken: ownerToken,
+                recoveryOwnerToken,
+                undispatchedAttemptIds: [prepared.attemptId, "missing-attempt"],
+                startedAttemptIds: [],
+                now: 200,
+              }),
+            )
+            .pipe(Effect.flip),
+        ).toMatchObject({
+          _tag: "SessionProviderAttempt.ConflictError",
+          reason: "provider_recovery_exact_attempt_mismatch",
+        })
+        expect((yield* attempts.get(prepared.attemptId))?.state).toBe("prepared")
+        expect(
+          yield* db.transaction((tx) =>
+            SessionProviderAttempt.recoverExactInTransaction(tx, {
+              sessionId,
+              staleOwnerToken: ownerToken,
+              recoveryOwnerToken,
+              undispatchedAttemptIds: [prepared.attemptId],
+              startedAttemptIds: [],
+              now: 200,
+            }),
+          ),
+        ).toBe(1)
+        expect(yield* attempts.get(prepared.attemptId)).toMatchObject({
+          state: "failed",
+          errorCode: "owner_lease_lost_before_dispatch",
+        })
+        expect((yield* owners.release({ ownerToken: recoveryOwnerToken, now: 201 })).releasedAt).not.toBe(201)
+        expect(
+          (yield* owners.heartbeat({ ownerToken: recoveryOwnerToken, leaseMs: 100, now: 202 }).pipe(Effect.flip))
+            .reason,
+        ).toBe("provider_owner_lease_not_live")
+        expect(
+          (yield* owners.register({ ownerToken: recoveryOwnerToken, leaseMs: 100, now: 202 }).pipe(Effect.flip)).reason,
+        ).toBe("owner_token_already_registered")
+      }),
+    )
+  })
+
+  test("durably abandons a prepared attempt before physical dispatch", async () => {
+    const harness = makeHarness()
+    await harness.run(
+      Effect.gen(function* () {
+        yield* seed()
+        const context = yield* SessionContext.Service
+        const attempts = yield* SessionProviderAttempt.Service
+        const owners = yield* SessionProviderOwner.Service
+        yield* owners.register({ ownerToken, leaseMs: 1_000, now: 1 })
+        const activity = yield* context.openActivity({ sessionId, triggerInputId: triggerId, now: 10 })
+        const selection = yield* context.commitSelection(
+          selectionInput(activity.activityId, harness.codec, [triggerId]),
+        )
+        yield* context.appendValidation({
+          selectionId: selection.selectionId,
+          providerTurnSeq: 0,
+          authorizationEpoch: 2,
+          egressEpoch: 3,
+          observedLocationMutationEpoch: 9,
+          selectedSourceFingerprint: "sources-v1",
+          validatedAt: 100,
+          validUntil: 500,
+          outcome: "valid",
+          reasonCode: "current",
+        })
+        const prepared = yield* attempts.prepare(prepareInput(activity.activityId, selection, 0))
+        expect(
+          yield* attempts.abandonPrepared({
+            attemptId: prepared.attemptId,
+            expectedOwnerToken: ownerToken,
+            errorCode: "provider_dispatch_readiness_expired",
+            now: 200,
+          }),
+        ).toMatchObject({
+          state: "failed",
+          settledAt: 200,
+          errorCode: "provider_dispatch_readiness_expired",
+        })
+        expect(
+          (yield* attempts
+            .markDispatching({ attemptId: prepared.attemptId, expectedOwnerToken: ownerToken, now: 201 })
+            .pipe(Effect.flip))._tag,
+        ).toBe("SessionProviderAttempt.InvalidStateError")
+      }),
+    )
+  })
+
   test("requires a current validation and resolves crash-indeterminate replay explicitly", async () => {
     const harness = makeHarness()
     await harness.run(
@@ -272,6 +441,9 @@ describe("provider attempt safety", () => {
         yield* seed()
         const context = yield* SessionContext.Service
         const attempts = yield* SessionProviderAttempt.Service
+        const owners = yield* SessionProviderOwner.Service
+        yield* owners.register({ ownerToken, leaseMs: 201, now: 1 })
+        yield* owners.register({ ownerToken: recoveryOwnerToken, leaseMs: 1_000, now: 1 })
         const activity = yield* context.openActivity({ sessionId, triggerInputId: triggerId, now: 10 })
         const selection = yield* context.commitSelection(
           selectionInput(activity.activityId, harness.codec, [triggerId]),
@@ -294,16 +466,40 @@ describe("provider attempt safety", () => {
         })
         const attempt = yield* attempts.prepare(prepare)
         expect((yield* attempts.prepare(prepare)).attemptId).toBe(attempt.attemptId)
-        yield* attempts.markDispatching(attempt.attemptId, 201)
+        expect(
+          yield* attempts
+            .markDispatching({ attemptId: attempt.attemptId, expectedOwnerToken: ownerToken, now: 200 })
+            .pipe(Effect.flip),
+        ).toMatchObject({
+          _tag: "SessionProviderAttempt.ConflictError",
+          reason: "provider_attempt_wire_identity_not_sealed",
+        })
+        yield* attempts.sealPrepared({
+          attemptId: attempt.attemptId,
+          expectedOwnerToken: ownerToken,
+          preparedTurnHash: "a".repeat(64),
+          wireRequestHash: "b".repeat(64),
+          now: 200,
+        })
+        yield* attempts.markDispatching({ attemptId: attempt.attemptId, expectedOwnerToken: ownerToken, now: 201 })
         expect((yield* attempts.prepare(prepare).pipe(Effect.flip))._tag).toBe(
           "SessionProviderAttempt.UnsafeRetryError",
         )
-        expect(yield* attempts.recoverIndeterminate(sessionId, 202)).toBe(1)
+        yield* owners.release({ ownerToken, now: 0 })
+        expect(
+          yield* attempts.recoverIndeterminate({
+            sessionId,
+            staleOwnerToken: ownerToken,
+            recoveryOwnerToken,
+            now: 202,
+          }),
+        ).toBe(1)
         expect((yield* attempts.get(attempt.attemptId))?.state).toBe("indeterminate_after_crash")
 
         const denied = yield* attempts
           .resolve({
             attemptId: attempt.attemptId,
+            recoveryOwnerToken,
             actor: actor(false),
             decision: "abandoned",
             riskAcknowledged: false,
@@ -315,6 +511,7 @@ describe("provider attempt safety", () => {
         const noEvidence = yield* attempts
           .resolve({
             attemptId: attempt.attemptId,
+            recoveryOwnerToken,
             actor: actor(true),
             decision: "settled",
             riskAcknowledged: false,
@@ -326,6 +523,7 @@ describe("provider attempt safety", () => {
         const unsafe = yield* attempts
           .resolve({
             attemptId: attempt.attemptId,
+            recoveryOwnerToken,
             actor: actor(true),
             decision: "replayed",
             riskAcknowledged: false,
@@ -350,6 +548,7 @@ describe("provider attempt safety", () => {
         })
         const resolved = yield* attempts.resolve({
           attemptId: attempt.attemptId,
+          recoveryOwnerToken,
           actor: actor(true),
           decision: "replayed",
           riskAcknowledged: true,
@@ -363,10 +562,32 @@ describe("provider attempt safety", () => {
           parentAttemptId: attempt.attemptId,
           providerTurnSeq: 1,
         })
-        yield* attempts.markDispatching(resolved.replay!.attemptId, 206)
-        expect(yield* attempts.recoverIndeterminate(sessionId, 207)).toBe(1)
+        yield* attempts.sealPrepared({
+          attemptId: resolved.replay!.attemptId,
+          expectedOwnerToken: recoveryOwnerToken,
+          preparedTurnHash: "c".repeat(64),
+          wireRequestHash: "d".repeat(64),
+          now: 206,
+        })
+        yield* attempts.markDispatching({
+          attemptId: resolved.replay!.attemptId,
+          expectedOwnerToken: recoveryOwnerToken,
+          now: 206,
+        })
+        yield* owners.release({ ownerToken: recoveryOwnerToken, now: 207 })
+        const finalOwnerToken = "provider-owner-final"
+        yield* owners.register({ ownerToken: finalOwnerToken, leaseMs: 1_000, now: 207 })
+        expect(
+          yield* attempts.recoverIndeterminate({
+            sessionId,
+            staleOwnerToken: recoveryOwnerToken,
+            recoveryOwnerToken: finalOwnerToken,
+            now: 207,
+          }),
+        ).toBe(1)
         const abandoned = yield* attempts.resolve({
           attemptId: resolved.replay!.attemptId,
+          recoveryOwnerToken: finalOwnerToken,
           actor: actor(true),
           decision: "abandoned",
           riskAcknowledged: false,
@@ -404,14 +625,19 @@ function makeHarness(limits = defaultLimits, policy: "required" | "best_effort" 
   }).pipe(Layer.provide(database))
   const context = SessionContext.layer.pipe(Layer.provide(Layer.merge(database, artifacts)))
   const attempts = SessionProviderAttempt.layer.pipe(Layer.provide(database))
-  const layer = Layer.mergeAll(database, artifacts, context, attempts)
+  const owners = SessionProviderOwner.layer.pipe(Layer.provide(database))
+  const layer = Layer.mergeAll(database, artifacts, context, attempts, owners)
   return {
     codec,
     run: <A, E>(
       effect: Effect.Effect<
         A,
         E,
-        Database.Service | ContextArtifactStore.Service | SessionContext.Service | SessionProviderAttempt.Service
+        | Database.Service
+        | ContextArtifactStore.Service
+        | SessionContext.Service
+        | SessionProviderAttempt.Service
+        | SessionProviderOwner.Service
       >,
     ) => Effect.runPromise(effect.pipe(Effect.provide(layer), Effect.scoped)),
   }
@@ -420,6 +646,37 @@ function makeHarness(limits = defaultLimits, policy: "required" | "best_effort" 
 function seed() {
   return Effect.gen(function* () {
     const db = (yield* Database.Service).db
+    yield* db
+      .insert(SecurityNamespaceTable)
+      .values({
+        id: namespace,
+        kind: "implicit_local",
+        binding_hash: "namespace-binding",
+        created_at: 1,
+      })
+      .run()
+    yield* db
+      .insert(ProjectScopeIdentityTable)
+      .values({
+        security_namespace_id: namespace,
+        project_scope_key: projectScope,
+        project_kind: "registered_root",
+        project_identity_hash: "project-identity",
+        observed_project_id: projectId,
+        created_at: 1,
+      })
+      .run()
+    yield* db
+      .insert(LocationIdentityTable)
+      .values({
+        security_namespace_id: namespace,
+        location_key: location,
+        project_scope_key: projectScope,
+        canonical_root: "/tmp/context-test",
+        observed_project_id: projectId,
+        created_at: 1,
+      })
+      .run()
     yield* db
       .insert(ProjectTable)
       .values({ id: projectId, worktree: AbsolutePath.make("/tmp/context-test"), sandboxes: [] })
@@ -476,6 +733,7 @@ function selectionInput(activityId: string, codec: ContextTokenCodec.Codec, prom
   const offsets = rendered.offsets[token]!
   return {
     securityNamespaceId: namespace,
+    projectScopeKey: projectScope,
     sessionId,
     activityId,
     revision: 0,
@@ -489,6 +747,7 @@ function selectionInput(activityId: string, codec: ContextTokenCodec.Codec, prom
     selectedSourceFingerprint: "sources-v1",
     observedLocationMutationEpoch: 4,
     nextRevalidationAt: 1_000,
+    releasedKnowledgeBinding: DeepAgentReleasedSnapshot.binding(undefined),
     graphRevisions: { code: "code:1", documents: "documents:0", knowledge: "knowledge:1", memory: "memory:1" },
     graphStatuses: [
       ContextFederation.status.matched("code", [{ source: "code", revision: "code:1", state: "ready" }]),
@@ -498,12 +757,8 @@ function selectionInput(activityId: string, codec: ContextTokenCodec.Codec, prom
         reasonCode: "cold_start",
         revisions: [],
       }),
-      ContextFederation.status.matched("knowledge", [
-        { source: "knowledge", revision: "knowledge:1", state: "ready" },
-      ]),
-      ContextFederation.status.matched("memory", [
-        { source: "memory", revision: "memory:1", state: "ready" },
-      ]),
+      ContextFederation.status.matched("knowledge", [{ source: "knowledge", revision: "knowledge:1", state: "ready" }]),
+      ContextFederation.status.matched("memory", [{ source: "memory", revision: "memory:1", state: "ready" }]),
     ],
     selectedRefs: [
       {
@@ -554,6 +809,7 @@ function prepareInput(activityId: string, selection: SessionContext.Selection, p
     projectionHash: selection.projectionHash,
     requestHash: "request-v1",
     providerId: "provider-test",
+    ownerToken,
     authorizationEpoch: 2,
     egressEpoch: 3,
     selectedSourceFingerprint: "sources-v1",
