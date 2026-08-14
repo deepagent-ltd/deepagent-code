@@ -919,7 +919,9 @@ export const layer = Layer.effect(
                     time_created: continuation.message.info.time.created,
                     time_updated: continuation.message.info.time.created,
                     data: Object.fromEntries(
-                      Object.entries(continuation.message.info).filter(([key]) => key !== "id" && key !== "sessionID"),
+                      Object.entries(MessageV2.stripActivityProgress(continuation.message.info)).filter(
+                        ([key]) => key !== "id" && key !== "sessionID",
+                      ),
                     ) as typeof MessageTable.$inferInsert.data,
                   })
                   .run()
@@ -1287,7 +1289,10 @@ export const layer = Layer.effect(
       let dispatchCount = 0
       let previousAttemptID: string | undefined
       let currentProcessor = yield* processors.create({ assistantMessage: msg, sessionID: input.sessionID, model })
-      let result: "continue" | "compact" | "stop" = "stop"
+      let result: SessionProcessor.ProcessorDecision = {
+        action: "stop",
+        reason: { code: "assistant_error", errorName: "CompactionNotStarted" },
+      }
 
       while (true) {
         dispatchCount++
@@ -1304,7 +1309,7 @@ export const layer = Layer.effect(
         const dispatchResult = yield* Effect.exit(currentProcessor.processSummary(summaryStreamInput, attempt))
         if (Exit.isSuccess(dispatchResult)) {
           result = dispatchResult.value
-          if (result === "stop") {
+          if (result.action === "stop") {
             yield* failRun(run.run_id, "summary_provider_error")
             return "stop"
           }
@@ -1342,7 +1347,7 @@ export const layer = Layer.effect(
         currentProcessor = yield* processors.create({ assistantMessage: retryMsg, sessionID: input.sessionID, model })
       }
 
-      if (result === "compact") {
+      if (result.action === "compact") {
         currentProcessor.message.error = new SessionV1.ContextOverflowError({
           message: "Session too large to compact - context exceeds model limit even after stripping media",
         }).toObject()
@@ -1353,7 +1358,7 @@ export const layer = Layer.effect(
       }
 
       const continuation = yield* Effect.gen(function* () {
-        if (result !== "continue" || !input.auto) return
+        if (result.action !== "continue" || !input.auto) return
         const info = yield* provider.getProvider(userMessage.model.providerID)
         if (
           (yield* plugin.trigger(
@@ -1433,7 +1438,7 @@ export const layer = Layer.effect(
         yield* failRun(run.run_id, "summary_provider_error")
         return "stop"
       }
-      if (result === "continue") {
+      if (result.action === "continue") {
         const persisted = yield* session.messages({ sessionID: input.sessionID }).pipe(Effect.orDie)
         const checkpointIndex = persisted.findIndex((item) => item.info.id === currentProcessor.message.id)
         const checkpoint = persisted[checkpointIndex] ?? {
@@ -1531,7 +1536,7 @@ export const layer = Layer.effect(
           yield* publishCommittedRun(run.run_id)
         }
       }
-      return result
+      return result.action
     })
 
     const processCompaction = Effect.fn("SessionCompaction.process")(function* (

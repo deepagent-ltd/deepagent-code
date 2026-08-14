@@ -24,8 +24,8 @@ import { Cause, Duration, Effect, Exit, Fiber, Option, Schedule, Schema, Scope }
 import { EffectBridge } from "@/effect/bridge"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Database } from "@deepagent-code/core/database/database"
-import { TaskRunTable } from "@deepagent-code/core/session/sql"
-import { and, desc, eq } from "drizzle-orm"
+import { SessionTable, TaskRunTable, TaskStructuredOutputEvidenceTable } from "@deepagent-code/core/session/sql"
+import { and, desc, eq, inArray } from "drizzle-orm"
 import { Worktree } from "@/worktree"
 import { Git } from "@/git"
 import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
@@ -43,7 +43,6 @@ import { SessionToolCapability, type ToolCapabilitySnapshot } from "@/session/to
 import { ToolRegistry } from "@/tool/registry" // P0-10
 import { MCP } from "@/mcp" // P0-10
 import { Plugin } from "@/plugin" // P0-10
-import Ajv from "ajv"
 import { KeyedMutex } from "@deepagent-code/core/effect/keyed-mutex"
 import { Log } from "@deepagent-code/core/util/log"
 import { FSUtil } from "@deepagent-code/core/fs-util"
@@ -65,12 +64,23 @@ import {
   startTaskRun,
   type ErrorData,
   type Run as DurableTaskRun,
+  type StructuredOutputReceipt,
 } from "./task-run"
+export type { StructuredOutputReceipt } from "./task-run"
 import { LegacyTaskInput } from "@/session/task-input"
 import { TaskWorkspacePreflight } from "@/session/workspace-preflight"
 import { SessionBranchProvisioner } from "@/session/branch-provisioner"
 import { TaskWorktree } from "@/session/task-worktree"
 import { submitAutomaticWorktree, type SubmittedPR } from "@/session/task-pr-submission"
+import { decodeFinalizerFailure } from "./task-finalizer-failure"
+import { extractStructuredText, validateStructuredOutput } from "./task-structured-output"
+import {
+  boundDegradedRawResult,
+  isStructuredOutputContract,
+  makeDegradedStructuredOutput,
+  persistDegradedStructuredOutput,
+  persistStructuredFinalizerResponse,
+} from "./task-structured-output-evidence"
 
 const taskLog = Log.create({ service: "tool.task" })
 
@@ -116,8 +126,11 @@ export function resolveOutputSchema(
 }
 
 const FINALIZER_ATTEMPTS = 2
-const FINALIZER_RAW_RESULT_MAX_CHARS = 80_000
-const decodeJson = Schema.decodeUnknownOption(Schema.UnknownFromJsonString)
+type FinalizerAttempt = 1 | 2
+
+function isFinalizerAttempt(attempt: number): attempt is FinalizerAttempt {
+  return attempt === 1 || attempt === 2
+}
 // Token usage is provider- and cache-dependent, so it is deliberately not a hard task boundary. The
 // step, wall-time, no-progress, and output bounds remain the operational safety limits.
 export const DEFAULT_SUBAGENT_RESEARCH_BUDGET = {
@@ -141,25 +154,43 @@ export type SubagentPromptInput = {
   agent: string
   agentModeOverride: AgentMode | undefined
   outputSchema: Record<string, unknown> | undefined
-  /** Permit only the bounded second finalizer to return schema-validated JSON text. */
+  /** Permit schema-validated JSON text when structured transport degrades. */
   allowTextFallback?: boolean
   directStructuredOutput?: boolean
   finalizerInstructions?: readonly string[]
+  researchResult?: SessionV1.WithParts
   runID?: string
   budget?: SubagentResearchBudget
   tools: Record<string, boolean>
   worktreeInfo: Worktree.Info | undefined
   onResearchCompleted?: (sourceMessageID: MessageID) => Effect.Effect<void, unknown>
-  onFinalizing?: (input: { attempt: number; sourceMessageID: MessageID }) => Effect.Effect<void, unknown>
-  onFinalized?: (messageID: MessageID) => Effect.Effect<void, unknown>
+  onFinalizing?: (input: { attempt: 1 | 2; sourceMessageID: MessageID }) => Effect.Effect<void, unknown>
+  onFinalized?: (
+    messageID: MessageID,
+    receipt: StructuredOutputReceipt,
+    output: string,
+    sourceMessageID: MessageID,
+  ) => Effect.Effect<void, unknown>
+}
+
+export type DegradedStructuredOutput = {
+  readonly _degraded: true
+  readonly _reason: "structured_output_missing" | "structured_output_invalid"
+  readonly _attempts: number
+  readonly _raw: string
 }
 
 type SubagentTerminalReason =
   | "structured_output_valid"
+  | "structured_output_text_fallback"
+  | "structured_output_degraded_text"
   | "text_output_valid"
   | "provider_error"
   | "structured_output_missing"
   | "structured_output_invalid"
+  | "structured_finalizer_transport_error"
+  | "structured_finalizer_validation_error"
+  | "structured_finalizer_internal_error"
   | "doom_loop"
   | "assistant_error"
   | "human"
@@ -168,6 +199,11 @@ type SubagentTerminalReason =
   | "budget_exhausted"
   | "execution_lease_expired"
   | "runtime_error"
+
+type StructuredOutputTerminalReason = Extract<
+  SubagentTerminalReason,
+  "structured_output_valid" | "structured_output_text_fallback" | "structured_output_degraded_text"
+>
 const subagentSettlementLocks = KeyedMutex.makeUnsafe<SessionID>()
 const sharedWriteFallbackLocks = KeyedMutex.makeUnsafe<string>()
 
@@ -190,6 +226,7 @@ function stringField(value: unknown, key: string) {
 
 function terminalReason(error: string | undefined): SubagentTerminalReason {
   const code = error?.match(/^\[([^\]]+)\]/)?.[1]
+  if (error?.includes("Phase: finalize")) return decodeFinalizerFailure(error).reason
   if (code === "provider_error") return code
   if (code === "structured_output_missing") return code
   if (code === "structured_output_invalid") return code
@@ -246,8 +283,59 @@ function markSubagentResearchCompleted(run: DurableTaskRun, owner: string, sourc
   )
 }
 
-function markSubagentFinalized(run: DurableTaskRun, owner: string, messageID: MessageID) {
-  return markTaskFinalized(run, owner, messageID).pipe(
+function structuredOutputTerminalReason(receipt: StructuredOutputReceipt): StructuredOutputTerminalReason {
+  if (receipt.transport === "degraded_text") return "structured_output_degraded_text"
+  if (receipt.transport === "text_fallback") return "structured_output_text_fallback"
+  return "structured_output_valid"
+}
+
+function markSubagentFinalized(
+  run: DurableTaskRun,
+  owner: string,
+  messageID: MessageID,
+  receipt: StructuredOutputReceipt,
+  output: string,
+  sourceMessageID: MessageID,
+) {
+  const contract = run.executionSpec?.structuredOutput
+  if (!isFinalizerAttempt(receipt.attempt)) {
+    return Effect.die(new Error(`invalid structured finalizer receipt attempt ${receipt.attempt}`))
+  }
+  const prepared = contract
+    ? receipt.transport === "degraded_text"
+      ? persistDegradedStructuredOutput({
+          runID: run.runID,
+          childSessionID: run.childSessionID,
+          ownerToken: owner,
+          claimGeneration: run.claimGeneration,
+          sourceMessageID,
+          contract,
+          receipt,
+          output,
+        })
+      : persistStructuredFinalizerResponse({
+          runID: run.runID,
+          childSessionID: run.childSessionID,
+          ownerToken: owner,
+          claimGeneration: run.claimGeneration,
+          attempt: receipt.attempt,
+          sourceMessageID,
+          responseMessageID: messageID,
+          contract,
+          receipt,
+          output,
+        })
+    : Effect.die(new Error(`Task run ${run.runID} finalized without its structured output contract`))
+  return prepared.pipe(
+    Effect.andThen(
+      markTaskFinalized(
+        run,
+        owner,
+        receipt.transport === "degraded_text" ? undefined : messageID,
+        Date.now(),
+        structuredOutputTerminalReason(receipt),
+      ),
+    ),
     Effect.flatMap((updated) => (updated ? Effect.void : Effect.fail(lostTaskRunLease(run)))),
   )
 }
@@ -296,6 +384,7 @@ function settleSubagentRun(
     output?: string
     error?: ErrorData
     structuredResultMessageID?: MessageID
+    structuredOutput?: StructuredOutputReceipt
     notification?: { directory: string; agent: string; variant?: string; text: string }
   },
 ) {
@@ -310,6 +399,7 @@ function settleSubagentRun(
         output: input?.output,
         error: input?.error,
         structuredResultMessageID: input?.structuredResultMessageID,
+        structuredOutputReceipt: input?.structuredOutput,
         notification: input?.notification
           ? {
               directory: input.notification.directory,
@@ -337,8 +427,14 @@ function settleSubagentRun(
               finished: true,
               state,
               phase: "settled",
-              settled_at: Date.now(),
+              settled_at: settled.run.timeSettled ?? Date.now(),
               reason,
+              attempts: settled.run.attempts,
+              ...(settled.run.rawResultMessageID ? { raw_result_ref: settled.run.rawResultMessageID } : {}),
+              ...(settled.run.error ? { error: settled.run.error } : {}),
+              ...(settled.run.structuredOutputReceipt
+                ? { structured_output: settled.run.structuredOutputReceipt }
+                : {}),
             },
           },
         },
@@ -396,7 +492,7 @@ export function projectRecoveredSubagentRun(sessions: Session.Interface, run: Du
  *
  * Idempotent: if `subagent.finished === true` for the matching run, it no-ops.
  */
-export function projectDurableSettledRun(sessions: Session.Interface, childSessionID: SessionID) {
+export function projectDurableSettledRun(sessions: Session.Interface, childSessionID: SessionID, runID?: string) {
   return subagentSettlementLocks.withLock(childSessionID)(
     Effect.gen(function* () {
       const database = yield* Database.Service
@@ -407,20 +503,30 @@ export function projectDurableSettledRun(sessions: Session.Interface, childSessi
           generation: TaskRunTable.generation,
           state: TaskRunTable.state,
           reason: TaskRunTable.reason,
+          attempts: TaskRunTable.attempts,
+          raw_result_message_id: TaskRunTable.raw_result_message_id,
+          error: TaskRunTable.error,
+          structured_output_receipt: TaskRunTable.structured_output_receipt,
           time_settled: TaskRunTable.time_settled,
         })
         .from(TaskRunTable)
-        .where(and(eq(TaskRunTable.child_session_id as any, childSessionID as any), eq(TaskRunTable.phase, "settled")))
+        .where(
+          and(
+            eq(TaskRunTable.child_session_id as any, childSessionID as any),
+            eq(TaskRunTable.phase, "settled"),
+            ...(runID ? [eq(TaskRunTable.run_id, runID)] : []),
+          ),
+        )
         .orderBy(desc(TaskRunTable.generation))
         .limit(1)
         .get()
         .pipe(Effect.orElseSucceed(() => undefined))
-      if (!row) return
+      if (!row) return false
       const current = yield* sessions.get(childSessionID).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
-      if (!current) return
+      if (!current) return false
       const { deepagent, subagent } = subagentMetadata(current.metadata)
       // Guard: only update if run_id matches and not already finished
-      if (subagent.run_id !== row.run_id || subagent.finished === true) return
+      if (subagent.run_id !== row.run_id || subagent.finished === true) return false
       const terminalStates = ["completed", "error", "cancelled", "interrupted"] as const
       type TerminalState = (typeof terminalStates)[number]
       const state: TerminalState = (terminalStates as ReadonlyArray<string>).includes(row.state)
@@ -439,6 +545,10 @@ export function projectDurableSettledRun(sessions: Session.Interface, childSessi
               phase: "settled",
               settled_at: row.time_settled ?? Date.now(),
               reason: row.reason ?? "unknown",
+              attempts: row.attempts,
+              ...(row.raw_result_message_id ? { raw_result_ref: row.raw_result_message_id } : {}),
+              ...(row.error ? { error: row.error } : {}),
+              ...(row.structured_output_receipt ? { structured_output: row.structured_output_receipt } : {}),
             },
           },
         },
@@ -449,8 +559,45 @@ export function projectDurableSettledRun(sessions: Session.Interface, childSessi
         state,
         reason: row.reason,
       })
+      return true
     }),
   )
+}
+
+export function repairDurableSettledRunProjections(sessions: Session.Interface, input: { readonly directory: string }) {
+  return Effect.gen(function* () {
+    const database = yield* Database.Service
+    const rows = yield* database.db
+      .select({
+        runID: TaskRunTable.run_id,
+        childSessionID: TaskRunTable.child_session_id,
+        executionSpec: TaskRunTable.execution_spec,
+        evidenceRunID: TaskStructuredOutputEvidenceTable.run_id,
+      })
+      .from(TaskRunTable)
+      .innerJoin(SessionTable, eq(SessionTable.id, TaskRunTable.parent_session_id))
+      .leftJoin(TaskStructuredOutputEvidenceTable, eq(TaskStructuredOutputEvidenceTable.run_id, TaskRunTable.run_id))
+      .where(
+        and(
+          eq(SessionTable.directory, input.directory),
+          eq(TaskRunTable.phase, "settled"),
+          eq(TaskRunTable.effective_delivery_mode, "foreground"),
+          inArray(TaskRunTable.state, ["completed", "error", "failed", "cancelled", "interrupted", "closed"]),
+        ),
+      )
+      .orderBy(desc(TaskRunTable.generation))
+      .all()
+      .pipe(Effect.orDie)
+    const repairable = rows
+      .filter((row) => !isStructuredOutputContract(row.executionSpec?.structuredOutput) || row.evidenceRunID)
+      .filter((row, index, values) => values.findIndex((item) => item.childSessionID === row.childSessionID) === index)
+    const repaired = yield* Effect.forEach(
+      repairable,
+      (row) => projectDurableSettledRun(sessions, SessionID.make(row.childSessionID), row.runID),
+      { concurrency: 1 },
+    )
+    return repaired.filter(Boolean).length
+  })
 }
 
 function withTaskRunLease<A, E, R>(run: DurableTaskRun, owner: string, effect: Effect.Effect<A, E, R>) {
@@ -503,38 +650,9 @@ function assistantText(result: SessionV1.WithParts) {
     .trim()
 }
 
-function validateStructuredOutput(schema: Record<string, unknown>, value: unknown): string | undefined {
-  const { $schema: _, ...document } = schema
-  const validate = new Ajv({ allErrors: true, strict: false }).compile(document)
-  if (validate(value)) return undefined
-  return (
-    validate.errors?.map((error) => `${error.instancePath || "/"} ${error.message ?? "is invalid"}`).join("; ") ??
-    "schema validation failed"
-  )
-}
-
-function extractStructuredText(text: string) {
-  const trimmed = text.trim()
-  if (!trimmed) return undefined
-  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1]?.trim()
-  const objectStart = trimmed.indexOf("{")
-  const objectEnd = trimmed.lastIndexOf("}")
-  const arrayStart = trimmed.indexOf("[")
-  const arrayEnd = trimmed.lastIndexOf("]")
-  return [
-    trimmed,
-    fenced,
-    objectStart !== -1 && objectEnd > objectStart ? trimmed.slice(objectStart, objectEnd + 1) : undefined,
-    arrayStart !== -1 && arrayEnd > arrayStart ? trimmed.slice(arrayStart, arrayEnd + 1) : undefined,
-  ]
-    .filter((candidate): candidate is string => candidate !== undefined)
-    .map((candidate) => Option.getOrUndefined(decodeJson(candidate)))
-    .find((candidate) => candidate !== undefined)
-}
-
 export function runSubagentPrompt(input: SubagentPromptInput): Effect.Effect<string, unknown> {
   return Effect.gen(function* () {
-    const parts = yield* input.ops.resolvePromptParts(input.prompt)
+    const parts = input.researchResult ? [] : yield* input.ops.resolvePromptParts(input.prompt)
     const startedAt = Date.now()
     const budget = input.budget ?? DEFAULT_SUBAGENT_RESEARCH_BUDGET
     if (input.directStructuredOutput) {
@@ -544,85 +662,153 @@ export function runSubagentPrompt(input: SubagentPromptInput): Effect.Effect<str
       taskLog.info("subagent.structured.started", {
         run_id: input.runID,
         child_session_id: input.sessionID,
+        max_attempts: FINALIZER_ATTEMPTS,
       })
-      const result = yield* input.ops
-        .prompt({
-          messageID: MessageID.ascending(),
-          sessionID: input.sessionID,
-          model: input.model,
-          variant: input.variant,
-          agent: input.agent,
-          format: new SessionV1.OutputFormatJsonSchema({
-            type: "json_schema",
-            schema: input.outputSchema,
-            retryCount: 1,
-          }),
-          metadata: {
-            deepagent: {
-              ...(input.agentModeOverride ? { agent_mode_override: input.agentModeOverride } : {}),
-              structured_direct: true,
-            },
-          },
-          tools: input.tools,
-          parts: [...parts, ...(input.finalizerInstructions ?? []).map((text) => ({ type: "text" as const, text }))],
+      let correction: string | undefined
+      for (let attempt = 1; attempt <= FINALIZER_ATTEMPTS; attempt++) {
+        const allowText = input.allowTextFallback === true && attempt === FINALIZER_ATTEMPTS
+        taskLog.info("subagent.structured.attempted", {
+          run_id: input.runID,
+          child_session_id: input.sessionID,
+          attempt,
         })
-        .pipe(
-          Effect.timeout(Duration.millis(budget.maxWallMs)),
-          Effect.catchIf(Cause.isTimeoutError, () =>
-            Effect.fail(
-              taskError({
-                code: "budget_exhausted",
-                message: `Structured output wall-time budget exhausted (${budget.maxWallMs}ms).`,
-                sessionID: input.sessionID,
-                phase: "finalize",
-              }),
+        const result = yield* input.ops
+          .prompt({
+            messageID: MessageID.ascending(),
+            sessionID: input.sessionID,
+            model: input.model,
+            variant: input.variant,
+            agent: input.agent,
+            ...(allowText
+              ? {}
+              : {
+                  format: new SessionV1.OutputFormatJsonSchema({
+                    type: "json_schema",
+                    schema: input.outputSchema,
+                    retryCount: 1,
+                  }),
+                }),
+            metadata: {
+              deepagent: {
+                ...(input.agentModeOverride ? { agent_mode_override: input.agentModeOverride } : {}),
+                structured_direct: {
+                  attempt,
+                  allow_text: allowText,
+                },
+              },
+            },
+            tools: input.tools,
+            parts: [
+              ...parts,
+              ...(input.finalizerInstructions ?? []).map((text) => ({ type: "text" as const, text })),
+              ...(correction
+                ? [
+                    {
+                      type: "text" as const,
+                      text: allowText
+                        ? [
+                            "Return exactly one JSON value matching the output schema below. Do not use Markdown or explanatory prose.",
+                            `Previous validation error: ${correction}`,
+                            `<output_schema>${JSON.stringify(input.outputSchema)}</output_schema>`,
+                          ].join("\n")
+                        : `Previous validation error: ${correction}`,
+                    },
+                  ]
+                : []),
+            ],
+          })
+          .pipe(
+            Effect.timeout(Duration.millis(Math.max(1, budget.maxWallMs - (Date.now() - startedAt)))),
+            Effect.catchIf(Cause.isTimeoutError, () =>
+              Effect.fail(
+                taskError({
+                  code: "budget_exhausted",
+                  message: `Structured output wall-time budget exhausted (${budget.maxWallMs}ms).`,
+                  sessionID: input.sessionID,
+                  phase: "finalize",
+                  attempts: attempt,
+                }),
+              ),
             ),
-          ),
-        )
-      const error = assistantError(result)
-      if (error) {
-        return yield* Effect.fail(
-          taskError({
-            code: error.name === "APIError" ? "provider_error" : "structured_output_invalid",
-            message: `${error.name}: ${error.message}`,
-            sessionID: input.sessionID,
-            phase: "finalize",
-            attempts: 1,
-          }),
-        )
-      }
+          )
+        const error = assistantError(result)
+        // Provider/API failures are outside the structured-validation retry contract. The provider
+        // layer owns transport retries; another outer prompt here could duplicate provider side effects.
+        if (error && error.name !== "StructuredOutputError") {
+          return yield* Effect.fail(
+            taskError({
+              code: error.name === "APIError" ? "provider_error" : "structured_output_invalid",
+              message: `${error.name}: ${error.message}`,
+              sessionID: input.sessionID,
+              phase: "finalize",
+              attempts: attempt,
+            }),
+          )
+        }
 
-      const structured = result.info.role === "assistant" ? result.info.structured : undefined
-      if (structured === undefined) {
-        return yield* Effect.fail(
-          taskError({
-            code: "structured_output_missing",
-            message: "Model did not call StructuredOutput.",
-            sessionID: input.sessionID,
-            phase: "finalize",
-            attempts: 1,
-          }),
-        )
+        const structured = result.info.role === "assistant" ? result.info.structured : undefined
+        const textFallback =
+          structured === undefined && allowText ? extractStructuredText(assistantText(result)) : undefined
+        const candidate = structured === undefined ? textFallback : structured
+        if (candidate === undefined) {
+          correction = error
+            ? `${error.name}: ${error.message}`.slice(0, 1_000)
+            : allowText
+              ? "Model did not return a JSON value."
+              : "Model did not call StructuredOutput."
+          if (attempt < FINALIZER_ATTEMPTS) continue
+          taskLog.warn("subagent.structured.failed", {
+            run_id: input.runID,
+            child_session_id: input.sessionID,
+            attempt,
+            reason: "structured_output_missing",
+          })
+          return yield* Effect.fail(
+            taskError({
+              code: "structured_output_missing",
+              message: correction,
+              sessionID: input.sessionID,
+              phase: "finalize",
+              attempts: attempt,
+            }),
+          )
+        }
+        const validationError = validateStructuredOutput(input.outputSchema, candidate)
+        if (validationError) {
+          correction = validationError.slice(0, 1_000)
+          if (attempt < FINALIZER_ATTEMPTS) continue
+          taskLog.warn("subagent.structured.failed", {
+            run_id: input.runID,
+            child_session_id: input.sessionID,
+            attempt,
+            reason: "structured_output_invalid",
+          })
+          return yield* Effect.fail(
+            taskError({
+              code: "structured_output_invalid",
+              message: correction,
+              sessionID: input.sessionID,
+              phase: "finalize",
+              attempts: attempt,
+            }),
+          )
+        }
+        const receipt: StructuredOutputReceipt = {
+          attempt,
+          transport: structured === undefined ? "text_fallback" : "structured",
+        }
+        const output = JSON.stringify(candidate)
+        if (input.onFinalized) yield* input.onFinalized(result.info.id, receipt, output, result.info.id)
+        taskLog.info("subagent.structured.completed", {
+          run_id: input.runID,
+          child_session_id: input.sessionID,
+          attempt,
+          transport: receipt.transport,
+          result_message_id: result.info.id,
+        })
+        return output
       }
-      const validationError = validateStructuredOutput(input.outputSchema, structured)
-      if (validationError) {
-        return yield* Effect.fail(
-          taskError({
-            code: "structured_output_invalid",
-            message: validationError.slice(0, 1_000),
-            sessionID: input.sessionID,
-            phase: "finalize",
-            attempts: 1,
-          }),
-        )
-      }
-      if (input.onFinalized) yield* input.onFinalized(result.info.id)
-      taskLog.info("subagent.structured.completed", {
-        run_id: input.runID,
-        child_session_id: input.sessionID,
-        result_message_id: result.info.id,
-      })
-      return JSON.stringify(structured)
+      return yield* Effect.die(new Error("unreachable: direct structured output exhausted without settlement"))
     }
     taskLog.info("subagent.research.started", {
       run_id: input.runID,
@@ -639,68 +825,70 @@ export function runSubagentPrompt(input: SubagentPromptInput): Effect.Effect<str
             },
           ]
         : []
-    const research = yield* input.ops
-      .prompt({
-        messageID: MessageID.ascending(),
-        sessionID: input.sessionID,
-        model: input.model,
-        variant: input.variant,
-        agent: input.agent,
-        metadata: {
-          deepagent: {
-            task_activity: {
-              interactive: false,
-              run_id: input.runID,
-              started_at: startedAt,
-              budget: {
-                max_steps: budget.maxSteps,
-                max_wall_ms: budget.maxWallMs,
-                max_no_progress: budget.maxNoProgress,
+    const research = input.researchResult
+      ? input.researchResult
+      : yield* input.ops
+          .prompt({
+            messageID: MessageID.ascending(),
+            sessionID: input.sessionID,
+            model: input.model,
+            variant: input.variant,
+            agent: input.agent,
+            metadata: {
+              deepagent: {
+                task_activity: {
+                  interactive: false,
+                  run_id: input.runID,
+                  started_at: startedAt,
+                  budget: {
+                    max_steps: budget.maxSteps,
+                    max_wall_ms: budget.maxWallMs,
+                    max_no_progress: budget.maxNoProgress,
+                  },
+                },
+                ...(input.agentModeOverride ? { agent_mode_override: input.agentModeOverride } : {}),
               },
             },
-            ...(input.agentModeOverride ? { agent_mode_override: input.agentModeOverride } : {}),
-          },
-        },
-        tools: input.tools,
-        parts: [
-          ...(input.worktreeInfo
-            ? [
-                {
-                  type: "text" as const,
-                  text:
-                    `You are running in an ISOLATED git worktree at ${input.worktreeInfo.directory} (branch ${input.worktreeInfo.branch ?? "detached"}). ` +
-                    `You inherited context from the parent session, but your working directory is this worktree. ` +
-                    `Re-read files before editing (do not trust remembered paths/contents), and know your changes stay isolated until merged back.`,
-                },
-              ]
-            : []),
-          ...leafInstruction,
-          ...parts,
-        ],
-      })
-      .pipe(
-        Effect.timeout(Duration.millis(budget.maxWallMs)),
-        Effect.catchIf(Cause.isTimeoutError, () =>
-          Effect.sync(() => {
-            taskLog.warn("subagent.research.failed", {
-              run_id: input.runID,
-              child_session_id: input.sessionID,
-              reason: "wall_time_budget_exhausted",
-            })
-          }).pipe(
-            Effect.andThen(
-              Effect.fail(
-                taskError({
-                  code: "budget_exhausted",
-                  message: `Research wall-time budget exhausted (${budget.maxWallMs}ms).`,
-                  sessionID: input.sessionID,
-                  phase: "research",
-                }),
+            tools: input.tools,
+            parts: [
+              ...(input.worktreeInfo
+                ? [
+                    {
+                      type: "text" as const,
+                      text:
+                        `You are running in an ISOLATED git worktree at ${input.worktreeInfo.directory} (branch ${input.worktreeInfo.branch ?? "detached"}). ` +
+                        `You inherited context from the parent session, but your working directory is this worktree. ` +
+                        `Re-read files before editing (do not trust remembered paths/contents), and know your changes stay isolated until merged back.`,
+                    },
+                  ]
+                : []),
+              ...leafInstruction,
+              ...parts,
+            ],
+          })
+          .pipe(
+            Effect.timeout(Duration.millis(budget.maxWallMs)),
+            Effect.catchIf(Cause.isTimeoutError, () =>
+              Effect.sync(() => {
+                taskLog.warn("subagent.research.failed", {
+                  run_id: input.runID,
+                  child_session_id: input.sessionID,
+                  reason: "wall_time_budget_exhausted",
+                })
+              }).pipe(
+                Effect.andThen(
+                  Effect.fail(
+                    taskError({
+                      code: "budget_exhausted",
+                      message: `Research wall-time budget exhausted (${budget.maxWallMs}ms).`,
+                      sessionID: input.sessionID,
+                      phase: "research",
+                    }),
+                  ),
+                ),
               ),
             ),
-          ),
-        ),
-      )
+          )
     const researchError = assistantError(research)
     if (researchError) {
       taskLog.warn("subagent.research.failed", {
@@ -748,7 +936,25 @@ export function runSubagentPrompt(input: SubagentPromptInput): Effect.Effect<str
       )
     }
 
-    const boundedRaw = Array.from(raw).slice(0, FINALIZER_RAW_RESULT_MAX_CHARS).join("")
+    const boundedRaw = boundDegradedRawResult(raw)
+    const degrade = (
+      attempt: number,
+      reason: "structured_output_missing" | "structured_output_invalid",
+    ): Effect.Effect<string, unknown> =>
+      Effect.gen(function* () {
+        const receipt: StructuredOutputReceipt = { attempt, transport: "degraded_text", reason }
+        const output = makeDegradedStructuredOutput(boundedRaw, receipt)
+        if (input.onFinalized) yield* input.onFinalized(research.info.id, receipt, output, research.info.id)
+        taskLog.warn("subagent.finalize.degraded", {
+          run_id: input.runID,
+          child_session_id: input.sessionID,
+          attempt,
+          reason,
+          result_message_id: research.info.id,
+          raw_chars: Array.from(boundedRaw).length,
+        })
+        return output
+      })
     let correction: string | undefined
     taskLog.info("subagent.finalize.started", {
       run_id: input.runID,
@@ -762,6 +968,9 @@ export function runSubagentPrompt(input: SubagentPromptInput): Effect.Effect<str
         child_session_id: input.sessionID,
         attempt,
       })
+      if (!isFinalizerAttempt(attempt)) {
+        return yield* Effect.die(new Error(`invalid structured finalizer attempt ${attempt}`))
+      }
       if (input.onFinalizing) yield* input.onFinalizing({ attempt, sourceMessageID: research.info.id })
       const finalized = yield* input.ops.prompt({
         messageID: MessageID.ascending(),
@@ -782,6 +991,7 @@ export function runSubagentPrompt(input: SubagentPromptInput): Effect.Effect<str
           deepagent: {
             ...(input.agentModeOverride ? { agent_mode_override: input.agentModeOverride } : {}),
             structured_finalizer: {
+              run_id: input.runID,
               attempt,
               source_message_id: research.info.id,
               allow_text: allowText,
@@ -810,6 +1020,7 @@ export function runSubagentPrompt(input: SubagentPromptInput): Effect.Effect<str
         ],
       })
       const error = assistantError(finalized)
+      // Transport errors are not schema failures and are not retried by this outer finalizer loop.
       if (error && error.name !== "StructuredOutputError") {
         correction = `${error.name}: ${error.message}`.slice(0, 1_000)
         taskLog.warn("subagent.finalize.failed", {
@@ -830,9 +1041,7 @@ export function runSubagentPrompt(input: SubagentPromptInput): Effect.Effect<str
       }
       const structured = finalized.info.role === "assistant" ? finalized.info.structured : undefined
       const candidate =
-        structured === undefined && input.allowTextFallback === true
-          ? extractStructuredText(assistantText(finalized))
-          : structured
+        structured === undefined && allowText ? extractStructuredText(assistantText(finalized)) : structured
       if (candidate === undefined) {
         correction = error
           ? `${error.name}: ${error.message}`.slice(0, 1_000)
@@ -846,26 +1055,24 @@ export function runSubagentPrompt(input: SubagentPromptInput): Effect.Effect<str
           attempt,
           reason: "structured_output_missing",
         })
-        return yield* Effect.fail(
-          taskError({
-            code: "structured_output_missing",
-            message: correction,
-            sessionID: input.sessionID,
-            phase: "finalize",
-            attempts: attempt,
-          }),
-        )
+        return yield* degrade(attempt, "structured_output_missing")
       }
       const validationError = validateStructuredOutput(input.outputSchema, candidate)
       if (!validationError) {
-        if (input.onFinalized) yield* input.onFinalized(finalized.info.id)
+        const receipt: StructuredOutputReceipt = {
+          attempt,
+          transport: structured === undefined ? "text_fallback" : "structured",
+        }
+        const output = JSON.stringify(candidate)
+        if (input.onFinalized) yield* input.onFinalized(finalized.info.id, receipt, output, research.info.id)
         taskLog.info("subagent.finalize.completed", {
           run_id: input.runID,
           child_session_id: input.sessionID,
           attempt,
+          transport: receipt.transport,
           result_message_id: finalized.info.id,
         })
-        return JSON.stringify(candidate)
+        return output
       }
       const boundedValidationError = validationError.slice(0, 1_000)
       correction = boundedValidationError
@@ -876,17 +1083,104 @@ export function runSubagentPrompt(input: SubagentPromptInput): Effect.Effect<str
         attempt,
         reason: "structured_output_invalid",
       })
-      return yield* Effect.fail(
-        taskError({
-          code: "structured_output_invalid",
-          message: boundedValidationError,
-          sessionID: input.sessionID,
-          phase: "finalize",
-          attempts: attempt,
-        }),
-      )
+      return yield* degrade(attempt, "structured_output_invalid")
     }
     return yield* Effect.die(new Error("unreachable: structured finalizer exhausted without settlement"))
+  })
+}
+
+export function runDurableStructuredFinalizer(input: {
+  readonly ops: TaskPromptOps
+  readonly run: Pick<DurableTaskRun, "runID" | "childSessionID" | "executionSpec">
+  readonly research: SessionV1.WithParts
+  readonly contract: NonNullable<NonNullable<DurableTaskRun["executionSpec"]>["structuredOutput"]>
+  readonly onFinalizing: (input: {
+    readonly attempt: 1 | 2
+    readonly sourceMessageID: MessageID
+  }) => Effect.Effect<void, unknown, never>
+  readonly onPrepared?: (
+    input: {
+      readonly attempt: 1 | 2
+      readonly sourceMessageID: MessageID
+      readonly output: string
+    } & (
+      | {
+          readonly receipt: Extract<StructuredOutputReceipt, { readonly transport: "degraded_text" }>
+        }
+      | {
+          readonly responseMessageID: MessageID
+          readonly receipt: Exclude<StructuredOutputReceipt, { readonly transport: "degraded_text" }>
+        }
+    ),
+  ) => Effect.Effect<void, unknown, never>
+}) {
+  return Effect.gen(function* () {
+    const spec = input.run.executionSpec
+    if (!spec?.model || !spec.agent) {
+      return yield* Effect.fail(
+        new Error(`Task run ${input.run.runID} has a structured contract without frozen model identity`),
+      )
+    }
+    let finalized: { readonly messageID: MessageID; readonly receipt: StructuredOutputReceipt } | undefined
+    const output = yield* runSubagentPrompt({
+      ops: input.ops,
+      prompt: spec.prompt?.text ?? "",
+      sessionID: input.run.childSessionID,
+      model: {
+        providerID: ProviderV2.ID.make(spec.model.providerID),
+        modelID: ModelV2.ID.make(spec.model.modelID),
+      },
+      variant: spec.model.variant,
+      agent: spec.agent,
+      agentModeOverride: undefined,
+      outputSchema: input.contract.schema,
+      allowTextFallback: input.contract.allowTextFallback,
+      runID: input.run.runID,
+      budget: spec.researchBudget,
+      tools: spec.tools ?? {},
+      worktreeInfo: undefined,
+      researchResult: input.research,
+      onFinalizing: input.onFinalizing,
+      onFinalized: (messageID, receipt, preparedOutput, sourceMessageID) => {
+        if (!isFinalizerAttempt(receipt.attempt)) {
+          return Effect.die(new Error(`invalid structured finalizer receipt attempt ${receipt.attempt}`))
+        }
+        return (
+          !input.onPrepared
+            ? Effect.void
+            : receipt.transport === "degraded_text"
+              ? input.onPrepared({
+                  attempt: receipt.attempt,
+                  sourceMessageID,
+                  receipt,
+                  output: preparedOutput,
+                })
+              : input.onPrepared({
+                  attempt: receipt.attempt,
+                  sourceMessageID,
+                  responseMessageID: messageID,
+                  receipt,
+                  output: preparedOutput,
+                })
+        ).pipe(
+          Effect.andThen(
+            Effect.sync(() => {
+              finalized = { messageID, receipt }
+            }),
+          ),
+        )
+      },
+    })
+    if (!finalized) {
+      return yield* Effect.fail(
+        new Error(`Task run ${input.run.runID} structured finalizer returned without a receipt`),
+      )
+    }
+    return {
+      output,
+      ...(finalized.receipt.transport === "degraded_text" ? {} : { structuredResultMessageID: finalized.messageID }),
+      receipt: finalized.receipt,
+    }
   })
 }
 
@@ -1029,6 +1323,7 @@ interface AttemptBundle {
   ) => Effect.Effect<void, unknown>
   readonly inject: (state: "completed" | "error" | "interrupted", text: string) => Effect.Effect<unknown, unknown>
   readonly automaticWriteIsolation: boolean
+  readonly structuredSettlement: { reason: StructuredOutputTerminalReason; receipt?: StructuredOutputReceipt }
   readonly submitWorktree: () => Effect.Effect<SubmittedPR | undefined, unknown>
   readonly teardownWorktree: (force: boolean) => Effect.Effect<unknown, unknown>
 }
@@ -1174,7 +1469,7 @@ export const TaskTool = Tool.define(
       const ops = ctx.extra?.promptOps as TaskPromptOps
       if (!ops) return yield* Effect.fail(new Error("TaskTool requires promptOps in ctx.extra"))
       const resolvedOutputSchema = resolveOutputSchema(params.output_schema, params.subagent_type)
-      const allowTextFallback = params.output_schema === undefined && resolvedOutputSchema !== undefined
+      const allowTextFallback = resolvedOutputSchema !== undefined
       const subagentIntensity =
         (cfg.provider?.deepagent?.options?.subagentIntensity as string | undefined) === "downgrade"
           ? "downgrade"
@@ -1257,6 +1552,17 @@ export const TaskTool = Tool.define(
               }
             : {}),
           permission: childPermission,
+          ...(resolvedOutputSchema
+            ? {
+                structuredOutput: {
+                  schema: resolvedOutputSchema,
+                  allowTextFallback,
+                  receiptVersion: 1 as const,
+                  maxAttempts: FINALIZER_ATTEMPTS,
+                },
+              }
+            : {}),
+          researchBudget,
         },
       }).pipe(Effect.provideService(Database.Service, database))
 
@@ -1956,6 +2262,11 @@ export const TaskTool = Tool.define(
             title: params.description,
             metadata,
           })
+          const structuredSettlement: {
+            reason: StructuredOutputTerminalReason
+            receipt?: StructuredOutputReceipt
+            resultMessageID?: MessageID
+          } = { reason: "structured_output_valid" }
 
           const runTaskInner = Effect.fn("TaskTool.runTaskInner")(function* () {
             return yield* runSubagentPrompt({
@@ -1979,10 +2290,19 @@ export const TaskTool = Tool.define(
                 markSubagentFinalizing(sessions, activeRunState, activeOwner, progress).pipe(
                   Effect.provideService(Database.Service, database),
                 ),
-              onFinalized: (messageID) =>
-                markSubagentFinalized(activeRunState, activeOwner, messageID).pipe(
-                  Effect.provideService(Database.Service, database),
-                ),
+              onFinalized: (messageID, receipt, output, sourceMessageID) => {
+                structuredSettlement.reason = structuredOutputTerminalReason(receipt)
+                structuredSettlement.receipt = receipt
+                structuredSettlement.resultMessageID = receipt.transport === "degraded_text" ? undefined : messageID
+                return markSubagentFinalized(
+                  activeRunState,
+                  activeOwner,
+                  messageID,
+                  receipt,
+                  output,
+                  sourceMessageID,
+                ).pipe(Effect.provideService(Database.Service, database))
+              },
               tools: {
                 ...(evaluatePermission("todowrite", "*", next.permission).action === "allow"
                   ? {}
@@ -2026,6 +2346,8 @@ export const TaskTool = Tool.define(
               {
                 output: details?.output,
                 error: details?.error,
+                structuredResultMessageID: structuredSettlement.resultMessageID,
+                structuredOutput: state === "completed" ? structuredSettlement.receipt : undefined,
                 notification: details?.notifyText ? notification(details.notifyText) : undefined,
               },
             ).pipe(Effect.provideService(Database.Service, database))
@@ -2084,6 +2406,7 @@ export const TaskTool = Tool.define(
             nextSession: a.nextSession,
             metadata,
             automaticWriteIsolation,
+            structuredSettlement,
             markFinished,
             inject,
             submitWorktree,
@@ -2184,7 +2507,7 @@ export const TaskTool = Tool.define(
               const output = withPRSubmission(outcome.output, pr)
               yield* b.markFinished(
                 "completed",
-                resolvedOutputSchema ? "structured_output_valid" : "text_output_valid",
+                resolvedOutputSchema ? b.structuredSettlement.reason : "text_output_valid",
                 { output },
               )
               if (!pr) yield* b.teardownWorktree(b.automaticWriteIsolation)
@@ -2215,7 +2538,12 @@ export const TaskTool = Tool.define(
             }
             if (outcome.kind === "error") {
               const reason = terminalReason(outcome.reason)
-              yield* b.markFinished("error", reason, { error: { code: reason, message: outcome.reason } })
+              const failure = outcome.reason.includes("Phase: finalize")
+                ? decodeFinalizerFailure(outcome.reason)
+                : undefined
+              yield* b.markFinished("error", reason, {
+                error: failure?.error ?? { code: reason, message: outcome.reason },
+              })
               yield* b.teardownWorktree(false)
               return yield* Effect.fail(
                 taskError({
@@ -2275,7 +2603,7 @@ export const TaskTool = Tool.define(
               const output = withPRSubmission(waited.info?.output ?? "", pr)
               yield* b.markFinished(
                 "completed",
-                resolvedOutputSchema ? "structured_output_valid" : "text_output_valid",
+                resolvedOutputSchema ? b.structuredSettlement.reason : "text_output_valid",
                 {
                   output,
                   notifyText: renderOutput({
@@ -2322,12 +2650,13 @@ export const TaskTool = Tool.define(
             if (status === "error") {
               const error = waited.info?.error ?? "Task failed"
               const reason = terminalReason(error)
+              const failure = error.includes("Phase: finalize") ? decodeFinalizerFailure(error) : undefined
               const guarded = reason === "budget_exhausted" || reason === "doom_loop"
               const text = guarded
                 ? `The subagent stopped because its execution budget or loop guard was exhausted: ${error}`
                 : `The subagent failed and was not automatically retried: ${error}`
               yield* b.markFinished("error", reason, {
-                error: { code: reason, message: error },
+                error: failure?.error ?? { code: reason, message: error },
                 notifyText: renderOutput({
                   sessionID: b.nextSession.id,
                   state: "error",
@@ -2422,6 +2751,11 @@ export const TaskTool = Tool.define(
       })
       const runState = yield* activateRun(claimedRun ?? admission.run)
       const runOwner = runState.executionOwner ?? executionOwner
+      const structuredSettlement: {
+        reason: StructuredOutputTerminalReason
+        receipt?: StructuredOutputReceipt
+        resultMessageID?: MessageID
+      } = { reason: "structured_output_valid" }
 
       const runTask = Effect.fn("TaskTool.runTask")(function* () {
         // §5a chokepoint: BOTH the foreground and background dispatch paths route the subagent's
@@ -2466,10 +2800,14 @@ export const TaskTool = Tool.define(
             markSubagentFinalizing(sessions, runState, runOwner, progress).pipe(
               Effect.provideService(Database.Service, database),
             ),
-          onFinalized: (messageID) =>
-            markSubagentFinalized(runState, runOwner, messageID).pipe(
+          onFinalized: (messageID, receipt, output, sourceMessageID) => {
+            structuredSettlement.reason = structuredOutputTerminalReason(receipt)
+            structuredSettlement.receipt = receipt
+            structuredSettlement.resultMessageID = receipt.transport === "degraded_text" ? undefined : messageID
+            return markSubagentFinalized(runState, runOwner, messageID, receipt, output, sourceMessageID).pipe(
               Effect.provideService(Database.Service, database),
-            ),
+            )
+          },
           tools: {
             ...(evaluatePermission("todowrite", "*", next.permission).action === "allow" ? {} : { todowrite: false }),
             ...(evaluatePermission(id, "*", next.permission).action === "allow"
@@ -2504,6 +2842,8 @@ export const TaskTool = Tool.define(
         const won = yield* settleSubagentRun(sessions, runState, runOwner, state, reason ?? "runtime_error", {
           output: details?.output,
           error: details?.error,
+          structuredResultMessageID: structuredSettlement.resultMessageID,
+          structuredOutput: state === "completed" ? structuredSettlement.receipt : undefined,
           notification: details?.notifyText ? notification(details.notifyText) : undefined,
         }).pipe(Effect.provideService(Database.Service, database))
         if (!won) yield* Effect.fail(lostTaskRunLease(runState))
@@ -2566,7 +2906,7 @@ export const TaskTool = Tool.define(
           ),
         )
         const completedOutput = withPRSubmission(output, pr)
-        yield* markFinished("completed", resolvedOutputSchema ? "structured_output_valid" : "text_output_valid", {
+        yield* markFinished("completed", resolvedOutputSchema ? structuredSettlement.reason : "text_output_valid", {
           output: completedOutput,
           ...(notifyParent
             ? {
@@ -2589,20 +2929,21 @@ export const TaskTool = Tool.define(
         yield* background.wait({ id: jobID }).pipe(
           Effect.flatMap((result) => {
             if (result.info?.status === "completed") return complete(result.info.output ?? "", true)
-            if (result.info?.status === "error")
-              return markFinished("error", terminalReason(result.info.error), {
-                error: {
-                  code: terminalReason(result.info.error),
-                  message: result.info.error ?? "Task failed",
-                },
+            if (result.info?.status === "error") {
+              const message = result.info.error ?? "Task failed"
+              const reason = terminalReason(message)
+              const failure = message.includes("Phase: finalize") ? decodeFinalizerFailure(message) : undefined
+              return markFinished("error", reason, {
+                error: failure?.error ?? { code: reason, message },
                 notifyText: renderOutput({
                   sessionID: nextSession.id,
                   state: "error",
                   summary: `Background task failed: ${params.description}`,
-                  text: result.info.error ?? "Task failed",
+                  text: message,
                   maxChars: flags.subagentOutputMaxChars,
                 }),
-              }).pipe(Effect.andThen(teardownWorktree(false)), Effect.andThen(inject("error", result.info.error ?? "")))
+              }).pipe(Effect.andThen(teardownWorktree(false)), Effect.andThen(inject("error", message)))
+            }
             if (result.info?.status === "cancelled")
               return markFinished("cancelled", "parent_interrupted").pipe(Effect.andThen(teardownWorktree(false)))
             return Effect.void
@@ -2693,8 +3034,11 @@ export const TaskTool = Tool.define(
             // Promoted to background: `notify` (registered via onPromote) owns the finish marker.
             if (result?.metadata?.background === true) return backgroundResult()
             if (result?.status === "error") {
-              yield* markFinished("error", terminalReason(result.error), {
-                error: { code: terminalReason(result.error), message: result.error ?? "Task failed" },
+              const message = result.error ?? "Task failed"
+              const reason = terminalReason(message)
+              const failure = message.includes("Phase: finalize") ? decodeFinalizerFailure(message) : undefined
+              yield* markFinished("error", reason, {
+                error: failure?.error ?? { code: reason, message },
               })
               yield* teardownWorktree(false)
               return yield* Effect.fail(new Error(result.error ?? "Task failed"))

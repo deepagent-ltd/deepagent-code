@@ -49,12 +49,15 @@ import { SessionSteer } from "@/session/steer"
 import { SessionRunState } from "@/session/run-state"
 import { SessionStatus } from "@/session/status"
 import { SessionSummary } from "@/session/summary"
+import { SessionProjection } from "@/session/session-projector"
+import { SessionLegacyProviderResolution } from "@/session/legacy-provider-resolution"
 import { Todo } from "@/session/todo"
 import { SessionShare } from "@/share/session"
 import { ShareNext } from "@/share/share-next"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { EventV2 } from "@deepagent-code/core/event"
 import { Database } from "@deepagent-code/core/database/database"
+import { LocationIdentity } from "@deepagent-code/core/context-federation/identity"
 import { Skill } from "@/skill"
 import { Snapshot } from "@/snapshot"
 import { ToolRegistry } from "@/tool/registry"
@@ -135,6 +138,7 @@ import { corsVaryFix } from "./middleware/cors-vary"
 import { errorLayer } from "./middleware/error"
 import { fenceLayer } from "./middleware/fence"
 import { schemaErrorLayer } from "./middleware/schema-error"
+import { syncReplayBodyLimitLayer } from "./middleware/sync-replay-body-limit"
 
 export const context = Context.makeUnsafe<unknown>(new Map())
 
@@ -330,10 +334,12 @@ export function createRoutes(
     Layer.provide([
       errorLayer,
       compressionLayer,
+      syncReplayBodyLimitLayer,
       corsVaryFix,
       fenceLayer.pipe(Layer.provide(Database.defaultLayer)),
       cors(corsOptions),
       Database.defaultLayer,
+      LocationIdentity.defaultLayer,
       Account.defaultLayer,
       Agent.defaultLayer,
       Auth.defaultLayer,
@@ -373,9 +379,11 @@ export function createRoutes(
       SessionRunState.defaultLayer,
       SessionStatus.defaultLayer,
       SessionSummary.defaultLayer,
+      SessionLegacyProviderResolution.defaultLayer,
       ShareNext.defaultLayer,
       Snapshot.defaultLayer,
       EventV2Bridge.defaultLayer,
+      SessionProjection.defaultLayer,
       EventV2.defaultLayer,
       Skill.defaultLayer,
       Todo.defaultLayer,

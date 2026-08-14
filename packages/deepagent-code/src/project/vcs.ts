@@ -1,4 +1,4 @@
-import { Effect, Layer, Context, Schema, Stream, Scope } from "effect"
+import { Duration, Effect, Layer, Context, Schema, Stream, Scope } from "effect"
 import { formatPatch, structuredPatch } from "diff"
 import { InstanceState } from "@/effect/instance-state"
 import { Watcher } from "@deepagent-code/core/filesystem/watcher"
@@ -11,6 +11,12 @@ const log = Log.create({ service: "vcs" })
 const PATCH_CONTEXT_LINES = 2_147_483_647
 const MAX_PATCH_BYTES = 10_000_000
 const MAX_TOTAL_PATCH_BYTES = 10_000_000
+export const RawDiffLimits = {
+  candidateFiles: 1_000,
+  discoveryBytes: 4 * 1024 * 1024,
+  wallTimeMs: 15_000,
+  patchBytes: 10 * 1024 * 1024,
+} as const
 type DiffOptions = {
   readonly context?: number
 }
@@ -288,13 +294,34 @@ export class PatchApplyError extends Schema.TaggedErrorClass<PatchApplyError>()(
   reason: Schema.Literals(["non-git", "not-clean"]),
 }) {}
 
+export class RawDiffError extends Schema.TaggedErrorClass<RawDiffError>()("VcsRawDiffError", {
+  message: Schema.String,
+  reason: Schema.Literals([
+    "candidate-files",
+    "status-output",
+    "status-failed",
+    "tracked-output",
+    "tracked-failed",
+    "untracked-output",
+    "untracked-failed",
+    "total-output",
+    "time-limit",
+    "remote-status",
+    "remote-output",
+    "remote-decode",
+  ]),
+  limit: Schema.optional(Schema.Number),
+  actual: Schema.optional(Schema.Number),
+  file: Schema.optional(Schema.String),
+}) {}
+
 export interface Interface {
   readonly init: () => Effect.Effect<void>
   readonly branch: () => Effect.Effect<string | undefined>
   readonly defaultBranch: () => Effect.Effect<string | undefined>
   readonly status: () => Effect.Effect<FileStatus[]>
   readonly diff: (mode: Mode, options?: DiffOptions) => Effect.Effect<FileDiff[]>
-  readonly diffRaw: () => Effect.Effect<string>
+  readonly diffRaw: () => Effect.Effect<string, RawDiffError>
   readonly apply: (input: ApplyInput) => Effect.Effect<ApplyResult, PatchApplyError>
 }
 
@@ -399,15 +426,149 @@ export const layer: Layer.Layer<Service, never, Git.Service | EventV2Bridge.Serv
       diffRaw: Effect.fn("Vcs.diffRaw")(function* () {
         const ctx = yield* InstanceState.context
         if (ctx.project.vcs !== "git") return ""
-        const [hasHead, status] = yield* Effect.all([git.hasHead(ctx.directory), git.status(ctx.directory)], {
-          concurrency: 2,
-        })
-        const tracked = hasHead ? (yield* git.patchAll(ctx.directory, "HEAD")).text : ""
-        const untracked = yield* Effect.forEach(
-          status.filter((item) => item.code === "??"),
-          (item) => git.patchUntracked(ctx.directory, item.file).pipe(Effect.map((patch) => patch.text)),
+        const deadline = Date.now() + RawDiffLimits.wallTimeMs
+        const deadlineRemaining = () => Duration.millis(Math.max(1, deadline - Date.now()))
+        const [hasHead, status] = yield* Effect.all(
+          [
+            git
+              .run(["rev-parse", "--verify", "HEAD"], {
+                cwd: ctx.directory,
+                maxErrorBytes: RawDiffLimits.discoveryBytes,
+                maxOutputBytes: RawDiffLimits.discoveryBytes,
+                timeout: deadlineRemaining(),
+              })
+              .pipe(Effect.map((result) => result.exitCode === 0)),
+            git.run(["status", "--porcelain=v1", "--untracked-files=all", "--no-renames", "-z", "--", "."], {
+              cwd: ctx.directory,
+              maxErrorBytes: RawDiffLimits.discoveryBytes,
+              maxOutputBytes: RawDiffLimits.discoveryBytes,
+              timeout: deadlineRemaining(),
+            }),
+          ],
+          { concurrency: 2 },
         )
-        return [tracked, ...untracked].filter(Boolean).join("\n")
+        if (Date.now() >= deadline)
+          return yield* new RawDiffError({ message: "Raw diff discovery exceeded its deadline", reason: "time-limit" })
+        if (status.truncated)
+          return yield* new RawDiffError({
+            message: "Raw diff status discovery exceeded its output budget",
+            reason: "status-output",
+            limit: RawDiffLimits.discoveryBytes,
+          })
+        if (status.exitCode !== 0)
+          return yield* new RawDiffError({
+            message: "Raw diff status discovery failed",
+            reason: "status-failed",
+          })
+
+        const candidates = status
+          .text()
+          .split("\0")
+          .filter(Boolean)
+          .flatMap((item) => {
+            const file = item.slice(3)
+            if (!file) return []
+            return [{ code: item.slice(0, 2), file }]
+          })
+        if (candidates.length > RawDiffLimits.candidateFiles)
+          return yield* new RawDiffError({
+            message: "Raw diff candidate file count exceeded its limit",
+            reason: "candidate-files",
+            limit: RawDiffLimits.candidateFiles,
+            actual: candidates.length,
+          })
+
+        const patches: string[] = []
+        let bytes = 0
+        if (hasHead) {
+          const tracked = yield* git.run(
+            ["diff", "--patch", "--no-ext-diff", "--no-renames", "--unified=3", "HEAD", "--", "."],
+            {
+              cwd: ctx.directory,
+              maxErrorBytes: RawDiffLimits.discoveryBytes,
+              maxOutputBytes: RawDiffLimits.patchBytes + 1,
+              timeout: deadlineRemaining(),
+            },
+          )
+          if (Date.now() >= deadline)
+            return yield* new RawDiffError({ message: "Tracked raw diff exceeded its deadline", reason: "time-limit" })
+          if (tracked.truncated || tracked.stdout.byteLength > RawDiffLimits.patchBytes)
+            return yield* new RawDiffError({
+              message: "Tracked raw patch exceeded the total output budget",
+              reason: "tracked-output",
+              limit: RawDiffLimits.patchBytes,
+            })
+          if (tracked.exitCode !== 0)
+            return yield* new RawDiffError({
+              message: "Tracked raw patch generation failed",
+              reason: "tracked-failed",
+            })
+          if (tracked.stdout.byteLength > 0) {
+            patches.push(tracked.text())
+            bytes = tracked.stdout.byteLength
+          }
+        }
+
+        for (const item of candidates.filter((item) => item.code === "??" || (!hasHead && item.code[1] !== "D"))) {
+          if (Date.now() >= deadline)
+            return yield* new RawDiffError({ message: "Raw diff exceeded its deadline", reason: "time-limit" })
+          const separator = patches.length > 0 ? 1 : 0
+          const patchRemaining = RawDiffLimits.patchBytes - bytes - separator
+          if (patchRemaining <= 0)
+            return yield* new RawDiffError({
+              message: "Raw patch exceeded the total output budget before all untracked files were encoded",
+              reason: "total-output",
+              limit: RawDiffLimits.patchBytes,
+              actual: bytes + separator,
+              file: item.file,
+            })
+          const patch = yield* git.run(
+            [
+              "diff",
+              "--no-index",
+              "--patch",
+              "--no-ext-diff",
+              "--no-renames",
+              "--unified=3",
+              "--",
+              "/dev/null",
+              item.file,
+            ],
+            {
+              cwd: ctx.directory,
+              maxErrorBytes: RawDiffLimits.discoveryBytes,
+              maxOutputBytes: patchRemaining + 1,
+              timeout: deadlineRemaining(),
+            },
+          )
+          if (Date.now() >= deadline)
+            return yield* new RawDiffError({ message: "Untracked raw diff exceeded its deadline", reason: "time-limit" })
+          if (patch.truncated || patch.stdout.byteLength > patchRemaining)
+            return yield* new RawDiffError({
+              message: `Untracked raw patch exceeded the remaining output budget: ${item.file}`,
+              reason: "untracked-output",
+              limit: patchRemaining,
+              file: item.file,
+            })
+          if (patch.exitCode !== 0 && patch.exitCode !== 1)
+            return yield* new RawDiffError({
+              message: `Untracked raw patch generation failed: ${item.file}`,
+              reason: "untracked-failed",
+              file: item.file,
+            })
+          if (patch.stdout.byteLength === 0) continue
+          patches.push(patch.text())
+          bytes += separator + patch.stdout.byteLength
+        }
+        const result = patches.join("\n")
+        const actual = Buffer.byteLength(result)
+        if (actual <= RawDiffLimits.patchBytes) return result
+        return yield* new RawDiffError({
+          message: "Raw patch exceeded the total UTF-8 output budget",
+          reason: "total-output",
+          limit: RawDiffLimits.patchBytes,
+          actual,
+        })
       }),
       apply: Effect.fn("Vcs.apply")(function* (input: ApplyInput) {
         const ctx = yield* InstanceState.context

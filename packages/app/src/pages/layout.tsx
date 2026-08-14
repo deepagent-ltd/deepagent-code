@@ -44,6 +44,7 @@ import {
   getSessionPrefetch,
   isSessionPrefetchCurrent,
   runSessionPrefetch,
+  SESSION_MESSAGE_PAGE_LIMIT,
   setSessionPrefetch,
   shouldSkipSessionPrefetch,
 } from "@/context/global-sync/session-prefetch"
@@ -685,7 +686,7 @@ export default function Layout(props: ParentProps<{ onStartupRestoreSettled?: ()
     running: number
   }
 
-  const prefetchChunk = 200
+  const prefetchChunk = SESSION_MESSAGE_PAGE_LIMIT
   const prefetchConcurrency = 2
   const prefetchPendingLimit = 10
   const span = 4

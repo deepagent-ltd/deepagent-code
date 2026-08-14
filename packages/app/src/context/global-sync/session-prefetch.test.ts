@@ -4,6 +4,7 @@ import {
   clearSessionPrefetchDirectory,
   getSessionPrefetch,
   runSessionPrefetch,
+  SESSION_MESSAGE_PAGE_LIMIT,
   setSessionPrefetch,
   shouldSkipSessionPrefetch,
 } from "./session-prefetch"
@@ -12,6 +13,9 @@ import { ServerScope } from "@/utils/server-scope"
 const scope = ServerScope.local
 
 describe("session prefetch", () => {
+  test("uses the bounded server page size", () => {
+    expect(SESSION_MESSAGE_PAGE_LIMIT).toBe(100)
+  })
   test("stores and clears message metadata by directory", () => {
     clearSessionPrefetch(scope, "/tmp/a", ["ses_1"])
     clearSessionPrefetch(scope, "/tmp/b", ["ses_1"])

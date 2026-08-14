@@ -9,7 +9,7 @@ import { Skill } from "@/skill"
 import { Effect } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { InstanceHttpApi } from "../api"
-import { ApiVcsApplyError } from "../groups/instance"
+import { ApiVcsApplyError, ApiVcsRawDiffError } from "../groups/instance"
 import { markInstanceForDisposal } from "../lifecycle"
 import { Config } from "@/config/config"
 import { snapshotGateway } from "@/deepagent/config"
@@ -95,7 +95,21 @@ export const instanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "instance"
     })
 
     const getVcsDiffRaw = Effect.fn("InstanceHttpApi.vcsDiffRaw")(function* () {
-      return yield* vcs.diffRaw()
+      return yield* vcs.diffRaw().pipe(
+        Effect.mapError(
+          (error) =>
+            new ApiVcsRawDiffError({
+              name: "VcsRawDiffError",
+              data: {
+                message: error.message,
+                reason: error.reason,
+                limit: error.limit,
+                actual: error.actual,
+                file: error.file,
+              },
+            }),
+        ),
+      )
     })
 
     const applyVcs = Effect.fn("InstanceHttpApi.vcsApply")(function* (ctx: { payload: Vcs.ApplyInput }) {

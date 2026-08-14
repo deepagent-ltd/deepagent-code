@@ -11,11 +11,12 @@
  *
  * These tests exercise the two F3-changed paths in llm.ts:
  *   A. AI SDK experimental_repairToolCall callback — via error type discrimination helpers.
- *   B. Workflow toolExecutor — via isolated helper that mirrors the closure logic.
+ *   B. Workflow toolExecutor — via the production workflow wiring closure.
  */
 
 import { describe, test, expect } from "bun:test"
-import { InvalidToolInputError, NoSuchToolError } from "ai"
+import { InvalidToolInputError, NoSuchToolError, type Tool } from "ai"
+import { wireWorkflowModel } from "../../src/session/llm"
 
 // ---------------------------------------------------------------------------
 // A. Error type discrimination helpers (mirrors repair callback logic)
@@ -136,61 +137,34 @@ describe("F3.A repair callback — input preview safety", () => {
 })
 
 // ---------------------------------------------------------------------------
-// B. Workflow toolExecutor — isolated helper tests
+// B. Workflow toolExecutor — production closure tests
 // ---------------------------------------------------------------------------
 
-/**
- * Isolated version of the workflow toolExecutor logic from llm.ts.
- * Mirrors the actual implementation to allow direct unit testing without
- * spinning up the full Effect layer.
- */
 async function workflowToolExecutor(
   toolName: string,
   argsJson: string,
   requestID: string,
-  tools: Record<string, { execute?: (args: unknown, opts: unknown) => Promise<unknown> }>,
-): Promise<{ result: string; error?: string; metadata?: unknown; title?: unknown }> {
-  // (1) Unknown tool
-  const t = tools[toolName]
-  if (!t || !t.execute) {
-    return {
-      result: "",
-      error: `[unknown_tool] Tool "${toolName}" is not available. Resend the request using a valid tool name.`,
-    }
+  tools: Record<string, Pick<Tool, "execute">>,
+): Promise<{ result: string; error?: string | null; metadata?: unknown; title?: unknown }> {
+  const model: Parameters<typeof wireWorkflowModel>[0]["model"] = {
+    sessionID: "",
+    systemPrompt: null,
+    sessionPreapprovedTools: [],
+    toolExecutor: null,
+    approvalHandler: null,
   }
-
-  // (2) JSON parse
-  let parsedArgs: unknown
-  try {
-    parsedArgs = JSON.parse(argsJson)
-  } catch (parseErr: any) {
-    const inputPreview = argsJson.length > 200 ? argsJson.slice(0, 200) + "…[truncated]" : argsJson
-    return {
-      result: "",
-      error: `[invalid_json] Arguments for tool "${toolName}" are not valid JSON (${(parseErr?.message ?? "parse error").slice(0, 200)}). Resend the request with complete, valid JSON arguments.`,
-    }
-  }
-
-  // (3) Execute
-  try {
-    const result = await t.execute!(parsedArgs, { toolCallId: requestID, messages: [], abortSignal: undefined })
-    const output = typeof result === "string" ? result : ((result as any)?.output ?? JSON.stringify(result))
-    return {
-      result: output,
-      metadata: typeof result === "object" ? (result as any)?.metadata : undefined,
-      title: typeof result === "object" ? (result as any)?.title : undefined,
-    }
-  } catch (e: any) {
-    const isSchemaError =
-      Array.isArray(e?.issues) || e?._tag === "ParseError" || e?.cause?._tag === "ParseError"
-    if (isSchemaError) {
-      return {
-        result: "",
-        error: `[schema_mismatch] Arguments for tool "${toolName}" do not match the expected schema. Resend the request with correctly structured arguments.`,
-      }
-    }
-    return { result: "", error: (e?.message ?? String(e)).slice(0, 500) }
-  }
+  wireWorkflowModel({
+    model,
+    sessionID: "workflow-test",
+    systemPrompt: "test",
+    tools,
+    messages: [],
+    abort: new AbortController().signal,
+    ruleset: [],
+    warn: () => {},
+  })
+  if (!model.toolExecutor) throw new Error("workflow tool executor was not installed")
+  return model.toolExecutor(toolName, argsJson, requestID)
 }
 
 describe("F3.B workflow toolExecutor — error classification", () => {
@@ -200,24 +174,14 @@ describe("F3.B workflow toolExecutor — error classification", () => {
 
   // AC1: valid JSON passes through unchanged
   test("AC1: valid JSON is parsed and passed to execute without modification", async () => {
-    const result = await workflowToolExecutor(
-      "echo",
-      '{"message":"hello world"}',
-      "call-1",
-      { echo: echoTool },
-    )
+    const result = await workflowToolExecutor("echo", '{"message":"hello world"}', "call-1", { echo: echoTool })
     expect(result.error).toBeUndefined()
     expect(result.result).toBe('{"message":"hello world"}')
   })
 
   // AC3: invalid JSON → bounded error with resubmit hint
   test("AC3: invalid JSON produces bounded error with [invalid_json] prefix", async () => {
-    const result = await workflowToolExecutor(
-      "echo",
-      '{"message": unquoted}',
-      "call-2",
-      { echo: echoTool },
-    )
+    const result = await workflowToolExecutor("echo", '{"message": unquoted}', "call-2", { echo: echoTool })
     expect(result.error).toBeDefined()
     expect(result.error).toMatch(/^\[invalid_json\]/)
     expect(result.error).toContain("echo")
@@ -242,12 +206,7 @@ describe("F3.B workflow toolExecutor — error classification", () => {
         throw err
       },
     }
-    const result = await workflowToolExecutor(
-      "schema_tool",
-      '{"value":42}',
-      "call-4",
-      { schema_tool: schemaTool },
-    )
+    const result = await workflowToolExecutor("schema_tool", '{"value":42}', "call-4", { schema_tool: schemaTool })
     expect(result.error).toBeDefined()
     expect(result.error).toMatch(/^\[schema_mismatch\]/)
     expect(result.error).not.toMatch(/invalid_json/)
@@ -305,6 +264,84 @@ describe("F3.B workflow toolExecutor — error classification", () => {
     expect(result.error).not.toMatch(/^\[(invalid_json|schema_mismatch|unknown_tool)\]/)
     // Bounded to 500 chars
     expect(result.error!.length).toBeLessThanOrEqual(500)
+  })
+
+  test("same tool name with different args and request IDs executes the wrapped closure twice", async () => {
+    const calls: Array<{ args: unknown; requestID: string }> = []
+    const model: Parameters<typeof wireWorkflowModel>[0]["model"] = {
+      sessionID: "",
+      systemPrompt: null,
+      sessionPreapprovedTools: [],
+      toolExecutor: null,
+      approvalHandler: null,
+    }
+    wireWorkflowModel({
+      model,
+      sessionID: "workflow-exact-call",
+      systemPrompt: "test",
+      tools: {
+        write: {
+          execute: async (args, options) => {
+            calls.push({ args, requestID: options.toolCallId })
+            return { output: JSON.stringify(args) }
+          },
+        },
+      },
+      messages: [],
+      abort: new AbortController().signal,
+      ruleset: [{ permission: "write", pattern: "*", action: "ask" }],
+      warn: () => {},
+    })
+    if (!model.approvalHandler || !model.toolExecutor) throw new Error("workflow hooks were not installed")
+
+    expect(model.sessionPreapprovedTools).toEqual([])
+    expect(await model.approvalHandler([{ name: "write", args: '{"path":"a.ts"}' }])).toEqual({
+      approved: true,
+    })
+    expect(await model.approvalHandler([{ name: "write", args: '{"path":"b.ts"}' }])).toEqual({
+      approved: true,
+    })
+    await model.toolExecutor("write", '{"path":"a.ts"}', "call-a")
+    await model.toolExecutor("write", '{"path":"b.ts"}', "call-b")
+
+    expect(calls).toEqual([
+      { args: { path: "a.ts" }, requestID: "call-a" },
+      { args: { path: "b.ts" }, requestID: "call-b" },
+    ])
+    expect(model.sessionPreapprovedTools).toEqual([])
+  })
+
+  test("provider builtin approval stays advisory when its mapped wrapped tool is available", async () => {
+    const model: Parameters<typeof wireWorkflowModel>[0]["model"] = {
+      sessionID: "",
+      systemPrompt: null,
+      sessionPreapprovedTools: [],
+      toolExecutor: null,
+      approvalHandler: null,
+    }
+    wireWorkflowModel({
+      model,
+      sessionID: "workflow-builtin-approval",
+      systemPrompt: "test",
+      tools: {
+        bash: { execute: async () => ({ output: "ok" }) },
+        apply_patch: { execute: async () => ({ output: "ok" }) },
+      },
+      messages: [],
+      abort: new AbortController().signal,
+      ruleset: [{ permission: "*", pattern: "*", action: "ask" }],
+      warn: () => {},
+    })
+    if (!model.approvalHandler) throw new Error("workflow approval handler was not installed")
+
+    expect(
+      await model.approvalHandler([
+        { name: "runShellCommand", args: '{"command":"pwd"}' },
+        { name: "runWriteFile", args: '{"filepath":"a.ts","contents":"ok"}' },
+      ]),
+    ).toEqual({ approved: true })
+    expect(await model.approvalHandler([{ name: "server_only_tool", args: "{}" }])).toEqual({ approved: false })
+    expect(model.sessionPreapprovedTools).toEqual([])
   })
 })
 

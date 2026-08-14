@@ -1,14 +1,20 @@
 export * as RetentionSweeper from "./retention-sweeper"
 
 import { Cause, Context, Duration, Effect, Layer, Schedule } from "effect"
-import { and, eq, isNotNull, lt } from "drizzle-orm"
+import { and, asc, eq, inArray, isNotNull, lt, sql } from "drizzle-orm"
 import { Database } from "../database/database"
 import { DeepAgentEventBus } from "./deepagent-event-bus"
 import { DeepAgentEventTable } from "./deepagent-event-sql"
 import { ApprovalQueueTable } from "./approval-queue-sql"
 import { WorkspaceConfig } from "./workspace-config"
 import { AgentPushLogTable } from "../im/push-log-sql"
-import { EventSequenceTable } from "../event/sql"
+import { EventArtifactTable, EventCompactionReceiptTable, EventSequenceTable } from "../event/sql"
+import {
+  FilePartArtifactBindingTable,
+  FilePartArtifactDiscardTable,
+  FilePartArtifactImportTable,
+  FilePartArtifactTable,
+} from "../file-part-artifact.sql"
 import { SessionTable } from "../session/sql"
 import type { WorkspaceV2 } from "../workspace"
 import * as Log from "../util/log"
@@ -29,6 +35,7 @@ import * as Log from "../util/log"
 const log = Log.create({ service: "retention-sweeper" })
 
 const DAY_MS = 86_400_000
+const SWEEP_BATCH_ROWS = 100
 // default sweep cadence — hourly (retention is a slow reclaim; a missed hour is harmless).
 export const DEFAULT_SWEEP_INTERVAL_MS = Duration.toMillis(Duration.hours(1))
 
@@ -58,6 +65,7 @@ export interface LayerOptions {
   readonly intervalMs?: number
   // start the background sweep daemon (scoped fork). Default true; tests pass false and call sweepOnce.
   readonly runLoop?: boolean
+  readonly compactSession?: (sessionID: string) => Effect.Effect<boolean>
 }
 
 export const layerWith = (options?: LayerOptions) =>
@@ -75,91 +83,153 @@ export const layerWith = (options?: LayerOptions) =>
         Effect.gen(function* () {
           const at = nowArg ?? now()
 
-          // enumerate the workspaces that actually have events — the only ones worth a retention pass.
-          // (push-log / approval pruning is scoped to these same workspaces; a workspace with no events
-          //  but stray audit rows is swept the next time it publishes — acceptable for slow reclaim.)
-          const workspaceRows = yield* db
+          const eventWorkspaceRows = yield* db
             .selectDistinct({ workspaceID: DeepAgentEventTable.workspace_id })
             .from(DeepAgentEventTable)
+            .orderBy(asc(DeepAgentEventTable.workspace_id))
+            .limit(SWEEP_BATCH_ROWS)
             .all()
             .pipe(Effect.orDie)
+          const sessionWorkspaceRows = yield* db
+            .selectDistinct({ workspaceID: SessionTable.workspace_id })
+            .from(SessionTable)
+            .where(isNotNull(SessionTable.workspace_id))
+            .orderBy(asc(SessionTable.workspace_id))
+            .limit(SWEEP_BATCH_ROWS)
+            .all()
+            .pipe(Effect.orDie)
+          const workspaceRows = [...new Set([...eventWorkspaceRows, ...sessionWorkspaceRows].map((row) => row.workspaceID))]
+            .filter((workspaceID): workspaceID is WorkspaceV2.ID => workspaceID !== null)
+            .map((workspaceID) => ({ workspaceID }))
 
           let deletedEvents = 0
           let deletedPushLogs = 0
           let deletedApprovals = 0
           let deletedEventV2Sequences = 0
 
+          const abandonedImports = yield* db
+            .select({
+              eventID: FilePartArtifactImportTable.event_id,
+              artifactID: FilePartArtifactImportTable.artifact_id,
+              aggregateID: FilePartArtifactImportTable.aggregate_id,
+              seq: FilePartArtifactImportTable.seq,
+              originalDataHash: FilePartArtifactImportTable.original_data_hash,
+              canonicalDataHash: FilePartArtifactImportTable.canonical_data_hash,
+              canonicalData: FilePartArtifactImportTable.canonical_data,
+            })
+            .from(FilePartArtifactImportTable)
+            .where(lt(FilePartArtifactImportTable.created_at, at - DAY_MS))
+            .limit(SWEEP_BATCH_ROWS)
+            .all()
+            .pipe(Effect.orDie)
+          yield* db.transaction(
+            () => Effect.forEach(
+              abandonedImports,
+              (imported) => Effect.gen(function* () {
+                const binding = yield* db.select({ id: FilePartArtifactBindingTable.event_id })
+                  .from(FilePartArtifactBindingTable)
+                  .where(eq(FilePartArtifactBindingTable.event_id, imported.eventID)).get().pipe(Effect.orDie)
+                if (binding) return
+                yield* db.insert(FilePartArtifactDiscardTable).values({
+                  event_id: imported.eventID,
+                  aggregate_id: imported.aggregateID,
+                  seq: imported.seq,
+                  artifact_id: imported.artifactID,
+                  original_data_hash: imported.originalDataHash,
+                  canonical_data_hash: imported.canonicalDataHash,
+                  canonical_data: imported.canonicalData,
+                  created_at: at,
+                }).onConflictDoNothing().run().pipe(Effect.orDie)
+                yield* db.delete(FilePartArtifactImportTable)
+                  .where(eq(FilePartArtifactImportTable.event_id, imported.eventID)).run().pipe(Effect.orDie)
+                yield* db.delete(FilePartArtifactTable).where(and(
+                  eq(FilePartArtifactTable.artifact_id, imported.artifactID),
+                  sql`NOT EXISTS (
+                    SELECT 1 FROM ${FilePartArtifactBindingTable} binding
+                    WHERE binding.artifact_id = ${imported.artifactID}
+                  )`,
+                  sql`NOT EXISTS (
+                    SELECT 1 FROM ${FilePartArtifactImportTable} imported
+                    WHERE imported.artifact_id = ${imported.artifactID}
+                  )`,
+                )).run().pipe(Effect.orDie)
+              }),
+              { discard: true },
+            ),
+            { behavior: "immediate" },
+          ).pipe(Effect.orDie)
+
           for (const { workspaceID } of workspaceRows) {
             const resolved = yield* config.get(workspaceID)
             const olderThan = at - resolved.retentionDays * DAY_MS
 
             // §A3 events (referential-safe sweep on the bus).
-            const eventResult = yield* bus.sweep({ workspaceID, olderThan })
+            const eventResult = yield* bus.sweep({ workspaceID, olderThan, limit: SWEEP_BATCH_ROWS })
             deletedEvents += eventResult.deletedEvents
 
             // §B4 push audit log — prune this workspace's rows past retention.
-            const pushDeleted = yield* db
-              .delete(AgentPushLogTable)
-              .where(
-                and(
-                  eq(AgentPushLogTable.workspace_id, workspaceID),
-                  lt(AgentPushLogTable.created_at, olderThan),
-                ),
-              )
-              .returning({ id: AgentPushLogTable.id })
-              .all()
-              .pipe(Effect.orDie)
-            deletedPushLogs += pushDeleted.length
+            const pushIDs = yield* db.select({ id: AgentPushLogTable.id }).from(AgentPushLogTable).where(and(
+              eq(AgentPushLogTable.workspace_id, workspaceID), lt(AgentPushLogTable.created_at, olderThan),
+            )).orderBy(asc(AgentPushLogTable.id)).limit(SWEEP_BATCH_ROWS).all().pipe(Effect.orDie)
+            if (pushIDs.length > 0) {
+              const pushDeleted = yield* db.delete(AgentPushLogTable).where(inArray(AgentPushLogTable.id, pushIDs.map((row) => row.id))).returning({ id: AgentPushLogTable.id }).all().pipe(Effect.orDie)
+              deletedPushLogs += pushDeleted.length
+            }
 
             // §D2 approval queue — prune RESOLVED items past retention only. A pending item survives
             // regardless of age (a human still owes it a decision).
-            const approvalDeleted = yield* db
-              .delete(ApprovalQueueTable)
-              .where(
-                and(
-                  eq(ApprovalQueueTable.workspace_id, workspaceID),
-                  eq(ApprovalQueueTable.status, "resolved"),
-                  lt(ApprovalQueueTable.created_at, olderThan),
-                ),
-              )
-              .returning({ id: ApprovalQueueTable.id })
-              .all()
-              .pipe(Effect.orDie)
-            deletedApprovals += approvalDeleted.length
+            const approvalIDs = yield* db.select({ id: ApprovalQueueTable.id }).from(ApprovalQueueTable).where(and(
+              eq(ApprovalQueueTable.workspace_id, workspaceID), eq(ApprovalQueueTable.status, "resolved"), lt(ApprovalQueueTable.created_at, olderThan),
+            )).orderBy(asc(ApprovalQueueTable.id)).limit(SWEEP_BATCH_ROWS).all().pipe(Effect.orDie)
+            if (approvalIDs.length > 0) {
+              const approvalDeleted = yield* db.delete(ApprovalQueueTable).where(inArray(ApprovalQueueTable.id, approvalIDs.map((row) => row.id))).returning({ id: ApprovalQueueTable.id }).all().pipe(Effect.orDie)
+              deletedApprovals += approvalDeleted.length
+            }
 
-            // PERF §EventV2-retention: prune EventV2 mirror events for sessions that have been
-            // archived for longer than retentionDays. The EventV2 `event` table records every
-            // streaming delta (message.part.updated, etc.) and has no built-in expiry — it grows
-            // unboundedly and can reach 500MB+ on long-running deployments. Once a session is
-            // archived its event history is cold and safe to discard: active sessions keep their
-            // full event log for live projector replay, but archived ones no longer need it.
-            //
-            // Implementation: delete rows from `event_sequence` where the corresponding session row
-            // (same workspace) has time_archived IS NOT NULL AND time_archived < olderThan.
-            // The EventTable has ON DELETE CASCADE from event_sequence, so this one DELETE removes
-            // both the sequence header and all its events in a single statement.
-            const archivedSessions = yield* db
+            // Archived sessions may be compacted through their active snapshot, but the aggregate
+            // root remains readable until the explicit Session/EventV2 remove authority runs. The
+            // sweeper must not delete EventSequence directly: doing so would bypass the root
+            // lifecycle and make replay/fork history disappear while the Session row remains.
+            const archivedFilter = and(
+              eq(SessionTable.workspace_id, workspaceID as WorkspaceV2.ID),
+              isNotNull(SessionTable.time_archived),
+              lt(SessionTable.time_archived, olderThan),
+            )
+
+            const compactableSessions = yield* db
               .select({ id: SessionTable.id })
               .from(SessionTable)
-              .where(
-                and(
-                  eq(SessionTable.workspace_id, workspaceID as WorkspaceV2.ID),
-                  isNotNull(SessionTable.time_archived),
-                  lt(SessionTable.time_archived, olderThan),
-                ),
-              )
+              .where(and(
+                archivedFilter,
+                sql`EXISTS (
+                  SELECT 1 FROM ${EventSequenceTable} sequence
+                  WHERE sequence.aggregate_id = ${SessionTable.id}
+                    AND NOT EXISTS (
+                      SELECT 1 FROM ${EventCompactionReceiptTable} receipt
+                      WHERE receipt.aggregate_id = sequence.aggregate_id
+                        AND receipt.state = 'complete'
+                        AND receipt.through_seq >= sequence.seq
+                    )
+                )`,
+                sql`(
+                  EXISTS (
+                    SELECT 1 FROM ${EventArtifactTable} artifact
+                    WHERE artifact.aggregate_id = ${SessionTable.id}
+                  ) OR EXISTS (
+                    SELECT 1 FROM ${FilePartArtifactBindingTable} binding
+                    WHERE binding.aggregate_id = ${SessionTable.id}
+                  )
+                )`,
+              ))
+              .orderBy(SessionTable.id)
+              .limit(SWEEP_BATCH_ROWS)
               .all()
               .pipe(Effect.orDie)
-
-            for (const { id } of archivedSessions) {
-              const seqDeleted = yield* db
-                .delete(EventSequenceTable)
-                .where(eq(EventSequenceTable.aggregate_id, id))
-                .returning({ aggregate_id: EventSequenceTable.aggregate_id })
-                .all()
-                .pipe(Effect.orDie)
-              deletedEventV2Sequences += seqDeleted.length
-            }
+            yield* Effect.forEach(
+              compactableSessions,
+              (session) => options?.compactSession?.(session.id) ?? Effect.void,
+              { discard: true },
+            )
           }
 
           return {
@@ -174,8 +244,9 @@ export const layerWith = (options?: LayerOptions) =>
       // Background daemon (scoped to the layer). A failure in a single pass is logged and swallowed so
       // the loop never dies on one bad sweep. Schedule.spaced waits between completions.
       if (runLoop) {
-        yield* sweepOnce()
+        yield* Effect.sleep(Duration.millis(intervalMs))
           .pipe(
+            Effect.andThen(sweepOnce()),
             Effect.catchCause((cause) =>
               Effect.sync(() => log.error("retention sweep failed", { cause: Cause.pretty(cause) })).pipe(
                 Effect.as<SweepSummary>({

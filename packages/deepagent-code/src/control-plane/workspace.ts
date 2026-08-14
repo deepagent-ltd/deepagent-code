@@ -1,8 +1,10 @@
-import { Context, Effect, FiberMap, Iterable, Layer, Schema, Stream } from "effect"
+import { Context, Effect, FiberMap, Layer, Option, Schema, Stream } from "effect"
+import { isDeepStrictEqual } from "node:util"
 import { serviceUse } from "@deepagent-code/core/effect/service-use"
 import { FetchHttpClient, HttpBody, HttpClient, HttpClientError, HttpClientRequest } from "effect/unstable/http"
 import { Database } from "@deepagent-code/core/database/database"
 import { asc } from "drizzle-orm"
+import { and } from "drizzle-orm"
 import { eq } from "drizzle-orm"
 import { inArray } from "drizzle-orm"
 import { Project } from "@/project/project"
@@ -10,7 +12,7 @@ import { GlobalBus } from "@/bus/global"
 import { Auth } from "@/auth"
 import { EventV2 } from "@deepagent-code/core/event"
 import { EventV2Bridge } from "@/event-v2-bridge"
-import { EventSequenceTable, EventTable } from "@deepagent-code/core/event/sql"
+import { EventSequenceTable, WorkspaceSyncCursorTable } from "@deepagent-code/core/event/sql"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import * as Log from "@deepagent-code/core/util/log"
 import { RuntimeFlags } from "@/effect/runtime-flags"
@@ -18,10 +20,9 @@ import { ProjectV2 } from "@deepagent-code/core/project"
 import { Slug } from "@deepagent-code/core/util/slug"
 import { WorkspaceTable } from "@deepagent-code/core/control-plane/workspace.sql"
 import { getAdapter, registeredAdapters } from "./adapters"
-import { type Target, type WorkspaceInfo, WorkspaceInfo as WorkspaceInfoSchema } from "./types"
+import { type WorkspaceInfo, WorkspaceInfo as WorkspaceInfoSchema } from "./types"
 import { WorkspaceV2 } from "@deepagent-code/core/workspace"
 import { Session } from "@/session/session"
-import { SessionPrompt } from "@/session/prompt"
 import { SessionTable } from "@deepagent-code/core/session/sql"
 import { SessionID } from "@/session/schema"
 import { NotFoundError } from "@/storage/storage"
@@ -29,9 +30,10 @@ import { errorData } from "@/util/error"
 import { waitEvent } from "./util"
 import { WorkspaceRef } from "@/effect/instance-ref"
 import { Vcs } from "@/project/vcs"
-import { InstanceStore } from "@/project/instance-store"
-import { InstanceBootstrap } from "@/project/bootstrap"
 import { WorkspaceAdapterRuntime } from "./workspace-adapter-runtime"
+import { SessionRecoveryTransferGuard } from "@/session/recovery-transfer-guard"
+import { Hash } from "@deepagent-code/core/util/hash"
+import { FilePartArtifact } from "@deepagent-code/core/file-part-artifact"
 
 export const Info = Schema.Struct({
   ...WorkspaceInfoSchema.fields,
@@ -75,6 +77,7 @@ function fromRow(row: typeof WorkspaceTable.$inferSelect): Info {
 }
 
 const log = Log.create({ service: "workspace-sync" })
+const decodeHttpError = Schema.decodeUnknownOption(Schema.UnknownFromJsonString)
 
 export const CreateInput = Schema.Struct({
   id: Schema.optional(WorkspaceV2.ID),
@@ -125,6 +128,34 @@ export class SessionWarpHttpError extends Schema.TaggedErrorClass<SessionWarpHtt
   },
 ) {}
 
+export class SessionWarpRecoveryProjectionError extends Schema.TaggedErrorClass<SessionWarpRecoveryProjectionError>()(
+  "WorkspaceSessionWarpRecoveryProjectionError",
+  {
+    message: Schema.String,
+    sessionID: SessionID,
+    recoveryAuthorityID: Schema.String,
+  },
+) {}
+
+export class SessionWarpHistoryLimitError extends Schema.TaggedErrorClass<SessionWarpHistoryLimitError>()(
+  "WorkspaceSessionWarpHistoryLimitError",
+  {
+    message: Schema.String,
+    sessionID: SessionID,
+    eventID: EventV2.ID,
+    bytes: Schema.Number,
+  },
+) {}
+
+export class SessionWarpTransferUnsupportedError extends Schema.TaggedErrorClass<SessionWarpTransferUnsupportedError>()(
+  "WorkspaceSessionWarpTransferUnsupportedError",
+  {
+    message: Schema.String,
+    sessionID: SessionID,
+    reason: Schema.Literals(["placement_change", "copy_changes"]),
+  },
+) {}
+
 export class SyncTimeoutError extends Schema.TaggedErrorClass<SyncTimeoutError>()("WorkspaceSyncTimeoutError", {
   message: Schema.String,
   state: Schema.Record(Schema.String, Schema.Number),
@@ -140,6 +171,10 @@ type SessionWarpError =
   | WorkspaceNotFoundError
   | SessionEventsNotFoundError
   | SessionWarpHttpError
+  | SessionWarpRecoveryProjectionError
+  | SessionWarpHistoryLimitError
+  | SessionWarpTransferUnsupportedError
+  | Vcs.RawDiffError
   | Vcs.PatchApplyError
   | HttpClientError.HttpClientError
 type WaitForSyncError = SyncTimeoutError | SyncAbortedError
@@ -172,10 +207,8 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const auth = yield* Auth.Service
     const session = yield* Session.Service
-    const prompt = yield* SessionPrompt.Service
     const http = yield* HttpClient.HttpClient
     const events = yield* EventV2Bridge.Service
-    const vcs = yield* Vcs.Service
     const flags = yield* RuntimeFlags.Service
     const fs = yield* FSUtil.Service
     const { db } = yield* Database.Service
@@ -267,133 +300,353 @@ export const layer = Layer.effect(
       )
     })
 
-    const runInWorkspace = <A, E, R>(input: {
-      workspaceID?: WorkspaceV2.ID
-      local: () => Effect.Effect<A, E, R>
-      remote: (input: {
-        workspace: Info
-        target: Extract<Target, { type: "remote" }>
-      }) => HttpClientRequest.HttpClientRequest
-      fallback: A
-      response?: "json" | "text"
-    }) =>
-      Effect.gen(function* () {
-        if (!input.workspaceID) return yield* input.local()
-
-        const workspace = yield* get(input.workspaceID)
-        if (!workspace) return input.fallback
-
-        const target = yield* WorkspaceAdapterRuntime.target(workspace)
-
-        if (target.type === "local") {
-          const store = yield* InstanceStore.Service
-          return yield* store.provide({ directory: target.directory }, input.local())
-        }
-
-        const response = yield* http.execute(input.remote({ workspace, target })).pipe(
-          Effect.catch((error) =>
-            Effect.sync(() => {
-              log.warn("workspace target request failed", {
-                workspaceID: workspace.id,
-                error: errorData(error),
-              })
-            }),
-          ),
-        )
-        if (!response) return input.fallback
-        if (response.status < 200 || response.status >= 300) {
-          const body = yield* response.text.pipe(Effect.catch(() => Effect.succeed("")))
-          log.warn("workspace target request failed", {
-            workspaceID: workspace.id,
-            status: response.status,
-            body,
-          })
-          return input.fallback
-        }
-
-        const body = input.response === "text" ? response.text : response.json
-        return yield* body.pipe(
-          Effect.map((result) => result as A),
-          Effect.catch((error) =>
-            Effect.sync(() => {
-              log.warn("workspace target response decode failed", {
-                workspaceID: workspace.id,
-                error: errorData(error),
-              })
-              return input.fallback
-            }),
-          ),
-        )
-      })
-
     const syncHistory = Effect.fn("Workspace.syncHistory")(function* (
       space: Info,
       url: URL | string,
       headers: HeadersInit | undefined,
     ) {
-      const sessionIDs = (yield* db
-        .select({ id: SessionTable.id })
-        .from(SessionTable)
-        .where(eq(SessionTable.workspace_id, space.id))
-        .all()
-        .pipe(Effect.orDie)).map((row) => row.id)
-      const state = sessionIDs.length
-        ? Object.fromEntries(
-            (yield* db
-              .select()
-              .from(EventSequenceTable)
-              .where(inArray(EventSequenceTable.aggregate_id, sessionIDs))
-              .all()
-              .pipe(Effect.orDie)).map((row) => [row.aggregate_id, row.seq]),
-          )
-        : {}
-
+      const normalized = new URL(url)
+      normalized.hash = ""
+      normalized.search = ""
+      normalized.pathname = normalized.pathname.replace(/\/$/, "")
+      const remoteFingerprint = Hash.sha256(`${normalized.toString()}:workspace:${space.id}`)
+      const receipt = yield* db
+        .select({ cursor: WorkspaceSyncCursorTable.cursor })
+        .from(WorkspaceSyncCursorTable)
+        .where(
+          and(
+            eq(WorkspaceSyncCursorTable.workspace_id, space.id),
+            eq(WorkspaceSyncCursorTable.remote_fingerprint, remoteFingerprint),
+          ),
+        )
+        .get()
+        .pipe(Effect.orDie)
       log.info("syncing workspace history", {
         workspaceID: space.id,
-        sessions: sessionIDs.length,
-        known: Object.keys(state).length,
+        resume: Boolean(receipt),
       })
 
-      const response = yield* http.execute(
-        HttpClientRequest.post(route(url, "/sync/history"), {
-          headers: new Headers(headers),
-          body: HttpBody.jsonUnsafe(state),
-        }),
-      )
-
-      if (response.status < 200 || response.status >= 300) {
-        const body = yield* response.text
-        return yield* new SyncHttpError({
-          message: `Workspace history HTTP failure: ${response.status} ${body}`,
-          status: response.status,
-          body,
+      let total = 0
+      let cursor: string | undefined = receipt?.cursor
+      let reset = Boolean(cursor)
+      const requestJson = Effect.fn("Workspace.syncArtifactRequest")(function* (
+        path: string,
+        body: unknown,
+        maxBytes: number,
+      ) {
+        const response = yield* http.execute(
+          HttpClientRequest.post(route(url, path), {
+            headers: new Headers(headers),
+            body: HttpBody.jsonUnsafe(body),
+          }),
+        )
+        const declaredBytes = Number(response.headers["content-length"])
+        if (Number.isFinite(declaredBytes) && declaredBytes > maxBytes)
+          return yield* new SyncHttpError({
+            message: `Workspace artifact response exceeds ${maxBytes} bytes`,
+            status: 502,
+          })
+        const chunks: Uint8Array[] = []
+        let bytes = 0
+        yield* Stream.runForEach(response.stream, (chunk) => {
+          bytes += chunk.byteLength
+          if (bytes > maxBytes)
+            return Effect.fail(
+              new SyncHttpError({ message: `Workspace artifact response exceeds ${maxBytes} bytes`, status: 502 }),
+            )
+          chunks.push(chunk)
+          return Effect.void
         })
-      }
+        const text = Buffer.concat(chunks, bytes).toString()
+        if (response.status < 200 || response.status >= 300) {
+          return yield* new SyncHttpError({
+            message: `Workspace artifact HTTP failure: ${response.status} ${text}`,
+            status: response.status,
+            body: text,
+          })
+        }
+        const parsed = Option.getOrUndefined(Schema.decodeUnknownOption(Schema.UnknownFromJsonString)(text))
+        if (parsed === undefined)
+          return yield* new SyncHttpError({ message: "Workspace artifact response is not valid JSON", status: 502 })
+        return parsed
+      })
+      const importArtifactMetadata = Effect.fn("Workspace.syncFilePartArtifactMetadata")(function* (
+        metadata: FilePartArtifact.Metadata,
+        verified = false,
+        stagedImports?: FilePartArtifact.Metadata[],
+      ) {
+        const descriptor = metadata.descriptor
+        const remote = verified
+          ? metadata
+          : Schema.decodeUnknownSync(FilePartArtifact.Metadata)(
+              yield* requestJson(
+                "/sync/artifact/file/metadata",
+                {
+                  eventID: metadata.eventID,
+                  aggregateID: metadata.aggregateID,
+                  seq: metadata.seq,
+                  artifactID: descriptor.id,
+                },
+                64 * 1024,
+              ),
+            )
+        if (JSON.stringify(remote) !== JSON.stringify(metadata))
+          return yield* new SyncHttpError({ message: "Workspace artifact metadata diverged from history", status: 409 })
+        if (!stagedImports?.some((candidate) => candidate.eventID === remote.eventID)) stagedImports?.push(remote)
+        if (!(yield* FilePartArtifact.has(descriptor).pipe(Effect.provideService(Database.Service, { db }))))
+          for (const [index, hash] of remote.chunkHashes.entries()) {
+            const chunk = yield* requestJson(
+              "/sync/artifact/file/chunk",
+              {
+                eventID: remote.eventID,
+                aggregateID: remote.aggregateID,
+                seq: remote.seq,
+                artifactID: descriptor.id,
+                index,
+                hash,
+              },
+              512 * 1024,
+            )
+            if (!chunk || typeof chunk !== "object" || Array.isArray(chunk))
+              return yield* new SyncHttpError({ message: `Workspace artifact chunk ${index} is invalid`, status: 409 })
+            const value = chunk as Record<string, unknown>
+            if (
+              value.artifactID !== descriptor.id ||
+              value.index !== index ||
+              value.hash !== hash ||
+              typeof value.data !== "string" ||
+              !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value.data)
+            )
+              return yield* new SyncHttpError({ message: `Workspace artifact chunk ${index} is invalid`, status: 409 })
+            yield* FilePartArtifact.importChunk({
+              metadata: remote,
+              index,
+              hash,
+              data: Buffer.from(value.data, "base64"),
+            }).pipe(Effect.provideService(Database.Service, { db }))
+          }
+        yield* FilePartArtifact.stageImport(remote).pipe(Effect.provideService(Database.Service, { db }))
+      })
+      const importArtifact = Effect.fn("Workspace.syncFilePartArtifact")(function* (
+        item: HistoryEvent,
+        stagedImports: FilePartArtifact.Metadata[],
+      ) {
+        const descriptor = FilePartArtifact.descriptor(item.data)
+        if (!descriptor) return
+        const metadata = Schema.decodeUnknownSync(FilePartArtifact.Metadata)(
+          yield* requestJson(
+            "/sync/artifact/file/metadata",
+            { eventID: item.id, aggregateID: item.aggregate_id, seq: item.seq, artifactID: descriptor.id },
+            64 * 1024,
+          ),
+        )
+        if (
+          metadata.eventID !== item.id ||
+          metadata.aggregateID !== item.aggregate_id ||
+          metadata.seq !== item.seq ||
+          !FilePartArtifact.matchesDataHash(metadata.canonicalDataHash, metadata.canonicalData) ||
+          !isDeepStrictEqual(metadata.canonicalData, item.data) ||
+          JSON.stringify(metadata.descriptor) !== JSON.stringify(descriptor)
+        )
+          return yield* new SyncHttpError({ message: "Workspace artifact metadata diverged from history", status: 409 })
+        yield* importArtifactMetadata(metadata, true, stagedImports)
+      })
+      const importSnapshot = Effect.fn("Workspace.syncSnapshot")(function* (
+        item: HistoryResync,
+        stagedImports: FilePartArtifact.Metadata[],
+        stagedSnapshots: HistoryResync["snapshot"][],
+      ) {
+        if (!events.snapshotRows || !events.snapshotChunks || !events.stageSnapshotRows || !events.stageSnapshotChunks)
+          return yield* new SyncHttpError({ message: "Workspace snapshot transfer is unavailable", status: 503 })
+        const stageRows = events.stageSnapshotRows
+        const stageChunks = events.stageSnapshotChunks
+        stagedSnapshots.push(item.snapshot)
+        let after = -1
+        while (true) {
+          const page = Schema.decodeUnknownSync(SnapshotRowsPage)(
+            yield* requestJson(
+              "/sync/snapshot/rows",
+              {
+                aggregateID: item.snapshot.aggregateID,
+                snapshotID: item.snapshot.snapshotID,
+                snapshotHash: item.snapshot.snapshotHash,
+                after,
+                limit: EventV2.SNAPSHOT_TRANSFER_ROWS,
+              },
+              256 * 1024,
+            ),
+          )
+          yield* stageRows(item.snapshot, page.rows)
+          yield* Effect.forEach(
+            page.rows,
+            (row) =>
+              Effect.gen(function* () {
+                let chunkAfter = -1
+                const body: Buffer[] = []
+                while (true) {
+                  const chunks = Schema.decodeUnknownSync(SnapshotChunksPage)(
+                    yield* requestJson(
+                      "/sync/snapshot/chunks",
+                      {
+                        aggregateID: item.snapshot.aggregateID,
+                        snapshotID: item.snapshot.snapshotID,
+                        snapshotHash: item.snapshot.snapshotHash,
+                        rowHash: row.rowHash,
+                        after: chunkAfter,
+                        limit: 8,
+                      },
+                      4 * 1024 * 1024,
+                    ),
+                  )
+                  const decoded = chunks.chunks.map((chunk) => ({ ...chunk, data: Buffer.from(chunk.data, "base64") }))
+                  yield* stageChunks(item.snapshot, row, decoded)
+                  body.push(...decoded.map((chunk) => chunk.data))
+                  if (chunks.complete) break
+                  const next = chunks.chunks.at(-1)?.chunkIndex
+                  if (next === undefined || next <= chunkAfter)
+                    return yield* new SyncHttpError({ message: "Workspace snapshot chunk cursor did not advance", status: 409 })
+                  chunkAfter = next
+                }
+                if (row.tableName !== "file_part_artifact_binding") return
+                const value = Option.getOrUndefined(
+                  Schema.decodeUnknownOption(Schema.UnknownFromJsonString)(Buffer.concat(body, row.rowBytes).toString()),
+                )
+                if (!value || typeof value !== "object" || Array.isArray(value) || !("metadata" in value))
+                  return yield* new SyncHttpError({ message: "Workspace snapshot artifact row is invalid", status: 409 })
+                yield* importArtifactMetadata(
+                  Schema.decodeUnknownSync(FilePartArtifact.Metadata)(value.metadata),
+                  false,
+                  stagedImports,
+                )
+              }),
+            { discard: true },
+          )
+          if (page.complete) break
+          const next = page.rows.at(-1)?.rowIndex
+          if (next === undefined || next <= after)
+            return yield* new SyncHttpError({ message: "Workspace snapshot row cursor did not advance", status: 409 })
+          after = next
+        }
+        yield* events.importSnapshot(item.snapshot)
+      })
+      while (true) {
+        const expectedCursor = cursor
+        const response = yield* http.execute(
+          HttpClientRequest.post(route(url, "/sync/history"), {
+            headers: new Headers(headers),
+            body: HttpBody.jsonUnsafe({ version: 1, ...(cursor ? { cursor } : {}) }),
+          }),
+        )
 
-      const history = (yield* response.json) as HistoryEvent[]
+        if (response.status === 409) {
+          const body = yield* response.text
+          const error = Option.getOrUndefined(decodeHttpError(body))
+          const stale =
+            error &&
+            typeof error === "object" &&
+            "resource" in error &&
+            error.resource === `sync-cursor-reset:${space.id}`
+          if (stale && reset && expectedCursor) {
+            yield* db
+              .delete(WorkspaceSyncCursorTable)
+              .where(and(eq(WorkspaceSyncCursorTable.workspace_id, space.id), eq(WorkspaceSyncCursorTable.remote_fingerprint, remoteFingerprint), eq(WorkspaceSyncCursorTable.cursor, expectedCursor)))
+              .run()
+              .pipe(Effect.orDie)
+            cursor = undefined
+            reset = false
+            continue
+          }
+          return yield* new SyncHttpError({
+            message: `Workspace history HTTP failure: ${response.status} ${body}`,
+            status: response.status,
+            body,
+          })
+        }
+        if (response.status < 200 || response.status >= 300) {
+          const body = yield* response.text
+          return yield* new SyncHttpError({
+            message: `Workspace history HTTP failure: ${response.status} ${body}`,
+            status: response.status,
+            body,
+          })
+        }
+
+        const decoded = (yield* response.json) as HistoryEnvelope | HistoryEvent[]
+        const history = Array.isArray(decoded) ? decoded : decoded.items
+        const nextCursor = Array.isArray(decoded) ? cursor : decoded.nextCursor
+        yield* Effect.forEach(
+          history,
+          (item) => {
+            const stagedImports: FilePartArtifact.Metadata[] = []
+            const stagedSnapshots: HistoryResync["snapshot"][] = []
+            return Effect.gen(function* () {
+              if (item.kind === "resync_required") {
+                yield* importSnapshot(item, stagedImports, stagedSnapshots)
+                return
+              }
+              yield* importArtifact(item, stagedImports)
+              yield* events.replay({
+                id: EventV2.ID.make(item.id),
+                aggregateID: item.aggregate_id,
+                seq: item.seq,
+                type: item.type,
+                data: item.data,
+              }, { publish: true, ownerID: space.id }).pipe(Effect.provideService(WorkspaceRef, space.id))
+            }).pipe(
+              Effect.ensuring(
+                Effect.suspend(() => Effect.gen(function* () {
+                  yield* Effect.forEach(
+                    stagedImports,
+                    (metadata) => FilePartArtifact.discardImport({
+                      eventID: EventV2.ID.make(metadata.eventID),
+                      aggregateID: metadata.aggregateID,
+                      artifactID: metadata.descriptor.id,
+                    }).pipe(Effect.provideService(Database.Service, { db }), Effect.ignore),
+                    { discard: true },
+                  )
+                  yield* Effect.forEach(
+                    stagedSnapshots,
+                    (snapshot) => {
+                      const discardImportedSnapshot = events.discardImportedSnapshot
+                      if (!discardImportedSnapshot) return Effect.succeed(undefined)
+                      return Effect.gen(function* () {
+                        let complete = false
+                        while (!complete) {
+                          const result = yield* discardImportedSnapshot({
+                            snapshotID: snapshot.snapshotID,
+                            aggregateID: snapshot.aggregateID,
+                            limit: EventV2.SNAPSHOT_TRANSFER_ROWS,
+                          })
+                          complete = result.complete
+                        }
+                      }).pipe(Effect.ignore)
+                    },
+                    { discard: true },
+                  )
+                })),
+              ),
+            )
+          },
+          { discard: true },
+        )
+        if (!Array.isArray(decoded)) {
+          const advanced = expectedCursor
+            ? yield* db.update(WorkspaceSyncCursorTable).set({ cursor: decoded.nextCursor, updated_at: Date.now() }).where(and(eq(WorkspaceSyncCursorTable.workspace_id, space.id), eq(WorkspaceSyncCursorTable.remote_fingerprint, remoteFingerprint), eq(WorkspaceSyncCursorTable.cursor, expectedCursor))).returning({ cursor: WorkspaceSyncCursorTable.cursor }).get().pipe(Effect.orDie)
+            : yield* db.insert(WorkspaceSyncCursorTable).values({ workspace_id: space.id, remote_fingerprint: remoteFingerprint, cursor: decoded.nextCursor, updated_at: Date.now() }).onConflictDoNothing().returning({ cursor: WorkspaceSyncCursorTable.cursor }).get().pipe(Effect.orDie)
+          if (!advanced)
+            return yield* new SyncHttpError({ message: "Workspace sync cursor changed concurrently", status: 409 })
+        }
+        cursor = nextCursor
+        reset = false
+        total += history.length
+        if (history.length === 0) break
+        if (!Array.isArray(decoded) && decoded.complete) break
+      }
 
       log.info("workspace history synced", {
         workspaceID: space.id,
-        events: history.length,
+        events: total,
       })
-
-      yield* Effect.forEach(
-        history,
-        (event) =>
-          events
-            .replay(
-              {
-                id: EventV2.ID.make(event.id),
-                aggregateID: event.aggregate_id,
-                seq: event.seq,
-                type: event.type,
-                data: event.data,
-              },
-              { publish: true, ownerID: space.id },
-            )
-            .pipe(Effect.provideService(WorkspaceRef, space.id)),
-        { discard: true },
-      )
     })
 
     const syncWorkspaceLoop = Effect.fn("Workspace.syncWorkspaceLoop")(function* (space: Info) {
@@ -609,200 +862,35 @@ export const layer = Layer.effect(
           .get()
           .pipe(Effect.orDie)
 
-        if (current?.workspaceID) {
-          const previous = yield* get(current.workspaceID)
-          if (previous) {
-            const target = yield* WorkspaceAdapterRuntime.target(previous)
-
-            if (target.type === "remote") {
-              yield* syncHistory(previous, target.url, target.headers).pipe(
-                Effect.catch((error) =>
-                  Effect.sync(() => {
-                    log.warn("session warp final source sync failed", {
-                      workspaceID: previous.id,
-                      sessionID: input.sessionID,
-                      error: errorData(error),
-                    })
-                  }),
-                ),
-              )
-            } else {
-              yield* prompt.cancel(input.sessionID)
-            }
-
-            // "claim" this session so any future events coming from
-            // the old workspace are ignored
-            yield* events.claim(input.sessionID, input.workspaceID ?? previous.projectID)
-          }
-        }
-
-        const sourcePatch =
-          input.copyChanges && current?.workspaceID
-            ? yield* runInWorkspace({
-                workspaceID: current?.workspaceID ?? undefined,
-                local: () => vcs.diffRaw(),
-                remote: ({ target }) =>
-                  HttpClientRequest.get(route(target.url, "/vcs/diff/raw"), {
-                    headers: new Headers(target.headers),
-                  }),
-                fallback: "",
-                response: "text",
-              }).pipe(Effect.provide(InstanceStore.defaultLayer.pipe(Layer.provide(InstanceBootstrap.defaultLayer))))
-            : ""
-
-        if (sourcePatch) {
-          // Attempt to apply the file changes to the new workspace.
-          // We intentionally do first so if it fails we don't warp
-          // the session.
-          yield* runInWorkspace({
-            workspaceID: input.workspaceID ?? undefined,
-            local: () => vcs.apply({ patch: sourcePatch }),
-            remote: ({ target }) =>
-              HttpClientRequest.post(route(target.url, "/vcs/apply"), {
-                headers: new Headers(target.headers),
-                body: HttpBody.jsonUnsafe({ patch: sourcePatch }),
-              }),
-            fallback: { applied: false },
-          }).pipe(Effect.provide(InstanceStore.defaultLayer.pipe(Layer.provide(InstanceBootstrap.defaultLayer))))
-        }
-
-        if (input.workspaceID === null) {
-          yield* session.setWorkspace({ sessionID: input.sessionID, workspaceID: undefined })
-
-          log.info("session warp complete", {
-            workspaceID: input.workspaceID,
-            sessionID: input.sessionID,
-            target: "local",
-          })
-          return
-        }
-
-        const workspaceID = input.workspaceID
-        const space = yield* get(workspaceID)
-        if (!space)
-          return yield* new WorkspaceNotFoundError({
-            message: `Workspace not found: ${workspaceID}`,
-            workspaceID,
-          })
-
-        const target = yield* WorkspaceAdapterRuntime.target(space)
-
-        if (target.type === "local") {
-          yield* session.setWorkspace({ sessionID: input.sessionID, workspaceID: input.workspaceID })
-
-          log.info("session warp complete", {
-            workspaceID: input.workspaceID,
-            sessionID: input.sessionID,
-            target: target.directory,
-          })
-          return
-        }
-
-        const rows = yield* db
-          .select({
-            id: EventTable.id,
-            aggregateID: EventTable.aggregate_id,
-            seq: EventTable.seq,
-            type: EventTable.type,
-            data: EventTable.data,
-          })
-          .from(EventTable)
-          .where(eq(EventTable.aggregate_id, input.sessionID))
-          .orderBy(asc(EventTable.seq))
-          .all()
-          .pipe(Effect.orDie)
-        if (rows.length === 0)
+        if (!current)
           return yield* new SessionEventsNotFoundError({
-            message: `No events found for session: ${input.sessionID}`,
+            message: `No session found for warp: ${input.sessionID}`,
             sessionID: input.sessionID,
           })
-
-        const batches = Iterable.chunksOf(rows, 10)
-        const total = Iterable.size(batches)
-
-        log.info("session warp prepared", {
-          workspaceID: input.workspaceID,
-          sessionID: input.sessionID,
-          target: String(route(target.url, "/sync/replay")),
-          events: rows.length,
-          batches: total,
-          first: rows[0]?.seq,
-          last: rows.at(-1)?.seq,
-        })
-
-        yield* Effect.forEach(
-          batches,
-          (events, i) =>
-            Effect.gen(function* () {
-              const response = yield* http.execute(
-                HttpClientRequest.post(route(target.url, "/sync/replay"), {
-                  headers: new Headers(target.headers),
-                  body: HttpBody.jsonUnsafe({
-                    directory: space.directory ?? "",
-                    events,
-                  }),
-                }),
-              )
-
-              if (response.status < 200 || response.status >= 300) {
-                const body = yield* response.text
-                log.error("session warp batch failed", {
-                  workspaceID: input.workspaceID,
-                  sessionID: input.sessionID,
-                  step: i + 1,
-                  total,
-                  status: response.status,
-                  body,
-                })
-                return yield* new SessionWarpHttpError({
-                  message: `Failed to warp session ${input.sessionID} into workspace ${workspaceID}: HTTP ${response.status} ${body}`,
-                  workspaceID,
-                  sessionID: input.sessionID,
-                  status: response.status,
-                  body,
-                })
-              }
-
-              log.info("session warp batch posted", {
-                workspaceID: input.workspaceID,
-                sessionID: input.sessionID,
-                step: i + 1,
-                total,
-                status: response.status,
-              })
-            }),
-          { discard: true },
-        )
-
-        const response = yield* http.execute(
-          HttpClientRequest.post(route(target.url, "/sync/steal"), {
-            headers: new Headers(target.headers),
-            body: HttpBody.jsonUnsafe({ sessionID: input.sessionID }),
-          }),
-        )
-        if (response.status < 200 || response.status >= 300) {
-          const body = yield* response.text
-          log.error("session warp steal failed", {
+        if ((input.workspaceID ?? undefined) === (current.workspaceID ?? undefined) && !input.copyChanges) return
+        if (input.workspaceID !== null && !(yield* get(input.workspaceID)))
+          return yield* new WorkspaceNotFoundError({
+            message: `Workspace not found: ${input.workspaceID}`,
             workspaceID: input.workspaceID,
-            sessionID: input.sessionID,
-            status: response.status,
-            body,
           })
-          return yield* new SessionWarpHttpError({
-            message: `Failed to steal session ${input.sessionID} into workspace ${workspaceID}: HTTP ${response.status} ${body}`,
-            workspaceID,
+        const recoveryAuthorityID = yield* SessionRecoveryTransferGuard.authorityID(db, input.sessionID)
+        if (recoveryAuthorityID)
+          return yield* new SessionWarpRecoveryProjectionError({
+            message:
+              "Provider recovery projection cannot move between workspaces until canonical recovery snapshot import is available",
             sessionID: input.sessionID,
-            status: response.status,
-            body,
+            recoveryAuthorityID,
           })
-        }
-
-        yield* session.setWorkspace({ sessionID: input.sessionID, workspaceID: input.workspaceID })
-
-        log.info("session warp complete", {
-          workspaceID: input.workspaceID,
+        if (input.copyChanges)
+          return yield* new SessionWarpTransferUnsupportedError({
+            message: "Copying workspace changes requires an idempotent patch transfer receipt",
+            sessionID: input.sessionID,
+            reason: "copy_changes",
+          })
+        return yield* new SessionWarpTransferUnsupportedError({
+          message: "Session placement changes require durable transfer admission, source fencing, and target receipts",
           sessionID: input.sessionID,
-          batches: total,
+          reason: "placement_change",
         })
       }).pipe(
         Effect.tapError((err) =>
@@ -1002,9 +1090,7 @@ export const layer = Layer.effect(
 export const defaultLayer = layer.pipe(
   Layer.provide(Auth.defaultLayer),
   Layer.provide(Session.defaultLayer),
-  Layer.provide(SessionPrompt.defaultLayer),
   Layer.provide(Project.defaultLayer),
-  Layer.provide(Vcs.defaultLayer),
   Layer.provide(FSUtil.defaultLayer),
   Layer.provide(Database.defaultLayer),
   Layer.provide(EventV2Bridge.defaultLayer),
@@ -1015,12 +1101,46 @@ export const defaultLayer = layer.pipe(
 const TIMEOUT = 5000
 
 type HistoryEvent = {
+  kind: "event"
   id: string
   aggregate_id: string
   seq: number
   type: string
   data: Record<string, unknown>
 }
+
+type HistoryResync = {
+  kind: "resync_required"
+  snapshot: EventV2.SerializedSnapshot
+}
+
+type HistoryEnvelope = {
+  version: 1
+  items: (HistoryEvent | HistoryResync)[]
+  nextCursor: string
+  complete: boolean
+}
+
+const SnapshotRow = Schema.Struct({
+  snapshotID: Schema.String,
+  rowIndex: Schema.Number,
+  tableName: Schema.String,
+  rowKey: Schema.String,
+  rowHash: Schema.String,
+  rowBytes: Schema.Number,
+  chunkCount: Schema.Number,
+  chainHash: Schema.String,
+})
+const SnapshotRowsPage = Schema.Struct({ rows: Schema.Array(SnapshotRow), complete: Schema.Boolean })
+const SnapshotChunksPage = Schema.Struct({
+  chunks: Schema.Array(Schema.Struct({
+    rowHash: Schema.String,
+    chunkIndex: Schema.Number,
+    data: Schema.String,
+    chunkHash: Schema.String,
+  })),
+  complete: Schema.Boolean,
+})
 
 function waitUntilSynced(input: {
   db: Database.Interface["db"]

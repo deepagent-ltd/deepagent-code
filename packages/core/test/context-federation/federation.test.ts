@@ -8,7 +8,7 @@ import {
   SecurityNamespaceID,
   type ContextRef,
 } from "../../src/context-federation/reference"
-import { DocumentStore, type DocType } from "../../src/deepagent/document-store"
+import { DocumentStore, documentRevision, type Doc, type DocType } from "../../src/deepagent/document-store"
 import { tmpdir } from "../fixture/tmpdir"
 
 const namespace = SecurityNamespaceID.make("sec_federation_test")
@@ -107,7 +107,11 @@ describe("legacy durable K/M/D adapters", () => {
     store.link(first.id, "conflicts_with", second.id)
 
     const result = await Effect.runPromise(
-      ContextAdapters.knowledge({ stores: [store], scope }).query({ text: "provider retries" }),
+      ContextAdapters.knowledge({
+        stores: [store, store],
+        scope,
+        releasedSelection: selection([store.get(first.id)!, second]),
+      }).query({ text: "provider retries" }),
     )
     expect(result.candidates.map((item) => item.ref.entityId).toSorted()).toEqual([first.id, second.id].toSorted())
     expect(
@@ -184,7 +188,11 @@ describe("legacy durable K/M/D adapters", () => {
       evidenceRefs: [hidden.id, visibleEvidence.id],
     })
 
-    const adapter = ContextAdapters.knowledge({ stores: [store], scope })
+    const adapter = ContextAdapters.knowledge({
+      stores: [store, store],
+      scope,
+      releasedSelection: selection([visible, visibleEvidence]),
+    })
     const result = await Effect.runPromise(adapter.query({ text: "durable admission" }))
     expect(result.status).toMatchObject({ kind: "complete", outcome: "matched" })
     expect(result.candidates.map((item) => item.ref.entityId).toSorted()).toEqual(
@@ -232,7 +240,11 @@ describe("legacy durable K/M/D adapters", () => {
       validUntil: 50,
     })
     const memory = await Effect.runPromise(
-      ContextAdapters.memory({ stores: [store], scope }).query({ text: "previous build", now: 100 }),
+      ContextAdapters.memory({
+        stores: [store, store],
+        scope,
+        releasedSelection: selection([current, expired]),
+      }).query({ text: "previous build", now: 100 }),
     )
     expect(memory.candidates.find((item) => item.ref.entityId === current.id)?.visibility).toBe("model")
     expect(memory.candidates.find((item) => item.ref.entityId === expired.id)?.visibility).toBe("reference_only")
@@ -335,6 +347,27 @@ function add(
       ...(input.validUntil === undefined ? {} : { valid_until: input.validUntil }),
     },
   })
-  if (input.status !== "draft") store.setStatus(doc.id, input.status)
+  if (input.status !== "draft") store.setStatus(doc.id, input.status, documentRevision(doc))
   return store.get(doc.id)!
+}
+
+function selection(documents: readonly Doc[]) {
+  return {
+    snapshotId: "snapshot_federation_test",
+    securityNamespaceId: namespace,
+    projectScopeKey: project,
+    legacyProjectId: scope.legacyProjectId,
+    parentSnapshotId: null,
+    generation: 1,
+    membershipHash: `sha256:${"0".repeat(64)}`,
+    manifestHash: `sha256:${"1".repeat(64)}`,
+    documents: documents.map((doc) => ({
+      sourceStore: "project" as const,
+      id: doc.id,
+      version: doc.version,
+      hash: doc.hash,
+      type: doc.type,
+      scope: doc.scope,
+    })),
+  }
 }

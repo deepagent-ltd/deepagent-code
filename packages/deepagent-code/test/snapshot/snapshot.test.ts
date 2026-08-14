@@ -479,6 +479,13 @@ it.instance(
     expect(patch.files).not.toContain(fwd(tmp.path, "later-ignored.txt"))
     expect(patch.files).toContain(fwd(tmp.path, ".gitignore"))
     expect(patch.files).toContain(fwd(tmp.path, "still-tracked.txt"))
+    const after = yield* snapshot.track()
+    const manifest = yield* snapshot.diffManifest(before!, after!)
+    expect(manifest.files.map((item) => item.file)).toEqual([".gitignore", "still-tracked.txt"])
+    expect(manifest.totalFiles).toBe(2)
+    expect(manifest.totalFilesExact).toBe(true)
+    expect(manifest.completeness).toBe("complete")
+    expect(manifest.truncationReasons).toEqual([])
   }),
   { git: true },
 )
@@ -1038,6 +1045,131 @@ it.instance(
     expect(diffs[0].file).toBe("whitespace.txt")
     expect(diffs[0].additions).toBeGreaterThan(0)
   }),
+  { git: true },
+)
+
+it.instance(
+  "diffFull bounds candidate files before materialization",
+  withTrackedSnapshot(({ tmp, snapshot, before }) =>
+    Effect.gen(function* () {
+      yield* Effect.forEach(
+        Array.from({ length: Snapshot.DiffLimits.candidateFiles + 5 }, (_, index) => index),
+        (index) => write(`${tmp.path}/generated/file-${String(index).padStart(4, "0")}.txt`, "content"),
+        { concurrency: 50, discard: true },
+      )
+      const after = yield* snapshot.track()
+      expect(after).toBeTruthy()
+      const diffs = yield* snapshot.diffFull(before, after!)
+      expect(diffs.length).toBe(Snapshot.DiffLimits.candidateFiles)
+      expect(diffs[0].file).toBe("generated/file-0000.txt")
+      expect(diffs.at(-1)?.file).toBe("generated/file-0999.txt")
+    }),
+  ),
+  { git: true },
+)
+
+it.instance(
+  "diffManifest is metadata-only, deterministic, and reports candidate truncation",
+  withTrackedSnapshot(({ tmp, snapshot, before }) =>
+    Effect.gen(function* () {
+      yield* Effect.forEach(
+        Array.from({ length: Snapshot.DiffLimits.candidateFiles + 5 }, (_, index) => index),
+        (index) => write(`${tmp.path}/manifest/file-${String(index).padStart(4, "0")}.txt`, "content"),
+        { concurrency: 50, discard: true },
+      )
+      const after = yield* snapshot.track()
+      expect(after).toBeTruthy()
+      const first = yield* snapshot.diffManifest(before, after!)
+      const second = yield* snapshot.diffManifest(before, after!)
+
+      expect(first).toEqual(second)
+      expect(first.files).toHaveLength(Snapshot.DiffLimits.candidateFiles)
+      expect(first.files.every((item) => item.patch === undefined)).toBe(true)
+      expect(first.totalFiles).toBe(Snapshot.DiffLimits.candidateFiles + 5)
+      expect(first.totalFilesExact).toBe(true)
+      expect(first.statisticsExact).toBe(false)
+      expect(first.completeness).toBe("truncated")
+      expect(first.truncationReasons).toContain("candidate_file_limit")
+      expect(first.manifestHash).toMatch(/^sha256:[a-f0-9]{64}$/)
+      expect(Buffer.byteLength(JSON.stringify(first.files))).toBeLessThanOrEqual(Snapshot.DiffLimits.manifestBytes)
+    }),
+  ),
+  { git: true },
+)
+
+it.instance(
+  "diffManifest preserves visible statuses after a large ignored prefix",
+  withTrackedSnapshot(({ tmp, snapshot, before }) =>
+    Effect.gen(function* () {
+      const ignored = Array.from(
+        { length: Snapshot.DiffLimits.candidateFiles + 5 },
+        (_, index) => `ignored/file-${String(index).padStart(4, "0")}.txt`,
+      )
+      yield* Effect.forEach(ignored, (file) => write(`${tmp.path}/${file}`, "ignored"), {
+        concurrency: 50,
+        discard: true,
+      })
+      yield* write(`${tmp.path}/visible-added.txt`, "visible")
+      const after = yield* snapshot.track()
+      expect(after).toBeTruthy()
+      yield* write(`${tmp.path}/.gitignore`, "ignored/\n")
+      const filtered = yield* snapshot.track()
+      expect(filtered).toBeTruthy()
+      const manifest = yield* snapshot.diffManifest(before, filtered!)
+      const visible = manifest.files.find((item) => item.file === "visible-added.txt")
+      expect(visible?.status).toBe("added")
+      expect(manifest.files.some((item) => item.file?.startsWith("ignored/"))).toBe(false)
+    }),
+  ),
+  { git: true },
+  30_000,
+)
+
+it.instance(
+  "diffFull does not materialize a source file above the hard limit",
+  withTrackedSnapshot(({ tmp, snapshot, before }) =>
+    Effect.gen(function* () {
+      yield* write(`${tmp.path}/too-large.txt`, "x".repeat(Snapshot.DiffLimits.sourceFileBytes + 1))
+      const after = yield* snapshot.track()
+      expect(after).toBeTruthy()
+      const diffs = yield* snapshot.diffFull(before, after!)
+      expect(diffs).toHaveLength(1)
+      expect(diffs[0].file).toBe("too-large.txt")
+      expect(diffs[0].patch).toBe("")
+      expect(diffs[0].additions).toBe(1)
+      const manifest = yield* snapshot.diffFullManifest(before, after!)
+      expect(manifest.statisticsExact).toBe(true)
+      expect(manifest.completeness).toBe("truncated")
+      expect(manifest.truncationReasons).toContain("source_file_limit")
+    }),
+  ),
+  { git: true },
+)
+
+it.instance(
+  "diffFull bounds cumulative patch bytes",
+  withTrackedSnapshot(({ tmp, snapshot, before }) =>
+    Effect.gen(function* () {
+      const content = Array.from({ length: 60_000 }, (_, index) => `line-${index}`).join("\n")
+      yield* Effect.forEach(
+        Array.from({ length: 12 }, (_, index) => index),
+        (index) => write(`${tmp.path}/patch-budget/file-${index}.txt`, content),
+        { concurrency: 6, discard: true },
+      )
+      const after = yield* snapshot.track()
+      expect(after).toBeTruthy()
+      const diffs = yield* snapshot.diffFull(before, after!)
+      expect(diffs).toHaveLength(12)
+      expect(diffs.reduce((bytes, item) => bytes + Buffer.byteLength(item.patch ?? ""), 0)).toBeLessThanOrEqual(
+        Snapshot.DiffLimits.patchTotalBytes,
+      )
+      expect(diffs.some((item) => item.patch === "")).toBe(true)
+      const manifest = yield* snapshot.diffFullManifest(before, after!)
+      expect(manifest.statisticsExact).toBe(true)
+      expect(manifest.completeness).toBe("truncated")
+      expect(manifest.truncationReasons).toContain("patch_file_limit")
+    }),
+  ),
   { git: true },
 )
 
