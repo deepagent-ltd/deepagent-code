@@ -41,6 +41,7 @@ describe("released knowledge turn binding migration", () => {
       Effect.gen(function* () {
         const db = (yield* Database.Service).db
         yield* seedAuthority(db)
+        yield* seedSession(db)
 
         const directInsertResults = yield* Effect.all(
           (["dispatching", "streaming"] as const).map((providerState, index) =>
@@ -107,6 +108,7 @@ describe("released knowledge turn binding migration", () => {
       Effect.gen(function* () {
         const db = (yield* Database.Service).db
         const binding = yield* seedAuthority(db)
+        yield* seedSession(db)
         const selected = binding.exactRefs.slice(0, 1)
         yield* insertReceipt(db, {
           id: "bound-selected-subset",
@@ -642,14 +644,7 @@ function seedAuthority(db: DatabaseClient) {
 
 function seedSelection(db: DatabaseClient, binding: Binding) {
   return Effect.gen(function* () {
-    yield* db.run(sql`
-      INSERT INTO project (id, worktree, sandboxes, time_created, time_updated)
-      VALUES ('binding-project', '/tmp/binding-primary', '[]', 1, 1)
-    `)
-    yield* db.run(sql`
-      INSERT INTO session (id, project_id, slug, directory, title, version, time_created, time_updated)
-      VALUES (${sessionId}, 'binding-project', 'binding-session', '/tmp/binding-primary', 'Binding session', 'test', 1, 1)
-    `)
+    yield* seedSession(db)
     yield* db.run(sql`
       INSERT INTO session_input (id, session_id, prompt, delivery, admitted_seq, promoted_seq, time_created)
       VALUES ('binding-input', ${sessionId}, '{"text":"binding"}', 'steer', 0, 0, 1)
@@ -683,6 +678,19 @@ function seedSelection(db: DatabaseClient, binding: Binding) {
         ${JSON.stringify(binding.exactRefs)}, ${binding.exactRefsFingerprint},
         '{}', '{}', '[]', 'projection', 'projection-hash', 1, 'available', 'artifact-ref', 1
       )
+    `)
+  })
+}
+
+function seedSession(db: DatabaseClient) {
+  return Effect.gen(function* () {
+    yield* db.run(sql`
+      INSERT INTO project (id, worktree, sandboxes, time_created, time_updated)
+      VALUES ('binding-project', '/tmp/binding-primary', '[]', 1, 1)
+    `)
+    yield* db.run(sql`
+      INSERT INTO session (id, project_id, slug, directory, title, version, time_created, time_updated)
+      VALUES (${sessionId}, 'binding-project', 'binding-session', '/tmp/binding-primary', 'Binding session', 'test', 1, 1)
     `)
   })
 }

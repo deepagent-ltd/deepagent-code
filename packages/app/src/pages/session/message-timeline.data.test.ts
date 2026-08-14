@@ -60,6 +60,8 @@ describe("message timeline compaction", () => {
           hash: "a".repeat(64),
           codec: "legacy-message-diff.v2",
           fileCount: 4_500,
+          previewFileCount: 0,
+          previewTruncated: true,
         },
       },
     } as UserMessage

@@ -236,7 +236,7 @@ export async function runLegacyLiveCases(input: {
     const { AgentGateway } = await import("@deepagent-code/core/agent-gateway")
     const { CrossSpawnSpawner } = await import("@deepagent-code/core/cross-spawn-spawner")
     const { EffectFlock } = await import("@deepagent-code/core/util/effect-flock")
-    const { Context, Deferred, Effect, Fiber, Layer, Schedule } = await import("effect")
+    const { Context, Deferred, Effect, Fiber, Layer, Schedule, Schema } = await import("effect")
     const { eq } = await import("drizzle-orm")
     const { AgentExecution } = await import("@deepagent-code/core/deepagent/agent-execution")
     const { ApprovalQueue } = await import("@deepagent-code/core/deepagent/approval-queue")
@@ -264,9 +264,11 @@ export async function runLegacyLiveCases(input: {
       SessionLegacyActivityTerminalTable,
     } = await import("../../src/session/activity-sql")
     const { SessionPromptEpochTable } = await import("../../src/session/prompt-epoch.sql")
-    const { PartTable, SessionIntentTable, SessionWorldStateBaselineTable } = await import(
+    const { PartTable, SessionIntentTable, SessionMessageTable, SessionWorldStateBaselineTable } = await import(
       "@deepagent-code/core/session/sql"
     )
+    const { SessionV2 } = await import("@deepagent-code/core/session")
+    const { SessionMessage } = await import("@deepagent-code/core/session/message")
     const { SessionPromptIntent } = await import("../../src/session/prompt-intent")
     const { SessionPrompt } = await import("../../src/session/prompt")
     const { SessionRevert } = await import("../../src/session/revert")
@@ -1026,6 +1028,16 @@ export async function runLegacyLiveCases(input: {
           const children = yield* Effect.forEach(yield* sessions.children(session.id), (child) =>
             Effect.gen(function* () {
               const childMessages = yield* sessions.messages({ sessionID: child.id })
+              const v2Messages = (yield* database.db
+                .select({ id: SessionMessageTable.id, type: SessionMessageTable.type, data: SessionMessageTable.data })
+                .from(SessionMessageTable)
+                .where(eq(SessionMessageTable.session_id, SessionV2.ID.make(child.id)))).map((message) =>
+                Schema.decodeUnknownSync(SessionMessage.Message)({
+                  ...message.data,
+                  id: message.id,
+                  type: message.type,
+                }),
+              )
               const childDirectoryExists = yield* Effect.promise(() => directoryExists(child.directory))
               const childAssistants = childMessages.filter(
                 (message): message is SessionV1.WithParts & { info: SessionV1.Assistant } =>
@@ -1112,6 +1124,31 @@ export async function runLegacyLiveCases(input: {
                       metadata: "metadata" in part.state ? part.state.metadata : undefined,
                     })),
                 })),
+                v2Tools: v2Messages.flatMap((message) =>
+                  message.type !== "assistant"
+                    ? []
+                    : message.content.flatMap((part) => {
+                        if (part.type !== "tool") return []
+                        const text =
+                          part.state.status === "pending"
+                            ? ""
+                            : part.state.content.flatMap((item) => (item.type === "text" ? [item.text] : [])).join("")
+                        return [
+                          {
+                            messageID: message.id,
+                            id: part.id,
+                            name: part.name,
+                            status: part.state.status,
+                            input: part.state.input,
+                            output:
+                              part.state.status === "completed"
+                                ? text || JSON.stringify(part.state.structured)
+                                : undefined,
+                            error: part.state.status === "error" ? part.state.error.message : undefined,
+                          },
+                        ]
+                      }),
+                ),
               }
             }),
           )

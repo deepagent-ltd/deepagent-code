@@ -1,7 +1,12 @@
 import { expect } from "bun:test"
 import { Database } from "@deepagent-code/core/database/database"
+import { LocationIdentity } from "@deepagent-code/core/context-federation/identity"
+import { ContextFederationRollout } from "@deepagent-code/core/context-federation/rollout"
+import { DeepAgentReleasedSnapshot } from "@deepagent-code/core/deepagent/released-snapshot"
 import { ModelV2 } from "@deepagent-code/core/model"
+import { AbsolutePath } from "@deepagent-code/core/schema"
 import { NamedError } from "@deepagent-code/core/util/error"
+import { Hash } from "@deepagent-code/core/util/hash"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import {
   SessionHistoryStateTable,
@@ -16,6 +21,7 @@ import {
 import { and, eq } from "drizzle-orm"
 import { Effect, Layer } from "effect"
 import { EventV2Bridge } from "@/event-v2-bridge"
+import { ContextActivationReceipt } from "@/context-federation/activation-receipt"
 import { EventSequenceTable, EventTable } from "@deepagent-code/core/event/sql"
 import {
   SessionActivityTable,
@@ -24,8 +30,10 @@ import {
   SessionProviderAttemptResolutionTable,
   SessionProviderAttemptTable,
 } from "@deepagent-code/core/context-federation/session-sql"
+import { SessionProviderOwner } from "@deepagent-code/core/context-federation/provider-owner"
 import { Prompt } from "@deepagent-code/core/session/prompt"
 import { SessionMessage } from "@deepagent-code/core/session/message"
+import { SessionProjector } from "@deepagent-code/core/session/projector"
 import { SessionInputTable } from "@deepagent-code/core/session/sql"
 import { SessionLegacyProviderResolution } from "@/session/legacy-provider-resolution"
 import { MessageV2 } from "@/session/message-v2"
@@ -41,7 +49,10 @@ const layer = Layer.mergeAll(
   Session.defaultLayer,
   Database.defaultLayer,
   EventV2Bridge.defaultLayer,
+  SessionProjector.defaultLayer,
   SessionLegacyProviderResolution.defaultLayer,
+  SessionProviderOwner.layer.pipe(Layer.provide(Database.defaultLayer)),
+  LocationIdentity.defaultLayer,
 )
 const it = testEffect(layer)
 const model = { providerID: ProviderV2.ID.make("test"), modelID: ModelV2.ID.make("model") }
@@ -93,6 +104,247 @@ const addAssistant = Effect.fn("LegacyProviderResolutionTest.addAssistant")(func
   })
 })
 
+const seedIndeterminateProviderTurn = Effect.fn("LegacyProviderResolutionTest.seedIndeterminateProviderTurn")(
+  function* (input: {
+    session: Session.Info
+    userMessageID: MessageID
+    assistantMessageID: MessageID
+    receiptID: string
+    providerAttemptID: string
+    activityID: string
+    selectionID: string
+    requestHash: string
+    prompt?: { epoch: number; windowID: string; historyHash: string }
+  }) {
+    const db = (yield* Database.Service).db
+    const owners = yield* SessionProviderOwner.Service
+    const identity = yield* LocationIdentity.Service.use((service) =>
+      service.resolve({
+        boundary: { kind: "implicit_local" },
+        directory: AbsolutePath.make(input.session.directory),
+        project: { kind: "git", observedProjectId: input.session.projectID },
+      }),
+    )
+    const binding = DeepAgentReleasedSnapshot.binding(undefined)
+    const staleOwnerToken = `stale:${input.receiptID}`
+    const recoveryOwnerToken = `recovery:${input.receiptID}`
+    const now = Date.now()
+    const preparedTurnHash = Hash.sha256(`prepared:${input.receiptID}`)
+    const contextEligibility = ContextFederationRollout.resolveProject(
+      ContextFederationRollout.resolve(
+        {
+          contextFederationShadow: true,
+          locationIndexesV2Shadow: true,
+          contextProjectionV2: true,
+          contextQueryToolsV2: true,
+          coreV2ExecutionOwner: false,
+        },
+        { coreV2ParityVerified: false },
+      ),
+      identity.projectScopeKey,
+      { stage: "all", percentage: 100, internalProjectScopeKeys: [], killSwitch: false },
+    )
+    const contextReadiness = {
+      ...ContextFederationRollout.READINESS_READY_STUB,
+      revision: `readiness:${input.receiptID}`,
+      observedAt: now,
+      expiresAt: now + 60_000,
+    }
+    const contextActivation = ContextActivationReceipt.make({
+      readiness: contextReadiness,
+      decision: ContextFederationRollout.activate(contextEligibility, contextReadiness),
+      recordedAt: now,
+      projectionEnabled: true,
+      toolsEnabled: true,
+      selection: { selectionId: input.selectionID, projectionHash: "projection" },
+    })
+
+    yield* owners.register({ ownerToken: staleOwnerToken, leaseMs: SessionProviderOwner.LeaseMs })
+    yield* Effect.addFinalizer(() => owners.release({ ownerToken: staleOwnerToken }).pipe(Effect.ignore))
+    yield* db
+      .insert(SessionInputTable)
+      .values({
+        id: SessionMessage.ID.make(input.userMessageID),
+        session_id: input.session.id,
+        prompt: new Prompt({ text: "dispatch then crash" }),
+        delivery: "steer",
+        admitted_seq: 0,
+        promoted_seq: 0,
+      })
+      .run()
+      .pipe(Effect.orDie)
+    yield* db
+      .insert(SessionActivityTable)
+      .values({
+        activity_id: input.activityID,
+        session_id: input.session.id,
+        ordinal: 0,
+        trigger_input_id: input.userMessageID,
+        delivery: "steer",
+        state: "active",
+        created_at: now,
+      })
+      .run()
+      .pipe(Effect.orDie)
+    yield* db
+      .insert(SessionContextSelectionTable)
+      .values({
+        selection_id: input.selectionID,
+        session_id: input.session.id,
+        activity_id: input.activityID,
+        revision: 0,
+        trigger_input_id: input.userMessageID,
+        location_key: identity.locationKey,
+        security_namespace_id: identity.securityNamespaceId,
+        project_scope_key: identity.projectScopeKey,
+        query_fingerprint: "query",
+        authorization_fingerprint: "authorization",
+        authorization_epoch: 0,
+        execution_fingerprint: "execution",
+        selected_source_fingerprint: "sources",
+        observed_location_mutation_epoch: 0,
+        next_revalidation_at: now + 60_000,
+        released_knowledge_binding_state: binding.state,
+        released_knowledge_exact_refs: binding.exactRefs,
+        released_knowledge_exact_refs_fingerprint: binding.exactRefsFingerprint,
+        graph_revisions: "{}",
+        graph_statuses: "[]",
+        selected_refs: "[]",
+        projection: "",
+        projection_hash: "projection",
+        token_count: 0,
+        artifact_write_status: "degraded_unavailable",
+        inline_audit: "{}",
+        created_at: now,
+      })
+      .run()
+      .pipe(Effect.orDie)
+    yield* db
+      .insert(SessionProviderAttemptTable)
+      .values({
+        attempt_id: input.providerAttemptID,
+        session_id: input.session.id,
+        activity_id: input.activityID,
+        provider_turn_seq: 0,
+        selection_id: input.selectionID,
+        projection_hash: "projection",
+        request_hash: input.requestHash,
+        provider_id: model.providerID,
+        owner_token: staleOwnerToken,
+        state: "prepared",
+        created_at: now,
+      })
+      .run()
+      .pipe(Effect.orDie)
+    yield* db
+      .insert(SessionToolRequestReceiptTable)
+      .values({
+        receipt_id: input.receiptID,
+        request_ordinal: 1,
+        session_id: input.session.id,
+        user_message_id: input.userMessageID,
+        assistant_message_id: input.assistantMessageID,
+        provider_attempt_id: input.providerAttemptID,
+        context_selection_id: input.selectionID,
+        context_eligibility: contextEligibility,
+        context_readiness: contextReadiness,
+        context_activation: contextActivation,
+        context_activation_fingerprint: ContextActivationReceipt.fingerprint({
+          eligibility: contextEligibility,
+          readiness: contextReadiness,
+          activation: contextActivation,
+        }),
+        released_knowledge_security_namespace_id: identity.securityNamespaceId,
+        released_knowledge_project_scope_key: identity.projectScopeKey,
+        released_knowledge_binding_state: binding.state,
+        released_knowledge_exact_refs: binding.exactRefs,
+        released_knowledge_exact_refs_fingerprint: binding.exactRefsFingerprint,
+        provider_id: model.providerID,
+        model_id: model.modelID,
+        protocol: "chat",
+        registry_tool_ids: [],
+        permission_filtered_tool_ids: [],
+        final_offered_tool_ids: [],
+        call_ids: [],
+        ...(input.prompt
+          ? {
+              prompt_epoch: input.prompt.epoch,
+              prompt_window_id: input.prompt.windowID,
+              effective_history_hash: input.prompt.historyHash,
+            }
+          : {}),
+        request_input_hash: input.requestHash,
+        provider_state: "preparing",
+        owner_token: staleOwnerToken,
+        request_state: "prepared",
+        created_at: now,
+      })
+      .run()
+      .pipe(Effect.orDie)
+    yield* db
+      .update(SessionProviderAttemptTable)
+      .set({ prepared_turn_hash: preparedTurnHash, wire_request_hash: input.requestHash })
+      .where(eq(SessionProviderAttemptTable.attempt_id, input.providerAttemptID))
+      .run()
+      .pipe(Effect.orDie)
+    yield* db
+      .update(SessionToolRequestReceiptTable)
+      .set({
+        released_knowledge_selected_refs: [],
+        released_knowledge_selected_refs_fingerprint: binding.exactRefsFingerprint,
+      })
+      .where(eq(SessionToolRequestReceiptTable.receipt_id, input.receiptID))
+      .run()
+      .pipe(Effect.orDie)
+    yield* db
+      .update(SessionToolRequestReceiptTable)
+      .set({
+        provider_state: "prepared",
+        final_request_hash: input.requestHash,
+        provider_request_hash: input.requestHash,
+        adapter_prepared_at: now,
+        tool_definition_hash: Hash.sha256("[]"),
+        prepared_turn_hash: preparedTurnHash,
+        system_stable_hash: Hash.sha256(`stable:${input.receiptID}`),
+        system_volatile_hash: Hash.sha256(`volatile:${input.receiptID}`),
+        wire_request_hash: input.requestHash,
+        tool_result_reference_ids: [],
+        tool_result_reference_count: 0,
+      })
+      .where(eq(SessionToolRequestReceiptTable.receipt_id, input.receiptID))
+      .run()
+      .pipe(Effect.orDie)
+    yield* db
+      .update(SessionProviderAttemptTable)
+      .set({ state: "dispatching" })
+      .where(eq(SessionProviderAttemptTable.attempt_id, input.providerAttemptID))
+      .run()
+      .pipe(Effect.orDie)
+    yield* db
+      .update(SessionToolRequestReceiptTable)
+      .set({
+        provider_state: "indeterminate_after_crash",
+        request_state: "dispatched",
+        dispatching_at: now,
+        terminal_at: now,
+        request_error_code: "provider_started_outcome_unknown_after_process_restart",
+      })
+      .where(eq(SessionToolRequestReceiptTable.receipt_id, input.receiptID))
+      .run()
+      .pipe(Effect.orDie)
+    yield* owners.register({ ownerToken: recoveryOwnerToken, leaseMs: SessionProviderOwner.LeaseMs })
+    yield* Effect.addFinalizer(() => owners.release({ ownerToken: recoveryOwnerToken }).pipe(Effect.ignore))
+    yield* owners.release({ ownerToken: staleOwnerToken })
+    yield* db
+      .update(SessionProviderAttemptTable)
+      .set({ state: "indeterminate_after_crash", error_code: "process_recovery" })
+      .where(eq(SessionProviderAttemptTable.attempt_id, input.providerAttemptID))
+      .run()
+      .pipe(Effect.orDie)
+    return { recoveryOwnerToken }
+  },
+)
+
 it.instance(
   "forks the safe prefix and resolves an ambiguous legacy provider turn exactly once",
   () =>
@@ -121,115 +373,27 @@ it.instance(
       const authority = yield* MessageV2.promptHistoryProjectionEffect(source.id)
       if (!authority.worldStateBaselineHash) return yield* Effect.die("expected frozen source World State baseline")
       const baselineHash = authority.worldStateBaselineHash
-      const requestHash = "final-request-hash"
+      const requestHash = Hash.sha256("final-request-hash")
       const receiptID = "receipt-ambiguous-provider-turn"
       const providerAttemptID = "attempt-ambiguous-provider-turn"
       const providerActivityID = "activity-ambiguous-provider-turn"
       const providerSelectionID = "selection-ambiguous-provider-turn"
+      const seeded = yield* seedIndeterminateProviderTurn({
+        session: source,
+        userMessageID: user.id,
+        assistantMessageID: assistant.id,
+        receiptID,
+        providerAttemptID,
+        activityID: providerActivityID,
+        selectionID: providerSelectionID,
+        requestHash,
+        prompt: {
+          epoch: authority.epoch,
+          windowID: authority.window.windowID,
+          historyHash: authority.effectiveHistoryHash,
+        },
+      })
       const now = Date.now()
-
-      yield* db
-        .insert(SessionInputTable)
-        .values({
-          id: SessionMessage.ID.make(user.id),
-          session_id: source.id,
-          prompt: new Prompt({ text: "dispatch then crash" }),
-          delivery: "steer",
-          admitted_seq: 0,
-          promoted_seq: 0,
-        })
-        .run()
-        .pipe(Effect.orDie)
-      yield* db
-        .insert(SessionActivityTable)
-        .values({
-          activity_id: providerActivityID,
-          session_id: source.id,
-          ordinal: 0,
-          trigger_input_id: user.id,
-          delivery: "steer",
-          state: "active",
-          created_at: now,
-        })
-        .run()
-        .pipe(Effect.orDie)
-      yield* db
-        .insert(SessionContextSelectionTable)
-        .values({
-          selection_id: providerSelectionID,
-          session_id: source.id,
-          activity_id: providerActivityID,
-          revision: 0,
-          trigger_input_id: user.id,
-          location_key: "local",
-          query_fingerprint: "query",
-          authorization_fingerprint: "authorization",
-          authorization_epoch: 0,
-          execution_fingerprint: "execution",
-          selected_source_fingerprint: "sources",
-          observed_location_mutation_epoch: 0,
-          next_revalidation_at: now + 60_000,
-          graph_revisions: "{}",
-          graph_statuses: "[]",
-          selected_refs: "[]",
-          projection: "",
-          projection_hash: "projection",
-          token_count: 0,
-          artifact_write_status: "degraded_unavailable",
-          inline_audit: "{}",
-          created_at: now,
-        })
-        .run()
-        .pipe(Effect.orDie)
-      yield* db
-        .insert(SessionProviderAttemptTable)
-        .values({
-          attempt_id: providerAttemptID,
-          session_id: source.id,
-          activity_id: providerActivityID,
-          provider_turn_seq: 0,
-          selection_id: providerSelectionID,
-          projection_hash: "projection",
-          request_hash: requestHash,
-          provider_id: model.providerID,
-          state: "indeterminate_after_crash",
-          created_at: now,
-          error_code: "process_recovery",
-        })
-        .run()
-        .pipe(Effect.orDie)
-      yield* db
-        .insert(SessionToolRequestReceiptTable)
-        .values({
-          receipt_id: receiptID,
-          request_ordinal: 1,
-          session_id: source.id,
-          user_message_id: user.id,
-          assistant_message_id: assistant.id,
-          provider_attempt_id: providerAttemptID,
-          provider_id: model.providerID,
-          model_id: model.modelID,
-          protocol: "chat",
-          registry_tool_ids: [],
-          permission_filtered_tool_ids: [],
-          final_offered_tool_ids: [],
-          call_ids: [],
-          prompt_epoch: authority.epoch,
-          prompt_window_id: authority.window.windowID,
-          effective_history_hash: authority.effectiveHistoryHash,
-          request_input_hash: "input-request-hash",
-          final_request_hash: requestHash,
-          provider_state: "indeterminate_after_crash",
-          adapter_prepared_at: now,
-          dispatching_at: now,
-          terminal_at: now,
-          owner_token: "stale-process",
-          request_state: "dispatched",
-          request_error_code: "provider_started_outcome_unknown_after_process_restart",
-          created_at: now,
-        })
-        .run()
-        .pipe(Effect.orDie)
       yield* db
         .update(SessionPromptEpochTable)
         .set({ authority_state: "recovery_required", recovery_reason: "provider outcome is unknown after restart" })
@@ -631,7 +795,7 @@ it.instance(
           .pipe(Effect.orDie),
       ).toEqual({ mutationEpoch: 1 })
 
-      yield* recoverProviderReceiptsOnStartup()
+      yield* recoverProviderReceiptsOnStartup({ ownerToken: seeded.recoveryOwnerToken })
       expect(
         yield* db
           .select({ state: SessionHistoryStateTable.state })
@@ -707,30 +871,21 @@ it.instance(
       const tail = yield* addUser(source.id, "after orphan")
       const authority = yield* MessageV2.promptHistoryProjectionEffect(source.id)
       const now = Date.now()
-      yield* db
-        .insert(SessionToolRequestReceiptTable)
-        .values({
-          receipt_id: "legacy-orphan-without-prompt-authority",
-          request_ordinal: 1,
-          session_id: source.id,
-          user_message_id: orphanUser.id,
-          assistant_message_id: orphanAssistant.id,
-          provider_attempt_id: null,
-          provider_id: model.providerID,
-          model_id: model.modelID,
-          protocol: "chat",
-          registry_tool_ids: [],
-          permission_filtered_tool_ids: [],
-          final_offered_tool_ids: [],
-          call_ids: [],
-          provider_state: "indeterminate_after_crash",
-          terminal_at: now,
-          request_state: "dispatched",
-          request_error_code: "legacy_migration_without_prompt_authority",
-          created_at: now,
-        })
-        .run()
-        .pipe(Effect.orDie)
+      yield* seedIndeterminateProviderTurn({
+        session: source,
+        userMessageID: orphanUser.id,
+        assistantMessageID: orphanAssistant.id,
+        receiptID: "legacy-orphan-without-prompt-authority",
+        providerAttemptID: "attempt-orphan-without-prompt-authority",
+        activityID: "activity-orphan-without-prompt-authority",
+        selectionID: "selection-orphan-without-prompt-authority",
+        requestHash: Hash.sha256("legacy-orphan-without-prompt-authority"),
+        prompt: {
+          epoch: authority.epoch + 1_000,
+          windowID: "missing-prompt-authority-window",
+          historyHash: Hash.sha256("missing-prompt-authority-history"),
+        },
+      })
       yield* db
         .update(SessionPromptEpochTable)
         .set({ authority_state: "recovery_required", recovery_reason: "provider outcome is unknown after restart" })
@@ -784,7 +939,7 @@ it.instance(
           receiptID: "legacy-orphan-without-prompt-authority",
           resolutionSupported: false,
           unsupportedReasons: expect.arrayContaining([
-            "legacy_receipt_authority_incomplete",
+            "source_prompt_epoch_missing",
             "source_world_state_baseline_missing",
           ]),
         }),

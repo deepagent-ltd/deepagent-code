@@ -23,6 +23,7 @@ import { SessionRevert } from "../../src/session/revert"
 import { SessionSummary } from "../../src/session/summary"
 import { MessageV2 } from "../../src/session/message-v2"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
+import { SessionV2 } from "@deepagent-code/core/session"
 import * as Log from "@deepagent-code/core/util/log"
 import { provideTmpdirServer, testInstanceStoreLayer } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
@@ -233,6 +234,7 @@ function makeHttp() {
     TestLLMServer.layer,
     SessionSummary.defaultLayer,
     SessionPrompt.layer.pipe(
+      Layer.provide(SessionV2.defaultLayer),
       Layer.provide(SessionProviderOwner.layer.pipe(Layer.provide(deps))),
       Layer.provide(testInstanceStoreLayer),
       Layer.provide(SessionRevert.defaultLayer),
@@ -248,7 +250,7 @@ function makeHttp() {
       Layer.provide(Instruction.defaultLayer),
       Layer.provide(SystemPrompt.defaultLayer),
       Layer.provide(LocationIdentity.layer.pipe(Layer.provide(deps))),
-      Layer.provide(RuntimeFlags.layer({ experimentalEventSystem: true })),
+      Layer.provide(RuntimeFlags.layer({ experimentalEventSystem: true, coreV2ExecutionOwner: false })),
       Layer.provideMerge(deps),
     ),
   )

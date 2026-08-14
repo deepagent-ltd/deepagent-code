@@ -120,18 +120,26 @@ describe("DatabaseMigration", () => {
     await run(
       Effect.gen(function* () {
         const db = yield* makeDb
-        yield* db.run(sql`CREATE TABLE event_sequence (aggregate_id TEXT PRIMARY KEY, seq INTEGER NOT NULL, owner_id TEXT)`)
-        yield* db.run(sql`CREATE TABLE event (id TEXT PRIMARY KEY, aggregate_id TEXT NOT NULL, seq INTEGER NOT NULL, type TEXT NOT NULL, data TEXT NOT NULL)`)
+        yield* db.run(
+          sql`CREATE TABLE event_sequence (aggregate_id TEXT PRIMARY KEY, seq INTEGER NOT NULL, owner_id TEXT)`,
+        )
+        yield* db.run(
+          sql`CREATE TABLE event (id TEXT PRIMARY KEY, aggregate_id TEXT NOT NULL, seq INTEGER NOT NULL, type TEXT NOT NULL, data TEXT NOT NULL)`,
+        )
         yield* db.run(sql`INSERT INTO event_sequence VALUES ('session-a', 1, NULL)`)
         yield* db.run(sql`INSERT INTO event VALUES ('event-a', 'session-a', 0, 'test.1', '{}')`)
         yield* db.run(sql`INSERT INTO event VALUES ('event-b', 'session-a', 1, 'test.1', '{}')`)
 
         yield* DatabaseMigration.applyOnly(db, [eventSnapshotAuthorityMigration])
         const oldWriter = yield* db
-          .run(sql`INSERT INTO event(id, aggregate_id, seq, type, data) VALUES ('event-old-writer', 'session-a', 2, 'test.1', '{}')`)
+          .run(
+            sql`INSERT INTO event(id, aggregate_id, seq, type, data) VALUES ('event-old-writer', 'session-a', 2, 'test.1', '{}')`,
+          )
           .pipe(Effect.exit)
         yield* db.run(sql`UPDATE event_sync_sequence SET seq = seq + 1 WHERE id = 1`)
-        yield* db.run(sql`INSERT INTO event(id, aggregate_id, seq, type, data, sync_seq) VALUES ('event-new-writer', 'session-a', 2, 'test.1', '{}', (SELECT seq FROM event_sync_sequence WHERE id = 1))`)
+        yield* db.run(
+          sql`INSERT INTO event(id, aggregate_id, seq, type, data, sync_seq) VALUES ('event-new-writer', 'session-a', 2, 'test.1', '{}', (SELECT seq FROM event_sync_sequence WHERE id = 1))`,
+        )
 
         expect(oldWriter._tag).toBe("Failure")
         expect(yield* db.all(sql`SELECT id, sync_seq FROM event ORDER BY rowid`)).toEqual([
@@ -142,7 +150,11 @@ describe("DatabaseMigration", () => {
         expect(yield* db.all(sql`SELECT sync_seq, event_id FROM event_sync_index`)).toEqual([
           { sync_seq: 3, event_id: "event-new-writer" },
         ])
-        expect(yield* db.get(sql`SELECT seq, backfill_complete, length(generation) AS generation_length, length(cursor_secret) AS secret_length FROM event_sync_sequence WHERE id = 1`)).toEqual({ seq: 3, backfill_complete: 0, generation_length: 32, secret_length: 64 })
+        expect(
+          yield* db.get(
+            sql`SELECT seq, backfill_complete, length(generation) AS generation_length, length(cursor_secret) AS secret_length FROM event_sync_sequence WHERE id = 1`,
+          ),
+        ).toEqual({ seq: 3, backfill_complete: 0, generation_length: 32, secret_length: 64 })
       }),
     )
   })
@@ -174,7 +186,9 @@ describe("DatabaseMigration", () => {
         yield* db.run(sql`INSERT INTO event VALUES ('event-a', '{}')`)
         yield* DatabaseMigration.applyOnly(db, [eventImmutableMigration])
 
-        const updated = yield* db.run(sql`UPDATE event SET data = '{"changed":true}' WHERE id = 'event-a'`).pipe(Effect.exit)
+        const updated = yield* db
+          .run(sql`UPDATE event SET data = '{"changed":true}' WHERE id = 'event-a'`)
+          .pipe(Effect.exit)
         expect(String(updated)).toContain("event_update_immutable")
         expect(yield* db.get(sql`SELECT data FROM event WHERE id = 'event-a'`)).toEqual({ data: "{}" })
 
@@ -238,15 +252,32 @@ describe("DatabaseMigration", () => {
         )`)
         yield* db.run(sql`INSERT INTO event_snapshot VALUES ('snapshot-a', 'session-a', '${"b".repeat(64)}', '{}')`)
 
-        expect(String(yield* db.run(sql`
+        expect(
+          String(
+            yield* db
+              .run(
+                sql`
           UPDATE event_dedupe SET data_hash = '${"c".repeat(64)}' WHERE event_id = 'event-a'
-        `).pipe(Effect.exit))).toContain("event_dedupe_update_immutable")
-        expect(String(yield* db.run(sql`DELETE FROM event_dedupe WHERE event_id = 'event-a'`).pipe(Effect.exit)))
-          .toContain("event_dedupe_delete_immutable")
+        `,
+              )
+              .pipe(Effect.exit),
+          ),
+        ).toContain("event_dedupe_update_immutable")
+        expect(
+          String(yield* db.run(sql`DELETE FROM event_dedupe WHERE event_id = 'event-a'`).pipe(Effect.exit)),
+        ).toContain("event_dedupe_delete_immutable")
         yield* db.run(sql`UPDATE event_dedupe SET source_data = NULL WHERE event_id = 'event-a'`)
-        expect(String(yield* db.run(sql`
+        expect(
+          String(
+            yield* db
+              .run(
+                sql`
           UPDATE event_snapshot SET snapshot_hash = '${"c".repeat(64)}' WHERE snapshot_id = 'snapshot-a'
-        `).pipe(Effect.exit))).toContain("event_snapshot_update_immutable")
+        `,
+              )
+              .pipe(Effect.exit),
+          ),
+        ).toContain("event_snapshot_update_immutable")
 
         yield* db.run(sql`DELETE FROM event_sequence WHERE aggregate_id = 'session-a'`)
         expect(yield* db.all(sql`SELECT * FROM event_dedupe`)).toEqual([])
@@ -257,11 +288,20 @@ describe("DatabaseMigration", () => {
           'file-event-a', 'session-file', 1, 'file-a', '${"b".repeat(64)}',
           '${"c".repeat(64)}', '{}', 1
         )`)
-        expect(String(yield* db.run(sql`
+        expect(
+          String(
+            yield* db
+              .run(
+                sql`
           UPDATE file_part_artifact_import SET original_data_hash = '${"d".repeat(64)}'
-        `).pipe(Effect.exit))).toContain("file_part_artifact_import_update_immutable")
-        expect(String(yield* db.run(sql`DELETE FROM file_part_artifact_import`).pipe(Effect.exit)))
-          .toContain("file_part_artifact_import_not_consumed")
+        `,
+              )
+              .pipe(Effect.exit),
+          ),
+        ).toContain("file_part_artifact_import_update_immutable")
+        expect(String(yield* db.run(sql`DELETE FROM file_part_artifact_import`).pipe(Effect.exit))).toContain(
+          "file_part_artifact_import_not_consumed",
+        )
         yield* db.run(sql`INSERT INTO file_part_artifact_binding VALUES (
           'file-event-a', 'session-file', 1, 'file-a', '${"b".repeat(64)}', '${"c".repeat(64)}', '{}'
         )`)
@@ -409,11 +449,19 @@ describe("DatabaseMigration", () => {
         )`)
 
         yield* DatabaseMigration.applyOnly(db, [eventSidecarCompactionMigration])
-        expect((yield* db.all<{ name: string }>(sql`PRAGMA table_info('event_snapshot_row')`)).map((row) => row.name))
-          .toEqual([
-            "snapshot_id", "aggregate_id", "row_index", "table_name", "row_key",
-            "row_hash", "row_bytes", "chunk_count", "chain_hash",
-          ])
+        expect(
+          (yield* db.all<{ name: string }>(sql`PRAGMA table_info('event_snapshot_row')`)).map((row) => row.name),
+        ).toEqual([
+          "snapshot_id",
+          "aggregate_id",
+          "row_index",
+          "table_name",
+          "row_key",
+          "row_hash",
+          "row_bytes",
+          "chunk_count",
+          "chain_hash",
+        ])
         expect(yield* db.get(sql`SELECT aggregate_id, row_key, row_bytes FROM event_snapshot_row`)).toEqual({
           aggregate_id: "session-legacy-snapshot",
           row_key: "session-legacy-snapshot",
@@ -423,39 +471,66 @@ describe("DatabaseMigration", () => {
           data: "7B7D",
           chunk_hash: "d".repeat(64),
         })
-        expect(yield* db.all(sql`SELECT * FROM event_snapshot_row WHERE snapshot_id = 'snapshot-crash-staged'`))
-          .toEqual([])
-        expect(yield* db.all(sql`SELECT * FROM event_snapshot_chunk WHERE row_hash = ${"1".repeat(64)}`))
-          .toEqual([])
-        expect(yield* db.all(sql`SELECT * FROM event_snapshot_attempt WHERE snapshot_id = 'snapshot-orphan-attempt'`)).toEqual([])
-        expect(yield* db.all(sql`SELECT * FROM event_snapshot_row WHERE snapshot_id = 'snapshot-orphan-attempt'`)).toEqual([])
+        expect(
+          yield* db.all(sql`SELECT * FROM event_snapshot_row WHERE snapshot_id = 'snapshot-crash-staged'`),
+        ).toEqual([])
+        expect(yield* db.all(sql`SELECT * FROM event_snapshot_chunk WHERE row_hash = ${"1".repeat(64)}`)).toEqual([])
+        expect(
+          yield* db.all(sql`SELECT * FROM event_snapshot_attempt WHERE snapshot_id = 'snapshot-orphan-attempt'`),
+        ).toEqual([])
+        expect(
+          yield* db.all(sql`SELECT * FROM event_snapshot_row WHERE snapshot_id = 'snapshot-orphan-attempt'`),
+        ).toEqual([])
         expect(yield* db.all(sql`SELECT * FROM event_snapshot_chunk WHERE row_hash = ${"4".repeat(64)}`)).toEqual([])
-        expect((yield* db.all<{ name: string; unique: number }>(sql`PRAGMA index_list('event_snapshot')`))
-          .filter((index) => index.unique === 1)).toHaveLength(2)
-        expect(yield* db.get(sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'file_part_artifact_discard'`))
-          .toEqual({ name: "file_part_artifact_discard" })
+        expect(
+          (yield* db.all<{ name: string; unique: number }>(sql`PRAGMA index_list('event_snapshot')`)).filter(
+            (index) => index.unique === 1,
+          ),
+        ).toHaveLength(2)
+        expect(
+          yield* db.get(
+            sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'file_part_artifact_discard'`,
+          ),
+        ).toEqual({ name: "file_part_artifact_discard" })
         expect(yield* db.all(sql`PRAGMA foreign_key_list('event_snapshot_attempt')`)).toContainEqual(
-          expect.objectContaining({ table: "event_sequence", from: "aggregate_id", to: "aggregate_id", on_delete: "CASCADE" }),
+          expect.objectContaining({
+            table: "event_sequence",
+            from: "aggregate_id",
+            to: "aggregate_id",
+            on_delete: "CASCADE",
+          }),
         )
-        expect(yield* db.get(sql`
+        expect(
+          yield* db.get(sql`
           SELECT name FROM sqlite_master
           WHERE type = 'index' AND name = 'event_snapshot_row_hash_idx'
-        `)).toEqual({ name: "event_snapshot_row_hash_idx" })
-        expect(yield* db.get(sql`
+        `),
+        ).toEqual({ name: "event_snapshot_row_hash_idx" })
+        expect(
+          yield* db.get(sql`
           SELECT name FROM sqlite_master
           WHERE type = 'index' AND name = 'event_snapshot_row_aggregate_idx'
-        `)).toEqual({ name: "event_snapshot_row_aggregate_idx" })
-        expect(yield* db.get(sql`
+        `),
+        ).toEqual({ name: "event_snapshot_row_aggregate_idx" })
+        expect(
+          yield* db.get(sql`
           SELECT name FROM sqlite_master
           WHERE type = 'index' AND name = 'event_snapshot_attempt_aggregate_idx'
-        `)).toEqual({ name: "event_snapshot_attempt_aggregate_idx" })
-        expect((yield* db.run(sql`INSERT INTO event_snapshot_attempt(
+        `),
+        ).toEqual({ name: "event_snapshot_attempt_aggregate_idx" })
+        expect(
+          (yield* db
+            .run(
+              sql`INSERT INTO event_snapshot_attempt(
           snapshot_id, aggregate_id, through_seq, expected_latest, codec, schema_version,
           projection_revision, row_count, encoded_bytes, content_hash, tables, state, created_at, updated_at
         ) VALUES (
           'snapshot-orphan', 'session-missing', 0, 0, 'session-projection', 1,
           'revision-orphan', 0, 0, ${"f".repeat(64)}, '{}', 'prepared', 1, 1
-        )`).pipe(Effect.exit))._tag).toBe("Failure")
+        )`,
+            )
+            .pipe(Effect.exit))._tag,
+        ).toBe("Failure")
 
         yield* db.run(sql`DELETE FROM event_sequence WHERE aggregate_id = 'session-legacy-snapshot'`)
         expect(yield* db.all(sql`SELECT * FROM event_snapshot`)).toEqual([])
@@ -470,7 +545,9 @@ describe("DatabaseMigration", () => {
       Effect.gen(function* () {
         const db = yield* makeDb
         yield* db.run(sql`PRAGMA foreign_keys = ON`)
-        yield* db.run(sql`CREATE TABLE event_sequence (aggregate_id TEXT PRIMARY KEY, seq INTEGER NOT NULL, owner_id TEXT)`)
+        yield* db.run(
+          sql`CREATE TABLE event_sequence (aggregate_id TEXT PRIMARY KEY, seq INTEGER NOT NULL, owner_id TEXT)`,
+        )
         yield* db.run(sql`CREATE TABLE event (
           id TEXT PRIMARY KEY, aggregate_id TEXT NOT NULL REFERENCES event_sequence(aggregate_id) ON DELETE CASCADE,
           seq INTEGER NOT NULL, type TEXT NOT NULL, data TEXT NOT NULL
@@ -528,9 +605,11 @@ describe("DatabaseMigration", () => {
         expect(String(result)).toContain("conflicting aggregate authorities")
         expect(yield* db.get(sql`SELECT snapshot_id, row_key, row_hash FROM event_snapshot_row`)).toEqual(before)
         expect(yield* db.get(sql`SELECT hex(data) AS data FROM event_snapshot_chunk`)).toEqual({ data: "7B7D" })
-        expect(yield* db.get(sql`
+        expect(
+          yield* db.get(sql`
           SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'file_part_artifact_discard'
-        `)).toBeUndefined()
+        `),
+        ).toBeUndefined()
       }),
     )
   })
@@ -716,6 +795,132 @@ describe("DatabaseMigration", () => {
         const before = yield* db.get(sql`SELECT count(*) as count FROM migration`)
         yield* DatabaseMigration.apply(db)
         expect(yield* db.get(sql`SELECT count(*) as count FROM migration`)).toEqual(before)
+      }),
+    )
+  })
+
+  test("accepts the historical subagent control-plane migration id", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* DatabaseMigration.apply(db)
+        yield* db.run(sql`
+          INSERT INTO migration (id, time_completed)
+          VALUES ('20260803000000_subagent_control_plane_l1', 1)
+        `)
+
+        yield* DatabaseMigration.apply(db)
+
+        expect(
+          yield* db.all(sql`
+            SELECT id FROM migration
+            WHERE id LIKE '2026080300000%'
+            ORDER BY id
+          `),
+        ).toEqual([
+          { id: "20260803000000_subagent_control_plane_l1" },
+          { id: "20260803000000_time_suspended" },
+          { id: "20260803000001_subagent_control_plane_l1" },
+        ])
+      }),
+    )
+  })
+
+  test("reconciles the known merged migration lineage without rewriting current authority", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        const mergedInsertions = new Set([
+          "20260812120000_legacy_provider_recovery",
+          "20260812130000_legacy_activity_lifecycle_expand",
+          "20260812140000_session_diff_manifest",
+          "20260813074240_bug_407_010_maintenance",
+          "20260813100000_event_snapshot_authority",
+          "20260813110000_provider_recovery_authority_bridge",
+          "20260813120000_legacy_provider_receipt_supersession",
+          "20260813125000_event_sync_backfill_authority",
+          "20260813130000_file_part_artifact",
+          "20260813131000_event_snapshot_chunks",
+          "20260813132000_session_diff_artifact",
+          "20260813133000_session_transfer_authority",
+          "20260813134000_database_capability",
+          "20260813135000_event_immutable",
+          "20260813140000_event_sidecar_compaction",
+          "20260813141000_bug_407_010_sidecar_lifecycle",
+          "20260813142000_bug_407_010_sidecar_indexes",
+          "20260813143000_bug_407_010_aggregate_indexes",
+          "20260813120346_v2_provider_parity_campaign",
+          "20260813121129_v2_provider_parity_response_fingerprint",
+          "20260813121200_v2_provider_parity_campaign_authority",
+          "20260813150000_single_authority_snapshot_merge",
+        ])
+
+        yield* DatabaseMigration.applyOnly(
+          db,
+          migrations.filter((migration) => !mergedInsertions.has(migration.id)),
+        )
+        yield* db.run(sql`
+          INSERT INTO event_sequence(aggregate_id, seq, owner_id)
+          VALUES ('aggregate-merged-history', 0, NULL)
+        `)
+        yield* db.run(sql`
+          INSERT INTO event(id, aggregate_id, seq, type, data)
+          VALUES ('event-merged-history', 'aggregate-merged-history', 0, 'merge.history', '{"preserved":true}')
+        `)
+
+        yield* DatabaseMigration.apply(db)
+
+        const completedMigrations = new Set(
+          (yield* db.all<{ id: string }>(sql`SELECT id FROM migration`)).map((migration) => migration.id),
+        )
+        expect([...mergedInsertions].every((id) => completedMigrations.has(id))).toBe(true)
+        expect(yield* db.get(sql`SELECT data FROM event WHERE id = 'event-merged-history'`)).toEqual({
+          data: '{"preserved":true}',
+        })
+        expect(
+          yield* db.get(sql`
+            SELECT state, cursor_rowid, high_water_rowid, processed_count
+            FROM event_sync_backfill WHERE id = 1
+          `),
+        ).toEqual({ state: "pending", cursor_rowid: 0, high_water_rowid: 1, processed_count: 0 })
+        expect(
+          yield* db.all<{ name: string }>(sql`
+            SELECT name FROM sqlite_master
+            WHERE type = 'table' AND name IN (
+              'session_prompt_epoch_message',
+              'session_legacy_activity_run',
+              'event_snapshot',
+              'file_part_artifact',
+              'session_transfer_operation',
+              'database_capability',
+              'session_v2_provider_parity_baseline'
+            )
+            ORDER BY name
+          `),
+        ).toEqual([
+          { name: "database_capability" },
+          { name: "event_snapshot" },
+          { name: "file_part_artifact" },
+          { name: "session_legacy_activity_run" },
+          { name: "session_prompt_epoch_message" },
+          { name: "session_transfer_operation" },
+          { name: "session_v2_provider_parity_baseline" },
+        ])
+        expect(
+          yield* db.get(sql`
+            SELECT capability, minimum_reader_protocol, minimum_writer_protocol
+            FROM database_capability
+          `),
+        ).toEqual({
+          capability: "bounded_event_snapshot_v1",
+          minimum_reader_protocol: 2,
+          minimum_writer_protocol: 2,
+        })
+        expect(yield* db.all(sql`PRAGMA foreign_key_check`)).toEqual([])
+
+        const completedBeforeRetry = yield* db.get<{ count: number }>(sql`SELECT count(*) AS count FROM migration`)
+        yield* DatabaseMigration.apply(db)
+        expect(yield* db.get(sql`SELECT count(*) AS count FROM migration`)).toEqual(completedBeforeRetry)
       }),
     )
   })

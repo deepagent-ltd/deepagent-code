@@ -5,6 +5,7 @@ import { Effect, Layer, Schema } from "effect"
 import { FileSystem } from "../filesystem"
 import { Image } from "../image"
 import { PermissionV2 } from "../permission"
+import { recoverReadDefect } from "./read-failure"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
 
@@ -33,10 +34,21 @@ export const layer = Layer.effectDiscard(
       .register({
         [name]: Tool.make({
           description:
-            "Read a text file or supported image, page through a large UTF-8 text file by line offset, or list a directory page relative to the current location. Absolute paths are accepted only for managed tool-output files.",
+            "Read a text file or supported image, page through a large UTF-8 text file by line offset, or list a directory page in the current Location. Paths may be Location-relative or absolute within the current Location. Absolute managed tool-output paths are also accepted.",
           input: Input,
           output: Output,
           toModelOutput: ({ input, output }) => {
+            if ("type" in output && output.type === "text") return [{ type: "text", text: output.content }]
+            if ("type" in output && output.type === "text-page")
+              return [
+                {
+                  type: "text",
+                  text:
+                    output.truncated && output.next !== undefined
+                      ? `${output.content}\n\n... continue reading at offset ${output.next} ...`
+                      : output.content,
+                },
+              ]
             if (!("type" in output) || output.type !== "binary" || !SUPPORTED_IMAGE_MIMES.has(output.mime)) return []
             return [
               { type: "text", text: "Image read successfully" },
@@ -78,6 +90,7 @@ export const layer = Layer.effectDiscard(
                     : `Unable to read ${input.path}`
                 return new ToolFailure({ message })
               }),
+              Effect.catchDefect((defect) => recoverReadDefect(input.path, defect)),
             )
           },
         }),
