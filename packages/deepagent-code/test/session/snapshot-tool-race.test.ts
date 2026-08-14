@@ -23,6 +23,7 @@ import { SessionRevert } from "../../src/session/revert"
 import { SessionSummary } from "../../src/session/summary"
 import { MessageV2 } from "../../src/session/message-v2"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
+import { SessionV2 } from "@deepagent-code/core/session"
 import * as Log from "@deepagent-code/core/util/log"
 import { provideTmpdirServer, testInstanceStoreLayer } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
@@ -70,6 +71,8 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { TestContextFacades } from "../fixture/context-facades"
 import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
 import { PromptEpoch } from "@/session/prompt-epoch"
+import { LocationIdentity } from "@deepagent-code/core/context-federation/identity"
+import { SessionProviderOwner } from "@deepagent-code/core/context-federation/provider-owner"
 
 void Log.init({ print: false })
 
@@ -152,8 +155,7 @@ const stubRuntimeBaseLayer = Layer.succeed(
 
 // Fully-inert DebugService (D1) stub — avoids InstanceState.make + finalizer side effects
 // at registry-build time. This test never invokes the debug tool.
-const debugStubDie = <A>(): Effect.Effect<A, never, never> =>
-  Effect.die("DebugService stub (not used in this test)")
+const debugStubDie = <A>(): Effect.Effect<A, never, never> => Effect.die("DebugService stub (not used in this test)")
 const stubDebugServiceLayer = Layer.succeed(
   DebugService.Service,
   DebugService.Service.of({
@@ -232,6 +234,8 @@ function makeHttp() {
     TestLLMServer.layer,
     SessionSummary.defaultLayer,
     SessionPrompt.layer.pipe(
+      Layer.provide(SessionV2.defaultLayer),
+      Layer.provide(SessionProviderOwner.layer.pipe(Layer.provide(deps))),
       Layer.provide(testInstanceStoreLayer),
       Layer.provide(SessionRevert.defaultLayer),
       Layer.provide(Image.defaultLayer),
@@ -245,7 +249,8 @@ function makeHttp() {
       Layer.provideMerge(trunc),
       Layer.provide(Instruction.defaultLayer),
       Layer.provide(SystemPrompt.defaultLayer),
-      Layer.provide(RuntimeFlags.layer({ experimentalEventSystem: true })),
+      Layer.provide(LocationIdentity.layer.pipe(Layer.provide(deps))),
+      Layer.provide(RuntimeFlags.layer({ experimentalEventSystem: true, coreV2ExecutionOwner: false })),
       Layer.provideMerge(deps),
     ),
   )
@@ -336,13 +341,48 @@ it.live("tool execution produces non-empty session diff (snapshot race)", () =>
       if (!user) throw new Error("Expected user message")
 
       // Poll for the turn diff — summarize() is fire-and-forget.
-      let diff: Array<{ file?: string }> = []
+      let diff: Snapshot.FileDiff[] = []
       for (let i = 0; i < 50; i++) {
         diff = yield* summary.diff({ sessionID: session.id, messageID: user.info.id })
         if (diff.length > 0) break
         yield* Effect.sleep("100 millis")
       }
       expect(diff.length).toBeGreaterThan(0)
+      expect(diff.every((item) => item.patch === undefined)).toBe(true)
+      const persisted = (yield* sessions.messages({ sessionID: session.id })).find(
+        (message) => message.info.id === user.info.id && message.info.role === "user",
+      )
+      expect(
+        persisted?.info.role === "user"
+          ? persisted.info.summary?.diffs.every((item) => item.patch === undefined)
+          : false,
+      ).toBe(true)
+      expect(persisted?.info.role === "user" ? persisted.info.summary?.diffManifest : undefined).toMatchObject({
+        completeness: "complete",
+        totalFiles: 1,
+        totalFilesExact: true,
+        statisticsExact: true,
+        includedFiles: 1,
+        truncatedFiles: 0,
+      })
+      expect(
+        persisted?.info.role === "user" ? persisted.info.summary?.diffManifest?.manifestHash : undefined,
+      ).toStartWith("sha256:")
+      let sessionSummary = (yield* sessions.get(session.id)).summary
+      for (let i = 0; i < 20 && sessionSummary?.files === 0; i++) {
+        yield* Effect.sleep("50 millis")
+        sessionSummary = (yield* sessions.get(session.id)).summary
+      }
+      expect(sessionSummary).toMatchObject({ additions: 1, deletions: 0, files: 1 })
+      expect(sessionSummary?.diffManifest).toMatchObject({
+        completeness: "complete",
+        totalFiles: 1,
+        totalFilesExact: true,
+        statisticsExact: true,
+        includedFiles: 1,
+        truncatedFiles: 0,
+      })
+      expect(sessionSummary?.diffManifest?.manifestHash).toStartWith("sha256:")
     }),
     { git: true, config: providerCfg },
   ),

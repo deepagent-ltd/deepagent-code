@@ -4,6 +4,9 @@ export interface Runner<A, E = never> {
   readonly state: State<A, E>
   readonly busy: boolean
   readonly ensureRunning: (work: Effect.Effect<A, E>, onRunning?: Effect.Effect<void>) => Effect.Effect<A, E>
+  readonly startRunning: (work: Effect.Effect<A, E>) => Effect.Effect<A, E | Busy>
+  readonly markFinalizing: Effect.Effect<void>
+  readonly markRunning: Effect.Effect<void>
   readonly startShell: (work: Effect.Effect<A, E>, ready?: Latch.Latch) => Effect.Effect<A, E | Busy>
   readonly cancel: Effect.Effect<void>
 }
@@ -33,6 +36,7 @@ interface PendingHandle<A, E> {
 export type State<A, E> =
   | { readonly _tag: "Idle" }
   | { readonly _tag: "Running"; readonly run: RunHandle<A, E> }
+  | { readonly _tag: "Finalizing"; readonly run: RunHandle<A, E> }
   | { readonly _tag: "Shell"; readonly shell: ShellHandle<A, E> }
   | { readonly _tag: "ShellThenRun"; readonly shell: ShellHandle<A, E>; readonly run: PendingHandle<A, E> }
 
@@ -73,10 +77,10 @@ export const make = <A, E = never>(
       (st) =>
         [
           Effect.gen(function* () {
-            if (st._tag === "Running" && st.run.id === id) yield* idle
+            if ((st._tag === "Running" || st._tag === "Finalizing") && st.run.id === id) yield* idle
             yield* complete(done, exit)
           }),
-          st._tag === "Running" && st.run.id === id ? ({ _tag: "Idle" } as const) : st,
+          (st._tag === "Running" || st._tag === "Finalizing") && st.run.id === id ? ({ _tag: "Idle" } as const) : st,
         ] as const,
     ).pipe(Effect.flatten)
 
@@ -120,6 +124,7 @@ export const make = <A, E = never>(
           onRunning ? onRunning.pipe(Effect.andThen(awaitDone(done))) : awaitDone(done)
         switch (st._tag) {
           case "Running":
+          case "Finalizing":
           case "ShellThenRun":
             return [awaitRunning(st.run.done), st] as const
           case "Shell": {
@@ -136,6 +141,29 @@ export const make = <A, E = never>(
             return [awaitRunning(done), { _tag: "Running", run }] as const
           }
         }
+      }),
+    ).pipe(Effect.flatten)
+
+  const markFinalizing = SynchronizedRef.update(ref, (st) =>
+    st._tag === "Running" ? ({ _tag: "Finalizing", run: st.run } as const) : st,
+  )
+
+  const markRunning = SynchronizedRef.update(ref, (st) =>
+    st._tag === "Finalizing" ? ({ _tag: "Running", run: st.run } as const) : st,
+  )
+
+  const startRunning = (work: Effect.Effect<A, E>): Effect.Effect<A, E | Busy> =>
+    SynchronizedRef.modifyEffect(
+      ref,
+      Effect.fnUntraced(function* (st) {
+        if (st._tag !== "Idle") {
+          const reject: Effect.Effect<A, E | Busy> = Effect.fail(new Busy())
+          return [reject, st] as const
+        }
+        const done = yield* Deferred.make<A, E | Cancelled>()
+        const run = yield* startRun(work, done)
+        const awaitRun: Effect.Effect<A, E | Busy> = awaitDone(done)
+        return [awaitRun, { _tag: "Running", run }] as const
       }),
     ).pipe(Effect.flatten)
 
@@ -183,6 +211,16 @@ export const make = <A, E = never>(
           }),
           { _tag: "Idle" } as const,
         ] as const
+      case "Finalizing":
+        // Finalization owns durable terminal settlement. Keep this runner busy until the
+        // interrupted fiber's onExit has completed that teardown and published Idle.
+        return [
+          Effect.gen(function* () {
+            yield* Fiber.interrupt(st.run.fiber)
+            yield* Deferred.fail(st.run.done, new Cancelled()).pipe(Effect.asVoid)
+          }),
+          st,
+        ] as const
       case "Shell":
         return [
           Effect.gen(function* () {
@@ -211,6 +249,9 @@ export const make = <A, E = never>(
       return state()._tag !== "Idle"
     },
     ensureRunning,
+    startRunning,
+    markFinalizing,
+    markRunning,
     startShell,
     cancel,
   }

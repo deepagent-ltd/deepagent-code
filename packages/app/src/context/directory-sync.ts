@@ -6,6 +6,7 @@ import {
   clearSessionPrefetch,
   getSessionPrefetch,
   getSessionPrefetchPromise,
+  SESSION_MESSAGE_PAGE_LIMIT,
   setSessionPrefetch,
 } from "./global-sync/session-prefetch"
 import type { Message, Part } from "@deepagent-code/sdk/v2/client"
@@ -14,16 +15,30 @@ import { diffs as list, message as clean } from "@/utils/diffs"
 import { createServerSdkContext, useServerSDK } from "./server-sdk"
 import { type createServerSyncContextInner } from "./server-sync"
 import { promptAdmissionClientMessageID } from "./global-sync/prompt-admission"
+import { mergeMessage } from "./global-sync/event-reducer"
 
 const SKIP_PARTS = new Set(["patch", "step-start", "step-finish"])
+type ActivityProgress = NonNullable<Extract<Message, { role: "assistant" }>["activityProgress"]>
 
 function sortParts(parts: Part[]) {
   return parts.filter((part) => !!part?.id).sort((a, b) => cmp(a.id, b.id))
 }
 
-function runInflight(map: Map<string, Promise<void>>, key: string, task: () => Promise<void>) {
+export async function runInflight(
+  map: Map<string, Promise<void>>,
+  trailing: Set<string>,
+  key: string,
+  force: boolean,
+  task: () => Promise<void>,
+): Promise<void> {
   const pending = map.get(key)
-  if (pending) return pending
+  if (pending) {
+    if (!force) return pending
+    trailing.add(key)
+    await pending.catch(() => {})
+    if (!trailing.delete(key)) return
+    return runInflight(map, trailing, key, true, task)
+  }
   const promise = task().finally(() => {
     map.delete(key)
   })
@@ -41,10 +56,55 @@ const isNotFound = (error: unknown) =>
   error.cause !== null &&
   (error.cause as { status?: unknown }).status === 404
 
-function merge<T extends { id: string }>(a: readonly T[], b: readonly T[]) {
-  const map = new Map(a.map((item) => [item.id, item] as const))
-  for (const item of b) map.set(item.id, item)
-  return [...map.values()].sort((x, y) => cmp(x.id, y.id))
+function mergePageMessages(
+  base: readonly Message[],
+  incoming: readonly Message[],
+  previous: readonly Message[],
+  baseline: ReadonlyMap<string, ActivityProgress | undefined>,
+  authoritative: boolean,
+) {
+  const messages = new Map(base.map((item) => [item.id, item] as const))
+  const previousByID = new Map(previous.map((item) => [item.id, item] as const))
+  if (authoritative) {
+    for (const item of previous) {
+      if (!baseline.has(item.id) || !sameActivityProgress(item, baseline.get(item.id))) messages.set(item.id, item)
+    }
+  }
+  let conflict = false
+  for (const item of incoming) {
+    if (authoritative && baseline.has(item.id) && !previousByID.has(item.id)) continue
+    const current = previousByID.get(item.id) ?? messages.get(item.id)
+    if (!current) {
+      messages.set(item.id, item)
+      continue
+    }
+    if (authoritative && sameActivityProgress(current, baseline.get(item.id))) {
+      messages.set(item.id, item)
+      continue
+    }
+    const result = mergeMessage(current, item)
+    messages.set(item.id, result.message)
+    conflict ||= result.conflict
+  }
+  return {
+    messages: [...messages.values()].sort((a, b) => cmp(a.id, b.id)),
+    conflict,
+  }
+}
+
+function activityProgress(message: Message): ActivityProgress | undefined {
+  if (message.role !== "assistant" || !message.activityProgress) return
+  return { ...message.activityProgress }
+}
+
+function sameActivityProgress(message: Message, baseline: ActivityProgress | undefined) {
+  const marker = activityProgress(message)
+  return (
+    marker?.activityID === baseline?.activityID &&
+    marker?.revision === baseline?.revision &&
+    marker?.state === baseline?.state &&
+    marker?.terminalReason === baseline?.terminalReason
+  )
 }
 
 type OptimisticStore = {
@@ -208,12 +268,17 @@ export const createDirSyncContext = (
   }
   const absolute = (path: string) => (current()[0].path.directory + "/" + path).replace("//", "/")
   const initialMessagePageSize = 80
-  const historyMessagePageSize = 200
+  const historyMessagePageSize = SESSION_MESSAGE_PAGE_LIMIT
   const inflight = new Map<string, Promise<void>>()
+  const trailing = new Set<string>()
+  const inflightMessages = new Map<string, Promise<void>>()
+  const trailingMessages = new Set<string>()
   const inflightDiff = new Map<string, Promise<void>>()
+  const trailingDiff = new Set<string>()
   const optimistic = new Map<string, Map<string, OptimisticItem>>()
   const maxDirs = 30
   const seen = new Map<string, Set<string>>()
+  let requestSessionSync: ((sessionID: string) => void) | undefined
   const [meta, setMeta] = createStore({
     limit: {} as Record<string, number>,
     cursor: {} as Record<string, string | undefined>,
@@ -353,61 +418,81 @@ export const createDirSyncContext = (
     limit: number
     before?: string
     mode?: "replace" | "prepend"
+    force?: boolean
+    authoritative?: boolean
+    refetchOnConflict?: boolean
   }) => {
     const key = keyFor(input.directory, input.sessionID)
-    if (meta.loading[key]) return
-
-    setMeta("loading", key, true)
-    await fetchMessages(input)
-      .then((page) => {
-        if (!tracked(input.directory, input.sessionID)) return
-        const optimistic = getOptimistic(input.directory, input.sessionID)
-        const next = mergeOptimisticPage(page, optimistic.pending)
-        for (const messageID of next.confirmed) {
-          clearOptimistic(input.directory, input.sessionID, messageID)
-        }
-        const [store] = serverSync.child(input.directory, { bootstrap: false })
-        const cached = input.mode === "prepend" ? (store.message[input.sessionID] ?? []) : optimistic.canonical
-        const message = merge(cached, next.session)
-        batch(() => {
-          input.setStore("message", input.sessionID, reconcile(message, { key: "id" }))
-          for (const p of next.part) {
-            const filtered = p.part.filter((x) => !SKIP_PARTS.has(x.type))
-            if (filtered.length) input.setStore("part", p.id, filtered)
+    return runInflight(inflightMessages, trailingMessages, key, input.force === true, async () => {
+      const baseline = new Map(
+        (serverSync.child(input.directory, { bootstrap: false })[0].message[input.sessionID] ?? []).map((message) => [
+          message.id,
+          activityProgress(message),
+        ]),
+      )
+      let conflict = false
+      setMeta("loading", key, true)
+      await fetchMessages(input)
+        .then((page) => {
+          if (!tracked(input.directory, input.sessionID)) return
+          const optimistic = getOptimistic(input.directory, input.sessionID)
+          const next = mergeOptimisticPage(page, optimistic.pending)
+          for (const messageID of next.confirmed) {
+            clearOptimistic(input.directory, input.sessionID, messageID)
           }
-          setMeta("limit", key, message.length)
-          setMeta("cursor", key, next.cursor)
-          setMeta("complete", key, next.complete)
-          setSessionPrefetch({
-            scope: serverSDK.scope,
-            directory: input.directory,
-            sessionID: input.sessionID,
-            limit: message.length,
-            cursor: next.cursor,
-            complete: next.complete,
+          const [store] = serverSync.child(input.directory, { bootstrap: false })
+          const previous = store.message[input.sessionID] ?? []
+          const cached = input.mode === "prepend" ? previous : optimistic.canonical
+          const merged = mergePageMessages(cached, next.session, previous, baseline, input.authoritative === true)
+          conflict = merged.conflict
+          if (conflict)
+            console.error("Conflicting activity progress page", {
+              sessionID: input.sessionID,
+              mode: input.mode ?? "replace",
+              refetchOnConflict: input.refetchOnConflict !== false,
+            })
+          const message = merged.messages
+          batch(() => {
+            input.setStore("message", input.sessionID, reconcile(message, { key: "id" }))
+            for (const p of next.part) {
+              const filtered = p.part.filter((x) => !SKIP_PARTS.has(x.type))
+              if (filtered.length) input.setStore("part", p.id, filtered)
+            }
+            setMeta("limit", key, message.length)
+            setMeta("cursor", key, next.cursor)
+            setMeta("complete", key, next.complete)
+            setSessionPrefetch({
+              scope: serverSDK.scope,
+              directory: input.directory,
+              sessionID: input.sessionID,
+              limit: message.length,
+              cursor: next.cursor,
+              complete: next.complete,
+            })
           })
         })
-      })
-      .catch((error) => {
-        if (isNotFound(error) && !tracked(input.directory, input.sessionID)) return
-        throw error
-      })
-      .finally(() => {
-        setMeta(
-          produce((draft) => {
-            if (!tracked(input.directory, input.sessionID)) {
-              delete draft.loading[key]
-              return
-            }
-            draft.loading[key] = false
-          }),
-        )
-      })
+        .catch((error) => {
+          if (isNotFound(error) && !tracked(input.directory, input.sessionID)) return
+          throw error
+        })
+        .finally(() => {
+          setMeta(
+            produce((draft) => {
+              if (!tracked(input.directory, input.sessionID)) {
+                delete draft.loading[key]
+                return
+              }
+              draft.loading[key] = false
+            }),
+          )
+          if (conflict && input.refetchOnConflict !== false) requestSessionSync?.(input.sessionID)
+        })
+    })
   }
 
   const loadPlan = (sessionID: string) => serverSync.plan.sync(directory, sessionID)
 
-  return {
+  const result = {
     get data() {
       return current()[0]
     },
@@ -499,7 +584,7 @@ export const createDirSyncContext = (
           })
         }
 
-        return runInflight(inflight, key, async () => {
+        return runInflight(inflight, trailing, key, opts?.force === true, async () => {
           const pending = getSessionPrefetchPromise(serverSDK.scope, directory, sessionID)
           if (pending) {
             await pending
@@ -557,6 +642,9 @@ export const createDirSyncContext = (
                   setStore,
                   sessionID,
                   limit,
+                  force: opts?.force === true,
+                  authoritative: opts?.force === true,
+                  refetchOnConflict: opts?.force !== true,
                 })
 
           await Promise.all([sessionReq, messagesReq, planReq])
@@ -568,7 +656,7 @@ export const createDirSyncContext = (
         if (store.session_diff[sessionID] !== undefined && !opts?.force) return
 
         const key = keyFor(directory, sessionID)
-        return runInflight(inflightDiff, key, () =>
+        return runInflight(inflightDiff, trailingDiff, key, opts?.force === true, () =>
           retry(() => client.session.diff({ sessionID })).then((diff) => {
             if (!tracked(directory, sessionID)) return
             setStore("session_diff", sessionID, reconcile(list(diff.data), { key: "file" }))
@@ -592,7 +680,7 @@ export const createDirSyncContext = (
           const [, setStore] = serverSync.child(directory)
           touch(directory, setStore, sessionID)
           const key = keyFor(directory, sessionID)
-          const step = count ?? historyMessagePageSize
+          const step = Math.min(count ?? historyMessagePageSize, SESSION_MESSAGE_PAGE_LIMIT)
           if (meta.loading[key]) return
           if (meta.complete[key]) return
           const before = meta.cursor[key]
@@ -651,4 +739,14 @@ export const createDirSyncContext = (
       return current()[0].path.directory
     },
   }
+
+  requestSessionSync = (sessionID) => {
+    void result.session.sync(sessionID, { force: true }).catch((error) => {
+      console.error("Failed to reload session after an activity progress conflict", error)
+    })
+  }
+  serverSync.registerSessionReloader?.(directory, (sessionID) =>
+    result.session.sync(sessionID, { force: true }),
+  )
+  return result
 }

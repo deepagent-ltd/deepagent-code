@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
+import { Hash } from "@deepagent-code/core/util/hash"
 import { cleanupRunsDir, deepagentRunInput, readJson, runDeepAgentStream, tempRunsDir } from "./_gateway"
 
 describe("DeepAgent max knowledge mode", () => {
@@ -7,9 +8,32 @@ describe("DeepAgent max knowledge mode", () => {
     const dir = await tempRunsDir()
     try {
       AgentGateway.configure({ enabled: true, agentMode: "max", runsDir: dir, allowProviderExecutedTools: false })
+      const store = AgentGateway.DeepAgentKnowledgeSource.userGlobalStoreFor()
+      const documents = AgentGateway.DeepAgentReleasedSnapshot.normalizeDocumentRefs(
+        store
+          .listByStatus("active")
+          .flatMap((ref) => {
+            const doc = store.documentStore.get(ref.id, ref.version)
+            return doc?.tags.includes("pack:code.gpu-kernel")
+              ? [AgentGateway.DeepAgentReleasedSnapshot.documentRef(doc, "user_global")]
+              : []
+          }),
+      )
+      const releasedKnowledgeSelection = {
+        snapshotId: "knowledge-mode-gpu-kernel",
+        securityNamespaceId: "knowledge-mode-namespace",
+        projectScopeKey: "knowledge-mode-global",
+        legacyProjectId: "global",
+        parentSnapshotId: null,
+        generation: 1,
+        membershipHash: AgentGateway.DeepAgentReleasedSnapshot.exactRefsFingerprint(documents),
+        manifestHash: Hash.sha256("knowledge-mode-gpu-kernel"),
+        documents,
+      }
       const runDir = await runDeepAgentStream(dir, undefined, "max", {
         ...deepagentRunInput,
         feature: "optimize sgemm cuda kernel shared memory",
+        releasedKnowledgeSelection,
       })
 
       const knowledge = await readJson(runDir, "KNOWLEDGE_RETRIEVAL_RESULT.json")
@@ -23,6 +47,13 @@ describe("DeepAgent max knowledge mode", () => {
           inject_full_strategy_body: false,
           inject_full_memory_body: false,
           inject_full_skill_body: false,
+        },
+        released_snapshot: {
+          snapshot_id: releasedKnowledgeSelection.snapshotId,
+          membership_hash: releasedKnowledgeSelection.membershipHash,
+          manifest_hash: releasedKnowledgeSelection.manifestHash,
+          generation: releasedKnowledgeSelection.generation,
+          exact_doc_refs: documents,
         },
       })
       // DAP-11: curated strategies/methodologies are seeded into DocumentStore (slug-derived ids

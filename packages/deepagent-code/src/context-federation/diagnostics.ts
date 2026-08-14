@@ -1,18 +1,29 @@
 export * as ContextFederationDiagnostics from "./diagnostics"
 
-import { ContextArtifactTable, SessionActivityTable, SessionContextSelectionTable, SessionProviderAttemptResolutionTable, SessionProviderAttemptTable } from "@deepagent-code/core/context-federation/session-sql"
+import {
+  ContextArtifactTable,
+  SessionActivityTable,
+  SessionContextSelectionTable,
+  SessionProviderAttemptResolutionTable,
+  SessionProviderAttemptTable,
+} from "@deepagent-code/core/context-federation/session-sql"
 import { GraphKind } from "@deepagent-code/core/context-federation/contract"
 import { GraphQueryStatus } from "@deepagent-code/core/context-federation/federation"
 import { Sensitivity } from "@deepagent-code/core/context-federation/authorization"
 import { SessionProviderAttempt } from "@deepagent-code/core/context-federation/provider-attempt"
+import { SessionProviderOwner } from "@deepagent-code/core/context-federation/provider-owner"
 import { Database } from "@deepagent-code/core/database/database"
 import { SessionSchema } from "@deepagent-code/core/session/schema"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
-import { and, desc, eq, inArray } from "drizzle-orm"
-import { Context, Effect, Layer, Schema } from "effect"
+import { SessionToolRequestResolutionTable } from "@deepagent-code/core/session/sql"
+import { SessionToolRequestReceiptTable } from "../session/tool-request-receipt.sql"
+import { and, desc, eq, inArray, isNull } from "drizzle-orm"
+import { Cause, Context, Effect, Layer, Ref, Schema } from "effect"
+import { randomUUID } from "node:crypto"
 import { Session } from "../session/session"
 import { SessionFederatedContext } from "./session-context-runtime"
 import { ContextFederationObservability } from "./observability"
+import { ContextFederationProviderOwnerRuntime } from "./provider-owner-runtime"
 
 const StoredSelectedRef = Schema.Struct({
   ref: Schema.Struct({ graph: GraphKind, revision: Schema.String }),
@@ -39,7 +50,10 @@ export class DiagnosticsError extends Schema.TaggedErrorClass<DiagnosticsError>(
 ) {}
 
 export interface Interface {
-  readonly get: (sessionId: SessionSchema.ID, now?: number) => Effect.Effect<ReturnType<typeof dashboard>, DiagnosticsError>
+  readonly get: (
+    sessionId: SessionSchema.ID,
+    now?: number,
+  ) => Effect.Effect<ReturnType<typeof dashboard>, DiagnosticsError>
   readonly resolveAttempt: (input: {
     readonly session: Session.Info
     readonly attemptId: string
@@ -60,9 +74,32 @@ export const layer = Layer.effect(
     const sessions = yield* Session.Service
     const attempts = yield* SessionProviderAttempt.Service
     const federation = yield* SessionFederatedContext.Service
+    const owners = yield* SessionProviderOwner.Service
+    const recoveryOwnerToken = `${process.pid}:diagnostics:${randomUUID()}`
+    yield* owners.register({ ownerToken: recoveryOwnerToken, leaseMs: SessionProviderOwner.LeaseMs }).pipe(Effect.orDie)
+    const ownerHealthy = yield* Ref.make(true)
+    yield* Effect.addFinalizer(() => owners.release({ ownerToken: recoveryOwnerToken }).pipe(Effect.ignore))
+    yield* Effect.gen(function* () {
+      while (yield* Ref.get(ownerHealthy)) {
+        const continued = yield* ContextFederationProviderOwnerRuntime.tick({
+          owners,
+          ownerToken: recoveryOwnerToken,
+          leaseMs: SessionProviderOwner.LeaseMs,
+          healthy: ownerHealthy,
+          label: "provider diagnostics",
+        })
+        if (!continued) return
+        yield* Effect.sleep(10_000)
+      }
+    }).pipe(
+      Effect.catchCause((cause) => Effect.logError(`provider diagnostics heartbeat failed: ${Cause.pretty(cause)}`)),
+      Effect.forkScoped,
+    )
 
     const get: Interface["get"] = (sessionId, now = Date.now()) =>
       Effect.gen(function* () {
+        if (!(yield* Ref.get(ownerHealthy)))
+          return yield* new DiagnosticsError({ reason: "provider_owner_runtime_unhealthy" })
         const selectionRows = yield* database.db
           .select()
           .from(SessionContextSelectionTable)
@@ -71,22 +108,31 @@ export const layer = Layer.effect(
           .limit(50)
           .all()
           .pipe(Effect.orDie)
-        const activityRows = selectionRows.length === 0
-          ? []
-          : yield* database.db
-              .select()
-              .from(SessionActivityTable)
-              .where(inArray(SessionActivityTable.activity_id, [...new Set(selectionRows.map((row) => row.activity_id))]))
-              .all()
-              .pipe(Effect.orDie)
-        const artifactRows = selectionRows.length === 0
-          ? []
-          : yield* database.db
-              .select()
-              .from(ContextArtifactTable)
-              .where(inArray(ContextArtifactTable.selection_id, selectionRows.map((row) => row.selection_id)))
-              .all()
-              .pipe(Effect.orDie)
+        const activityRows =
+          selectionRows.length === 0
+            ? []
+            : yield* database.db
+                .select()
+                .from(SessionActivityTable)
+                .where(
+                  inArray(SessionActivityTable.activity_id, [...new Set(selectionRows.map((row) => row.activity_id))]),
+                )
+                .all()
+                .pipe(Effect.orDie)
+        const artifactRows =
+          selectionRows.length === 0
+            ? []
+            : yield* database.db
+                .select()
+                .from(ContextArtifactTable)
+                .where(
+                  inArray(
+                    ContextArtifactTable.selection_id,
+                    selectionRows.map((row) => row.selection_id),
+                  ),
+                )
+                .all()
+                .pipe(Effect.orDie)
         const attemptRows = yield* database.db
           .select()
           .from(SessionProviderAttemptTable)
@@ -95,40 +141,73 @@ export const layer = Layer.effect(
           .limit(50)
           .all()
           .pipe(Effect.orDie)
-        const resolutionRows = attemptRows.length === 0
-          ? []
-          : yield* database.db
-              .select()
-              .from(SessionProviderAttemptResolutionTable)
-              .where(inArray(SessionProviderAttemptResolutionTable.attempt_id, attemptRows.map((row) => row.attempt_id)))
-              .all()
-              .pipe(Effect.orDie)
+        const resolutionRows =
+          attemptRows.length === 0
+            ? []
+            : yield* database.db
+                .select()
+                .from(SessionProviderAttemptResolutionTable)
+                .where(
+                  inArray(
+                    SessionProviderAttemptResolutionTable.attempt_id,
+                    attemptRows.map((row) => row.attempt_id),
+                  ),
+                )
+                .all()
+                .pipe(Effect.orDie)
         const messages = attemptRows.some((row) => row.state === "indeterminate_after_crash")
           ? yield* sessions.messages({ sessionID: SessionSchema.ID.make(sessionId) }).pipe(Effect.orDie)
           : []
         return dashboard({
           sessionId,
-          selections: selectionRows.map((row) => selectionView({
-            row,
-            activity: activityRows.find((activity) => activity.activity_id === row.activity_id),
-            artifact: artifactRows.find((artifact) => artifact.selection_id === row.selection_id),
-            now,
-          })),
-          attempts: attemptRows.map((row) => attemptView(
-            row,
-            resolutionRows.find((resolution) => resolution.attempt_id === row.attempt_id),
-            hasTerminalMessage(messages, row.attempt_id),
-            now,
-          )),
+          selections: selectionRows.map((row) =>
+            selectionView({
+              row,
+              activity: activityRows.find((activity) => activity.activity_id === row.activity_id),
+              artifact: artifactRows.find((artifact) => artifact.selection_id === row.selection_id),
+              now,
+            }),
+          ),
+          attempts: attemptRows.map((row) =>
+            attemptView(
+              row,
+              resolutionRows.find((resolution) => resolution.attempt_id === row.attempt_id),
+              hasTerminalMessage(messages, row.attempt_id),
+              now,
+            ),
+          ),
         })
       }).pipe(Effect.mapError(diagnosticsError))
 
     const resolveAttempt: Interface["resolveAttempt"] = (input) =>
       Effect.gen(function* () {
+        if (!(yield* Ref.get(ownerHealthy)))
+          return yield* new DiagnosticsError({ reason: "provider_owner_runtime_unhealthy" })
         const attempt = yield* attempts.get(input.attemptId)
         if (!attempt || attempt.sessionId !== input.session.id) {
           return yield* new DiagnosticsError({ reason: "provider_attempt_not_found" })
         }
+        const legacyReceipt = yield* database.db
+          .select({ receiptID: SessionToolRequestReceiptTable.receipt_id })
+          .from(SessionToolRequestReceiptTable)
+          .leftJoin(
+            SessionToolRequestResolutionTable,
+            eq(SessionToolRequestResolutionTable.receipt_id, SessionToolRequestReceiptTable.receipt_id),
+          )
+          .where(
+            and(
+              eq(SessionToolRequestReceiptTable.session_id, input.session.id),
+              eq(SessionToolRequestReceiptTable.provider_attempt_id, input.attemptId),
+              eq(SessionToolRequestReceiptTable.provider_state, "indeterminate_after_crash"),
+              isNull(SessionToolRequestResolutionTable.resolution_id),
+            ),
+          )
+          .get()
+          .pipe(Effect.orDie)
+        if (legacyReceipt)
+          return yield* new DiagnosticsError({
+            reason: "legacy_provider_recovery_required",
+          })
         if (input.decision === "replayed") {
           const resolved = yield* federation.replayIndeterminate({
             session: input.session,
@@ -136,20 +215,23 @@ export const layer = Layer.effect(
             actorId: input.actorId,
             reason: input.reason,
             riskAcknowledged: input.riskAcknowledged,
+            recoveryOwnerToken,
             now: input.now,
           })
           return attemptView(resolved.replay, undefined, false, input.now ?? Date.now())
         }
-        const terminal = input.decision === "settled"
-          ? (yield* sessions.messages({ sessionID: input.session.id }).pipe(Effect.orDie)).find(
-              (message) => hasTerminalMessage([message], input.attemptId),
-            )
-          : undefined
+        const terminal =
+          input.decision === "settled"
+            ? (yield* sessions.messages({ sessionID: input.session.id }).pipe(Effect.orDie)).find((message) =>
+                hasTerminalMessage([message], input.attemptId),
+              )
+            : undefined
         if (input.decision === "settled" && !terminal) {
           return yield* new DiagnosticsError({ reason: "persisted_terminal_event_required" })
         }
         const resolved = yield* attempts.resolve({
           attemptId: input.attemptId,
+          recoveryOwnerToken,
           actor: {
             type: "user",
             id: input.actorId,
@@ -161,7 +243,7 @@ export const layer = Layer.effect(
             ? {
                 providerEvidence: {
                   kind: "persisted_terminal_event" as const,
-                  requestHash: attempt.requestHash,
+                  requestHash: attempt.wireRequestHash ?? attempt.requestHash,
                   eventId: terminal.info.id,
                   observedAt: terminal.info.role === "assistant" ? terminal.info.time.completed! : Date.now(),
                 },
@@ -179,6 +261,7 @@ export const layer = Layer.effect(
 )
 
 export const defaultLayer = layer.pipe(
+  Layer.provide(SessionProviderOwner.layer.pipe(Layer.provide(Database.defaultLayer))),
   Layer.provide(SessionProviderAttempt.layer.pipe(Layer.provide(Database.defaultLayer))),
   Layer.provide(SessionFederatedContext.defaultLayer),
   Layer.provide(Database.defaultLayer),
@@ -240,10 +323,10 @@ function selectionView(input: {
     activityState: input.activity?.state ?? "failed",
     revision: input.row.revision,
     summary: statuses.some((status) => status.kind !== "complete")
-      ? "partial" as const
+      ? ("partial" as const)
       : statuses.some((status) => status.outcome === "matched")
-        ? "complete" as const
-        : "empty" as const,
+        ? ("complete" as const)
+        : ("empty" as const),
     statuses,
     evidence: selected.map((item) => ({
       token: item.token,
@@ -286,19 +369,22 @@ function attemptView(
   terminalEvidence = false,
   now = Date.now(),
 ) {
-  const value = "attemptId" in attempt ? attempt : {
-    attemptId: attempt.attempt_id,
-    activityId: attempt.activity_id,
-    providerTurnSeq: attempt.provider_turn_seq,
-    selectionId: attempt.selection_id,
-    providerId: attempt.provider_id,
-    parentAttemptId: attempt.parent_attempt_id ?? undefined,
-    state: attempt.state,
-    createdAt: attempt.created_at,
-    firstEventAt: attempt.first_event_at ?? undefined,
-    settledAt: attempt.settled_at ?? undefined,
-    errorCode: attempt.error_code ?? undefined,
-  }
+  const value =
+    "attemptId" in attempt
+      ? attempt
+      : {
+          attemptId: attempt.attempt_id,
+          activityId: attempt.activity_id,
+          providerTurnSeq: attempt.provider_turn_seq,
+          selectionId: attempt.selection_id,
+          providerId: attempt.provider_id,
+          parentAttemptId: attempt.parent_attempt_id ?? undefined,
+          state: attempt.state,
+          createdAt: attempt.created_at,
+          firstEventAt: attempt.first_event_at ?? undefined,
+          settledAt: attempt.settled_at ?? undefined,
+          errorCode: attempt.error_code ?? undefined,
+        }
   return {
     attemptId: value.attemptId,
     activityId: value.activityId,
@@ -333,17 +419,17 @@ function hasTerminalMessage(messages: readonly SessionV1.WithParts[], attemptId:
     const info = message.info
     return Boolean(
       info &&
-      typeof info === "object" &&
-      "role" in info &&
-      info.role === "assistant" &&
-      "providerAttemptID" in info &&
-      info.providerAttemptID === attemptId &&
-      "time" in info &&
-      info.time &&
-      typeof info.time === "object" &&
-      "completed" in info.time &&
-      typeof info.time.completed === "number" &&
-      !("error" in info && info.error),
+        typeof info === "object" &&
+        "role" in info &&
+        info.role === "assistant" &&
+        "providerAttemptID" in info &&
+        info.providerAttemptID === attemptId &&
+        "time" in info &&
+        info.time &&
+        typeof info.time === "object" &&
+        "completed" in info.time &&
+        typeof info.time.completed === "number" &&
+        !("error" in info && info.error),
     )
   })
 }

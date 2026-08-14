@@ -43,6 +43,42 @@ describe("message timeline compaction", () => {
       }),
     )
   })
+
+  test("keeps a legacy diff artifact as metadata without materializing an inline patch", async () => {
+    const { Timeline } = await import("./message-timeline.data")
+    const message = {
+      id: "msg_diff_artifact",
+      sessionID: "ses_1",
+      role: "user",
+      agent: "build",
+      model: { providerID: "deepseek", modelID: "deepseek-chat" },
+      time: { created: 1 },
+      summary: {
+        diffs: [],
+        diffArtifact: {
+          id: "evtart_legacy",
+          hash: "a".repeat(64),
+          codec: "legacy-message-diff.v2",
+          fileCount: 4_500,
+          previewFileCount: 0,
+          previewTruncated: true,
+        },
+      },
+    } as UserMessage
+
+    const rows = Timeline.constructMessageRows(message, () => [], [], 0, false, "idle", false)
+    const diff = rows.find((row) => row._tag === "DiffSummary")
+
+    expect(diff).toEqual(
+      expect.objectContaining({
+        _tag: "DiffSummary",
+        userMessageID: message.id,
+        diffs: [],
+        artifact: message.summary?.diffArtifact,
+      }),
+    )
+    expect(JSON.stringify(rows)).not.toContain('"patch"')
+  })
 })
 
 describe("message timeline activity progress", () => {
@@ -184,5 +220,58 @@ describe("message timeline activity progress", () => {
     expect(
       rows.flatMap((row) => (row._tag === "AssistantPart" && row.group.type === "part" ? [row.group.ref.partID] : [])),
     ).toEqual(["prt_final_1", "prt_final_plain"])
+  })
+
+  test("uses the message marker to collapse reasoning-only revisions", async () => {
+    const { Timeline } = await import("./message-timeline.data")
+    const messages = [
+      {
+        ...assistant("msg_reasoning_a0"),
+        activityProgress: { activityID: "activity-reasoning", revision: 0, state: "progress" as const },
+      },
+      {
+        ...assistant("msg_reasoning_a1"),
+        activityProgress: { activityID: "activity-reasoning", revision: 1, state: "progress" as const },
+      },
+    ]
+    const reasoning = (messageID: string, id: string) =>
+      ({ id, sessionID: user.sessionID, messageID, type: "reasoning", text: id }) as Part
+    const parts = new Map([
+      [messages[0].id, [reasoning(messages[0].id, "prt_reasoning_old")]],
+      [messages[1].id, [reasoning(messages[1].id, "prt_reasoning_latest")]],
+    ])
+
+    const rows = Timeline.constructMessageRows(user, (id) => parts.get(id) ?? [], messages, 0, true, "idle", false)
+
+    expect(
+      rows.flatMap((row) => (row._tag === "AssistantPart" && row.group.type === "part" ? [row.group.ref.partID] : [])),
+    ).toEqual(["prt_reasoning_latest"])
+  })
+
+  test("hides an older tool revision when the latest terminal message has no renderable parts", async () => {
+    const { Timeline } = await import("./message-timeline.data")
+    const old = {
+      ...assistant("msg_tool_old"),
+      activityProgress: { activityID: "activity-tool", revision: 0, state: "progress" as const },
+    }
+    const terminal = {
+      ...assistant("msg_tool_terminal"),
+      activityProgress: { activityID: "activity-tool", revision: 1, state: "final" as const },
+    }
+    const tool = {
+      id: "prt_tool_old",
+      sessionID: user.sessionID,
+      messageID: old.id,
+      type: "tool",
+      callID: "call-old",
+      tool: "bash",
+      state: { status: "completed", input: {}, output: "pending", title: "poll", time: { start: 1, end: 2 } },
+    } as Part
+    const parts = new Map([[old.id, [tool]]])
+    const visibility = Timeline.activityProgressVisibility([old, terminal], (id) => parts.get(id) ?? [])
+
+    const rows = Timeline.constructMessageRows(user, (id) => parts.get(id) ?? [], [old], 0, true, "idle", false, visibility)
+
+    expect(rows.some((row) => row._tag === "AssistantPart")).toBe(false)
   })
 })

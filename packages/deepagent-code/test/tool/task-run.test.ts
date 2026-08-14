@@ -4,13 +4,17 @@ import { ProjectV2 } from "@deepagent-code/core/project"
 import { ProjectTable } from "@deepagent-code/core/project/sql"
 import { AbsolutePath } from "@deepagent-code/core/schema"
 import {
+  MessageTable,
+  PartTable,
   SessionTable,
+  TaskStructuredOutputEvidencePartTable,
+  TaskStructuredOutputEvidenceTable,
   TaskNotificationOutboxTable,
   TaskRunEventTable,
   TaskRunTable,
 } from "@deepagent-code/core/session/sql"
-import { Effect, Layer } from "effect"
-import { count, eq } from "drizzle-orm"
+import { Effect, Exit, Layer } from "effect"
+import { count, eq, sql } from "drizzle-orm"
 import { MessageID, SessionID } from "../../src/session/schema"
 import {
   acknowledgeTaskNotification,
@@ -28,7 +32,9 @@ import {
   requestHash,
   settleTaskRun,
   startTaskRun,
+  type Run,
 } from "../../src/tool/task-run"
+import { persistStructuredFinalizerResponse } from "../../src/tool/task-structured-output-evidence"
 import { testEffect } from "../lib/effect"
 import { tmpdirScoped } from "../fixture/fixture"
 import { CrossSpawnSpawner } from "@deepagent-code/core/cross-spawn-spawner"
@@ -68,6 +74,7 @@ const admit = (input?: {
   parentRunID?: string
   request?: unknown
   deliveryMode?: "foreground" | "background"
+  executionSpec?: Run["executionSpec"]
   now?: number
 }) =>
   admitTaskRun({
@@ -79,6 +86,7 @@ const admit = (input?: {
     parentRunID: input?.parentRunID,
     request: input?.request ?? { prompt: "research", subagent_type: "researcher" },
     deliveryMode: input?.deliveryMode ?? "foreground",
+    executionSpec: input?.executionSpec,
     now: input?.now,
   })
 
@@ -224,7 +232,7 @@ describe("TaskRun durable store", () => {
             run: running!,
             owner: "worker",
             state: "completed",
-            reason: "structured_output_valid",
+            reason: "text_output_valid",
             output: '{"result":"ok"}',
             notification: { directory: "/project", payload: { agent: "build", text: "complete" } },
             now: 3,
@@ -442,14 +450,72 @@ describe("TaskRun durable store", () => {
   it.effect("phase refs persist and settlement CAS has one immutable winner", () =>
     Effect.gen(function* () {
       yield* setup
-      const admission = yield* admit({ messageID: MessageID.ascending("msg_settlement") })
-      const claimed = yield* claimTaskProvisioning({ run: admission.run, owner: "worker", now: 10 })
-      const running = (yield* startTaskRun(claimed!, "worker", 11))!
+      const admission = yield* admit({
+        messageID: MessageID.ascending("msg_settlement"),
+        executionSpec: {
+          prompt: { text: "inspect" },
+          agent: "researcher",
+          model: { providerID: "test", modelID: "test" },
+          structuredOutput: {
+            schema: { type: "object" },
+            allowTextFallback: true,
+            receiptVersion: 1,
+            maxAttempts: 2,
+          },
+        },
+      })
+      const time = Date.now()
+      const claimed = yield* claimTaskProvisioning({ run: admission.run, owner: "worker", now: time })
+      const running = (yield* startTaskRun(claimed!, "worker", time + 1))!
       const rawMessageID = MessageID.ascending("msg_raw_result")
+      const requestMessageID = MessageID.ascending("msg_structured_request")
       const finalMessageID = MessageID.ascending("msg_structured_result")
-      yield* markTaskResearchCompleted(running, "worker", rawMessageID, 12)
-      yield* markTaskFinalizing(running, "worker", 2, rawMessageID, 13)
-      yield* markTaskFinalized(running, "worker", finalMessageID, 14)
+      const { db } = yield* Database.Service
+      yield* db.run(sql`
+        INSERT INTO session (id, project_id, slug, directory, title, version, time_created, time_updated)
+        VALUES (${running.childSessionID}, ${ProjectV2.ID.global}, 'task-run-child', '/project', 'child', 'test', ${time}, ${time})
+      `)
+      yield* db.run(sql`
+        INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES
+          (${rawMessageID}, ${running.childSessionID}, ${time + 2}, ${time + 2}, '{"role":"assistant"}'),
+          (${requestMessageID}, ${running.childSessionID}, ${time + 3}, ${time + 3},
+            ${JSON.stringify({
+              role: "user",
+              metadata: {
+                deepagent: {
+                  structured_finalizer: {
+                    run_id: running.runID,
+                    attempt: 2,
+                    source_message_id: rawMessageID,
+                    allow_text: false,
+                  },
+                },
+              },
+            })}),
+          (${finalMessageID}, ${running.childSessionID}, ${time + 4}, ${time + 4},
+            ${JSON.stringify({ role: "assistant", parentID: requestMessageID, structured: { answer: "ok" } })})
+      `)
+      yield* db.run(sql`
+        INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES
+          ('prt_task_raw', ${rawMessageID}, ${running.childSessionID}, ${time + 2}, ${time + 2}, '{"type":"text","text":"research"}'),
+          ('prt_task_result', ${finalMessageID}, ${running.childSessionID}, ${time + 4}, ${time + 4}, '{"type":"text","text":"{\\"answer\\":\\"ok\\"}"}')
+      `)
+      yield* markTaskResearchCompleted(running, "worker", rawMessageID, time + 2)
+      yield* markTaskFinalizing(running, "worker", 2, rawMessageID, time + 3)
+      yield* persistStructuredFinalizerResponse({
+        runID: running.runID,
+        childSessionID: running.childSessionID,
+        ownerToken: "worker",
+        claimGeneration: running.claimGeneration,
+        attempt: 2,
+        sourceMessageID: rawMessageID,
+        responseMessageID: finalMessageID,
+        contract: running.executionSpec!.structuredOutput!,
+        receipt: { attempt: 2, transport: "structured" },
+        output: '{"answer":"ok"}',
+        now: time + 4,
+      })
+      yield* markTaskFinalized(running, "worker", finalMessageID, time + 4)
 
       const winner = yield* settleTaskRun({
         run: running,
@@ -458,11 +524,12 @@ describe("TaskRun durable store", () => {
         reason: "structured_output_valid",
         output: '{"answer":"ok"}',
         structuredResultMessageID: finalMessageID,
+        structuredOutputReceipt: { attempt: 2, transport: "structured" },
         notification: {
           directory: "/project",
           payload: { agent: "build", text: "complete" },
         },
-        now: 15,
+        now: time + 5,
       })
       const loser = yield* settleTaskRun({
         run: running,
@@ -470,20 +537,99 @@ describe("TaskRun durable store", () => {
         state: "error",
         reason: "provider_error",
         error: { code: "provider_error", message: "late failure" },
-        now: 16,
+        now: time + 6,
       })
 
       expect(winner.won).toBe(true)
       expect(winner.run.rawResultMessageID).toBe(rawMessageID)
       expect(winner.run.structuredResultMessageID).toBe(finalMessageID)
+      expect(winner.run.structuredOutputReceipt).toEqual({ attempt: 2, transport: "structured" })
       expect(loser.won).toBe(false)
       expect(loser.run.state).toBe("completed")
       expect(loser.run.output).toBe('{"answer":"ok"}')
 
-      const { db } = yield* Database.Service
       expect(yield* db.select({ count: count() }).from(TaskNotificationOutboxTable).get().pipe(Effect.orDie)).toEqual({
         count: 1,
       })
+      expect(
+        yield* db
+          .select({
+            terminalState: TaskStructuredOutputEvidenceTable.terminal_state,
+            attempts: TaskStructuredOutputEvidenceTable.attempts,
+            rawMessageID: TaskStructuredOutputEvidenceTable.raw_result_message_id,
+            resultMessageID: TaskStructuredOutputEvidenceTable.result_message_id,
+            output: TaskStructuredOutputEvidenceTable.output,
+          })
+          .from(TaskStructuredOutputEvidenceTable)
+          .where(eq(TaskStructuredOutputEvidenceTable.run_id, running.runID))
+          .get()
+          .pipe(Effect.orDie),
+      ).toEqual({
+        terminalState: "completed",
+        attempts: 2,
+        rawMessageID,
+        resultMessageID: finalMessageID,
+        output: '{"answer":"ok"}',
+      })
+      expect(
+        yield* db
+          .select({ count: count() })
+          .from(TaskStructuredOutputEvidencePartTable)
+          .where(eq(TaskStructuredOutputEvidencePartTable.run_id, running.runID))
+          .get()
+          .pipe(Effect.orDie),
+      ).toEqual({ count: 2 })
+
+      expect(
+        Exit.isFailure(
+          yield* db
+            .run(sql`UPDATE message SET data = '{"role":"assistant","tampered":true}' WHERE id = ${rawMessageID}`)
+            .pipe(Effect.exit),
+        ),
+      ).toBe(true)
+      expect(
+        Exit.isFailure(
+          yield* db
+            .run(sql`UPDATE part SET data = '{"type":"text","text":"tampered"}' WHERE id = 'prt_task_raw'`)
+            .pipe(Effect.exit),
+        ),
+      ).toBe(true)
+      expect(
+        Exit.isFailure(
+          yield* db
+            .run(
+              sql`
+              INSERT INTO part (id, message_id, session_id, time_created, time_updated, data)
+              VALUES ('prt_task_late', ${rawMessageID}, ${running.childSessionID}, ${time + 6}, ${time + 6},
+                '{"type":"text","text":"late"}')
+            `,
+            )
+            .pipe(Effect.exit),
+        ),
+      ).toBe(true)
+      expect(Exit.isFailure(yield* db.run(sql`DELETE FROM part WHERE id = 'prt_task_raw'`).pipe(Effect.exit))).toBe(
+        true,
+      )
+      expect(Exit.isFailure(yield* db.run(sql`DELETE FROM message WHERE id = ${rawMessageID}`).pipe(Effect.exit))).toBe(
+        true,
+      )
+      expect(
+        Exit.isFailure(
+          yield* db
+            .run(sql`UPDATE task_structured_output_evidence SET output = 'tampered' WHERE run_id = ${running.runID}`)
+            .pipe(Effect.exit),
+        ),
+      ).toBe(true)
+
+      yield* db.delete(SessionTable).where(eq(SessionTable.id, parentSessionID)).run().pipe(Effect.orDie)
+      expect(
+        yield* db
+          .select({ count: count() })
+          .from(TaskStructuredOutputEvidenceTable)
+          .where(eq(TaskStructuredOutputEvidenceTable.run_id, running.runID))
+          .get()
+          .pipe(Effect.orDie),
+      ).toEqual({ count: 0 })
     }),
   )
 

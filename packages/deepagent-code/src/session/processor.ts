@@ -1,4 +1,6 @@
 import { PermissionV1 } from "@deepagent-code/core/v1/permission"
+import { DeepAgentActivityAuthority } from "@deepagent-code/core/deepagent/index"
+import { Hash } from "@deepagent-code/core/util/hash"
 import { Image } from "@/image/image"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { Cause, Deferred, Effect, Exit, Layer, Context, Scope, Schema, Data } from "effect"
@@ -35,6 +37,7 @@ import { toolFileSourceFromUri, Usage, type LLMEvent } from "@deepagent-code/llm
 import { ToolOutput } from "@deepagent-code/core/tool-output"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { InvalidToolInputError } from "ai"
+import { SessionPromptIntent } from "./prompt-intent"
 
 const DOOM_LOOP_THRESHOLD = 3
 const DOOM_LOOP_SEQUENCE_WINDOW = 12
@@ -113,6 +116,11 @@ export class ToolSequenceTracker {
 
   setResultFingerprintResolver(resolver: (toolName: string, result: unknown) => unknown): void {
     this.resultFingerprintResolver = resolver
+  }
+
+  resultFingerprint(toolName: string, result: unknown): string | undefined {
+    const resolved = this.resultFingerprintResolver?.(toolName, result)
+    return resolved === undefined ? undefined : Hash.sha256(canonicalJson(resolved))
   }
 
   fingerprint(toolName: string, input: unknown): string {
@@ -466,7 +474,16 @@ class DegenerationDetector {
   }
 }
 
-export type Result = "compact" | "stop" | "continue"
+export type ProcessorStopReason =
+  | { readonly code: "user_rejected_question"; readonly callID: string }
+  | { readonly code: "user_rejected_permission"; readonly callID: string }
+  | { readonly code: "task_no_progress_budget_exhausted"; readonly limit: number; readonly used: number }
+  | { readonly code: "assistant_error"; readonly errorName: string }
+
+export type ProcessorDecision =
+  | { readonly action: "compact" }
+  | { readonly action: "stop"; readonly reason: ProcessorStopReason }
+  | { readonly action: "continue" }
 
 export interface Handle {
   readonly message: SessionV1.Assistant
@@ -492,7 +509,7 @@ export interface Handle {
       readonly settled: Effect.Effect<void>
       readonly failed: (error: unknown) => Effect.Effect<void>
     },
-  ) => Effect.Effect<Result>
+  ) => Effect.Effect<ProcessorDecision>
   readonly processSummary: (
     streamInput: LLM.StreamInput,
     providerAttempt: {
@@ -502,7 +519,7 @@ export interface Handle {
       readonly settled: Effect.Effect<void>
       readonly failed: (error: unknown) => Effect.Effect<void>
     },
-  ) => Effect.Effect<Result, SummaryProtocolViolation>
+  ) => Effect.Effect<ProcessorDecision, SummaryProtocolViolation>
 }
 
 type Input = {
@@ -539,7 +556,7 @@ interface ProcessorContext extends Input {
   toolcalls: Record<string, ToolCall>
   shouldBreak: boolean
   snapshot: string | undefined
-  blocked: boolean
+  stopReason: ProcessorStopReason | undefined
   needsCompaction: boolean
   currentText: SessionV1.TextPart | undefined
   currentTextID: string | undefined
@@ -551,6 +568,11 @@ interface ProcessorContext extends Input {
   processorDecodedOrdinal: number
   processorReceiptCallIDs: Set<string>
   processorSchemaInvalidCallIDs: Set<string>
+  activityEvidence: Map<string, { fingerprint: string; kind: string }>
+  activityEffectReceipts: Map<string, { receiptID: string; fingerprint: string }>
+  activityToolNames: Set<string>
+  activityWorkspaceRevision: string | undefined
+  activityValidationFingerprint: string | undefined
 }
 
 type StreamEvent = LLMEvent
@@ -586,10 +608,12 @@ export const layer = Layer.effect(
         model: input.model,
         sequenceTracker: input.sequenceTracker,
         planTracker: input.planTracker,
+        loopPolicy: input.loopPolicy,
+        noProgressLimit: input.noProgressLimit,
         toolcalls: {},
         shouldBreak: false,
         snapshot: initialSnapshot,
-        blocked: false,
+        stopReason: undefined,
         needsCompaction: false,
         currentText: undefined,
         currentTextID: undefined,
@@ -601,6 +625,11 @@ export const layer = Layer.effect(
         processorDecodedOrdinal: 0,
         processorReceiptCallIDs: new Set(),
         processorSchemaInvalidCallIDs: new Set(),
+        activityEvidence: new Map(),
+        activityEffectReceipts: new Map(),
+        activityToolNames: new Set(),
+        activityWorkspaceRevision: initialSnapshot,
+        activityValidationFingerprint: undefined,
       }
       const mirrorAssistant = flags.experimentalEventSystem && !input.assistantMessage.summary
       let aborted = false
@@ -648,6 +677,82 @@ export const layer = Layer.effect(
           }),
         )
       }
+
+      const observeDurableTurn = Effect.fn("SessionProcessor.observeDurableTurn")(function* () {
+        if (
+          flags.activityAuthority !== "durable" ||
+          ctx.loopPolicy !== "ask" ||
+          ctx.assistantMessage.summary ||
+          ctx.activityToolNames.size === 0
+        )
+          return
+        const activity = yield* SessionPromptIntent.activeActivityForSession(ctx.sessionID).pipe(
+          Effect.provideService(Database.Service, database),
+        )
+        if (!activity)
+          return yield* Effect.die(
+            new Error(`durable activity authority has no active legacy activity: ${ctx.sessionID}`),
+          )
+        const current = yield* DeepAgentActivityAuthority.reconstruct({
+          activityKind: "legacy",
+          activityID: activity.activityID,
+        }).pipe(Effect.provideService(Database.Service, database))
+        const configured =
+          current.objective.enforcementState === "monitoring"
+            ? current.objective
+            : yield* Effect.gen(function* () {
+                const messages = yield* session.messages({ sessionID: ctx.sessionID })
+                const trigger = messages.find((message) => message.info.id === activity.messageID)
+                const objectiveText =
+                  trigger?.parts
+                    .filter((part): part is SessionV1.TextPart => part.type === "text" && !part.synthetic)
+                    .map((part) => part.text.trim())
+                    .filter(Boolean)
+                    .join("\n") || `Complete legacy activity ${activity.activityID}`
+                return yield* DeepAgentActivityAuthority.configure({
+                  activityKind: "legacy",
+                  activityID: activity.activityID,
+                  expectedVersion: current.objective.version,
+                  objectiveText,
+                  completionCriteria: [{ kind: "plan_complete" }],
+                  enforcementState: "monitoring",
+                  stallThreshold: DOOM_LOOP_MIN_REPEATS - 1,
+                }).pipe(Effect.provideService(Database.Service, database))
+              })
+        const plan = AgentGateway.DeepAgentSessionState.getPlan(ctx.sessionID)
+          ? AgentGateway.DeepAgentPlanStore.planDocRef(ctx.sessionID)
+          : null
+        const observed = yield* DeepAgentActivityAuthority.observe({
+          activityKind: "legacy",
+          activityID: activity.activityID,
+          idempotencyKey: `provider-turn:${ctx.assistantMessage.id}`,
+          expectedVersion: configured.version,
+          ...(ctx.activityWorkspaceRevision ? { workspaceRevision: ctx.activityWorkspaceRevision } : {}),
+          ...(plan ? { planVersion: plan.version } : {}),
+          ...(ctx.activityValidationFingerprint ? { validationFingerprint: ctx.activityValidationFingerprint } : {}),
+          evidence: [...ctx.activityEvidence.values()],
+          effectReceipts: [...ctx.activityEffectReceipts.values()],
+        }).pipe(Effect.provideService(Database.Service, database))
+        if (observed.objective.state !== "needs_human") return
+        const agent = yield* agents.get(ctx.assistantMessage.agent)
+        const patterns = [...ctx.activityToolNames].toSorted()
+        yield* permission.ask({
+          id: PermissionV1.ID.make(
+            `per_${Hash.sha256(`no-progress:${activity.activityID}:${observed.observation.revision}`).slice(0, 48)}`,
+          ),
+          permission: "doom_loop",
+          patterns,
+          sessionID: ctx.sessionID,
+          metadata: {
+            activity_id: activity.activityID,
+            observation_revision: observed.observation.revision,
+            no_progress_count: observed.observation.noProgressCount,
+            vector_hash: observed.observation.vectorHash,
+          },
+          always: patterns,
+          ruleset: agent.permission,
+        })
+      })
 
       const persistMissingPlanToolCall = Effect.fn("SessionProcessor.persistMissingPlanToolCall")(function* (
         toolCallID: string,
@@ -834,6 +939,37 @@ export const layer = Layer.effect(
             attachments: output.attachments,
           },
         })
+        if (flags.activityAuthority === "durable" && ctx.loopPolicy === "ask") {
+          const workspaceRevision = yield* snapshot.track()
+          const resultFingerprint =
+            match.part.tool && ctx.sequenceTracker
+              ? ctx.sequenceTracker.resultFingerprint(match.part.tool, output)
+              : undefined
+          const evidenceFingerprint =
+            resultFingerprint ?? Hash.sha256(canonicalJson({ tool: match.part.tool, input: match.part.state.input }))
+          const receiptID = `${ctx.assistantMessage.id}:${toolCallID}`
+          ctx.activityEvidence.set(evidenceFingerprint, {
+            fingerprint: evidenceFingerprint,
+            kind: resultFingerprint ? "tool_result" : "tool_invocation",
+          })
+          if (workspaceRevision !== ctx.activityWorkspaceRevision)
+            ctx.activityEffectReceipts.set(receiptID, {
+              receiptID,
+              fingerprint: Hash.sha256(
+                canonicalJson({
+                  tool: match.part.tool,
+                  input: match.part.state.input,
+                  workspaceRevision: workspaceRevision ?? null,
+                }),
+              ),
+            })
+          ctx.activityWorkspaceRevision = workspaceRevision
+          ctx.activityToolNames.add(match.part.tool)
+          if (protocol)
+            ctx.activityValidationFingerprint = Hash.sha256(
+              canonicalJson({ outcome: protocol.outcome, code: protocol.code ?? null }),
+            )
+        }
         const noProgress = yield* settleToolCall(
           toolCallID,
           match.part.tool,
@@ -873,21 +1009,62 @@ export const layer = Layer.effect(
       ) {
         const match = yield* readToolCall(toolCallID)
         if (!match || match.part.state.status !== "running") return false
+        const rejection =
+          error instanceof Question.RejectedError
+            ? ({ code: "user_rejected_question", callID: toolCallID } as const)
+            : error instanceof PermissionV1.RejectedError
+              ? ({ code: "user_rejected_permission", callID: toolCallID } as const)
+              : undefined
         yield* session.updatePart({
           ...match.part,
           state: {
             status: "error",
             input: match.part.state.input,
             error: errorMessage(error),
-            ...(match.part.state.metadata || metadata
-              ? { metadata: { ...match.part.state.metadata, ...metadata } }
+            ...(match.part.state.metadata || metadata || rejection
+              ? {
+                  metadata: {
+                    ...match.part.state.metadata,
+                    ...metadata,
+                    ...(rejection ? { failureCode: rejection.code } : {}),
+                  },
+                }
               : {}),
             time: { start: match.part.state.time.start, end: Date.now() },
           },
         })
-        if (error instanceof PermissionV1.RejectedError || error instanceof Question.RejectedError) {
-          ctx.blocked = ctx.shouldBreak
+        if (flags.activityAuthority === "durable" && ctx.loopPolicy === "ask") {
+          const workspaceRevision = yield* snapshot.track()
+          const message = errorMessage(error)
+          const evidenceFingerprint = Hash.sha256(
+            canonicalJson({
+              tool: match.part.tool,
+              input: match.part.state.input,
+              error: message,
+              metadata: metadata ?? null,
+            }),
+          )
+          const receiptID = `${ctx.assistantMessage.id}:${toolCallID}`
+          ctx.activityEvidence.set(evidenceFingerprint, { fingerprint: evidenceFingerprint, kind: "tool_error" })
+          if (workspaceRevision !== ctx.activityWorkspaceRevision)
+            ctx.activityEffectReceipts.set(receiptID, {
+              receiptID,
+              fingerprint: Hash.sha256(
+                canonicalJson({
+                  tool: match.part.tool,
+                  input: match.part.state.input,
+                  error: message,
+                  workspaceRevision: workspaceRevision ?? null,
+                }),
+              ),
+            })
+          ctx.activityWorkspaceRevision = workspaceRevision
+          ctx.activityToolNames.add(match.part.tool)
+          ctx.activityValidationFingerprint = Hash.sha256(
+            canonicalJson({ outcome: "tool_error", error: message, metadata: metadata ?? null }),
+          )
         }
+        if (rejection && ctx.shouldBreak) ctx.stopReason ??= rejection
         yield* settleToolCall(toolCallID)
         return true
       })
@@ -1259,6 +1436,10 @@ export const layer = Layer.effect(
                     }),
                   )
                 }
+                if (flags.activityAuthority === "durable") {
+                  ctx.sequenceTracker.setTriggered(detected.sequenceKey)
+                  return
+                }
                 const agent = yield* agents.get(ctx.assistantMessage.agent)
                 yield* permission.ask({
                   permission: "doom_loop",
@@ -1317,6 +1498,8 @@ export const layer = Layer.effect(
                 }),
               )
             }
+
+            if (flags.activityAuthority === "durable") return
 
             const agent = yield* agents.get(ctx.assistantMessage.agent)
             yield* permission.ask({
@@ -1865,6 +2048,11 @@ export const layer = Layer.effect(
         ctx.processorDecodedOrdinal = 0
         ctx.processorReceiptCallIDs.clear()
         ctx.processorSchemaInvalidCallIDs.clear()
+        ctx.activityEvidence.clear()
+        ctx.activityEffectReceipts.clear()
+        ctx.activityToolNames.clear()
+        ctx.activityWorkspaceRevision = yield* snapshot.track()
+        ctx.activityValidationFingerprint = undefined
 
         return yield* Effect.gen(function* () {
           const streamed = Effect.gen(function* () {
@@ -1885,6 +2073,7 @@ export const layer = Layer.effect(
             yield* stream.pipe(
               Stream.tap((event) =>
                 Effect.gen(function* () {
+                  yield* streamInput.requestReceipt?.observed(event) ?? Effect.void
                   if (firstEvent) {
                     firstEvent = false
                     yield* providerAttempt?.streaming ?? Effect.void
@@ -1975,25 +2164,53 @@ export const layer = Layer.effect(
                   ]).pipe(Effect.asVoid),
             ),
           )
+          const governed = completed.pipe(Effect.andThen(observeDurableTurn))
           yield* (
             propagateSummaryViolation
-              ? completed.pipe(
+              ? governed.pipe(
                   Effect.catch((error) =>
                     error instanceof SummaryProtocolViolation ? Effect.fail(error) : halt(error),
                   ),
                 )
-              : completed.pipe(Effect.catch(halt))
+              : governed.pipe(Effect.catch(halt))
           ).pipe(Effect.ensuring(cleanup()))
 
-          if (ctx.needsCompaction) return "compact"
-          if (ctx.blocked || ctx.assistantMessage.error) return "stop"
-          return "continue"
+          if (ctx.needsCompaction) return { action: "compact" } as const
+          if (ctx.stopReason) return { action: "stop", reason: ctx.stopReason } as const
+          if (
+            ctx.assistantMessage.error?.name === "TaskBudgetExceededError" &&
+            ctx.assistantMessage.error.data.budget === "no_progress"
+          )
+            return {
+              action: "stop",
+              reason: {
+                code: "task_no_progress_budget_exhausted",
+                limit: ctx.assistantMessage.error.data.limit,
+                used: ctx.assistantMessage.error.data.used,
+              },
+            } as const
+          if (ctx.assistantMessage.error)
+            return {
+              action: "stop",
+              reason: {
+                code: "assistant_error",
+                errorName: ctx.assistantMessage.error.name,
+              },
+            } as const
+          return { action: "continue" } as const
         })
       })
 
       const process = Effect.fn("SessionProcessor.process")((streamInput: LLM.StreamInput, providerAttempt) =>
         processInternal(streamInput, providerAttempt).pipe(
-          Effect.catchTag("SummaryProtocolViolation", (error) => halt(error).pipe(Effect.as("stop" as const))),
+          Effect.catchTag("SummaryProtocolViolation", (error) =>
+            halt(error).pipe(
+              Effect.as({
+                action: "stop",
+                reason: { code: "assistant_error", errorName: "SummaryProtocolViolation" },
+              } as const),
+            ),
+          ),
         ),
       )
 

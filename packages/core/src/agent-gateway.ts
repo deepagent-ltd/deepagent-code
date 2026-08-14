@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises"
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises"
 import { createHash, randomUUID } from "node:crypto"
 import path from "node:path"
 import { Cause, Effect, Layer, Stream } from "effect"
@@ -18,6 +18,8 @@ import type { AgentMode } from "./deepagent/mode"
 import { resolveDeepAgentCodeHome } from "./deepagent/workspace"
 import * as KnowledgeRetriever from "./deepagent/knowledge-retriever"
 import type { ProblemProfile } from "./deepagent/domain-pack"
+import { DeepAgentDurableLearning, type Admission } from "./deepagent/durable-learning"
+import { writeFileAtomic } from "./deepagent/atomic-write"
 import {
   buildDeterministicResult,
   classifyDeterministicTask,
@@ -63,6 +65,7 @@ export type Config = {
   readonly allowProviderExecutedToolNames?: readonly string[]
   readonly killSwitch?: boolean
   readonly selfLearning?: SelfLearningPolicy
+  readonly durableLearning?: boolean
   readonly modelRouter?: Partial<ModelRouterConfig>
   readonly resumeFrom?: ResumeConfig
 }
@@ -100,6 +103,7 @@ export type RunInput = {
     readonly function: string
   }
   readonly metadata?: Record<string, unknown>
+  readonly releasedKnowledgeSelection?: DeepAgentReleasedSnapshot.Selection
 }
 
 export type RuntimeSnapshot = {
@@ -213,6 +217,7 @@ const env = () => {
     allowProviderExecutedToolNames: processEnv.DEEPAGENT_PROVIDER_EXECUTED_TOOL_ALLOWLIST,
     killSwitch: processEnv.DEEPAGENT_KILL_SWITCH,
     selfLearning: processEnv.DEEPAGENT_SELF_LEARNING,
+    durableLearning: processEnv.DEEPAGENT_DURABLE_LEARNING,
     routerProvider: processEnv.DEEPAGENT_ROUTER_PROVIDER,
     routerModel: processEnv.DEEPAGENT_ROUTER_MODEL,
     routerReason: processEnv.DEEPAGENT_ROUTER_REASON,
@@ -229,6 +234,7 @@ type CurrentConfig = {
   readonly allowProviderExecutedToolNames: readonly string[]
   readonly killSwitch: boolean
   readonly selfLearning: SelfLearningPolicy
+  readonly durableLearning: boolean
   readonly modelRouter: ModelRouterConfig
   readonly runsDir?: string
   readonly baseDir?: string
@@ -244,6 +250,7 @@ let current: CurrentConfig = {
   allowProviderExecutedToolNames: parseAllowlist(env().allowProviderExecutedToolNames),
   killSwitch: env().killSwitch === "true" || env().killSwitch === "1",
   selfLearning: env().selfLearning === "auto" ? "auto" : "manual",
+  durableLearning: env().durableLearning === "true" || env().durableLearning === "1",
   modelRouter: {
     upstreamProviderID: env().routerProvider ?? "deepagent-upstream",
     upstreamModelID: env().routerModel ?? "deepagent/default-upstream",
@@ -256,6 +263,103 @@ let current: CurrentConfig = {
 }
 
 export const selfLearningPolicy = (): SelfLearningPolicy => current.selfLearning
+
+export type LearningAuthority = {
+  readonly record?: (admission: Admission) => Promise<void>
+  readonly enqueue: (admission: Admission) => Promise<void>
+}
+
+export const LEARNING_ADMISSION_RECEIPT_FILE = "LEARNING_ADMISSION_RECEIPT.json"
+
+let learningAuthority: LearningAuthority | undefined
+let learningRecovery: Promise<void> | undefined
+let learningRecoveryRequested = false
+
+export const setLearningAuthority = (authority: LearningAuthority | undefined): void => {
+  learningAuthority = authority
+  if (authority && current.durableLearning) {
+    scheduleLearningAdmissionRecovery()
+  }
+}
+
+const scheduleLearningAdmissionRecovery = () => {
+  learningRecoveryRequested = true
+  if (learningRecovery) return
+  learningRecovery = (async () => {
+    while (learningRecoveryRequested) {
+      learningRecoveryRequested = false
+      await recoverLearningAdmissions()
+    }
+  })()
+    .catch(() => undefined)
+    .finally(() => {
+      learningRecovery = undefined
+      if (learningRecoveryRequested) scheduleLearningAdmissionRecovery()
+    })
+}
+
+export const flushLearningAdmissionRecovery = async (): Promise<void> => {
+  if (learningAuthority && current.durableLearning) scheduleLearningAdmissionRecovery()
+  while (learningRecovery) await learningRecovery
+}
+
+export const recoverLearningAdmissions = async (
+  authority = learningAuthority,
+  runsDir = current.runsDir,
+): Promise<readonly string[]> => {
+  if (!authority?.record || !runsDir) return []
+  const record = authority.record
+  const entries = await readdir(runsDir, { withFileTypes: true }).catch(() => [])
+  return entries
+    .filter((entry) => entry.isDirectory())
+    .reduce<Promise<readonly string[]>>(async (result, entry) => {
+      const recovered = await result
+      const file = path.join(runsDir, entry.name, LEARNING_ADMISSION_RECEIPT_FILE)
+      const value = await readFile(file, "utf8")
+        .then((content) => JSON.parse(content) as unknown)
+        .catch(() => undefined)
+      const decoded = DeepAgentDurableLearning.admissionFromLocalReceipt(value)
+      if (!decoded || decoded.receipt.state !== "local_pending") return recovered
+      if (
+        !(await DeepAgentDurableLearning.validateLocalAdmissionReceipt(
+          decoded.admission,
+          path.join(runsDir, entry.name),
+        ))
+      ) {
+        return recovered
+      }
+      const recorded = await record(decoded.admission)
+        .then(() => true)
+        .catch(async (error) => {
+          await writeLearningAdmissionReceipt(
+            file,
+            decoded.admission,
+            "local_pending",
+            "record_failed",
+            failureMessage(error),
+          ).catch(() => undefined)
+          return false
+        })
+      if (!recorded) return recovered
+      await writeLearningAdmissionReceipt(file, decoded.admission, "durable_pending").catch(() => undefined)
+      const submitted = await authority
+        .enqueue(decoded.admission)
+        .then(() => true)
+        .catch(async (error) => {
+          await writeLearningAdmissionReceipt(
+            file,
+            decoded.admission,
+            "durable_pending",
+            "enqueue_failed",
+            failureMessage(error),
+          ).catch(() => undefined)
+          return false
+        })
+      if (!submitted) return recovered
+      await writeLearningAdmissionReceipt(file, decoded.admission, "submitted").catch(() => undefined)
+      return [...recovered, entry.name]
+    }, Promise.resolve([]))
+}
 
 // G31-3: minimal in-memory audit counters for general-mode (passthrough) turns.
 // No disk writes — available only for diagnostics / budget tracking in-process.
@@ -280,6 +384,11 @@ export const getGeneralAudit = (sessionID: string): GeneralAuditEntry | undefine
 
 export const configure = (config: Config = {}) => {
   const nextRunsDir = "runsDir" in config ? config.runsDir : current.runsDir
+  const nextDurableLearning = config.durableLearning ?? current.durableLearning
+  const shouldRecoverLearning =
+    learningAuthority &&
+    nextDurableLearning &&
+    ((!current.durableLearning && nextDurableLearning) || (current.durableLearning && nextRunsDir !== current.runsDir))
   // P0-0: memory/state always root at the single storage home. Production injects `baseDir`
   // explicitly (config.ts passes Global.Path.agent.data on every configure call); when absent we
   // re-resolve from the canonical/test storage root. We do NOT fall back to a frozen module-init value, so a late env change (tests)
@@ -326,9 +435,13 @@ export const configure = (config: Config = {}) => {
         : current.allowProviderExecutedToolNames,
     killSwitch: config.killSwitch ?? current.killSwitch,
     selfLearning: config.selfLearning ?? current.selfLearning,
+    durableLearning: nextDurableLearning,
     modelRouter: { ...current.modelRouter, ...config.modelRouter },
     runsDir: nextRunsDir,
     resumeFrom: "resumeFrom" in config ? config.resumeFrom : current.resumeFrom,
+  }
+  if (shouldRecoverLearning) {
+    scheduleLearningAdmissionRecovery()
   }
   return current
 }
@@ -391,6 +504,9 @@ export const fromRequest = (request: LLMRequest): RunInput => {
         ? { file: genericAgent.originFile, function: genericAgent.originFunction }
         : undefined,
     metadata,
+    releasedKnowledgeSelection: DeepAgentReleasedSnapshot.decodeSelection(
+      isRecord(metadata.deepagent) ? metadata.deepagent.released_knowledge_selection : undefined,
+    ),
   }
 }
 
@@ -441,6 +557,7 @@ import * as DeepAgentBudget from "./deepagent/budget"
 import * as DeepAgentKnowledgeRetriever from "./deepagent/knowledge-retriever"
 import * as DeepAgentHooks from "./deepagent/hooks"
 import * as DeepAgentKnowledgeGate from "./deepagent/knowledge-gate"
+import { DeepAgentReleasedSnapshot } from "./deepagent/released-snapshot"
 import type { RunSummary } from "./deepagent/run-graph"
 
 export {
@@ -466,6 +583,7 @@ export {
   DeepAgentKnowledgeRetriever,
   DeepAgentHooks,
   DeepAgentKnowledgeGate,
+  DeepAgentReleasedSnapshot,
   DeepAgentKnowledgeSource,
   DeepAgentDurableKnowledgeStore,
   DeepAgentDomainPackRegistry,
@@ -709,7 +827,66 @@ const close = async (run: RunRecord, state: Exclude<RunCloseState, "opened" | "s
   if ((state === "failed" || state === "blocked" || state === "cancelled") && !run.failureDossierRef) {
     run.failureDossierRef = await writeFailureDossier(run, failure)
   }
-  await writeArtifacts(run, state)
+  const finalStatus = learningFinalStatus(run, state)
+  const authority = learningAuthority
+  const artifacts = prepareArtifacts(run, state)
+  const admission =
+    run.config.durableLearning && finalStatus
+      ? durableLearningAdmission(run, finalStatus, terminalArtifactFor(run, artifacts))
+      : undefined
+  const receiptFile = path.join(run.dir, LEARNING_ADMISSION_RECEIPT_FILE)
+  const recordError = !authority
+    ? { code: "authority_unavailable", detail: "Durable learning authority is unavailable" }
+    : !authority.record
+      ? { code: "record_unavailable", detail: "Durable learning outbox record authority is unavailable" }
+      : undefined
+  if (run.config.durableLearning && admission) {
+    await writeLearningAdmissionReceipt(
+      receiptFile,
+      admission,
+      "local_pending",
+      recordError?.code,
+      recordError?.detail,
+    ).catch(() => undefined)
+  }
+  await writeArtifacts(run, state, artifacts)
+  const recorded =
+    run.config.durableLearning && admission && authority?.record
+      ? await authority
+          .record(admission)
+          .then(() => true)
+          .catch(async (error) => {
+            await writeLearningAdmissionReceipt(
+              receiptFile,
+              admission,
+              "local_pending",
+              "record_failed",
+              failureMessage(error),
+            ).catch(() => undefined)
+            return false
+          })
+      : false
+  if (recorded && admission) {
+    await writeLearningAdmissionReceipt(receiptFile, admission, "durable_pending").catch(() => undefined)
+  }
+  if (recorded && admission && authority) {
+    const submitted = await authority
+      .enqueue(admission)
+      .then(() => true)
+      .catch(async (error) => {
+        await writeLearningAdmissionReceipt(
+          receiptFile,
+          admission,
+          "durable_pending",
+          "enqueue_failed",
+          failureMessage(error),
+        ).catch(() => undefined)
+        return false
+      })
+    if (submitted) {
+      await writeLearningAdmissionReceipt(receiptFile, admission, "submitted").catch(() => undefined)
+    }
+  }
 
   const sessionId = run.input.sessionID
   if (!sessionId) return
@@ -722,11 +899,11 @@ const close = async (run: RunRecord, state: Exclude<RunCloseState, "opened" | "s
       // onSessionComplete now only does session bookkeeping (no persist) — the old duplicate
       // ungated persist + auto-approve here was the sensitivity-bypass hole; removed.
       DeepAgentOrchestrator.onSessionComplete(sessionId)
-      runBackgroundLearning(run, "completed")
+      await runBackgroundLearning(run, "completed")
     }
   } else if (state === "failed") {
     DeepAgentSessionState.fail(sessionId)
-    runBackgroundLearning(run, "failed")
+    await runBackgroundLearning(run, "failed")
   }
 }
 
@@ -743,10 +920,9 @@ const ensureSessionStateForRun = (run: RunRecord): DeepAgentSessionState.Session
   })
 }
 
-// E1: background learning runs OFF the main task thread via a process-level queue. close()
-// enqueues (non-blocking) and the queue drains on a microtask, so learning never blocks or
-// regresses the user-facing turn. The gateway only triggers session_finalization here; idle /
-// pause / project_switch triggers are enqueued by the app lifecycle through the same queue.
+// The legacy path runs off-thread through a process queue. The flag-gated durable path awaits only
+// immutable artifact + job admission; extraction/review/governance remain background work. The
+// gateway currently owns session_finalization only; the other lifecycle triggers remain open work.
 const learningQueue = new DeepAgentBackgroundLearning.LearningQueue()
 
 export const enqueueLearning = (job: DeepAgentBackgroundLearning.LearningJob): void => learningQueue.enqueue(job)
@@ -757,7 +933,8 @@ export const flushLearning = async (): Promise<void> => {
   await learningQueue.drainNow()
 }
 
-const runBackgroundLearning = (run: RunRecord, finalStatus: "completed" | "failed"): void => {
+const runBackgroundLearning = async (run: RunRecord, finalStatus: "completed" | "failed"): Promise<void> => {
+  if (run.config.durableLearning) return
   const sessionId = run.input.sessionID
   if (!sessionId) return
   const session = ensureSessionStateForRun(run)
@@ -768,24 +945,28 @@ const runBackgroundLearning = (run: RunRecord, finalStatus: "completed" | "faile
   const projectID = projectIDForWorkspace(workspacePath)
   const runID = session.runId
   const mode = session.mode
-  const roundState = session.roundState
+  const roundState = structuredClone(session.roundState)
   const totalRounds = session.roundState.round
+  const baseDir = run.config.baseDir ?? resolveDeepAgentCodeHome()
+  const selfLearning = run.config.selfLearning
+  const runsDir = run.config.runsDir
+  const policy = selfLearning === "auto" ? "auto_merge_safe_project" : "manual_review"
   learningQueue.enqueue({
     trigger: "session_finalization",
     build: () => {
-      const home = new DeepAgentWorkspace.DeepAgentCodeHome(current.baseDir)
+      const home = new DeepAgentWorkspace.DeepAgentCodeHome(baseDir)
       const project = home.ensureProject(projectID, workspacePath)
       // P0-1: the selfLearning setting maps to the worker policy. auto -> safe memory candidates
       // auto-approve (gated by looksSensitive); manual -> everything stays pending for review.
-      const policy = current.selfLearning === "auto" ? "auto_merge_safe_project" : "manual_review"
       // docs/34 §8: the worker stages into THIS workspace's durable project store (opened from the
-      // same baseDir + path the retriever reads), so learned knowledge is immediately consistent.
-      const durable = DeepAgentKnowledgeSource.projectStoreFor(workspacePath)
+      // captured baseDir + project path), so later process-global reconfiguration cannot redirect an
+      // already-admitted job to another authority root.
+      const durable = new DeepAgentDurableKnowledgeStore.DurableKnowledgeStore(path.join(project.root, "knowledge"))
       // Gate 3 (R3 anti-pollution): the worker must consult the SAME durable RejectedBuffer the human
       // `reject` handler writes, so a rejected pattern is not re-learned + auto-admitted on a later run.
       // The handler roots it at dirname(runsDir)/memory; construct the reader at the identical path.
-      const rejectedBuffer = current.runsDir
-        ? new DeepAgentPromotion.RejectedBuffer(path.join(path.dirname(current.runsDir), "memory"))
+      const rejectedBuffer = runsDir
+        ? new DeepAgentPromotion.RejectedBuffer(path.join(path.dirname(runsDir), "memory"))
         : undefined
       return {
         worker: new DeepAgentBackgroundLearning.LearningWorker(project, projectID, durable, rejectedBuffer),
@@ -806,8 +987,8 @@ const runBackgroundLearning = (run: RunRecord, finalStatus: "completed" | "faile
           //   reviewer: async (candidates) => {
           //     // Open a fresh, ephemeral session using a small model (e.g. "small" preset).
           //     // Pass ONLY `candidates` — no round state, no session messages, no tool outputs.
-          //     // Return a filtered/annotated subset. The LearningWorker falls back to the full
-          //     // extraction if this throws, so failures here are always non-fatal.
+          //     // Return an exact immutable subset. The LearningWorker rejects rewritten, duplicated,
+          //     // or invented candidates and fail-closes to the safe governance subset on failure.
           //     return reviewCandidatesWithFreshSession(candidates, current.baseDir)
           //   },
           //
@@ -825,6 +1006,71 @@ const runBackgroundLearning = (run: RunRecord, finalStatus: "completed" | "faile
   } catch {
     /* environment-fact staleness is advisory; never let it break the close() path */
   }
+}
+
+const learningFinalStatus = (
+  run: RunRecord,
+  state: Exclude<RunCloseState, "opened" | "streaming">,
+): "completed" | "failed" | undefined => {
+  if (state === "failed") return "failed"
+  if (state !== "completed") return undefined
+  const hasPendingToolCalls = run.latestEvents.some(
+    (event) =>
+      event.event_type === "tool-call" && !run.latestEvents.some((candidate) => candidate.event_type === "tool-result"),
+  )
+  return hasPendingToolCalls ? undefined : "completed"
+}
+
+const durableLearningAdmission = (
+  run: RunRecord,
+  finalStatus: "completed" | "failed",
+  terminalArtifact: Admission["terminalArtifact"],
+): Admission | undefined => {
+  const sessionId = run.input.sessionID
+  if (!sessionId) return undefined
+  const session = ensureSessionStateForRun(run)
+  if (!session) return undefined
+  const workspacePath = session.workspacePath ?? process.cwd()
+  const runsDir = run.config.runsDir
+  const admission = {
+    baseDir: run.config.baseDir ?? resolveDeepAgentCodeHome(),
+    workspacePath,
+    rejectedBufferDir: runsDir ? path.join(path.dirname(runsDir), "memory") : null,
+    terminalArtifact,
+    input: {
+      projectID: projectIDForWorkspace(workspacePath),
+      sessionID: sessionId,
+      runID: session.runId,
+      mode: session.mode,
+      roundState: structuredClone(session.roundState),
+      totalRounds: session.roundState.round,
+      finalStatus,
+      trigger: "session_finalization" as const,
+      policy: run.config.selfLearning === "auto" ? ("auto_merge_safe_project" as const) : ("manual_review" as const),
+    },
+  }
+  return {
+    ...admission,
+    terminalArtifact: {
+      ...terminalArtifact,
+      learning_admission_fingerprint: DeepAgentDurableLearning.admissionFingerprint(admission),
+    },
+  }
+}
+
+const learningAdmissionFingerprintForRun = (run: RunRecord, state: RunCloseState): string | undefined => {
+  if (!run.config.durableLearning) return undefined
+  if (state === "opened" || state === "streaming") return undefined
+  const finalStatus = learningFinalStatus(run, state)
+  if (!finalStatus) return undefined
+  const terminalArtifact = {
+    schema_version: "deepagent-code.learning_terminal_artifact.v1" as const,
+    path: path.join(run.dir, "DEEPAGENT_RUN_STATE.json"),
+    sha256: "0".repeat(64),
+    learning_admission_fingerprint: "0".repeat(64),
+  }
+  const admission = durableLearningAdmission(run, finalStatus, terminalArtifact)
+  return admission ? DeepAgentDurableLearning.admissionFingerprint(admission) : undefined
 }
 
 // §G.6 connection-failure hook. Scans this run's validation outputs for a connection-shaped failure
@@ -956,16 +1202,72 @@ const observeToolAudit = (run: RunRecord, event: LLMEventType) => {
   })
 }
 
-const writeArtifacts = async (run: RunRecord, state: RunCloseState) => {
-  await mkdir(run.dir, { recursive: true })
+const prepareArtifacts = (run: RunRecord, state: RunCloseState) => {
   const summary = runSummaryFor(run, state)
-  materializeRunGraph(run, summary) // F5: document graph is the first materialized run memory source.
-  const artifacts = artifactsFor(run, state, summary)
+  materializeRunGraph(run, summary)
+  return artifactsFor(run, state, summary)
+}
+
+const writeArtifacts = async (run: RunRecord, state: RunCloseState, artifacts = prepareArtifacts(run, state)) => {
+  await mkdir(run.dir, { recursive: true })
   await Promise.all(
-    Object.entries(artifacts).map(([name, value]) =>
-      writeFile(path.join(run.dir, name), artifactText(name, value), "utf8"),
-    ),
+    Object.entries(artifacts)
+      .filter(([name]) => name !== "DEEPAGENT_RUN_STATE.json")
+      .map(([name, value]) => writeFile(path.join(run.dir, name), artifactText(name, value), "utf8")),
   )
+  const terminal = artifactText("DEEPAGENT_RUN_STATE.json", artifacts["DEEPAGENT_RUN_STATE.json"])
+  writeFileAtomic(path.join(run.dir, "DEEPAGENT_RUN_STATE.json"), terminal)
+  if ((await readFile(path.join(run.dir, "DEEPAGENT_RUN_STATE.json"), "utf8")) !== terminal) {
+    throw new Error("DeepAgent terminal run state verification failed")
+  }
+}
+
+const terminalArtifactFor = (run: RunRecord, artifacts: Record<string, unknown>): Admission["terminalArtifact"] => {
+  const content = artifactText("DEEPAGENT_RUN_STATE.json", artifacts["DEEPAGENT_RUN_STATE.json"])
+  const runState = artifacts["DEEPAGENT_RUN_STATE.json"]
+  const fingerprint = isRecord(runState) ? stringValue(runState.learning_admission_fingerprint) : undefined
+  if (!fingerprint) throw new Error("DeepAgent terminal run state is missing the learning admission fingerprint")
+  return {
+    schema_version: "deepagent-code.learning_terminal_artifact.v1",
+    path: path.join(run.dir, "DEEPAGENT_RUN_STATE.json"),
+    sha256: createHash("sha256").update(content).digest("hex"),
+    learning_admission_fingerprint: fingerprint,
+  }
+}
+
+const writeLearningAdmissionReceipt = async (
+  file: string,
+  admission: Admission,
+  state: DeepAgentDurableLearning.LocalAdmissionReceipt["state"],
+  code?: string,
+  detail?: string,
+) => {
+  try {
+    writeFileAtomic(
+      file,
+      `${JSON.stringify(
+        DeepAgentDurableLearning.localAdmissionReceipt(
+          admission,
+          state,
+          code && detail
+            ? {
+                code,
+                detail,
+              }
+            : null,
+        ),
+        null,
+        2,
+      )}\n`,
+    )
+  } catch (error) {
+    console.error("deepagent durable learning admission receipt write failed", {
+      file,
+      state,
+      error: failureMessage(error),
+    })
+    throw error
+  }
 }
 
 // F5: materialize the run as a typed-document graph under <runDir>/graph so the document
@@ -1014,7 +1316,7 @@ const binding = (run: RunRecord) => ({
   failure_dossier_ref: run.failureDossierRef,
 })
 
-const runState = (run: RunRecord, state: RunCloseState) => ({
+const runState = (run: RunRecord, state: RunCloseState, learningAdmissionFingerprint?: string) => ({
   schema_version: "deepagent_global_run_state.v1",
   run_id: run.runID,
   provider_id: run.input.providerID,
@@ -1034,6 +1336,10 @@ const runState = (run: RunRecord, state: RunCloseState) => ({
   generic_agent_session_id: run.input.callKind === "session_turn" ? sessionID(run) : null,
   generic_agent_message_id: run.input.callKind === "session_turn" ? messageID(run) : null,
   parent_generic_agent_session_id: run.input.parentSessionID ?? null,
+  goal_id:
+    run.input.metadata && isRecord(run.input.metadata.deepagent)
+      ? (stringValue(run.input.metadata.deepagent.goal_id) ?? null)
+      : null,
   auxiliary_call_id: run.input.auxiliaryCallID ?? null,
   passthrough: true,
   default_agent_preserved: true,
@@ -1046,6 +1352,7 @@ const runState = (run: RunRecord, state: RunCloseState) => ({
   degraded_reasons: [],
   deterministic_status: deterministicResultArtifact(run).verified_state,
   failure_dossier_ref: run.failureDossierRef,
+  ...(learningAdmissionFingerprint ? { learning_admission_fingerprint: learningAdmissionFingerprint } : {}),
 })
 
 const ledger = (run: RunRecord) => ({
@@ -1079,7 +1386,7 @@ const artifactsFor = (run: RunRecord, state: RunCloseState, summary = runSummary
     "TEST.md": testDoc(run, state),
     "HISTORY.md": historyDoc(run, state),
     "DIAGNOSIS_RESULT.json": diagnosisResult(run, state),
-    "DEEPAGENT_RUN_STATE.json": runState(run, state),
+    "DEEPAGENT_RUN_STATE.json": runState(run, state, learningAdmissionFingerprintForRun(run, state)),
     "RUN_CONTEXT.md": summary.runContextMarkdown,
     "CANDIDATE_LINEAGE.json": candidateLineage(run, state, summary),
     "OUTPUT_CONTRACT.json": outputContract(run),
@@ -1377,6 +1684,15 @@ const knowledgeRetrievalResult = (run: RunRecord) => {
     conflicts: retrieval?.conflicts ?? [],
     do_not_use_refs: retrieval?.doNotUse ?? [],
     gap_analysis: retrieval?.gapAnalysis ?? [],
+    released_snapshot: run.input.releasedKnowledgeSelection
+      ? {
+          snapshot_id: run.input.releasedKnowledgeSelection.snapshotId,
+          membership_hash: run.input.releasedKnowledgeSelection.membershipHash,
+          manifest_hash: run.input.releasedKnowledgeSelection.manifestHash,
+          generation: run.input.releasedKnowledgeSelection.generation,
+          exact_doc_refs: run.input.releasedKnowledgeSelection.documents,
+        }
+      : null,
     scope_notes: ["No hidden/evaluator data is eligible for prompt, memory, strategy, or active knowledge."],
     retrieval_policy: {
       topk_by_kind: retrieval?.topkApplied ?? KnowledgeRetriever.TOPK_DEFAULT,
@@ -2680,6 +2996,7 @@ const retrieveKnowledge = (run: RunRecord) => {
     // docs/34 §8: scope durable retrieval to the run's workspace path (unions user-global +
     // this workspace's project-shared). Absent workspace => user-global only.
     ...(workspacePath ? { workspacePath } : {}),
+    ...(run.input.releasedKnowledgeSelection ? { releasedSelection: run.input.releasedKnowledgeSelection } : {}),
   })
 }
 
