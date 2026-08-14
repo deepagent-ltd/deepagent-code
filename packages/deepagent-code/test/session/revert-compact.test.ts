@@ -15,6 +15,7 @@ import { provideTmpdirInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { ModelV2 } from "@deepagent-code/core/model"
+import { Storage } from "@/storage/storage"
 
 void Log.init({ print: false })
 
@@ -22,6 +23,7 @@ const env = Layer.mergeAll(
   Session.defaultLayer,
   SessionRevert.defaultLayer,
   Snapshot.defaultLayer,
+  Storage.defaultLayer,
   CrossSpawnSpawner.defaultLayer,
 )
 
@@ -549,7 +551,14 @@ describe("revert + compact workflow", () => {
             sessionID: sid,
             messageID: first,
           })
-          expect((yield* session.get(sid)).revert?.messageID).toBe(first)
+          const reverted = yield* session.get(sid)
+          expect(reverted.revert?.messageID).toBe(first)
+          expect(reverted.summary?.files).toBe(3)
+          const persisted = yield* Storage.Service.use((storage) =>
+            storage.read<Snapshot.FileDiff[]>(["session_diff", sid]),
+          )
+          expect(persisted).toHaveLength(3)
+          expect(persisted.every((item) => item.patch === undefined)).toBe(true)
           expect(yield* read(path.join(dir, "a.txt"))).toBe("a0")
           expect(yield* read(path.join(dir, "b.txt"))).toBe("b0")
           expect(yield* read(path.join(dir, "c.txt"))).toBe("c0")

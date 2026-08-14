@@ -30,6 +30,10 @@ Guidelines:
 
 Complete the user's search request efficiently and report your findings clearly.`
 
+const PROMPT_RESEARCHER = `You are a read-only research agent. Follow the user's research request exactly by inspecting the workspace with read-only tools.
+
+Use Read, Glob, Grep, Git Read, and other explicitly permitted analysis tools to gather concrete evidence. Do not edit files, run shell commands, delegate tasks, or claim evidence that you did not observe. Return the requested structured result when the user supplies an output contract.`
+
 const PROMPT_COMPACTION = `You are an anchored context summarization assistant for coding sessions.
 
 Summarize only the conversation history you are given. The newest turns may be kept verbatim outside your summary, so focus on the older context that still matters for continuing the work.
@@ -176,6 +180,30 @@ export const Plugin = PluginV2.define({
               { action: "webfetch", resource: "*", effect: "allow" },
               { action: "websearch", resource: "*", effect: "allow" },
               { action: "read", resource: "*", effect: "allow" },
+            ],
+            readonlyExternalDirectory,
+          ),
+        )
+      })
+
+      editor.update(AgentV2.ID.make("researcher"), (item) => {
+        item.description = "Read-only agent for evidence-backed research into a specific subsystem."
+        item.system = PROMPT_RESEARCHER
+        item.mode = "subagent"
+        item.permissions.push(
+          ...PermissionV2.merge(
+            defaults,
+            [
+              { action: "*", resource: "*", effect: "deny" },
+              { action: "grep", resource: "*", effect: "allow" },
+              { action: "glob", resource: "*", effect: "allow" },
+              { action: "list", resource: "*", effect: "allow" },
+              { action: "git_read", resource: "*", effect: "allow" },
+              { action: "webfetch", resource: "*", effect: "allow" },
+              { action: "websearch", resource: "*", effect: "allow" },
+              { action: "read", resource: "*", effect: "allow" },
+              { action: "code_intel", resource: "*", effect: "allow" },
+              { action: "context_query", resource: "*", effect: "allow" },
             ],
             readonlyExternalDirectory,
           ),

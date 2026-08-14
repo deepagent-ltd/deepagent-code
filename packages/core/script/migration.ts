@@ -31,6 +31,8 @@ await $`bun drizzle-kit generate ${args.values.name ? ["--name", args.values.nam
 const sqlMigrations = await sqlMigrationNames(sqlDir)
 
 for (const name of sqlMigrations) {
+  // Checkpoints seed Drizzle's next schema diff; executable backfills and triggers stay in the TypeScript migration chain.
+  if (await isSchemaCheckpoint(sqlDir, name)) continue
   if (await Bun.file(path.join(tsDir, `${name}.ts`)).exists()) continue
   await Bun.write(
     path.join(tsDir, `${name}.ts`),
@@ -38,7 +40,7 @@ for (const name of sqlMigrations) {
   )
 }
 
-await Bun.write(registry, renderRegistry(await typescriptMigrationNames()))
+await Bun.write(registry, renderRegistry(await migrationNamesInRegistryOrder()))
 
 async function check() {
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "deepagent-code-core-migration-check-"))
@@ -64,12 +66,13 @@ export default { ...config, out: ${JSON.stringify(output)} }
 
     const sqlMigrations = await sqlMigrationNames(output)
     for (const name of sqlMigrations) {
+      if (await isSchemaCheckpoint(output, name)) continue
       if (await Bun.file(path.join(tsDir, `${name}.ts`)).exists()) continue
       throw new Error(
         `Database migration TypeScript wrapper is missing for ${name}. Run \`bun script/migration.ts\` from packages/core.`,
       )
     }
-    if ((await Bun.file(registry).text()) !== renderRegistry(await typescriptMigrationNames())) {
+    if ((await Bun.file(registry).text()) !== renderRegistry(await migrationNamesInRegistryOrder())) {
       throw new Error("Database migration registry is stale. Run `bun script/migration.ts` from packages/core.")
     }
   } finally {
@@ -84,8 +87,22 @@ async function sqlMigrationNames(directory: string) {
     .sort()
 }
 
+function isSchemaCheckpoint(directory: string, name: string) {
+  return Bun.file(path.join(directory, name, "schema-checkpoint")).exists()
+}
+
 async function typescriptMigrationNames() {
   return (await Array.fromAsync(new Bun.Glob("*.ts").scan({ cwd: tsDir }))).map((file) => file.slice(0, -3)).sort()
+}
+
+async function migrationNamesInRegistryOrder() {
+  const available = await typescriptMigrationNames()
+  const availableSet = new Set(available)
+  const registered = Array.from((await Bun.file(registry).text()).matchAll(/import\("\.\/migration\/([^"]+)"\)/g))
+    .map((match) => match[1])
+    .filter((name): name is string => name !== undefined && availableSet.has(name))
+  const registeredSet = new Set(registered)
+  return [...registered, ...available.filter((name) => !registeredSet.has(name))]
 }
 
 async function snapshot(directory: string) {

@@ -48,6 +48,7 @@ export const SessionTable = sqliteTable(
     summary_deletions: integer(),
     summary_files: integer(),
     summary_diffs: text({ mode: "json" }).$type<Snapshot.FileDiff[]>(),
+    summary_diff_manifest: text({ mode: "json" }).$type<Snapshot.DiffManifestDescriptor>(),
     metadata: text({ mode: "json" }).$type<Record<string, unknown>>(),
     cost: real().notNull().default(0),
     tokens_input: integer().notNull().default(0),
@@ -299,6 +300,13 @@ export const SessionIntentTable = sqliteTable(
     correlation_id: text(),
     owner_token: text(),
     lease_expires_at: integer(),
+    execution_mode: text().$type<"legacy" | "run_now" | "deferred">().notNull().default("legacy"),
+    execution_state: text()
+      .$type<"legacy" | "pending" | "claimed" | "absorbed" | "canceled">()
+      .notNull()
+      .default("legacy"),
+    execution_claim_id: text(),
+    execution_claimed_at: integer(),
     mutation_epoch: integer().notNull().default(0),
     version: integer().notNull().default(0),
     time_created: integer().notNull(),
@@ -407,13 +415,77 @@ export const SessionWorldStateBaselineTable = sqliteTable(
     snapshot: text({ mode: "json" }).$type<unknown>().notNull(),
     fragment: text().notNull(),
     fragment_hash: text().notNull(),
-    provenance: text().$type<"native" | "fork_rebuilt" | "legacy_migration">().notNull(),
+    provenance: text()
+      .$type<"native" | "fork_rebuilt" | "legacy_migration" | "recovery_copied" | "recovery_recollected">()
+      .notNull(),
     created_at: integer().notNull(),
   },
   (table) => [
     primaryKey({ columns: [table.session_id, table.prompt_epoch, table.section_id] }),
     index("session_world_state_baseline_epoch_idx").on(table.session_id, table.prompt_epoch),
   ],
+)
+
+export const SessionToolRequestResolutionCommandTable = sqliteTable(
+  "session_tool_request_resolution_command",
+  {
+    command_id: text().primaryKey(),
+    request_hash: text().notNull(),
+    session_id: text().$type<SessionSchema.ID>().notNull(),
+    receipt_id: text().notNull(),
+    result_resolution_id: text(),
+    created_at: integer().notNull(),
+  },
+  (table) => [index("session_tool_request_resolution_command_session_idx").on(table.session_id, table.created_at)],
+)
+
+export const SessionToolRequestResolutionTable = sqliteTable(
+  "session_tool_request_resolution",
+  {
+    resolution_id: text().primaryKey(),
+    receipt_id: text().notNull().unique(),
+    session_id: text().$type<SessionSchema.ID>().notNull(),
+    legacy_activity_id: text(),
+    assistant_message_id: text().$type<MessageID>().notNull(),
+    source_prompt_epoch: integer().notNull(),
+    source_window_id: text().notNull(),
+    source_effective_history_hash: text().notNull(),
+    source_request_hash: text().notNull(),
+    source_mutation_epoch: integer().notNull(),
+    expected_provider_state: text().$type<"indeterminate_after_crash">().notNull(),
+    decision: text().$type<"abandoned">().notNull(),
+    actor_type: text().$type<"user" | "administrator" | "system-verifier">().notNull(),
+    actor_id: text().notNull(),
+    reason: text().notNull(),
+    risk_acknowledged: integer({ mode: "boolean" }).notNull(),
+    safe_end_message_id: text().$type<MessageID>(),
+    safe_history_hash: text().notNull(),
+    safe_message_ids: text({ mode: "json" }).$type<MessageID[]>().notNull(),
+    ambiguity_message_id: text().$type<MessageID>().notNull(),
+    physical_message_high_water: text().$type<MessageID>().notNull(),
+    successor_prompt_epoch: integer().notNull(),
+    successor_window_id: text().notNull(),
+    successor_history_hash: text().notNull(),
+    successor_mutation_epoch: integer().notNull(),
+    created_at: integer().notNull(),
+  },
+  (table) => [index("session_tool_request_resolution_session_idx").on(table.session_id, table.created_at)],
+)
+
+export const SessionPromptEpochRecoveryTable = sqliteTable(
+  "session_prompt_epoch_recovery",
+  {
+    session_id: text().$type<SessionSchema.ID>().notNull(),
+    prompt_epoch: integer().notNull(),
+    resolution_id: text().notNull().unique(),
+    source_prompt_epoch: integer().notNull(),
+    source_mutation_epoch: integer().notNull(),
+    successor_mutation_epoch: integer().notNull(),
+    ambiguity_message_id: text().$type<MessageID>().notNull(),
+    physical_message_high_water: text().$type<MessageID>().notNull(),
+    created_at: integer().notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.session_id, table.prompt_epoch] })],
 )
 
 export const SessionContextEpochTable = sqliteTable("session_context_epoch", {
@@ -428,6 +500,16 @@ export const SessionContextEpochTable = sqliteTable("session_context_epoch", {
   replacement_seq: integer(),
   revision: integer().notNull().default(0),
 })
+
+export type TaskStructuredOutputReceipt = {
+  readonly attempt: number
+} & (
+  | { readonly transport: "structured" | "text_fallback" }
+  | {
+      readonly transport: "degraded_text"
+      readonly reason: "structured_output_missing" | "structured_output_invalid"
+    }
+)
 
 export const TaskRunTable = sqliteTable(
   "task_run",
@@ -469,6 +551,7 @@ export const TaskRunTable = sqliteTable(
     lease_expires_at: integer(),
     raw_result_message_id: text().$type<MessageID>(),
     structured_result_message_id: text().$type<MessageID>(),
+    structured_output_receipt: text({ mode: "json" }).$type<TaskStructuredOutputReceipt>(),
     output: text(),
     error: text({ mode: "json" }).$type<{ code: string; message: string; data?: Record<string, unknown> }>(),
     time_created: integer().notNull(),
@@ -567,6 +650,79 @@ export const TaskRunTable = sqliteTable(
       table.generation,
     ),
     index("task_run_goal_idx").on(table.goal_id, table.goal_tick_seq, table.goal_role, table.goal_ordinal),
+  ],
+)
+
+export const TaskStructuredOutputEvidenceTable = sqliteTable(
+  "task_structured_output_evidence",
+  {
+    run_id: text()
+      .primaryKey()
+      .references(() => TaskRunTable.run_id, { onDelete: "cascade" }),
+    child_session_id: text().$type<SessionSchema.ID>().notNull(),
+    owner_token: text().notNull(),
+    claim_generation: integer().notNull(),
+    expected_version: integer().notNull(),
+    terminal_state: text().$type<"completed" | "failed">().notNull(),
+    attempts: integer().notNull(),
+    contract_json: text().notNull(),
+    raw_result_message_id: text().$type<MessageID>().notNull(),
+    raw_message_json: text().notNull(),
+    raw_parts_json: text().notNull(),
+    result_message_id: text().$type<MessageID>(),
+    result_message_json: text(),
+    result_parts_json: text(),
+    output: text(),
+    structured_output_receipt: text({ mode: "json" }).$type<TaskStructuredOutputReceipt>(),
+    failure_code: text(),
+    created_at: integer().notNull(),
+  },
+  (table) => [
+    index("task_structured_output_evidence_raw_message_idx").on(table.raw_result_message_id),
+    index("task_structured_output_evidence_result_message_idx").on(table.result_message_id),
+  ],
+)
+
+export const TaskStructuredOutputEvidencePartTable = sqliteTable(
+  "task_structured_output_evidence_part",
+  {
+    run_id: text()
+      .notNull()
+      .references(() => TaskStructuredOutputEvidenceTable.run_id, { onDelete: "cascade" }),
+    role: text().$type<"raw" | "result">().notNull(),
+    ordinal: integer().notNull(),
+    part_id: text().$type<PartID>().notNull(),
+    message_id: text().$type<MessageID>().notNull(),
+    session_id: text().$type<SessionSchema.ID>().notNull(),
+    part_json: text().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.run_id, table.role, table.part_id] }),
+    uniqueIndex("task_structured_output_evidence_part_ordinal_idx").on(table.run_id, table.role, table.ordinal),
+    index("task_structured_output_evidence_part_part_idx").on(table.part_id),
+  ],
+)
+
+export const TaskStructuredFinalizerResponseTable = sqliteTable(
+  "task_structured_finalizer_response",
+  {
+    run_id: text()
+      .notNull()
+      .references(() => TaskRunTable.run_id, { onDelete: "cascade" }),
+    attempt: integer().notNull(),
+    child_session_id: text().$type<SessionSchema.ID>().notNull(),
+    owner_token: text().notNull(),
+    claim_generation: integer().notNull(),
+    expected_version: integer().notNull(),
+    source_message_id: text().$type<MessageID>().notNull(),
+    request_message_id: text().$type<MessageID>().notNull(),
+    response_message_id: text().$type<MessageID>().notNull(),
+    response_message_json: text().notNull(),
+    created_at: integer().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.run_id, table.attempt] }),
+    uniqueIndex("task_structured_finalizer_response_message_idx").on(table.response_message_id),
   ],
 )
 

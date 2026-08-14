@@ -1,5 +1,5 @@
 import { describe, expect, test, beforeEach, afterEach } from "bun:test"
-import { mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { DeepAgentCodeHome } from "../../src/deepagent/workspace"
@@ -101,7 +101,7 @@ describe("V3.1 LearningWorker and SkillCurator", () => {
   })
 
   test("manual review policy sends staged candidates to Memory Inbox", async () => {
-    const { store, worker } = workerFor()
+    const { paths, store, worker } = workerFor()
     const result = await worker.run({
       projectID: "projA",
       sessionID: "sess1",
@@ -129,6 +129,9 @@ describe("V3.1 LearningWorker and SkillCurator", () => {
     const candidates = store.listByStatus("candidate")
     expect(candidates.length).toBe(1)
     expect(store.documentStore.get(candidates[0]!.id)!.extensions?.knowledge_scope).toBe("project-shared")
+    expect(readdirSync(path.join(paths.docsDir, "memory-inbox"))).toEqual([
+      "inbox__memory__run2__first-pass-success.json",
+    ])
   })
 
   test("strategy and anti-pattern candidates require review instead of auto-merge", async () => {
@@ -170,6 +173,202 @@ describe("V3.1 LearningWorker and SkillCurator", () => {
     })
     expect(failed.auto_merged_ids).toEqual([])
     expect(failed.inbox_ids[0]).toContain("anti_pattern:run4:repeated-failure")
+  })
+
+  test("reviewer failure admits only candidates that do not require review", async () => {
+    const safe = workerFor("safe")
+    const safeResult = await safe.worker.run({
+      projectID: safe.projectID,
+      sessionID: "sess-safe",
+      runID: "run-safe",
+      mode: "high",
+      roundState: createInitialRoundState("high"),
+      totalRounds: 1,
+      finalStatus: "completed",
+      trigger: "idle",
+      reviewer: async () => {
+        throw new Error("reviewer unavailable")
+      },
+    })
+    expect(safeResult.auto_merged_ids).toEqual(["memory:run-safe:first-pass-success"])
+    expect(safe.store.listByStatus("active")).toHaveLength(1)
+
+    const sensitive = workerFor("sensitive")
+    const roundState = createInitialRoundState("max")
+    roundState.diagnoses.push({
+      round: 1,
+      root_cause: "api_key leaked into the generated configuration",
+      evidence_refs: ["run:run-sensitive:r1"],
+      next_action: "revise",
+    })
+    const sensitiveResult = await sensitive.worker.run({
+      projectID: sensitive.projectID,
+      sessionID: "sess-sensitive",
+      runID: "run-sensitive",
+      mode: "max",
+      roundState,
+      totalRounds: 2,
+      finalStatus: "completed",
+      trigger: "session_finalization",
+      reviewer: async () => {
+        throw new Error("reviewer unavailable")
+      },
+    })
+    expect(sensitiveResult.candidate_count).toBe(1)
+    expect(sensitiveResult.auto_merged_ids).toEqual([])
+    expect(sensitiveResult.inbox_ids).toEqual(["inbox:strategy:run-sensitive:diagnosis-led-fix:r1"])
+    expect(sensitive.store.listByStatus("active")).toHaveLength(0)
+    expect(sensitive.store.listByStatus("candidate")).toHaveLength(1)
+    expect(sensitive.worker.listInbox()[0]?.reason).toBe("reviewer unavailable: sensitive")
+
+    const manual = workerFor("manual-unavailable")
+    const manualResult = await manual.worker.run({
+      projectID: manual.projectID,
+      sessionID: "sess-manual",
+      runID: "run-manual",
+      mode: "high",
+      roundState: createInitialRoundState("high"),
+      totalRounds: 1,
+      finalStatus: "completed",
+      trigger: "pause",
+      policy: "manual_review",
+      reviewer: async () => {
+        throw new Error("reviewer unavailable")
+      },
+    })
+    expect(manualResult.auto_merged_ids).toEqual([])
+    expect(manual.store.listByStatus("candidate")).toHaveLength(1)
+    expect(manual.worker.listInbox()[0]?.reason).toBe("reviewer unavailable under manual review policy")
+  })
+
+  test("reviewer may select an exact subset but cannot rewrite or duplicate candidates", async () => {
+    const rewritten = workerFor("rewritten")
+    const rewrittenState = createInitialRoundState("max")
+    rewrittenState.diagnoses.push({
+      round: 1,
+      root_cause: "api_key leaked into the generated configuration",
+      evidence_refs: ["run:run-rewritten:r1"],
+      next_action: "revise",
+    })
+    const rewrittenResult = await rewritten.worker.run({
+      projectID: rewritten.projectID,
+      sessionID: "sess-rewritten",
+      runID: "run-rewritten",
+      mode: "max",
+      roundState: rewrittenState,
+      totalRounds: 2,
+      finalStatus: "completed",
+      trigger: "session_finalization",
+      reviewer: async (candidates) =>
+        candidates.map((candidate) => ({
+          ...candidate,
+          summary: "Harmless configuration detail",
+          confidence: 1,
+        })),
+    })
+    expect(rewrittenResult.auto_merged_ids).toEqual([])
+    expect(rewritten.store.listByStatus("active")).toHaveLength(0)
+    expect(rewritten.store.listByStatus("candidate")).toHaveLength(1)
+    expect(rewritten.worker.listInbox()[0]?.reason).toBe("reviewer unavailable: sensitive")
+
+    const duplicated = workerFor("duplicated")
+    const duplicatedResult = await duplicated.worker.run({
+      projectID: duplicated.projectID,
+      sessionID: "sess-duplicated",
+      runID: "run-duplicated",
+      mode: "high",
+      roundState: createInitialRoundState("high"),
+      totalRounds: 1,
+      finalStatus: "completed",
+      trigger: "idle",
+      reviewer: async (candidates) => [candidates[0]!, candidates[0]!],
+    })
+    expect(duplicatedResult.auto_merged_ids).toEqual(["memory:run-duplicated:first-pass-success"])
+    expect(duplicated.store.listByStatus("active")).toHaveLength(1)
+  })
+
+  test("manual review cannot reinforce an existing active document before approval", async () => {
+    const guarded = workerFor("manual-existing-active")
+    await guarded.worker.run({
+      projectID: guarded.projectID,
+      sessionID: "sess-auto",
+      runID: "run-auto",
+      mode: "high",
+      roundState: createInitialRoundState("high"),
+      totalRounds: 1,
+      finalStatus: "completed",
+      trigger: "session_finalization",
+    })
+    const before = guarded.store.documentStore.get(guarded.store.listByStatus("active")[0]!.id)!
+
+    const reviewed = await guarded.worker.run({
+      projectID: guarded.projectID,
+      sessionID: "sess-manual",
+      runID: "run-manual",
+      mode: "high",
+      roundState: createInitialRoundState("high"),
+      totalRounds: 1,
+      finalStatus: "completed",
+      trigger: "session_finalization",
+      policy: "manual_review",
+      reviewer: async () => {
+        throw new Error("reviewer unavailable")
+      },
+    })
+    const after = guarded.store.documentStore.get(before.id)!
+
+    expect(reviewed.auto_merged_ids).toEqual([])
+    expect(reviewed.inbox_ids).toHaveLength(1)
+    expect(guarded.store.listByStatus("candidate")).toHaveLength(1)
+    expect({ version: after.version, hash: after.hash }).toEqual({ version: before.version, hash: before.hash })
+  })
+
+  test("durable governance plans a near-duplicate as an isolated review proposal", async () => {
+    const guarded = workerFor("durable-near-duplicate")
+    await guarded.worker.run({
+      projectID: guarded.projectID,
+      sessionID: "sess-active",
+      runID: "run-active",
+      mode: "high",
+      roundState: createInitialRoundState("high"),
+      totalRounds: 1,
+      finalStatus: "completed",
+      trigger: "session_finalization",
+    })
+    const before = guarded.store.documentStore.get(guarded.store.listByStatus("active")[0]!.id)!
+    const candidate = Learning.extract({
+      runId: "run-proposal",
+      mode: "high",
+      roundState: createInitialRoundState("high"),
+      totalRounds: 1,
+      finalStatus: "completed",
+    }).candidates[0]!
+
+    const plan = guarded.worker.planDurableGovernance(
+      {
+        projectID: guarded.projectID,
+        sessionID: "sess-proposal",
+        runID: "run-proposal",
+        mode: "high",
+        roundState: createInitialRoundState("high"),
+        totalRounds: 1,
+        finalStatus: "completed",
+        trigger: "session_finalization",
+        policy: "auto_merge_safe_project",
+      },
+      [candidate],
+      true,
+    )
+
+    expect(plan).toMatchObject([
+      {
+        action: "manual_review",
+        candidate: { candidate_id: "memory:run-proposal:first-pass-success" },
+        document: { idSlug: "memory:run-proposal:first-pass-success" },
+        inbox: { id: "inbox:memory:run-proposal:first-pass-success", status: "pending" },
+      },
+    ])
+    expect(guarded.store.documentStore.get(before.id)).toEqual(before)
   })
 
   test("SkillCurator merges, archives, restores, and rewrites manifest", () => {

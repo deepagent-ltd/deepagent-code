@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs"
 import path from "node:path"
 import type { LearningCandidate } from "./learning"
 import * as Learning from "./learning"
@@ -10,6 +10,8 @@ import type { DocType, EvidenceStrength } from "./document-store"
 import { evidenceFromConfidence } from "./knowledge-retriever"
 import { fingerprint as candidateFingerprint, type RejectedBuffer } from "./promotion"
 import * as Governance from "./memory-governance"
+import { CanonicalJson } from "../util/canonical-json"
+import { writeFileAtomic } from "./atomic-write"
 
 export const MEMORY_INBOX_SCHEMA_VERSION = "deepagent-code.memory_inbox_item.v1"
 export const SKILL_RECORD_SCHEMA_VERSION = "deepagent-code.skill_record.v1"
@@ -41,6 +43,9 @@ export type LearningWorkerInput = {
   readonly reviewer?: (candidates: readonly LearningCandidate[]) => Promise<readonly LearningCandidate[]>
 }
 
+export type LearningGovernanceInput = Omit<LearningWorkerInput, "reviewer">
+type RejectionAuthority = Pick<RejectedBuffer, "has">
+
 export type MemoryInboxItem = {
   readonly schema_version: typeof MEMORY_INBOX_SCHEMA_VERSION
   readonly id: string
@@ -60,6 +65,28 @@ export type LearningWorkerResult = {
   readonly skipped_ids: readonly string[]
 }
 
+export type LearningGovernancePlan = {
+  readonly candidate: LearningCandidate
+  readonly action: "skip" | "auto_admit" | "manual_review"
+  readonly reason?: string
+  readonly document?: KnowledgeDocInput
+  readonly inbox?: Omit<MemoryInboxItem, "created_at">
+}
+
+export const exactReviewerSubset = (
+  extracted: readonly LearningCandidate[],
+  reviewed: readonly LearningCandidate[],
+): readonly LearningCandidate[] | undefined => {
+  const originals = new Map(extracted.map((candidate) => [candidate.candidate_id, CanonicalJson.stringify(candidate)]))
+  const seen = new Set<string>()
+  const valid = reviewed.every((candidate) => {
+    if (seen.has(candidate.candidate_id)) return false
+    seen.add(candidate.candidate_id)
+    return originals.get(candidate.candidate_id) === CanonicalJson.stringify(candidate)
+  })
+  return valid ? reviewed : undefined
+}
+
 export type SkillRecord = {
   readonly schema_version: typeof SKILL_RECORD_SCHEMA_VERSION
   readonly id: string
@@ -76,7 +103,7 @@ const safeFileID = (id: string): string => id.replace(/[^A-Za-z0-9._:-]/g, "_").
 
 const writeJson = (file: string, value: unknown): void => {
   mkdirSync(path.dirname(file), { recursive: true })
-  writeFileSync(file, JSON.stringify(value, null, 2), "utf8")
+  writeFileAtomic(file, JSON.stringify(value, null, 2))
 }
 
 export class LearningWorker {
@@ -92,7 +119,7 @@ export class LearningWorker {
     // consults it so a pattern a human explicitly rejected is NOT silently re-learned + auto-admitted on
     // a later run. Injected by the caller that owns the memory-dir path (the reject handler writes the
     // SAME buffer). Omitted ⇒ gate 3 is inert (back-compat for tests / callers without a buffer).
-    private readonly rejectedBuffer?: RejectedBuffer,
+    private readonly rejectedBuffer?: RejectionAuthority,
   ) {
     // ProjectPaths.root is <baseDir>/project/<pid>; the durable knowledge store roots at
     // <baseDir>/project/<pid>/knowledge — i.e. a "knowledge" subdir of the project root.
@@ -110,16 +137,29 @@ export class LearningWorker {
     })
     // H32-2: if a reviewer is injected, pass ONLY the extracted candidates — no session state, no
     // history, no run context. The reviewer may filter or annotate; we proceed on its output.
-    // If the reviewer throws, fall back to the full extraction to keep the learning pass non-fatal.
+    // A failed reviewer cannot authorize writes that require review. Safe auto-admit candidates may
+    // continue; everything else stays pending with an explicit reviewer-unavailable reason.
     let candidates: readonly LearningCandidate[] = extraction.candidates
+    let reviewerUnavailable = false
     if (input.reviewer && candidates.length > 0) {
       try {
-        candidates = await input.reviewer(candidates)
+        const reviewed = exactReviewerSubset(candidates, await input.reviewer(candidates))
+        if (reviewed) candidates = reviewed
+        else reviewerUnavailable = true
       } catch {
-        // Non-fatal: reviewer failure must not block the learning pass.
-        candidates = extraction.candidates
+        reviewerUnavailable = true
       }
     }
+    return this.govern(input, candidates, extraction.candidates.length, started, reviewerUnavailable)
+  }
+
+  async govern(
+    input: LearningGovernanceInput,
+    candidates: readonly LearningCandidate[],
+    candidateCount = candidates.length,
+    started = Date.now(),
+    reviewerUnavailable = false,
+  ): Promise<LearningWorkerResult> {
     const policy = input.policy ?? "auto_merge_safe_project"
     const autoMerged: string[] = []
     const inbox: string[] = []
@@ -131,47 +171,42 @@ export class LearningWorker {
       // global promotion). Gates 3/4 (exact dedup + near-dup merge) live in the store's
       // stageCandidate; gate 8 (admit) is approve(). manual_review policy forces ALL candidates to
       // review regardless of route.
-      const classification = Governance.classify(candidate)
-      const contradictsHighTrust = this.detectHighTrustContradiction(candidate, classification)
-      const govRoute = Governance.route({
-        classification,
-        // Gate 3 (R3): consult the durable RejectedBuffer by fingerprint so a pattern a human explicitly
-        // rejected is dropped, not silently re-learned + auto-admitted. Extraction always emits fresh
-        // candidates as status "staged" (never "rejected"), so the old `status === "rejected"` check was
-        // ALWAYS false — the gate was vacuous and the buffer was never consulted on this path. When no
-        // buffer is injected the gate stays inert (back-compat), matching the prior effective behavior.
-        inRejectedBuffer:
-          (this.rejectedBuffer?.has(candidateFingerprint(candidate)) ?? false) || candidate.status === "rejected",
-        contradictsHighTrust,
-        // Learning candidates never self-promote into a pack or to global scope; those are explicit
-        // human actions (gate 6/7) handled in the review/promote path, so false here.
-        promotesIntoPack: false,
-        promotesToGlobal: false,
-      })
+      const governance = this.governance(candidate)
 
       const forceReview = policy === "manual_review"
       const autoAdmit =
-        !forceReview && govRoute.kind === "auto_admit" && Governance.meetsConfidenceFloor(candidate, classification)
+        !forceReview &&
+        governance.route.kind === "auto_admit" &&
+        Governance.meetsConfidenceFloor(candidate, governance.classification)
 
-      if (govRoute.kind === "drop") {
+      if (governance.route.kind === "drop") {
         skipped.push(candidate.candidate_id)
         continue
       }
 
       if (autoAdmit || candidate.status === "staged") {
-        // Stage into the durable store (gate 3/4 dedup+merge happen here).
-        const doc = this.store.stageCandidate(candidateToInput(candidate, this.projectID, input.trigger))
+        // Only an auto-admit decision may reinforce an already-active near duplicate. Review-required
+        // candidates must remain proposals and cannot mutate retrievable knowledge before approval.
+        const doc = this.store.stageCandidate(candidateToInput(candidate, this.projectID, input.trigger), {
+          allowActiveReinforcement: autoAdmit,
+        })
         if (autoAdmit) {
           this.store.approve(doc.id) // gate 8: admit (status -> active, retrievable)
           autoMerged.push(candidate.candidate_id)
         } else {
           // Routed to human review: keep the doc as a pending candidate (unretrievable) AND enqueue
           // an inbox item tagged with the specific review reason so the UI can group it.
-          const reason = forceReview
-            ? "manual review policy"
-            : govRoute.kind === "review"
-              ? govRoute.reason
-              : "candidate requires review"
+          const reason = reviewerUnavailable
+            ? forceReview
+              ? "reviewer unavailable under manual review policy"
+              : governance.route.kind === "review"
+                ? `reviewer unavailable: ${governance.route.reason}`
+                : "reviewer unavailable: candidate requires review"
+            : forceReview
+              ? "manual review policy"
+              : governance.route.kind === "review"
+                ? governance.route.reason
+                : "candidate requires review"
           inbox.push(this.enqueueInbox(candidate, input.projectID, reason))
         }
       } else {
@@ -182,11 +217,66 @@ export class LearningWorker {
     return {
       trigger: input.trigger,
       enqueue_ms: Date.now() - started,
-      candidate_count: extraction.candidates.length,
+      candidate_count: candidateCount,
       auto_merged_ids: autoMerged,
       inbox_ids: inbox,
       skipped_ids: skipped,
     }
+  }
+
+  planDurableGovernance(
+    input: LearningGovernanceInput,
+    candidates: readonly LearningCandidate[],
+    reviewerUnavailable: boolean,
+  ): readonly LearningGovernancePlan[] {
+    return candidates.map((candidate) => {
+      const governance = this.governance(candidate)
+      if (governance.route.kind === "drop" || candidate.status !== "staged") {
+        return { candidate, action: "skip" as const }
+      }
+      const automatic =
+        input.policy !== "manual_review" &&
+        governance.route.kind === "auto_admit" &&
+        Governance.meetsConfidenceFloor(candidate, governance.classification) &&
+        !governance.nearDuplicate
+      if (automatic) {
+        return {
+          candidate,
+          action: "auto_admit" as const,
+          document: candidateToInput(candidate, this.projectID, input.trigger),
+        }
+      }
+      const reason = reviewerUnavailable
+        ? input.policy === "manual_review"
+          ? "reviewer unavailable under manual review policy"
+          : governance.route.kind === "review"
+            ? `reviewer unavailable: ${governance.route.reason}`
+            : governance.nearDuplicate
+              ? "reviewer unavailable: near-duplicate merge requires review"
+              : "reviewer unavailable: confidence below automatic admission floor"
+        : input.policy === "manual_review"
+          ? "manual review policy"
+          : governance.route.kind === "review"
+            ? governance.route.reason
+            : governance.nearDuplicate
+              ? "near-duplicate merge requires review"
+              : "confidence below automatic admission floor"
+      const id = `inbox:${candidate.candidate_id}`
+      return {
+        candidate,
+        action: "manual_review" as const,
+        reason,
+        document: candidateToInput(candidate, this.projectID, input.trigger),
+        inbox: {
+          schema_version: MEMORY_INBOX_SCHEMA_VERSION,
+          id,
+          project_id: input.projectID,
+          candidate,
+          reason,
+          status: "pending" as const,
+        },
+      }
+    })
   }
 
   listInbox(): MemoryInboxItem[] {
@@ -194,8 +284,35 @@ export class LearningWorker {
     if (!existsSync(dir)) return []
     return readdirSync(dir)
       .filter((file) => file.endsWith(".json"))
+      .filter((file) => !existsSync(path.join(dir, `${file}.revoked`)))
       .map((file) => JSON.parse(readFileSync(path.join(dir, file), "utf8")) as MemoryInboxItem)
       .sort((a, b) => a.id.localeCompare(b.id))
+  }
+
+  private governance(candidate: LearningCandidate) {
+    const classification = Governance.classify(candidate)
+    const type: DocType = candidate.type === "anti_pattern" ? "failure_dossier" : candidate.type
+    const nearDuplicate = this.store.documentStore.findSimilarKnowledge({
+      type,
+      scope: `durable:project:${this.projectID}`,
+      domain: null,
+      description: candidate.summary,
+    })
+    return {
+      classification,
+      nearDuplicate,
+      route: Governance.route({
+        classification,
+        // Gate 3 (R3): the durable buffer is the human reject authority. Extraction emits staged
+        // candidates, so status alone cannot prove that a fingerprint was previously rejected.
+        inRejectedBuffer:
+          (this.rejectedBuffer?.has(candidateFingerprint(candidate)) ?? false) || candidate.status === "rejected",
+        contradictsHighTrust: nearDuplicate ? Governance.isHighTrust(nearDuplicate) : false,
+        // Learning candidates cannot promote themselves into packs or global scope.
+        promotesIntoPack: false,
+        promotesToGlobal: false,
+      }),
+    }
   }
 
   // U6 gate 5: a candidate contradicts existing knowledge when the store already holds a similar doc

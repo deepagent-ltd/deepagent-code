@@ -26,8 +26,9 @@ import { fromRow } from "./session/info"
 import { SessionRunner } from "./session/runner/index"
 import { SessionStore } from "./session/store"
 import { SessionExecution } from "./session/execution"
+import { SessionExecutionLocal } from "./session/execution/local"
 import { logFailure } from "./session/logging"
-import { MessageDecodeError } from "./session/error"
+import { MessageDecodeError, SessionNotFound } from "./session/error"
 import { SessionEvent } from "./session/event"
 import { SessionInput } from "./session/input"
 
@@ -88,9 +89,8 @@ type LegacyMessageWithParts = {
   parts: SessionV1.Part[]
 }
 
-export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("Session.NotFoundError", {
-  sessionID: SessionSchema.ID,
-}) {}
+export const NotFoundError = SessionNotFound.Error
+export type NotFoundError = SessionNotFound.Error
 
 export class OperationUnavailableError extends Schema.TaggedErrorClass<OperationUnavailableError>()(
   "Session.OperationUnavailableError",
@@ -107,6 +107,121 @@ export class PromptConflictError extends Schema.TaggedErrorClass<PromptConflictE
 }) {}
 
 export type Error = NotFoundError | MessageDecodeError | OperationUnavailableError | PromptConflictError
+
+export function legacyAssistant(input: {
+  readonly sessionID: SessionSchema.ID
+  readonly parentMessageID: SessionV1.MessageID
+  readonly directory: string
+  readonly root: string
+  readonly message: SessionMessage.Assistant
+}): SessionV1.WithParts {
+  const created = DateTime.toEpochMillis(input.message.time.created)
+  const completed = input.message.time.completed ? DateTime.toEpochMillis(input.message.time.completed) : undefined
+  const messageID = SessionV1.MessageID.ascending(input.message.id)
+  const parts = input.message.content.map((part, index): SessionV1.Part => {
+    const id = SessionV1.PartID.ascending(`prt_${input.message.id.slice("msg_".length)}_${index}`)
+    if (part.type === "text") {
+      return {
+        id,
+        sessionID: input.sessionID,
+        messageID,
+        type: "text",
+        text: part.text,
+        time: { start: created, ...(completed === undefined ? {} : { end: completed }) },
+      }
+    }
+    if (part.type === "reasoning") {
+      return {
+        id,
+        sessionID: input.sessionID,
+        messageID,
+        type: "reasoning",
+        text: part.text,
+        metadata: part.providerMetadata,
+        time: { start: created, ...(completed === undefined ? {} : { end: completed }) },
+      }
+    }
+    return {
+      id,
+      sessionID: input.sessionID,
+      messageID,
+      type: "tool",
+      callID: part.id,
+      tool: part.name,
+      metadata: part.provider?.metadata,
+      state: legacyAssistantToolState(part, { sessionID: input.sessionID, messageID }),
+    }
+  })
+  const tokens = input.message.tokens ?? { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
+  return {
+    info: {
+      id: messageID,
+      sessionID: input.sessionID,
+      role: "assistant",
+      time: { created, ...(completed === undefined ? {} : { completed }) },
+      ...(input.message.error
+        ? { error: { name: "UnknownError", data: { message: input.message.error.message } } }
+        : {}),
+      parentID: input.parentMessageID,
+      modelID: input.message.model.id,
+      providerID: input.message.model.providerID,
+      mode: input.message.agent,
+      agent: input.message.agent,
+      path: { cwd: input.directory, root: input.root },
+      cost: input.message.cost ?? 0,
+      tokens,
+      ...(input.message.model.variant === undefined ? {} : { variant: input.message.model.variant }),
+      ...(input.message.finish === undefined ? {} : { finish: input.message.finish }),
+    },
+    parts,
+  }
+}
+
+function legacyAssistantToolState(
+  part: SessionMessage.AssistantTool,
+  identity: { readonly sessionID: SessionSchema.ID; readonly messageID: SessionV1.MessageID },
+): SessionV1.ToolState {
+  const start = DateTime.toEpochMillis(part.time.ran ?? part.time.created)
+  if (part.state.status === "pending") {
+    return { status: "pending", input: {}, raw: part.state.input }
+  }
+  if (part.state.status === "running") {
+    return { status: "running", input: part.state.input, title: part.name, time: { start } }
+  }
+  if (part.state.status === "completed") {
+    return {
+      status: "completed",
+      input: part.state.input,
+      output: typeof part.state.result === "string" ? part.state.result : JSON.stringify(part.state.result),
+      title: part.name,
+      metadata: part.provider?.resultMetadata ?? {},
+      time: { start, end: DateTime.toEpochMillis(part.time.completed ?? part.time.created) },
+      attachments: part.state.attachments?.map((file, index) => ({
+        id: SessionV1.PartID.ascending(`prt_${part.id}_${index}`),
+        sessionID: identity.sessionID,
+        messageID: identity.messageID,
+        type: "file",
+        mime: file.mime,
+        filename: file.name,
+        url: file.uri,
+        source: file.source
+          ? {
+              type: "file",
+              path: file.uri,
+              text: { value: file.source.text, start: file.source.start, end: file.source.end },
+            }
+          : undefined,
+      })),
+    }
+  }
+  return {
+    status: "error",
+    input: part.state.input,
+    error: part.state.error.message,
+    metadata: part.provider?.resultMetadata,
+    time: { start, end: DateTime.toEpochMillis(part.time.completed ?? part.time.created) },
+  }
+}
 
 const V2ConversationTypes = ["user", "synthetic", "system", "shell", "assistant", "compaction"] as const
 
@@ -717,6 +832,16 @@ export const layer = Layer.effect(
 
 export const defaultLayer = layer.pipe(
   Layer.provide(SessionExecution.noopLayer),
+  Layer.provide(SessionStore.defaultLayer),
+  Layer.provide(SessionProjector.defaultLayer),
+  Layer.provide(EventV2.defaultLayer),
+  Layer.provide(Database.defaultLayer),
+  Layer.provide(ProjectV2.defaultLayer),
+  Layer.orDie,
+)
+
+export const liveLayer = layer.pipe(
+  Layer.provide(SessionExecutionLocal.liveLayer),
   Layer.provide(SessionStore.defaultLayer),
   Layer.provide(SessionProjector.defaultLayer),
   Layer.provide(EventV2.defaultLayer),

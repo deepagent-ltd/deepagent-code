@@ -88,6 +88,8 @@ import type {
   DeepagentKnowledgeRejectIdsErrors,
   DeepagentKnowledgeRejectIdsResponses,
   DeepagentKnowledgeRejectResponses,
+  DeepagentKnowledgeReleaseBaselineErrors,
+  DeepagentKnowledgeReleaseBaselineResponses,
   DeepagentKnowledgeReviewSummaryErrors,
   DeepagentKnowledgeReviewSummaryResponses,
   DeepagentKnowledgeShipGateErrors,
@@ -387,6 +389,10 @@ import type {
   SessionDeleteMessageErrors,
   SessionDeleteMessageResponses,
   SessionDeleteResponses,
+  SessionDiffArtifactFileErrors,
+  SessionDiffArtifactFileResponses,
+  SessionDiffArtifactManifestErrors,
+  SessionDiffArtifactManifestResponses,
   SessionDiffErrors,
   SessionDiffResponses,
   SessionForkErrors,
@@ -413,6 +419,10 @@ import type {
   SessionPromptResponses,
   SessionPromptSuggestionErrors,
   SessionPromptSuggestionResponses,
+  SessionProviderResolutionListErrors,
+  SessionProviderResolutionListResponses,
+  SessionProviderResolutionResolveErrors,
+  SessionProviderResolutionResolveResponses,
   SessionRevertErrors,
   SessionRevertResponses,
   SessionShareErrors,
@@ -432,14 +442,20 @@ import type {
   SessionUpdateErrors,
   SessionUpdateResponses,
   SubtaskPartInput,
+  SyncArtifactFileChunkErrors,
+  SyncArtifactFileChunkResponses,
+  SyncArtifactFileMetadataErrors,
+  SyncArtifactFileMetadataResponses,
   SyncHistoryListErrors,
   SyncHistoryListResponses,
   SyncReplayErrors,
   SyncReplayResponses,
+  SyncSnapshotChunksErrors,
+  SyncSnapshotChunksResponses,
+  SyncSnapshotRowsErrors,
+  SyncSnapshotRowsResponses,
   SyncStartErrors,
   SyncStartResponses,
-  SyncStealErrors,
-  SyncStealResponses,
   TextPartInput,
   ToolIdsErrors,
   ToolIdsResponses,
@@ -778,7 +794,7 @@ export class ControlPlane extends HeyApiClient {
   /**
    * Move session
    *
-   * Move a session to another project directory, optionally transferring local changes.
+   * Move a session when a durable transfer implementation is available.
    */
   public moveSession<ThrowOnError extends boolean = false>(
     parameters: {
@@ -1399,7 +1415,7 @@ export class Workspace extends HeyApiClient {
   /**
    * Warp session into workspace
    *
-   * Move a session's sync history into the target workspace, or detach it to the local project.
+   * Move a session when a durable workspace transfer implementation is available.
    */
   public warp<ThrowOnError extends boolean = false>(
     parameters: {
@@ -2392,15 +2408,21 @@ export class Knowledge extends HeyApiClient {
   }
 
   /**
-   * Approve DeepAgent knowledge by id
+   * Approve an exact DeepAgent knowledge revision
    *
-   * Flag durable knowledge entries as approved (retrievable). Reversible; does not move files.
+   * Append an approved governance revision only when the selected store, document revision, candidate identity, fingerprint, and governance revision still match.
    */
   public approve<ThrowOnError extends boolean = false>(
     parameters: {
       directory?: string
       workspace?: string
-      ids: Array<string>
+      sourceStore: "user_global" | "project"
+      id: string
+      version: number
+      hash: string
+      candidateId: string
+      fingerprint: string
+      expectedGovernanceRevision: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -2411,7 +2433,13 @@ export class Knowledge extends HeyApiClient {
           args: [
             { in: "query", key: "directory" },
             { in: "query", key: "workspace" },
-            { in: "body", key: "ids" },
+            { in: "body", key: "sourceStore" },
+            { in: "body", key: "id" },
+            { in: "body", key: "version" },
+            { in: "body", key: "hash" },
+            { in: "body", key: "candidateId" },
+            { in: "body", key: "fingerprint" },
+            { in: "body", key: "expectedGovernanceRevision" },
           ],
         },
       ],
@@ -2433,15 +2461,21 @@ export class Knowledge extends HeyApiClient {
   }
 
   /**
-   * Reject DeepAgent knowledge by id
+   * Reject an exact DeepAgent knowledge revision
    *
-   * Flag durable knowledge entries as rejected (not retrievable). Reversible; does not move files.
+   * Append a rejected governance revision only when the exact review authority still matches, then publish a new released head without that exact revision when it was released.
    */
   public rejectIds<ThrowOnError extends boolean = false>(
     parameters: {
       directory?: string
       workspace?: string
-      ids: Array<string>
+      sourceStore: "user_global" | "project"
+      id: string
+      version: number
+      hash: string
+      candidateId: string
+      fingerprint: string
+      expectedGovernanceRevision: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -2452,7 +2486,13 @@ export class Knowledge extends HeyApiClient {
           args: [
             { in: "query", key: "directory" },
             { in: "query", key: "workspace" },
-            { in: "body", key: "ids" },
+            { in: "body", key: "sourceStore" },
+            { in: "body", key: "id" },
+            { in: "body", key: "version" },
+            { in: "body", key: "hash" },
+            { in: "body", key: "candidateId" },
+            { in: "body", key: "fingerprint" },
+            { in: "body", key: "expectedGovernanceRevision" },
           ],
         },
       ],
@@ -2474,23 +2514,25 @@ export class Knowledge extends HeyApiClient {
   }
 
   /**
-   * Run the ablation regression ship gate
+   * Create the initial released knowledge baseline
    *
-   * CI/eval posts measured per-group/per-task metrics; if MAX regresses vs HIGH the candidate refs are demoted (rejected) so misleading knowledge cannot ship (docs/30 §7).
+   * One-time explicit cutover that binds exact durable document revisions. It fails when a released head already exists.
    */
-  public shipGate<ThrowOnError extends boolean = false>(
+  public releaseBaseline<ThrowOnError extends boolean = false>(
     parameters: {
       directory?: string
       workspace?: string
-      tasks: Array<string>
-      metrics: Array<{
-        group: "general" | "high" | "max"
-        task: string
-        metric: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      snapshotId: string
+      evaluationId: string
+      candidateRefs: Array<{
+        sourceStore: "user_global" | "project"
+        id: string
+        version: number
+        hash: string
+        type: "knowledge" | "strategy" | "methodology" | "memory" | "skill"
+        scope: string
       }>
-      candidateRefs: Array<string>
-      tolerance?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-      repeats?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      baselineRef: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -2501,6 +2543,75 @@ export class Knowledge extends HeyApiClient {
           args: [
             { in: "query", key: "directory" },
             { in: "query", key: "workspace" },
+            { in: "body", key: "snapshotId" },
+            { in: "body", key: "evaluationId" },
+            { in: "body", key: "candidateRefs" },
+            { in: "body", key: "baselineRef" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      DeepagentKnowledgeReleaseBaselineResponses,
+      DeepagentKnowledgeReleaseBaselineErrors,
+      ThrowOnError
+    >({
+      url: "/deepagent/knowledge/release-baseline",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Run the ablation regression ship gate
+   *
+   * CI/eval posts measured per-group/per-task metrics; PASS advances the immutable release head, while FAIL preserves the previous passed snapshot and document governance.
+   */
+  public shipGate<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      snapshotId: string
+      evaluationId: string
+      expectedParent: {
+        snapshotId: string
+        generation: number
+        membershipHash: string
+      }
+      tasks: Array<string>
+      metrics: Array<{
+        group: "general" | "high" | "max"
+        task: string
+        metric: number
+      }>
+      candidateRefs: Array<{
+        sourceStore: "user_global" | "project"
+        id: string
+        version: number
+        hash: string
+        type: "knowledge" | "strategy" | "methodology" | "memory" | "skill"
+        scope: string
+      }>
+      tolerance?: number
+      repeats?: 1
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "snapshotId" },
+            { in: "body", key: "evaluationId" },
+            { in: "body", key: "expectedParent" },
             { in: "body", key: "tasks" },
             { in: "body", key: "metrics" },
             { in: "body", key: "candidateRefs" },
@@ -7400,6 +7511,94 @@ export class Session2 extends HeyApiClient {
   }
 
   /**
+   * Get a Session diff artifact manifest page
+   *
+   * Read only metadata for an artifact committed to the addressed Session message.
+   */
+  public diffArtifactManifest<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+      messageID: string
+      artifactID: string
+      cursor?: string
+      limit?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "messageID" },
+            { in: "query", key: "artifactID" },
+            { in: "query", key: "cursor" },
+            { in: "query", key: "limit" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      SessionDiffArtifactManifestResponses,
+      SessionDiffArtifactManifestErrors,
+      ThrowOnError
+    >({
+      url: "/session/{sessionID}/diff-artifact/manifest",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Get one bounded Session diff artifact file patch
+   *
+   * Verify content-addressed chunks and return at most the requested UTF-8 byte budget for one authorized path.
+   */
+  public diffArtifactFile<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+      messageID: string
+      artifactID: string
+      path: string
+      maxBytes?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "messageID" },
+            { in: "query", key: "artifactID" },
+            { in: "query", key: "path" },
+            { in: "query", key: "maxBytes" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      SessionDiffArtifactFileResponses,
+      SessionDiffArtifactFileErrors,
+      ThrowOnError
+    >({
+      url: "/session/{sessionID}/diff-artifact/file",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
    * Get session messages
    *
    * Retrieve all messages in a session, including user prompts and AI responses.
@@ -8283,6 +8482,102 @@ export class Session2 extends HeyApiClient {
       },
     })
   }
+
+  /**
+   * List provider recovery decisions
+   *
+   * List unresolved legacy provider outcomes that require explicit recovery.
+   */
+  public providerResolutionList<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      SessionProviderResolutionListResponses,
+      SessionProviderResolutionListErrors,
+      ThrowOnError
+    >({
+      url: "/session/{sessionID}/provider-resolution",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Resolve a provider outcome
+   *
+   * Append an audited abandoned resolution and activate a safe successor history epoch.
+   */
+  public providerResolutionResolve<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+      commandID: string
+      receiptID: string
+      decision: "abandoned"
+      expected: {
+        providerState: "indeterminate_after_crash"
+        promptEpoch: number
+        sessionMutationEpoch: number
+        requestHash: string
+        historyHash: string
+        worldStateBaselineHash: string
+      }
+      reason?: string
+      riskAcknowledged?: boolean
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "commandID" },
+            { in: "body", key: "receiptID" },
+            { in: "body", key: "decision" },
+            { in: "body", key: "expected" },
+            { in: "body", key: "reason" },
+            { in: "body", key: "riskAcknowledged" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      SessionProviderResolutionResolveResponses,
+      SessionProviderResolutionResolveErrors,
+      ThrowOnError
+    >({
+      url: "/session/{sessionID}/provider-resolution",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
 }
 
 export class Part extends HeyApiClient {
@@ -8366,15 +8661,23 @@ export class History extends HeyApiClient {
   /**
    * List sync events
    *
-   * List sync events for all aggregates. Keys are aggregate IDs the client already knows about, values are the last known sequence ID. Events with seq > value are returned for those aggregates. Aggregates not listed in the input get their full history.
+   * List a bounded page with an opaque global cursor. A bounded legacy aggregate map is accepted only for the first upgrade request. Retention-floor crossings return resync_required with a canonical snapshot.
    */
   public list<ThrowOnError extends boolean = false>(
     parameters?: {
       directory?: string
       workspace?: string
-      body?: {
-        [key: string]: number
-      }
+      body?:
+        | {
+            [key: string]: number
+          }
+        | {
+            version: 1
+            cursor?: string
+            known?: {
+              [key: string]: number
+            }
+          }
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -8400,6 +8703,113 @@ export class History extends HeyApiClient {
         ...params.headers,
       },
     })
+  }
+}
+
+export class File2 extends HeyApiClient {
+  /**
+   * Read scoped file-part artifact metadata
+   *
+   * Resolve a content-addressed file-part descriptor only through its exact workspace event binding.
+   */
+  public metadata<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      eventID: string
+      aggregateID: string
+      seq: number
+      artifactID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "eventID" },
+            { in: "body", key: "aggregateID" },
+            { in: "body", key: "seq" },
+            { in: "body", key: "artifactID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      SyncArtifactFileMetadataResponses,
+      SyncArtifactFileMetadataErrors,
+      ThrowOnError
+    >({
+      url: "/sync/artifact/file/metadata",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Read one verified file-part artifact chunk
+   *
+   * Return one bounded base64 chunk after workspace scope and expected hash validation.
+   */
+  public chunk<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      eventID: string
+      aggregateID: string
+      seq: number
+      artifactID: string
+      index: number
+      hash: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "eventID" },
+            { in: "body", key: "aggregateID" },
+            { in: "body", key: "seq" },
+            { in: "body", key: "artifactID" },
+            { in: "body", key: "index" },
+            { in: "body", key: "hash" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      SyncArtifactFileChunkResponses,
+      SyncArtifactFileChunkErrors,
+      ThrowOnError
+    >({
+      url: "/sync/artifact/file/chunk",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
+export class Artifact extends HeyApiClient {
+  private _file?: File2
+  get file(): File2 {
+    return (this._file ??= new File2({ client: this.client }))
   }
 }
 
@@ -8489,16 +8899,15 @@ export class Sync extends HeyApiClient {
     })
   }
 
-  /**
-   * Steal session into workspace
-   *
-   * Update a session to belong to the current workspace through the sync event system.
-   */
-  public steal<ThrowOnError extends boolean = false>(
+  public snapshotRows<ThrowOnError extends boolean = false>(
     parameters: {
       directory?: string
       workspace?: string
-      sessionID: string
+      aggregateID: string
+      snapshotID: string
+      snapshotHash: string
+      after?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      limit?: number
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -8509,13 +8918,59 @@ export class Sync extends HeyApiClient {
           args: [
             { in: "query", key: "directory" },
             { in: "query", key: "workspace" },
-            { in: "body", key: "sessionID" },
+            { in: "body", key: "aggregateID" },
+            { in: "body", key: "snapshotID" },
+            { in: "body", key: "snapshotHash" },
+            { in: "body", key: "after" },
+            { in: "body", key: "limit" },
           ],
         },
       ],
     )
-    return (options?.client ?? this.client).post<SyncStealResponses, SyncStealErrors, ThrowOnError>({
-      url: "/sync/steal",
+    return (options?.client ?? this.client).post<SyncSnapshotRowsResponses, SyncSnapshotRowsErrors, ThrowOnError>({
+      url: "/sync/snapshot/rows",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  public snapshotChunks<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      aggregateID: string
+      snapshotID: string
+      snapshotHash: string
+      rowHash: string
+      after?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      limit?: number
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "aggregateID" },
+            { in: "body", key: "snapshotID" },
+            { in: "body", key: "snapshotHash" },
+            { in: "body", key: "rowHash" },
+            { in: "body", key: "after" },
+            { in: "body", key: "limit" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<SyncSnapshotChunksResponses, SyncSnapshotChunksErrors, ThrowOnError>({
+      url: "/sync/snapshot/chunks",
       ...options,
       ...params,
       headers: {
@@ -8529,6 +8984,11 @@ export class Sync extends HeyApiClient {
   private _history?: History
   get history(): History {
     return (this._history ??= new History({ client: this.client }))
+  }
+
+  private _artifact?: Artifact
+  get artifact(): Artifact {
+    return (this._artifact ??= new Artifact({ client: this.client }))
   }
 }
 

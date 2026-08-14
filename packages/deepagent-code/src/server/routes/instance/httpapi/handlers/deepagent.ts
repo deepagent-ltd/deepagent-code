@@ -15,7 +15,9 @@ import {
   DeepAgentGoalPlanConflictError,
   DeepAgentGoalPlanUnavailableError,
   DeepAgentGoalPlanValidationError,
+  DeepAgentKnowledgeReviewConflictError,
   DeepAgentPromotionError,
+  type DeepAgentShipGateMetric,
 } from "../groups/deepagent"
 import { WorkspaceRouteContext } from "../middleware/workspace-routing"
 import { RuntimeFlags } from "@/effect/runtime-flags"
@@ -34,6 +36,9 @@ import type { PanelTurnRunner } from "@/panel/panelist-runner"
 import type { PanelVerdict } from "@/agent/schema/panel"
 import type { CompletionCriterion } from "@deepagent-code/core/deepagent/goal-loop"
 import { PlanConflictError, PlanValidationError } from "@deepagent-code/core/deepagent/plan-controller"
+import { Database } from "@deepagent-code/core/database/database"
+import { LocationIdentity } from "@deepagent-code/core/context-federation/identity"
+import { AbsolutePath } from "@deepagent-code/core/schema"
 import {
   PlanEditBusyError,
   PlanEditChallengeError,
@@ -43,6 +48,7 @@ import {
   PlanEditTargetUnavailableError,
   type PlanEditReceipt,
 } from "@deepagent-code/core/deepagent/plan-edit-protocol"
+import { SERVER_USER_ID } from "../utils/workspace-context"
 
 export const mapGoalPlanError = (error: GoalManager.GoalPlanEditAdmissionError) => {
   if (error instanceof PlanValidationError) {
@@ -105,6 +111,35 @@ const dbgLog = Log.create({ service: "deepagent.packs.debug" })
 // stable verdict distribution) while bounding the fan-out (one subagent turn per lens per round).
 const PANEL_MAX_ROUNDS_CEILING = 3
 
+const shipGateGroups = ["general", "high", "max"] as const
+
+const validateShipGateMatrix = (
+  tasks: readonly string[],
+  metrics: readonly DeepAgentShipGateMetric[],
+  repeats: number | undefined,
+) => {
+  if (tasks.length === 0) return "ship gate requires at least one task"
+  if (repeats !== undefined && repeats !== 1) return "ship gate repeats must be 1 for aggregated metrics"
+
+  const taskSet = new Set(tasks)
+  if (taskSet.size !== tasks.length) return "ship gate tasks must be unique"
+
+  const byKey = new Map<string, number>()
+  for (const metric of metrics) {
+    if (!Number.isFinite(metric.metric)) return `ship gate metric must be finite: ${metric.group}:${metric.task}`
+    if (!taskSet.has(metric.task)) return `ship gate metric references an extra task: ${metric.task}`
+    const key = `${metric.group}:${metric.task}`
+    if (byKey.has(key)) return `duplicate ship gate metric: ${key}`
+    byKey.set(key, metric.metric)
+  }
+
+  const missing = tasks
+    .flatMap((task) => shipGateGroups.map((group) => `${group}:${task}`))
+    .filter((key) => !byKey.has(key))
+  if (missing.length > 0) return `ship gate metrics are incomplete: missing ${missing.join(", ")}`
+  return byKey
+}
+
 export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagent", (handlers) =>
   Effect.gen(function* () {
     const config = yield* Config.Service
@@ -115,6 +150,8 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
     const sessionPrompt = yield* SessionPrompt.Service
     const provider = yield* Provider.Service
     const goals = yield* GoalManager.Service
+    const database = yield* Database.Service
+    const locationIdentity = yield* LocationIdentity.Service
 
     // Build a reviewer-subagent turn runner scoped to a session — the panelist seam consultPanel needs.
     // Reuses makeTaskSubagentRunner (the same child-session + permission-derivation path the goal loop
@@ -172,7 +209,7 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
     const promote = Effect.fn("DeepAgentHttpApi.promote")(function* (ctx) {
       // P1-2: bind to the active workspace store before any read/write.
       const memoryDir = yield* workspaceMemoryDir()
-      yield* workspaceDir()
+      const dir = yield* workspaceDir()
       const now = new Date().toISOString()
       // F30-3 (v4.0.4): promotions should be associated with a passed ship-gate snapshot.
       // Soft enforcement: warn if absent so operators can update callers before v4.0.6 hardens this.
@@ -205,21 +242,20 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
               `promotion validation gate failed: ${verdict.reason ?? "candidate did not pass server-side validation"}`,
             )
           }
-          const record = AgentGateway.DeepAgentPromotion.promote(
-            ctx.payload.candidate,
-            ctx.payload.origin,
-            verdict,
-            ctx.payload.approval,
-            now,
+          return AgentGateway.DeepAgentPromotion.approveCandidate(
+            AgentGateway.DeepAgentPromotion.promote(
+              ctx.payload.candidate,
+              ctx.payload.origin,
+              verdict,
+              ctx.payload.approval,
+              now,
+            ),
+            AgentGateway.DeepAgentKnowledgeSource.storesForWorkspace(dir),
+            {
+              ...(ctx.payload.snapshotId ? { reviewRef: ctx.payload.snapshotId } : {}),
+              transitionedAt: Date.parse(now),
+            },
           )
-          // H32-1 (v4.0.4): persist to user-global store. The store now accepts a shared
-          // DocumentStore handle (injected via knowledge-source.configure) for CAS/SSOT
-          // participation; existing callers without a shared handle continue using isolated instances.
-          AgentGateway.DeepAgentPromotion.persistPromoted(
-            record,
-            AgentGateway.DeepAgentKnowledgeSource.userGlobalStoreFor(),
-          )
-          return record
         },
         catch: (error) =>
           new DeepAgentPromotionError({ message: error instanceof Error ? error.message : String(error) }),
@@ -232,23 +268,45 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
       const dir = yield* workspaceDir()
       const rejected = yield* Effect.try({
         try: () => {
-          // P2-6: reject writes BOTH truth sources — the durable doc status (authoritative,
-          // reversible, what the UI/retriever read) AND the RejectedBuffer fingerprint (relearn-dedup
-          // index that promote checks).
           const buffer = new AgentGateway.DeepAgentPromotion.RejectedBuffer(memoryDir)
           const fingerprint = AgentGateway.DeepAgentPromotion.fingerprint(ctx.payload.candidate)
-          AgentGateway.DeepAgentPromotion.reject(ctx.payload.candidate, buffer, ctx.payload.reason)
-          AgentGateway.DeepAgentKnowledgeSource.setApprovalForWorkspace(
-            dir,
-            ctx.payload.candidate.candidate_id,
-            "rejected",
+          const doc = AgentGateway.DeepAgentPromotion.rejectCandidate(
+            ctx.payload.candidate,
+            AgentGateway.DeepAgentKnowledgeSource.storesForWorkspace(dir),
+            ctx.payload.reason,
+            { type: "human", id: "legacy-knowledge-reject-route" },
           )
-          return { candidateId: ctx.payload.candidate.candidate_id, fingerprint, reason: ctx.payload.reason }
+          // RejectedBuffer is a rebuildable anti-relearning projection. Write it only after the
+          // immutable document governance revision commits; retrying this route reuses the same doc.
+          AgentGateway.DeepAgentPromotion.reject(ctx.payload.candidate, buffer, ctx.payload.reason)
+          return { candidateId: doc.id, fingerprint, reason: ctx.payload.reason }
         },
         catch: (error) =>
           new DeepAgentPromotionError({ message: error instanceof Error ? error.message : String(error) }),
       })
       return { rejected }
+    })
+
+    const REVIEW_TYPES = ["knowledge", "strategy", "methodology", "memory", "skill", "failure_dossier"] as const
+    type ReviewType = (typeof REVIEW_TYPES)[number]
+    const asReviewType = (type: string): ReviewType => {
+      if (!REVIEW_TYPES.includes(type as ReviewType)) throw new Error(`unsupported knowledge review type: ${type}`)
+      return type as ReviewType
+    }
+    const knowledgeItem = (item: AgentGateway.DeepAgentKnowledgeSource.ReviewItem) => ({
+      sourceStore: item.sourceStore,
+      id: item.id,
+      version: item.version,
+      hash: item.hash,
+      candidateId: item.candidateId,
+      fingerprint: item.fingerprint,
+      governanceRevision: item.governanceRevision,
+      type: asReviewType(item.type),
+      summary: item.summary,
+      evidence_strength: item.evidence_strength,
+      evidence_refs: item.evidence_refs,
+      approval_status: item.approval_status,
+      scope: item.scope,
     })
 
     const knowledgePending = Effect.fn("DeepAgentHttpApi.knowledgePending")(function* () {
@@ -257,25 +315,13 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
         try: () => {
           // P0-1b: return ALL three states so the Review UI can also revoke an already-approved
           // entry. Sorted by id for a stable list (the UI filters/groups by approval_status).
-          const REVIEW_TYPES = ["knowledge", "strategy", "methodology", "memory", "skill", "failure_dossier"] as const
-          type ReviewType = (typeof REVIEW_TYPES)[number]
-          const asReviewType = (t: string): ReviewType =>
-            REVIEW_TYPES.includes(t as ReviewType) ? (t as ReviewType) : "knowledge"
           const items = [...AgentGateway.DeepAgentKnowledgeSource.listAllForWorkspace(dir)]
             // Skills are agent-executable procedures, not human-readable facts — the governance UI
             // only surfaces learned facts (knowledge/memory/strategy/methodology/failure_dossier).
             // (Domain-pack seed docs are already excluded upstream by knowledge-source.)
             .filter((e) => e.type !== "skill")
-            .map((e) => ({
-              id: e.id,
-              type: asReviewType(e.type),
-              summary: e.summary,
-              evidence_strength: e.evidence_strength,
-              evidence_refs: e.evidence_refs,
-              approval_status: e.approval_status,
-              scope: e.scope,
-            }))
-            .sort((a, b) => a.id.localeCompare(b.id))
+            .map(knowledgeItem)
+            .sort((a, b) => a.id.localeCompare(b.id) || a.sourceStore.localeCompare(b.sourceStore))
           return { items }
         },
         catch: (error) =>
@@ -292,77 +338,270 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
       })
     })
 
+    const commitKnowledgeReviewDecision = Effect.fn("DeepAgentHttpApi.commitKnowledgeReviewDecision")(function* (
+      dir: string,
+      payload: {
+        readonly sourceStore: "user_global" | "project"
+        readonly id: string
+        readonly version: number
+        readonly hash: string
+        readonly candidateId: string
+        readonly fingerprint: string
+        readonly expectedGovernanceRevision: string
+      },
+      decision: "approve" | "reject",
+    ) {
+      return yield* Effect.try({
+        try: () => ({
+          updated: knowledgeItem(
+            AgentGateway.DeepAgentKnowledgeSource.commitReviewDecisionForWorkspace(
+              dir,
+              {
+                sourceStore: payload.sourceStore,
+                id: payload.id,
+                version: payload.version,
+                hash: payload.hash,
+                candidateId: payload.candidateId,
+                fingerprint: payload.fingerprint,
+                governanceRevision: payload.expectedGovernanceRevision,
+              },
+              decision,
+              { type: "human", id: SERVER_USER_ID },
+            ),
+          ),
+        }),
+        catch: (error) =>
+          error instanceof AgentGateway.DeepAgentKnowledgeSource.ReviewAuthorityConflictError
+            ? new DeepAgentKnowledgeReviewConflictError({
+                message: error.message,
+                sourceStore: payload.sourceStore,
+                id: payload.id,
+              })
+            : new DeepAgentPromotionError({ message: error instanceof Error ? error.message : String(error) }),
+      })
+    })
+
     const knowledgeApprove = Effect.fn("DeepAgentHttpApi.knowledgeApprove")(function* (ctx) {
       const dir = yield* workspaceDir()
-      return yield* Effect.try({
-        try: () => {
-          for (const id of ctx.payload.ids)
-            AgentGateway.DeepAgentKnowledgeSource.setApprovalForWorkspace(dir, id, "approved")
-          return { updated: ctx.payload.ids }
-        },
-        catch: (error) =>
-          new DeepAgentPromotionError({ message: error instanceof Error ? error.message : String(error) }),
-      })
+      return yield* commitKnowledgeReviewDecision(dir, ctx.payload, "approve")
     })
 
     const knowledgeRejectIds = Effect.fn("DeepAgentHttpApi.knowledgeRejectIds")(function* (ctx) {
       const dir = yield* workspaceDir()
-      return yield* Effect.try({
-        try: () => {
-          for (const id of ctx.payload.ids)
-            AgentGateway.DeepAgentKnowledgeSource.setApprovalForWorkspace(dir, id, "rejected")
-          return { updated: ctx.payload.ids }
+      const scope = yield* releasedScope(dir)
+      const parent = yield* AgentGateway.DeepAgentReleasedSnapshot.current(database.db, scope)
+      const decision = yield* commitKnowledgeReviewDecision(dir, ctx.payload, "reject")
+      const actor = { type: "human" as const, id: SERVER_USER_ID }
+      const exactDocument = {
+        sourceStore: ctx.payload.sourceStore,
+        id: ctx.payload.id,
+        version: ctx.payload.version,
+        hash: ctx.payload.hash,
+      }
+      const document = parent?.documents.find(
+        (candidate) =>
+          candidate.sourceStore === ctx.payload.sourceStore &&
+          candidate.id === ctx.payload.id &&
+          candidate.version === ctx.payload.version &&
+          candidate.hash === ctx.payload.hash,
+      )
+      const prior = document
+        ? undefined
+        : yield* AgentGateway.DeepAgentReleasedSnapshot.findRevocation(database.db, {
+            scope,
+            document: exactDocument,
+            actor,
+          })
+      if (!parent || (!document && !prior)) return { ...decision, release_revocation: { state: "not_released" as const } }
+      const revocation = prior ?? (yield* AgentGateway.DeepAgentReleasedSnapshot.revoke(
+        database.db,
+        {
+          scope,
+          expectedParent: parent,
+          document: document!,
+          actor,
         },
-        catch: (error) =>
-          new DeepAgentPromotionError({ message: error instanceof Error ? error.message : String(error) }),
-      })
+        releaseDocumentAuthority(dir),
+      ).pipe(
+        Effect.mapError((error) =>
+          error instanceof AgentGateway.DeepAgentReleasedSnapshot.SnapshotConflictError ||
+          error instanceof AgentGateway.DeepAgentReleasedSnapshot.SnapshotIdentityConflictError ||
+          error instanceof AgentGateway.DeepAgentReleasedSnapshot.SnapshotDocumentError
+            ? new DeepAgentKnowledgeReviewConflictError({
+                message:
+                  error instanceof AgentGateway.DeepAgentReleasedSnapshot.SnapshotConflictError ||
+                    error instanceof AgentGateway.DeepAgentReleasedSnapshot.SnapshotIdentityConflictError
+                    ? "released knowledge parent changed while the rejection was committing; retry the same decision"
+                    : error.reason,
+                sourceStore: ctx.payload.sourceStore,
+                id: ctx.payload.id,
+              })
+            : new DeepAgentPromotionError({ message: error instanceof Error ? error.message : String(error) }),
+        ),
+      ))
+      return {
+        ...decision,
+        release_revocation: {
+          state: revocation.state,
+          previous_snapshot_id: revocation.previousSnapshotId,
+          active_snapshot_id: revocation.selection.snapshotId,
+          generation: revocation.selection.generation,
+          membership_hash: revocation.selection.membershipHash,
+          manifest_hash: revocation.selection.manifestHash,
+          document_count: revocation.selection.documents.length,
+        },
+      }
     })
 
-    // V3.2 ablation ship gate (docs/30 §7): the live enforcement seam for "knowledge must not drag
-    // down the model". CI/eval posts the REAL measured metric matrix (per group×task) plus the
-    // candidate refs under test. We feed those measurements into the existing evaluateSnapshot
-    // regression rule; on FAIL the candidate refs are DEMOTED (approval_status=rejected) so they
-    // are immediately unretrievable — ablation now has teeth via the same flag mechanism as review.
+    const releasedScope = Effect.fn("DeepAgentHttpApi.releasedScope")(function* (dir: string) {
+      const identity = yield* locationIdentity.resolve({
+        boundary: { kind: "implicit_local" },
+        directory: AbsolutePath.make(dir),
+        project: {
+          kind: "registered_root",
+          observedProjectId: AgentGateway.DeepAgentDurableKnowledgeStore.projectIdForWorkspace(dir),
+        },
+      })
+      return {
+        securityNamespaceId: identity.securityNamespaceId,
+        projectScopeKey: identity.projectScopeKey,
+        legacyProjectId: AgentGateway.DeepAgentDurableKnowledgeStore.projectIdForWorkspace(dir),
+      }
+    })
+
+    const releaseDocumentAuthority = (dir: string) => {
+      const stores = AgentGateway.DeepAgentKnowledgeSource.storesForWorkspace(dir)
+      const userGlobal = stores[0]?.documentStore
+      const project = stores[1]?.documentStore
+      if (!userGlobal || !project) throw new Error("durable release document authority is unavailable")
+      return { userGlobal, project }
+    }
+
+    const knowledgeReleaseBaseline = Effect.fn("DeepAgentHttpApi.knowledgeReleaseBaseline")(function* (ctx) {
+      const dir = yield* workspaceDir()
+      return yield* Effect.gen(function* () {
+        const scope = yield* releasedScope(dir)
+        const current = yield* AgentGateway.DeepAgentReleasedSnapshot.current(database.db, scope)
+        if (current)
+          return yield* new DeepAgentPromotionError({ message: "released knowledge baseline already exists" })
+        const documents = ctx.payload.candidateRefs
+        const selection = yield* AgentGateway.DeepAgentReleasedSnapshot.publish(
+          database.db,
+          {
+            snapshotId: ctx.payload.snapshotId,
+            evaluationId: ctx.payload.evaluationId,
+            scope,
+            expectedParentSnapshotId: null,
+            expectedGeneration: 0,
+            releaseKind: "legacy_baseline",
+            verdict: "passed",
+            documents,
+            evaluationMatrix: { kind: "legacy_baseline", documents },
+            baselineRef: ctx.payload.baselineRef,
+            repetitions: 1,
+            actor: { type: "system", id: "legacy-knowledge-baseline-route" },
+          },
+          releaseDocumentAuthority(dir),
+        )
+        if (!selection) return yield* Effect.die("passing baseline did not produce an active selection")
+        return {
+          release_snapshot_id: ctx.payload.snapshotId,
+          active_snapshot_id: selection.snapshotId,
+          generation: selection.generation,
+          membership_hash: selection.membershipHash,
+          manifest_hash: selection.manifestHash,
+          document_count: selection.documents.length,
+        }
+      }).pipe(
+        Effect.mapError((error) =>
+          error instanceof DeepAgentPromotionError
+            ? error
+            : new DeepAgentPromotionError({ message: error instanceof Error ? error.message : String(error) }),
+        ),
+      )
+    })
+
+    // CI/eval posts the measured matrix and candidate refs. The durable release service records the
+    // exact doc revisions and advances the namespace/project head only for a passing verdict. A failed
+    // gate remains auditable but leaves both the previous head and document governance untouched.
     const knowledgeShipGate = Effect.fn("DeepAgentHttpApi.knowledgeShipGate")(function* (ctx) {
       const dir = yield* workspaceDir()
-      return yield* Effect.try({
-        try: () => {
-          const { tasks, metrics, candidateRefs, tolerance, repeats } = ctx.payload
-          // Build a deterministic runner from the posted measurements (default 0 for missing cells
-          // so an absent MAX measurement reads as a regression rather than a silent pass).
-          const byKey = new Map<string, number>()
-          for (const m of metrics) byKey.set(`${m.group}:${m.task}`, m.metric)
-          const runner = (group: "general" | "high" | "max", task: string) => byKey.get(`${group}:${task}`) ?? 0
-          const decision = AgentGateway.DeepAgentKnowledgeGate.evaluateSnapshot(
-            `ship_gate:${new Date().toISOString()}`,
-            tasks,
-            runner,
-            { ...(tolerance !== undefined ? { tolerance } : {}), ...(repeats !== undefined ? { repeats } : {}) },
-          )
-          const demoted: string[] = []
-          const notInStore: string[] = []
-          if (!decision.ship) {
-            // FAIL → demote every candidate ref under test (the suspect delta) so it cannot ship.
-            // P1-2: setApprovalForWorkspace only affects durable docs. In-code / domain-pack refs
-            // (e.g. "strategy:first-fast-design", "strategy:gpu:...") have no doc, so demoting them
-            // is a no-op — report them separately instead of claiming a false demotion.
-            for (const ref of candidateRefs) {
-              if (AgentGateway.DeepAgentKnowledgeSource.setApprovalForWorkspace(dir, ref, "rejected")) demoted.push(ref)
-              else notInStore.push(ref)
-            }
-          }
-          return {
-            ship: decision.ship,
-            reason: decision.reason,
-            offenders: decision.offenders,
-            demoted,
-            not_in_store: notInStore,
-            per_group: decision.perGroup,
-          }
-        },
-        catch: (error) =>
-          new DeepAgentPromotionError({ message: error instanceof Error ? error.message : String(error) }),
-      })
+      return yield* Effect.gen(function* () {
+        const scope = yield* releasedScope(dir)
+        const parent = yield* AgentGateway.DeepAgentReleasedSnapshot.current(database.db, scope)
+        if (!parent) return yield* new DeepAgentPromotionError({ message: "released knowledge baseline is required" })
+        if (
+          ctx.payload.expectedParent.snapshotId !== parent.snapshotId ||
+          ctx.payload.expectedParent.generation !== parent.generation ||
+          ctx.payload.expectedParent.membershipHash !== parent.membershipHash
+        ) {
+          return yield* new DeepAgentPromotionError({ message: "released knowledge parent changed since evaluation" })
+        }
+        const byKey = validateShipGateMatrix(ctx.payload.tasks, ctx.payload.metrics, ctx.payload.repeats)
+        if (typeof byKey === "string") return yield* new DeepAgentPromotionError({ message: byKey })
+        const decision = AgentGateway.DeepAgentKnowledgeGate.evaluateSnapshot(
+          ctx.payload.snapshotId,
+          ctx.payload.tasks,
+          (group, task) => byKey.get(`${group}:${task}`)!,
+          {
+            ...(ctx.payload.tolerance !== undefined ? { tolerance: ctx.payload.tolerance } : {}),
+          },
+        )
+        const documents = yield* Effect.try({
+          try: () => AgentGateway.DeepAgentReleasedSnapshot.mergeDocuments(parent.documents, ctx.payload.candidateRefs),
+          catch: (error) =>
+            error instanceof AgentGateway.DeepAgentReleasedSnapshot.SnapshotDocumentError
+              ? new DeepAgentPromotionError({ message: error.reason })
+              : error instanceof Error
+                ? new DeepAgentPromotionError({ message: error.message })
+                : new DeepAgentPromotionError({ message: String(error) }),
+        })
+        const selection = yield* AgentGateway.DeepAgentReleasedSnapshot.publish(
+          database.db,
+          {
+            snapshotId: ctx.payload.snapshotId,
+            evaluationId: ctx.payload.evaluationId,
+            scope,
+            expectedParentSnapshotId: parent.snapshotId,
+            expectedGeneration: parent.generation,
+            releaseKind: "evaluated",
+            verdict: decision.ship ? "passed" : "failed",
+            ...(!decision.ship ? { failureReason: decision.reason } : {}),
+            documents,
+            evaluationMatrix: {
+              tasks: ctx.payload.tasks,
+              metrics: ctx.payload.metrics,
+              tolerance: ctx.payload.tolerance ?? 0,
+              offenders: decision.offenders,
+            },
+            baselineRef: "knowledge-ship-gate:high",
+            repetitions: ctx.payload.repeats ?? 1,
+            actor: { type: "system", id: "legacy-knowledge-ship-gate-route" },
+          },
+          releaseDocumentAuthority(dir),
+        )
+        if (!selection) return yield* Effect.die("released knowledge publish lost the active selection")
+        return {
+          ship: decision.ship,
+          reason: decision.reason,
+          offenders: decision.offenders,
+          demoted: [],
+          not_in_store: [],
+          per_group: decision.perGroup,
+          release_snapshot_id: ctx.payload.snapshotId,
+          active_snapshot_id: selection.snapshotId,
+          generation: selection.generation,
+          membership_hash: selection.membershipHash,
+          manifest_hash: selection.manifestHash,
+          document_count: selection.documents.length,
+        }
+      }).pipe(
+        Effect.mapError((error) =>
+          error instanceof DeepAgentPromotionError
+            ? error
+            : new DeepAgentPromotionError({ message: error instanceof Error ? error.message : String(error) }),
+        ),
+      )
     })
 
     // docs/34 §9 S10: pinned packs persist per-workspace as a small JSON file under the memory dir.
@@ -831,6 +1070,7 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
       .handle("knowledgeReviewSummary", knowledgeReviewSummary)
       .handle("knowledgeApprove", knowledgeApprove)
       .handle("knowledgeRejectIds", knowledgeRejectIds)
+      .handle("knowledgeReleaseBaseline", knowledgeReleaseBaseline)
       .handle("knowledgeShipGate", knowledgeShipGate)
       .handle("packsActive", packsActive)
       .handle("packsAll", packsAll)

@@ -4,6 +4,7 @@ import path from "node:path"
 import { writeFileAtomic } from "./atomic-write"
 import type { LearningCandidate } from "./learning"
 import { DurableKnowledgeStore } from "./durable-knowledge-store"
+import { documentRevision, type Doc, type GovernanceActor } from "./document-store"
 
 // V3 learning promotion gate (docs/31 §1, decision 12). The ONLY path from a staged
 // learning candidate to durable active knowledge. Enforces anti-pollution rules:
@@ -11,7 +12,7 @@ import { DurableKnowledgeStore } from "./durable-knowledge-store"
 //      is hard-blocked; external_trace requires the validation gate + human approval.
 //  R2: promotion requires explicit human approval.
 //  R3: rejected fingerprints are remembered so the same bad pattern is not relearned.
-//  R4: promotion produces a NEW durable record (new id); the run candidate keeps identity.
+//  R4: approval preserves the candidate's canonical durable document identity.
 
 export type CandidateOrigin = "run_local" | "external_trace" | "sealed"
 
@@ -77,10 +78,8 @@ export const promote = (
   if (!verdict.pass) throw new Error("cannot promote a candidate that failed the validation gate")
   if (!approval.approved) throw new Error("R2: promotion requires human approval")
   const evidence_strength = verdict.evidence.length >= 1 ? "medium" : "weak"
-  const newId =
-    `durable:${candidate.type}:` + createHash("sha256").update(candidate.candidate_id).digest("hex").slice(0, 12)
   return {
-    id: newId, // R4: new durable identity
+    id: candidate.candidate_id,
     source_candidate_id: candidate.candidate_id,
     type: candidate.type,
     summary: candidate.summary,
@@ -94,28 +93,66 @@ export const promote = (
 export const reject = (candidate: LearningCandidate, rejected: RejectedBuffer, reason: string): void =>
   rejected.add(fingerprint(candidate), reason)
 
-// Persist a human-approved promoted record into the durable DocumentStore so the retriever finds it
-// on subsequent runs (closes the self-learning loop: run candidate -> gate -> human -> durable ->
-// retrievable). The promoted doc is staged then immediately approved (active). It is written as
-// user-global (no project tag) intentionally: the explicit human-approval path promotes knowledge
-// meant to apply broadly, unlike the automatic LearningWorker path which stays project-shared.
-export const persistPromoted = (record: PromotedRecord, store: DurableKnowledgeStore): string => {
-  const doc = store.stageCandidate({
-    type: record.type === "anti_pattern" ? "failure_dossier" : record.type,
-    description: record.summary,
-    body: record.summary,
-    domain: null,
-    tags: ["promoted", "learned"],
-    scope: "user-global",
-    sensitivity: "source_code",
-    risk: "low",
-    confidence: {
-      evidence_strength: record.evidence_strength,
-      support_count: record.evidence_refs.length || 1,
+export const approveCandidate = (
+  record: PromotedRecord,
+  stores: readonly DurableKnowledgeStore[],
+  options: { readonly reviewRef?: string; readonly transitionedAt?: number } = {},
+): PromotedRecord => {
+  const matches = stores
+    .map((store) => ({
+      store,
+      doc: store.findCandidate(
+        record.source_candidate_id,
+        record.type === "anti_pattern" ? "failure_dossier" : record.type,
+        record.summary,
+      ),
+    }))
+    .filter((match): match is { readonly store: DurableKnowledgeStore; readonly doc: Doc } => match.doc !== null)
+  if (matches.length === 0)
+    throw new Error(`approveCandidate: durable candidate ${record.source_candidate_id} was not found`)
+  if (matches.length > 1)
+    throw new Error(`approveCandidate: durable candidate ${record.source_candidate_id} has multiple authorities`)
+  const match = matches[0]!
+  const approved = match.store.approveCandidate(
+    match.doc.id,
+    documentRevision(match.doc),
+    { type: "human", id: record.promoted_by },
+    {
+      ...(options.reviewRef ? { reviewRef: options.reviewRef } : {}),
+      ...(options.transitionedAt !== undefined ? { transitionedAt: options.transitionedAt } : {}),
     },
-    provenance: { source: "human", run_ref: record.source_candidate_id, evidence_refs: record.evidence_refs },
-    idSlug: record.id,
-  })
-  store.approve(doc.id) // human-approved -> active -> retrievable
-  return doc.id // the durable doc id (distinct from the promotion record id)
+  )
+  return { ...record, id: approved.id }
 }
+
+export const rejectCandidate = (
+  candidate: LearningCandidate,
+  stores: readonly DurableKnowledgeStore[],
+  reason: string,
+  actor: GovernanceActor,
+  options: { readonly reviewRef?: string; readonly transitionedAt?: number } = {},
+): Doc => {
+  const matches = stores
+    .map((store) => ({
+      store,
+      doc: store.findCandidate(
+        candidate.candidate_id,
+        candidate.type === "anti_pattern" ? "failure_dossier" : candidate.type,
+        candidate.summary,
+      ),
+    }))
+    .filter((match): match is { readonly store: DurableKnowledgeStore; readonly doc: Doc } => match.doc !== null)
+  if (matches.length === 0) throw new Error(`rejectCandidate: durable candidate ${candidate.candidate_id} was not found`)
+  if (matches.length > 1) throw new Error(`rejectCandidate: durable candidate ${candidate.candidate_id} has multiple authorities`)
+  const match = matches[0]!
+  return match.store.rejectCandidate(match.doc.id, documentRevision(match.doc), actor, reason, {
+    fingerprint: fingerprint(candidate),
+    ...(options.reviewRef ? { reviewRef: options.reviewRef } : {}),
+    ...(options.transitionedAt !== undefined ? { transitionedAt: options.transitionedAt } : {}),
+  })
+}
+
+// Compatibility name retained for older callers. It no longer persists or copies a document; it
+// resolves and approves the already-durable candidate in the supplied store.
+export const persistPromoted = (record: PromotedRecord, store: DurableKnowledgeStore): string =>
+  approveCandidate(record, [store]).id

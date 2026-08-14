@@ -383,7 +383,7 @@ describe("session HttpApi", () => {
           (yield* request(`${pathFor(SessionPaths.messages, { sessionID: parent.id })}?before=${nextCursor}`, {
             headers,
           })).status,
-        ).toBe(400)
+        ).toBe(200)
         expect(
           (yield* request(`${pathFor(SessionPaths.messages, { sessionID: parent.id })}?limit=1&before=invalid`, {
             headers,
@@ -848,7 +848,7 @@ describe("session HttpApi", () => {
         })
 
         expect(response.status).toBe(200)
-        expect((yield* json<Session.Info>(response)).summary?.diffs).toEqual([{ additions: 1, deletions: 0 }])
+        expect((yield* json<Session.Info>(response)).summary?.diffs).toBeUndefined()
       }),
     { git: true, config: { formatter: false, lsp: false } },
   )

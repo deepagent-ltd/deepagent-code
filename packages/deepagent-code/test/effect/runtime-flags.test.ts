@@ -21,7 +21,19 @@ describe("RuntimeFlags", () => {
     }),
   )
 
-  it.effect("four-graph owner rollout flags default OFF and remain independently observable", () =>
+  it.effect("activity authority remains legacy-owned until explicitly cut over", () =>
+    Effect.gen(function* () {
+      const defaults = yield* readFlags.pipe(Effect.provide(fromConfig({})))
+      const durable = yield* readFlags.pipe(
+        Effect.provide(fromConfig({ DEEPAGENT_CODE_ACTIVITY_AUTHORITY: "durable" })),
+      )
+
+      expect(defaults.activityAuthority).toBe("legacy")
+      expect(durable.activityAuthority).toBe("durable")
+    }),
+  )
+
+  it.effect("four-graph owner rollout flags default ON and retain independent kill-switches", () =>
     Effect.gen(function* () {
       const defaults = yield* readFlags.pipe(Effect.provide(fromConfig({})))
       expect({
@@ -31,20 +43,20 @@ describe("RuntimeFlags", () => {
         contextQueryToolsV2: defaults.contextQueryToolsV2,
         coreV2ExecutionOwner: defaults.coreV2ExecutionOwner,
       }).toEqual({
-        contextFederationShadow: false,
-        locationIndexesV2Shadow: false,
-        contextProjectionV2: false,
-        contextQueryToolsV2: false,
-        coreV2ExecutionOwner: false,
+        contextFederationShadow: true,
+        locationIndexesV2Shadow: true,
+        contextProjectionV2: true,
+        contextQueryToolsV2: true,
+        coreV2ExecutionOwner: true,
       })
 
-      const requested = yield* readFlags.pipe(
-        Effect.provide(fromConfig({ DEEPAGENT_CODE_CONTEXT_FEDERATION_SHADOW: "true" })),
+      const disabled = yield* readFlags.pipe(
+        Effect.provide(fromConfig({ DEEPAGENT_CODE_CONTEXT_FEDERATION_SHADOW: "false" })),
       )
-      expect(requested.contextFederationShadow).toBe(true)
-      expect(requested.contextProjectionV2).toBe(false)
-      expect(requested.contextQueryToolsV2).toBe(false)
-      expect(requested.coreV2ExecutionOwner).toBe(false)
+      expect(disabled.contextFederationShadow).toBe(false)
+      expect(disabled.contextProjectionV2).toBe(true)
+      expect(disabled.contextQueryToolsV2).toBe(true)
+      expect(disabled.coreV2ExecutionOwner).toBe(true)
     }),
   )
 
