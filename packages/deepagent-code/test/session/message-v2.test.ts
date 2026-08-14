@@ -112,7 +112,49 @@ function basePart(messageID: string, id: string) {
   }
 }
 
+describe("session.message-v2.clientProjection", () => {
+  test("canonicalizes a bounded legacy summary without inline diffs", () => {
+    const message = {
+      ...userInfo("msg_manifest_only"),
+      summary: {},
+    } as SessionV1.User
+
+    expect(MessageV2.clientProjection(message).summary?.diffs).toEqual([])
+  })
+})
+
 describe("session.message-v2.toModelMessage", () => {
+  test("does not expose computed activity progress to the provider projection", async () => {
+    const assistantID = "msg_activity_projection"
+    const plain: SessionV1.WithParts = {
+      info: assistantInfo(assistantID, "msg_parent"),
+      parts: [
+        {
+          ...basePart(assistantID, "p1"),
+          type: "reasoning",
+          text: "inspect state",
+          time: { start: 0, end: 1 },
+        },
+        { ...basePart(assistantID, "p2"), type: "text", text: "working" },
+      ] as SessionV1.Part[],
+    }
+    const projected: SessionV1.WithParts = {
+      ...plain,
+      info: {
+        ...plain.info,
+        activityProgress: {
+          activityID: "activity-1",
+          revision: 8,
+          state: "progress",
+        },
+      } as SessionV1.Assistant,
+    }
+
+    expect(await MessageV2.toModelMessages([projected], model)).toStrictEqual(
+      await MessageV2.toModelMessages([plain], model),
+    )
+  })
+
   test("filters out messages with no parts", async () => {
     const input: SessionV1.WithParts[] = [
       {

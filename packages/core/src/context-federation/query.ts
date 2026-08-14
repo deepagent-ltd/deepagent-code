@@ -6,6 +6,7 @@ import type { ContextQueryIntent, GraphKind } from "./contract"
 import type { GraphQueryStatus } from "./federation"
 import type { Relation } from "./link-store"
 import type { ContextRef } from "./reference"
+import { DeepAgentReleasedSnapshot } from "../deepagent/released-snapshot"
 
 export type Request = {
   readonly intent: ContextQueryIntent
@@ -20,6 +21,8 @@ export type Request = {
   readonly sessionId: string
   /** Internal execution capability. Public tool callers always set this to true. */
   readonly toolCall?: boolean
+  /** Internal provider-turn authority. Public tool inputs never populate this field. */
+  readonly releasedKnowledgeSelection?: DeepAgentReleasedSnapshot.Selection
 }
 
 export type Hit = {

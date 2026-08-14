@@ -5,6 +5,7 @@ import { ProviderTransform } from "@/provider/transform"
 import { MCP } from "@/mcp"
 import { McpAdapter } from "@/mcp/adapter"
 import { Permission } from "@/permission"
+import { PermissionV1 } from "@deepagent-code/core/v1/permission"
 import { Tool } from "@/tool/tool"
 import { ToolProvenance } from "@/tool/provenance"
 import { ToolJsonSchema } from "@/tool/json-schema"
@@ -16,7 +17,7 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import type { TaskPromptOps } from "@/tool/task"
 import { type Tool as AITool, tool, jsonSchema, type ToolExecutionOptions, asSchema } from "ai"
 import type { JSONSchema7 } from "@ai-sdk/provider"
-import { Effect, Result, Schema } from "effect"
+import { Cause, Effect, Exit, Result, Schema } from "effect"
 import { MessageV2 } from "./message-v2"
 import { Session } from "./session"
 import { SessionProcessor } from "./processor"
@@ -27,6 +28,7 @@ import { ProviderV2 } from "@deepagent-code/core/provider"
 import { ModelV2 } from "@deepagent-code/core/model"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { ToolSemanticFingerprint } from "@/tool/semantic-fingerprint"
+import { ContextFederationRollout } from "@deepagent-code/core/context-federation/rollout"
 
 const log = Log.create({ service: "session.tools" })
 const DEFAULT_SUBAGENT_PERMISSION_TIMEOUT_MS = 60_000
@@ -56,6 +58,126 @@ export function mcpResultError(
     .join("\n\n")
     .trim()
   return new Error(message || `MCP tool ${toolName} returned an error`)
+}
+
+export function executeWithPermissionAuthority<A, E, R>(input: {
+  readonly permission: Permission.Interface
+  readonly context: Tool.Context
+  readonly toolName: string
+  readonly execute: Effect.Effect<A, E, R>
+}): Effect.Effect<A, E, R> {
+  return Effect.uninterruptibleMask((restore) =>
+    Effect.gen(function* () {
+      const effects = input.permission.effectsForToolCall
+        ? yield* input.permission.effectsForToolCall({
+            sessionID: input.context.sessionID,
+            toolMessageID: input.context.messageID,
+            toolCallID: input.context.callID ?? "",
+            toolName: input.toolName,
+          })
+        : []
+      if (effects.length) {
+        const unsettled = effects.find((item) => item.state !== "settled")
+        if (unsettled)
+          return yield* Effect.die(
+            new Error(
+              `Permission effect ${unsettled.receiptID} is ${unsettled.state}; external side effect replay is unsafe`,
+            ),
+          )
+        const terminal = effects[0]!
+        if (terminal.outcome === "failure")
+          return yield* Effect.die(
+            new Error(
+              typeof terminal.result === "object" && terminal.result && "message" in terminal.result
+                ? String(terminal.result.message)
+                : "Previously settled permission effect failed",
+            ),
+          )
+        return terminal.result as A
+      }
+      const attempted = yield* restore(input.execute).pipe(Effect.exit)
+      if (Exit.isFailure(attempted)) {
+        if (Cause.hasInterrupts(attempted.cause)) {
+          yield* quarantinePermissionEffects(input.permission, input.context, input.toolName)
+          return yield* Effect.failCause(attempted.cause)
+        }
+        const settled = yield* restore(
+          settlePermissionEffects(input.permission, input.context, "failure", {
+            message: Cause.pretty(attempted.cause),
+          }),
+        ).pipe(Effect.exit)
+        if (Exit.isFailure(settled)) {
+          yield* quarantinePermissionEffects(input.permission, input.context, input.toolName)
+        }
+        return yield* Effect.failCause(attempted.cause)
+      }
+      const settled = yield* restore(
+        settlePermissionEffects(input.permission, input.context, "success", attempted.value),
+      ).pipe(Effect.exit)
+      if (Exit.isFailure(settled)) {
+        yield* quarantinePermissionEffects(input.permission, input.context, input.toolName)
+        return yield* Effect.failCause(settled.cause)
+      }
+      return attempted.value
+    }),
+  )
+}
+
+export function executeWithHostPermissionAdmission<A, E, R>(input: {
+  readonly context: Tool.Context
+  readonly request?: Omit<PermissionV1.Request, "id" | "sessionID" | "tool">
+  readonly admissionKey?: string
+  readonly execute: Effect.Effect<A, E, R>
+}) {
+  return Effect.gen(function* () {
+    if (input.request) yield* input.context.ask(input.request)
+    if (input.admissionKey) input.context.hostPermissionAdmissions?.add(input.admissionKey)
+    return yield* input.execute
+  })
+}
+
+function quarantinePermissionEffects(permission: Permission.Interface, context: Tool.Context, toolName: string) {
+  return Effect.gen(function* () {
+    const queried = permission.effectsForToolCall
+      ? yield* permission
+          .effectsForToolCall({
+            sessionID: context.sessionID,
+            toolMessageID: context.messageID,
+            toolCallID: context.callID ?? "",
+            toolName,
+          })
+          .pipe(Effect.exit)
+      : undefined
+    const ownerIDs = queried
+      ? Exit.isSuccess(queried)
+        ? queried.value.length > 0
+          ? queried.value.filter((effect) => effect.state === "started").map((effect) => effect.ownerID)
+          : (context.permissionEffectGrants ?? []).map((grant) => grant.ownerID)
+        : (context.permissionEffectGrants ?? []).map((grant) => grant.ownerID)
+      : (context.permissionEffectGrants ?? []).map((grant) => grant.ownerID)
+    const uniqueOwnerIDs = [...new Set(ownerIDs)]
+    if (!uniqueOwnerIDs.length) return
+    if (!permission.rotateOwnerIfCurrent) {
+      return yield* Effect.die(new Error("permission effect recovery authority is unavailable"))
+    }
+    yield* Effect.forEach(uniqueOwnerIDs, permission.rotateOwnerIfCurrent, { discard: true })
+  })
+}
+
+function settlePermissionEffects(
+  permission: Permission.Interface,
+  context: Tool.Context,
+  outcome: "success" | "failure",
+  result: unknown,
+) {
+  return Effect.forEach(
+    context.permissionEffectGrants ?? [],
+    (grant) =>
+      permission.settleEffect
+        ? permission.settleEffect({ grant, outcome, result })
+        : Effect.die(new Error("permission effect settlement service is unavailable")),
+    { discard: true },
+  )
 }
 
 // U1 PlanController gate: a HookPolicy with the before_tool_use plan gate. The current policy lets
@@ -106,6 +228,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   bypassAgentCheck: boolean
   messages: SessionV1.WithParts[]
   promptOps: TaskPromptOps
+  contextFederationRollout?: ContextFederationRollout.Decision
 }) {
   using _ = log.time("resolveTools")
   const tools: Record<string, AITool> = {}
@@ -117,41 +240,69 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   const truncate = yield* Truncate.Service
   const flags = yield* RuntimeFlags.Service
 
-  const context = (args: Record<string, unknown>, options: ToolExecutionOptions): Tool.Context => ({
-    sessionID: input.session.id,
-    abort: options.abortSignal!,
-    messageID: input.processor.message.id,
-    callID: options.toolCallId,
-    extra: { model: input.model, bypassAgentCheck: input.bypassAgentCheck, promptOps: input.promptOps },
-    agent: input.agent.name,
-    messages: input.messages,
-    metadata: (val) =>
-      input.processor.updateToolCall(options.toolCallId, (match) => {
-        if (!["running", "pending"].includes(match.state.status)) return match
-        return {
-          ...match,
-          state: {
-            title: val.title,
-            metadata: val.metadata,
-            status: "running",
-            input: args,
-            time: { start: Date.now() },
-          },
-        }
-      }),
-    ask: (req) =>
-      permission
-        .ask({
-          ...req,
-          sessionID: input.session.id,
-          tool: { messageID: input.processor.message.id, callID: options.toolCallId },
-          ruleset: Permission.merge(input.agent.permission, input.session.permission ?? []),
-          ...(input.session.parentID
-            ? { timeoutMs: flags.subagentPermissionTimeoutMs ?? DEFAULT_SUBAGENT_PERMISSION_TIMEOUT_MS }
-            : {}),
-        })
-        .pipe(Effect.orDie),
-  })
+  const context = (args: Record<string, unknown>, options: ToolExecutionOptions, toolName: string): Tool.Context => {
+    const permissionEffectGrants: Permission.EffectGrant[] = []
+    const hostPermissionAdmissions = new Set<string>()
+    return {
+      sessionID: input.session.id,
+      abort: options.abortSignal!,
+      messageID: input.processor.message.id,
+      callID: options.toolCallId,
+      extra: { model: input.model, bypassAgentCheck: input.bypassAgentCheck, promptOps: input.promptOps },
+      agent: input.agent.name,
+      messages: input.messages,
+      permissionEffectGrants,
+      hostPermissionAdmissions,
+      metadata: (val) =>
+        input.processor.updateToolCall(options.toolCallId, (match) => {
+          if (!["running", "pending"].includes(match.state.status)) return match
+          return {
+            ...match,
+            state: {
+              title: val.title,
+              metadata: val.metadata,
+              status: "running",
+              input: args,
+              time: { start: Date.now() },
+            },
+          }
+        }),
+      ask: (req) =>
+        permission.askEffect
+          ? permission
+              .askEffect({
+                ...req,
+                sessionID: input.session.id,
+                tool: { messageID: input.processor.message.id, callID: options.toolCallId },
+                effectToolName: toolName,
+                ruleset: Permission.merge(input.agent.permission, input.session.permission ?? []),
+                ...(input.session.parentID
+                  ? { timeoutMs: flags.subagentPermissionTimeoutMs ?? DEFAULT_SUBAGENT_PERMISSION_TIMEOUT_MS }
+                  : {}),
+              })
+              .pipe(
+                Effect.tap((grant) =>
+                  Effect.sync(() => {
+                    if (grant && !permissionEffectGrants.some((item) => item.receiptID === grant.receiptID))
+                      permissionEffectGrants.push(grant)
+                  }),
+                ),
+                Effect.asVoid,
+                Effect.orDie,
+              )
+          : permission
+              .ask({
+                ...req,
+                sessionID: input.session.id,
+                tool: { messageID: input.processor.message.id, callID: options.toolCallId },
+                ruleset: Permission.merge(input.agent.permission, input.session.permission ?? []),
+                ...(input.session.parentID
+                  ? { timeoutMs: flags.subagentPermissionTimeoutMs ?? DEFAULT_SUBAGENT_PERMISSION_TIMEOUT_MS }
+                  : {}),
+              })
+              .pipe(Effect.orDie),
+    }
+  }
 
   // Shared plan-gate chokepoint (U1 soft gate + U9 hard gate). BOTH the builtin loop AND the MCP loop
   // must run this: a mutating tool of EITHER kind that is not bound to a fresh plan step has to be gated,
@@ -227,6 +378,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
     providerID: input.model.providerID,
     agent: input.agent,
     projectScopeKey: input.session.projectID,
+    contextFederationRollout: input.contextFederationRollout,
   })) {
     const schema = ProviderTransform.schema(input.model, ToolJsonSchema.fromTool(item))
     const aiToolDef: AITool = tool({
@@ -235,60 +387,81 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
       execute(args, options) {
         return run.promise(
           Effect.gen(function* () {
-            const ctx = context(args, options)
-            yield* plugin.trigger(
-              "tool.execute.before",
-              { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID },
-              { args },
-            )
-            // U1 soft gate + U9 hard gate via the shared chokepoint. Read-only shell commands
-            // (ls/cat/grep/git status/curl probe/…) are the agent's eyes and must never be gated — pass
-            // the command string so the classifier can exempt them. Any ambiguity → mutating (fail-safe).
-            // Non-shell tools ignore the command arg.
-            const command =
-              (item.id === "bash" || item.id === "shell") &&
-              typeof (args as { command?: unknown } | undefined)?.command === "string"
-                ? (args as { command: string }).command
-                : null
-            // Fail SAFE if the classifier ever throws (it is total today — pure regex/string ops — but a
-            // future regex/refactor could introduce a throw): treat an unclassifiable command as mutating
-            // so it is gated, rather than letting the exception abort the whole turn.
-            let isMutating: boolean
-            try {
-              isMutating = AgentGateway.DeepAgentPlanController.isMutatingTool(item.id, command)
-            } catch {
-              isMutating = true
-            }
-            const gate = evaluatePlanGate(ctx.sessionID, isMutating)
-            if (gate.kind === "block") {
-              return { title: "Plan update required", output: gate.output, metadata: {} }
-            }
-            const result = yield* item.execute(args, ctx).pipe(
-              // I33-2: any tool execution failure marks the plan stale (tool_failed reason).
-              // Finalization and the next runtime-system boundary enforce that state; tool output
-              // remains exclusively the tool's real result.
-              Effect.tapError(() =>
-                Effect.sync(() => AgentGateway.DeepAgentSessionState.markPlanStale(ctx.sessionID, "tool_failed")),
-              ),
-            )
-            const output = {
-              ...result,
-              attachments: result.attachments?.map((attachment) => ({
-                ...attachment,
-                id: PartID.ascending(),
-                sessionID: ctx.sessionID,
-                messageID: input.processor.message.id,
-              })),
-            }
-            yield* plugin.trigger(
-              "tool.execute.after",
-              { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID, args },
-              output,
-            )
-            if (options.abortSignal?.aborted) {
-              yield* input.processor.completeToolCall(options.toolCallId, output)
-            }
-            return output
+            const ctx = context(args, options, item.id)
+            return yield* executeWithPermissionAuthority({
+              permission,
+              context: ctx,
+              toolName: item.id,
+              execute: executeWithHostPermissionAdmission({
+                context: ctx,
+                ...(item.provenance?.source === "custom"
+                  ? {
+                      admissionKey: item.id,
+                      request: {
+                        permission: item.id,
+                        patterns: ["*"],
+                        metadata: { args },
+                        always: ["*"],
+                      },
+                    }
+                  : {}),
+                execute: Effect.gen(function* () {
+                  yield* plugin.trigger(
+                    "tool.execute.before",
+                    { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID },
+                    { args },
+                  )
+                  // U1 soft gate + U9 hard gate via the shared chokepoint. Read-only shell commands
+                  // (ls/cat/grep/git status/curl probe/…) are the agent's eyes and must never be gated — pass
+                  // the command string so the classifier can exempt them. Any ambiguity → mutating (fail-safe).
+                  // Non-shell tools ignore the command arg.
+                  const command =
+                    (item.id === "bash" || item.id === "shell") &&
+                    typeof (args as { command?: unknown } | undefined)?.command === "string"
+                      ? (args as { command: string }).command
+                      : null
+                  // Fail SAFE if the classifier ever throws (it is total today — pure regex/string ops — but a
+                  // future regex/refactor could introduce a throw): treat an unclassifiable command as mutating
+                  // so it is gated, rather than letting the exception abort the whole turn.
+                  let isMutating: boolean
+                  try {
+                    isMutating = AgentGateway.DeepAgentPlanController.isMutatingTool(item.id, command)
+                  } catch {
+                    isMutating = true
+                  }
+                  const gate = evaluatePlanGate(ctx.sessionID, isMutating)
+                  if (gate.kind === "block") {
+                    return { title: "Plan update required", output: gate.output, metadata: {} }
+                  }
+                  const result = yield* item.execute(args, ctx).pipe(
+                    // I33-2: any tool execution failure marks the plan stale (tool_failed reason).
+                    // Finalization and the next runtime-system boundary enforce that state; tool output
+                    // remains exclusively the tool's real result.
+                    Effect.tapError(() =>
+                      Effect.sync(() => AgentGateway.DeepAgentSessionState.markPlanStale(ctx.sessionID, "tool_failed")),
+                    ),
+                  )
+                  const output = {
+                    ...result,
+                    attachments: result.attachments?.map((attachment) => ({
+                      ...attachment,
+                      id: PartID.ascending(),
+                      sessionID: ctx.sessionID,
+                      messageID: input.processor.message.id,
+                    })),
+                  }
+                  yield* plugin.trigger(
+                    "tool.execute.after",
+                    { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID, args },
+                    output,
+                  )
+                  if (options.abortSignal?.aborted) {
+                    yield* input.processor.completeToolCall(options.toolCallId, output)
+                  }
+                  return output
+                }),
+              }),
+            })
           }),
         )
       },
@@ -324,114 +497,123 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
     item.execute = (args, opts) =>
       run.promise(
         Effect.gen(function* () {
-          const ctx = context(args, opts)
-          // M7 read-only SQL guard: for a read_only server, reject any SQL-bearing arg that is not
-          // provably read-only (defense-in-depth atop the server's own --access-mode=restricted).
-          if (isReadOnlyDb) {
-            for (const sqlArg of extractSqlArgs(args)) {
-              const verdict = McpAdapter.assertReadOnlySql(sqlArg)
-              if (!verdict.allowed) {
-                return {
-                  title: "",
-                  metadata: { error: true, riskTier: "read_only", reason: verdict.reason },
-                  output: `Rejected by read-only DB guard: ${verdict.reason}`,
-                  attachments: [],
-                  content: [{ type: "text" as const, text: `Rejected by read-only DB guard: ${verdict.reason}` }],
+          const ctx = context(args, opts, key)
+          return yield* executeWithPermissionAuthority({
+            permission,
+            context: ctx,
+            toolName: key,
+            execute: executeWithHostPermissionAdmission({
+              context: ctx,
+              ...(gateAction === "allow"
+                ? {}
+                : { request: { permission: key, metadata: {}, patterns: ["*"], always: ["*"] } }),
+              execute: Effect.gen(function* () {
+                // M7 read-only SQL guard: for a read_only server, reject any SQL-bearing arg that is not
+                // provably read-only (defense-in-depth atop the server's own --access-mode=restricted).
+                if (isReadOnlyDb) {
+                  for (const sqlArg of extractSqlArgs(args)) {
+                    const verdict = McpAdapter.assertReadOnlySql(sqlArg)
+                    if (!verdict.allowed) {
+                      return {
+                        title: "",
+                        metadata: { error: true, riskTier: "read_only", reason: verdict.reason },
+                        output: `Rejected by read-only DB guard: ${verdict.reason}`,
+                        attachments: [],
+                        content: [{ type: "text" as const, text: `Rejected by read-only DB guard: ${verdict.reason}` }],
+                      }
+                    }
+                  }
                 }
-              }
-            }
-          }
-          // Plan gate for MCP tools (parity with the builtin path). An MCP tool whose risk tier is not
-          // `read_only` mutates external state (fs write, DB write, shell exec), so it must be gated like
-          // a builtin mutating tool — otherwise a stale plan's gate is silently bypassed via MCP. A
-          // read_only tier is the agent's eyes (exempt), mirroring read-only shell commands.
-          const mcpIsMutating = tier !== "read_only"
-          const mcpGate = evaluatePlanGate(ctx.sessionID, mcpIsMutating)
-          if (mcpGate.kind === "block") {
-            return {
-              title: "Plan update required",
-              metadata: {},
-              output: mcpGate.output,
-              attachments: [],
-              content: [{ type: "text" as const, text: mcpGate.output }],
-            }
-          }
-          yield* plugin.trigger(
-            "tool.execute.before",
-            { tool: key, sessionID: ctx.sessionID, callID: opts.toolCallId },
-            { args },
-          )
-          const result: Awaited<ReturnType<NonNullable<typeof execute>>> = yield* Effect.gen(function* () {
-            // read_only tier → auto-allow (no prompt); all other tiers + tier-less → ask (fail-closed).
-            if (gateAction !== "allow") {
-              yield* ctx.ask({ permission: key, metadata: {}, patterns: ["*"], always: ["*"] })
-            }
-            return yield* Effect.promise(() => execute(args, opts))
-          }).pipe(
-            Effect.withSpan("Tool.execute", {
-              attributes: {
-                "tool.name": key,
-                "tool.call_id": opts.toolCallId,
-                "session.id": ctx.sessionID,
-                "message.id": input.processor.message.id,
-              },
+                // Plan gate for MCP tools (parity with the builtin path). An MCP tool whose risk tier is not
+                // `read_only` mutates external state (fs write, DB write, shell exec), so it must be gated like
+                // a builtin mutating tool — otherwise a stale plan's gate is silently bypassed via MCP. A
+                // read_only tier is the agent's eyes (exempt), mirroring read-only shell commands.
+                const mcpIsMutating = tier !== "read_only"
+                const mcpGate = evaluatePlanGate(ctx.sessionID, mcpIsMutating)
+                if (mcpGate.kind === "block") {
+                  return {
+                    title: "Plan update required",
+                    metadata: {},
+                    output: mcpGate.output,
+                    attachments: [],
+                    content: [{ type: "text" as const, text: mcpGate.output }],
+                  }
+                }
+                yield* plugin.trigger(
+                  "tool.execute.before",
+                  { tool: key, sessionID: ctx.sessionID, callID: opts.toolCallId },
+                  { args },
+                )
+                const result: Awaited<ReturnType<NonNullable<typeof execute>>> = yield* Effect.gen(function* () {
+                  return yield* Effect.promise(() => execute(args, opts))
+                }).pipe(
+                  Effect.withSpan("Tool.execute", {
+                    attributes: {
+                      "tool.name": key,
+                      "tool.call_id": opts.toolCallId,
+                      "session.id": ctx.sessionID,
+                      "message.id": input.processor.message.id,
+                    },
+                  }),
+                )
+                const executionError = mcpResultError(key, result)
+                if (executionError) return yield* Effect.fail(executionError)
+                yield* plugin.trigger(
+                  "tool.execute.after",
+                  { tool: key, sessionID: ctx.sessionID, callID: opts.toolCallId, args },
+                  result,
+                )
+
+                const textParts: string[] = []
+                const attachments: Omit<SessionV1.FilePart, "id" | "sessionID" | "messageID">[] = []
+                for (const contentItem of result.content) {
+                  if (contentItem.type === "text") textParts.push(contentItem.text)
+                  else if (contentItem.type === "image") {
+                    attachments.push({
+                      type: "file",
+                      mime: contentItem.mimeType,
+                      url: `data:${contentItem.mimeType};base64,${contentItem.data}`,
+                    })
+                  } else if (contentItem.type === "resource") {
+                    const { resource } = contentItem
+                    if (resource.text) textParts.push(resource.text)
+                    if (resource.blob) {
+                      attachments.push({
+                        type: "file",
+                        mime: resource.mimeType ?? "application/octet-stream",
+                        url: `data:${resource.mimeType ?? "application/octet-stream"};base64,${resource.blob}`,
+                        filename: resource.uri,
+                      })
+                    }
+                  }
+                }
+
+                const truncated = yield* truncate.output(textParts.join("\n\n"), {}, input.agent)
+                const metadata = {
+                  ...result.metadata,
+                  truncated: truncated.truncated,
+                  ...(truncated.truncated && { outputPath: truncated.outputPath }),
+                }
+
+                const output = {
+                  title: "",
+                  metadata,
+                  output: truncated.content,
+                  attachments: attachments.map((attachment) => ({
+                    ...attachment,
+                    id: PartID.ascending(),
+                    sessionID: ctx.sessionID,
+                    messageID: input.processor.message.id,
+                  })),
+                  content: result.content,
+                }
+                if (opts.abortSignal?.aborted) {
+                  yield* input.processor.completeToolCall(opts.toolCallId, output)
+                }
+                return output
+              }),
             }),
-          )
-          const executionError = mcpResultError(key, result)
-          if (executionError) return yield* Effect.fail(executionError)
-          yield* plugin.trigger(
-            "tool.execute.after",
-            { tool: key, sessionID: ctx.sessionID, callID: opts.toolCallId, args },
-            result,
-          )
-
-          const textParts: string[] = []
-          const attachments: Omit<SessionV1.FilePart, "id" | "sessionID" | "messageID">[] = []
-          for (const contentItem of result.content) {
-            if (contentItem.type === "text") textParts.push(contentItem.text)
-            else if (contentItem.type === "image") {
-              attachments.push({
-                type: "file",
-                mime: contentItem.mimeType,
-                url: `data:${contentItem.mimeType};base64,${contentItem.data}`,
-              })
-            } else if (contentItem.type === "resource") {
-              const { resource } = contentItem
-              if (resource.text) textParts.push(resource.text)
-              if (resource.blob) {
-                attachments.push({
-                  type: "file",
-                  mime: resource.mimeType ?? "application/octet-stream",
-                  url: `data:${resource.mimeType ?? "application/octet-stream"};base64,${resource.blob}`,
-                  filename: resource.uri,
-                })
-              }
-            }
-          }
-
-          const truncated = yield* truncate.output(textParts.join("\n\n"), {}, input.agent)
-          const metadata = {
-            ...result.metadata,
-            truncated: truncated.truncated,
-            ...(truncated.truncated && { outputPath: truncated.outputPath }),
-          }
-
-          const output = {
-            title: "",
-            metadata,
-            output: truncated.content,
-            attachments: attachments.map((attachment) => ({
-              ...attachment,
-              id: PartID.ascending(),
-              sessionID: ctx.sessionID,
-              messageID: input.processor.message.id,
-            })),
-            content: result.content,
-          }
-          if (opts.abortSignal?.aborted) {
-            yield* input.processor.completeToolCall(opts.toolCallId, output)
-          }
-          return output
+          })
         }),
       )
     tools[key] = item

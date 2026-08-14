@@ -3,12 +3,26 @@ import {
   openUserGlobalStore,
   openProjectStore,
   projectIdForWorkspace,
+  isVisibleToWorkspace,
   statusToApproval,
   type ScoredDoc,
 } from "./durable-knowledge-store"
-import type { DocType, DocumentStore } from "./document-store"
+import {
+  DocumentConflictError,
+  DocumentRevisionConflictError,
+  documentRevision,
+  getGovernanceEnvelope,
+  governanceFingerprint,
+  type Doc,
+  type DocType,
+  type DocumentStore,
+  type GovernanceActor,
+} from "./document-store"
+import { DeepAgentReleasedSnapshot, SnapshotIntegrityError } from "./released-snapshot"
 import { DeepAgentCodeHome } from "./workspace"
 import { EnvironmentFactAdoption } from "./environment-fact-adoption"
+import { CanonicalJson } from "../util/canonical-json"
+import { Hash } from "../util/hash"
 import path from "node:path"
 
 // V3.2.1 decision B (docs/34 §8): the read-side adapter between the knowledge retriever and the
@@ -102,7 +116,12 @@ export type SourceQuery = {
   // docs ("provenance:deepagent_core", "pack:") so seeded core/domain knowledge — still served
   // in-code until S4 — is not double-injected. Removed once S4 moves core/domain to the store.
   readonly excludeTagPrefixes?: readonly string[]
+  readonly releasedSelection: DeepAgentReleasedSnapshot.Selection
   readonly limit: number
+}
+
+export type ReleasedScoredDoc = ScoredDoc & {
+  readonly documentRef: DeepAgentReleasedSnapshot.DocumentRef
 }
 
 const excluded = (tags: readonly string[], prefixes: readonly string[]): boolean =>
@@ -110,34 +129,99 @@ const excluded = (tags: readonly string[], prefixes: readonly string[]): boolean
 
 // Union user-global + (optional) project-scoped active docs, re-scored and merged. Throws if not
 // configured (callers in the retriever catch and degrade to []).
-export const queryKnowledge = (query: SourceQuery): readonly ScoredDoc[] => {
+export const queryKnowledge = (query: SourceQuery): readonly ReleasedScoredDoc[] => {
   const projectId = query.workspacePath ? projectIdForWorkspace(query.workspacePath) : undefined
-  const ug = userGlobalStore().retrieve({
-    types: query.types,
-    ...(query.domain !== undefined ? { domain: query.domain } : {}),
-    ...(query.keywords ? { keywords: query.keywords } : {}),
-    ...(query.activePackIds ? { activePackIds: query.activePackIds } : {}),
-    limit: query.limit,
-  })
-  const proj = query.workspacePath
-    ? projectStore(query.workspacePath).retrieve({
-        types: query.types,
-        ...(query.domain !== undefined ? { domain: query.domain } : {}),
-        ...(query.keywords ? { keywords: query.keywords } : {}),
-        ...(query.activePackIds ? { activePackIds: query.activePackIds } : {}),
-        projectId,
-        limit: query.limit,
-      })
+  if (query.releasedSelection.legacyProjectId !== (projectId ?? "global")) {
+    throw new SnapshotIntegrityError({
+      snapshotId: query.releasedSelection.snapshotId,
+      docId: "<selection>",
+      reason: `selection project ${query.releasedSelection.legacyProjectId} does not match query project ${projectId ?? "global"}`,
+    })
+  }
+  const project = query.workspacePath ? projectStore(query.workspacePath) : undefined
+  const released = validateReleasedSelection(query.releasedSelection, userGlobalStore(), project, projectId)
+  const ug = userGlobalStore()
+    .retrieve({
+      types: query.types,
+      ...(query.domain !== undefined ? { domain: query.domain } : {}),
+      ...(query.keywords ? { keywords: query.keywords } : {}),
+      ...(query.activePackIds ? { activePackIds: query.activePackIds } : {}),
+      releasedDocuments: released.userGlobal,
+      limit: query.limit,
+    })
+    .map((result) => ({
+      ...result,
+      documentRef: DeepAgentReleasedSnapshot.documentRef(result.doc, "user_global"),
+    }))
+  const proj = project
+    ? project
+        .retrieve({
+          types: query.types,
+          ...(query.domain !== undefined ? { domain: query.domain } : {}),
+          ...(query.keywords ? { keywords: query.keywords } : {}),
+          ...(query.activePackIds ? { activePackIds: query.activePackIds } : {}),
+          releasedDocuments: released.project,
+          projectId,
+          limit: query.limit,
+        })
+        .map((result) => ({
+          ...result,
+          documentRef: DeepAgentReleasedSnapshot.documentRef(result.doc, "project"),
+        }))
     : []
   const prefixes = query.excludeTagPrefixes ?? []
-  // Merge, dedupe by id (user-global wins on tie), drop excluded-tag docs, re-sort.
-  const byId = new Map<string, ScoredDoc>()
+  // Merge only duplicate observations from the same durable authority. A user-global and a
+  // project document may intentionally share the same document id because each store allocates
+  // ids independently; collapsing by bare id would silently discard one exact released ref.
+  const byAuthority = new Map<string, ReleasedScoredDoc>()
   for (const s of [...ug, ...proj]) {
     if (excluded(s.doc.tags, prefixes)) continue
-    const existing = byId.get(s.doc.id)
-    if (!existing || s.score > existing.score) byId.set(s.doc.id, s)
+    const authorityKey = `${s.documentRef.sourceStore}:${s.documentRef.id}`
+    const existing = byAuthority.get(authorityKey)
+    if (!existing || s.score > existing.score) byAuthority.set(authorityKey, s)
   }
-  return [...byId.values()].sort((a, b) => b.score - a.score || a.doc.id.localeCompare(b.doc.id)).slice(0, query.limit)
+  return [...byAuthority.values()]
+    .sort(
+      (a, b) =>
+        b.score - a.score ||
+        a.documentRef.sourceStore.localeCompare(b.documentRef.sourceStore) ||
+        a.doc.id.localeCompare(b.doc.id),
+    )
+    .slice(0, query.limit)
+}
+
+function validateReleasedSelection(
+  selection: DeepAgentReleasedSnapshot.Selection,
+  userGlobal: DurableKnowledgeStore,
+  project: DurableKnowledgeStore | undefined,
+  projectId: string | undefined,
+) {
+  const validate = (sourceStore: "user_global" | "project", store: DurableKnowledgeStore | undefined) =>
+    selection.documents
+      .filter((ref) => ref.sourceStore === sourceStore)
+      .map((ref) => {
+        const doc = store?.documentStore.get(ref.id, ref.version)
+        if (
+          !doc ||
+          doc.hash !== ref.hash ||
+          doc.type !== ref.type ||
+          doc.scope !== ref.scope ||
+          !isVisibleToWorkspace(doc, projectId)
+        ) {
+          throw new SnapshotIntegrityError({
+            snapshotId: selection.snapshotId,
+            docId: ref.id,
+            reason: !doc
+              ? `${sourceStore} document revision is missing`
+              : "document hash, type, scope, or workspace visibility does not match the released snapshot",
+          })
+        }
+        return ref
+      })
+  return {
+    userGlobal: validate("user_global", userGlobal),
+    project: validate("project", project),
+  }
 }
 
 // --- review-path write helpers (docs/34 §7.3, §9 S3c) ---
@@ -166,18 +250,6 @@ export const environmentFactAdoptionFor = (workspacePath: string): EnvironmentFa
 // Open the project store for a workspace path. Throws if not configured.
 export const projectStoreFor = (workspacePath: string): DurableKnowledgeStore => projectStore(workspacePath)
 
-// Flip approval across both stores for a workspace; returns true if a matching durable doc was found
-// (so the caller can distinguish a real flip from an in-code/no-op id — V3.2.1 P1-2).
-export const setApprovalForWorkspace = (
-  workspacePath: string,
-  id: string,
-  status: "pending" | "approved" | "rejected",
-): boolean => {
-  const proj = projectStore(workspacePath).setApproval(id, status)
-  const ug = userGlobalStore().setApproval(id, status)
-  return proj || ug
-}
-
 // Union the review queue across ALL review-relevant statuses (candidate/active/rejected) for the
 // workspace — the Review UI shows all three so an already-approved doc can be revoked (DAP-7 P0-1b).
 export const listAllForWorkspace = (workspacePath: string): readonly ReviewItem[] => {
@@ -185,8 +257,9 @@ export const listAllForWorkspace = (workspacePath: string): readonly ReviewItem[
   const seen = new Set<string>()
   for (const status of ["candidate", "active", "rejected"] as const) {
     for (const item of listByStatusForWorkspace(workspacePath, status)) {
-      if (seen.has(item.id)) continue
-      seen.add(item.id)
+      const authorityKey = `${item.sourceStore}:${item.id}`
+      if (seen.has(authorityKey)) continue
+      seen.add(authorityKey)
       out.push(item)
     }
   }
@@ -197,7 +270,13 @@ export const reviewSummaryForWorkspace = (workspacePath: string): { readonly pen
   pendingCount: listByStatusForWorkspace(workspacePath, "candidate").filter((item) => item.type !== "skill").length,
 })
 export type ReviewItem = {
+  readonly sourceStore: "user_global" | "project"
   readonly id: string
+  readonly version: number
+  readonly hash: string
+  readonly candidateId: string
+  readonly fingerprint: string
+  readonly governanceRevision: string
   readonly type: import("./document-store").DocType
   readonly summary: string
   readonly evidence_strength: import("./document-store").EvidenceStrength
@@ -207,6 +286,77 @@ export type ReviewItem = {
   //   "durable" (or legacy untagged)  → user-global bucket
   //   "durable:project:<project_id>"  → that project's bucket
   readonly scope: string
+}
+
+export type ReviewAuthority = Pick<
+  ReviewItem,
+  "sourceStore" | "id" | "version" | "hash" | "candidateId" | "fingerprint" | "governanceRevision"
+>
+
+export class ReviewAuthorityConflictError extends Error {
+  readonly _tag = "ReviewAuthorityConflictError"
+  constructor(readonly detail: string) {
+    super(`knowledge review authority conflict: ${detail}`)
+    this.name = "ReviewAuthorityConflictError"
+  }
+}
+
+export const commitReviewDecisionForWorkspace = (
+  workspacePath: string,
+  expected: ReviewAuthority,
+  decision: "approve" | "reject",
+  actor: GovernanceActor,
+): ReviewItem => {
+  const store = expected.sourceStore === "user_global" ? userGlobalStore() : projectStore(workspacePath)
+  const current = store.documentStore.get(expected.id)
+  if (!current) throw new ReviewAuthorityConflictError(`${expected.sourceStore}:${expected.id} is missing`)
+  const actual = reviewAuthority(expected.sourceStore, current)
+  if (!sameReviewAuthority(expected, actual)) {
+    if (decision === "reject" && isExactRejectReplay(store.documentStore, expected, current, actor)) {
+      return reviewItem(expected.sourceStore, current)
+    }
+    throw new ReviewAuthorityConflictError(
+      `${expected.sourceStore}:${expected.id} changed since it was listed; refresh the review queue`,
+    )
+  }
+  try {
+    return reviewItem(
+      expected.sourceStore,
+      decision === "approve"
+        ? store.approveCandidate(current.id, documentRevision(current), actor, { fingerprint: expected.fingerprint })
+        : store.rejectCandidate(current.id, documentRevision(current), actor, "human review rejected", {
+            fingerprint: expected.fingerprint,
+          }),
+    )
+  } catch (error) {
+    if (error instanceof DocumentConflictError || error instanceof DocumentRevisionConflictError)
+      throw new ReviewAuthorityConflictError(
+        `${expected.sourceStore}:${expected.id} changed while the decision was committing; refresh the review queue`,
+      )
+    throw error
+  }
+}
+
+function isExactRejectReplay(
+  store: DocumentStore,
+  expected: ReviewAuthority,
+  current: Doc,
+  actor: GovernanceActor,
+) {
+  const original = store.get(expected.id, expected.version)
+  const governance = getGovernanceEnvelope(current)
+  return (
+    original !== null &&
+    sameReviewAuthority(expected, reviewAuthority(expected.sourceStore, original)) &&
+    current.version === expected.version + 1 &&
+    current.status === "rejected" &&
+    governance?.review_status === "rejected" &&
+    governance.fingerprint === expected.fingerprint &&
+    governance.actor_type === actor.type &&
+    governance.actor_id === actor.id &&
+    governance.reason === "human review rejected" &&
+    governance.source_doc_ref === `${expected.id}@v${expected.version}`
+  )
 }
 
 // A built-in seeded pack doc carries a pack id (extensions.pack_id or a "pack:" tag). These are the
@@ -228,24 +378,66 @@ export const listByStatusForWorkspace = (
 ): readonly ReviewItem[] => {
   const seen = new Set<string>()
   const out: ReviewItem[] = []
-  const stores = [userGlobalStore(), projectStore(workspacePath)]
-  for (const store of stores) {
+  const stores = [
+    { sourceStore: "user_global" as const, store: userGlobalStore() },
+    { sourceStore: "project" as const, store: projectStore(workspacePath) },
+  ]
+  for (const entry of stores) {
+    const store = entry.store
     for (const ref of store.listByStatus(status)) {
-      if (seen.has(ref.id)) continue
-      seen.add(ref.id)
-      const doc = store.documentStore.get(ref.id)
+      const authorityKey = `${entry.sourceStore}:${ref.id}`
+      if (seen.has(authorityKey)) continue
+      seen.add(authorityKey)
+      const doc = store.documentStore.get(ref.id, ref.version)
       if (!doc) continue
       if (isSeededPackDoc(doc)) continue
-      out.push({
-        id: doc.id,
-        type: doc.type,
-        summary: doc.description,
-        evidence_strength: doc.confidence?.evidence_strength ?? "none",
-        evidence_refs: doc.provenance.evidence_refs ?? [],
-        approval_status: statusToApproval(doc.status),
-        scope: doc.scope,
-      })
+      out.push(reviewItem(entry.sourceStore, doc))
     }
   }
   return out
 }
+
+const reviewItem = (sourceStore: ReviewAuthority["sourceStore"], doc: Doc): ReviewItem => ({
+  ...reviewAuthority(sourceStore, doc),
+  type: doc.type,
+  summary: doc.description,
+  evidence_strength: doc.confidence?.evidence_strength ?? "none",
+  evidence_refs: doc.provenance.evidence_refs ?? [],
+  approval_status: statusToApproval(doc.status),
+  scope: doc.scope,
+})
+
+const reviewAuthority = (sourceStore: ReviewAuthority["sourceStore"], doc: Doc): ReviewAuthority => {
+  const governance = getGovernanceEnvelope(doc)
+  const candidateId =
+    governance?.candidate_id ??
+    (typeof doc.extensions?.candidate_id === "string" ? doc.extensions.candidate_id : doc.id)
+  const fingerprint = governance?.fingerprint ?? governanceFingerprint(doc)
+  return {
+    sourceStore,
+    id: doc.id,
+    version: doc.version,
+    hash: doc.hash,
+    candidateId,
+    fingerprint,
+    governanceRevision: Hash.sha256(
+      CanonicalJson.stringify({
+        sourceStore,
+        id: doc.id,
+        status: doc.status,
+        candidateId,
+        fingerprint,
+        governance: governance ?? null,
+      }),
+    ),
+  }
+}
+
+const sameReviewAuthority = (expected: ReviewAuthority, actual: ReviewAuthority) =>
+  expected.sourceStore === actual.sourceStore &&
+  expected.id === actual.id &&
+  expected.version === actual.version &&
+  expected.hash === actual.hash &&
+  expected.candidateId === actual.candidateId &&
+  expected.fingerprint === actual.fingerprint &&
+  expected.governanceRevision === actual.governanceRevision

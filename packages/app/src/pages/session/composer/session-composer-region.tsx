@@ -20,6 +20,7 @@ import { GoalStatusBar } from "@/components/deepagent/goal-status-bar"
 import { GoalStartButton } from "@/components/deepagent/goal-start-button"
 import type { FollowupDraft } from "@/components/prompt-input/submit"
 import { createResizeObserver } from "@solid-primitives/resize-observer"
+import { SessionProviderRecoveryDock } from "@/pages/session/composer/session-provider-recovery-dock"
 
 export function SessionComposerRegion(props: {
   state: SessionComposerState
@@ -71,6 +72,16 @@ export function SessionComposerRegion(props: {
   const parentID = createMemo(() => info()?.parentID)
   const child = createMemo(() => !!parentID())
   const showComposer = createMemo(() => !props.state.blocked() || child())
+  const [recoveryStore, setRecoveryStore] = createStore({
+    sessionID: route.params.id,
+    pending: !!route.params.id,
+  })
+
+  createEffect(() => {
+    const sessionID = route.params.id
+    if (recoveryStore.sessionID === sessionID) return
+    setRecoveryStore({ sessionID, pending: !!sessionID })
+  })
 
   const previewPrompt = () =>
     prompt
@@ -189,6 +200,16 @@ export function SessionComposerRegion(props: {
           )}
         </Show>
 
+        <Show when={route.params.id}>
+          <SessionProviderRecoveryDock
+            sessionID={route.params.id!}
+            onPendingChange={(pending) => {
+              if (recoveryStore.sessionID !== route.params.id) return
+              setRecoveryStore("pending", pending)
+            }}
+          />
+        </Show>
+
         <Show when={showComposer()}>
           <Show
             when={prompt.ready()}
@@ -302,7 +323,7 @@ export function SessionComposerRegion(props: {
                       onQueue={props.followup?.onQueue}
                       onAbort={props.followup?.onAbort}
                       onSubmit={props.onSubmit}
-                      disabled={props.inputDisabled}
+                      disabled={props.inputDisabled || recoveryStore.pending}
                       controlRef={props.inputControlRef}
                     />
                   </Show>

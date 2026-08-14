@@ -8,7 +8,7 @@ import {
   WorkspaceRoutingQueryFields,
 } from "../middleware/workspace-routing"
 import { described } from "./metadata"
-import { NonNegativeInt } from "@deepagent-code/core/schema"
+import { NonNegativeInt, PositiveInt } from "@deepagent-code/core/schema"
 
 const root = "/deepagent"
 
@@ -17,6 +17,17 @@ export class DeepAgentPromotionError extends Schema.ErrorClass<DeepAgentPromotio
     message: Schema.String,
   },
   { httpApiStatus: 400 },
+) {}
+
+export class DeepAgentKnowledgeReviewConflictError extends Schema.ErrorClass<DeepAgentKnowledgeReviewConflictError>(
+  "DeepAgentKnowledgeReviewConflictError",
+)(
+  {
+    message: Schema.String,
+    sourceStore: Schema.Literals(["user_global", "project"]),
+    id: Schema.String,
+  },
+  { httpApiStatus: 409 },
 ) {}
 
 export class DeepAgentGoalPlanValidationError extends Schema.ErrorClass<DeepAgentGoalPlanValidationError>(
@@ -165,10 +176,16 @@ export const DeepAgentRejectionResult = Schema.Struct({
   }),
 })
 
-// V3.2.1 (docs/34) self-learning Review UI: list candidate/active/rejected durable knowledge and
-// batch approve/reject by id. Accessibility is the DocStatus flag (approval_status), never a move.
+// Review decisions round-trip the exact immutable authority selected by the human. Equal bare ids
+// may exist in both roots, and a page opened before a governance transition must not target latest.
 export const DeepAgentKnowledgeItem = Schema.Struct({
+  sourceStore: Schema.Literals(["user_global", "project"]),
   id: Schema.String,
+  version: PositiveInt,
+  hash: Schema.String,
+  candidateId: Schema.String,
+  fingerprint: Schema.String,
+  governanceRevision: Schema.String,
   type: Schema.Literals(["knowledge", "strategy", "methodology", "memory", "skill", "failure_dossier"]),
   summary: Schema.String,
   // Evidence strength of the durable doc (strong/medium/weak/none) — the durable model carries
@@ -185,9 +202,32 @@ export const DeepAgentKnowledgeList = Schema.Struct({ items: Schema.Array(DeepAg
 
 export const DeepAgentKnowledgeReviewSummary = Schema.Struct({ pendingCount: Schema.Number })
 
-export const DeepAgentKnowledgeStatusInput = Schema.Struct({ ids: Schema.Array(Schema.String) })
+export const DeepAgentKnowledgeStatusInput = Schema.Struct({
+  sourceStore: Schema.Literals(["user_global", "project"]),
+  id: Schema.String,
+  version: PositiveInt,
+  hash: Schema.String,
+  candidateId: Schema.String,
+  fingerprint: Schema.String,
+  expectedGovernanceRevision: Schema.String,
+})
 
-export const DeepAgentKnowledgeStatusResult = Schema.Struct({ updated: Schema.Array(Schema.String) })
+export const DeepAgentKnowledgeReleaseRevocation = Schema.Struct({
+  state: Schema.Literals(["revoked", "already_revoked"]),
+  previous_snapshot_id: Schema.String,
+  active_snapshot_id: Schema.String,
+  generation: PositiveInt,
+  membership_hash: Schema.String,
+  manifest_hash: Schema.String,
+  document_count: NonNegativeInt,
+})
+
+export const DeepAgentKnowledgeNotReleased = Schema.Struct({ state: Schema.Literal("not_released") })
+
+export const DeepAgentKnowledgeStatusResult = Schema.Struct({
+  updated: DeepAgentKnowledgeItem,
+  release_revocation: Schema.optional(Schema.Union([DeepAgentKnowledgeReleaseRevocation, DeepAgentKnowledgeNotReleased])),
+})
 
 // docs/34 §9 S10: domain pack pin/unpin and active pack set query.
 export const DeepAgentPackInfo = Schema.Struct({
@@ -222,28 +262,70 @@ export const DeepAgentPackCatalogResult = Schema.Struct({ packs: Schema.Array(De
 // V3.2 ablation ship gate (docs/30 §7). The CI/eval harness POSTs the REAL measured primary
 // metric for each (group, task) cell — this is the honest seam: the runtime never fabricates eval
 // numbers, it consumes them. candidateRefs are the durable ids whose shipping is under test; on a
-// FAIL verdict they are demoted (approval_status=rejected) so misleading knowledge cannot ship.
+// PASS advances the immutable release head; FAIL records evidence and leaves the previous head intact.
 export const DeepAgentShipGateMetric = Schema.Struct({
   group: Schema.Literals(["general", "high", "max"]),
   task: Schema.String,
-  metric: Schema.Number, // higher is better (pass-rate / correctness / score)
+  metric: Schema.Finite, // higher is better (pass-rate / correctness / score)
+})
+export type DeepAgentShipGateMetric = typeof DeepAgentShipGateMetric.Type
+
+export const DeepAgentReleasedKnowledgeDocumentRef = Schema.Struct({
+  sourceStore: Schema.Literals(["user_global", "project"]),
+  id: Schema.String,
+  version: PositiveInt,
+  hash: Schema.String,
+  type: Schema.Literals(["knowledge", "strategy", "methodology", "memory", "skill"]),
+  scope: Schema.String,
+})
+export type DeepAgentReleasedKnowledgeDocumentRef = typeof DeepAgentReleasedKnowledgeDocumentRef.Type
+
+export const DeepAgentReleasedKnowledgeExpectedParent = Schema.Struct({
+  snapshotId: Schema.NullOr(Schema.String),
+  generation: NonNegativeInt,
+  membershipHash: Schema.NullOr(Schema.String),
+})
+
+export const DeepAgentKnowledgeBaselineInput = Schema.Struct({
+  snapshotId: Schema.String,
+  evaluationId: Schema.String,
+  candidateRefs: Schema.Array(DeepAgentReleasedKnowledgeDocumentRef),
+  baselineRef: Schema.String,
+})
+
+export const DeepAgentKnowledgeReleaseResult = Schema.Struct({
+  release_snapshot_id: Schema.String,
+  active_snapshot_id: Schema.String,
+  generation: PositiveInt,
+  membership_hash: Schema.String,
+  manifest_hash: Schema.String,
+  document_count: NonNegativeInt,
 })
 
 export const DeepAgentShipGateInput = Schema.Struct({
-  tasks: Schema.Array(Schema.String),
+  snapshotId: Schema.String,
+  evaluationId: Schema.String,
+  expectedParent: DeepAgentReleasedKnowledgeExpectedParent,
+  tasks: Schema.NonEmptyArray(Schema.String),
   metrics: Schema.Array(DeepAgentShipGateMetric),
-  candidateRefs: Schema.Array(Schema.String),
-  tolerance: Schema.optional(Schema.Number),
-  repeats: Schema.optional(Schema.Number),
+  candidateRefs: Schema.Array(DeepAgentReleasedKnowledgeDocumentRef),
+  tolerance: Schema.optional(Schema.Finite),
+  repeats: Schema.optional(Schema.Literal(1)),
 })
 
 export const DeepAgentShipGateResult = Schema.Struct({
   ship: Schema.Boolean,
   reason: Schema.String,
   offenders: Schema.Array(Schema.String), // offending TASKS
-  demoted: Schema.Array(Schema.String), // candidate REFS actually demoted (had a durable row)
-  not_in_store: Schema.Array(Schema.String), // refs with no durable row (in-code/domain) — demote was a no-op
+  demoted: Schema.Array(Schema.String), // retained as an empty compatibility field; release no longer mutates governance
+  not_in_store: Schema.Array(Schema.String), // refs with no active durable revision to bind into the snapshot
   per_group: Schema.Struct({ gen: Schema.Number, high: Schema.Number, max: Schema.Number }),
+  release_snapshot_id: Schema.String,
+  active_snapshot_id: Schema.String,
+  generation: PositiveInt,
+  membership_hash: Schema.String,
+  manifest_hash: Schema.String,
+  document_count: NonNegativeInt,
 })
 
 // V3.8.1 §G environment-fact use-gate. Provisional user-global environment facts (verifiable,
@@ -622,13 +704,14 @@ export const DeepAgentApi = HttpApi.make("deepagent").add(
       HttpApiEndpoint.post("knowledgeApprove", `${root}/knowledge/approve`, {
         query: WorkspaceRoutingQuery,
         payload: DeepAgentKnowledgeStatusInput,
-        success: described(DeepAgentKnowledgeStatusResult, "Ids that were marked approved (accessible)"),
-        error: DeepAgentPromotionError,
+        success: described(DeepAgentKnowledgeStatusResult, "Exact knowledge revision marked approved"),
+        error: [DeepAgentPromotionError, DeepAgentKnowledgeReviewConflictError],
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "deepagent.knowledge.approve",
-          summary: "Approve DeepAgent knowledge by id",
-          description: "Flag durable knowledge entries as approved (retrievable). Reversible; does not move files.",
+          summary: "Approve an exact DeepAgent knowledge revision",
+          description:
+            "Append an approved governance revision only when the selected store, document revision, candidate identity, fingerprint, and governance revision still match.",
         }),
       ),
     )
@@ -636,13 +719,29 @@ export const DeepAgentApi = HttpApi.make("deepagent").add(
       HttpApiEndpoint.post("knowledgeRejectIds", `${root}/knowledge/reject-ids`, {
         query: WorkspaceRoutingQuery,
         payload: DeepAgentKnowledgeStatusInput,
-        success: described(DeepAgentKnowledgeStatusResult, "Ids that were marked rejected (inaccessible)"),
-        error: DeepAgentPromotionError,
+        success: described(DeepAgentKnowledgeStatusResult, "Exact knowledge revision marked rejected"),
+        error: [DeepAgentPromotionError, DeepAgentKnowledgeReviewConflictError],
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "deepagent.knowledge.rejectIds",
-          summary: "Reject DeepAgent knowledge by id",
-          description: "Flag durable knowledge entries as rejected (not retrievable). Reversible; does not move files.",
+          summary: "Reject an exact DeepAgent knowledge revision",
+          description:
+            "Append a rejected governance revision only when the exact review authority still matches, then publish a new released head without that exact revision when it was released.",
+        }),
+      ),
+    )
+    .add(
+      HttpApiEndpoint.post("knowledgeReleaseBaseline", `${root}/knowledge/release-baseline`, {
+        query: WorkspaceRoutingQuery,
+        payload: DeepAgentKnowledgeBaselineInput,
+        success: described(DeepAgentKnowledgeReleaseResult, "Explicit initial released-knowledge baseline"),
+        error: DeepAgentPromotionError,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "deepagent.knowledge.releaseBaseline",
+          summary: "Create the initial released knowledge baseline",
+          description:
+            "One-time explicit cutover that binds exact durable document revisions. It fails when a released head already exists.",
         }),
       ),
     )
@@ -650,14 +749,14 @@ export const DeepAgentApi = HttpApi.make("deepagent").add(
       HttpApiEndpoint.post("knowledgeShipGate", `${root}/knowledge/ship-gate`, {
         query: WorkspaceRoutingQuery,
         payload: DeepAgentShipGateInput,
-        success: described(DeepAgentShipGateResult, "Ablation ship-gate verdict; offending refs demoted on failure"),
+        success: described(DeepAgentShipGateResult, "Ablation ship-gate verdict and durable snapshot result"),
         error: DeepAgentPromotionError,
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "deepagent.knowledge.shipGate",
           summary: "Run the ablation regression ship gate",
           description:
-            "CI/eval posts measured per-group/per-task metrics; if MAX regresses vs HIGH the candidate refs are demoted (rejected) so misleading knowledge cannot ship (docs/30 §7).",
+            "CI/eval posts measured per-group/per-task metrics; PASS advances the immutable release head, while FAIL preserves the previous passed snapshot and document governance.",
         }),
       ),
     )

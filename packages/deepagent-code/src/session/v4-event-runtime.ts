@@ -44,6 +44,7 @@ import { goalStoreRoot } from "./goal-manager"
 import { SessionRevert } from "./revert"
 import { SessionSteer } from "./steer"
 import { EventV2Bridge } from "@/event-v2-bridge"
+import { EventV2 } from "@deepagent-code/core/event"
 // §C3 (P2.9) — file locks + code-graph symbols.
 import { FileLock } from "@deepagent-code/core/file-lock"
 import { LocationIndexRuntime } from "@/location-index/runtime"
@@ -661,15 +662,42 @@ const executionRuntimeLayer = Layer.mergeAll(runtimeLayer, handoffConsumerLayer)
   Layer.provide(AgentExecution.layer),
 )
 
-// The retention sweeper daemon — started only when a V4 daemon is enabled. This coupling is
-// self-consistent, not a surprise: the durable event/audit tables are written ONLY by V4 publishers
-// (the flag-gated IM double-write, goal-manager, agent-push), so with all V4 flags off nothing is
-// written and there is nothing to prune. Turning any V4 flag on both starts writing those rows AND
-// starts the 30-day sweep that bounds them — they activate together by design.
+// EventV2 is written by every Session, independently of the V4 feature flags. Keep retention running
+// even when the optional V4 daemons are disabled so archived legacy Sessions cannot accumulate raw
+// EventV2 history indefinitely.
 const retentionLayer = Layer.unwrap(
   Effect.gen(function* () {
-    const flags = yield* RuntimeFlags.Service
-    return RetentionSweeper.layerWith({ runLoop: anyV4DaemonEnabled(flags) })
+    const events = yield* EventV2Bridge.Service
+    return RetentionSweeper.layerWith({
+      runLoop: true,
+      compactSession: (sessionID) =>
+        Effect.gen(function* () {
+          if (!events.prepareCheckpoint || !events.stageCheckpoint || !events.finalizeCheckpoint) return false
+          if (!events.aggregateState) return false
+          const state = yield* events.aggregateState(sessionID)
+          if (!state || state.seq < 0) return false
+          let attempt = yield* events.prepareCheckpoint({
+            aggregateID: sessionID,
+            throughSeq: EventV2.Cursor.make(state.seq),
+            expectedLatest: EventV2.Cursor.make(state.seq),
+            codec: "session-projection",
+            schemaVersion: 1,
+            ...(state.ownerID ? { ownerID: state.ownerID } : {}),
+          })
+          if (attempt.state === "prepared") attempt = yield* events.stageCheckpoint({ snapshotID: attempt.snapshotID })
+          if (attempt.state === "prepared") return true
+          const snapshot = attempt.state === "complete"
+            ? yield* events.snapshot(sessionID)
+            : yield* events.finalizeCheckpoint({ snapshotID: attempt.snapshotID })
+          if (!snapshot || snapshot.snapshotID !== attempt.snapshotID) return false
+          const result = yield* events.compact({
+            aggregateID: sessionID,
+            throughSeq: EventV2.Cursor.make(state.seq),
+            limit: 100,
+          })
+          return result.complete
+        }),
+    })
   }),
 )
 

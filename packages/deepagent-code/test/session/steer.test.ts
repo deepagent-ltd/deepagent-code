@@ -34,6 +34,7 @@ import { SessionSteer } from "../../src/session/steer"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { SessionStatus } from "../../src/session/status"
 import { SessionMessage } from "@deepagent-code/core/session/message"
+import { SessionV2 } from "@deepagent-code/core/session"
 import { Prompt } from "@deepagent-code/core/session/prompt"
 import { Skill } from "../../src/skill"
 import { SystemPrompt } from "../../src/session/system"
@@ -67,7 +68,16 @@ import { MessageTable, SessionIntentTable, SessionSteerTable, SessionTable } fro
 import { eq } from "drizzle-orm"
 import { SessionMutationEpoch } from "../../src/session/mutation-epoch"
 import { SessionPromptIntent } from "../../src/session/prompt-intent"
-import { SessionActivityAdmissionTable, SessionLegacyActivityAdmissionTable } from "../../src/session/activity-sql"
+import {
+  SessionActivityAdmissionTable,
+  SessionActivityProgressTable,
+  SessionLegacyActivityAdmissionTable,
+  SessionLegacyActivityRunTable,
+  SessionLegacyActivityTable,
+  SessionLegacyActivityTerminalTable,
+} from "../../src/session/activity-sql"
+import { LocationIdentity } from "@deepagent-code/core/context-federation/identity"
+import { SessionProviderOwner } from "@deepagent-code/core/context-federation/provider-owner"
 
 void Log.init({ print: false })
 
@@ -87,6 +97,7 @@ const summary = Layer.succeed(
     summarize: () => Effect.void,
     diff: () => Effect.succeed([]),
     computeDiff: () => Effect.succeed([]),
+    computeManifest: () => Effect.succeed(SessionSummary.emptyManifest()),
   }),
 )
 
@@ -186,9 +197,14 @@ const infra = Layer.mergeAll(NodeFileSystem.layer, CrossSpawnSpawner.defaultLaye
 // steeringOn/steeringOff: the ONLY difference is the v4Steering flag, so tests can assert the
 // kill-switch cleanly. The steer buffer shares the same Database as Session (built over `deps`).
 function makePrompt(steering: boolean) {
-  const flags = RuntimeFlags.layer({ experimentalEventSystem: true, v4Steering: steering })
+  const flags = RuntimeFlags.layer({
+    experimentalEventSystem: true,
+    v4Steering: steering,
+    coreV2ExecutionOwner: false,
+  })
   const deps = Layer.mergeAll(
     Session.defaultLayer,
+    SessionV2.defaultLayer,
     Snapshot.defaultLayer,
     LLM.defaultLayer,
     AgentSvc.defaultLayer,
@@ -236,6 +252,7 @@ function makePrompt(steering: boolean) {
   )
   const compact = SessionCompaction.layer.pipe(Layer.provide(flags), Layer.provideMerge(proc), Layer.provideMerge(deps))
   return SessionPrompt.layer.pipe(
+    Layer.provide(SessionProviderOwner.layer.pipe(Layer.provide(deps))),
     Layer.provide(testInstanceStoreLayer),
     Layer.provide(SessionRevert.defaultLayer),
     Layer.provide(Image.defaultLayer),
@@ -249,6 +266,7 @@ function makePrompt(steering: boolean) {
     Layer.provideMerge(trunc),
     Layer.provide(Instruction.defaultLayer),
     Layer.provide(SystemPrompt.defaultLayer),
+    Layer.provide(LocationIdentity.layer.pipe(Layer.provide(deps))),
     Layer.provide(flags),
     Layer.provideMerge(deps),
     Layer.provide(summary),
@@ -786,6 +804,66 @@ on.instance(
 
       // Two model calls: the original + the follow-up that absorbed the steer.
       expect(yield* llm.calls).toBe(2)
+
+      const { db } = yield* Database.Service
+      const activities = yield* db
+        .select()
+        .from(SessionLegacyActivityTable)
+        .where(eq(SessionLegacyActivityTable.session_id, chat.id))
+        .all()
+        .pipe(Effect.orDie)
+      expect(activities).toMatchObject([{ state: "settled", terminal_reason: "assistant_completed" }])
+      const activity = activities[0]
+      expect(activity).toBeDefined()
+      if (!activity) return
+      expect(
+        yield* db
+          .select()
+          .from(SessionLegacyActivityAdmissionTable)
+          .where(eq(SessionLegacyActivityAdmissionTable.activity_id, activity.activity_id))
+          .orderBy(SessionLegacyActivityAdmissionTable.ordinal)
+          .all()
+          .pipe(Effect.orDie),
+      ).toMatchObject([
+        { ordinal: 0, role: "trigger" },
+        { ordinal: 1, role: "steer" },
+      ])
+      expect(
+        yield* db
+          .select()
+          .from(SessionActivityProgressTable)
+          .where(eq(SessionActivityProgressTable.activity_id, activity.activity_id))
+          .orderBy(SessionActivityProgressTable.revision)
+          .all()
+          .pipe(Effect.orDie),
+      ).toMatchObject([
+        { revision: 0, input_membership_ordinal: 0, state: "progress" },
+        { revision: 1, input_membership_ordinal: 1, state: "final" },
+      ])
+      const runs = yield* db
+        .select()
+        .from(SessionLegacyActivityRunTable)
+        .where(eq(SessionLegacyActivityRunTable.session_id, chat.id))
+        .all()
+        .pipe(Effect.orDie)
+      expect(runs).toMatchObject([
+        { activity_id: activity.activity_id, state: "completed", terminal_reason: "assistant_completed" },
+      ])
+      expect(
+        yield* db
+          .select()
+          .from(SessionLegacyActivityTerminalTable)
+          .where(eq(SessionLegacyActivityTerminalTable.activity_id, activity.activity_id))
+          .all()
+          .pipe(Effect.orDie),
+      ).toMatchObject([
+        {
+          run_id: runs[0]?.run_id,
+          state: "settled",
+          reason_code: "assistant_completed",
+          membership_ordinal: 1,
+        },
+      ])
 
       // The steered message is persisted as an ordinary user message in history.
       const msgs = yield* sessions.messages({ sessionID: chat.id })
