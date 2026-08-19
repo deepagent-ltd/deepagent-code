@@ -14,6 +14,10 @@ import type { State, VcsCache, SessionPlan, SessionGoal, SessionPlanUpdateOption
 import { trimSessions } from "./session-trim"
 import { dropSessionCaches } from "./session-cache"
 import { diffs as list, message as clean } from "@/utils/diffs"
+// BUG-407-012 root cause B: message/part arrays are kept in (time, id) chronological order, not
+// ID lexicographic order — the 6-byte ID time field wraps every 2^36 ms, so ID order alone is
+// not time order. Bare-ID events (remove/delta) must locate by identity scan, not binary search.
+import { findMessageIndex, findPartIndex, locateMessage, locatePart } from "@/utils/message-order"
 import { promptAdmissionClientMessageID } from "./prompt-admission"
 
 const SKIP_PARTS = new Set(["patch", "step-start", "step-finish"])
@@ -281,8 +285,8 @@ export function applyDirectoryEvent(input: {
           produce((draft) => {
             const messages = draft.message[info.sessionID]
             if (messages) {
-              const result = Binary.search(messages, clientMessageID, (message) => message.id)
-              if (result.found) messages.splice(result.index, 1)
+              const index = findMessageIndex(messages, clientMessageID)
+              if (index !== -1) messages.splice(index, 1)
             }
             const parts = draft.part[clientMessageID]
             if (parts) {
@@ -297,7 +301,7 @@ export function applyDirectoryEvent(input: {
         input.setStore("message", info.sessionID, [info])
         break
       }
-      const result = Binary.search(messages, info.id, (m) => m.id)
+      const result = locateMessage(messages, info)
       if (result.found) {
         const existing = messages[result.index]!
         const merged = mergeMessage(existing, info)
@@ -328,8 +332,8 @@ export function applyDirectoryEvent(input: {
         produce((draft) => {
           const messages = draft.message[props.sessionID]
           if (messages) {
-            const result = Binary.search(messages, props.messageID, (m) => m.id)
-            if (result.found) messages.splice(result.index, 1)
+            const index = findMessageIndex(messages, props.messageID)
+            if (index !== -1) messages.splice(index, 1)
           }
           const parts = draft.part[props.messageID]
           if (parts) {
@@ -355,7 +359,7 @@ export function applyDirectoryEvent(input: {
         input.setStore("part", part.messageID, [part])
         break
       }
-      const result = Binary.search(parts, part.id, (p) => p.id)
+      const result = locatePart(parts, part)
       if (result.found) {
         input.setStore("part", part.messageID, result.index, reconcile(part))
         break
@@ -378,15 +382,15 @@ export function applyDirectoryEvent(input: {
       )
       const parts = input.store.part[props.messageID]
       if (!parts) break
-      const result = Binary.search(parts, props.partID, (p) => p.id)
-      if (result.found) {
+      const index = findPartIndex(parts, props.partID)
+      if (index !== -1) {
         input.setStore(
           produce((draft) => {
             const list = draft.part[props.messageID]
             if (!list) return
-            const next = Binary.search(list, props.partID, (p) => p.id)
-            if (!next.found) return
-            list.splice(next.index, 1)
+            const next = findPartIndex(list, props.partID)
+            if (next === -1) return
+            list.splice(next, 1)
             if (list.length === 0) delete draft.part[props.messageID]
           }),
         )
@@ -397,14 +401,14 @@ export function applyDirectoryEvent(input: {
       const props = event.properties as { messageID: string; partID: string; field: string; delta: string }
       const parts = input.store.part[props.messageID]
       if (!parts) break
-      const result = Binary.search(parts, props.partID, (p) => p.id)
-      if (!result.found) break
+      const index = findPartIndex(parts, props.partID)
+      if (index === -1) break
       input.setStore("part_text_accum_delta", props.partID, (existing) => (existing ?? "") + props.delta)
       input.setStore(
         "part",
         props.messageID,
         produce((draft) => {
-          const part = draft[result.index]
+          const part = draft[index]
           const field = props.field as keyof typeof part
           const existing = part[field] as string | undefined
           ;(part[field] as string) = (existing ?? "") + props.delta
