@@ -3,11 +3,16 @@ import { RequestExecutor } from "@deepagent-code/llm/route"
 import { Effect, Layer, Ref } from "effect"
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import type { ModelMessage } from "ai"
+import { join } from "path"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { ModelV2 } from "@deepagent-code/core/model"
+import { Database } from "@deepagent-code/core/database/database"
+import { DatabaseMigration } from "@deepagent-code/core/database/migration"
+import remoteCompactPersistenceMigration from "@deepagent-code/core/database/migration/20260820000000_remote_compact_persistence"
 import type { Provider } from "@/provider/provider"
 import { RemoteCompact } from "@/session/remote-compact"
 import { testEffect } from "../lib/effect"
+import { TestInstance } from "../fixture/fixture"
 
 const JSON_HEADERS = { "content-type": "application/json" } as const
 
@@ -215,6 +220,35 @@ describe("remote compaction fail-over", () => {
       ),
     ),
   )
+
+  // §4.3 same-provenance guard: a blob minted by another provider can never be
+  // replayed — drop it and fall back to local summarization, without HTTP.
+  it.live("clears a foreign-provider blob and fails over to local (§4.3 same source)", () =>
+    Effect.gen(function* () {
+      RemoteCompact.EncryptedContentStore.set("ses_cross_provider", "enc-foreign", { providerID: "deepseek" })
+      const outcome = yield* RemoteCompact.attemptRemoteCompaction(input(openaiModel, "ses_cross_provider")).pipe(
+        Effect.provide(noHttpLayer),
+        noRetries,
+      )
+      expect(outcome.used).toBe("local")
+      expect(outcome.used === "local" && outcome.reason).toContain("belongs to provider deepseek")
+      expect(RemoteCompact.EncryptedContentStore.get("ses_cross_provider")).toBeUndefined()
+    }),
+  )
+
+  // §4.3 capability loss: switching to a model whose route does not serve
+  // /responses/compact invalidates any staged blob so it can never be replayed.
+  it.live("clears a stale blob when the capability probe is false (§4.3)", () =>
+    Effect.gen(function* () {
+      RemoteCompact.EncryptedContentStore.set("ses_capability_lost", "enc-stale")
+      const outcome = yield* RemoteCompact.attemptRemoteCompaction(input(anthropicModel, "ses_capability_lost")).pipe(
+        Effect.provide(noHttpLayer),
+        noRetries,
+      )
+      expect(outcome.used).toBe("local")
+      expect(RemoteCompact.EncryptedContentStore.get("ses_capability_lost")).toBeUndefined()
+    }),
+  )
 })
 
 describe("remote compaction encrypted_content staging", () => {
@@ -264,6 +298,77 @@ describe("remote compaction encrypted_content staging", () => {
       expect(RemoteCompact.EncryptedContentStore.get("ses_restart")).toBe("enc-lost")
       RemoteCompact.EncryptedContentStore.clear("ses_restart")
       expect(RemoteCompact.EncryptedContentStore.get("ses_restart")).toBeUndefined()
+    }),
+  )
+})
+
+// Gap 1 durability: with a bound Database handle the blob survives a process
+// restart (fresh Database instance over the same file). The migration is not
+// registered in migration.gen.ts yet (mainline does that), so each phase
+// applies it explicitly via applyOnly — tracked, hence idempotent across the
+// two phases.
+describe("remote compaction encrypted_content durability (Gap 1)", () => {
+  const it = testEffect(Layer.empty)
+
+  const seedSession = (db: Database.Interface["db"], sessionID: string) =>
+    Effect.gen(function* () {
+      yield* db.run(`
+        INSERT INTO project (id, worktree, sandboxes, time_created, time_updated)
+        VALUES ('project-${sessionID}', '/repo', '[]', 1, 1)
+      `)
+      yield* db.run(`
+        INSERT INTO session (
+          id, project_id, slug, directory, title, version, mutation_epoch, time_created, time_updated
+        ) VALUES (
+          '${sessionID}', 'project-${sessionID}', '${sessionID}', '/repo', 'Remote compact', '1', 0, 1, 1
+        )
+      `)
+    })
+
+  it.instance(
+    "set → restart (new Database instance, same file) → get hits with attribution",
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const file = join(test.directory, "remote-compact.db")
+      const sessionID = "ses_persist_round_trip"
+      yield* Effect.addFinalizer(() => Effect.sync(() => RemoteCompact.EncryptedContentStore.bind(undefined)))
+
+      // Phase 1 — first process: bind, seed, store.
+      yield* Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        yield* DatabaseMigration.applyOnly(db, [remoteCompactPersistenceMigration])
+        yield* seedSession(db, sessionID)
+        RemoteCompact.EncryptedContentStore.bind(db)
+        RemoteCompact.EncryptedContentStore.set(sessionID, "enc-durable", {
+          providerID: "openai",
+          modelID: "gpt-5-mini",
+          sourceRunID: "run-persist-1",
+        })
+        expect(RemoteCompact.EncryptedContentStore.get(sessionID)).toBe("enc-durable")
+        RemoteCompact.EncryptedContentStore.bind(undefined)
+        // Unbound store is memory-only: the durable row is invisible here.
+        expect(RemoteCompact.EncryptedContentStore.get(sessionID)).toBeUndefined()
+      }).pipe(Effect.provide(Database.layerFromPath(file)))
+
+      // Phase 2 — restart: a fresh Database instance over the same file sees it.
+      yield* Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        yield* DatabaseMigration.applyOnly(db, [remoteCompactPersistenceMigration])
+        RemoteCompact.EncryptedContentStore.bind(db)
+        expect(RemoteCompact.EncryptedContentStore.get(sessionID)).toBe("enc-durable")
+        const record = RemoteCompact.EncryptedContentStore.getRecord(sessionID)
+        expect(record?.providerID).toBe("openai")
+        expect(record?.modelID).toBe("gpt-5-mini")
+        expect(record?.sourceRunID).toBe("run-persist-1")
+
+        // Latest wins: a second set replaces the row (never a second row).
+        RemoteCompact.EncryptedContentStore.set(sessionID, "enc-durable-2", { providerID: "openai" })
+        expect(RemoteCompact.EncryptedContentStore.get(sessionID)).toBe("enc-durable-2")
+
+        // Fail-over clear removes the durable row as well.
+        RemoteCompact.EncryptedContentStore.clear(sessionID)
+        expect(RemoteCompact.EncryptedContentStore.get(sessionID)).toBeUndefined()
+      }).pipe(Effect.provide(Database.layerFromPath(file)))
     }),
   )
 })

@@ -24,8 +24,11 @@ import {
   CompactionArtifactTable,
   CompactionRunTable,
   CompactionSummaryAttemptTable,
+  type CompactionMode,
   type SummaryAttemptState,
 } from "./compaction-sql"
+import { attemptRemoteCompaction, EncryptedContentStore, supportsRemoteCompaction } from "./remote-compact"
+import { RequestExecutor } from "@deepagent-code/llm/route"
 import { eq, and, inArray, isNull } from "drizzle-orm"
 
 import { Cause, Effect, Exit, Layer, Context, Option } from "effect"
@@ -392,6 +395,18 @@ export const validateReplacementTargetInTransaction = Effect.fn(
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/SessionCompaction") {}
 
+// UPD-005 Gap 2 (§4.2, information-hole exemption): a committed run that compacted
+// remotely carries no TEXT summary by design — "no information is lost" is guaranteed
+// by the provider's server-held encrypted context, not by text. Any check that treats
+// a missing summary_text as an information hole MUST exempt runs in this shape.
+export const remoteCompactionInformationHoleExempt = (run: {
+  readonly compaction_mode: CompactionMode | null
+  readonly encrypted_content_session: string | null
+}): boolean =>
+  run.compaction_mode === "remote_compact" &&
+  run.encrypted_content_session !== null &&
+  run.encrypted_content_session.length > 0
+
 export const use = serviceUse(Service)
 
 export const layer = Layer.effect(
@@ -406,6 +421,13 @@ export const layer = Layer.effect(
     const events = yield* EventV2Bridge.Service
     const flags = yield* RuntimeFlags.Service
     const { db } = yield* Database.Service
+    // UPD-005 Gap 2: the remote branch dispatches through the route executor.
+    const executor = yield* RequestExecutor.Service
+    // UPD-005 Gap 1: bind the encrypted_content store to this database so the
+    // opaque blob survives restarts (see remote-compact.ts). Revert to memory-only
+    // mode when this layer goes away so no closed handle stays reachable.
+    EncryptedContentStore.bind(db)
+    yield* Effect.addFinalizer(() => Effect.sync(() => EncryptedContentStore.bind(undefined)))
     const promptEpoch = yield* PromptEpoch.Service
     const activeCompactions = new Set<SessionID>()
 
@@ -1142,6 +1164,60 @@ export const layer = Layer.effect(
         .pipe(Effect.orDie)
     })
 
+    // UPD-005 Gap 2 (§4.2): commit for the remote mode. There is no TEXT summary
+    // and no marker text part to commit — the run records the mode, the pointer to
+    // the durably stored encrypted_content, and transitions to 'committed'.
+    // summary_text stays NULL by design (information-hole exempt, see
+    // remoteCompactionInformationHoleExempt).
+    const commitRemoteRun = Effect.fn("SessionCompaction.commitRemoteRun")(function* (input: {
+      runID: string
+      sessionID: SessionID
+      reason: "auto" | "manual"
+    }) {
+      return yield* db
+        .transaction(
+          (tx) =>
+            Effect.gen(function* () {
+              // The authority trigger only admits requested → summarizing →
+              // committed, so advance the run through the same sequence the local
+              // path uses.
+              yield* tx
+                .update(CompactionRunTable)
+                .set({ state: "summarizing" })
+                .where(and(eq(CompactionRunTable.run_id, input.runID), eq(CompactionRunTable.state, "requested")))
+                .run()
+              const committed = yield* tx
+                .update(CompactionRunTable)
+                .set({
+                  state: "committed",
+                  compaction_mode: "remote_compact",
+                  encrypted_content_session: input.sessionID,
+                  completion_reason: input.reason,
+                  committed_at: Date.now(),
+                })
+                .where(and(eq(CompactionRunTable.run_id, input.runID), eq(CompactionRunTable.state, "summarizing")))
+                .returning({ run_id: CompactionRunTable.run_id })
+                .get()
+              if (!committed) return false
+              // A remote run has nothing publishable: orphan any pending run
+              // bookkeeping artifacts (mirrors failRun) so recovery never replays them.
+              yield* tx
+                .update(CompactionArtifactTable)
+                .set({ state: "orphaned" })
+                .where(
+                  and(
+                    eq(CompactionArtifactTable.run_id, input.runID),
+                    eq(CompactionArtifactTable.state, "pending"),
+                  ),
+                )
+                .run()
+              return true
+            }),
+          { behavior: "immediate" },
+        )
+        .pipe(Effect.orDie)
+    })
+
     const isOverflow = Effect.fn("SessionCompaction.isOverflow")(function* (input: {
       tokens: SessionV1.Assistant["tokens"]
       model: Provider.Model
@@ -1323,6 +1399,59 @@ export const layer = Layer.effect(
         sourceProjectionVersion: projection.projectionVersion,
       })
       if (!run) return "stop"
+
+      const agent = yield* agents.get("compaction")
+      const model = agent.model
+        ? yield* provider.getModel(agent.model.providerID, agent.model.modelID).pipe(Effect.orDie)
+        : yield* provider.getModel(userMessage.model.providerID, userMessage.model.modelID).pipe(Effect.orDie)
+
+      // UPD-005 Gap 2 (§4.2/§5): server-side compaction branch — remote only. The
+      // capability probe runs BEFORE any marker part is written: a remote commit
+      // produces no TEXT summary and no marker text part. {used:"local"} falls
+      // through to the local summary path below, which stays byte-for-byte unchanged.
+      if (!supportsRemoteCompaction(model)) {
+        // §4.3: capability lost (e.g. model switch) — the stale blob must never be replayed.
+        EncryptedContentStore.clear(input.sessionID)
+      }
+      if (supportsRemoteCompaction(model)) {
+        const providerInfo = yield* provider.getProvider(model.providerID).pipe(Effect.orDie)
+        const remoteMessages = yield* MessageV2.toModelMessagesEffect([...input.messages], model, {
+          stripMedia: true,
+          toolOutputMaxChars: TOOL_OUTPUT_MAX_CHARS,
+        })
+        const outcome = yield* attemptRemoteCompaction({
+          sessionID: input.sessionID,
+          model,
+          provider: providerInfo,
+          auth: undefined,
+          messages: remoteMessages,
+        }).pipe(Effect.provideService(RequestExecutor.Service, executor))
+        if (outcome.used === "remote") {
+          EncryptedContentStore.set(input.sessionID, outcome.encryptedContent, {
+            providerID: model.providerID,
+            modelID: model.id,
+            sourceRunID: run.run_id,
+          })
+          const committed = yield* commitRemoteRun({
+            runID: run.run_id,
+            sessionID: input.sessionID,
+            reason: input.auto ? "auto" : "manual",
+          })
+          if (!committed) {
+            yield* failRun(run.run_id, "compaction_commit_conflict")
+            return "stop"
+          }
+          log.info("remote compaction committed", { runID: run.run_id, sessionID: input.sessionID })
+          return "stop"
+        }
+        // {used:"local"}: record why the server-side path was unavailable (§4.2),
+        // then the existing local summary path below takes over.
+        log.info("remote compaction unavailable, using local summary", {
+          runID: run.run_id,
+          reason: outcome.reason,
+        })
+      }
+
       if (existingCompactionPart) {
         yield* registerArtifact({
           runID: run.run_id,
@@ -1355,10 +1484,6 @@ export const layer = Layer.effect(
       // messages, which are indistinguishable from a real repeated prompt in the UI and history.
       const messages = input.messages
 
-      const agent = yield* agents.get("compaction")
-      const model = agent.model
-        ? yield* provider.getModel(agent.model.providerID, agent.model.modelID).pipe(Effect.orDie)
-        : yield* provider.getModel(userMessage.model.providerID, userMessage.model.modelID).pipe(Effect.orDie)
       const cfg = yield* config.get()
       const history = compactionPart && messages.at(-1)?.info.id === input.parentID ? messages.slice(0, -1) : messages
       const prior = completedCompactions(history)
@@ -1630,6 +1755,11 @@ export const layer = Layer.effect(
         const rawSummary = summaryText(checkpoint)
         const summary = rawSummary ? stripSummaryAnalysis(rawSummary) : undefined
         if (!summary) {
+          // Information-hole gate: a local_summary run MUST commit text. Remote runs
+          // never reach this checkpoint (they commit earlier via commitRemoteRun) and
+          // are exempt per remoteCompactionInformationHoleExempt — their NULL
+          // summary_text is legal because the server-held encrypted context, not
+          // text, guarantees no information is lost (§4.2).
           yield* failRun(run.run_id, "summary_text_missing")
           return "stop"
         }
@@ -1914,6 +2044,7 @@ export const defaultLayer = Layer.suspend(() =>
     Layer.provide(EventV2Bridge.defaultLayer),
     Layer.provide(Database.defaultLayer),
     Layer.provide(PromptEpoch.defaultLayer),
+    Layer.provide(RequestExecutor.defaultLayer),
   ),
 )
 

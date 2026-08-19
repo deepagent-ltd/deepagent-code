@@ -146,5 +146,6 @@ export const migrations = (
     import("./migration/20260816080000_receipt_active_pack_set_attribution"),
     import("./migration/20260816081000_session_context_reconciliation"),
     import("./migration/20260819120000_session_intent_confirmation_state"),
+    import("./migration/20260820000000_remote_compact_persistence"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

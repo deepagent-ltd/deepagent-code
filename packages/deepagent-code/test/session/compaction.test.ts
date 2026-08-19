@@ -7,6 +7,7 @@ import { PartTable, SessionHistoryStateTable, SessionWorldStateBaselineTable } f
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { APICallError } from "ai"
 import { Cause, Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect"
+import { HttpClientResponse } from "effect/unstable/http"
 import * as Stream from "effect/Stream"
 import { and, eq, inArray } from "drizzle-orm"
 import { Config } from "@/config/config"
@@ -38,9 +39,13 @@ import { CrossSpawnSpawner } from "@deepagent-code/core/cross-spawn-spawner"
 import { TestConfig } from "../fixture/config"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { PromptEpoch } from "@/session/prompt-epoch"
-import { CompactionArtifactTable, CompactionRunTable, CompactionSummaryAttemptTable } from "@/session/compaction-sql"
+import { CompactionArtifactTable, CompactionRunTable, CompactionSummaryAttemptTable, SessionCompactionEncryptedContentTable } from "@/session/compaction-sql"
 import { SessionPromptEpochTable } from "@/session/prompt-epoch.sql"
 import { LLMEvent, Usage } from "@deepagent-code/llm"
+import { RequestExecutor } from "@deepagent-code/llm/route"
+import { DatabaseMigration } from "@deepagent-code/core/database/migration"
+import remoteCompactPersistenceMigration from "@deepagent-code/core/database/migration/20260820000000_remote_compact_persistence"
+import { EncryptedContentStore } from "@/session/remote-compact"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { ModelV2 } from "@deepagent-code/core/model"
 import { SessionProjector } from "@deepagent-code/core/session/projector"
@@ -240,6 +245,7 @@ function fake(
     get message() {
       return msg
     },
+    snapshotOutcome: {} satisfies Snapshot.TrackOutcome,
     updateToolCall: Effect.fn("TestSessionProcessor.updateToolCall")(() => Effect.succeed(undefined)),
     completeToolCall: Effect.fn("TestSessionProcessor.completeToolCall")(() => Effect.void),
     process: Effect.fn("TestSessionProcessor.process")(() => Effect.succeed(decision)),
@@ -267,6 +273,19 @@ function cfg(compaction?: ConfigV1.Info["compaction"]) {
   })
 }
 
+// UPD-005: the Gap 1/Gap 2 persistence migration is not registered in
+// migration.gen.ts yet (mainline registers it). Layer it over the tracked
+// history so compaction_run carries the mode columns the drizzle schema
+// already declares. applyOnly is tracked, hence idempotent.
+const database = Layer.effect(
+  Database.Service,
+  Effect.gen(function* () {
+    const service = yield* Database.Service
+    yield* DatabaseMigration.applyOnly(service.db, [remoteCompactPersistenceMigration])
+    return service
+  }),
+).pipe(Layer.provide(Database.defaultLayer))
+
 const deps = Layer.mergeAll(
   wide().layer,
   layer("continue"),
@@ -275,7 +294,7 @@ const deps = Layer.mergeAll(
   EventV2Bridge.defaultLayer,
   Config.defaultLayer,
   RuntimeFlags.layer({ experimentalEventSystem: true }),
-  Database.defaultLayer,
+  database,
   EventV2Bridge.defaultLayer,
   PromptEpoch.defaultLayer,
 )
@@ -285,11 +304,15 @@ const env = Layer.mergeAll(
   // QUAL-007: the core SessionProjector materializes event-created sessions; without it message
   // writes hit the session FK.
   SessionProjector.defaultLayer,
-  Database.defaultLayer,
+  database,
   EventV2Bridge.defaultLayer,
   CrossSpawnSpawner.defaultLayer,
   PromptEpoch.defaultLayer,
-  SessionCompaction.layer.pipe(Layer.provide(SessionNs.defaultLayer), Layer.provideMerge(deps)),
+  SessionCompaction.layer.pipe(
+    Layer.provide(SessionNs.defaultLayer),
+    Layer.provide(RequestExecutor.defaultLayer),
+    Layer.provideMerge(deps),
+  ),
 )
 
 const it = testEffect(env)
@@ -297,7 +320,7 @@ const it = testEffect(env)
 const compactionEnv = Layer.mergeAll(
   SessionNs.defaultLayer,
   SessionProjector.defaultLayer,
-  Database.defaultLayer,
+  database,
   EventV2Bridge.defaultLayer,
   CrossSpawnSpawner.defaultLayer,
   PromptEpoch.defaultLayer,
@@ -311,6 +334,7 @@ type CompactionProcessOptions = {
   provider?: ReturnType<typeof ProviderTest.fake>
   config?: Layer.Layer<Config.Service>
   flags?: Partial<RuntimeFlags.Info>
+  executor?: Layer.Layer<RequestExecutor.Service>
 }
 
 function withCompaction(options?: CompactionProcessOptions) {
@@ -328,7 +352,15 @@ function compactionProcessLayer(options?: CompactionProcessOptions) {
         Layer.provide(status),
       )
     : layer(options?.result ?? "continue")
-  return Layer.mergeAll(SessionCompaction.layer.pipe(Layer.provide(processor)), processor, events, status).pipe(
+  return Layer.mergeAll(
+    SessionCompaction.layer.pipe(
+      Layer.provide(processor),
+      Layer.provide(options?.executor ?? RequestExecutor.defaultLayer),
+    ),
+    processor,
+    events,
+    status,
+  ).pipe(
     Layer.provide(SessionNs.defaultLayer),
     Layer.provide((options?.provider ?? wide()).layer),
     Layer.provide(Snapshot.defaultLayer),
@@ -341,7 +373,7 @@ function compactionProcessLayer(options?: CompactionProcessOptions) {
     Layer.provide(options?.config ?? Config.defaultLayer),
     Layer.provide(RuntimeFlags.layer({ experimentalEventSystem: true, ...options?.flags })),
     Layer.provide(EventV2Bridge.defaultLayer),
-    Layer.provide(Database.defaultLayer),
+    Layer.provide(database),
     Layer.provide(PromptEpoch.defaultLayer),
   )
 }
@@ -2857,5 +2889,155 @@ describe("SessionNs.getUsage", () => {
     expect(result.tokens.input).toBe(500)
     expect(result.tokens.cache.read).toBe(200)
     expect(result.tokens.cache.write).toBe(300)
+  })
+})
+
+// =============================================================================
+// UPD-005 Gap 2 (§4.2/§5): the remote compaction commit path.
+// =============================================================================
+describe("session.compaction.process remote mode (UPD-005 Gap 2)", () => {
+  const remoteModel = ProviderTest.model({
+    id: ModelV2.ID.make("gpt-5-mini"),
+    limit: { context: 100_000, output: 32_000 },
+  })
+  const remoteProvider = ProviderTest.fake({
+    model: remoteModel,
+    info: ProviderTest.info({ options: { apiKey: "test-openai-key" } }, remoteModel),
+  })
+  const remoteRef = {
+    providerID: ProviderV2.ID.make("openai"),
+    modelID: ModelV2.ID.make("gpt-5-mini"),
+  }
+
+  // Mock /responses/compact executor: a direct service stub (no HttpClient in
+  // the loop) answering every request with a compaction item.
+  const compactExecutor = (encryptedContent: string): Layer.Layer<RequestExecutor.Service> =>
+    Layer.succeed(
+      RequestExecutor.Service,
+      RequestExecutor.Service.of({
+        execute: (request) =>
+          Effect.succeed(
+            HttpClientResponse.fromWeb(
+              request,
+              new Response(
+                JSON.stringify({ output: [{ type: "compaction", id: "cmp_1", encrypted_content: encryptedContent }] }),
+                { headers: { "content-type": "application/json" } },
+              ),
+            ),
+          ),
+      }),
+    )
+
+  function createRemoteUserMessage(sessionID: SessionID, text: string) {
+    return Effect.gen(function* () {
+      const ssn = yield* SessionNs.Service
+      const msg = yield* ssn.updateMessage({
+        id: MessageID.ascending(),
+        role: "user",
+        sessionID,
+        agent: "build",
+        model: remoteRef,
+        time: { created: Date.now() },
+      })
+      yield* ssn.updatePart({
+        id: PartID.ascending(),
+        messageID: msg.id,
+        sessionID,
+        type: "text",
+        text,
+      })
+      return msg
+    })
+  }
+
+  itCompaction.instance(
+    "commits remote compaction: mode columns, durable blob, no summary and no marker part",
+    Effect.gen(function* () {
+      const db = (yield* Database.Service).db
+      // The migration is not registered in migration.gen.ts yet (mainline does
+      // that), so apply it explicitly — tracked, hence idempotent.
+      yield* DatabaseMigration.applyOnly(db, [remoteCompactPersistenceMigration])
+      const ssn = yield* SessionNs.Service
+      const session = yield* ssn.create({})
+      const msg = yield* createRemoteUserMessage(session.id, "compact me")
+      const msgs = yield* ssn.messages({ sessionID: session.id })
+
+      const result = yield* SessionCompaction.use.process({
+        parentID: msg.id,
+        messages: msgs,
+        sessionID: session.id,
+        auto: false,
+      }).pipe(withCompaction({ provider: remoteProvider, executor: compactExecutor("enc-remote-commit") }))
+      expect(result).toBe("stop")
+
+      // Run columns (§4.2): committed remote mode, blob pointer, no summary text.
+      const runs = yield* db.select().from(CompactionRunTable).all()
+      expect(runs).toHaveLength(1)
+      const run = runs[0]!
+      expect(run.state).toBe("committed")
+      expect(run.compaction_mode).toBe("remote_compact")
+      expect(run.encrypted_content_session).toBe(session.id)
+      expect(run.summary_text).toBeNull()
+      expect(run.completion_reason).toBe("manual")
+
+      // Store persistence (Gap 1): the blob is durably attributed.
+      const blob = yield* db
+        .select()
+        .from(SessionCompactionEncryptedContentTable)
+        .where(eq(SessionCompactionEncryptedContentTable.session_id, session.id))
+        .get()
+      expect(blob?.encrypted_content).toBe("enc-remote-commit")
+      expect(blob?.provider_id).toBe("openai")
+      expect(blob?.model_id).toBe("gpt-5-mini")
+      expect(blob?.source_run_id).toBe(run.run_id)
+      // A freshly bound store (i.e. after a restart) reads the blob back from the
+      // table — the compaction layer above has already finalized and unbound.
+      EncryptedContentStore.bind(db)
+      expect(EncryptedContentStore.get(session.id)).toBe("enc-remote-commit")
+      EncryptedContentStore.bind(undefined)
+
+      // No TEXT summary, no marker part: remote mode commits invisibly.
+      const after = yield* ssn.messages({ sessionID: session.id })
+      expect(after.some((message) => message.parts.some((part) => part.type === "compaction"))).toBe(false)
+      expect(after.some((message) => message.info.role === "assistant")).toBe(false)
+    }),
+  )
+})
+
+describe("remote compaction information-hole exemption", () => {
+  test("exempts committed remote runs that carry a blob pointer", () => {
+    expect(
+      SessionCompaction.remoteCompactionInformationHoleExempt({
+        compaction_mode: "remote_compact",
+        encrypted_content_session: "ses_remote",
+      }),
+    ).toBe(true)
+  })
+
+  test("keeps every other shape subject to the information-hole check", () => {
+    expect(
+      SessionCompaction.remoteCompactionInformationHoleExempt({
+        compaction_mode: "local_summary",
+        encrypted_content_session: "ses_remote",
+      }),
+    ).toBe(false)
+    expect(
+      SessionCompaction.remoteCompactionInformationHoleExempt({
+        compaction_mode: "remote_compact",
+        encrypted_content_session: null,
+      }),
+    ).toBe(false)
+    expect(
+      SessionCompaction.remoteCompactionInformationHoleExempt({
+        compaction_mode: "remote_compact",
+        encrypted_content_session: "",
+      }),
+    ).toBe(false)
+    expect(
+      SessionCompaction.remoteCompactionInformationHoleExempt({
+        compaction_mode: null,
+        encrypted_content_session: null,
+      }),
+    ).toBe(false)
   })
 })

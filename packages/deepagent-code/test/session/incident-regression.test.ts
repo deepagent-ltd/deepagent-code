@@ -32,6 +32,8 @@ import path from "path"
 import { NodeFileSystem } from "@effect/platform-node"
 import { FetchHttpClient } from "effect/unstable/http"
 import { Database } from "@deepagent-code/core/database/database"
+import { DatabaseMigration } from "@deepagent-code/core/database/migration"
+import remoteCompactPersistenceMigration from "@deepagent-code/core/database/migration/20260820000000_remote_compact_persistence"
 import { LocationIdentity } from "@deepagent-code/core/context-federation/identity"
 import {
   LocationIdentityTable,
@@ -87,6 +89,7 @@ import { LLM } from "../../src/session/llm"
 import { MessageV2 } from "../../src/session/message-v2"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import { SessionCompaction } from "../../src/session/compaction"
+import { RequestExecutor } from "@deepagent-code/llm/route"
 import { SessionSummary } from "../../src/session/summary"
 import { Instruction } from "../../src/session/instruction"
 import { SessionProcessor } from "../../src/session/processor"
@@ -689,6 +692,18 @@ const stubDebugServiceLayer = Layer.succeed(
   }),
 )
 
+// UPD-005: the Gap 1/Gap 2 persistence migration is not registered in
+// migration.gen.ts yet (mainline registers it). Apply it over the tracked history
+// so compaction_run carries the mode columns the drizzle schema already declares.
+const database = Layer.effect(
+  Database.Service,
+  Effect.gen(function* () {
+    const service = yield* Database.Service
+    yield* DatabaseMigration.applyOnly(service.db, [remoteCompactPersistenceMigration])
+    return service
+  }),
+).pipe(Layer.provide(Database.defaultLayer))
+
 function makeIncidentPromptLayer() {
   const runtimeFlags = RuntimeFlags.layer({
     experimentalEventSystem: true,
@@ -711,7 +726,7 @@ function makeIncidentPromptLayer() {
     FSUtil.defaultLayer,
     BackgroundJob.defaultLayer,
     status,
-    Database.defaultLayer,
+    database,
     EventV2Bridge.defaultLayer,
     PromptEpoch.defaultLayer,
   ).pipe(Layer.provideMerge(infra))
@@ -744,6 +759,7 @@ function makeIncidentPromptLayer() {
   )
   const compact = SessionCompaction.layer.pipe(
     Layer.provide(runtimeFlags),
+    Layer.provide(RequestExecutor.defaultLayer),
     Layer.provideMerge(proc),
     Layer.provideMerge(deps),
   )
