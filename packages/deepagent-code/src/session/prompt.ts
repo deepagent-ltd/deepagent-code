@@ -47,6 +47,8 @@ import { SessionSummary } from "./summary"
 import { Snapshot } from "@/snapshot"
 import { NamedError } from "@deepagent-code/core/util/error"
 import { SessionProcessor } from "./processor"
+import { TurnStageEvidence } from "./turn-stage-evidence"
+import { TurnDeadlineWatchdog } from "./turn-deadline-watchdog"
 import { Tool } from "@/tool/tool"
 import { ToolInternal } from "@/tool/internal"
 import { Permission } from "@/permission"
@@ -1245,6 +1247,31 @@ export const layer = Layer.effect(
       Effect.catchCause((cause) => Effect.logError(`provider owner maintenance failed: ${Cause.pretty(cause)}`)),
       Effect.forkScoped,
     )
+    // BUG-407-012 gap C (§8.3-3/4 conservative): optional watchdog that fails activities
+    // stuck before provider dispatch once the total deadline elapses without durable
+    // receipt/dispatch evidence. DEFAULT OFF; forked only when the flag is enabled. The
+    // sweep never throws (per-activity errors degrade to skipped outcomes) and reuses the
+    // existing terminalization path — no new recovery states.
+    if (flags.providerPreDispatchWatchdog)
+      yield* Effect.gen(function* () {
+        while (true) {
+          const outcomes = yield* TurnDeadlineWatchdog.sweep({
+            database,
+            deadlineMs: flags.providerPreDispatchDeadlineMs,
+          })
+          for (const outcome of outcomes)
+            if (outcome.kind === "failed")
+              yield* Effect.logWarning(
+                `pre-dispatch deadline watchdog failed stale activity ${outcome.activityID} (run ${outcome.runID})`,
+              )
+          yield* Effect.sleep(Duration.seconds(30))
+        }
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logError(`pre-dispatch deadline watchdog failed: ${Cause.pretty(cause)}`),
+        ),
+        Effect.forkScoped,
+      )
     // BUG-407-012 root cause A: a fenced lease no longer reaches this gate — rotation happens on
     // the maintenance tick (LeaseMs/3 cadence, well inside one lease), so the successor token is
     // live before the next prompt dispatch. `healthy` only latches false if the maintenance loop
@@ -2944,6 +2971,13 @@ export const layer = Layer.effect(
           const run = admitted.materialized.run
           if (!run)
             return yield* Effect.die(new Error(`run-now prompt created an empty activity run: ${input.sessionID}`))
+          // BUG-407-012 gap C: durable evidence that the legacy activity run was claimed.
+          yield* TurnStageEvidence.record(db, {
+            sessionID: input.sessionID,
+            activityID: run.activityID,
+            stage: "activity_claimed",
+            details: { via: "admit" },
+          })
           yield* pauseAtActivityCrashPoint("after_admit_and_bind")
           if (lifecycle) yield* lifecycle.ready({ messageID: admitted.message.info.id, delivery: "turn" })
           return yield* runLoop(input.sessionID, false, run)
@@ -3501,6 +3535,14 @@ export const layer = Layer.effect(
                 Effect.map((activity) => (activity?.state === "active" ? activity : undefined)),
               )
             : undefined
+        // BUG-407-012 gap C: persist durable stage evidence at each provider-turn boundary.
+        // Record-only: single forward-only upsert that never throws, so it cannot alter
+        // turn timing (in particular terminal settlement ordering).
+        const recordTurnStage = (stage: TurnStageEvidence.Stage, details?: Record<string, unknown>) => {
+          const activityID = currentActivityRun?.activityID ?? legacyActivity?.activityID
+          if (!activityID) return Effect.void
+          return TurnStageEvidence.record(db, { sessionID, activityID, stage, ...(details ? { details } : {}) })
+        }
         let providerBoundary: SessionPromptIntent.ProviderInputBoundary | undefined
         let activityTerminalCommitted = false
         const enterFinalizing = (run: SessionPromptIntent.RunIdentity) =>
@@ -3637,6 +3679,12 @@ export const layer = Layer.effect(
                 if (currentActivityRun) {
                   yield* pauseAtActivityCrashPoint("after_admit_and_bind")
                   legacyActivity = { activityID: currentActivityRun.activityID, state: "active" as const }
+                  yield* TurnStageEvidence.record(db, {
+                    sessionID,
+                    activityID: currentActivityRun.activityID,
+                    stage: "activity_claimed",
+                    details: { via: "steer_claim" },
+                  })
                 }
               }
               const absorbed = yield* drainSteers(sessionID, drainFirst && step === 0)
@@ -4096,10 +4144,16 @@ export const layer = Layer.effect(
                     Effect.provideService(Database.Service, database),
                     Effect.flatMap((activity) => (activity ? publishActivityProjection(activity) : Effect.void)),
                   )
+                yield* recordTurnStage("terminal_settled", {
+                  state: decision?.state,
+                  reasonCode: decision?.reasonCode,
+                  via: "abnormal_turn",
+                })
               }),
             )
           const finalizeInterruptedTurn = finalizeAbnormalTurn("interrupted", "user_cancelled", "cancel", "AbortError")
 
+          yield* recordTurnStage("snapshot_started")
           const handle = yield* processor
             .create({
               assistantMessage: msg,
@@ -4107,10 +4161,14 @@ export const layer = Layer.effect(
               model,
               sequenceTracker: toolSequenceTracker,
               planTracker: planProtocolTracker,
+              ...(legacyActivity ? { activityID: legacyActivity.activityID } : {}),
               loopPolicy: finalizerMode || taskActivity ? "error" : "ask",
               noProgressLimit: taskActivity?.maxNoProgress,
             })
             .pipe(Effect.onInterrupt(() => finalizeInterruptedTurn))
+          yield* handle.snapshotOutcome.degraded
+            ? recordTurnStage("snapshot_degraded", handle.snapshotOutcome.degraded)
+            : recordTurnStage("snapshot_finished")
 
           const outcome: "break" | "continue" = yield* Effect.gen(function* () {
             sessionFederationActivation = yield* activateFederation()
@@ -4190,6 +4248,7 @@ export const layer = Layer.effect(
                   })
                 : providerHistory
             const modelMsgs = yield* MessageV2.toModelMessagesEffect(historyForProvider, model, { terminalBoundaryID })
+            yield* recordTurnStage("history_loaded", { messages: providerHistory.length })
             const system = yield* Effect.all([
               sys.skills(agent),
               sys.environment(model),
@@ -4549,6 +4608,14 @@ export const layer = Layer.effect(
                       request_state: "prepared",
                       created_at: admittedAt,
                     })
+                    if (legacyActivity)
+                      yield* TurnStageEvidence.recordInTransaction(tx, {
+                        sessionID,
+                        activityID: legacyActivity.activityID,
+                        stage: "request_prepared",
+                        now: admittedAt,
+                        details: { receiptID, requestOrdinal },
+                      })
                     if (continuation) {
                       const admitted = yield* tx
                         .update(CompactionRunTable)
@@ -4978,6 +5045,11 @@ export const layer = Layer.effect(
                 if (!finalized && activityProgressFinalizer.value) yield* activityProgressFinalizer.value()
                 activityProgressFinalizer.value = undefined
                 turnSettled.value = true
+                // BUG-407-012 gap C: record-only evidence; settlement ordering above is unchanged.
+                yield* recordTurnStage(
+                  "terminal_settled",
+                  decision ? { state: decision.state, reasonCode: decision.reasonCode } : undefined,
+                )
                 // BUG-407-008 §6.2 P6: test-only crash point (no-op outside the crash env).
                 yield* pauseAtActivityCrashPoint("after_progress_settle_before_next_admission")
                 // Summary diffs mutate user-message metadata. Run them only after the Provider
@@ -5241,6 +5313,7 @@ export const layer = Layer.effect(
                         : {}),
                     })
                     if (!transitioned) return
+                    yield* recordTurnStage("provider_dispatch_started", { dispatchingAt })
                   }),
                 streaming: () =>
                   Effect.gen(function* () {

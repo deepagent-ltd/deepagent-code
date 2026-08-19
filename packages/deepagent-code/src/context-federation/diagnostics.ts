@@ -17,6 +17,7 @@ import { SessionSchema } from "@deepagent-code/core/session/schema"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { SessionToolRequestResolutionTable } from "@deepagent-code/core/session/sql"
 import { SessionToolRequestReceiptTable } from "../session/tool-request-receipt.sql"
+import { TurnStageEvidence } from "../session/turn-stage-evidence"
 import { and, desc, eq, gte, inArray, isNull, lte } from "drizzle-orm"
 import { Cause, Context, Effect, Layer, Ref, Schema } from "effect"
 import { randomUUID } from "node:crypto"
@@ -86,6 +87,16 @@ export interface Interface {
    * indexing noise.
    */
   readonly cohort: (input: { readonly sinceMs: number; readonly untilMs?: number }) => Effect.Effect<CohortSummary, DiagnosticsError>
+  /**
+   * BUG-407-012 gap C: recent durable provider-turn stage evidence for a session (optionally
+   * narrowed to one activity), newest first. Exposes where a turn got stuck between the legacy
+   * activity claim and the provider receipt so incidents can be attributed post-hoc.
+   */
+  readonly turnStageEvidence: (input: {
+    readonly sessionId: SessionSchema.ID
+    readonly activityId?: string
+    readonly limit?: number
+  }) => Effect.Effect<readonly TurnStageEvidence.Row[], DiagnosticsError>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/ContextFederationDiagnostics") {}
@@ -344,7 +355,13 @@ export const layer = Layer.effect(
         } satisfies CohortSummary
       }).pipe(Effect.mapError(diagnosticsError))
 
-    return Service.of({ get, resolveAttempt, cohort })
+    const turnStageEvidence: Interface["turnStageEvidence"] = (input) =>
+      TurnStageEvidence.recent(database.db, {
+        sessionID: input.sessionId,
+        ...(input.activityId ? { activityID: input.activityId } : {}),
+        ...(input.limit ? { limit: input.limit } : {}),
+      }).pipe(Effect.mapError(diagnosticsError))
+    return Service.of({ get, resolveAttempt, cohort, turnStageEvidence })
   }),
 )
 

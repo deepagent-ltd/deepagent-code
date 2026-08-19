@@ -487,6 +487,9 @@ export type ProcessorDecision =
 
 export interface Handle {
   readonly message: SessionV1.Assistant
+  // BUG-407-012 gap C: outcome of the pre-stream snapshot capture, so the turn
+  // boundary layer can persist `snapshot_finished` / `snapshot_degraded` evidence.
+  readonly snapshotOutcome: Snapshot.TrackOutcome
   readonly updateToolCall: (
     toolCallID: string,
     update: (part: SessionV1.ToolPart) => SessionV1.ToolPart,
@@ -534,6 +537,11 @@ type Input = {
    */
   sequenceTracker?: ToolSequenceTracker
   planTracker?: PlanProtocolTracker
+  /**
+   * BUG-407-012 gap C: legacy activity identity for snapshot budget attribution.
+   * Absent when the caller has no activity binding (legacy paths).
+   */
+  activityID?: string
   loopPolicy?: "ask" | "error"
   noProgressLimit?: number
 }
@@ -601,7 +609,11 @@ export const layer = Layer.effect(
       // Pre-capture snapshot before the LLM stream starts. The AI SDK
       // may execute tools internally before emitting start-step events,
       // so capturing inside the event handler can be too late.
-      const initialSnapshot = yield* snapshot.track()
+      const snapshotOutcome = yield* snapshot.trackOutcome({
+        sessionId: input.sessionID,
+        ...(input.activityID ? { activityId: input.activityID } : {}),
+      })
+      const initialSnapshot = snapshotOutcome.hash
       const ctx: ProcessorContext = {
         assistantMessage: input.assistantMessage,
         sessionID: input.sessionID,
@@ -2201,6 +2213,7 @@ export const layer = Layer.effect(
         get message() {
           return ctx.assistantMessage
         },
+        snapshotOutcome,
         updateToolCall,
         completeToolCall,
         process,

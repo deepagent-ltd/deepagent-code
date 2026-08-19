@@ -315,6 +315,16 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   // run loop stops absorbing and ends the activity; any still-pending steers are consumed by the
   // NEXT drain cycle as a fresh activity instead of silently extending the old work without bound.
   steerAbsorbLimit: positiveIntegerWithDefault("DEEPAGENT_CODE_STEER_ABSORB_LIMIT", 5),
+  // BUG-407-012 gap C: pre-dispatch deadline watchdog. DEFAULT OFF. When enabled, a maintenance
+  // sweep fails any legacy activity that stayed active past the deadline WITHOUT durable receipt /
+  // dispatch evidence, through the existing terminalization path with a typed terminal reason (so an
+  // exact retry remains possible). Activities that already have a receipt are never touched — the
+  // existing outcome-unknown recovery stays authoritative for those.
+  providerPreDispatchWatchdog: bool("DEEPAGENT_CODE_PROVIDER_PRE_DISPATCH_WATCHDOG"),
+  providerPreDispatchDeadlineMs: positiveIntegerWithDefault(
+    "DEEPAGENT_CODE_PROVIDER_PRE_DISPATCH_DEADLINE_MS",
+    10 * 60_000,
+  ),
   // BUG-407-007 staged authority cutover. `legacy` preserves the existing in-process permission and
   // no-progress owner. `durable` routes production legacy activities through the SQLite-backed
   // objective/progress/permission authority.

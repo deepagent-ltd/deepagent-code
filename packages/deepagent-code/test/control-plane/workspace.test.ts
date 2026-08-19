@@ -1027,7 +1027,7 @@ describe("workspace CRUD", () => {
           .run()
           .pipe(Effect.orDie)
         yield* db
-          .insert(SessionToolRequestReceiptTable)
+          .insert(SessionToolRequestReceiptTable) // fixture-exempt: seeds an indeterminate receipt so warp must fail closed on unresolved provider recovery
           .values({
             receipt_id: warpReceiptID,
             request_ordinal: 1,
