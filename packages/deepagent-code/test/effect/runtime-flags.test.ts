@@ -21,19 +21,6 @@ describe("RuntimeFlags", () => {
     }),
   )
 
-  it.effect("activity authority remains legacy-owned until explicitly cut over", () =>
-    Effect.gen(function* () {
-      const defaults = yield* readFlags.pipe(Effect.provide(fromConfig({})))
-      const durable = yield* readFlags.pipe(
-        Effect.provide(fromConfig({ DEEPAGENT_CODE_ACTIVITY_AUTHORITY: "durable" })),
-      )
-
-      // 2026-08-17 production cutover: default flipped to durable (gate-validated; legacy retires on pass).
-      expect(defaults.activityAuthority).toBe("durable")
-      expect(durable.activityAuthority).toBe("durable")
-    }),
-  )
-
   it.effect("four-graph owner rollout flags default ON and retain independent kill-switches", () =>
     Effect.gen(function* () {
       const defaults = yield* readFlags.pipe(Effect.provide(fromConfig({})))

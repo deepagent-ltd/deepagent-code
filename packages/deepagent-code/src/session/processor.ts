@@ -680,7 +680,6 @@ export const layer = Layer.effect(
 
       const observeDurableTurn = Effect.fn("SessionProcessor.observeDurableTurn")(function* () {
         if (
-          flags.activityAuthority !== "durable" ||
           ctx.loopPolicy !== "ask" ||
           ctx.assistantMessage.summary ||
           ctx.activityToolNames.size === 0
@@ -946,7 +945,7 @@ export const layer = Layer.effect(
             attachments: output.attachments,
           },
         })
-        if (flags.activityAuthority === "durable" && ctx.loopPolicy === "ask") {
+        if (ctx.loopPolicy === "ask") {
           const workspaceRevision = yield* snapshot.track()
           const resultFingerprint =
             match.part.tool && ctx.sequenceTracker
@@ -1040,7 +1039,7 @@ export const layer = Layer.effect(
             time: { start: match.part.state.time.start, end: Date.now() },
           },
         })
-        if (flags.activityAuthority === "durable" && ctx.loopPolicy === "ask") {
+        if (ctx.loopPolicy === "ask") {
           const workspaceRevision = yield* snapshot.track()
           const message = errorMessage(error)
           const evidenceFingerprint = Hash.sha256(
@@ -1443,24 +1442,6 @@ export const layer = Layer.effect(
                     }),
                   )
                 }
-                if (flags.activityAuthority === "durable") {
-                  ctx.sequenceTracker.setTriggered(detected.sequenceKey)
-                  return
-                }
-                const agent = yield* agents.get(ctx.assistantMessage.agent)
-                yield* permission.ask({
-                  permission: "doom_loop",
-                  patterns: [value.name],
-                  sessionID: ctx.assistantMessage.sessionID,
-                  metadata: {
-                    tool: value.name,
-                    input,
-                    period: detected.period,
-                    count: detected.count,
-                  },
-                  always: [value.name],
-                  ruleset: agent.permission,
-                })
                 ctx.sequenceTracker.setTriggered(detected.sequenceKey)
               }
               // Tracker handles all detection for this call; skip legacy path.
@@ -1505,18 +1486,8 @@ export const layer = Layer.effect(
                 }),
               )
             }
-
-            if (flags.activityAuthority === "durable") return
-
-            const agent = yield* agents.get(ctx.assistantMessage.agent)
-            yield* permission.ask({
-              permission: "doom_loop",
-              patterns: [value.name],
-              sessionID: ctx.assistantMessage.sessionID,
-              metadata: { tool: value.name, input },
-              always: [value.name],
-              ruleset: agent.permission,
-            })
+            // Interactive policies surface the doom loop through the durable no-progress authority
+            // (recorded on the activity), not through a permission prompt.
             return
           }
 

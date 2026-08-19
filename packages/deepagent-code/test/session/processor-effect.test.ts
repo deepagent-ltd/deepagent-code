@@ -336,7 +336,7 @@ const noProgressLLM = Layer.sync(LLM.Service, () => {
     },
   })
 })
-const durableFlags = RuntimeFlags.layer({ experimentalEventSystem: true, activityAuthority: "durable" })
+const durableFlags = RuntimeFlags.layer({ experimentalEventSystem: true })
 const durablePermission = Permission.layer.pipe(
   Layer.provide(EventV2Bridge.defaultLayer),
   Layer.provide(Database.defaultLayer),
@@ -2129,7 +2129,6 @@ itNoProgress.live(
           const { processors, session, provider } = yield* boot()
           const database = yield* Database.Service
           const permission = yield* Permission.Service
-          expect((yield* RuntimeFlags.Service).activityAuthority).toBe("durable")
           const chat = yield* session.create({})
           const parent = yield* user(chat.id, "read stable.ts until it changes")
           const activityID = yield* admitActivity(chat.id, parent.id)

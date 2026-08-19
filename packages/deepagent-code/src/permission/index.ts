@@ -149,13 +149,9 @@ export const layerWith = (options: LayerOptions = {}) =>
         return rotated
       })
       const rotateOwner = Effect.fn("Permission.rotateOwner")(function* () {
-        if (flags.activityAuthority !== "durable")
-          return yield* Effect.die(new Error("durable permission authority is unavailable"))
         return yield* withPermissionOwner(permissionOwnerID().pipe(Effect.flatMap(rotatePermissionOwner)))
       })
       const rotateOwnerIfCurrent = Effect.fn("Permission.rotateOwnerIfCurrent")(function* (expectedOwnerID: string) {
-        if (flags.activityAuthority !== "durable")
-          return yield* Effect.die(new Error("durable permission authority is unavailable"))
         return yield* withPermissionOwner(
           permissionOwnerID().pipe(
             Effect.flatMap((ownerID) =>
@@ -164,20 +160,18 @@ export const layerWith = (options: LayerOptions = {}) =>
           ),
         )
       })
-      if (flags.activityAuthority === "durable") {
-        yield* DeepAgentActivityAuthority.heartbeatPermissionOwner({
-          ownerID: yield* permissionOwnerID(),
-          leaseMs: ownerLeaseMs,
-        }).pipe(Effect.provideService(Database.Service, database), Effect.orDie)
-        yield* Effect.addFinalizer(() =>
-          permissionOwnerID().pipe(
-            Effect.flatMap((ownerID) => DeepAgentActivityAuthority.releasePermissionOwner(ownerID)),
-            withPermissionOwner,
-            Effect.provideService(Database.Service, database),
-            Effect.orDie,
-          ),
-        )
-      }
+      yield* DeepAgentActivityAuthority.heartbeatPermissionOwner({
+        ownerID: yield* permissionOwnerID(),
+        leaseMs: ownerLeaseMs,
+      }).pipe(Effect.provideService(Database.Service, database), Effect.orDie)
+      yield* Effect.addFinalizer(() =>
+        permissionOwnerID().pipe(
+          Effect.flatMap((ownerID) => DeepAgentActivityAuthority.releasePermissionOwner(ownerID)),
+          withPermissionOwner,
+          Effect.provideService(Database.Service, database),
+          Effect.orDie,
+        ),
+      )
       const allPending = new Map<PermissionV1.ID, PendingEntry>()
       const claimPending = (id: PermissionV1.ID, entry: PendingEntry) => {
         if (allPending.get(id) !== entry || entry.settling) return false
@@ -227,40 +221,37 @@ export const layerWith = (options: LayerOptions = {}) =>
         }),
       )
 
-      if (flags.activityAuthority === "durable") {
-        const heartbeat = withPermissionOwner(
-          Effect.gen(function* () {
-            const ownerID = yield* permissionOwnerID()
-            yield* DeepAgentActivityAuthority.heartbeatPermissionOwner({
-              ownerID,
-              leaseMs: ownerLeaseMs,
-            }).pipe(
-              Effect.provideService(Database.Service, database),
-              Effect.catchTag("ActivityAuthority.ConflictError", () =>
-                rotatePermissionOwner(ownerID).pipe(Effect.asVoid),
-              ),
-            )
-            const recoveryOwnerID = yield* permissionOwnerID()
-            yield* DeepAgentActivityAuthority.recoverPendingPermissions(recoveryOwnerID).pipe(
-              Effect.provideService(Database.Service, database),
-            )
-            yield* DeepAgentActivityAuthority.recoverPermissionEffects(recoveryOwnerID).pipe(
-              Effect.provideService(Database.Service, database),
-            )
-          }),
-        )
-        yield* heartbeat.pipe(Effect.orDie)
-        yield* heartbeat.pipe(
-          Effect.catchCause((cause) => Effect.logError("permission owner heartbeat failed", { cause })),
-          Effect.repeat(Schedule.fixed(Duration.millis(ownerHeartbeatMs))),
-          Effect.forkScoped,
-        )
-      }
+      const heartbeat = withPermissionOwner(
+        Effect.gen(function* () {
+          const ownerID = yield* permissionOwnerID()
+          yield* DeepAgentActivityAuthority.heartbeatPermissionOwner({
+            ownerID,
+            leaseMs: ownerLeaseMs,
+          }).pipe(
+            Effect.provideService(Database.Service, database),
+            Effect.catchTag("ActivityAuthority.ConflictError", () =>
+              rotatePermissionOwner(ownerID).pipe(Effect.asVoid),
+            ),
+          )
+          const recoveryOwnerID = yield* permissionOwnerID()
+          yield* DeepAgentActivityAuthority.recoverPendingPermissions(recoveryOwnerID).pipe(
+            Effect.provideService(Database.Service, database),
+          )
+          yield* DeepAgentActivityAuthority.recoverPermissionEffects(recoveryOwnerID).pipe(
+            Effect.provideService(Database.Service, database),
+          )
+        }),
+      )
+      yield* heartbeat.pipe(Effect.orDie)
+      yield* heartbeat.pipe(
+        Effect.catchCause((cause) => Effect.logError("permission owner heartbeat failed", { cause })),
+        Effect.repeat(Schedule.fixed(Duration.millis(ownerHeartbeatMs))),
+        Effect.forkScoped,
+      )
 
       const durableRules = Effect.fn("Permission.durableRules")(function* (
         sessionID: PermissionV1.Request["sessionID"],
       ) {
-        if (flags.activityAuthority !== "durable") return [] as PermissionV1.Rule[]
         const owner = yield* database.db
           .select({ projectID: SessionTable.project_id })
           .from(SessionTable)
@@ -393,37 +384,35 @@ export const layerWith = (options: LayerOptions = {}) =>
         return outcome.value.decision
       })
 
-      if (flags.activityAuthority === "durable") {
-        const reconcileLocalDecisions = Effect.suspend(() =>
-          Effect.forEach(
-            Array.from(allPending.values()),
-            (entry) =>
-              Effect.gen(function* () {
-                if (entry.settling) return
-                const decision = yield* DeepAgentActivityAuthority.permissionDecisionForRequest(entry.info.id).pipe(
-                  Effect.provideService(Database.Service, database),
-                )
-                if (!decision && entry.pendingSettlement && claimPending(entry.info.id, entry)) {
-                  yield* settleClaimed(entry, entry.pendingSettlement.reply, entry.pendingSettlement.message)
-                  return
-                }
-                if (!decision || !claimPending(entry.info.id, entry)) return
-                const adopted = yield* adoptDurableDecision(entry, decision.decision).pipe(Effect.exit)
-                if (Exit.isFailure(adopted)) {
-                  entry.settling = false
-                  return yield* Effect.failCause(adopted.cause)
-                }
-                yield* completeClaimed(entry, adopted.value, decision.feedback)
-              }),
-            { discard: true },
-          ),
-        )
-        yield* reconcileLocalDecisions.pipe(
-          Effect.catchCause((cause) => Effect.logError("permission decision reconciliation failed", { cause })),
-          Effect.repeat(Schedule.fixed(Duration.millis(permissionDecisionPollMs))),
-          Effect.forkScoped,
-        )
-      }
+      const reconcileLocalDecisions = Effect.suspend(() =>
+        Effect.forEach(
+          Array.from(allPending.values()),
+          (entry) =>
+            Effect.gen(function* () {
+              if (entry.settling) return
+              const decision = yield* DeepAgentActivityAuthority.permissionDecisionForRequest(entry.info.id).pipe(
+                Effect.provideService(Database.Service, database),
+              )
+              if (!decision && entry.pendingSettlement && claimPending(entry.info.id, entry)) {
+                yield* settleClaimed(entry, entry.pendingSettlement.reply, entry.pendingSettlement.message)
+                return
+              }
+              if (!decision || !claimPending(entry.info.id, entry)) return
+              const adopted = yield* adoptDurableDecision(entry, decision.decision).pipe(Effect.exit)
+              if (Exit.isFailure(adopted)) {
+                entry.settling = false
+                return yield* Effect.failCause(adopted.cause)
+              }
+              yield* completeClaimed(entry, adopted.value, decision.feedback)
+            }),
+          { discard: true },
+        ),
+      )
+      yield* reconcileLocalDecisions.pipe(
+        Effect.catchCause((cause) => Effect.logError("permission decision reconciliation failed", { cause })),
+        Effect.repeat(Schedule.fixed(Duration.millis(permissionDecisionPollMs))),
+        Effect.forkScoped,
+      )
 
       const askEffect = Effect.fn("Permission.askEffect")(function* (input: AskInput) {
         const owner = yield* InstanceState.get(state)
@@ -444,10 +433,7 @@ export const layerWith = (options: LayerOptions = {}) =>
         let needsAsk = false
 
         for (const pattern of request.patterns) {
-          const rule =
-            flags.activityAuthority === "durable"
-              ? evaluateDurable(request.permission, pattern, ruleset, owner.approved, savedRules)
-              : evaluate(request.permission, pattern, ruleset, owner.approved)
+          const rule = evaluateDurable(request.permission, pattern, ruleset, owner.approved, savedRules)
           log.info("evaluated", { permission: request.permission, pattern, action: rule })
           if (rule.action === "deny") {
             return yield* new PermissionV1.DeniedError({
@@ -458,22 +444,17 @@ export const layerWith = (options: LayerOptions = {}) =>
           needsAsk = true
         }
 
-        if (!needsAsk && flags.activityAuthority !== "durable") return
-
-        const activity =
-          flags.activityAuthority === "durable"
-            ? yield* SessionPromptIntent.activeActivityForSession(request.sessionID).pipe(
-                Effect.provideService(Database.Service, database),
-              )
-            : undefined
-        if (flags.activityAuthority === "durable" && !activity) {
+        const activity = yield* SessionPromptIntent.activeActivityForSession(request.sessionID).pipe(
+          Effect.provideService(Database.Service, database),
+        )
+        if (!activity) {
           // The durable authority records requests/decisions against an ADMITTED legacy activity.
           // A turn driven without one (direct legacy loop entry, recovery edge windows) must not be
           // hard-denied: fall back to policy-only semantics — allowed requests proceed unrecorded,
           // interactive requests settle through the in-memory pending path exactly like legacy mode.
           if (!needsAsk) return
         }
-        if (flags.activityAuthority === "durable" && activity && requestKind === "tool" && !request.tool)
+        if (activity && requestKind === "tool" && !request.tool)
           return yield* new PermissionV1.DeniedError({
             ruleset: [{ permission: "activity_tool_identity", pattern: request.permission, action: "deny" }],
           })
@@ -626,7 +607,7 @@ export const layerWith = (options: LayerOptions = {}) =>
             const current = yield* InstanceState.context
             const workspaceID = yield* InstanceState.workspaceID
             const existing = allPending.get(input.requestID)
-            if (!existing && flags.activityAuthority === "durable") {
+            if (!existing) {
               const request = yield* DeepAgentActivityAuthority.permissionRequestForRequest(input.requestID).pipe(
                 Effect.provideService(Database.Service, database),
               )
@@ -688,43 +669,20 @@ export const layerWith = (options: LayerOptions = {}) =>
             }
 
             const winnerReply = permissionReplyForDecision(durable)
-            if (flags.activityAuthority === "durable") {
-              // Durable-backed siblings fan out through the DB (decidePermissionWithFanout + the
-              // reconciliation poller); memory-only entries of the same session (turns without an
-              // admitted activity) still need the legacy in-memory fan-out or they never settle.
-              if (winnerReply === "reject") {
-                if (input.reply !== "reject") return yield* new PermissionV1.NotFoundError({ requestID: input.requestID })
-                for (const [id, item] of allPending) {
-                  if (item.durable || item.info.sessionID !== existing.info.sessionID || !claimPending(id, item)) continue
-                  yield* settleClaimed(item, "reject")
-                }
-                return
-              }
-              if (winnerReply === "once") return
-              for (const [id, item] of allPending) {
-                if (item.durable || item.info.sessionID !== existing.info.sessionID) continue
-                const ok = item.info.patterns.every(
-                  (pattern) => evaluate(item.info.permission, pattern, item.owner.approved).action === "allow",
-                )
-                if (!ok || !claimPending(id, item)) continue
-                yield* settleClaimed(item, "always")
-              }
-              return
-            }
+            // Durable-backed siblings fan out through the DB (decidePermissionWithFanout + the
+            // reconciliation poller); memory-only entries of the same session (turns without an
+            // admitted activity) still need the in-memory fan-out or they never settle.
             if (winnerReply === "reject") {
-              if (input.reply === "reject") {
-                for (const [id, item] of allPending) {
-                  if (item.info.sessionID !== existing.info.sessionID || !claimPending(id, item)) continue
-                  yield* settleClaimed(item, "reject")
-                }
-              }
               if (input.reply !== "reject") return yield* new PermissionV1.NotFoundError({ requestID: input.requestID })
+              for (const [id, item] of allPending) {
+                if (item.durable || item.info.sessionID !== existing.info.sessionID || !claimPending(id, item)) continue
+                yield* settleClaimed(item, "reject")
+              }
               return
             }
             if (winnerReply === "once") return
-
             for (const [id, item] of allPending) {
-              if (item.info.sessionID !== existing.info.sessionID) continue
+              if (item.durable || item.info.sessionID !== existing.info.sessionID) continue
               const ok = item.info.patterns.every(
                 (pattern) => evaluate(item.info.permission, pattern, item.owner.approved).action === "allow",
               )
@@ -749,7 +707,6 @@ export const layerWith = (options: LayerOptions = {}) =>
         readonly toolCallID: string
         readonly toolName: string
       }) {
-        if (flags.activityAuthority !== "durable") return []
         return yield* DeepAgentActivityAuthority.permissionEffectsForToolCall(input).pipe(
           Effect.provideService(Database.Service, database),
         )
@@ -781,7 +738,6 @@ export const layerWith = (options: LayerOptions = {}) =>
         readonly expectedVersion: number
         readonly terminalReason: string
       }) {
-        if (flags.activityAuthority !== "durable") return false
         return yield* permissionOwnerID().pipe(
           Effect.flatMap((recoveryOwnerID) =>
             DeepAgentActivityAuthority.recoverActivity({
@@ -805,7 +761,9 @@ export const layerWith = (options: LayerOptions = {}) =>
         askEffect,
         effectsForToolCall,
         settleEffect,
-        ...(flags.activityAuthority === "durable" ? { rotateOwner, rotateOwnerIfCurrent, recoverActivity } : {}),
+        rotateOwner,
+        rotateOwnerIfCurrent,
+        recoverActivity,
         reply,
         list,
       })

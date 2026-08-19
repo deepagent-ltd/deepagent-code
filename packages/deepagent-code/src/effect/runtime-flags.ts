@@ -324,19 +324,6 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   // (fail-closed partial unique index per (parent_session, subkind) active). Default false until
   // the release gate qualifies the delegation paths; enable with DEEPAGENT_CODE_ACTIVITY_FACADE=true.
   activityFacade: bool("DEEPAGENT_CODE_ACTIVITY_FACADE"),
-  // 2026-08-17 production cutover decision: the default flips to `durable`. The release gate
-  // (full-suite + live LLM matrix) validates the durable path; once it passes the legacy mode is
-  // retired entirely. If the gate fails we either fix the durable path or flip this default back
-  // to `legacy` for the release — set DEEPAGENT_CODE_ACTIVITY_AUTHORITY=legacy to opt out.
-  activityAuthority: Config.string("DEEPAGENT_CODE_ACTIVITY_AUTHORITY").pipe(
-    Config.withDefault("durable"),
-    Config.map((value): "legacy" | "durable" => {
-      if (value === "legacy" || value === "durable") return value
-      throw new Error(
-        `Invalid DEEPAGENT_CODE_ACTIVITY_AUTHORITY="${value}". Must be one of: legacy, durable. Refusing to select an unknown activity authority.`,
-      )
-    }),
-  ),
   // PR-2: Streaming degeneration detector mode for reasoning outputs.
   // "off"    — detector is disabled; all output passes through unmodified.
   // "shadow" — detector runs and logs hits, but never triggers a circuit break.
