@@ -105,7 +105,13 @@ export const tickCommand = (request: {
 }): DeepAgentEvent.PublishInput => ({
   type: LMNEvents.GOAL_TICK_REQUESTED,
   source: "system",
-  workspaceID: request.sessionID,
+  // FEATURE-003-407 residual: the durable event row's workspace_id MUST be the REAL workspace id, not
+  // the sessionID. The bus's groupsFor routes workspace-bound consumer groups (workspace_id != "") by
+  // this column, so a sessionID here misroutes the event to zero tenants and poisons per-workspace
+  // queries. The real id travels in `request.workspaceID` (stamped by goal-manager from the session);
+  // when it is genuinely unavailable (legacy commands), fall back to "" — the bus's GLOBAL semantics
+  // (a "" row is owed only to global groups, same as any cross-workspace event).
+  workspaceID: request.workspaceID ?? "",
   actorID: request.sessionID,
   // §N: the command is the goal's own work — normal priority; it is NOT an approval-queue candidate.
   priority: "normal",
