@@ -1197,25 +1197,46 @@ export const layer = Layer.effect(
       yield* Effect.forEach(activities, publishActivityProjection, { discard: true })
     })
     const providerOwner = yield* SessionProviderOwner.Service
-    const providerOwnerToken = `${process.pid}:${randomUUID()}`
+    // BUG-407-012 root cause A: the process owner token is mutable. Sleeping past LeaseMs fences
+    // the startup token (correct fencing), and the maintenance loop below rotates to a successor
+    // generation instead of latching unhealthy forever. Every consumer must read the current token
+    // from `providerOwnerState` at use time — never capture a startup-time token constant.
+    const providerOwnerBase = `${process.pid}:${randomUUID()}`
+    const providerOwnerInitialToken = ContextFederationProviderOwnerRuntime.nextOwnerToken({
+      ownerBase: providerOwnerBase,
+      generation: 0,
+    })
     yield* providerOwner
       .register({
-        ownerToken: providerOwnerToken,
+        ownerToken: providerOwnerInitialToken,
         leaseMs: SessionProviderOwner.LeaseMs,
       })
       .pipe(Effect.orDie)
+    const providerOwnerState = yield* Ref.make<ContextFederationProviderOwnerRuntime.OwnerGeneration>({
+      ownerToken: providerOwnerInitialToken,
+      generation: 0,
+    })
     const providerOwnerHealthy = yield* Ref.make(true)
-    yield* Effect.addFinalizer(() => providerOwner.release({ ownerToken: providerOwnerToken }).pipe(Effect.ignore))
-    yield* recoverProviderReceiptsOnStartup({ ownerToken: providerOwnerToken })
+    yield* Effect.addFinalizer(() =>
+      Ref.get(providerOwnerState).pipe(
+        Effect.flatMap((state) => providerOwner.release({ ownerToken: state.ownerToken })),
+        Effect.ignore,
+      ),
+    )
+    yield* recoverProviderReceiptsOnStartup({ ownerToken: providerOwnerInitialToken })
     yield* Effect.gen(function* () {
       while (yield* Ref.get(providerOwnerHealthy)) {
         const continued = yield* ContextFederationProviderOwnerRuntime.tick({
           owners: providerOwner,
-          ownerToken: providerOwnerToken,
+          owner: providerOwnerState,
+          ownerBase: providerOwnerBase,
           leaseMs: SessionProviderOwner.LeaseMs,
           healthy: providerOwnerHealthy,
           label: "provider",
-          recover: recoverProviderReceiptsOnStartup({ ownerToken: providerOwnerToken }),
+          recover: Effect.gen(function* () {
+            const current = yield* Ref.get(providerOwnerState)
+            yield* recoverProviderReceiptsOnStartup({ ownerToken: current.ownerToken })
+          }),
         })
         if (!continued) return
         yield* Effect.sleep(Duration.millis(SessionProviderOwner.LeaseMs / 3))
@@ -1224,6 +1245,10 @@ export const layer = Layer.effect(
       Effect.catchCause((cause) => Effect.logError(`provider owner maintenance failed: ${Cause.pretty(cause)}`)),
       Effect.forkScoped,
     )
+    // BUG-407-012 root cause A: a fenced lease no longer reaches this gate — rotation happens on
+    // the maintenance tick (LeaseMs/3 cadence, well inside one lease), so the successor token is
+    // live before the next prompt dispatch. `healthy` only latches false if the maintenance loop
+    // itself dies, which is the only condition that must keep rejecting prompts.
     const ensureProviderOwnerHealthy = Effect.gen(function* () {
       if (!(yield* Ref.get(providerOwnerHealthy)))
         return yield* Effect.die(new Error("provider owner runtime is unhealthy"))
@@ -4418,10 +4443,13 @@ export const layer = Layer.effect(
                         ),
                       )
                     const admittedAt = Date.now()
+                    // BUG-407-012 root cause A: read the live owner generation at use time; the
+                    // startup token may already be fenced and rotated away by the maintenance loop.
+                    const providerOwnerCurrent = yield* Ref.get(providerOwnerState)
                     const providerAttempt = providerAttemptAdmission
                       ? yield* SessionProviderAttempt.prepareInTransaction(tx, {
                           ...providerAttemptAdmission,
-                          ownerToken: providerOwnerToken,
+                          ownerToken: providerOwnerCurrent.ownerToken,
                           now: admittedAt,
                         })
                       : undefined
@@ -4517,7 +4545,7 @@ export const layer = Layer.effect(
                       response_chain_reuse_decision: "not_supported",
                       response_chain_refusal_reason: "provider_path_not_stateful",
                       provider_state: "preparing",
-                      owner_token: providerOwnerToken,
+                      owner_token: providerOwnerCurrent.ownerToken,
                       request_state: "prepared",
                       created_at: admittedAt,
                     })
@@ -4682,12 +4710,15 @@ export const layer = Layer.effect(
                               ? input.values.terminal_at
                               : Date.now()
                       const observedAt = yield* SessionProviderOwner.observedAtInTransaction(tx)
+                      // BUG-407-012 root cause A: the lease guard runs against the current owner
+                      // generation, not the startup token captured when the layer started.
+                      const providerOwnerCurrent = yield* Ref.get(providerOwnerState)
                       const owner = yield* tx
                         .select({ ownerToken: SessionProviderOwnerLeaseTable.owner_token })
                         .from(SessionProviderOwnerLeaseTable)
                         .where(
                           and(
-                            eq(SessionProviderOwnerLeaseTable.owner_token, providerOwnerToken),
+                            eq(SessionProviderOwnerLeaseTable.owner_token, providerOwnerCurrent.ownerToken),
                             isNull(SessionProviderOwnerLeaseTable.released_at),
                             gt(SessionProviderOwnerLeaseTable.lease_expires_at, observedAt),
                           ),
@@ -4700,7 +4731,7 @@ export const layer = Layer.effect(
                         .where(
                           and(
                             eq(SessionToolRequestReceiptTable.receipt_id, receiptID),
-                            eq(SessionToolRequestReceiptTable.owner_token, providerOwnerToken),
+                            eq(SessionToolRequestReceiptTable.owner_token, providerOwnerCurrent.ownerToken),
                           ),
                         )
                         .get()
@@ -4747,7 +4778,7 @@ export const layer = Layer.effect(
                       if (input.attemptTransition && providerAttempt) {
                         yield* SessionProviderAttempt.transitionInTransaction(tx, {
                           attemptId: providerAttempt.attemptId,
-                          expectedOwnerToken: providerOwnerToken,
+                          expectedOwnerToken: providerOwnerCurrent.ownerToken,
                           from: [...input.attemptTransition.from],
                           to: input.attemptTransition.state,
                           now: input.attemptTransition.at,
@@ -4769,7 +4800,7 @@ export const layer = Layer.effect(
                         .where(
                           and(
                             eq(SessionToolRequestReceiptTable.receipt_id, receiptID),
-                            eq(SessionToolRequestReceiptTable.owner_token, providerOwnerToken),
+                            eq(SessionToolRequestReceiptTable.owner_token, providerOwnerCurrent.ownerToken),
                             eq(SessionToolRequestReceiptTable.provider_state, current.state),
                           ),
                         )
@@ -4968,12 +4999,14 @@ export const layer = Layer.effect(
                     Effect.gen(function* () {
                       const preparedAt = Date.now()
                       const observedAt = yield* SessionProviderOwner.observedAtInTransaction(tx)
+                      // BUG-407-012 root cause A: read the live owner generation at use time.
+                      const providerOwnerCurrent = yield* Ref.get(providerOwnerState)
                       const owner = yield* tx
                         .select({ ownerToken: SessionProviderOwnerLeaseTable.owner_token })
                         .from(SessionProviderOwnerLeaseTable)
                         .where(
                           and(
-                            eq(SessionProviderOwnerLeaseTable.owner_token, providerOwnerToken),
+                            eq(SessionProviderOwnerLeaseTable.owner_token, providerOwnerCurrent.ownerToken),
                             isNull(SessionProviderOwnerLeaseTable.released_at),
                             gt(SessionProviderOwnerLeaseTable.lease_expires_at, observedAt),
                           ),
@@ -5013,7 +5046,7 @@ export const layer = Layer.effect(
                       if (providerAttempt)
                         yield* SessionProviderAttempt.transitionInTransaction(tx, {
                           attemptId: providerAttempt.attemptId,
-                          expectedOwnerToken: providerOwnerToken,
+                          expectedOwnerToken: providerOwnerCurrent.ownerToken,
                           from: ["prepared"],
                           to: "prepared",
                           now: preparedAt,
@@ -5071,7 +5104,7 @@ export const layer = Layer.effect(
                         .where(
                           and(
                             eq(SessionToolRequestReceiptTable.receipt_id, receiptID),
-                            eq(SessionToolRequestReceiptTable.owner_token, providerOwnerToken),
+                            eq(SessionToolRequestReceiptTable.owner_token, providerOwnerCurrent.ownerToken),
                             eq(SessionToolRequestReceiptTable.provider_state, "preparing"),
                           ),
                         )
@@ -5095,12 +5128,14 @@ export const layer = Layer.effect(
                   (tx) =>
                     Effect.gen(function* () {
                       const observedAt = yield* SessionProviderOwner.observedAtInTransaction(tx)
+                      // BUG-407-012 root cause A: read the live owner generation at use time.
+                      const providerOwnerCurrent = yield* Ref.get(providerOwnerState)
                       const owner = yield* tx
                         .select({ ownerToken: SessionProviderOwnerLeaseTable.owner_token })
                         .from(SessionProviderOwnerLeaseTable)
                         .where(
                           and(
-                            eq(SessionProviderOwnerLeaseTable.owner_token, providerOwnerToken),
+                            eq(SessionProviderOwnerLeaseTable.owner_token, providerOwnerCurrent.ownerToken),
                             isNull(SessionProviderOwnerLeaseTable.released_at),
                             gt(SessionProviderOwnerLeaseTable.lease_expires_at, observedAt),
                           ),
@@ -5113,7 +5148,7 @@ export const layer = Layer.effect(
                         .where(
                           and(
                             eq(SessionToolRequestReceiptTable.receipt_id, receiptID),
-                            eq(SessionToolRequestReceiptTable.owner_token, providerOwnerToken),
+                            eq(SessionToolRequestReceiptTable.owner_token, providerOwnerCurrent.ownerToken),
                             eq(SessionToolRequestReceiptTable.provider_state, "preparing"),
                           ),
                         )
@@ -5136,9 +5171,10 @@ export const layer = Layer.effect(
                 now: Date.now(),
               })
               if (!gate.allowed) {
+                const providerOwnerCurrentForRejection = yield* Ref.get(providerOwnerState)
                 yield* rejectUndispatchedProviderTurn({
                   receiptID,
-                  ownerToken: providerOwnerToken,
+                  ownerToken: providerOwnerCurrentForRejection.ownerToken,
                   ...(providerAttempt ? { providerAttemptID: providerAttempt.attemptId } : {}),
                   errorCode: `provider_dispatch_${gate.reason}`,
                 }).pipe(Effect.provideService(Database.Service, database))

@@ -98,15 +98,33 @@ export const layer = Layer.effect(
     const attempts = yield* SessionProviderAttempt.Service
     const federation = yield* SessionFederatedContext.Service
     const owners = yield* SessionProviderOwner.Service
-    const recoveryOwnerToken = `${process.pid}:diagnostics:${randomUUID()}`
-    yield* owners.register({ ownerToken: recoveryOwnerToken, leaseMs: SessionProviderOwner.LeaseMs }).pipe(Effect.orDie)
+    // BUG-407-012 root cause A: same rotation contract as the prompt owner — a fenced lease
+    // rotates to a successor generation; consumers read the current token at use time.
+    const recoveryOwnerBase = `${process.pid}:diagnostics:${randomUUID()}`
+    const recoveryOwnerInitialToken = ContextFederationProviderOwnerRuntime.nextOwnerToken({
+      ownerBase: recoveryOwnerBase,
+      generation: 0,
+    })
+    yield* owners
+      .register({ ownerToken: recoveryOwnerInitialToken, leaseMs: SessionProviderOwner.LeaseMs })
+      .pipe(Effect.orDie)
+    const recoveryOwnerState = yield* Ref.make<ContextFederationProviderOwnerRuntime.OwnerGeneration>({
+      ownerToken: recoveryOwnerInitialToken,
+      generation: 0,
+    })
     const ownerHealthy = yield* Ref.make(true)
-    yield* Effect.addFinalizer(() => owners.release({ ownerToken: recoveryOwnerToken }).pipe(Effect.ignore))
+    yield* Effect.addFinalizer(() =>
+      Ref.get(recoveryOwnerState).pipe(
+        Effect.flatMap((state) => owners.release({ ownerToken: state.ownerToken })),
+        Effect.ignore,
+      ),
+    )
     yield* Effect.gen(function* () {
       while (yield* Ref.get(ownerHealthy)) {
         const continued = yield* ContextFederationProviderOwnerRuntime.tick({
           owners,
-          ownerToken: recoveryOwnerToken,
+          owner: recoveryOwnerState,
+          ownerBase: recoveryOwnerBase,
           leaseMs: SessionProviderOwner.LeaseMs,
           healthy: ownerHealthy,
           label: "provider diagnostics",
@@ -232,13 +250,14 @@ export const layer = Layer.effect(
             reason: "legacy_provider_recovery_required",
           })
         if (input.decision === "replayed") {
+          const recoveryOwnerCurrent = yield* Ref.get(recoveryOwnerState)
           const resolved = yield* federation.replayIndeterminate({
             session: input.session,
             attemptId: input.attemptId,
             actorId: input.actorId,
             reason: input.reason,
             riskAcknowledged: input.riskAcknowledged,
-            recoveryOwnerToken,
+            recoveryOwnerToken: recoveryOwnerCurrent.ownerToken,
             now: input.now,
           })
           return attemptView(resolved.replay, undefined, false, input.now ?? Date.now())
@@ -252,9 +271,10 @@ export const layer = Layer.effect(
         if (input.decision === "settled" && !terminal) {
           return yield* new DiagnosticsError({ reason: "persisted_terminal_event_required" })
         }
+        const recoveryOwnerCurrent = yield* Ref.get(recoveryOwnerState)
         const resolved = yield* attempts.resolve({
           attemptId: input.attemptId,
-          recoveryOwnerToken,
+          recoveryOwnerToken: recoveryOwnerCurrent.ownerToken,
           actor: {
             type: "user",
             id: input.actorId,
