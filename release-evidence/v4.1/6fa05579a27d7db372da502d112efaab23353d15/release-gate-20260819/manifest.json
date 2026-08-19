@@ -1,0 +1,52 @@
+{
+  "schema_version": "deepagent.release_evidence.v1",
+  "version": "v4.1",
+  "gate_id": "release-gate-20260819",
+  "commit": "6fa05579a27d7db372da502d112efaab23353d15",
+  "date": "2026-08-19",
+  "generated_at": "2026-08-19T17:25:23Z",
+  "status": "passed",
+  "summary": "2026-08-19 发布门禁回填归档:全量确定性测试、migration 双路径、DeepSeek live 冒烟全部通过。原始日志未入仓库,本 manifest 以文本记录事实与来源;commit 绑定为归档时分支 HEAD,正式发布前须按 BUG-407-005 重新绑定发布 commit。",
+  "evidence": [
+    {
+      "kind": "test-summary",
+      "label": "full-suite-deterministic",
+      "path": null,
+      "sha256": null,
+      "conclusion": "全量确定性测试:4967 pass / 0 fail / 5006 tests。来源:2026-08-19 发布门禁执行摘要(原始日志未入仓库)。"
+    },
+    {
+      "kind": "migration",
+      "label": "dual-path-prod-replica",
+      "path": null,
+      "sha256": null,
+      "conclusion": "migration 双路径验证:在生产库副本上成功回放 143 个 migrations,新库/旧库两条路径均通过。来源:2026-08-19 发布门禁 migration 执行记录(原始日志未入仓库)。"
+    },
+    {
+      "kind": "smoke",
+      "label": "deepseek-live-cli-headless",
+      "path": null,
+      "sha256": null,
+      "conclusion": "DeepSeek live 冒烟:cli-headless 路径通过。来源:2026-08-19 发布门禁 live 冒烟记录(原始日志未入仓库)。"
+    },
+    {
+      "kind": "smoke",
+      "label": "deepseek-live-structured-legacy",
+      "path": null,
+      "sha256": null,
+      "conclusion": "DeepSeek live 冒烟:structured-legacy 路径通过。来源:2026-08-19 发布门禁 live 冒烟记录(原始日志未入仓库)。"
+    }
+  ],
+  "signatures": [
+    {
+      "role": "domain-owner",
+      "actor": "",
+      "at": ""
+    },
+    {
+      "role": "release-owner",
+      "actor": "",
+      "at": ""
+    }
+  ]
+}
