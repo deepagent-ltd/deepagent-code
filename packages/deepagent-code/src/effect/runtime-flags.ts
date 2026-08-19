@@ -334,6 +334,13 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   // (fail-closed partial unique index per (parent_session, subkind) active). Default false until
   // the release gate qualifies the delegation paths; enable with DEEPAGENT_CODE_ACTIVITY_FACADE=true.
   activityFacade: bool("DEEPAGENT_CODE_ACTIVITY_FACADE"),
+  // RISK-003 ④ (BUG-407-010 legacy data governance): durable automated schedule for the legacy
+  // event canonicalizer. The canonicalizer itself is already wired (core event.ts
+  // canonicalizeLegacyArtifacts + the sync maintenance endpoint); this flag starts a bounded
+  // background loop that walks the backlog in small batches. DEFAULT OFF (conservative rollout —
+  // the governance runbook advances per-step on production copies). Failures only log; the loop
+  // never deletes events or VACUUMs. Enable with DEEPAGENT_CODE_LEGACY_EVENT_CANONICALIZER=true.
+  legacyEventCanonicalizer: bool("DEEPAGENT_CODE_LEGACY_EVENT_CANONICALIZER"),
   // PR-2: Streaming degeneration detector mode for reasoning outputs.
   // "off"    — detector is disabled; all output passes through unmodified.
   // "shadow" — detector runs and logs hits, but never triggers a circuit break.

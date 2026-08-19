@@ -18,7 +18,11 @@ import { MessageV2 } from "@/session/message-v2"
 import { MessageID } from "@/session/schema"
 import { Session } from "@/session/session"
 import { SessionDiffArtifact } from "@/session/diff-artifact"
-import { SessionDiffArtifactFileChunkTable, SessionDiffMigrationReceiptTable } from "@/session/diff-artifact.sql"
+import {
+  SessionDiffArtifactFileChunkTable,
+  SessionDiffArtifactFileTable,
+  SessionDiffMigrationReceiptTable,
+} from "@/session/diff-artifact.sql"
 import { SessionPromptEpochTable } from "@/session/prompt-epoch.sql"
 import { SessionPaths } from "@/server/routes/instance/httpapi/groups/session"
 import { and, asc, eq, sql } from "drizzle-orm"
@@ -627,6 +631,171 @@ describe("Session legacy diff physical migration", () => {
             .get()
             .pipe(Effect.orDie),
         ).toEqual(expect.objectContaining({ state: "migration_validation_failed", failure_reason: "Session summary compare-and-swap lost" }))
+      }),
+    { git: true },
+    30_000,
+  )
+})
+
+describe("Session runtime diff artifact capture", () => {
+  it.instance(
+    "converges a runtime user summary diff onto session_diff_artifact during updateMessage",
+    () =>
+      Effect.gen(function* () {
+        const sessions = yield* Session.Service
+        const { db } = yield* Database.Service
+        const session = yield* sessions.create({ title: "runtime capture" })
+        const patch = "@@ -1 +1 @@\n-legacy\n+canonical"
+        const info = {
+          id: MessageID.ascending(),
+          sessionID: session.id,
+          role: "user" as const,
+          agent: "build",
+          model: { providerID: ProviderV2.ID.make("test"), modelID: ModelV2.ID.make("model") },
+          time: { created: Date.now() },
+          summary: {
+            diffs: [{ file: "src/runtime.ts", patch, additions: 1, deletions: 1, status: "modified" as const }],
+          },
+        } as unknown as SessionV1.User
+        const before = HistoryAuthority.hash([{ info, parts: [] }])
+
+        yield* sessions.updateMessage(info)
+
+        const raw = yield* db.get<{ data: string }>(
+          sql`SELECT CAST(data AS TEXT) AS data FROM message WHERE id = ${info.id}`,
+        )
+        expect(raw?.data).not.toContain('"patch"')
+        expect(raw?.data).not.toContain('"diffs"')
+        const stored = yield* MessageV2.get({ sessionID: session.id, messageID: info.id })
+        expect(stored.info.role === "user" ? stored.info.summary?.diffs : undefined).toEqual([])
+        const artifactID = stored.info.role === "user" ? stored.info.summary?.diffArtifact?.id : undefined
+        expect(artifactID).toBeDefined()
+        expect(stored.info.role === "user" ? stored.info.summary?.diffArtifact?.hash : undefined).toBe(
+          Hash.sha256(Buffer.from(JSON.stringify({ diffs: [{ file: "src/runtime.ts", patch, additions: 1, deletions: 1, status: "modified" }] }))),
+        )
+        expect(HistoryAuthority.hash([stored])).toBe(before)
+        const receipt = yield* db
+          .select()
+          .from(SessionDiffMigrationReceiptTable)
+          .where(eq(SessionDiffMigrationReceiptTable.message_id, info.id))
+          .get()
+          .pipe(Effect.orDie)
+        expect(receipt).toMatchObject({
+          state: "committed",
+          artifact_id: artifactID,
+          canonicalizer_version: 2,
+        })
+        expect(receipt?.committed_session_summary_hash).toBe(Hash.sha256("null"))
+        const eventArtifact = yield* db
+          .select()
+          .from(EventArtifactTable)
+          .where(eq(EventArtifactTable.artifact_id, receipt!.artifact_id))
+          .get()
+          .pipe(Effect.orDie)
+        expect(eventArtifact).toMatchObject({
+          kind: "legacy_message_diff",
+          codec_version: 2,
+          aggregate_id: session.id,
+          event_id: receipt!.source_event_id,
+        })
+        const files = yield* db
+          .select()
+          .from(SessionDiffArtifactFileTable)
+          .where(eq(SessionDiffArtifactFileTable.artifact_id, receipt!.artifact_id))
+          .all()
+          .pipe(Effect.orDie)
+        expect(files).toHaveLength(1)
+        expect(files[0]).toMatchObject({
+          path: "src/runtime.ts",
+          additions: 1,
+          deletions: 1,
+          status: "modified",
+          patch_hash: Hash.sha256(Buffer.from(patch)),
+        })
+        const chunks = yield* db
+          .select()
+          .from(SessionDiffArtifactFileChunkTable)
+          .where(eq(SessionDiffArtifactFileChunkTable.artifact_id, receipt!.artifact_id))
+          .orderBy(asc(SessionDiffArtifactFileChunkTable.chunk_index))
+          .all()
+          .pipe(Effect.orDie)
+        expect(Buffer.concat(chunks.map((chunk) => chunk.data)).toString()).toBe(patch)
+        // exact-retry parity: a second capture observes the committed receipt and skips.
+        expect(
+          yield* SessionDiffArtifact.capture({
+            sessionID: session.id,
+            messageID: info.id,
+            sourceEventID: receipt!.source_event_id as EventV2.ID,
+            now: 500,
+          }),
+        ).toEqual({ state: "skipped" })
+        const manifestResponse = yield* request(
+          `${pathFor(SessionPaths.diffArtifactManifest, session.id)}?${new URLSearchParams({
+            messageID: info.id,
+            artifactID: artifactID!,
+          })}`,
+        )
+        expect(manifestResponse.status).toBe(200)
+        const manifest = yield* json<typeof SessionDiffArtifact.Manifest.Type>(manifestResponse)
+        expect(manifest.files).toEqual([
+          expect.objectContaining({ file: "src/runtime.ts", patchBytes: Buffer.byteLength(patch) }),
+        ])
+        const fileResponse = yield* request(
+          `${pathFor(SessionPaths.diffArtifactFile, session.id)}?${new URLSearchParams({
+            messageID: info.id,
+            artifactID: artifactID!,
+            path: "src/runtime.ts",
+          })}`,
+        )
+        expect(fileResponse.status).toBe(200)
+        expect(yield* json<typeof SessionDiffArtifact.File.Type>(fileResponse)).toMatchObject({
+          patch,
+          truncated: false,
+        })
+      }),
+    { git: true },
+    30_000,
+  )
+
+  it.instance(
+    "leaves a runtime message that already carries a diffArtifact descriptor uncaptured",
+    () =>
+      Effect.gen(function* () {
+        const sessions = yield* Session.Service
+        const { db } = yield* Database.Service
+        const session = yield* sessions.create({ title: "runtime captured upstream" })
+        const info = {
+          id: MessageID.ascending(),
+          sessionID: session.id,
+          role: "user" as const,
+          agent: "build",
+          model: { providerID: ProviderV2.ID.make("test"), modelID: ModelV2.ID.make("model") },
+          time: { created: Date.now() },
+          summary: {
+            diffs: [],
+            diffArtifact: {
+              id: "evtart_upstream_descriptor",
+              hash: Hash.sha256("upstream"),
+              codec: "legacy-message-diff.v2",
+              fileCount: 1,
+              previewFileCount: 1,
+              previewTruncated: false,
+            },
+          },
+        } as unknown as SessionV1.User
+        yield* sessions.updateMessage(info)
+        expect(
+          yield* db
+            .select()
+            .from(SessionDiffMigrationReceiptTable)
+            .where(eq(SessionDiffMigrationReceiptTable.message_id, info.id))
+            .all()
+            .pipe(Effect.orDie),
+        ).toEqual([])
+        const stored = yield* MessageV2.get({ sessionID: session.id, messageID: info.id })
+        expect(stored.info.role === "user" ? stored.info.summary?.diffArtifact?.id : undefined).toBe(
+          "evtart_upstream_descriptor",
+        )
       }),
     { git: true },
     30_000,
