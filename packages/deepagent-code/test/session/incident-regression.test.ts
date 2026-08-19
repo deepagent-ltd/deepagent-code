@@ -952,6 +952,131 @@ incidentPrompt.instance(
   15_000,
 )
 
+incidentPrompt.instance(
+  "BUG-407-011 residual: continue_loop_on_deny keeps the run alive after dismissal and still terminalizes the activity",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useIncidentServerConfig((url) => ({
+        ...incidentProviderCfg(url),
+        experimental: { continue_loop_on_deny: true },
+      }))
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const question = yield* Question.Service
+      const { db } = yield* Database.Service
+      const chat = yield* sessions.create({
+        title: "BUG-407-011 continue_loop_on_deny",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      yield* llm.tool("question", {
+        questions: [
+          {
+            question: "Continue with this approach?",
+            header: "Continue",
+            options: [{ label: "Yes", description: "Continue" }],
+          },
+        ],
+      })
+      yield* llm.text("loop continued after deny")
+      yield* llm.text("next prompt admitted after continue-on-deny")
+
+      const first = yield* prompt
+        .prompt({
+          sessionID: chat.id,
+          agent: "build",
+          parts: [{ type: "text", text: "ask before proceeding" }],
+        })
+        .pipe(Effect.forkChild)
+      const request = yield* pollWithTimeout(
+        Effect.gen(function* () {
+          const pending = yield* question.list()
+          return pending.find((item) => item.sessionID === chat.id)
+        }),
+        "timed out waiting for question request",
+      )
+      yield* question.reject(request.id)
+      const firstResult = yield* Fiber.join(first)
+      expect(firstResult.info.role).toBe("assistant")
+      // The loop must NOT stop at the dismissal: the SAME run completes with the continuation text
+      // (the rejection is a tool failure, not a typed stop reason, under continue_loop_on_deny).
+      expect(
+        firstResult.parts.some((part) => part.type === "text" && part.text === "loop continued after deny"),
+      ).toBeTrue()
+      // The rejection surfaced as a tool FAILURE carrying the failureCode, not a turn abort.
+      const msgs = yield* sessions.messages({ sessionID: chat.id })
+      const questionPart = msgs
+        .flatMap((m) => m.parts)
+        .find((p) => p.type === "tool") as
+        | { state: { status: string; metadata?: Record<string, unknown> } }
+        | undefined
+      expect(questionPart?.state.status).toBe("error")
+      expect(questionPart?.state.metadata?.failureCode).toBe("user_rejected_question")
+
+      // The SAME activity terminalizes at run end — settled, never interrupted, never left active.
+      // (The run row uses its own terminal vocabulary: "completed" for a settled outcome.)
+      expect(yield* db.select().from(SessionLegacyActivityTable).all().pipe(Effect.orDie)).toMatchObject([
+        { state: "settled", terminal_reason: "assistant_completed" },
+      ])
+      expect(yield* db.select().from(SessionLegacyActivityRunTable).all().pipe(Effect.orDie)).toMatchObject([
+        { state: "completed", terminal_reason: "assistant_completed" },
+      ])
+      expect(yield* db.select().from(SessionLegacyActivityTerminalTable).all().pipe(Effect.orDie)).toMatchObject([
+        { state: "settled", reason_code: "assistant_completed", source: "provider_final" },
+      ])
+      // No recovery_required quarantine may linger after a continue-on-deny completion.
+      expect(
+        yield* db
+          .select()
+          .from(SessionHistoryStateTable)
+          .where(
+            and(
+              eq(SessionHistoryStateTable.session_id, chat.id),
+              eq(SessionHistoryStateTable.state, "recovery_required"),
+            ),
+          )
+          .all()
+          .pipe(Effect.orDie),
+      ).toEqual([])
+      expect(
+        yield* db
+          .select()
+          .from(SessionPromptEpochTable)
+          .where(
+            and(
+              eq(SessionPromptEpochTable.session_id, chat.id),
+              eq(SessionPromptEpochTable.authority_state, "recovery_required"),
+            ),
+          )
+          .all()
+          .pipe(Effect.orDie),
+      ).toEqual([])
+
+      // The next prompt in the same session must be admitted and run (no "requires recovery" conflict).
+      const next = yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        parts: [{ type: "text", text: "continue after continue-on-deny" }],
+      })
+      expect(
+        next.parts.some((part) => part.type === "text" && part.text === "next prompt admitted after continue-on-deny"),
+      ).toBeTrue()
+      expect(yield* llm.hits).toHaveLength(3)
+      expect(
+        yield* db
+          .select()
+          .from(SessionActivityAdmissionTable)
+          .where(eq(SessionActivityAdmissionTable.session_id, chat.id))
+          .all()
+          .pipe(Effect.orDie),
+      ).toHaveLength(2)
+      expect(yield* db.select().from(SessionLegacyActivityTable).all().pipe(Effect.orDie)).toMatchObject([
+        { state: "settled", terminal_reason: "assistant_completed" },
+        { state: "settled", terminal_reason: "assistant_completed" },
+      ])
+    }),
+  15_000,
+)
+
 // ---------------------------------------------------------------------------
 // BUG-407-009 shape: abandoned resolution of an indeterminate receipt
 // ---------------------------------------------------------------------------
