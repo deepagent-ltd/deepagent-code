@@ -28,7 +28,8 @@ describe("RuntimeFlags", () => {
         Effect.provide(fromConfig({ DEEPAGENT_CODE_ACTIVITY_AUTHORITY: "durable" })),
       )
 
-      expect(defaults.activityAuthority).toBe("legacy")
+      // 2026-08-17 production cutover: default flipped to durable (gate-validated; legacy retires on pass).
+      expect(defaults.activityAuthority).toBe("durable")
       expect(durable.activityAuthority).toBe("durable")
     }),
   )

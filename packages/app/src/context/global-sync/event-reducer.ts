@@ -47,8 +47,15 @@ export function mergeMessage(current: Message, incoming: Message) {
     }
   if (!existing) return { message: incoming, conflict: false }
   if (!next) return { message: { ...incoming, activityProgress: existing }, conflict: false }
-  if (existing.activityID !== next.activityID || existing.revision !== next.revision)
+  if (existing.activityID !== next.activityID)
     return { message: { ...incoming, activityProgress: existing }, conflict: true }
+  // BUG-005: revisions are monotonic within one activity (server commits revision+1). The paged
+  // snapshot routinely lags behind the realtime stream, so a revision mismatch is staleness, not a
+  // conflict — take the higher revision instead of escalating to a whole-session force reload.
+  if (existing.revision !== next.revision)
+    return existing.revision > next.revision
+      ? { message: { ...incoming, activityProgress: existing }, conflict: false }
+      : { message: incoming, conflict: false }
   if (existing.state === next.state) return { message: incoming, conflict: false }
   const rank = (progress: ActivityProgress) =>
     progress.state === "provisional" ? 0 : progress.state === "progress" ? 1 : 2

@@ -546,6 +546,50 @@ describe("applyDirectoryEvent", () => {
     expect(refreshed).toEqual([sessionID])
   })
 
+  test("BUG-005: treats a same-activity revision mismatch as staleness, not a conflict", () => {
+    const sessionID = "ses_1"
+    const current = assistantMessage("msg_assistant", sessionID, {
+      activityID: "activity-1",
+      revision: 5,
+      state: "progress",
+    })
+    const [store, setStore] = createStore(baseState({ message: { [sessionID]: [current] } }))
+    const refreshed: string[] = []
+    const apply = (revision: number, state: "progress" | "final") =>
+      applyDirectoryEvent({
+        event: {
+          type: "message.updated",
+          properties: {
+            info: assistantMessage(current.id, sessionID, {
+              activityID: "activity-1",
+              revision,
+              state,
+            }),
+          },
+        },
+        store,
+        setStore,
+        push() {},
+        directory: "/tmp",
+        loadLsp() {},
+        refetchSession: (id) => refreshed.push(id),
+      })
+
+    // A stale page/event carrying an older revision must keep the higher one and never escalate.
+    apply(2, "progress")
+    expect(refreshed).toEqual([])
+    expect(
+      (store.message[sessionID]?.[0] as Extract<Message, { role: "assistant" }>).activityProgress?.revision,
+    ).toBe(5)
+
+    // A newer revision is adopted without triggering a canonical refresh either.
+    apply(7, "final")
+    expect(refreshed).toEqual([])
+    const progress = (store.message[sessionID]?.[0] as Extract<Message, { role: "assistant" }>).activityProgress
+    expect(progress?.revision).toBe(7)
+    expect(progress?.state).toBe("final")
+  })
+
   test("allows a same-revision activity marker to advance but never regress", () => {
     const sessionID = "ses_1"
     const provisional = assistantMessage("msg_assistant", sessionID, {

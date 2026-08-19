@@ -21,6 +21,9 @@ const mergedHistoryInsertions = new Set([
   "20260813100000_event_snapshot_authority",
   "20260813110000_provider_recovery_authority_bridge",
   "20260813120000_legacy_provider_receipt_supersession",
+  "20260813120346_v2_provider_parity_campaign",
+  "20260813121129_v2_provider_parity_response_fingerprint",
+  "20260813121200_v2_provider_parity_campaign_authority",
   "20260813125000_event_sync_backfill_authority",
   "20260813130000_file_part_artifact",
   "20260813131000_event_snapshot_chunks",
@@ -32,6 +35,7 @@ const mergedHistoryInsertions = new Set([
   "20260813141000_bug_407_010_sidecar_lifecycle",
   "20260813142000_bug_407_010_sidecar_indexes",
   "20260813143000_bug_407_010_aggregate_indexes",
+  "20260813150000_single_authority_snapshot_merge",
 ])
 
 export type Migration = {

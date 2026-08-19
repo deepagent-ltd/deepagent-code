@@ -21,6 +21,26 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  test-fixture-gate:
+    name: test-fixture-gate
+    # QUAL-003: forbid test fixtures from bypassing the durable session state
+    # machine via direct inserts into authority tables. Pure grep gate, no deps.
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Run test fixture gate
+        run: bun script/check-test-fixtures.ts
+
   unit:
     name: unit (${{ matrix.settings.name }})
     strategy:

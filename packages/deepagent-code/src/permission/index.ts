@@ -466,11 +466,14 @@ export const layerWith = (options: LayerOptions = {}) =>
                 Effect.provideService(Database.Service, database),
               )
             : undefined
-        if (flags.activityAuthority === "durable" && !activity)
-          return yield* new PermissionV1.DeniedError({
-            ruleset: [{ permission: "activity_authority", pattern: request.sessionID, action: "deny" }],
-          })
-        if (flags.activityAuthority === "durable" && requestKind === "tool" && !request.tool)
+        if (flags.activityAuthority === "durable" && !activity) {
+          // The durable authority records requests/decisions against an ADMITTED legacy activity.
+          // A turn driven without one (direct legacy loop entry, recovery edge windows) must not be
+          // hard-denied: fall back to policy-only semantics — allowed requests proceed unrecorded,
+          // interactive requests settle through the in-memory pending path exactly like legacy mode.
+          if (!needsAsk) return
+        }
+        if (flags.activityAuthority === "durable" && activity && requestKind === "tool" && !request.tool)
           return yield* new PermissionV1.DeniedError({
             ruleset: [{ permission: "activity_tool_identity", pattern: request.permission, action: "deny" }],
           })
@@ -686,8 +689,26 @@ export const layerWith = (options: LayerOptions = {}) =>
 
             const winnerReply = permissionReplyForDecision(durable)
             if (flags.activityAuthority === "durable") {
-              if (winnerReply === "reject" && input.reply !== "reject")
-                return yield* new PermissionV1.NotFoundError({ requestID: input.requestID })
+              // Durable-backed siblings fan out through the DB (decidePermissionWithFanout + the
+              // reconciliation poller); memory-only entries of the same session (turns without an
+              // admitted activity) still need the legacy in-memory fan-out or they never settle.
+              if (winnerReply === "reject") {
+                if (input.reply !== "reject") return yield* new PermissionV1.NotFoundError({ requestID: input.requestID })
+                for (const [id, item] of allPending) {
+                  if (item.durable || item.info.sessionID !== existing.info.sessionID || !claimPending(id, item)) continue
+                  yield* settleClaimed(item, "reject")
+                }
+                return
+              }
+              if (winnerReply === "once") return
+              for (const [id, item] of allPending) {
+                if (item.durable || item.info.sessionID !== existing.info.sessionID) continue
+                const ok = item.info.patterns.every(
+                  (pattern) => evaluate(item.info.permission, pattern, item.owner.approved).action === "allow",
+                )
+                if (!ok || !claimPending(id, item)) continue
+                yield* settleClaimed(item, "always")
+              }
               return
             }
             if (winnerReply === "reject") {

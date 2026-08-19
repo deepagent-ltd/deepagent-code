@@ -95,6 +95,7 @@ import {
   TaskTool,
   type TaskPromptOps,
 } from "@/tool/task"
+import { validateStructuredOutput } from "@/tool/task-structured-output"
 import { SessionRunState } from "./run-state"
 import { SessionSteer } from "./steer"
 import { SessionPromptIntent } from "./prompt-intent"
@@ -129,6 +130,7 @@ import {
 import { SessionProviderOwner } from "@deepagent-code/core/context-federation/provider-owner"
 import { SessionProviderAttempt } from "@deepagent-code/core/context-federation/provider-attempt"
 import { ContextFederationExecutionParity } from "@deepagent-code/core/context-federation/execution-parity"
+import { ContextReconciliation } from "@deepagent-code/core/context-federation/reconciliation"
 import { Hash } from "@deepagent-code/core/util/hash"
 import { SessionFederatedContext } from "@/context-federation/session-context-runtime"
 import { ContextFederationReadiness } from "@/context-federation/readiness"
@@ -149,7 +151,7 @@ import {
 } from "@deepagent-code/core/session/prompt"
 import { Reference } from "@/reference/reference"
 import * as DateTime from "effect/DateTime"
-import { and, eq, exists, gt, inArray, isNull, max, notExists, notInArray, or } from "drizzle-orm"
+import { and, desc, eq, exists, gt, inArray, isNull, max, notExists, notInArray, or } from "drizzle-orm"
 import {
   SessionHistoryStateTable,
   SessionTable,
@@ -800,11 +802,17 @@ function buildStructuredOutputRuntimeTail(
   format: SessionV1.OutputFormat,
   finalizerMode: boolean,
   finalizerAllowsText = false,
+  wireFormat = false,
 ): string {
   if (finalizerAllowsText) {
     return "This is a bounded finalizer turn. Read the supplied research result and return exactly one JSON value. No research, Markdown, explanatory prose, or tool use is permitted."
   }
   if (format.type !== "json_schema") return ""
+  // UPD-002: wire mode — the provider enforces the schema via text.format, so
+  // the tail must NOT reference the (absent) StructuredOutput tool.
+  if (wireFormat) {
+    return "IMPORTANT: The user has requested structured output. Your final response text is schema-constrained by the provider. Reply with ONLY a single JSON value matching the required schema - no Markdown fences, prose, or wrapping."
+  }
   return [
     buildStructuredOutputSystemPrompt(format.schema),
     finalizerMode
@@ -1231,7 +1239,25 @@ export const layer = Layer.effect(
           : Effect.void,
       ),
     )
+    // BUG-003 restart recovery: settle federation activities left `active` by a dead run loop,
+    // mirroring the legacy recovery above (both run once at process start; without this the
+    // session's partial unique index stays locked and every new input attaches to the stale
+    // activity). Failures are logged, never fatal — startup must not die on best-effort cleanup.
+    if (federation) {
+      yield* federation.settleOrphanedActivities().pipe(
+        Effect.tap((count) =>
+          count > 0 ? Effect.logWarning(`settled ${count} orphaned federated activities after restart`) : Effect.void,
+        ),
+        Effect.catchCause((cause) =>
+          Effect.logWarning(`federated activity restart recovery failed: ${Cause.pretty(cause)}`),
+        ),
+      )
+    }
     const activeFederatedContexts = new Map<SessionID, SessionFederatedContext.Resolved>()
+    // BUG-004: consecutive steer-absorption rounds within the current activity run, per session.
+    // Reset at the top of every runLoop invocation (one invocation = one activity run); bounded by
+    // flags.steerAbsorbLimit at the model boundary so steers cannot extend old work without bound.
+    const steerAbsorbRounds = new Map<SessionID, number>()
     const activeReleasedKnowledge = new Map<
       SessionID,
       {
@@ -2897,17 +2923,28 @@ export const layer = Layer.effect(
           if (lifecycle) yield* lifecycle.ready({ messageID: admitted.message.info.id, delivery: "turn" })
           return yield* runLoop(input.sessionID, false, run)
         }).pipe(
-          Effect.onInterrupt(() => {
+          // BUG-008: terminalize on EVERY abnormal exit, not only interruption. A failure or defect
+          // between admit (which claims the legacy activity run) and runLoop's own exit hook
+          // previously left the activity `active`; the next admission then refused with "requires
+          // recovery before a new turn". finalizeCancellationBeforeProgress is CAS-guarded, so the
+          // loop-level hook and this handler are safe to both run.
+          Effect.onExit((exit) => {
+            if (Exit.isSuccess(exit)) return Effect.void
+            const interrupted = Cause.interruptors(exit.cause).size > 0
             const run = ownedRun.value
             return Effect.all(
               [
-                settleFederatedActivity(input.sessionID, "interrupted"),
+                settleFederatedActivity(input.sessionID, interrupted ? "interrupted" : "failed"),
                 run
                   ? SessionPromptIntent.finalizeCancellationBeforeProgress(run).pipe(
                       Effect.provideService(Database.Service, database),
                       Effect.flatMap((result) =>
                         result ? publishActivityProjection(result.invalidation) : Effect.void,
                       ),
+                      // The loop-level hook may have committed a terminal with a different decision
+                      // shape already (failure exit); the activity is terminal either way, so the
+                      // divergent replay is benign here.
+                      Effect.catchTag("SessionPromptIntent.Conflict", () => Effect.void),
                     )
                   : Effect.void,
               ],
@@ -3358,12 +3395,7 @@ export const layer = Layer.effect(
       "</system-reminder>",
     ].join("\n")
 
-    const runLoop: (
-      sessionID: SessionID,
-      drainFirst?: boolean,
-      activityRun?: SessionPromptIntent.RunIdentity,
-      onActivityRun?: (run: SessionPromptIntent.RunIdentity) => void,
-    ) => Effect.Effect<SessionV1.WithParts, SessionPromptIntent.Error> = Effect.fn("SessionPrompt.run")(
+    const runLoopInner = Effect.fn("SessionPrompt.run")(
       // §S1.2: `drainFirst` — a PURE-DRAIN turn (started to absorb a steer that landed in the isBusy→admit
       // race, with no initiating user message of its own) must drain on step 0 too; otherwise the step-0
       // skip + the immediate finish check would break before the steer is ever consumed. A normal turn
@@ -3384,6 +3416,8 @@ export const layer = Layer.effect(
         // that occurs when the model repeatedly guesses wrong field names (e.g. "summary" instead
         // of "module" for ResearchResult) and the AI SDK silently rejects them before execute().
         let structuredFailedAttempts = 0
+        // BUG-004: fresh activity run — restart the steer-absorption accounting.
+        steerAbsorbRounds.delete(sessionID)
         yield* sessions.recoverForks()
         yield* sessions.assertRunnable(sessionID).pipe(Effect.orDie)
         const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
@@ -3581,6 +3615,7 @@ export const layer = Layer.effect(
                 }
               }
               const absorbed = yield* drainSteers(sessionID, drainFirst && step === 0)
+              if (absorbed.length > 0) steerAbsorbRounds.set(sessionID, (steerAbsorbRounds.get(sessionID) ?? 0) + 1)
               pendingContextInputIds = [...pendingContextInputIds, ...absorbed]
             }
           }
@@ -3718,6 +3753,16 @@ export const layer = Layer.effect(
 
           const model = yield* getModel(lastUser.model.providerID, lastUser.model.modelID, sessionID)
           const finalizerDecision = finalizerMode ? LLM.finalizerCapability(model) : undefined
+          // UPD-002: wire structured-output decision (single helper shared with
+          // LLMRequestPrep.prepare). Wire mode ⇒ skip the synthesized
+          // StructuredOutput tool below; the json_schema travels as the
+          // request's wire format and the final assistant text carries the
+          // JSON value. Synthetic path unchanged for every other family.
+          const wireStructuredOutput = LLMRequestPrep.shouldUseWireStructuredOutput({
+            user: lastUser,
+            model,
+            flags,
+          })
           const task = finalizerMode ? undefined : tasks.pop()
 
           if (task?.type === "subtask") {
@@ -3806,6 +3851,16 @@ export const layer = Layer.effect(
               }
               if (action === "fallback") {
                 yield* writeSoftLandingState(sessionID, nextState)
+                // UPD-005 micro-compact: on entering the fallback phase, prune with a SMALLER
+                // protect window (MICRO_COMPACT_PROTECT < PRUNE_PROTECT) to truncate older
+                // non-protected tool results in place and buy headroom before the hard line.
+                // prune keeps its time.compacted idempotency guard, so repeated fallback entries
+                // (and the later turn-end / hard-phase prunes) never double-truncate. Failure is
+                // swallowed (same posture as the turn-end prune) — micro-compact is an
+                // optimization and must not block the soft-landing fallback note.
+                yield* compaction
+                  .prune({ sessionID, protect: SessionCompaction.MICRO_COMPACT_PROTECT })
+                  .pipe(Effect.ignore)
                 yield* injectTailReminder(
                   sessionID,
                   fallbackTailText(sessionID),
@@ -3948,48 +4003,77 @@ export const layer = Layer.effect(
           const receiptFinalizer: { value?: () => Effect.Effect<void> } = {}
           const activityProgressFinalizer: { value?: () => Effect.Effect<void> } = {}
           let progressAssistantMessageID: MessageID | undefined
-          const finalizeInterruptedTurn = Effect.uninterruptible(
-            Effect.gen(function* () {
-              yield* finalizeInterruptedAssistant
-              receiptTerminal.value ??= { state: "failed", errorCode: "AbortError" }
-              if (receiptFinalizer.value) yield* receiptFinalizer.value()
-              const decision = terminalDecision("interrupted", "user_cancelled", "cancel")
-              const finalized =
-                currentActivityRun && providerBoundary && decision
-                  ? yield* (
-                      progressAssistantMessageID
-                        ? SessionPromptIntent.finalizeActivityWithRevision({
-                            run: currentActivityRun,
-                            assistantMessageID: progressAssistantMessageID,
-                            decision,
-                          })
-                        : SessionPromptIntent.finalizeActivityWithoutRevision({
-                            run: currentActivityRun,
-                            membershipOrdinal: providerBoundary.membershipOrdinal,
-                            decision,
-                          })
-                    ).pipe(
-                      Effect.provideService(Database.Service, database),
-                      Effect.tap((result) =>
-                        Effect.sync(() => {
-                          activityTerminalCommitted = result.kind !== "follow_up_required"
-                        }),
-                      ),
-                      Effect.tap((result) =>
-                        result.kind === "follow_up_required"
-                          ? Effect.void
-                          : publishActivityProjection(result.invalidation),
-                      ),
-                    )
-                  : undefined
-              if (!finalized && activityProgressFinalizer.value) yield* activityProgressFinalizer.value()
-              if (legacyActivity && !activityProgressFinalizer.value && !finalized)
-                yield* SessionPromptIntent.interruptActivity(legacyActivity.activityID).pipe(
-                  Effect.provideService(Database.Service, database),
-                  Effect.flatMap((activity) => (activity ? publishActivityProjection(activity) : Effect.void)),
-                )
-            }),
-          )
+          const finalizeAbnormalTurn = (
+            terminalState: "interrupted" | "failed",
+            reasonCode: string,
+            source: "provider_final" | "host_stop" | "cancel",
+            errorCode: string,
+          ) =>
+            Effect.uninterruptible(
+              Effect.gen(function* () {
+                yield* finalizeInterruptedAssistant
+                receiptTerminal.value ??= { state: "failed", errorCode }
+                if (receiptFinalizer.value) yield* receiptFinalizer.value()
+                const baseDecision = terminalDecision(terminalState, reasonCode, source)
+                // Durable authority: the terminal guard rejects settling an activity while a tool
+                // permission effect is still in flight. A concurrently-finishing tool settles its
+                // effect imminently; wait for it, then route a clean interrupt/settle through
+                // recovery_required if a quarantined (unknown) effect remains.
+                const decision =
+                  baseDecision && currentActivityRun
+                    ? yield* SessionPromptIntent.awaitTerminalPermissionEffects({
+                        activityID: currentActivityRun.activityID,
+                      }).pipe(
+                        Effect.provideService(Database.Service, database),
+                        Effect.map((effects) =>
+                          (effects.unresolvedUnknown || effects.startedTimedOut) &&
+                          (baseDecision.state === "interrupted" || baseDecision.state === "settled")
+                            ? {
+                                ...baseDecision,
+                                state: "recovery_required" as const,
+                                reasonCode: "permission_effect_outcome_unknown",
+                              }
+                            : baseDecision,
+                        ),
+                      )
+                    : baseDecision
+                const finalized =
+                  currentActivityRun && providerBoundary && decision
+                    ? yield* (
+                        progressAssistantMessageID
+                          ? SessionPromptIntent.finalizeActivityWithRevision({
+                              run: currentActivityRun,
+                              assistantMessageID: progressAssistantMessageID,
+                              decision,
+                            })
+                          : SessionPromptIntent.finalizeActivityWithoutRevision({
+                              run: currentActivityRun,
+                              membershipOrdinal: providerBoundary.membershipOrdinal,
+                              decision,
+                            })
+                      ).pipe(
+                        Effect.provideService(Database.Service, database),
+                        Effect.tap((result) =>
+                          Effect.sync(() => {
+                            activityTerminalCommitted = result.kind !== "follow_up_required"
+                          }),
+                        ),
+                        Effect.tap((result) =>
+                          result.kind === "follow_up_required"
+                            ? Effect.void
+                            : publishActivityProjection(result.invalidation),
+                        ),
+                      )
+                    : undefined
+                if (!finalized && activityProgressFinalizer.value) yield* activityProgressFinalizer.value()
+                if (legacyActivity && !activityProgressFinalizer.value && !finalized)
+                  yield* SessionPromptIntent.interruptActivity(legacyActivity.activityID).pipe(
+                    Effect.provideService(Database.Service, database),
+                    Effect.flatMap((activity) => (activity ? publishActivityProjection(activity) : Effect.void)),
+                  )
+              }),
+            )
+          const finalizeInterruptedTurn = finalizeAbnormalTurn("interrupted", "user_cancelled", "cancel", "AbortError")
 
           const handle = yield* processor
             .create({
@@ -4029,7 +4113,7 @@ export const layer = Layer.effect(
                   Effect.provideService(RuntimeFlags.Service, flags),
                 )
 
-            if (lastUser.format?.type === "json_schema") {
+            if (lastUser.format?.type === "json_schema" && !wireStructuredOutput) {
               tools["StructuredOutput"] = createStructuredOutputTool({
                 schema: lastUser.format.schema,
                 onSuccess(output) {
@@ -4183,7 +4267,12 @@ export const layer = Layer.effect(
             // system prefix. Keep it in the same ephemeral tail used for other volatile runtime
             // context; strict turns use StructuredOutput as the hard gate, while the bounded text
             // fallback uses local JSON extraction plus the unchanged schema validator.
-            const structuredRuntimeTail = buildStructuredOutputRuntimeTail(format, finalizerMode, finalizerAllowsText)
+            const structuredRuntimeTail = buildStructuredOutputRuntimeTail(
+              format,
+              finalizerMode,
+              finalizerAllowsText,
+              wireStructuredOutput,
+            )
             const baseStreamInput: LLM.StreamInput = {
               user: lastUser,
               agent,
@@ -4198,7 +4287,9 @@ export const layer = Layer.effect(
               releasedKnowledgeSelection,
               toolChoice: finalizerAllowsText
                 ? "none"
-                : (finalizerDecision?.toolChoice ?? (format.type === "json_schema" ? "required" : undefined)),
+                : (finalizerDecision?.toolChoice ??
+                  // UPD-002: wire mode has no StructuredOutput tool to force.
+                  (format.type === "json_schema" && !wireStructuredOutput ? "required" : undefined)),
               reasoning: finalizerDecision?.reasoning,
               ...(structuredRuntimeTail ? { runtimeTail: structuredRuntimeTail } : {}),
               ...(!projectedContext && activeContext
@@ -4388,6 +4479,12 @@ export const layer = Layer.effect(
                       context_readiness: sessionFederationActivation.readiness,
                       context_activation: contextActivation,
                       context_activation_fingerprint: contextActivationFingerprint,
+                      // FEAT-007 attribution: the gateway locks the run's active pack snapshot id onto
+                      // the session state at the run entry (single authority, FEAT-002 — derived from the
+                      // same activation knowledge retrieval constrains on). Read it through; NULL when no
+                      // gateway run locked a snapshot for this session (never blocks admission).
+                      context_active_pack_set_snapshot_id:
+                        AgentGateway.DeepAgentSessionState.get(sessionID)?.packSnapshotId ?? null,
                       released_knowledge_security_namespace_id: releasedKnowledgeIdentity.securityNamespaceId,
                       released_knowledge_project_scope_key: releasedKnowledgeIdentity.projectScopeKey,
                       released_knowledge_binding_state: releasedKnowledgeBinding.state,
@@ -4464,7 +4561,13 @@ export const layer = Layer.effect(
                 assistantMessageID: handle.message.id,
                 providerReceiptID: receiptID,
                 membershipOrdinal: providerBoundary?.membershipOrdinal,
-              }).pipe(Effect.provideService(Database.Service, database), Effect.tap(publishActivityProgress))
+              }).pipe(
+                Effect.provideService(Database.Service, database),
+                // BUG-407-008 §6.2 P1/P2: test-only crash points (no-op outside the crash env).
+                Effect.tap(() => pauseAtActivityCrashPoint("after_begin_progress_commit_before_provisional_event")),
+                Effect.tap(publishActivityProgress),
+                Effect.tap(() => pauseAtActivityCrashPoint("after_provisional_event_before_provider_dispatch")),
+              )
             if (progressActivity) progressAssistantMessageID = handle.message.id
             if (progressActivity)
               activityProgressFinalizer.value = () =>
@@ -4476,6 +4579,34 @@ export const layer = Layer.effect(
                   Effect.tap(publishActivityProgress),
                   Effect.asVoid,
                 )
+            // FEAT-007: durable per-turn reconciliation of the federated selection, written
+            // immediately after the receipt admission. Best-effort by contract — a write
+            // failure is observable via the degraded metric but must never block the turn.
+            if (activeContext) {
+              yield* ContextReconciliation.record(db, {
+                sessionId: sessionID,
+                activityId: activeContext.selection.activityId,
+                turnReceiptId: receiptID,
+                selectionId: activeContext.selection.selectionId,
+                projectionRefs: activeContext.selection.selectedRefs.map((selected) => selected.ref),
+                // Legacy selected refs only materialize inside the provider prepare path; the
+                // receipt write site sees the projection selection exclusively, so the record
+                // degrades to projection-internal consistency (legacy fingerprint stays NULL).
+              }).pipe(
+                Effect.asVoid,
+                Effect.catchCause((cause) =>
+                  Effect.sync(() => {
+                    slog.warn("session context reconciliation write failed", {
+                      receiptID,
+                      sessionID,
+                      cause: Cause.pretty(cause),
+                      metric: "session_context_reconciliation_degraded_total",
+                      increment: 1,
+                    })
+                  }),
+                ),
+              )
+            }
             const bestEffortReceiptWrite = (operation: string, write: Effect.Effect<unknown, unknown>) =>
               write.pipe(
                 Effect.asVoid,
@@ -4816,6 +4947,8 @@ export const layer = Layer.effect(
                 if (!finalized && activityProgressFinalizer.value) yield* activityProgressFinalizer.value()
                 activityProgressFinalizer.value = undefined
                 turnSettled.value = true
+                // BUG-407-008 §6.2 P6: test-only crash point (no-op outside the crash env).
+                yield* pauseAtActivityCrashPoint("after_progress_settle_before_next_admission")
                 // Summary diffs mutate user-message metadata. Run them only after the Provider
                 // receipt is terminal so cancellation cannot strand an admitted request.
                 if (step === 1 && !finalizerMode)
@@ -5147,6 +5280,57 @@ export const layer = Layer.effect(
             )
             if (!response) return yield* Effect.die(new Error(`provider response is missing: ${handle.message.id}`))
 
+            // UPD-002 wire mode: the provider enforced the schema via text.format,
+            // so the final assistant TEXT carries the JSON value (no synthetic
+            // tool call). Capture it here with the same validator the synthetic
+            // path uses; failures reuse the structuredFailedAttempts retry-cap.
+            if (wireStructuredOutput && structured === undefined && format.type === "json_schema") {
+              const wireText = response.parts
+                .filter(
+                  (part): part is SessionV1.TextPart =>
+                    part.type === "text" && !part.synthetic && !part.ignored && part.text.trim() !== "",
+                )
+                .map((part) => part.text)
+                .join("")
+                .trim()
+              if (wireText.length > 0) {
+                let parsed: unknown
+                let wireError: string | undefined = "Wire structured output is not valid JSON."
+                try {
+                  parsed = JSON.parse(wireText)
+                  wireError = validateStructuredOutput(format.schema, parsed)
+                } catch {
+                  parsed = undefined
+                }
+                if (!wireError) {
+                  structured = parsed
+                } else {
+                  const retryMax = format.retryCount ?? 2
+                  structuredFailedAttempts++
+                  const fields = extractSchemaTopLevelFields(format.schema)
+                  const fieldList = fields.length > 0 ? fields.join(", ") : "(see schema)"
+                  if (structuredFailedAttempts >= retryMax) {
+                    handle.message.error = new SessionV1.StructuredOutputError({
+                      message: `Wire structured output validation failed after ${structuredFailedAttempts} attempt(s). Required fields: ${fieldList}`,
+                      retries: structuredFailedAttempts,
+                    }).toObject()
+                    yield* sessions.updateMessage(handle.message)
+                    yield* settleProviderTurn(terminalDecision("failed", "structured_output_retry_exhausted"))
+                    return "break" as const
+                  }
+                  yield* settleProviderTurn()
+                  yield* injectTailReminder(
+                    sessionID,
+                    `[structured-output correction] Your previous JSON response did not match the required schema: ${wireError.slice(0, 500)} Respond again with ONLY a single JSON value using exactly these top-level fields: ${fieldList}.`,
+                    lastUser.model,
+                    lastUser.agent,
+                    SessionProcessor.planProtocolActivityID(lastUser.metadata) ?? lastUser.id,
+                  )
+                  return "continue" as const
+                }
+              }
+            }
+
             if (structured !== undefined) {
               handle.message.structured = structured
               handle.message.finish = handle.message.finish ?? "stop"
@@ -5294,7 +5478,17 @@ export const layer = Layer.effect(
             return "continue" as const
           }).pipe(
             Effect.ensuring(instruction.clear(handle.message.id)),
-            Effect.onInterrupt(() => finalizeInterruptedTurn),
+            // BUG-008: terminalize the legacy activity on EVERY abnormal exit, not only interruption.
+            // A failed/defect loop exit previously left the activity `active` and the next prompt
+            // admission refused with "requires recovery before a new turn". Success exits already
+            // commit the terminal inside the loop (activityTerminalCommitted); finalizers are
+            // idempotent through the activity CAS, so double-firing is safe.
+            Effect.onExit((exit) => {
+              if (Exit.isSuccess(exit) || activityTerminalCommitted) return Effect.void
+              return Cause.interruptors(exit.cause).size > 0
+                ? finalizeInterruptedTurn
+                : finalizeAbnormalTurn("failed", "run_loop_exit_failure", "host_stop", "RunLoopExitFailure")
+            }),
           )
           // V4.1 §S1.1 needsFollowUp: the model finished this step (outcome === "break"), but if a steer
           // arrived while it was running, do NOT exit — loop once more so the top-of-loop drain absorbs
@@ -5303,6 +5497,17 @@ export const layer = Layer.effect(
           if (outcome === "break") {
             if (activityTerminalCommitted) break
             if (!finalizerMode && flags.v4Steering && (yield* steerBuffer.hasPending(sessionID))) {
+              // BUG-004: bound the absorption. Past the limit we end THIS activity instead of
+              // continuing; drainPendingSteers re-enters with drainFirst and consumes the pending
+              // steers as a FRESH activity (the old one settles on loop exit), so input is never
+              // lost and no single activity extends without bound.
+              if ((steerAbsorbRounds.get(sessionID) ?? 0) >= flags.steerAbsorbLimit) {
+                yield* slog.info("steer absorb limit reached; ending activity, pending steers start a fresh one", {
+                  rounds: steerAbsorbRounds.get(sessionID) ?? 0,
+                  limit: flags.steerAbsorbLimit,
+                })
+                break
+              }
               yield* slog.info("steer pending at model boundary, continuing to absorb")
               continue
             }
@@ -5329,6 +5534,34 @@ export const layer = Layer.effect(
         return finalAssistant
       },
     )
+
+    // BUG-003: settle the federated activity on EVERY terminal exit of the run loop. The happy
+    // path above settles just before returning; this wrapper covers error/defect/interrupt exits
+    // for all callers (prompt, loop drains, driveParentLoop) in one place instead of relying on
+    // each caller's onInterrupt hook. Idempotent with both (settle is a no-op once terminal and
+    // the in-memory map entry is removed on first settle).
+    const runLoop: (
+      sessionID: SessionID,
+      drainFirst?: boolean,
+      activityRun?: SessionPromptIntent.RunIdentity,
+      onActivityRun?: (run: SessionPromptIntent.RunIdentity) => void,
+    ) => Effect.Effect<SessionV1.WithParts, SessionPromptIntent.Error> = (
+      sessionID,
+      drainFirst,
+      activityRun,
+      onActivityRun,
+    ) =>
+      runLoopInner(sessionID, drainFirst, activityRun, onActivityRun).pipe(
+        Effect.onExit((exit) => {
+          if (Exit.isSuccess(exit)) return Effect.void
+          const state = Cause.interruptors(exit.cause).size > 0 ? ("interrupted" as const) : ("failed" as const)
+          return settleFederatedActivity(sessionID, state).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning(`federated activity settle failed on run-loop exit: ${Cause.pretty(cause)}`),
+            ),
+          )
+        }),
+      )
 
     // V4.1 §S1.1: admit a mid-turn user message into the durable steer buffer.
     // The canonical durable ID is always server-minted by admit(); the caller's messageID is used
@@ -5561,7 +5794,22 @@ export const layer = Layer.effect(
       if (FSUtil.resolve(session.directory) !== FSUtil.resolve(current.directory)) {
         return yield* instances.provide({ directory: session.directory }, loop(input, onRunning))
       }
-      if (federationRollout.enabled.coreV2ExecutionOwner) {
+      // FEAT-010: V2/legacy fork observability. Pure observation — the fork logic itself is
+      // untouched (no tightening, no loosening). Every loop() execution records ONE info-level
+      // structured slog with the owner selection plus the decision-factor snapshot, so production
+      // audits can answer "was the V2 owner branch selected, and why (not)" at any time.
+      const v2OwnerSelected = federationRollout.enabled.coreV2ExecutionOwner
+      yield* elog.info("v2 owner fork", {
+        sessionID: input.sessionID,
+        owner: v2OwnerSelected ? "v2" : "legacy",
+        releaseQualified: coreV2ParityVerified,
+        coreV2ExecutionOwnerFlag: flags.coreV2ExecutionOwner,
+        coreV2ExecutionOwnerEnabled: v2OwnerSelected,
+        parityCampaign: parityCampaign ? `${parityCampaign.id}:${parityCampaign.case}` : "none",
+        ownerCampaign: ownerCampaign ?? "release",
+        blockedReasons: federationRollout.blocked.coreV2ExecutionOwner ?? [],
+      })
+      if (v2OwnerSelected) {
         if (parityCampaign)
           return yield* Effect.die(new Error("V2 owner and parity recorder cannot run in the same process"))
         if (!(yield* V2ProviderTurn.ownerQualified(database.db, ownerCampaign)))
@@ -5580,6 +5828,13 @@ export const layer = Layer.effect(
         )
           return yield* Effect.die(new Error(`Legacy provider owner is still active: ${input.sessionID}`))
         return yield* Effect.gen(function* () {
+          yield* elog.info("v2 owner branch selected", {
+            sessionID: input.sessionID,
+            owner: "v2",
+            reason: "rollout_gate_open",
+            releaseQualified: coreV2ParityVerified,
+            ownerCampaign: ownerCampaign ?? "release",
+          })
           yield* status.set(input.sessionID, { type: "busy" })
           if (onRunning) yield* onRunning
           const readiness = yield* federationReadiness?.snapshot() ??
@@ -5599,6 +5854,44 @@ export const layer = Layer.effect(
             .resume(SessionV2.ID.make(input.sessionID))
             .pipe(Effect.provideService(V2ProviderTurn.CurrentOwnerCampaign, ownerCampaign))
             .pipe(Effect.orDie)
+          // FEAT-010: durable evidence correlation. The receipt row itself is written by the core
+          // runner (V2ProviderTurn.admit inside SessionRunner.runTurn during resume); read back the
+          // latest owner=v2 receipt so the slog trail ties this selection to its durable row.
+          // Best-effort: never fails the turn.
+          yield* database.db
+            .select({
+              receiptID: V2ProviderTurnReceiptTable.receipt_id,
+              state: V2ProviderTurnReceiptTable.state,
+            })
+            .from(V2ProviderTurnReceiptTable)
+            .where(
+              and(
+                eq(V2ProviderTurnReceiptTable.session_id, input.sessionID),
+                eq(V2ProviderTurnReceiptTable.owner_mode, "v2"),
+              ),
+            )
+            .orderBy(desc(V2ProviderTurnReceiptTable.request_ordinal))
+            .get()
+            .pipe(
+              Effect.orDie,
+              Effect.flatMap((receipt) =>
+                elog.info("v2 owner turn receipt", {
+                  sessionID: input.sessionID,
+                  owner: "v2",
+                  receiptID: receipt?.receiptID ?? "missing",
+                  receiptState: receipt?.state ?? "missing",
+                }),
+              ),
+            )
+            .pipe(
+              Effect.catchCause((cause) =>
+                elog.warn("v2 owner turn receipt lookup failed", {
+                  sessionID: input.sessionID,
+                  owner: "v2",
+                  error: Cause.pretty(cause),
+                }),
+              ),
+            )
           const assistant = (yield* coreV2Session
             .context(SessionV2.ID.make(input.sessionID))
             .pipe(Effect.orDie)).findLast(

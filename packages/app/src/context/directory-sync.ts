@@ -485,7 +485,24 @@ export const createDirSyncContext = (
               draft.loading[key] = false
             }),
           )
-          if (conflict && input.refetchOnConflict !== false) requestSessionSync?.(input.sessionID)
+          if (conflict && input.refetchOnConflict !== false) {
+            // BUG-005 residual: degrade conflict recovery from a FULL-session force reload
+            // (requestSessionSync) to an authoritative TAIL refetch. An activityProgress conflict
+            // only means the recent markers diverged; refetching the newest small page
+            // authoritatively reconciles them in place (mergePageMessages keys by id, so untouched
+            // messages are preserved) instead of refetching and re-rendering the whole session.
+            // force:true queues behind the in-flight page; refetchOnConflict:false bounds recursion.
+            void loadMessages({
+              directory: input.directory,
+              client: input.client,
+              setStore: input.setStore,
+              sessionID: input.sessionID,
+              limit: Math.min(input.limit, initialMessagePageSize),
+              force: true,
+              authoritative: true,
+              refetchOnConflict: false,
+            }).catch(() => {})
+          }
         })
     })
   }

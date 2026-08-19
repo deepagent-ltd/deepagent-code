@@ -40,7 +40,7 @@ import { SessionMessage } from "@deepagent-code/core/session/message"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { ModelV2 } from "@deepagent-code/core/model"
 import { EventV2 } from "@deepagent-code/core/event"
-import { buildPrompt } from "@deepagent-code/core/session/compaction"
+import { buildPrompt, TOOL_OUTPUT_MAX_CHARS } from "@deepagent-code/core/session/compaction"
 import {
   updateLedgerFromSummaryRequired,
   carryOverToBridgeRequired,
@@ -68,11 +68,172 @@ export const Event = {
 
 export const PRUNE_MINIMUM = 20_000
 export const PRUNE_PROTECT = 40_000
-const TOOL_OUTPUT_MAX_CHARS = 2_000
+// UPD-005 (micro-compact, safe subset): the protect window used when the soft-landing fallback
+// phase triggers an early prune. Smaller than PRUNE_PROTECT so the fallback phase truncates MORE
+// of the older (white-list-excluded) tool results in place, buying headroom before the hard line.
+// Never wired into the hard phase — hard keeps PRUNE_PROTECT semantics unchanged.
+export const MICRO_COMPACT_PROTECT = 10_000
+// UPD-005: TOOL_OUTPUT_MAX_CHARS is defined once in core (packages/core/src/session/compaction.ts)
+// and imported above — do NOT re-introduce a local copy here.
 const PRUNE_PROTECTED_TOOLS = ["skill"]
 const DEFAULT_TAIL_TURNS = 2
 const MIN_PRESERVE_RECENT_TOKENS = 2_000
 const MAX_PRESERVE_RECENT_TOKENS = 8_000
+
+// =============================================================================
+// UPD-005 (structured compaction summary, claude-code parity, safe subset).
+// =============================================================================
+// DETERMINISM CONTRACT: the template constants and the pure helpers below
+// (stripSummaryAnalysis / selectPostCompactFileCandidates) are pure functions —
+// same input, same output. The durable summary-attempt requestHash covers the
+// rendered prompt, so the template MUST stay a module-level constant.
+//
+// Scope: the structured nine-section template replaces the legacy anchored
+// summary ONLY on the worldStateReinjection=false compatibility path. With
+// worldStateReinjection=true the V4.0.1 four-bucket NARROW template stays
+// byte-for-byte unchanged — its responsibility separation (files / env /
+// diagnostics are World State re-injected at their LATEST value, never
+// summarized) is an information-hole invariant (§3.4/§3.5).
+//
+// The model drafts inside an <analysis> scratchpad first; stripSummaryAnalysis
+// removes that scratchpad and unwraps the <summary> envelope BEFORE the text
+// reaches any durable or projected surface. The text-only / no-tools protocol
+// (toolChoice:"none" + SummaryProtocolViolation enforcement) is unchanged.
+export const STRUCTURED_SUMMARY_TEMPLATE = `Your task is to create a detailed, structured summary of the conversation history above, paying close attention to the user's explicit requests and your previous actions. This summary must capture enough technical detail — decisions, code patterns, file context, and error history — for the work to continue without losing context.
+
+Respond with TEXT ONLY. Do not call any tools. Your entire response must be an <analysis> block followed by a <summary> block.
+
+Before writing the final summary, wrap your drafting analysis in <analysis> tags to organize your thoughts and verify coverage. In the analysis:
+1. Walk the conversation chronologically and identify the user's explicit requests, your approach, key decisions, technical concepts, file names, code snippets, errors and their fixes, and any user feedback — especially feedback that changed your direction.
+2. Note every security-relevant instruction or constraint the user stated (sensitive files or data to avoid, forbidden operations, credential/secret handling rules). These MUST be preserved VERBATIM in the final summary so they keep applying after compaction.
+3. Double-check technical accuracy and completeness. The <analysis> block is discarded after compaction — only the <summary> block survives.
+
+Inside <summary>, output exactly these nine numbered sections in this order:
+
+1. Primary Request and Intent: all of the user's explicit requests and intents, in detail.
+2. Key Technical Concepts: important concepts, technologies, and frameworks discussed.
+3. Files and Code Sections: files examined, modified, or created — why each matters, what changed, and important code snippets verbatim.
+4. Errors and Fixes: every error encountered and how it was fixed, including corrective user feedback.
+5. Problem Solving: problems solved and ongoing troubleshooting.
+6. All User Messages: every genuine user message (user-role turns only, never tool results or quoted assistant text), with security-relevant instructions preserved verbatim.
+7. Pending Tasks: tasks explicitly requested but not yet complete.
+8. Current Work: precisely what was in progress immediately before this summary request, with file names and code snippets where applicable.
+9. Next Steps: the next action, only when directly in line with the user's most recent explicit request; include a verbatim quote showing where the work left off. Write "(none)" if the last task concluded.
+
+Rules:
+- Keep every section, using "(none)" when a section is empty.
+- Preserve exact file paths, commands, error strings, identifiers, and user-designated durable facts verbatim.
+- Never attribute assistant-generated text to the user.
+- Do not mention the summary process or that context was compacted.
+
+<example>
+<analysis>
+[Drafting scratchpad: chronological coverage check]
+</analysis>
+
+<summary>
+1. Primary Request and Intent:
+   [Detailed description]
+
+2. Key Technical Concepts:
+   - [Concept 1]
+
+3. Files and Code Sections:
+   - [File path]
+     - Why it matters / changes made
+     - [Important code snippet]
+
+4. Errors and Fixes:
+   - [Error and the fix applied]
+
+5. Problem Solving:
+   - [Solved problems and ongoing troubleshooting]
+
+6. All User Messages:
+   - [User message content]
+
+7. Pending Tasks:
+   - [Task]
+
+8. Current Work:
+   - [Precise description]
+
+9. Next Steps:
+   - [Next step or "(none)"]
+</summary>
+</example>`
+
+// Mirrors the core buildPrompt composition (packages/core/src/session/compaction.ts)
+// with the structured template swapped in. Keep the preamble wording in sync with
+// the core builder — the anchored-summary update contract depends on it.
+export const buildStructuredSummaryPrompt = (input: {
+  readonly previousSummary?: string
+  readonly context: readonly string[]
+}) =>
+  [
+    input.previousSummary
+      ? `Update the anchored summary below using the conversation history above.\nPreserve still-true details, remove stale details, and merge in the new facts.\n<previous-summary>\n${input.previousSummary}\n</previous-summary>`
+      : "Create a new anchored summary from the conversation history.",
+    STRUCTURED_SUMMARY_TEMPLATE,
+    ...input.context,
+  ].join("\n\n")
+
+// Post-processing: strip the <analysis> drafting scratchpad and unwrap the
+// <summary> envelope. Pure and conservative — text without any <analysis> /
+// <summary> marker is returned byte-for-byte unchanged (legacy summaries and
+// NARROW outputs are untouched).
+export const stripSummaryAnalysis = (text: string): string => {
+  if (!/<\/?(?:analysis|summary)>/.test(text)) return text
+  let out = text.replace(/<analysis>[\s\S]*?<\/analysis>/g, "")
+  out = out.replace(/<summary>([\s\S]*?)<\/summary>/g, (_match, content: string) => `Summary:\n${content.trim()}`)
+  out = out.replace(/\n{3,}/g, "\n\n")
+  return out.trim()
+}
+
+// UPD-005 (post-compact re-injection hook, conservative version): claude-code
+// re-injects the most recently read files after compaction
+// (POST_COMPACT_MAX_FILES_TO_RESTORE = 5). The committed-history chain here has
+// NO injection point yet, so this module only SELECTS candidates — a pure
+// function of the compacted messages (same input ⇒ same output) — recorded for
+// future wiring. Never adds an injection path.
+export const POST_COMPACT_MAX_FILES_TO_RESTORE = 5
+export const POST_COMPACT_MAX_CHARS_PER_FILE = 20_000
+const POST_COMPACT_READ_TOOLS = new Set(["read"])
+
+export type PostCompactFileCandidate = {
+  readonly filePath: string
+  readonly tool: string
+  readonly messageID: MessageID
+}
+
+// Scans backwards (most recent read wins), deduplicates by path, caps at
+// POST_COMPACT_MAX_FILES_TO_RESTORE. Only completed reads count; a pending /
+// errored read does not prove the file content ever entered context.
+export const selectPostCompactFileCandidates = (
+  messages: readonly SessionV1.WithParts[],
+): readonly PostCompactFileCandidate[] => {
+  const seen = new Set<string>()
+  const candidates: PostCompactFileCandidate[] = []
+  for (let index = messages.length - 1; index >= 0 && candidates.length < POST_COMPACT_MAX_FILES_TO_RESTORE; index--) {
+    const message = messages[index]
+    for (let partIndex = message.parts.length - 1; partIndex >= 0; partIndex--) {
+      if (candidates.length >= POST_COMPACT_MAX_FILES_TO_RESTORE) break
+      const part = message.parts[partIndex]
+      if (part.type !== "tool" || part.state.status !== "completed") continue
+      if (!POST_COMPACT_READ_TOOLS.has(part.tool)) continue
+      const input: unknown = part.state.input
+      let filePath: string | undefined
+      if (typeof input === "object" && input !== null) {
+        const value = (input as Record<string, unknown>).filePath
+        if (typeof value === "string" && value.length > 0) filePath = value
+      }
+      if (!filePath || seen.has(filePath)) continue
+      seen.add(filePath)
+      candidates.push({ filePath, tool: part.tool, messageID: message.info.id })
+    }
+  }
+  return candidates
+}
 type Turn = {
   start: number
   end: number
@@ -148,7 +309,7 @@ export interface Interface {
     tokens: SessionV1.Assistant["tokens"]
     model: Provider.Model
   }) => Effect.Effect<boolean>
-  readonly prune: (input: { sessionID: SessionID }) => Effect.Effect<void>
+  readonly prune: (input: { sessionID: SessionID; protect?: number }) => Effect.Effect<void>
   readonly process: (input: {
     parentID: MessageID
     messages: SessionV1.WithParts[]
@@ -1043,12 +1204,24 @@ export const layer = Layer.effect(
       }
     })
 
-    // goes backwards through parts until there are PRUNE_PROTECT tokens worth of tool
-    // calls, then erases output of older tool calls to free context space
-    const prune = Effect.fn("SessionCompaction.prune")(function* (input: { sessionID: SessionID }) {
+    // goes backwards through parts until there are `protect` tokens worth of tool
+    // calls, then erases output of older tool calls to free context space.
+    // UPD-005: `protect` is parameterized (default PRUNE_PROTECT = pre-existing behavior) so the
+    // soft-landing fallback phase can run a micro-compact with a smaller window. DETERMINISM
+    // CONTRACT: the truncated set is a pure function of (messages, protect, PRUNE_MINIMUM) — the
+    // scan is strictly backwards, Token.estimate is pure, and only `Date.now()` (the persisted
+    // time.compacted stamp) varies between runs without ever changing WHICH parts get truncated.
+    // The durable summary-attempt requestHash is computed over the compacted projection, so any
+    // non-determinism here would desync compaction replays. Idempotency: parts already stamped
+    // with time.compacted break the scan, so a repeated prune never double-truncates.
+    const prune = Effect.fn("SessionCompaction.prune")(function* (input: {
+      sessionID: SessionID
+      protect?: number
+    }) {
       const cfg = yield* config.get()
       if (!cfg.compaction?.prune) return
-      log.info("pruning")
+      const protect = input.protect ?? PRUNE_PROTECT
+      log.info("pruning", { protect })
 
       const msgs = yield* session
         .messages({ sessionID: input.sessionID })
@@ -1073,7 +1246,7 @@ export const layer = Layer.effect(
           if (part.state.time.compacted) break loop
           const estimate = Token.estimate(part.state.output)
           total += estimate
-          if (total <= PRUNE_PROTECT) continue
+          if (total <= protect) continue
           pruned += estimate
           toPrune.push(part)
         }
@@ -1204,10 +1377,14 @@ export const layer = Layer.effect(
       )
       // V4.0.1 P1 (§3.4/§3.5): narrow the summary to four buckets ONLY when worldStateReinjection is on —
       // it MUST be the same flag that gates re-injection, else "summary drops files, nothing re-injects"
-      // opens an information hole. Flag OFF ⇒ legacy SUMMARY_TEMPLATE, byte-for-byte pre-V4.0.1.
+      // opens an information hole. Flag OFF ⇒ UPD-005 structured nine-section template (the pre-UPD-005
+      // legacy SUMMARY_TEMPLATE lived in core buildPrompt; the structured template supersedes it on this
+      // compatibility path only). Flag ON ⇒ NARROW template, byte-for-byte unchanged.
       const nextPrompt =
         compacting.prompt ??
-        buildPrompt({ previousSummary, context: compacting.context, narrow: flags.worldStateReinjection })
+        (flags.worldStateReinjection
+          ? buildPrompt({ previousSummary, context: compacting.context, narrow: true })
+          : buildStructuredSummaryPrompt({ previousSummary, context: compacting.context }))
       const msgs = structuredClone(selected.head)
       yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
       const modelMessages = yield* MessageV2.toModelMessagesEffect(msgs, model, {
@@ -1441,14 +1618,34 @@ export const layer = Layer.effect(
       if (result.action === "continue") {
         const persisted = yield* session.messages({ sessionID: input.sessionID }).pipe(Effect.orDie)
         const checkpointIndex = persisted.findIndex((item) => item.info.id === currentProcessor.message.id)
-        const checkpoint = persisted[checkpointIndex] ?? {
+        let checkpoint = persisted[checkpointIndex] ?? {
           info: msg,
           parts: [],
         }
-        const summary = summaryText(checkpoint)
+        // UPD-005: strip the <analysis> drafting scratchpad before the summary enters ANY durable or
+        // projected surface. The persisted text parts are rewritten FIRST so HistoryAuthority hashes,
+        // the commit validation (which re-hydrates from the DB), and the post-compaction projection all
+        // see the stripped text. stripSummaryAnalysis is a pure function and returns tag-free input
+        // byte-for-byte unchanged, so pre-UPD-005 summaries are unaffected.
+        const rawSummary = summaryText(checkpoint)
+        const summary = rawSummary ? stripSummaryAnalysis(rawSummary) : undefined
         if (!summary) {
           yield* failRun(run.run_id, "summary_text_missing")
           return "stop"
+        }
+        if (summary !== rawSummary) {
+          const textParts = checkpoint.parts.filter((part): part is SessionV1.TextPart => part.type === "text")
+          const strippedParts = checkpoint.parts.map((part) => {
+            if (part.type !== "text") return part
+            return part.id === textParts[0]?.id ? { ...part, text: summary } : { ...part, text: "" }
+          })
+          for (const part of strippedParts) {
+            if (part.type !== "text") continue
+            const original = checkpoint.parts.find((item): item is SessionV1.TextPart => item.id === part.id)
+            if (original && original.text === part.text) continue
+            yield* session.updatePart(part)
+          }
+          checkpoint = { info: checkpoint.info, parts: strippedParts }
         }
         if (summary) {
           const contextModel = yield* provider
@@ -1533,6 +1730,19 @@ export const layer = Layer.effect(
             yield* failRun(run.run_id, "compaction_commit_conflict")
             return "stop"
           }
+          // UPD-005 (post-compact re-injection hook, conservative version): record the candidate list of
+          // recently-read files from the compacted head ONLY. There is no injection point in the committed
+          // chain yet, so nothing is re-injected here. Persisting the list on compaction_run would require
+          // a core-owned schema migration (out of scope) — recorded as a report item for future wiring.
+          const postCompactCandidates = selectPostCompactFileCandidates(selected.head)
+          if (postCompactCandidates.length > 0)
+            log.info("post-compact file candidates", {
+              runID: run.run_id,
+              count: postCompactCandidates.length,
+              maxFiles: POST_COMPACT_MAX_FILES_TO_RESTORE,
+              maxCharsPerFile: POST_COMPACT_MAX_CHARS_PER_FILE,
+              files: postCompactCandidates.map((candidate) => candidate.filePath),
+            })
           yield* publishCommittedRun(run.run_id)
         }
       }

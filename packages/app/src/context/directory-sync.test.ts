@@ -412,6 +412,76 @@ describe("directory optimistic targeting", () => {
     if (result?.role === "assistant") expect(result.activityProgress).toEqual(canonical)
   })
 
+  test("conflict recovery refetches only the authoritative tail, not the whole session", async () => {
+    let messageCalls = 0
+    let sessionGetCalls = 0
+    const messageRequests: Array<{ limit: number; before?: string }> = []
+    let forcedStarted: (() => void) | undefined
+    const current = state()
+    const initial = { activityID: "activity-1", revision: 1, state: "progress" as const }
+    const canonical = { activityID: "activity-1", revision: 2, state: "final" as const }
+    const serverSync = {
+      child() {
+        return current
+      },
+      plan: {
+        async sync() {},
+      },
+    } as unknown as Parameters<typeof createDirSyncContext>[1]
+    const sync = createDirSyncContext("/repo/main", serverSync, {
+      scope: ServerScope.local,
+      createClient() {
+        return {
+          session: {
+            async get() {
+              sessionGetCalls += 1
+              return { data: { id: "ses_1" } }
+            },
+            async messages(input: { limit: number; before?: string }) {
+              messageCalls += 1
+              messageRequests.push({ limit: input.limit, before: input.before })
+              if (messageCalls === 3) forcedStarted?.()
+              const marker =
+                messageCalls === 2
+                  ? { activityID: "activity-conflict", revision: 0, state: "progress" as const }
+                  : messageCalls === 3
+                    ? canonical
+                    : initial
+              return {
+                data: [{ info: assistantMessage("msg_assistant", "ses_1", marker), parts: [] }],
+                response: { headers: new Headers(messageCalls === 1 ? { "x-next-cursor": "older" } : {}) },
+              }
+            },
+          },
+        }
+      },
+    } as unknown as Parameters<typeof createDirSyncContext>[2])
+    const sessionID = "ses_1"
+    current[1]("session", [current[0].session.length], { id: sessionID })
+    await sync.session.sync(sessionID, { force: true })
+
+    const forced = new Promise<void>((resolve) => {
+      forcedStarted = resolve
+    })
+    await sync.session.history.loadMore(sessionID)
+    await forced
+
+    expect(messageCalls).toBe(3)
+    // BUG-005 degradation: the recovery is a BOUNDED authoritative TAIL refetch (newest page, no
+    // `before`), NOT a full-session force reload — a full reload would re-fetch the session header.
+    expect(messageRequests[2]?.before).toBeUndefined()
+    expect(messageRequests[2]?.limit).toBeLessThanOrEqual(80)
+    expect(sessionGetCalls).toBe(1)
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const message = current[0].message[sessionID]?.[0]
+      if (message?.role === "assistant" && message.activityProgress?.revision === canonical.revision) break
+      await Promise.resolve()
+    }
+    const result = current[0].message[sessionID]?.[0]
+    expect(result?.role).toBe("assistant")
+    if (result?.role === "assistant") expect(result.activityProgress).toEqual(canonical)
+  })
+
   test("does not let an older forced response overwrite a marker received during the request", async () => {
     let release: (() => void) | undefined
     const current = state()

@@ -30,6 +30,9 @@ export const SessionToolRequestReceiptTable = sqliteTable("session_tool_request_
   context_readiness: text({ mode: "json" }).$type<ContextFederationRollout.DerivedContextDataReadiness>(),
   context_activation: text({ mode: "json" }).$type<ContextActivationReceipt.Receipt>(),
   context_activation_fingerprint: text(),
+  // FEAT-007 attribution: active_pack_set snapshot locked for the run. NULL when the snapshot
+  // id is not exposed on the federation resolve result (see prompt.ts receipt write site).
+  context_active_pack_set_snapshot_id: text(),
   released_knowledge_security_namespace_id: text().$type<SecurityNamespaceID>(),
   released_knowledge_project_scope_key: text().$type<ProjectScopeKey>(),
   released_knowledge_binding_state: text().$type<StoredBindingState>(),

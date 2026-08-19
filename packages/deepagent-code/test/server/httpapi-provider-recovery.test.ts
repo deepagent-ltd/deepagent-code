@@ -11,11 +11,20 @@ import {
   SessionProviderAttemptRecoveryBridgeTable,
   SessionProviderAttemptResolutionTable,
   SessionProviderAttemptTable,
+  SessionProviderOwnerLeaseTable,
 } from "@deepagent-code/core/context-federation/session-sql"
+import {
+  LocationIdentityTable,
+  ProjectScopeIdentityTable,
+  SecurityNamespaceTable,
+} from "@deepagent-code/core/context-federation/sql"
 import { Prompt } from "@deepagent-code/core/session/prompt"
 import { SessionMessage } from "@deepagent-code/core/session/message"
 import { SessionHistoryStateTable, SessionInputTable, SessionTable } from "@deepagent-code/core/session/sql"
-import { and, eq } from "drizzle-orm"
+import { and, eq, sql } from "drizzle-orm"
+import { ContextFederationRollout } from "@deepagent-code/core/context-federation/rollout"
+import { ProjectScopeKey, SecurityNamespaceID } from "@deepagent-code/core/context-federation/reference"
+import { ContextActivationReceipt } from "@/context-federation/activation-receipt"
 import { Effect, Layer } from "effect"
 import { MessageV2 } from "@/session/message-v2"
 import { SessionPromptEpochTable } from "@/session/prompt-epoch.sql"
@@ -93,6 +102,101 @@ const seedRecovery = Effect.fn("HttpProviderRecoveryTest.seedRecovery")(function
   const providerAttemptID = `attempt-${Hash.sha256(title).slice(0, 24)}`
   const activityID = `activity-${Hash.sha256(title).slice(0, 24)}`
   const selectionID = `selection-${Hash.sha256(title).slice(0, 24)}`
+  // Durable federation authority for the seeded selection/attempt/receipt chain: a synthesized
+  // namespace/scope identity plus the crashed owner's token (its lease is seeded live below).
+  const securityNamespaceID = `sec-${Hash.sha256(`${title}-ns`).slice(0, 24)}`
+  const projectScopeKey = `prjctx-${Hash.sha256(`${title}-scope`).slice(0, 24)}`
+  const ownerToken = `dead-${Hash.sha256(`${title}-owner`).slice(0, 20)}`
+  // 64-hex wire identity hashes the durable turn guards demand; derived per fixture title.
+  const finalRequestHash = Hash.sha256(`${title}-final-request`)
+  const preparedTurnHash = Hash.sha256(`${title}-prepared-turn`)
+  const systemStableHash = Hash.sha256(`${title}-system-stable`)
+  const systemVolatileHash = Hash.sha256(`${title}-system-volatile`)
+  const toolDefinitionHash = Hash.sha256(`${title}-tool-definition`)
+  const contextActivationFingerprint = Hash.sha256(`${title}-context-activation`)
+  // Typed federation fixture values the receipt columns demand: a not_requested decision whose
+  // requested/enabled/project fields mirror between eligibility and activation (the semantic
+  // guard compares them field-by-field as JSON).
+  const fixtureRequested: ContextFederationRollout.Requested = {
+    contextFederationShadow: false,
+    locationIndexesV2Shadow: false,
+    contextProjectionV2: false,
+    contextQueryToolsV2: false,
+    coreV2ExecutionOwner: false,
+  }
+  const fixtureEligibility: ContextFederationRollout.ProjectDecision = {
+    requested: fixtureRequested,
+    enabled: fixtureRequested,
+    blocked: {},
+    project: { projectScopeKey, stage: "all", bucket: 0, selected: false, killSwitch: false },
+  }
+  const fixtureReadiness: ContextFederationRollout.DerivedContextDataReadiness = {
+    revision: Hash.sha256(`${title}-readiness`),
+    state: "ready",
+    identityBound: true,
+    indexAvailable: true,
+    storageHealthy: true,
+    projectScopeKey,
+    reasons: [],
+    observedAt: now,
+    expiresAt: now + 600_000,
+  }
+  const fixtureActivation: ContextActivationReceipt.Receipt = {
+    schemaVersion: 1,
+    recordedAt: now,
+    readinessAgeMs: 0,
+    readinessExpiresInMs: 600_000,
+    outcome: "not_requested",
+    enabledCapabilities: [],
+    fallbackReasons: [],
+    decision: fixtureEligibility,
+    // The semantic guard forbids a selection reference without a bound selection row.
+    ...(providerAttempt ? { selection: { selectionId: selectionID, projectionHash: "projection" } } : {}),
+  }
+  // DB-clock timestamp expression (the lease triggers reject host-skewed values).
+  const dbNowMs = sql`CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)`
+
+  // The receipt/attempt owner guards demand a live exact owner lease at database time regardless
+  // of whether an attempt is seeded; the fixture receipt always belongs to the crashed owner.
+  yield* db
+    .insert(SessionProviderOwnerLeaseTable)
+    .values({
+      owner_token: ownerToken,
+      registered_at: dbNowMs,
+      heartbeat_at: dbNowMs,
+      lease_expires_at: sql`${dbNowMs} + 3600000`,
+      released_at: null,
+    } as never)
+    .run()
+    .pipe(Effect.orDie)
+
+  // Every receipt demands a durable released-knowledge scope authority: synthesize the minimal
+  // namespace/scope identity chain (the location identity is only needed by the selection guard
+  // and stays with the attempt branch below).
+  yield* db
+    .insert(SecurityNamespaceTable)
+    .values({
+      id: securityNamespaceID,
+      kind: "implicit_local",
+      binding_hash: Hash.sha256(`${title}-binding`),
+      created_at: now,
+      retired_at: null,
+    })
+    .run()
+    .pipe(Effect.orDie)
+  yield* db
+    .insert(ProjectScopeIdentityTable)
+    .values({
+      security_namespace_id: securityNamespaceID,
+      project_scope_key: projectScopeKey,
+      project_kind: "registered_root",
+      project_identity_hash: Hash.sha256(`${title}-project`),
+      observed_project_id: `project-${Hash.sha256(title).slice(0, 16)}`,
+      created_at: now,
+      retired_at: null,
+    })
+    .run()
+    .pipe(Effect.orDie)
 
   if (providerAttempt) {
     yield* db
@@ -108,7 +212,7 @@ const seedRecovery = Effect.fn("HttpProviderRecoveryTest.seedRecovery")(function
       .run()
       .pipe(Effect.orDie)
     yield* db
-      .insert(SessionActivityTable)
+      .insert(SessionActivityTable) // fixture-exempt: seeds active activity for crash-recovery fixture
       .values({
         activity_id: activityID,
         session_id: session.id,
@@ -121,6 +225,20 @@ const seedRecovery = Effect.fn("HttpProviderRecoveryTest.seedRecovery")(function
       .run()
       .pipe(Effect.orDie)
     yield* db
+      .insert(LocationIdentityTable)
+      .values({
+        security_namespace_id: securityNamespaceID,
+        location_key: "local",
+        project_scope_key: projectScopeKey,
+        workspace_binding: null,
+        canonical_root: `/recovery-fixture/${Hash.sha256(title).slice(0, 8)}`,
+        observed_project_id: null,
+        created_at: now,
+        retired_at: null,
+      })
+      .run()
+      .pipe(Effect.orDie)
+    yield* db
       .insert(SessionContextSelectionTable)
       .values({
         selection_id: selectionID,
@@ -129,6 +247,8 @@ const seedRecovery = Effect.fn("HttpProviderRecoveryTest.seedRecovery")(function
         revision: 0,
         trigger_input_id: user.id,
         location_key: "local",
+        security_namespace_id: SecurityNamespaceID.make(securityNamespaceID),
+        project_scope_key: ProjectScopeKey.make(projectScopeKey),
         query_fingerprint: "query",
         authorization_fingerprint: "authorization",
         authorization_epoch: 0,
@@ -136,6 +256,9 @@ const seedRecovery = Effect.fn("HttpProviderRecoveryTest.seedRecovery")(function
         selected_source_fingerprint: "sources",
         observed_location_mutation_epoch: 0,
         next_revalidation_at: now + 60_000,
+        released_knowledge_binding_state: "unavailable",
+        released_knowledge_exact_refs: [],
+        released_knowledge_exact_refs_fingerprint: "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
         graph_revisions: "{}",
         graph_statuses: "[]",
         selected_refs: "[]",
@@ -149,7 +272,7 @@ const seedRecovery = Effect.fn("HttpProviderRecoveryTest.seedRecovery")(function
       .run()
       .pipe(Effect.orDie)
     yield* db
-      .insert(SessionProviderAttemptTable)
+      .insert(SessionProviderAttemptTable) // fixture-exempt: admitted prepared attempt; walked to the crashed state below
       .values({
         attempt_id: providerAttemptID,
         session_id: session.id,
@@ -157,12 +280,19 @@ const seedRecovery = Effect.fn("HttpProviderRecoveryTest.seedRecovery")(function
         provider_turn_seq: 0,
         selection_id: selectionID,
         projection_hash: "projection",
-        request_hash: requestHash,
+        request_hash: `input-${requestHash}`,
         provider_id: model.providerID,
-        state: "indeterminate_after_crash",
+        owner_token: ownerToken,
+        state: "prepared",
         created_at: now,
-        error_code: "process_recovery",
       })
+      .run()
+      .pipe(Effect.orDie)
+    // Seal the attempt's wire identity once (prepared→prepared), the sole admission path.
+    yield* db
+      .update(SessionProviderAttemptTable)
+      .set({ prepared_turn_hash: preparedTurnHash, wire_request_hash: finalRequestHash })
+      .where(eq(SessionProviderAttemptTable.attempt_id, providerAttemptID))
       .run()
       .pipe(Effect.orDie)
   }
@@ -177,7 +307,7 @@ const seedRecovery = Effect.fn("HttpProviderRecoveryTest.seedRecovery")(function
     .run()
     .pipe(Effect.orDie)
   yield* db
-    .insert(SessionToolRequestReceiptTable)
+    .insert(SessionToolRequestReceiptTable) // fixture-exempt: bare 'preparing' receipt; walked through the durable lifecycle below
     .values({
       receipt_id: receiptID,
       request_ordinal: 1,
@@ -185,6 +315,12 @@ const seedRecovery = Effect.fn("HttpProviderRecoveryTest.seedRecovery")(function
       user_message_id: user.id,
       assistant_message_id: assistant.id,
       provider_attempt_id: providerAttempt ? providerAttemptID : null,
+      context_selection_id: providerAttempt ? selectionID : null,
+      released_knowledge_security_namespace_id: SecurityNamespaceID.make(securityNamespaceID),
+      released_knowledge_project_scope_key: ProjectScopeKey.make(projectScopeKey),
+      released_knowledge_binding_state: "unavailable",
+      released_knowledge_exact_refs: [],
+      released_knowledge_exact_refs_fingerprint: "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
       provider_id: model.providerID,
       model_id: model.modelID,
       protocol: "chat",
@@ -196,16 +332,101 @@ const seedRecovery = Effect.fn("HttpProviderRecoveryTest.seedRecovery")(function
       prompt_window_id: authority.window.windowID,
       effective_history_hash: authority.effectiveHistoryHash,
       request_input_hash: `input-${requestHash}`,
-      final_request_hash: requestHash,
-      provider_state: "indeterminate_after_crash",
-      adapter_prepared_at: now,
-      dispatching_at: now,
-      terminal_at: now,
-      owner_token: "dead-process",
-      request_state: "dispatched",
-      request_error_code: "provider_started_outcome_unknown_after_process_restart",
+      // Context activation semantics are admission-time bindings (immutable after insert).
+      context_eligibility: fixtureEligibility,
+      context_readiness: fixtureReadiness,
+      context_activation: fixtureActivation,
+      context_activation_fingerprint: contextActivationFingerprint,
+      // The receipt insert guard only admits a bare provider_state='preparing' row; the seed then
+      // walks the durable lifecycle (seal selected refs → prepared → dispatching → crash) so the
+      // fixture lands on the same indeterminate state the legacy seed used to write directly.
+      provider_state: "preparing",
+      owner_token: ownerToken,
+      request_state: "prepared",
       created_at: now,
     })
+    .run()
+    .pipe(Effect.orDie)
+  // 1) seal selected refs once while still preparing.
+  yield* db
+      .update(SessionToolRequestReceiptTable)
+      .set({
+        released_knowledge_selected_refs: [],
+        released_knowledge_selected_refs_fingerprint: "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      })
+      .where(eq(SessionToolRequestReceiptTable.receipt_id, receiptID))
+      .run()
+      .pipe(Effect.orDie)
+    // 2) seal the prepared turn and admit the receipt as prepared.
+    yield* db
+      .update(SessionToolRequestReceiptTable)
+      .set({
+        provider_state: "prepared",
+        final_request_hash: finalRequestHash,
+        provider_request_hash: finalRequestHash,
+        wire_request_hash: finalRequestHash,
+        prepared_turn_hash: preparedTurnHash,
+        system_stable_hash: systemStableHash,
+        system_volatile_hash: systemVolatileHash,
+        tool_definition_hash: toolDefinitionHash,
+        adapter_prepared_at: now,
+        final_offered_tool_ids: ["fixture_tool"],
+      })
+      .where(eq(SessionToolRequestReceiptTable.receipt_id, receiptID))
+      .run()
+      .pipe(Effect.orDie)
+  // 3) dispatch: the attempt first when present (wire identity must match), then the receipt.
+  if (providerAttempt) {
+    yield* db
+      .update(SessionProviderAttemptTable)
+      .set({ state: "dispatching" })
+      .where(eq(SessionProviderAttemptTable.attempt_id, providerAttemptID))
+      .run()
+      .pipe(Effect.orDie)
+  }
+  yield* db
+      .update(SessionToolRequestReceiptTable)
+      .set({ provider_state: "dispatching", dispatching_at: now })
+      .where(eq(SessionToolRequestReceiptTable.receipt_id, receiptID))
+      .run()
+      .pipe(Effect.orDie)
+  // 4) simulate the process crash mid-dispatch: with an attempt present, the dead owner's lease
+  // is released, a recovery process takes a fresh lease, and the crash sweep marks the attempt
+  // indeterminate (the recovery owner guard demands exactly this stale-old/live-recovery pair).
+  if (providerAttempt) {
+    yield* db
+      .update(SessionProviderOwnerLeaseTable)
+      .set({ released_at: sql`CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)` })
+      .where(eq(SessionProviderOwnerLeaseTable.owner_token, ownerToken))
+      .run()
+      .pipe(Effect.orDie)
+    yield* db
+      .insert(SessionProviderOwnerLeaseTable)
+      .values({
+        owner_token: `recovery-${Hash.sha256(`${title}-recovery`).slice(0, 16)}`,
+        registered_at: dbNowMs,
+        heartbeat_at: dbNowMs,
+        lease_expires_at: sql`${dbNowMs} + 3600000`,
+        released_at: null,
+      } as never)
+      .run()
+      .pipe(Effect.orDie)
+    yield* db
+      .update(SessionProviderAttemptTable)
+      .set({ state: "indeterminate_after_crash", error_code: "process_recovery" })
+      .where(eq(SessionProviderAttemptTable.attempt_id, providerAttemptID))
+      .run()
+      .pipe(Effect.orDie)
+  }
+  yield* db
+    .update(SessionToolRequestReceiptTable)
+    .set({
+      provider_state: "indeterminate_after_crash",
+      terminal_at: now,
+      request_state: "dispatched",
+      request_error_code: "provider_started_outcome_unknown_after_process_restart",
+    })
+    .where(eq(SessionToolRequestReceiptTable.receipt_id, receiptID))
     .run()
     .pipe(Effect.orDie)
   yield* db

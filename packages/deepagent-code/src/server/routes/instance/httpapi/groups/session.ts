@@ -317,9 +317,48 @@ export const ContextAttemptResolvePayload = Schema.Struct({
   reason: Schema.String,
   riskAcknowledged: Schema.optional(Schema.Boolean),
 })
+// FEAT-005: cohort-level durable aggregation query/result. The window is [sinceMs, untilMs]; untilMs
+// defaults to now when omitted. Result buckets selections by readiness (see diagnostics.cohort).
+export const ContextCohortQuery = Schema.Struct({
+  ...WorkspaceRoutingQueryFields,
+  sinceMs: Schema.NumberFromString,
+  untilMs: Schema.optional(Schema.NumberFromString),
+})
+const ContextCohortGraphStat = Schema.Struct({
+  statuses: Schema.Int,
+  ready: Schema.Int,
+  notReady: Schema.Int,
+})
+export const ContextCohortResult = Schema.Struct({
+  window: Schema.Struct({ sinceMs: Schema.Int, untilMs: Schema.Int }),
+  selections: Schema.Int,
+  sessions: Schema.Int,
+  tokens: Schema.Int,
+  readiness: Schema.Struct({
+    ready: Schema.Int,
+    building: Schema.Int,
+    degraded: Schema.Int,
+    blocked: Schema.Int,
+  }),
+  graphs: Schema.Struct({
+    code: ContextCohortGraphStat,
+    knowledge: ContextCohortGraphStat,
+    memory: ContextCohortGraphStat,
+    documents: ContextCohortGraphStat,
+  }),
+})
 export const ProviderResolutionPayload = Schema.Struct(
   Struct.omit(SessionLegacyProviderResolution.ResolveInput.fields, ["sessionID"]),
 )
+
+export const ImportSnapshotPayload = Schema.Struct({
+  bundle: Schema.String,
+})
+export const ImportSnapshotResult = Schema.Struct({
+  sessionID: Schema.String,
+  messages: Schema.Number,
+  parts: Schema.Number,
+})
 
 export const SessionPaths = {
   list: root,
@@ -357,7 +396,10 @@ export const SessionPaths = {
   updatePart: `${root}/:sessionID/message/:messageID/part/:partID`,
   contextDiagnostics: `${root}/:sessionID/context`,
   contextAttemptResolve: `${root}/:sessionID/context/attempt/:attemptID/resolve`,
+  contextCohort: `${root}/context/cohort`,
   providerResolution: `${root}/:sessionID/provider-resolution`,
+  exportSnapshot: `${root}/:sessionID/export`,
+  importSnapshot: `${root}/import-snapshot`,
 } as const
 
 export const SessionApi = HttpApi.make("session")
@@ -824,6 +866,19 @@ export const SessionApi = HttpApi.make("session")
             description: "Apply an audited abandon, verified-settle, or risk-acknowledged replay decision.",
           }),
         ),
+        HttpApiEndpoint.get("contextCohort", SessionPaths.contextCohort, {
+          query: ContextCohortQuery,
+          success: described(ContextCohortResult, "Cohort-level federated context aggregation"),
+          error: [HttpApiError.BadRequest],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.contextCohort",
+            summary: "Aggregate federated context selections across sessions",
+            description:
+              "FEAT-005: durable cohort aggregation over [sinceMs, untilMs], bucketed by readiness " +
+              "(ready/building/degraded/blocked) so rollout decisions are not skewed by cold-start noise.",
+          }),
+        ),
         HttpApiEndpoint.get("providerResolutionList", SessionPaths.providerResolution, {
           params: { sessionID: SessionID },
           query: WorkspaceRoutingQuery,
@@ -850,6 +905,32 @@ export const SessionApi = HttpApi.make("session")
             identifier: "session.providerResolutionResolve",
             summary: "Resolve a provider outcome",
             description: "Append an audited abandoned resolution and activate a safe successor history epoch.",
+          }),
+        ),
+        HttpApiEndpoint.get("exportSnapshot", SessionPaths.exportSnapshot, {
+          params: { sessionID: SessionID },
+          success: described(Schema.String, "Session snapshot bundle as a JSON string"),
+          error: [HttpApiError.BadRequest, ApiNotFoundError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.exportSnapshot",
+            summary: "Export a session snapshot",
+            description:
+              "Export the session's conversation (session + messages + parts) as a self-describing " +
+              "snapshot bundle (JSON). The bundle re-imports on another device as a fresh, continuable session.",
+          }),
+        ),
+        HttpApiEndpoint.post("importSnapshot", SessionPaths.importSnapshot, {
+          payload: ImportSnapshotPayload,
+          success: described(ImportSnapshotResult, "Imported session summary"),
+          error: [HttpApiError.BadRequest],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.importSnapshot",
+            summary: "Import a session snapshot",
+            description:
+              "Import a previously exported session bundle into the current instance as a fresh, " +
+              "continuable session (new IDs, re-rooted to the current project/directory).",
           }),
         ),
       )

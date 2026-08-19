@@ -689,10 +689,17 @@ export const layer = Layer.effect(
         const activity = yield* SessionPromptIntent.activeActivityForSession(ctx.sessionID).pipe(
           Effect.provideService(Database.Service, database),
         )
-        if (!activity)
-          return yield* Effect.die(
-            new Error(`durable activity authority has no active legacy activity: ${ctx.sessionID}`),
-          )
+        if (!activity) {
+          // The durable authority governs ADMITTED legacy activities. A turn driven without an
+          // admitted activity (direct legacy loop entry, recovery edge windows, seeded history)
+          // keeps legacy semantics: policy evaluation still applies, but there is no durable
+          // objective/progress/no-progress governance to observe. Skipping here must not defect —
+          // dying would crash every un-admitted turn the moment any tool settles.
+          slog.warn("durable observation skipped: no active legacy activity for session", {
+            activityToolCount: ctx.activityToolNames.size,
+          })
+          return
+        }
         const current = yield* DeepAgentActivityAuthority.reconstruct({
           activityKind: "legacy",
           activityID: activity.activityID,

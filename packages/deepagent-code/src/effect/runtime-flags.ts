@@ -311,12 +311,25 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   // ONLY the runLoop steer drain — it does NOT activate the dormant experimentalEventSystem V2 runner.
   // Disable with DEEPAGENT_CODE_V4_STEERING=false.
   v4Steering: stableOn("DEEPAGENT_CODE_V4_STEERING"),
+  // BUG-004: maximum consecutive steer-absorption rounds within ONE activity run. When reached, the
+  // run loop stops absorbing and ends the activity; any still-pending steers are consumed by the
+  // NEXT drain cycle as a fresh activity instead of silently extending the old work without bound.
+  steerAbsorbLimit: positiveIntegerWithDefault("DEEPAGENT_CODE_STEER_ABSORB_LIMIT", 5),
   // BUG-407-007 staged authority cutover. `legacy` preserves the existing in-process permission and
   // no-progress owner. `durable` routes production legacy activities through the SQLite-backed
-  // objective/progress/permission authority. This deliberately ships legacy-owned until the live and
-  // packaged recovery gates are complete.
+  // objective/progress/permission authority.
+  // FEAT-011 T3/T4/T6: the unified activity FACADE tools (activity_start/status/result/control).
+  // Staged OFF: the facade never duplicates lifecycle state — it delegates to the existing Task
+  // durable queue / GoalManager / PanelConsult runners and records session_facade_activity rows
+  // (fail-closed partial unique index per (parent_session, subkind) active). Default false until
+  // the release gate qualifies the delegation paths; enable with DEEPAGENT_CODE_ACTIVITY_FACADE=true.
+  activityFacade: bool("DEEPAGENT_CODE_ACTIVITY_FACADE"),
+  // 2026-08-17 production cutover decision: the default flips to `durable`. The release gate
+  // (full-suite + live LLM matrix) validates the durable path; once it passes the legacy mode is
+  // retired entirely. If the gate fails we either fix the durable path or flip this default back
+  // to `legacy` for the release — set DEEPAGENT_CODE_ACTIVITY_AUTHORITY=legacy to opt out.
   activityAuthority: Config.string("DEEPAGENT_CODE_ACTIVITY_AUTHORITY").pipe(
-    Config.withDefault("legacy"),
+    Config.withDefault("durable"),
     Config.map((value): "legacy" | "durable" => {
       if (value === "legacy" || value === "durable") return value
       throw new Error(

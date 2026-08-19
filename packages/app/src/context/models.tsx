@@ -1,9 +1,12 @@
-import { createMemo } from "solid-js"
+import { createMemo, onMount } from "solid-js"
 import { createStore } from "solid-js/store"
 import { DateTime } from "luxon"
 import { filter, firstBy, flat, groupBy, mapValues, pipe, uniqueBy, values } from "remeda"
 import { createSimpleContext } from "@deepagent-code/ui/context"
 import { useProviders } from "@/hooks/use-providers"
+import { useServerSync } from "@/context/server-sync"
+import { useLanguage } from "@/context/language"
+import { showToast } from "@/utils/toast"
 import { Persist, persisted } from "@/utils/persist"
 
 export type ModelKey = { providerID: string; modelID: string }
@@ -27,6 +30,8 @@ export const { use: useModels, provider: ModelsProvider } = createSimpleContext(
   gate: false,
   init: () => {
     const providers = useProviders()
+    const serverSync = useServerSync()
+    const language = useLanguage()
 
     const [store, setStore, _, ready] = persisted(
       Persist.global("model", ["model.v1"]),
@@ -87,9 +92,45 @@ export const { use: useModels, provider: ModelsProvider } = createSimpleContext(
 
     const latestSet = createMemo(() => new Set(latest().map((x) => modelKey(x))))
 
+    // PARITY-004 / GUI 批 — 模型启停服务端真相源:可见性(启/停)的权威来源是服务端 config
+    // `provider[pID].models[mID].disabled`(plugin/provider.ts 已映射 model.enabled=!disabled)。
+    // localStorage(store.user)仅作迁移来源与乐观缓存,不再是真相。
+    const serverDisabled = (model: ModelKey): boolean | undefined => {
+      const provider = serverSync.data.config.provider?.[model.providerID]
+      const disabled = provider?.models?.[model.modelID]?.disabled
+      return typeof disabled === "boolean" ? disabled : undefined
+    }
+
+    const setServerDisabled = async (model: ModelKey, disabled: boolean) => {
+      const config = serverSync.data.config
+      const provider = config.provider?.[model.providerID]
+      const current = provider?.models?.[model.modelID]
+      await serverSync.updateConfig({
+        ...config,
+        provider: {
+          ...config.provider,
+          [model.providerID]: {
+            ...provider,
+            models: {
+              ...provider?.models,
+              [model.modelID]: { ...current, disabled },
+            },
+          },
+        },
+      })
+    }
+
     const visibility = createMemo(() => {
       const map = new Map<string, Visibility>()
+      // localStorage 先铺底(迁移前的旧值)
       for (const item of store.user) map.set(`${item.providerID}:${item.modelID}`, item.visibility)
+      // 服务端真相覆盖(权威)
+      for (const model of available()) {
+        const key = `${model.provider.id}:${model.id}`
+        const disabled = serverDisabled({ providerID: model.provider.id, modelID: model.id })
+        if (disabled === true) map.set(key, "hide")
+        else if (disabled === false) map.set(key, "show")
+      }
       return map
     })
 
@@ -115,13 +156,35 @@ export const { use: useModels, provider: ModelsProvider } = createSimpleContext(
     const find = (key: ModelKey) => list().find((m) => m.id === key.modelID && m.provider.id === key.providerID)
 
     function update(model: ModelKey, state: Visibility) {
+      // 乐观写 localStorage(即时 UI),真相异步写服务端 config。
+      const key = modelKey(model)
       const index = store.user.findIndex((x) => x.modelID === model.modelID && x.providerID === model.providerID)
       if (index >= 0) {
         setStore("user", index, (current) => ({ ...current, visibility: state }))
-        return
+      } else {
+        setStore("user", store.user.length, { ...model, visibility: state })
       }
-      setStore("user", store.user.length, { ...model, visibility: state })
+      void setServerDisabled(model, state === "hide").catch(() => {
+        // 服务端写失败:回滚乐观态——移除该 model 的本地覆盖,visibility 回落到服务端真相/默认。
+        setStore("user", (items) => items.filter((item) => modelKey(item) !== key))
+        showToast({ title: language.t("common.requestFailed") })
+      })
     }
+
+    // 一次性迁移:把 localStorage 里的显式 show/hide 上收服务端,随后服务端即真相。
+    onMount(() => {
+      const pending = store.user.slice()
+      if (pending.length === 0) return
+      void (async () => {
+        for (const item of pending) {
+          if (serverDisabled({ providerID: item.providerID, modelID: item.modelID }) !== undefined) continue
+          await setServerDisabled({ providerID: item.providerID, modelID: item.modelID }, item.visibility === "hide").catch(
+            () => undefined,
+          )
+        }
+        setStore("user", [])
+      })()
+    })
 
     const visible = (model: ModelKey) => {
       const key = modelKey(model)

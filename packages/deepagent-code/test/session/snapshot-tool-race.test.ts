@@ -11,7 +11,7 @@
  * before tools run by hooking into start-step, but the AI SDK executes
  * tools internally during multi-step processing before emitting events.
  */
-import { expect } from "bun:test"
+import { afterEach, expect } from "bun:test"
 import { Effect, Layer } from "effect"
 import { FetchHttpClient } from "effect/unstable/http"
 import fs from "fs/promises"
@@ -25,7 +25,7 @@ import { MessageV2 } from "../../src/session/message-v2"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { SessionV2 } from "@deepagent-code/core/session"
 import * as Log from "@deepagent-code/core/util/log"
-import { provideTmpdirServer, testInstanceStoreLayer } from "../fixture/fixture"
+import { disposeAllInstances, provideTmpdirServer, testInstanceStoreLayer } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import { TestLLMServer } from "../lib/llm-server"
 
@@ -73,6 +73,12 @@ import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
 import { PromptEpoch } from "@/session/prompt-epoch"
 import { LocationIdentity } from "@deepagent-code/core/context-federation/identity"
 import { SessionProviderOwner } from "@deepagent-code/core/context-federation/provider-owner"
+
+// Dispose any instances loaded into the process-wide AppRuntime instance
+// store so this file leaves no shared state for files that run after it.
+afterEach(async () => {
+  await disposeAllInstances()
+})
 
 void Log.init({ print: false })
 

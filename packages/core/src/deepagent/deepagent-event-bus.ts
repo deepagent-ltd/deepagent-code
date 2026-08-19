@@ -4,7 +4,7 @@ import { Context, Effect, Layer, PubSub, Stream } from "effect"
 import { and, asc, desc, eq, isNull, lte, lt, gt, notExists, or, sql } from "drizzle-orm"
 import { alias } from "drizzle-orm/sqlite-core"
 import { Database } from "../database/database"
-import { DeepAgentEventDeliveryTable, DeepAgentEventDropTable, DeepAgentEventTable, DeepAgentConsumerGroupTable } from "./deepagent-event-sql"
+import { DeepAgentEventDeliveryTable, DeepAgentEventDropTable, DeepAgentEventTable, DeepAgentConsumerGroupTable, DeepAgentRateLimitBucketTable } from "./deepagent-event-sql"
 import { ApprovalQueueTable } from "./approval-queue-sql"
 import { DeepAgentEvent } from "./deepagent-event"
 import { RateLimiter } from "./rate-limiter"
@@ -71,8 +71,10 @@ export interface Interface {
    * NOT persisted (no row, no dispatch). Otherwise the persisted event is returned as `{ published }`.
    * The discriminated union lets the caller observe the drop (e.g. to log a blocked-push counter).
    *
-   * Keyed per workspaceID (fixed-window, in-memory). This is ADDITIVE — existing `publish` callers are
-   * untouched and bypass the gate entirely.
+   * Keyed per workspaceID (fixed-window, DURABLE — the bucket lives in `deepagent_rate_limit_bucket`
+   * and is updated inside an immediate transaction, so N processes sharing the DB enforce ONE
+   * combined quota; RISK-006). This is ADDITIVE — existing `publish` callers are untouched and
+   * bypass the gate entirely.
    */
   readonly tryPublish: (
     input: DeepAgentEvent.PublishInput,
@@ -135,6 +137,32 @@ export interface Interface {
   /** §A3 retry scan — pending deliveries whose backoff has elapsed (Router/Scheduler drives re-delivery). */
   readonly dueRetries: (now?: number) => Effect.Effect<ReadonlyArray<DeliveryTracker>>
   /**
+   * RISK-001: atomically claim due pending deliveries for ONE subscription group. Stamps a fresh
+   * claim token + lease inside an immediate transaction; rows under a live lease are skipped and
+   * expired leases are re-claimable. The returned opaque token must be passed to ackClaim/nackClaim
+   * so a stale worker cannot settle a delivery that a newer claimant already owns.
+   */
+  readonly claimDue: (input: {
+    readonly subscriptionGroup: string
+    readonly claimantId: string
+    readonly now?: number
+    readonly limit?: number
+    readonly leaseMs?: number
+  }) => Effect.Effect<{ readonly claimToken: string; readonly deliveries: ReadonlyArray<DeliveryTracker> }>
+  /** Ack conditioned on the claim token; a stale token (or non-pending row) is a no-op → false. */
+  readonly ackClaim: (input: {
+    readonly subscriptionGroup: string
+    readonly eventID: DeepAgentEvent.ID
+    readonly claimToken: string
+  }) => Effect.Effect<boolean>
+  /** Nack conditioned on the claim token; a stale token is a no-op → false. Clears the claim. */
+  readonly nackClaim: (input: {
+    readonly subscriptionGroup: string
+    readonly eventID: DeepAgentEvent.ID
+    readonly claimToken: string
+    readonly reason: string
+  }) => Effect.Effect<boolean>
+  /**
    * K40-4: real pending-delivery count per workspace — the durable backlog depth for the
    * backpressure gate. Counts deepagent_event_delivery rows with status='pending' scoped
    * to the given workspaceID (via the event join). Use this instead of in-flight counters.
@@ -163,11 +191,10 @@ export interface Interface {
     readonly limit?: number
   }) => Effect.Effect<{ readonly deletedEvents: number }>
   /**
-   * §E2 — prune the publish rate-limiter's per-workspace buckets whose fixed window has elapsed as of
-   * `now`, bounding the limiter's memory for idle workspaces. Returns how many buckets were dropped.
-   * The limiter lives inside this layer's closure; this exposes its `sweep` so a periodic daemon
-   * (v4-event-runtime) can drive it on a cadence without reaching into private state. `now` defaults to
-   * the injected clock (deterministic in tests). A no-op that never throws — safe to call any time.
+   * §E2 — prune the publish rate-limiter's durable per-workspace buckets
+   * (`deepagent_rate_limit_bucket`) whose fixed window has elapsed as of `now`, bounding the table
+   * for idle workspaces. Returns how many buckets were dropped. `now` defaults to the injected
+   * clock (deterministic in tests). A no-op that never throws — safe to call any time.
    */
   readonly sweepPublishLimiter: (now?: number) => Effect.Effect<{ readonly prunedBuckets: number }>
   /**
@@ -176,8 +203,11 @@ export interface Interface {
    * With durable registration, `publish` writes delivery rows for ALL registered groups — not just the
    * in-memory live ones — so an offline consumer catches up via `dueRetries` + `replay` on reconnect.
    * Idempotent: re-registering the same group updates `last_seen_at`.
+   *
+   * RISK-006: `workspaceID` records the tenant the group consumes for; defaults to "" (global /
+   * unscoped) so existing callers stay source-compatible.
    */
-  readonly registerConsumerGroup: (groupId: string, typeFilter?: string) => Effect.Effect<void>
+  readonly registerConsumerGroup: (groupId: string, typeFilter?: string, workspaceID?: string) => Effect.Effect<void>
   /**
    * K40-2: Durably unregister a consumer group. After this call `publish` will no longer create delivery
    * rows for this group. Live in-memory streams for this group are NOT terminated — they finish naturally.
@@ -186,6 +216,16 @@ export interface Interface {
 }
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/DeepAgentEventBus") {}
+
+// RISK-006 — durable priority ordering for dueRetries/claimDue: critical(3) > high(2) > normal(1)
+// > low(0). NULL (pre-migration rows) falls into ELSE and ranks as "normal". Combined with
+// next_attempt_at ASC this keeps FIFO order WITHIN a priority class.
+const priorityRank = sql<number>`case
+  when ${DeepAgentEventDeliveryTable.priority} = 'critical' then 3
+  when ${DeepAgentEventDeliveryTable.priority} = 'high' then 2
+  when ${DeepAgentEventDeliveryTable.priority} = 'low' then 0
+  else 1
+end`
 
 export interface LayerOptions {
   readonly maxAttempts?: number
@@ -236,10 +276,6 @@ export const layerWith = (options?: LayerOptions) =>
       // `subscribe` for grouped consumers merges both channels (highPriorityLive first), so when
       // multiple events are queued, critical/high are processed before normal/low.
       const highPriorityLive = yield* PubSub.unbounded<DeepAgentEvent.Event>()
-      // §A4/§E2 — ONE in-memory fixed-window limiter for the whole bus, keyed per workspaceID. Only
-      // `tryPublish` consults it; `publish` is unchanged. `now` (the injected clock) drives window
-      // resets so tests cross a boundary deterministically.
-      const publishLimiter = new RateLimiter.Service()
 
       yield* Effect.addFinalizer(() =>
         Effect.all([PubSub.shutdown(live), PubSub.shutdown(highPriorityLive)], { concurrency: "unbounded" }).pipe(
@@ -285,8 +321,9 @@ export const layerWith = (options?: LayerOptions) =>
       const dbGroupsCache = new Map<string, string[]>()
       const invalidateDbGroupsCache = () => dbGroupsCache.clear()
 
-      const groupsFor = (eventType: string): Effect.Effect<ReadonlyArray<string>> => {
-        const cached = dbGroupsCache.get(eventType)
+      const groupsFor = (eventType: string, workspaceID: string): Effect.Effect<ReadonlyArray<string>> => {
+        const cacheKey = `${eventType}\n${workspaceID}`
+        const cached = dbGroupsCache.get(cacheKey)
         if (cached !== undefined) {
           // DB portion is cached; still merge with current live groups (always fresh, no DB).
           const live = liveGroupsFor(eventType)
@@ -300,14 +337,24 @@ export const layerWith = (options?: LayerOptions) =>
           .select({ group_id: DeepAgentConsumerGroupTable.group_id })
           .from(DeepAgentConsumerGroupTable)
           .where(
-            or(isNull(DeepAgentConsumerGroupTable.type_filter), eq(DeepAgentConsumerGroupTable.type_filter, eventType)),
+            and(
+              or(isNull(DeepAgentConsumerGroupTable.type_filter), eq(DeepAgentConsumerGroupTable.type_filter, eventType)),
+              // RISK-006 residual: dispatch routing is workspace-scoped. A workspace-bound consumer
+              // group (workspace_id != "") is owed only its own tenant's events; a global group
+              // (workspace_id = "") keeps receiving every workspace. Live in-memory groups carry no
+              // workspace, so they remain global (all current consumers register globally).
+              or(
+                eq(DeepAgentConsumerGroupTable.workspace_id, ""),
+                eq(DeepAgentConsumerGroupTable.workspace_id, workspaceID),
+              ),
+            ),
           )
           .all()
           .pipe(
             Effect.orDie,
             Effect.map((rows) => {
               const dbGroups = rows.map((r) => r.group_id)
-              dbGroupsCache.set(eventType, dbGroups)
+              dbGroupsCache.set(cacheKey, dbGroups)
               const live = liveGroupsFor(eventType)
               // Union: db-registered + live-only (not yet durable-registered), deduplicated.
               const seen = new Set<string>(dbGroups)
@@ -352,7 +399,7 @@ export const layerWith = (options?: LayerOptions) =>
           // past the read-check above hits UNIQUE(idempotency_key) → 0 rows → not the winner). Dispatch
           // happens AFTER commit, so a subscriber never observes an uncommitted event.
           // K40-2: groupsFor is now async (queries DB for durable groups + in-memory live groups).
-          const owed = yield* groupsFor(event.type)
+          const owed = yield* groupsFor(event.type, event.workspaceID)
           // §F1 event_publish_latency_ms — wall-clock delta (injected clock) around the persist
           // transaction. One now() before, one after; the delta is written on the row so Observability
           // can build the publish-latency histogram. Cheap + additive.
@@ -395,6 +442,9 @@ export const layerWith = (options?: LayerOptions) =>
                           attempts: 0,
                           last_error: null,
                           next_attempt_at: createdAt, // owed immediately until acked
+                          // RISK-006: denormalize the event's priority onto the delivery row so the
+                          // retry/claim scans can order high-priority work first without a join.
+                          priority: event.priority,
                           created_at: createdAt,
                           updated_at: createdAt,
                         })),
@@ -455,15 +505,67 @@ export const layerWith = (options?: LayerOptions) =>
             return { published: yield* publish(input) }
           }
           const limit = opts?.limit ?? RateLimiter.EVENT_PUBLISH_PER_WORKSPACE.limit
-          const admitted = publishLimiter.check(
-            input.workspaceID,
-            limit,
-            RateLimiter.EVENT_PUBLISH_PER_WORKSPACE.windowMs,
-            now(),
-          )
+          const admitted = yield* checkDurableLimit(input.workspaceID, limit, now())
           if (!admitted) return { dropped: "rate_limited" as const }
           return { published: yield* publish(input) }
         })
+
+      // RISK-006 §A4/§E2 — DURABLE fixed-window check-and-increment against
+      // `deepagent_rate_limit_bucket`. The immediate transaction takes the SQLite write lock up front,
+      // so the read-modify-write below cannot interleave with another process/bus instance: every
+      // producer sharing the DB consumes ONE combined per-workspace quota (the old in-memory Map gave
+      // each process its own). Windows are epoch-aligned (floor(now / windowMs)) so independent
+      // processes agree on the current window without coordination. `now` (the injected clock) drives
+      // window boundaries so tests cross them deterministically.
+      const checkDurableLimit = (workspaceID: string, limit: number, at: number) =>
+        db
+          .transaction(
+            () =>
+              Effect.gen(function* () {
+                const windowMs = RateLimiter.EVENT_PUBLISH_PER_WORKSPACE.windowMs
+                const windowStart = Math.floor(at / windowMs) * windowMs
+                const bucket = yield* db
+                  .select()
+                  .from(DeepAgentRateLimitBucketTable)
+                  .where(
+                    and(
+                      eq(DeepAgentRateLimitBucketTable.workspace_id, workspaceID),
+                      eq(DeepAgentRateLimitBucketTable.window_start, windowStart),
+                    ),
+                  )
+                  .get()
+                  .pipe(Effect.orDie)
+                if (bucket) {
+                  if (bucket.count >= limit) return false
+                  yield* db
+                    .update(DeepAgentRateLimitBucketTable)
+                    .set({ count: bucket.count + 1 })
+                    .where(
+                      and(
+                        eq(DeepAgentRateLimitBucketTable.workspace_id, workspaceID),
+                        eq(DeepAgentRateLimitBucketTable.window_start, windowStart),
+                      ),
+                    )
+                    .run()
+                    .pipe(Effect.orDie)
+                  return true
+                }
+                // Fresh window — seed count=1. A conflict cannot happen while we hold the write lock,
+                // but the upsert keeps the insert total should that ever change.
+                yield* db
+                  .insert(DeepAgentRateLimitBucketTable)
+                  .values([{ workspace_id: workspaceID, window_start: windowStart, count: 1 }])
+                  .onConflictDoUpdate({
+                    target: [DeepAgentRateLimitBucketTable.workspace_id, DeepAgentRateLimitBucketTable.window_start],
+                    set: { count: 1 },
+                  })
+                  .run()
+                  .pipe(Effect.orDie)
+                return true
+              }),
+            { behavior: "immediate" },
+          )
+          .pipe(Effect.orDie)
 
       const subscribe: Interface["subscribe"] = (input) => {
         const filtered = Stream.fromPubSub(live).pipe(
@@ -747,10 +849,156 @@ export const layerWith = (options?: LayerOptions) =>
                 lte(DeepAgentEventDeliveryTable.next_attempt_at, at),
               ),
             )
-            .orderBy(asc(DeepAgentEventDeliveryTable.next_attempt_at))
+            // RISK-006: persistent priority — high/critical due work drains before normal/low.
+            .orderBy(desc(priorityRank), asc(DeepAgentEventDeliveryTable.next_attempt_at))
             .all()
             .pipe(Effect.orDie)
           return rows.map(trackerOf)
+        })
+
+      // RISK-001: locked replacement for the dueRetries scan. The immediate transaction takes the
+      // SQLite write lock up front, so the SELECT-then-UPDATE below cannot interleave with another
+      // writer — exactly one claimant wins each row while its lease is live.
+      const claimDue: Interface["claimDue"] = (input) =>
+        Effect.uninterruptible(
+          db
+            .transaction(
+              () =>
+                Effect.gen(function* () {
+                  const at = input.now ?? now()
+                  const leaseMs = input.leaseMs ?? 5 * 60_000
+                  const limit = input.limit ?? 50
+                  const eligible = yield* db
+                    .select()
+                    .from(DeepAgentEventDeliveryTable)
+                    .where(
+                      and(
+                        eq(DeepAgentEventDeliveryTable.subscription_group, input.subscriptionGroup),
+                        eq(DeepAgentEventDeliveryTable.status, "pending"),
+                        lte(DeepAgentEventDeliveryTable.next_attempt_at, at),
+                        or(
+                          isNull(DeepAgentEventDeliveryTable.claim_token),
+                          lte(DeepAgentEventDeliveryTable.lease_expires_at, at),
+                        ),
+                      ),
+                    )
+                    // RISK-006: persistent priority — a limited claim takes high/critical rows first.
+                    .orderBy(desc(priorityRank), asc(DeepAgentEventDeliveryTable.next_attempt_at))
+                    .limit(limit)
+                    .all()
+                    .pipe(Effect.orDie)
+                  const claimToken = crypto.randomUUID()
+                  if (eligible.length === 0) return { claimToken, deliveries: [] as ReadonlyArray<DeliveryTracker> }
+                  yield* db
+                    .update(DeepAgentEventDeliveryTable)
+                    .set({
+                      claim_token: claimToken,
+                      claimant_id: input.claimantId,
+                      claimed_at: at,
+                      lease_expires_at: at + leaseMs,
+                      updated_at: at,
+                    })
+                    .where(
+                      or(
+                        ...eligible.map((row) =>
+                          and(
+                            eq(DeepAgentEventDeliveryTable.event_id, row.event_id),
+                            eq(DeepAgentEventDeliveryTable.subscription_group, row.subscription_group),
+                          ),
+                        ),
+                      ),
+                    )
+                    .run()
+                    .pipe(Effect.orDie)
+                  return { claimToken, deliveries: eligible.map(trackerOf) }
+                }),
+              { behavior: "immediate" },
+            )
+            .pipe(Effect.orDie),
+        )
+
+      const ackClaim: Interface["ackClaim"] = (input) =>
+        db
+          .update(DeepAgentEventDeliveryTable)
+          .set({
+            status: "delivered",
+            last_error: null,
+            next_attempt_at: null,
+            updated_at: now(),
+          })
+          .where(
+            and(
+              eq(DeepAgentEventDeliveryTable.event_id, input.eventID),
+              eq(DeepAgentEventDeliveryTable.subscription_group, input.subscriptionGroup),
+              eq(DeepAgentEventDeliveryTable.claim_token, input.claimToken),
+              eq(DeepAgentEventDeliveryTable.status, "pending"),
+            ),
+          )
+          .returning({ eventID: DeepAgentEventDeliveryTable.event_id })
+          .all()
+          .pipe(Effect.map((rows) => rows.length > 0), Effect.orDie)
+
+      const nackClaim: Interface["nackClaim"] = (input) =>
+        Effect.gen(function* () {
+          const transition = yield* Effect.uninterruptible(
+            db
+              .transaction(
+                () =>
+                  Effect.gen(function* () {
+                    const current = yield* db
+                      .select()
+                      .from(DeepAgentEventDeliveryTable)
+                      .where(
+                        and(
+                          eq(DeepAgentEventDeliveryTable.event_id, input.eventID),
+                          eq(DeepAgentEventDeliveryTable.subscription_group, input.subscriptionGroup),
+                          eq(DeepAgentEventDeliveryTable.claim_token, input.claimToken),
+                        ),
+                      )
+                      .get()
+                      .pipe(Effect.orDie)
+                    // Stale token or a row that already settled — the claim no longer owns it.
+                    if (!current || current.status !== "pending")
+                      return { applied: false, justDied: false, attempts: 0 }
+                    const attempts = current.attempts + 1
+                    const dead = attempts >= maxAttempts
+                    const at = now()
+                    const nextAttemptAt = dead ? null : at + backoffBaseMs * 2 ** (attempts - 1)
+                    yield* db
+                      .update(DeepAgentEventDeliveryTable)
+                      .set({
+                        status: dead ? "dead" : "pending",
+                        attempts,
+                        last_error: input.reason,
+                        next_attempt_at: nextAttemptAt,
+                        // release the claim: a pending row is eligible for the next claimant; a dead
+                        // row never re-enters the retry scan.
+                        claim_token: null,
+                        claimant_id: null,
+                        claimed_at: null,
+                        lease_expires_at: null,
+                        updated_at: at,
+                      })
+                      .where(
+                        and(
+                          eq(DeepAgentEventDeliveryTable.event_id, input.eventID),
+                          eq(DeepAgentEventDeliveryTable.subscription_group, input.subscriptionGroup),
+                          eq(DeepAgentEventDeliveryTable.claim_token, input.claimToken),
+                        ),
+                      )
+                      .run()
+                      .pipe(Effect.orDie)
+                    return { applied: true, justDied: dead, attempts }
+                  }),
+                { behavior: "immediate" },
+              )
+              .pipe(Effect.orDie),
+          )
+          if (transition.justDied)
+            yield* emitDlqAlert(input.eventID, input.subscriptionGroup, input.reason, transition.attempts).pipe(
+              Effect.catchCause(() => Effect.void),
+            )
+          return transition.applied
         })
 
       // K40-4: real durable backlog depth per workspace — count pending delivery rows whose source event
@@ -873,22 +1121,41 @@ export const layerWith = (options?: LayerOptions) =>
           )
           .pipe(Effect.orDie)
 
-      // §E2 — drive the in-memory rate-limiter's stale-window prune. Synchronous + total (never fails),
-      // wrapped in Effect.sync so the daemon can schedule it uniformly with the other bus effects.
+      // §E2 — prune elapsed durable rate-limit windows (RISK-006). A bucket's window has elapsed once
+      // `window_start + windowMs <= now`. Returns how many buckets were dropped.
       const sweepPublishLimiter: Interface["sweepPublishLimiter"] = (nowArg) =>
-        Effect.sync(() => ({ prunedBuckets: publishLimiter.sweep(nowArg ?? now()) }))
+        Effect.gen(function* () {
+          const at = nowArg ?? now()
+          const windowMs = RateLimiter.EVENT_PUBLISH_PER_WORKSPACE.windowMs
+          const pruned = yield* db
+            .delete(DeepAgentRateLimitBucketTable)
+            .where(lte(DeepAgentRateLimitBucketTable.window_start, at - windowMs))
+            .returning({ workspace_id: DeepAgentRateLimitBucketTable.workspace_id })
+            .all()
+            .pipe(Effect.orDie)
+          return { prunedBuckets: pruned.length }
+        })
 
       // K40-2: durable consumer group registration — persists group identity so publish writes delivery
       // rows for offline groups too. Both methods are idempotent; registerConsumerGroup upserts.
       // PERF: both methods invalidate dbGroupsCache so the next groupsFor re-reads from DB.
-      const registerConsumerGroup: Interface["registerConsumerGroup"] = (groupId, typeFilter) => {
+      const registerConsumerGroup: Interface["registerConsumerGroup"] = (groupId, typeFilter, workspaceID) => {
         const at = now()
+        const workspace = workspaceID ?? ""
         return db
           .insert(DeepAgentConsumerGroupTable)
-          .values([{ group_id: groupId, type_filter: typeFilter ?? null, registered_at: at, last_seen_at: at }])
+          .values([
+            {
+              group_id: groupId,
+              type_filter: typeFilter ?? null,
+              workspace_id: workspace,
+              registered_at: at,
+              last_seen_at: at,
+            },
+          ])
           .onConflictDoUpdate({
             target: DeepAgentConsumerGroupTable.group_id,
-            set: { type_filter: typeFilter ?? null, last_seen_at: at },
+            set: { type_filter: typeFilter ?? null, workspace_id: workspace, last_seen_at: at },
           })
           .run()
           .pipe(Effect.orDie, Effect.asVoid, Effect.tap(() => Effect.sync(invalidateDbGroupsCache)))
@@ -907,6 +1174,9 @@ export const layerWith = (options?: LayerOptions) =>
         subscribe,
         ack,
         nack,
+        claimDue,
+        ackClaim,
+        nackClaim,
         replay,
         recentByType,
         deadLetters,

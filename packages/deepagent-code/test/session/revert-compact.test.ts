@@ -15,12 +15,16 @@ import { provideTmpdirInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { ModelV2 } from "@deepagent-code/core/model"
+import { SessionProjector } from "@deepagent-code/core/session/projector"
 import { Storage } from "@/storage/storage"
 
 void Log.init({ print: false })
 
 const env = Layer.mergeAll(
   Session.defaultLayer,
+  // QUAL-007: the core SessionProjector materializes event-created sessions; without it message
+  // writes hit the session FK.
+  SessionProjector.defaultLayer,
   SessionRevert.defaultLayer,
   Snapshot.defaultLayer,
   Storage.defaultLayer,

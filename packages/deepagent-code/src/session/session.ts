@@ -1058,14 +1058,28 @@ export const layer: Layer.Layer<
           },
           {
             commit: () =>
+              // QUAL-007: upsert, not plain update — messages created through updateMessage (fork
+              // fixtures, synthetic boundaries) must land in MessageTable; #115's commit callback
+              // dropped the insert half of the old projector's insert-or-update semantics.
               db
-                .update(MessageTable)
-                .set({
+                .insert(MessageTable)
+                .values({
+                  id: msg.id,
+                  session_id: msg.sessionID,
+                  time_created: msg.time.created,
+                  time_updated: msg.time.created,
                   data: Object.fromEntries(
                     Object.entries(msg).filter(([key]) => key !== "id" && key !== "sessionID"),
                   ) as typeof MessageTable.$inferInsert.data,
                 })
-                .where(and(eq(MessageTable.id, msg.id), eq(MessageTable.session_id, msg.sessionID)))
+                .onConflictDoUpdate({
+                  target: MessageTable.id,
+                  set: {
+                    data: Object.fromEntries(
+                      Object.entries(msg).filter(([key]) => key !== "id" && key !== "sessionID"),
+                    ) as typeof MessageTable.$inferInsert.data,
+                  },
+                })
                 .run()
                 .pipe(Effect.orDie),
           },

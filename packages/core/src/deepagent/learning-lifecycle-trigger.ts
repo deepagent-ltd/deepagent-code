@@ -31,8 +31,11 @@ export type ProjectBoundary = {
 
 export type ObserveInput = SessionBoundary | ProjectBoundary
 
+// FEAT-004: the skipped reason is DISCRIMINATED — `no_observer_registered` means the notify seam had no
+// runtime observer wired (pure CLI path / observer torn down), while `no_exact_settled_run` means an
+// observer DID run but found no matching settled source run. Telemetry/operators can tell the two apart.
 export type Outcome =
-  | { readonly state: "skipped"; readonly reason: "no_exact_settled_run" }
+  | { readonly state: "skipped"; readonly reason: "no_exact_settled_run" | "no_observer_registered" }
   | { readonly state: "prepared" | "admitted"; readonly receiptId: string; readonly runId: string }
 
 export type RuntimeObserver = {
@@ -65,8 +68,10 @@ export const setRuntimeObserver = (observer: RuntimeObserver | undefined) => {
   runtimeObserver = observer
 }
 
+// FEAT-004: an UNREGISTERED observer is its own skip reason — the trigger never searched for a source
+// run at all (distinct from observe() finding no matching settled run).
 export const notify = (input: ObserveInput): Promise<Outcome> =>
-  runtimeObserver?.observe(input) ?? Promise.resolve({ state: "skipped", reason: "no_exact_settled_run" })
+  runtimeObserver?.observe(input) ?? Promise.resolve({ state: "skipped", reason: "no_observer_registered" })
 
 export const observe = Effect.fn("DeepAgentLearningLifecycleTrigger.observe")(function* (
   db: DatabaseClient,

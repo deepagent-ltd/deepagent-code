@@ -6,6 +6,7 @@ import { tmpdir } from "node:os"
 import { Effect, Stream } from "effect"
 import { LLM, LLMEvent, Model } from "@deepagent-code/llm"
 import { AgentGateway } from "../src/agent-gateway"
+import { writePinnedPacks } from "../src/deepagent/pinned-packs"
 import { DeepAgentDurableLearning } from "../src/deepagent/durable-learning"
 import * as OpenAIChat from "@deepagent-code/llm/protocols/openai-chat"
 import { releasedUserGlobalSelection } from "./deepagent/released-selection-fixture"
@@ -60,6 +61,10 @@ describe("AgentGateway", () => {
       expect(Array.from(events).map((event) => event.type)).toEqual(["text-delta", "finish"])
       expect(await readdir(dir)).toHaveLength(1)
       expect(AgentGateway.systemPrompt("openai").join("\n").length).toBeGreaterThan(0)
+      // FEAT-007: the run entry locks the active pack snapshot id onto the session state so the
+      // session prompt loop can attribute each tool-request receipt (no registry configured here →
+      // the deterministic `pack_snapshot:empty` sentinel, still a valid `pack_snapshot:%` value).
+      expect(AgentGateway.DeepAgentSessionState.get("ses_test")?.packSnapshotId).toMatch(/^pack_snapshot:/)
     } finally {
       AgentGateway.configure({ enabled: false, runsDir: undefined })
       await rm(dir, { recursive: true, force: true })
@@ -1091,6 +1096,137 @@ describe("AgentGateway", () => {
     } finally {
       AgentGateway.configure({ enabled: false, runsDir: undefined })
       await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+// FEAT-001: GUI-pinned domain packs must actually shape gateway behavior — the pinned pack set read
+// from <baseDir>/memory/pinned-packs.json must appear in the run's active_pack_set and the pinned
+// pack's refs must be force-selected by knowledge retrieval.
+describe("AgentGateway pinned domain packs (FEAT-001)", () => {
+  const genericFeature = "rename a local helper function in the user service module"
+
+  const runMaxTurn = async (root: string) => {
+    const runsDir = path.join(root, "runs")
+    await mkdir(runsDir, { recursive: true })
+    AgentGateway.configure({
+      enabled: true,
+      agentMode: "max",
+      baseDir: root,
+      runsDir,
+      allowProviderExecutedTools: false,
+    })
+    // workspaceID stays non-absolute (user-global retrieval) so the fixture's global released
+    // selection matches the query project; pin wiring is independent of workspace scoping.
+    await Effect.runPromise(
+      AgentGateway.manageStream(
+        {
+          ...deepagentRunInput,
+          feature: genericFeature,
+          releasedKnowledgeSelection: releasedUserGlobalSelection(root),
+        },
+        Stream.make(LLMEvent.textDelta({ id: "text-0", text: "done" }), LLMEvent.finish({ reason: "stop" })),
+      ).pipe(Stream.runCollect),
+    )
+    const runDir = await readOnlyRunDir(runsDir)
+    return readJson(runDir, "MODEL_WORK_PACKAGE.json")
+  }
+
+  test("a pinned pack appears in active_pack_set and its refs are force-selected", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "deepagent-pin-"))
+    try {
+      writePinnedPacks(path.join(root, "memory"), ["code.gpu-kernel"])
+      const workPackage = await runMaxTurn(root)
+      expect(workPackage.active_pack_set).toContain("code.gpu-kernel")
+      const selectedRefs: string[] = workPackage.knowledge_retrieval.selected_refs
+      expect(selectedRefs.some((ref) => ref.includes("gpu"))).toBe(true)
+    } finally {
+      AgentGateway.configure({ enabled: false, runsDir: undefined })
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  test("without pins the pack stays inactive (unpinned behavior unchanged)", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "deepagent-nopin-"))
+    try {
+      const workPackage = await runMaxTurn(root)
+      expect(workPackage.active_pack_set).not.toContain("code.gpu-kernel")
+      const selectedRefs: string[] = workPackage.knowledge_retrieval.selected_refs
+      expect(selectedRefs.some((ref) => ref.includes("gpu"))).toBe(false)
+    } finally {
+      AgentGateway.configure({ enabled: false, runsDir: undefined })
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  test("a corrupt pinned-packs.json degrades to no pins and still completes the run", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "deepagent-corrupt-pin-"))
+    try {
+      await mkdir(path.join(root, "memory"), { recursive: true })
+      await writeFile(path.join(root, "memory", "pinned-packs.json"), "{not json")
+      const workPackage = await runMaxTurn(root)
+      expect(workPackage.active_pack_set).not.toContain("code.gpu-kernel")
+    } finally {
+      AgentGateway.configure({ enabled: false, runsDir: undefined })
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+})
+
+// FEAT-002: ONE pack-activation authority per run. The gateway builds the run profile once at run
+// entry (profile-builder) and both knowledge retrieval (RetrievalInput.profileOverride) and the
+// recorded active_pack_set consume it — so the deterministic read-only policy flip (which consumes
+// active_pack_set via activePackIds.includes("code.query")) is regression-locked end to end.
+describe("AgentGateway unified pack activation authority (FEAT-002)", () => {
+  const runMaxTurn = async (root: string, feature: string) => {
+    const runsDir = path.join(root, "runs")
+    const workspace = path.join(root, "workspace")
+    await mkdir(runsDir, { recursive: true })
+    await mkdir(workspace, { recursive: true })
+    AgentGateway.configure({
+      enabled: true,
+      agentMode: "max",
+      baseDir: root,
+      runsDir,
+      allowProviderExecutedTools: false,
+    })
+    // Absolute workspaceID => the run profile detects workspace facts from an empty dir (no
+    // README/package.json noise), keeping the activation verdict deterministic in this test.
+    await Effect.runPromise(
+      AgentGateway.manageStream(
+        { ...deepagentRunInput, feature, workspaceID: workspace },
+        Stream.make(LLMEvent.textDelta({ id: "text-0", text: "done" }), LLMEvent.finish({ reason: "stop" })),
+      ).pipe(Stream.runCollect),
+    )
+    const runDir = await readOnlyRunDir(runsDir)
+    return readJson(runDir, "MODEL_WORK_PACKAGE.json")
+  }
+
+  test("a deterministic query run records code.query in active_pack_set and flips read-only", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "deepagent-feat002-query-"))
+    try {
+      const workPackage = await runMaxTurn(root, "请查一下数据库里有多少条用户记录")
+      expect(workPackage.active_pack_set).toContain("code.query")
+      // Same source: the recorded set is the retrieval-constrained activation (includes fallbacks).
+      expect(workPackage.active_pack_set).toContain("code.core")
+      expect(workPackage.deterministic_result.enabled).toBe(true)
+      expect(workPackage.deterministic_result.read_only).toBe(true)
+    } finally {
+      AgentGateway.configure({ enabled: false, runsDir: undefined })
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  test("a mutation run keeps code.query out of active_pack_set and tools writable", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "deepagent-feat002-mutation-"))
+    try {
+      const workPackage = await runMaxTurn(root, "请修复登录逻辑并更新依赖")
+      expect(workPackage.active_pack_set).not.toContain("code.query")
+      expect(workPackage.deterministic_result.enabled).toBe(false)
+      expect(workPackage.deterministic_result.read_only).toBe(false)
+    } finally {
+      AgentGateway.configure({ enabled: false, runsDir: undefined })
+      await rm(root, { recursive: true, force: true })
     }
   })
 })

@@ -17,7 +17,7 @@ import { SessionSchema } from "@deepagent-code/core/session/schema"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { SessionToolRequestResolutionTable } from "@deepagent-code/core/session/sql"
 import { SessionToolRequestReceiptTable } from "../session/tool-request-receipt.sql"
-import { and, desc, eq, inArray, isNull } from "drizzle-orm"
+import { and, desc, eq, gte, inArray, isNull, lte } from "drizzle-orm"
 import { Cause, Context, Effect, Layer, Ref, Schema } from "effect"
 import { randomUUID } from "node:crypto"
 import { Session } from "../session/session"
@@ -44,6 +44,22 @@ const StoredSelectedRef = Schema.Struct({
 
 export type ResolutionDecision = "abandoned" | "settled" | "replayed"
 
+// FEAT-005: cohort-level readiness buckets. A selection's per-graph status states fold into one of
+// four buckets so a rollout dashboard can tell cold-start (building) apart from genuine degradation
+// or an authorization block — the in-memory observability snapshot can't (process-scoped, no window).
+export type ReadinessBucket = "ready" | "building" | "degraded" | "blocked"
+
+export type CohortSummary = {
+  readonly window: { readonly sinceMs: number; readonly untilMs: number }
+  readonly selections: number
+  readonly sessions: number
+  readonly tokens: number
+  readonly readiness: Readonly<Record<ReadinessBucket, number>>
+  readonly graphs: Readonly<
+    Record<GraphKind, { readonly statuses: number; readonly ready: number; readonly notReady: number }>
+  >
+}
+
 export class DiagnosticsError extends Schema.TaggedErrorClass<DiagnosticsError>()(
   "ContextFederationDiagnostics.DiagnosticsError",
   { reason: Schema.String },
@@ -63,6 +79,13 @@ export interface Interface {
     readonly actorId: string
     readonly now?: number
   }) => Effect.Effect<ReturnType<typeof attemptView>, DiagnosticsError>
+  /**
+   * FEAT-005: cohort-level durable aggregation. Aggregates federated context selections across all
+   * sessions within [sinceMs, untilMs] from the durable selection table (NOT the in-memory
+   * observability snapshot), bucketed by readiness so rollout decisions aren't skewed by cold-start
+   * indexing noise.
+   */
+  readonly cohort: (input: { readonly sinceMs: number; readonly untilMs?: number }) => Effect.Effect<CohortSummary, DiagnosticsError>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/ContextFederationDiagnostics") {}
@@ -256,7 +279,52 @@ export const layer = Layer.effect(
         return attemptView(resolved.attempt, undefined, false, input.now ?? Date.now())
       }).pipe(Effect.mapError(diagnosticsError))
 
-    return Service.of({ get, resolveAttempt })
+    const cohort: Interface["cohort"] = (input) =>
+      Effect.gen(function* () {
+        const untilMs = input.untilMs ?? Date.now()
+        const rows = yield* database.db
+          .select({
+            sessionId: SessionContextSelectionTable.session_id,
+            graphStatuses: SessionContextSelectionTable.graph_statuses,
+            tokenCount: SessionContextSelectionTable.token_count,
+          })
+          .from(SessionContextSelectionTable)
+          .where(and(gte(SessionContextSelectionTable.created_at, input.sinceMs), lte(SessionContextSelectionTable.created_at, untilMs)))
+          .all()
+          .pipe(Effect.orDie)
+        const readiness: Record<ReadinessBucket, number> = { ready: 0, building: 0, degraded: 0, blocked: 0 }
+        const graphs = Object.fromEntries(
+          GraphKind.literals.map((graph) => [graph, { statuses: 0, ready: 0, notReady: 0 }]),
+        ) as Record<GraphKind, { statuses: number; ready: number; notReady: number }>
+        const sessions = new Set<string>()
+        let tokens = 0
+        for (const row of rows) {
+          sessions.add(row.sessionId)
+          tokens += row.tokenCount
+          const statuses = parse(Schema.Array(GraphQueryStatus), row.graphStatuses, "graph_statuses")
+          // Selection-level bucket = the WORST graph state (blocked > degraded > building > ready),
+          // so a single cold/blocked graph keeps the whole selection out of the "ready" cohort.
+          let worst: ReadinessBucket = "ready"
+          for (const status of statuses) {
+            const bucket = readinessBucket(status)
+            graphs[status.graph].statuses += 1
+            if (bucket === "ready") graphs[status.graph].ready += 1
+            else graphs[status.graph].notReady += 1
+            if (bucketRank(bucket) > bucketRank(worst)) worst = bucket
+          }
+          readiness[worst] += 1
+        }
+        return {
+          window: { sinceMs: input.sinceMs, untilMs },
+          selections: rows.length,
+          sessions: sessions.size,
+          tokens,
+          readiness,
+          graphs,
+        } satisfies CohortSummary
+      }).pipe(Effect.mapError(diagnosticsError))
+
+    return Service.of({ get, resolveAttempt, cohort })
   }),
 )
 
@@ -439,6 +507,30 @@ function parse<A>(schema: Schema.Decoder<A>, value: string, field: string) {
     return Schema.decodeUnknownSync(schema, { onExcessProperty: "ignore" })(JSON.parse(value))
   } catch {
     throw new DiagnosticsError({ reason: `stored_${field}_invalid` })
+  }
+}
+
+// FEAT-005: fold a per-graph query status into a rollout-readiness bucket. complete→ready; a
+// partial with a degraded source is genuine degradation, cold/indexing/stale are cold-start
+// "building" (expected to self-resolve); a blocked graph is an authorization/source block (denied)
+// or an unavailable source (degraded); not_queried (source disabled) counts as not-ready building.
+function readinessBucket(status: GraphQueryStatus): ReadinessBucket {
+  if (status.kind === "complete") return "ready"
+  if (status.kind === "blocked") return status.state === "denied" ? "blocked" : "degraded"
+  if (status.kind === "not_queried") return "building"
+  return status.state === "degraded" ? "degraded" : "building" // partial: cold | indexing | stale
+}
+
+function bucketRank(bucket: ReadinessBucket): number {
+  switch (bucket) {
+    case "ready":
+      return 0
+    case "building":
+      return 1
+    case "degraded":
+      return 2
+    case "blocked":
+      return 3
   }
 }
 
