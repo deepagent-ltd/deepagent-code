@@ -59,7 +59,15 @@ export type Receipt = {
   readonly intentID: string
   readonly sessionID: SessionID
   readonly source: Source
-  readonly state: "preparing" | "admitting" | "admitted" | "canceled" | "superseded" | "failed"
+  readonly state:
+    | "preparing"
+    | "awaiting_confirmation"
+    | "selected"
+    | "admitting"
+    | "admitted"
+    | "canceled"
+    | "superseded"
+    | "failed"
   readonly variant?: Variant
   readonly payloadHash?: string
   readonly delivery?: Delivery
