@@ -1091,7 +1091,13 @@ export const layer: Layer.Layer<
         // message.updated event commits, so new writes never accumulate inline FileDiff[] bodies.
         // Best-effort by design: capture failures only log and leave the bounded inline diffs in
         // place (backfill/maintenance can pick them up later); a turn must never break here.
-        if (msg.role === "user" && msg.summary && msg.summary.diffs.length > 0 && !msg.summary.diffArtifact)
+        if (
+          flags.sessionDiffArtifactCapture &&
+          msg.role === "user" &&
+          msg.summary &&
+          msg.summary.diffs.length > 0 &&
+          !msg.summary.diffArtifact
+        )
           yield* SessionDiffArtifact.capture({
             sessionID: msg.sessionID,
             messageID: msg.id,

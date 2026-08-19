@@ -341,6 +341,11 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   // the governance runbook advances per-step on production copies). Failures only log; the loop
   // never deletes events or VACUUMs. Enable with DEEPAGENT_CODE_LEGACY_EVENT_CANONICALIZER=true.
   legacyEventCanonicalizer: bool("DEEPAGENT_CODE_LEGACY_EVENT_CANONICALIZER"),
+  // RISK-003 ① staged rollout: converge inline summary diffs onto the session_diff_artifact
+  // authority at write time (rewrites the message row to a compact descriptor). Staged OFF until
+  // the diff read path serves artifact descriptors and the §14 evidence chain (floor parity) is
+  // in place; until then the bug-407-010 hotfix contract holds (bound at read, storage untouched).
+  sessionDiffArtifactCapture: bool("DEEPAGENT_CODE_SESSION_DIFF_ARTIFACT_CAPTURE"),
   // PR-2: Streaming degeneration detector mode for reasoning outputs.
   // "off"    — detector is disabled; all output passes through unmodified.
   // "shadow" — detector runs and logs hits, but never triggers a circuit break.

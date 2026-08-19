@@ -639,7 +639,7 @@ describe("Session legacy diff physical migration", () => {
 
 describe("Session runtime diff artifact capture", () => {
   it.instance(
-    "converges a runtime user summary diff onto session_diff_artifact during updateMessage",
+    "capture converges a runtime user summary diff onto session_diff_artifact (direct invocation; updateMessage wiring is staged behind DEEPAGENT_CODE_SESSION_DIFF_ARTIFACT_CAPTURE)",
     () =>
       Effect.gen(function* () {
         const sessions = yield* Session.Service
@@ -660,6 +660,24 @@ describe("Session runtime diff artifact capture", () => {
         const before = HistoryAuthority.hash([{ info, parts: [] }])
 
         yield* sessions.updateMessage(info)
+
+        // The updateMessage wiring is staged behind DEEPAGENT_CODE_SESSION_DIFF_ARTIFACT_CAPTURE
+        // (default OFF: the bug-407-010 hotfix contract holds until the §14 evidence chain lands),
+        // so invoke capture directly against the committed message.updated event to lock the
+        // converged path itself.
+        const sourceEvent = yield* db
+          .select({ id: EventTable.id })
+          .from(EventTable)
+          .where(and(eq(EventTable.aggregate_id, session.id), sql`${EventTable.type} LIKE 'message.updated.%'`))
+          .orderBy(sql`${EventTable.seq} DESC`)
+          .get()
+          .pipe(Effect.orDie)
+        if (!sourceEvent) return yield* Effect.die(new Error("expected a message.updated event for capture"))
+        yield* SessionDiffArtifact.capture({
+          sessionID: session.id,
+          messageID: info.id,
+          sourceEventID: sourceEvent.id,
+        }).pipe(Effect.orDie)
 
         const raw = yield* db.get<{ data: string }>(
           sql`SELECT CAST(data AS TEXT) AS data FROM message WHERE id = ${info.id}`,
