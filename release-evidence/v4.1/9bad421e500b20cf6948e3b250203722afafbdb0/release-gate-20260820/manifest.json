@@ -1,0 +1,51 @@
+{
+  "schema_version": "deepagent.release_evidence.v1",
+  "version": "v4.1",
+  "gate_id": "release-gate-20260820",
+  "commit": "9bad421e500b20cf6948e3b250203722afafbdb0",
+  "date": "2026-08-20",
+  "generated_at": "2026-08-20T01:01:09Z",
+  "status": "passed",
+  "evidence": [
+    {
+      "kind": "test-summary",
+      "label": "full-suite-deterministic",
+      "path": null,
+      "sha256": null,
+      "conclusion": "5001 pass / 38 skip / 1 todo / 0 fail (5040 tests / 468 files, durable 默认模式;含 BUG-407-012 A/B/C、UPD-005 Gap1/2、RISK-003 代码项、release-evidence 基建全部批次)"
+    },
+    {
+      "kind": "migration",
+      "label": "dual-path-prod-replica",
+      "path": null,
+      "sha256": null,
+      "conclusion": "生产库副本回放 143+2 migrations(20260820 两个新 migration 含),新/旧库双路径通过;schema --check 无 drift"
+    },
+    {
+      "kind": "smoke",
+      "label": "deepseek-live-cli-headless",
+      "path": null,
+      "sha256": null,
+      "conclusion": "通过(9 JSON events)"
+    },
+    {
+      "kind": "smoke",
+      "label": "deepseek-live-structured-legacy",
+      "path": null,
+      "sha256": null,
+      "conclusion": "通过(16733 tokens)"
+    }
+  ],
+  "signatures": [
+    {
+      "role": "domain-owner",
+      "actor": "",
+      "at": ""
+    },
+    {
+      "role": "release-owner",
+      "actor": "",
+      "at": ""
+    }
+  ]
+}
