@@ -87,6 +87,7 @@ import {
   Types,
 } from "effect"
 import * as EffectLogger from "@deepagent-code/core/effect/logger"
+import { KeyedMutex } from "@deepagent-code/core/effect/keyed-mutex"
 import { InstanceState } from "@/effect/instance-state"
 import {
   projectDurableSettledRun,
@@ -6093,6 +6094,11 @@ export const layer = Layer.effect(
       )
     })
 
+    // Recovery attempts for one session serialize through this mutex: recursive instance loads
+    // (loop() redirects into instances.load when the EventRoute differs, which re-runs this
+    // initializer) can fork duplicate recovery loops before the fail-closed transition lands.
+    const recoveryMutex = KeyedMutex.makeUnsafe<string>()
+
     const wakeCommittedContinuations = (ctx: InstanceContext) =>
       Effect.runPromise(
         Effect.gen(function* () {
@@ -6100,28 +6106,36 @@ export const layer = Layer.effect(
           yield* Effect.forEach(
             pending,
             (item) =>
-              loop({ sessionID: item.sessionID }).pipe(
-                Effect.catchCause((cause) =>
-                  Effect.logError("committed compaction continuation recovery failed").pipe(
-                    Effect.annotateLogs({
-                      runID: item.runID,
-                      sessionID: item.sessionID,
-                      messageID: item.messageID,
-                      cause,
-                      causeDetail: Cause.pretty(cause),
-                    }),
-                    // BUG-407-009 §10.1 fail-closed: the continuation recovery capability is a
-                    // Maintenance deliverable, so a failed recovery must stop advertising the run as
-                    // recoverable — otherwise instance initialization re-wakes it indefinitely.
-                    Effect.andThen(
-                      compaction
-                        .failContinuationClosed({ runID: item.runID })
-                        .pipe(Effect.provideService(Database.Service, database)),
-                    ),
-                  ),
-                ),
-                Effect.forkIn(scope),
-              ),
+              recoveryMutex
+                .withLock(item.sessionID)(
+                  Effect.gen(function* () {
+                    // Re-check under the lock: a concurrent wake may already have failed the run
+                    // closed while this fork was waiting.
+                    const recoverable = yield* compaction.recoverableContinuations(ctx.project.id)
+                    if (!recoverable.some((row) => row.runID === item.runID)) return
+                    yield* loop({ sessionID: item.sessionID }).pipe(
+                      Effect.catchCause((cause) =>
+                        // BUG-407-009 §10.1: continuation recovery is a Maintenance deliverable,
+                        // so a failed attempt is the expected fail-closed outcome — warn (not
+                        // error) and stop advertising the run as recoverable.
+                        Effect.logWarning("compaction continuation recovery unavailable; failing closed").pipe(
+                          Effect.annotateLogs({
+                            runID: item.runID,
+                            sessionID: item.sessionID,
+                            messageID: item.messageID,
+                            causeDetail: Cause.pretty(cause),
+                          }),
+                          Effect.andThen(
+                            compaction
+                              .failContinuationClosed({ runID: item.runID })
+                              .pipe(Effect.provideService(Database.Service, database)),
+                          ),
+                        ),
+                      ),
+                    )
+                  }),
+                )
+                .pipe(Effect.forkIn(scope)),
             { discard: true },
           )
         }).pipe(Effect.provideService(InstanceRef, ctx)),
