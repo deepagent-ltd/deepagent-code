@@ -105,6 +105,7 @@ const layersFor = (database: string) => {
       Layer.provide(bridge),
     ),
     sessionProjector,
+    eventV2,
     Database.layerFromPath(database),
     fakeLLM,
   )
