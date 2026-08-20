@@ -138,7 +138,19 @@ export const isLightweightMode = (mode: AgentMode | string): boolean => mode ===
 // soft-blocked while the plan is stale; read/search/diagnosis tools always pass — otherwise a stale
 // plan could never be repaired (inspect first, then call `plan` to update, then continue). The
 // `plan` tool itself is never mutating, so it always passes the gate.
-const MUTATING_TOOLS = new Set(["edit", "write", "patch", "apply_patch", "multiedit"])
+const MUTATING_TOOLS = new Set([
+  "edit",
+  "write",
+  "patch",
+  "apply_patch",
+  "multiedit",
+  // FEAT-011 T5: the unified activity facade's MUTATING entry points — activity_start spawns a
+  // supervised background activity (task/goal/panel) and activity_control pause/resume/stop/steers
+  // one; both mutate execution state and must respect the stale-plan gate. activity_status /
+  // activity_result are read-only projections and stay unlisted.
+  "activity_start",
+  "activity_control",
+])
 const ALWAYS_ALLOWED_TOOLS = new Set(["read", "grep", "glob", "list", "ls", "search", "task", "webfetch"])
 
 export const isMutatingTool = (toolName: string, command?: string | null): boolean => {

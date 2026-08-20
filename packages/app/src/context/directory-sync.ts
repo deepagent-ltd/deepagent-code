@@ -12,6 +12,13 @@ import {
 import type { Message, Part } from "@deepagent-code/sdk/v2/client"
 import { SESSION_CACHE_LIMIT, dropSessionCaches, pickSessionCacheEvictions } from "./global-sync/session-cache"
 import { diffs as list, message as clean } from "@/utils/diffs"
+import {
+  compareMessages,
+  compareParts,
+  findMessageIndex,
+  locateMessage,
+  locatePart,
+} from "@/utils/message-order"
 import { createServerSdkContext, useServerSDK } from "./server-sdk"
 import { type createServerSyncContextInner } from "./server-sync"
 import { promptAdmissionClientMessageID } from "./global-sync/prompt-admission"
@@ -20,8 +27,10 @@ import { mergeMessage } from "./global-sync/event-reducer"
 const SKIP_PARTS = new Set(["patch", "step-start", "step-finish"])
 type ActivityProgress = NonNullable<Extract<Message, { role: "assistant" }>["activityProgress"]>
 
+// BUG-407-012 root cause B: ID order is not chronological order across the 6-byte ID time wrap;
+// parts sort by (time.start, id), messages by (time.created, id). See utils/message-order.ts.
 function sortParts(parts: Part[]) {
-  return parts.filter((part) => !!part?.id).sort((a, b) => cmp(a.id, b.id))
+  return parts.filter((part) => !!part?.id).sort((a, b) => compareParts(a, b))
 }
 
 export async function runInflight(
@@ -87,7 +96,7 @@ function mergePageMessages(
     conflict ||= result.conflict
   }
   return {
-    messages: [...messages.values()].sort((a, b) => cmp(a.id, b.id)),
+    messages: [...messages.values()].sort((a, b) => compareMessages(a, b)),
     conflict,
   }
 }
@@ -142,7 +151,7 @@ type MessagePage = {
 
 const hasParts = (parts: Part[] | undefined, want: Part[]) => {
   if (!parts) return want.length === 0
-  return want.every((part) => Binary.search(parts, part.id, (item) => item.id).found)
+  return want.every((part) => locatePart(parts, part).found)
 }
 
 const mergeParts = (parts: Part[] | undefined, want: Part[]) => {
@@ -150,7 +159,7 @@ const mergeParts = (parts: Part[] | undefined, want: Part[]) => {
   const next = [...parts]
   let changed = false
   for (const part of want) {
-    const result = Binary.search(next, part.id, (item) => item.id)
+    const result = locatePart(next, part)
     if (result.found) continue
     next.splice(result.index, 0, part)
     changed = true
@@ -180,7 +189,7 @@ export function mergeOptimisticPage(page: MessagePage, items: OptimisticItem[]) 
       part.delete(item.message.id)
       continue
     }
-    const result = Binary.search(session, item.message.id, (message) => message.id)
+    const result = locateMessage(session, item.message)
     const found = result.found
     if (!found) session.splice(result.index, 0, item.message)
 
@@ -209,7 +218,7 @@ export function applyOptimisticAdd(draft: OptimisticStore, input: OptimisticAddI
     return
   }
   if (messages) {
-    const result = Binary.search(messages, input.message.id, (m) => m.id)
+    const result = locateMessage(messages, input.message)
     if (result.found) messages[result.index] = input.message
     else messages.splice(result.index, 0, input.message)
   } else {
@@ -221,8 +230,8 @@ export function applyOptimisticAdd(draft: OptimisticStore, input: OptimisticAddI
 export function applyOptimisticRemove(draft: OptimisticStore, input: OptimisticRemoveInput) {
   const messages = draft.message[input.sessionID]
   if (messages) {
-    const result = Binary.search(messages, input.messageID, (m) => m.id)
-    if (result.found) messages.splice(result.index, 1)
+    const index = findMessageIndex(messages, input.messageID)
+    if (index !== -1) messages.splice(index, 1)
   }
   delete draft.part[input.messageID]
 }
@@ -230,7 +239,7 @@ export function applyOptimisticRemove(draft: OptimisticStore, input: OptimisticR
 function setOptimisticAdd(setStore: (...args: unknown[]) => void, input: OptimisticAddInput) {
   setStore("message", input.sessionID, (messages: Message[] | undefined) => {
     if (!messages) return [input.message]
-    const result = Binary.search(messages, input.message.id, (m) => m.id)
+    const result = locateMessage(messages, input.message)
     const next = [...messages]
     if (result.found) next[result.index] = input.message
     else next.splice(result.index, 0, input.message)
@@ -242,10 +251,10 @@ function setOptimisticAdd(setStore: (...args: unknown[]) => void, input: Optimis
 function setOptimisticRemove(setStore: (...args: unknown[]) => void, input: OptimisticRemoveInput) {
   setStore("message", input.sessionID, (messages: Message[] | undefined) => {
     if (!messages) return messages
-    const result = Binary.search(messages, input.messageID, (m) => m.id)
-    if (!result.found) return messages
+    const index = findMessageIndex(messages, input.messageID)
+    if (index === -1) return messages
     const next = [...messages]
-    next.splice(result.index, 1)
+    next.splice(index, 1)
     return next
   })
   setStore("part", input.messageID, undefined)
@@ -397,7 +406,9 @@ export const createDirSyncContext = (
       input.client.session.messages({ sessionID: input.sessionID, limit: input.limit, before: input.before }),
     )
     const items = (messages.data ?? []).filter((x) => !!x?.info?.id)
-    const session = items.map((x) => clean(x.info)).sort((a, b) => cmp(a.id, b.id))
+    // The server page is already in (time_created, id) order; re-sort with the same compound
+    // comparator so a wrapped `msg_00...` tail is never reordered ahead of `msg_ff...` history.
+    const session = items.map((x) => clean(x.info)).sort((a, b) => compareMessages(a, b))
     const part = items.map((message) => ({ id: message.info.id, part: sortParts(message.parts) }))
     const cursor = messages.response?.headers.get("x-next-cursor") ?? undefined
     return {
@@ -485,7 +496,24 @@ export const createDirSyncContext = (
               draft.loading[key] = false
             }),
           )
-          if (conflict && input.refetchOnConflict !== false) requestSessionSync?.(input.sessionID)
+          if (conflict && input.refetchOnConflict !== false) {
+            // BUG-005 residual: degrade conflict recovery from a FULL-session force reload
+            // (requestSessionSync) to an authoritative TAIL refetch. An activityProgress conflict
+            // only means the recent markers diverged; refetching the newest small page
+            // authoritatively reconciles them in place (mergePageMessages keys by id, so untouched
+            // messages are preserved) instead of refetching and re-rendering the whole session.
+            // force:true queues behind the in-flight page; refetchOnConflict:false bounds recursion.
+            void loadMessages({
+              directory: input.directory,
+              client: input.client,
+              setStore: input.setStore,
+              sessionID: input.sessionID,
+              limit: Math.min(input.limit, initialMessagePageSize),
+              force: true,
+              authoritative: true,
+              refetchOnConflict: false,
+            }).catch(() => {})
+          }
         })
     })
   }

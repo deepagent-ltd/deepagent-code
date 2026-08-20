@@ -63,6 +63,42 @@ export const PANEL_VERDICT = "panel.verdict"
 // producer (a dead delivery OF a dlq.alert never re-alerts).
 export const DLQ_ALERT = "dlq.alert"
 
+// §9 S10 / FEAT-003 — a domain-pack pin change HAS happened: packsPin/packsUnpin publish this after
+// the pinned-set file is durably written (the file write stays authoritative; the event is a
+// post-commit observation, never a driver). It makes pack mutations EVENTED so downstream surfaces no
+// longer have to wait for their next natural recomputation to notice a pin.
+//
+// BENEFIT BOUNDARY (deliberate, do not widen without review):
+//   - the federation four graphs do NOT read pack scope (the knowledge adapter only ever consumes
+//     released snapshots), so no federation-side reaction is expected from this event;
+//   - intended consumers are legacy retrieval-surface audit + UI notification — they subscribe as
+//     needed; this producer only guarantees the event is emitted and subscribable.
+export const PACK_CHANGED = "pack.changed"
+
+// FEAT-006 — a Wiki/knowledge page HAS changed: WikiService.editKnowledge publishes this after a
+// governed human edit lands (append-only new version, human provenance), and the §L execution
+// archiver publishes it after persisting a session execution-archive page (payload carries
+// `archive:true` + sessionID). Like PACK_CHANGED it is a post-commit observation, never a driver —
+// the DocumentStore write stays authoritative; the event only makes the mutation EVENTED.
+//
+// IDEMPOTENCY (FEAT-003 pattern): idempotencyKey = wiki.page.changed:<docId>:<version> — the
+// doc+version pair is the natural dedup identity of the write; archive writes prefix the key with
+// `archive:` so an archive page and a human edit of the same doc never collide. The bus dedupes on
+// the key, so a redelivered write never double-publishes.
+//
+// SELF-LOOP GUARD: the event-driven archiver consumes ONLY ARCHIVE_TRIGGER_TYPES
+// (session.completed / goal.completed) — wiki.page.changed is NOT an archive trigger (asserted in
+// tests), so an archive write's own event can never re-trigger archival. The consumer-type filter
+// isolates the producer→event→consumer loop by construction (same anti-self-cascade posture as
+// DLQ_ALERT, which is guarded at the producer instead).
+//
+// BENEFIT BOUNDARY (deliberate, do not widen without review — mirrors the PACK_CHANGED contract):
+//   - the federation knowledge graphs only ever consume RELEASED snapshots, so NO federation-side
+//     reaction is expected from this event;
+//   - intended consumers are audit, UI notification, and future cache invalidation — they subscribe
+//     on demand; this producer only guarantees the event is emitted and subscribable.
+export const WIKI_PAGE_CHANGED = "wiki.page.changed"
+
 // §C/§D — a multi-agent subtask that could NOT auto-execute and needs a human: it exceeded the agent's
 // autonomy ceiling, or it is a level_5 suggestion_only action (never auto-runs). The Multi-Agent
 // Runtime publishes this so the §D2 Approval Queue surfaces it for a human decision (rather than the

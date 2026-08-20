@@ -24,8 +24,11 @@ import {
   CompactionArtifactTable,
   CompactionRunTable,
   CompactionSummaryAttemptTable,
+  type CompactionMode,
   type SummaryAttemptState,
 } from "./compaction-sql"
+import { attemptRemoteCompaction, EncryptedContentStore, supportsRemoteCompaction } from "./remote-compact"
+import { RequestExecutor } from "@deepagent-code/llm/route"
 import { eq, and, inArray, isNull } from "drizzle-orm"
 
 import { Cause, Effect, Exit, Layer, Context, Option } from "effect"
@@ -40,7 +43,7 @@ import { SessionMessage } from "@deepagent-code/core/session/message"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { ModelV2 } from "@deepagent-code/core/model"
 import { EventV2 } from "@deepagent-code/core/event"
-import { buildPrompt } from "@deepagent-code/core/session/compaction"
+import { buildPrompt, TOOL_OUTPUT_MAX_CHARS } from "@deepagent-code/core/session/compaction"
 import {
   updateLedgerFromSummaryRequired,
   carryOverToBridgeRequired,
@@ -68,11 +71,172 @@ export const Event = {
 
 export const PRUNE_MINIMUM = 20_000
 export const PRUNE_PROTECT = 40_000
-const TOOL_OUTPUT_MAX_CHARS = 2_000
+// UPD-005 (micro-compact, safe subset): the protect window used when the soft-landing fallback
+// phase triggers an early prune. Smaller than PRUNE_PROTECT so the fallback phase truncates MORE
+// of the older (white-list-excluded) tool results in place, buying headroom before the hard line.
+// Never wired into the hard phase — hard keeps PRUNE_PROTECT semantics unchanged.
+export const MICRO_COMPACT_PROTECT = 10_000
+// UPD-005: TOOL_OUTPUT_MAX_CHARS is defined once in core (packages/core/src/session/compaction.ts)
+// and imported above — do NOT re-introduce a local copy here.
 const PRUNE_PROTECTED_TOOLS = ["skill"]
 const DEFAULT_TAIL_TURNS = 2
 const MIN_PRESERVE_RECENT_TOKENS = 2_000
 const MAX_PRESERVE_RECENT_TOKENS = 8_000
+
+// =============================================================================
+// UPD-005 (structured compaction summary, claude-code parity, safe subset).
+// =============================================================================
+// DETERMINISM CONTRACT: the template constants and the pure helpers below
+// (stripSummaryAnalysis / selectPostCompactFileCandidates) are pure functions —
+// same input, same output. The durable summary-attempt requestHash covers the
+// rendered prompt, so the template MUST stay a module-level constant.
+//
+// Scope: the structured nine-section template replaces the legacy anchored
+// summary ONLY on the worldStateReinjection=false compatibility path. With
+// worldStateReinjection=true the V4.0.1 four-bucket NARROW template stays
+// byte-for-byte unchanged — its responsibility separation (files / env /
+// diagnostics are World State re-injected at their LATEST value, never
+// summarized) is an information-hole invariant (§3.4/§3.5).
+//
+// The model drafts inside an <analysis> scratchpad first; stripSummaryAnalysis
+// removes that scratchpad and unwraps the <summary> envelope BEFORE the text
+// reaches any durable or projected surface. The text-only / no-tools protocol
+// (toolChoice:"none" + SummaryProtocolViolation enforcement) is unchanged.
+export const STRUCTURED_SUMMARY_TEMPLATE = `Your task is to create a detailed, structured summary of the conversation history above, paying close attention to the user's explicit requests and your previous actions. This summary must capture enough technical detail — decisions, code patterns, file context, and error history — for the work to continue without losing context.
+
+Respond with TEXT ONLY. Do not call any tools. Your entire response must be an <analysis> block followed by a <summary> block.
+
+Before writing the final summary, wrap your drafting analysis in <analysis> tags to organize your thoughts and verify coverage. In the analysis:
+1. Walk the conversation chronologically and identify the user's explicit requests, your approach, key decisions, technical concepts, file names, code snippets, errors and their fixes, and any user feedback — especially feedback that changed your direction.
+2. Note every security-relevant instruction or constraint the user stated (sensitive files or data to avoid, forbidden operations, credential/secret handling rules). These MUST be preserved VERBATIM in the final summary so they keep applying after compaction.
+3. Double-check technical accuracy and completeness. The <analysis> block is discarded after compaction — only the <summary> block survives.
+
+Inside <summary>, output exactly these nine numbered sections in this order:
+
+1. Primary Request and Intent: all of the user's explicit requests and intents, in detail.
+2. Key Technical Concepts: important concepts, technologies, and frameworks discussed.
+3. Files and Code Sections: files examined, modified, or created — why each matters, what changed, and important code snippets verbatim.
+4. Errors and Fixes: every error encountered and how it was fixed, including corrective user feedback.
+5. Problem Solving: problems solved and ongoing troubleshooting.
+6. All User Messages: every genuine user message (user-role turns only, never tool results or quoted assistant text), with security-relevant instructions preserved verbatim.
+7. Pending Tasks: tasks explicitly requested but not yet complete.
+8. Current Work: precisely what was in progress immediately before this summary request, with file names and code snippets where applicable.
+9. Next Steps: the next action, only when directly in line with the user's most recent explicit request; include a verbatim quote showing where the work left off. Write "(none)" if the last task concluded.
+
+Rules:
+- Keep every section, using "(none)" when a section is empty.
+- Preserve exact file paths, commands, error strings, identifiers, and user-designated durable facts verbatim.
+- Never attribute assistant-generated text to the user.
+- Do not mention the summary process or that context was compacted.
+
+<example>
+<analysis>
+[Drafting scratchpad: chronological coverage check]
+</analysis>
+
+<summary>
+1. Primary Request and Intent:
+   [Detailed description]
+
+2. Key Technical Concepts:
+   - [Concept 1]
+
+3. Files and Code Sections:
+   - [File path]
+     - Why it matters / changes made
+     - [Important code snippet]
+
+4. Errors and Fixes:
+   - [Error and the fix applied]
+
+5. Problem Solving:
+   - [Solved problems and ongoing troubleshooting]
+
+6. All User Messages:
+   - [User message content]
+
+7. Pending Tasks:
+   - [Task]
+
+8. Current Work:
+   - [Precise description]
+
+9. Next Steps:
+   - [Next step or "(none)"]
+</summary>
+</example>`
+
+// Mirrors the core buildPrompt composition (packages/core/src/session/compaction.ts)
+// with the structured template swapped in. Keep the preamble wording in sync with
+// the core builder — the anchored-summary update contract depends on it.
+export const buildStructuredSummaryPrompt = (input: {
+  readonly previousSummary?: string
+  readonly context: readonly string[]
+}) =>
+  [
+    input.previousSummary
+      ? `Update the anchored summary below using the conversation history above.\nPreserve still-true details, remove stale details, and merge in the new facts.\n<previous-summary>\n${input.previousSummary}\n</previous-summary>`
+      : "Create a new anchored summary from the conversation history.",
+    STRUCTURED_SUMMARY_TEMPLATE,
+    ...input.context,
+  ].join("\n\n")
+
+// Post-processing: strip the <analysis> drafting scratchpad and unwrap the
+// <summary> envelope. Pure and conservative — text without any <analysis> /
+// <summary> marker is returned byte-for-byte unchanged (legacy summaries and
+// NARROW outputs are untouched).
+export const stripSummaryAnalysis = (text: string): string => {
+  if (!/<\/?(?:analysis|summary)>/.test(text)) return text
+  let out = text.replace(/<analysis>[\s\S]*?<\/analysis>/g, "")
+  out = out.replace(/<summary>([\s\S]*?)<\/summary>/g, (_match, content: string) => `Summary:\n${content.trim()}`)
+  out = out.replace(/\n{3,}/g, "\n\n")
+  return out.trim()
+}
+
+// UPD-005 (post-compact re-injection hook, conservative version): claude-code
+// re-injects the most recently read files after compaction
+// (POST_COMPACT_MAX_FILES_TO_RESTORE = 5). The committed-history chain here has
+// NO injection point yet, so this module only SELECTS candidates — a pure
+// function of the compacted messages (same input ⇒ same output) — recorded for
+// future wiring. Never adds an injection path.
+export const POST_COMPACT_MAX_FILES_TO_RESTORE = 5
+export const POST_COMPACT_MAX_CHARS_PER_FILE = 20_000
+const POST_COMPACT_READ_TOOLS = new Set(["read"])
+
+export type PostCompactFileCandidate = {
+  readonly filePath: string
+  readonly tool: string
+  readonly messageID: MessageID
+}
+
+// Scans backwards (most recent read wins), deduplicates by path, caps at
+// POST_COMPACT_MAX_FILES_TO_RESTORE. Only completed reads count; a pending /
+// errored read does not prove the file content ever entered context.
+export const selectPostCompactFileCandidates = (
+  messages: readonly SessionV1.WithParts[],
+): readonly PostCompactFileCandidate[] => {
+  const seen = new Set<string>()
+  const candidates: PostCompactFileCandidate[] = []
+  for (let index = messages.length - 1; index >= 0 && candidates.length < POST_COMPACT_MAX_FILES_TO_RESTORE; index--) {
+    const message = messages[index]
+    for (let partIndex = message.parts.length - 1; partIndex >= 0; partIndex--) {
+      if (candidates.length >= POST_COMPACT_MAX_FILES_TO_RESTORE) break
+      const part = message.parts[partIndex]
+      if (part.type !== "tool" || part.state.status !== "completed") continue
+      if (!POST_COMPACT_READ_TOOLS.has(part.tool)) continue
+      const input: unknown = part.state.input
+      let filePath: string | undefined
+      if (typeof input === "object" && input !== null) {
+        const value = (input as Record<string, unknown>).filePath
+        if (typeof value === "string" && value.length > 0) filePath = value
+      }
+      if (!filePath || seen.has(filePath)) continue
+      seen.add(filePath)
+      candidates.push({ filePath, tool: part.tool, messageID: message.info.id })
+    }
+  }
+  return candidates
+}
 type Turn = {
   start: number
   end: number
@@ -148,7 +312,7 @@ export interface Interface {
     tokens: SessionV1.Assistant["tokens"]
     model: Provider.Model
   }) => Effect.Effect<boolean>
-  readonly prune: (input: { sessionID: SessionID }) => Effect.Effect<void>
+  readonly prune: (input: { sessionID: SessionID; protect?: number }) => Effect.Effect<void>
   readonly process: (input: {
     parentID: MessageID
     messages: SessionV1.WithParts[]
@@ -165,6 +329,11 @@ export interface Interface {
     activityID?: string
   }) => Effect.Effect<void>
   readonly recover: (sessionID: SessionID) => Effect.Effect<void>
+  // BUG-407-009 §10.1 fail-closed contract: when a committed compaction continuation cannot be
+  // recovered (the recovery capability itself is a Maintenance-milestone deliverable), the run must
+  // stop advertising itself as recoverable — otherwise instance initialization re-wakes it forever
+  // and floods the log. CAS pending/admitted/dispatching → failed; real recovery can revisit later.
+  readonly failContinuationClosed: (input: { runID: string }) => Effect.Effect<void>
   readonly recoverableContinuations: (projectID: Project.ID) => Effect.Effect<
     readonly {
       runID: string
@@ -231,6 +400,18 @@ export const validateReplacementTargetInTransaction = Effect.fn(
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/SessionCompaction") {}
 
+// UPD-005 Gap 2 (§4.2, information-hole exemption): a committed run that compacted
+// remotely carries no TEXT summary by design — "no information is lost" is guaranteed
+// by the provider's server-held encrypted context, not by text. Any check that treats
+// a missing summary_text as an information hole MUST exempt runs in this shape.
+export const remoteCompactionInformationHoleExempt = (run: {
+  readonly compaction_mode: CompactionMode | null
+  readonly encrypted_content_session: string | null
+}): boolean =>
+  run.compaction_mode === "remote_compact" &&
+  run.encrypted_content_session !== null &&
+  run.encrypted_content_session.length > 0
+
 export const use = serviceUse(Service)
 
 export const layer = Layer.effect(
@@ -245,6 +426,13 @@ export const layer = Layer.effect(
     const events = yield* EventV2Bridge.Service
     const flags = yield* RuntimeFlags.Service
     const { db } = yield* Database.Service
+    // UPD-005 Gap 2: the remote branch dispatches through the route executor.
+    const executor = yield* RequestExecutor.Service
+    // UPD-005 Gap 1: bind the encrypted_content store to this database so the
+    // opaque blob survives restarts (see remote-compact.ts). Revert to memory-only
+    // mode when this layer goes away so no closed handle stays reachable.
+    EncryptedContentStore.bind(db)
+    yield* Effect.addFinalizer(() => Effect.sync(() => EncryptedContentStore.bind(undefined)))
     const promptEpoch = yield* PromptEpoch.Service
     const activeCompactions = new Set<SessionID>()
 
@@ -981,6 +1169,60 @@ export const layer = Layer.effect(
         .pipe(Effect.orDie)
     })
 
+    // UPD-005 Gap 2 (§4.2): commit for the remote mode. There is no TEXT summary
+    // and no marker text part to commit — the run records the mode, the pointer to
+    // the durably stored encrypted_content, and transitions to 'committed'.
+    // summary_text stays NULL by design (information-hole exempt, see
+    // remoteCompactionInformationHoleExempt).
+    const commitRemoteRun = Effect.fn("SessionCompaction.commitRemoteRun")(function* (input: {
+      runID: string
+      sessionID: SessionID
+      reason: "auto" | "manual"
+    }) {
+      return yield* db
+        .transaction(
+          (tx) =>
+            Effect.gen(function* () {
+              // The authority trigger only admits requested → summarizing →
+              // committed, so advance the run through the same sequence the local
+              // path uses.
+              yield* tx
+                .update(CompactionRunTable)
+                .set({ state: "summarizing" })
+                .where(and(eq(CompactionRunTable.run_id, input.runID), eq(CompactionRunTable.state, "requested")))
+                .run()
+              const committed = yield* tx
+                .update(CompactionRunTable)
+                .set({
+                  state: "committed",
+                  compaction_mode: "remote_compact",
+                  encrypted_content_session: input.sessionID,
+                  completion_reason: input.reason,
+                  committed_at: Date.now(),
+                })
+                .where(and(eq(CompactionRunTable.run_id, input.runID), eq(CompactionRunTable.state, "summarizing")))
+                .returning({ run_id: CompactionRunTable.run_id })
+                .get()
+              if (!committed) return false
+              // A remote run has nothing publishable: orphan any pending run
+              // bookkeeping artifacts (mirrors failRun) so recovery never replays them.
+              yield* tx
+                .update(CompactionArtifactTable)
+                .set({ state: "orphaned" })
+                .where(
+                  and(
+                    eq(CompactionArtifactTable.run_id, input.runID),
+                    eq(CompactionArtifactTable.state, "pending"),
+                  ),
+                )
+                .run()
+              return true
+            }),
+          { behavior: "immediate" },
+        )
+        .pipe(Effect.orDie)
+    })
+
     const isOverflow = Effect.fn("SessionCompaction.isOverflow")(function* (input: {
       tokens: SessionV1.Assistant["tokens"]
       model: Provider.Model
@@ -1043,12 +1285,24 @@ export const layer = Layer.effect(
       }
     })
 
-    // goes backwards through parts until there are PRUNE_PROTECT tokens worth of tool
-    // calls, then erases output of older tool calls to free context space
-    const prune = Effect.fn("SessionCompaction.prune")(function* (input: { sessionID: SessionID }) {
+    // goes backwards through parts until there are `protect` tokens worth of tool
+    // calls, then erases output of older tool calls to free context space.
+    // UPD-005: `protect` is parameterized (default PRUNE_PROTECT = pre-existing behavior) so the
+    // soft-landing fallback phase can run a micro-compact with a smaller window. DETERMINISM
+    // CONTRACT: the truncated set is a pure function of (messages, protect, PRUNE_MINIMUM) — the
+    // scan is strictly backwards, Token.estimate is pure, and only `Date.now()` (the persisted
+    // time.compacted stamp) varies between runs without ever changing WHICH parts get truncated.
+    // The durable summary-attempt requestHash is computed over the compacted projection, so any
+    // non-determinism here would desync compaction replays. Idempotency: parts already stamped
+    // with time.compacted break the scan, so a repeated prune never double-truncates.
+    const prune = Effect.fn("SessionCompaction.prune")(function* (input: {
+      sessionID: SessionID
+      protect?: number
+    }) {
       const cfg = yield* config.get()
       if (!cfg.compaction?.prune) return
-      log.info("pruning")
+      const protect = input.protect ?? PRUNE_PROTECT
+      log.info("pruning", { protect })
 
       const msgs = yield* session
         .messages({ sessionID: input.sessionID })
@@ -1073,7 +1327,7 @@ export const layer = Layer.effect(
           if (part.state.time.compacted) break loop
           const estimate = Token.estimate(part.state.output)
           total += estimate
-          if (total <= PRUNE_PROTECT) continue
+          if (total <= protect) continue
           pruned += estimate
           toPrune.push(part)
         }
@@ -1150,6 +1404,59 @@ export const layer = Layer.effect(
         sourceProjectionVersion: projection.projectionVersion,
       })
       if (!run) return "stop"
+
+      const agent = yield* agents.get("compaction")
+      const model = agent.model
+        ? yield* provider.getModel(agent.model.providerID, agent.model.modelID).pipe(Effect.orDie)
+        : yield* provider.getModel(userMessage.model.providerID, userMessage.model.modelID).pipe(Effect.orDie)
+
+      // UPD-005 Gap 2 (§4.2/§5): server-side compaction branch — remote only. The
+      // capability probe runs BEFORE any marker part is written: a remote commit
+      // produces no TEXT summary and no marker text part. {used:"local"} falls
+      // through to the local summary path below, which stays byte-for-byte unchanged.
+      if (!supportsRemoteCompaction(model)) {
+        // §4.3: capability lost (e.g. model switch) — the stale blob must never be replayed.
+        EncryptedContentStore.clear(input.sessionID)
+      }
+      if (supportsRemoteCompaction(model)) {
+        const providerInfo = yield* provider.getProvider(model.providerID).pipe(Effect.orDie)
+        const remoteMessages = yield* MessageV2.toModelMessagesEffect([...input.messages], model, {
+          stripMedia: true,
+          toolOutputMaxChars: TOOL_OUTPUT_MAX_CHARS,
+        })
+        const outcome = yield* attemptRemoteCompaction({
+          sessionID: input.sessionID,
+          model,
+          provider: providerInfo,
+          auth: undefined,
+          messages: remoteMessages,
+        }).pipe(Effect.provideService(RequestExecutor.Service, executor))
+        if (outcome.used === "remote") {
+          EncryptedContentStore.set(input.sessionID, outcome.encryptedContent, {
+            providerID: model.providerID,
+            modelID: model.id,
+            sourceRunID: run.run_id,
+          })
+          const committed = yield* commitRemoteRun({
+            runID: run.run_id,
+            sessionID: input.sessionID,
+            reason: input.auto ? "auto" : "manual",
+          })
+          if (!committed) {
+            yield* failRun(run.run_id, "compaction_commit_conflict")
+            return "stop"
+          }
+          log.info("remote compaction committed", { runID: run.run_id, sessionID: input.sessionID })
+          return "stop"
+        }
+        // {used:"local"}: record why the server-side path was unavailable (§4.2),
+        // then the existing local summary path below takes over.
+        log.info("remote compaction unavailable, using local summary", {
+          runID: run.run_id,
+          reason: outcome.reason,
+        })
+      }
+
       if (existingCompactionPart) {
         yield* registerArtifact({
           runID: run.run_id,
@@ -1182,10 +1489,6 @@ export const layer = Layer.effect(
       // messages, which are indistinguishable from a real repeated prompt in the UI and history.
       const messages = input.messages
 
-      const agent = yield* agents.get("compaction")
-      const model = agent.model
-        ? yield* provider.getModel(agent.model.providerID, agent.model.modelID).pipe(Effect.orDie)
-        : yield* provider.getModel(userMessage.model.providerID, userMessage.model.modelID).pipe(Effect.orDie)
       const cfg = yield* config.get()
       const history = compactionPart && messages.at(-1)?.info.id === input.parentID ? messages.slice(0, -1) : messages
       const prior = completedCompactions(history)
@@ -1204,10 +1507,14 @@ export const layer = Layer.effect(
       )
       // V4.0.1 P1 (§3.4/§3.5): narrow the summary to four buckets ONLY when worldStateReinjection is on —
       // it MUST be the same flag that gates re-injection, else "summary drops files, nothing re-injects"
-      // opens an information hole. Flag OFF ⇒ legacy SUMMARY_TEMPLATE, byte-for-byte pre-V4.0.1.
+      // opens an information hole. Flag OFF ⇒ UPD-005 structured nine-section template (the pre-UPD-005
+      // legacy SUMMARY_TEMPLATE lived in core buildPrompt; the structured template supersedes it on this
+      // compatibility path only). Flag ON ⇒ NARROW template, byte-for-byte unchanged.
       const nextPrompt =
         compacting.prompt ??
-        buildPrompt({ previousSummary, context: compacting.context, narrow: flags.worldStateReinjection })
+        (flags.worldStateReinjection
+          ? buildPrompt({ previousSummary, context: compacting.context, narrow: true })
+          : buildStructuredSummaryPrompt({ previousSummary, context: compacting.context }))
       const msgs = structuredClone(selected.head)
       yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
       const modelMessages = yield* MessageV2.toModelMessagesEffect(msgs, model, {
@@ -1441,14 +1748,39 @@ export const layer = Layer.effect(
       if (result.action === "continue") {
         const persisted = yield* session.messages({ sessionID: input.sessionID }).pipe(Effect.orDie)
         const checkpointIndex = persisted.findIndex((item) => item.info.id === currentProcessor.message.id)
-        const checkpoint = persisted[checkpointIndex] ?? {
+        let checkpoint = persisted[checkpointIndex] ?? {
           info: msg,
           parts: [],
         }
-        const summary = summaryText(checkpoint)
+        // UPD-005: strip the <analysis> drafting scratchpad before the summary enters ANY durable or
+        // projected surface. The persisted text parts are rewritten FIRST so HistoryAuthority hashes,
+        // the commit validation (which re-hydrates from the DB), and the post-compaction projection all
+        // see the stripped text. stripSummaryAnalysis is a pure function and returns tag-free input
+        // byte-for-byte unchanged, so pre-UPD-005 summaries are unaffected.
+        const rawSummary = summaryText(checkpoint)
+        const summary = rawSummary ? stripSummaryAnalysis(rawSummary) : undefined
         if (!summary) {
+          // Information-hole gate: a local_summary run MUST commit text. Remote runs
+          // never reach this checkpoint (they commit earlier via commitRemoteRun) and
+          // are exempt per remoteCompactionInformationHoleExempt — their NULL
+          // summary_text is legal because the server-held encrypted context, not
+          // text, guarantees no information is lost (§4.2).
           yield* failRun(run.run_id, "summary_text_missing")
           return "stop"
+        }
+        if (summary !== rawSummary) {
+          const textParts = checkpoint.parts.filter((part): part is SessionV1.TextPart => part.type === "text")
+          const strippedParts = checkpoint.parts.map((part) => {
+            if (part.type !== "text") return part
+            return part.id === textParts[0]?.id ? { ...part, text: summary } : { ...part, text: "" }
+          })
+          for (const part of strippedParts) {
+            if (part.type !== "text") continue
+            const original = checkpoint.parts.find((item): item is SessionV1.TextPart => item.id === part.id)
+            if (original && original.text === part.text) continue
+            yield* session.updatePart(part)
+          }
+          checkpoint = { info: checkpoint.info, parts: strippedParts }
         }
         if (summary) {
           const contextModel = yield* provider
@@ -1533,6 +1865,19 @@ export const layer = Layer.effect(
             yield* failRun(run.run_id, "compaction_commit_conflict")
             return "stop"
           }
+          // UPD-005 (post-compact re-injection hook, conservative version): record the candidate list of
+          // recently-read files from the compacted head ONLY. There is no injection point in the committed
+          // chain yet, so nothing is re-injected here. Persisting the list on compaction_run would require
+          // a core-owned schema migration (out of scope) — recorded as a report item for future wiring.
+          const postCompactCandidates = selectPostCompactFileCandidates(selected.head)
+          if (postCompactCandidates.length > 0)
+            log.info("post-compact file candidates", {
+              runID: run.run_id,
+              count: postCompactCandidates.length,
+              maxFiles: POST_COMPACT_MAX_FILES_TO_RESTORE,
+              maxCharsPerFile: POST_COMPACT_MAX_CHARS_PER_FILE,
+              files: postCompactCandidates.map((candidate) => candidate.filePath),
+            })
           yield* publishCommittedRun(run.run_id)
         }
       }
@@ -1680,12 +2025,29 @@ export const layer = Layer.effect(
       }))
     })
 
+    const failContinuationClosed = Effect.fn("SessionCompaction.failContinuationClosed")(function* (input: {
+      runID: string
+    }) {
+      yield* db
+        .update(CompactionRunTable)
+        .set({ continuation_state: "failed" })
+        .where(
+          and(
+            eq(CompactionRunTable.run_id, input.runID),
+            inArray(CompactionRunTable.continuation_state, ["pending", "admitted", "dispatching"] as const),
+          ),
+        )
+        .run()
+        .pipe(Effect.orDie)
+    })
+
     return Service.of({
       isOverflow,
       prune,
       process: processCompaction,
       create,
       recover,
+      failContinuationClosed,
       recoverableContinuations,
       hasPending,
     })
@@ -1704,6 +2066,7 @@ export const defaultLayer = Layer.suspend(() =>
     Layer.provide(EventV2Bridge.defaultLayer),
     Layer.provide(Database.defaultLayer),
     Layer.provide(PromptEpoch.defaultLayer),
+    Layer.provide(RequestExecutor.defaultLayer),
   ),
 )
 

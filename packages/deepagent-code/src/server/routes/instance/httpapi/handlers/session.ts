@@ -31,12 +31,14 @@ import { InstanceHttpApi } from "../api"
 import {
   CommandPayload,
   ContextAttemptResolvePayload,
+  ContextCohortQuery,
   DiffArtifactFileQuery,
   DiffArtifactMaintenancePayload,
   DiffArtifactManifestQuery,
   DiffQuery,
   ForkPayload,
   InitPayload,
+  ImportSnapshotPayload,
   LegacyForkPayload,
   ListQuery,
   MessagesQuery,
@@ -49,11 +51,13 @@ import {
   SummarizePayload,
   UpdatePayload,
 } from "../groups/session"
-import { ConflictError, PermissionNotFoundError, ServiceUnavailableError, notFound } from "../errors"
+import { ApiNotFoundError, ConflictError, PermissionNotFoundError, ServiceUnavailableError, notFound } from "../errors"
 import * as SessionError from "./session-errors"
 import { randomUUID } from "node:crypto"
 import { getWorkspaceContext } from "../utils/workspace-context"
 import { SessionDiffArtifact } from "@/session/diff-artifact"
+import { exportSessionSnapshot, importSessionSnapshot, type SessionSnapshot } from "@/session/snapshot"
+import { InstanceState } from "@/effect/instance-state"
 
 const tryParseJson = (text: string) =>
   Effect.try({
@@ -719,6 +723,14 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       return resolved
     })
 
+    const contextCohort = Effect.fn("SessionHttpApi.contextCohort")(function* (ctx: {
+      query: typeof ContextCohortQuery.Type
+    }) {
+      return yield* contextDiagnosticsSvc
+        .cohort({ sinceMs: ctx.query.sinceMs, ...(ctx.query.untilMs != null ? { untilMs: ctx.query.untilMs } : {}) })
+        .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
+    })
+
     const providerResolutionList = Effect.fn("SessionHttpApi.providerResolutionList")(function* (ctx: {
       params: { sessionID: SessionID }
     }) {
@@ -743,6 +755,35 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
               : new ConflictError({ message: error.reason, resource: error.code }),
           ),
         )
+    })
+
+    const exportSnapshot = Effect.fn("SessionHttpApi.exportSnapshot")(function* (ctx: {
+      params: { sessionID: SessionID }
+    }) {
+      yield* requireSession(ctx.params.sessionID)
+      const bundle = yield* exportSessionSnapshot(ctx.params.sessionID).pipe(
+        Effect.mapError(() => notFound(`session not found: ${ctx.params.sessionID}`)),
+      )
+      return JSON.stringify(bundle)
+    })
+
+    const importSnapshot = Effect.fn("SessionHttpApi.importSnapshot")(function* (ctx: {
+      payload: typeof ImportSnapshotPayload.Type
+    }) {
+      const snapshot = yield* tryParseJson(ctx.payload.bundle).pipe(
+        Effect.flatMap((raw) =>
+          Effect.try({
+            try: () => raw as SessionSnapshot,
+            catch: () => new HttpApiError.BadRequest({}),
+          }),
+        ),
+      )
+      const instanceCtx = yield* InstanceState.context
+      return yield* importSessionSnapshot({
+        snapshot,
+        projectID: instanceCtx.project.id,
+        directory: instanceCtx.directory,
+      }).pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
     })
 
     return handlers
@@ -782,7 +823,10 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       .handle("updatePart", updatePart)
       .handle("contextDiagnostics", contextDiagnostics)
       .handle("contextAttemptResolve", contextAttemptResolve)
+      .handle("contextCohort", contextCohort)
       .handle("providerResolutionList", providerResolutionList)
       .handle("providerResolutionResolve", providerResolutionResolve)
+      .handle("exportSnapshot", exportSnapshot)
+      .handle("importSnapshot", importSnapshot)
   }),
 )

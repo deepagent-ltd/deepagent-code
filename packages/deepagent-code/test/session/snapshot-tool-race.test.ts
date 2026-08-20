@@ -11,7 +11,7 @@
  * before tools run by hooking into start-step, but the AI SDK executes
  * tools internally during multi-step processing before emitting events.
  */
-import { expect } from "bun:test"
+import { afterEach, expect } from "bun:test"
 import { Effect, Layer } from "effect"
 import { FetchHttpClient } from "effect/unstable/http"
 import fs from "fs/promises"
@@ -25,13 +25,15 @@ import { MessageV2 } from "../../src/session/message-v2"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { SessionV2 } from "@deepagent-code/core/session"
 import * as Log from "@deepagent-code/core/util/log"
-import { provideTmpdirServer, testInstanceStoreLayer } from "../fixture/fixture"
+import { disposeAllInstances, provideTmpdirServer, testInstanceStoreLayer } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import { TestLLMServer } from "../lib/llm-server"
 
 // Same layer setup as prompt-effect.test.ts
 import { NodeFileSystem } from "@effect/platform-node"
 import { Database } from "@deepagent-code/core/database/database"
+import { DatabaseMigration } from "@deepagent-code/core/database/migration"
+import remoteCompactPersistenceMigration from "@deepagent-code/core/database/migration/20260820000000_remote_compact_persistence"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { DebugService } from "@/debug/service"
 import { RuntimeBase } from "@/runtime/base"
@@ -53,6 +55,7 @@ import { Skill } from "../../src/skill"
 import { SystemPrompt } from "../../src/session/system"
 import { Todo } from "../../src/session/todo"
 import { SessionCompaction } from "../../src/session/compaction"
+import { RequestExecutor } from "@deepagent-code/llm/route"
 import { Instruction } from "../../src/session/instruction"
 import { SessionProcessor } from "../../src/session/processor"
 import { SessionRunState } from "../../src/session/run-state"
@@ -73,6 +76,12 @@ import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
 import { PromptEpoch } from "@/session/prompt-epoch"
 import { LocationIdentity } from "@deepagent-code/core/context-federation/identity"
 import { SessionProviderOwner } from "@deepagent-code/core/context-federation/provider-owner"
+
+// Dispose any instances loaded into the process-wide AppRuntime instance
+// store so this file leaves no shared state for files that run after it.
+afterEach(async () => {
+  await disposeAllInstances()
+})
 
 void Log.init({ print: false })
 
@@ -173,6 +182,18 @@ const stubDebugServiceLayer = Layer.succeed(
   }),
 )
 
+// UPD-005: the Gap 1/Gap 2 persistence migration is not registered in
+// migration.gen.ts yet (mainline registers it). Apply it over the tracked history
+// so compaction_run carries the mode columns the drizzle schema already declares.
+const database = Layer.effect(
+  Database.Service,
+  Effect.gen(function* () {
+    const service = yield* Database.Service
+    yield* DatabaseMigration.applyOnly(service.db, [remoteCompactPersistenceMigration])
+    return service
+  }),
+).pipe(Layer.provide(Database.defaultLayer))
+
 function makeHttp() {
   const deps = Layer.mergeAll(
     Session.defaultLayer,
@@ -191,7 +212,7 @@ function makeHttp() {
     FSUtil.defaultLayer,
     BackgroundJob.defaultLayer,
     status,
-    Database.defaultLayer,
+    database,
     EventV2Bridge.defaultLayer,
     PromptEpoch.defaultLayer,
   ).pipe(Layer.provideMerge(infra))
@@ -227,6 +248,7 @@ function makeHttp() {
   )
   const compact = SessionCompaction.layer.pipe(
     Layer.provide(RuntimeFlags.layer({ experimentalEventSystem: true })),
+    Layer.provide(RequestExecutor.defaultLayer),
     Layer.provideMerge(proc),
     Layer.provideMerge(deps),
   )

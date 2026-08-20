@@ -20,6 +20,7 @@ import {
   ProviderInternalReason,
   QuotaExceededReason,
   RateLimitReason,
+  TransportPhase,
   TransportReason,
   UnknownProviderReason,
 } from "../schema"
@@ -69,15 +70,38 @@ export function wireRequestHash(input: {
 }
 
 const BODY_LIMIT = 16_384
-const MAX_RETRIES = 2
+const TRANSPORT_RETRY_LIMIT = 2
+const STATUS_RETRY_LIMIT = 2
 const BASE_DELAY_MS = 500
 const MAX_DELAY_MS = 10_000
 const REDACTED = "<redacted>"
 
-/** Per-request transport retry budget. Durable provider attempts override this to zero. */
-export const CurrentRetryLimit = Context.Reference<number>("@deepagent-code/LLM/RequestExecutor/CurrentRetryLimit", {
-  defaultValue: () => MAX_RETRIES,
-})
+/**
+ * Per-request transport retry budget for pre-dispatch connection failures.
+ * Post-dispatch transport errors are never retried (double-billing risk), so
+ * this budget only ever applies to `TransportReason.phase === "pre-dispatch"`.
+ */
+export const CurrentTransportRetryLimit = Context.Reference<number>(
+  "@deepagent-code/LLM/RequestExecutor/CurrentTransportRetryLimit",
+  { defaultValue: () => TRANSPORT_RETRY_LIMIT },
+)
+
+/** Per-request retry budget for retryable HTTP status failures (429 / 5xx). */
+export const CurrentStatusRetryLimit = Context.Reference<number>(
+  "@deepagent-code/LLM/RequestExecutor/CurrentStatusRetryLimit",
+  { defaultValue: () => STATUS_RETRY_LIMIT },
+)
+
+/**
+ * Umbrella override for BOTH retry budgets. Durable provider attempts provide
+ * `0` here (the seal is recomputed before every attempt, so executor-internal
+ * retries would only multiply sealed physical requests). When unset
+ * (`undefined`), the per-class limits above apply independently.
+ */
+export const CurrentRetryLimit = Context.Reference<number | undefined>(
+  "@deepagent-code/LLM/RequestExecutor/CurrentRetryLimit",
+  { defaultValue: () => undefined },
+)
 
 // One source of truth for what counts as a sensitive name across headers,
 // URL query keys, and field names embedded inside request/response bodies.
@@ -389,7 +413,62 @@ const statusError =
       })
     })
 
+// Error codes that prove the request never reached the provider: DNS/TCP
+// connect failures, connection-phase timeouts, and TLS handshake rejections.
+// Anything else (ECONNRESET mid-exchange, header/body timeouts, unknown
+// errors) is ambiguous-or-delivered and classified post-dispatch.
+const PRE_DISPATCH_ERROR_CODES = new Set([
+  "ECONNREFUSED",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "ENETUNREACH",
+  "EHOSTUNREACH",
+  "EADDRNOTAVAIL",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "CERT_HAS_EXPIRED",
+  "CERT_NOT_YET_VALID",
+  "DEPTH_ZERO_SELF_SIGNED_CERT",
+  "SELF_SIGNED_CERT_IN_CHAIN",
+  "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+  "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
+  "ERR_TLS_CERT_ALTNAME_INVALID",
+])
+
+const hasPreDispatchCode = (error: unknown, seen: Set<unknown> = new Set()): boolean => {
+  if (!error || typeof error !== "object" || seen.has(error)) return false
+  seen.add(error)
+  const code = "code" in error ? (error as { readonly code?: unknown }).code : undefined
+  if (typeof code === "string" && PRE_DISPATCH_ERROR_CODES.has(code)) return true
+  const cause = "cause" in error ? (error as { readonly cause?: unknown }).cause : undefined
+  return hasPreDispatchCode(cause, seen)
+}
+
+/**
+ * Classifies a raw transport failure by dispatch phase. The executor only
+ * ever sees failures from `http.execute`, i.e. before response headers, but
+ * fetch cannot tell "connection refused" (nothing sent) from "connection
+ * dropped while awaiting headers" (request possibly delivered and billed).
+ * So pre-dispatch requires positive evidence from the underlying error codes;
+ * every ambiguous case degrades to post-dispatch, which is never retried.
+ */
+const transportPhase = (error: unknown): TransportPhase => {
+  // Effect timeouts carry no dispatch information; the request may already
+  // have been on the wire when the deadline fired.
+  if (!HttpClientError.isHttpClientError(error)) return "post-dispatch"
+  switch (error.reason._tag) {
+    // The request body/URL failed before anything was written to the wire.
+    case "EncodeError":
+    case "InvalidUrlError":
+      return "pre-dispatch"
+    case "TransportError":
+      return hasPreDispatchCode(error.reason.cause) ? "pre-dispatch" : "post-dispatch"
+    default:
+      return "post-dispatch"
+  }
+}
+
 const toHttpError = (redactedNames: ReadonlyArray<string | RegExp>) => (error: unknown) => {
+  const phase = transportPhase(error)
   const transportError = (input: {
     readonly message: string
     readonly kind?: string | undefined
@@ -401,6 +480,7 @@ const toHttpError = (redactedNames: ReadonlyArray<string | RegExp>) => (error: u
       reason: new TransportReason({
         message: input.message,
         kind: input.kind,
+        phase,
         url: input.request ? redactUrl(input.request.url) : undefined,
         http: input.request ? new HttpContext({ request: requestDetails(input.request, redactedNames) }) : undefined,
       }),
@@ -435,16 +515,30 @@ const retryDelay = (error: LLMError, attempt: number) => {
   ).pipe(Effect.map((delay) => Math.round(delay)))
 }
 
-const retryStatusFailures = <A, R>(
+const retryFailures = <A, R>(
   effect: Effect.Effect<A, LLMError, R>,
-  retries = MAX_RETRIES,
+  limits: { readonly transport: number; readonly status: number },
+  used: { readonly transport: number; readonly status: number } = { transport: 0, status: 0 },
   attempt = 0,
 ): Effect.Effect<A, LLMError, R> =>
   Effect.catchTag(effect, "LLM.Error", (error): Effect.Effect<A, LLMError, R> => {
-    if (!error.retryable || retries <= 0) return Effect.fail(error)
+    // Transport and status failures consume independent budgets: a flapping
+    // connection must not eat the 429/5xx budget and vice versa. Only
+    // pre-dispatch transport errors are retryable (see TransportReason).
+    const isTransport = error.reason._tag === "Transport"
+    const spent = isTransport ? used.transport : used.status
+    const limit = isTransport ? limits.transport : limits.status
+    if (!error.retryable || spent >= limit) return Effect.fail(error)
     return retryDelay(error, attempt).pipe(
       Effect.flatMap((delay) => Effect.sleep(delay)),
-      Effect.flatMap(() => retryStatusFailures(effect, retries - 1, attempt + 1)),
+      Effect.flatMap(() =>
+        retryFailures(
+          effect,
+          limits,
+          isTransport ? { transport: spent + 1, status: used.status } : { transport: used.transport, status: spent + 1 },
+          attempt + 1,
+        ),
+      ),
     )
   })
 
@@ -463,7 +557,10 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient> = Layer.e
     return Service.of({
       execute: (request) =>
         Effect.gen(function* () {
-          return yield* retryStatusFailures(executeOnce(request), yield* CurrentRetryLimit)
+          const override = yield* CurrentRetryLimit
+          const transportLimit = override ?? (yield* CurrentTransportRetryLimit)
+          const statusLimit = override ?? (yield* CurrentStatusRetryLimit)
+          return yield* retryFailures(executeOnce(request), { transport: transportLimit, status: statusLimit })
         }),
     })
   }),

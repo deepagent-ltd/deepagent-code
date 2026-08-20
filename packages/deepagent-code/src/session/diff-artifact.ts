@@ -1,5 +1,6 @@
 import { Database } from "@deepagent-code/core/database/database"
-import { EventArtifactChunkTable, EventArtifactTable } from "@deepagent-code/core/event/sql"
+import { EventV2 } from "@deepagent-code/core/event"
+import { EventArtifactChunkTable, EventArtifactTable, EventTable } from "@deepagent-code/core/event/sql"
 import { MessageTable, SessionPromptEpochMessageTable, SessionTable } from "@deepagent-code/core/session/sql"
 import { CanonicalJson } from "@deepagent-code/core/util/canonical-json"
 import { Hash } from "@deepagent-code/core/util/hash"
@@ -542,6 +543,289 @@ function migrateBoundedCandidate(db: Database.Interface["db"], candidate: Candid
       Effect.orDie,
     )
 }
+
+/**
+ * RISK-003 ① runtime writer. Persists the inline `summary.diffs` of a just-published user message
+ * into the session_diff_artifact authority and rewrites the message row to the compact
+ * `diffArtifact` descriptor, so runtime writes converge on the same durable shape the backfill
+ * (`migrate`) produces for legacy rows. Runs AFTER the message.updated event is committed (the
+ * event row supplies `source_event_id` + `original_data_hash`) and is best-effort: any validation
+ * or CAS failure leaves the bounded inline diffs in place and surfaces as a typed `Invalid` the
+ * caller logs. Never deletes events, never rewrites history hashes (user summary is excluded from
+ * HistoryAuthority, proven per call via `validateEpochHashes`).
+ */
+export const capture = Effect.fn("SessionDiffArtifact.capture")(function* (input: {
+  sessionID: SessionID
+  messageID: MessageID
+  sourceEventID: EventV2.ID
+  now?: number
+}) {
+  const { db } = yield* Database.Service
+  const now = input.now ?? Date.now()
+  const source = yield* db
+    .select({ text: sql<string>`CAST(${EventTable.data} AS TEXT)`, seq: EventTable.seq })
+    .from(EventTable)
+    .where(and(eq(EventTable.id, input.sourceEventID), eq(EventTable.aggregate_id, input.sessionID)))
+    .get()
+    .pipe(Effect.orDie)
+  if (!source) return yield* Effect.fail(new Invalid({ message: "runtime capture source event is missing" }))
+  const current = yield* db
+    .get<{ data: string }>(sql`
+      SELECT CAST(data AS TEXT) AS data
+      FROM message
+      WHERE id = ${input.messageID}
+        AND session_id = ${input.sessionID}
+        AND json_extract(data, '$.role') = 'user'
+    `)
+    .pipe(Effect.orDie)
+  if (!current) return yield* Effect.fail(new Invalid({ message: "runtime capture message is missing" }))
+  const decoded = Schema.decodeUnknownOption(Schema.UnknownFromJsonString)(current.data)
+  const parsed = decoded._tag === "Some" ? decoded.value : undefined
+  if (!record(parsed) || parsed.role !== "user")
+    return yield* Effect.fail(new Invalid({ message: "runtime capture message shape is invalid" }))
+  const summary = record(parsed.summary) ? parsed.summary : undefined
+  if (!summary) return yield* Effect.fail(new Invalid({ message: "runtime capture message shape is invalid" }))
+  if (summary.diffArtifact) return { state: "skipped" as const }
+  const diffs = summary.diffs
+  if (!Array.isArray(diffs) || diffs.length === 0) return { state: "skipped" as const }
+  if (diffs.length > MAX_MIGRATION_FILES)
+    return yield* Effect.fail(new Invalid({ message: `runtime diff count exceeds ${MAX_MIGRATION_FILES}` }))
+  const files = [] as Array<{
+    index: number
+    path: string
+    pathKey: string
+    additions: number
+    deletions: number
+    status: "added" | "deleted" | "modified" | null
+    patch: Buffer
+  }>
+  const pathKeys = new Set<string>()
+  for (const [index, entry] of diffs.entries()) {
+    if (!record(entry)) return yield* Effect.fail(new Invalid({ message: `runtime diff ${index} is invalid` }))
+    const path = normalizePath(entry.file)
+    if (!path)
+      return yield* Effect.fail(new Invalid({ message: `runtime diff ${index} file path is invalid` }))
+    const pathKey = path.toLocaleLowerCase("en-US")
+    if (pathKeys.has(pathKey))
+      return yield* Effect.fail(new Invalid({ message: "runtime diffs contain a case-colliding file path" }))
+    pathKeys.add(pathKey)
+    const additions = entry.additions
+    const deletions = entry.deletions
+    if (typeof additions !== "number" || !Number.isSafeInteger(additions) || additions < 0)
+      return yield* Effect.fail(new Invalid({ message: `runtime diff ${index} additions are invalid` }))
+    if (typeof deletions !== "number" || !Number.isSafeInteger(deletions) || deletions < 0)
+      return yield* Effect.fail(new Invalid({ message: `runtime diff ${index} deletions are invalid` }))
+    const status = entry.status
+    if (status !== undefined && status !== "added" && status !== "deleted" && status !== "modified")
+      return yield* Effect.fail(new Invalid({ message: `runtime diff ${index} status is invalid` }))
+    const patch = entry.patch
+    if (patch !== undefined && patch !== null && typeof patch !== "string")
+      return yield* Effect.fail(new Invalid({ message: `runtime diff ${index} patch is invalid` }))
+    files.push({
+      index,
+      path,
+      pathKey,
+      additions,
+      deletions,
+      status: status ?? null,
+      patch: Buffer.from(typeof patch === "string" ? patch : "", "utf8"),
+    })
+  }
+  const body = Buffer.from(JSON.stringify({ diffs }))
+  if (body.byteLength > MAX_MIGRATION_BODY_BYTES)
+    return yield* Effect.fail(new Invalid({ message: "runtime diff body exceeds the byte budget" }))
+  const bodyHash = Hash.sha256(body)
+  const originalDataHash = Hash.sha256(source.text)
+  const artifactID = `evtart_${Hash.sha256(`legacy-message-diff.v2:${input.sourceEventID}:${originalDataHash}:${bodyHash}`)}`
+  const descriptor: CanonicalArtifact = {
+    id: artifactID,
+    hash: bodyHash,
+    codec: "legacy-message-diff.v2",
+    fileCount: diffs.length,
+    previewFileCount: Math.min(diffs.length, MessageV2.ClientDiffLimits.files),
+    previewTruncated: diffs.length > MessageV2.ClientDiffLimits.files,
+  }
+  const nextSummary: Record<string, unknown> = { ...summary, diffArtifact: descriptor }
+  delete nextSummary.diffs
+  const next = { ...parsed, summary: nextSummary }
+  const nextData = CanonicalJson.stringify(next)
+  const canonicalData = {
+    sessionID: input.sessionID,
+    info: { ...next, id: input.messageID, sessionID: input.sessionID },
+  }
+  const canonicalText = JSON.stringify(canonicalData)
+  const bodyChunks = Array.from(
+    { length: Math.max(1, Math.ceil(body.byteLength / FILE_CHUNK_BYTES)) },
+    (_, index) => body.subarray(index * FILE_CHUNK_BYTES, (index + 1) * FILE_CHUNK_BYTES),
+  )
+  return yield* db
+    .transaction(
+      (tx) =>
+        Effect.gen(function* () {
+          const existing = yield* tx
+            .select()
+            .from(SessionDiffMigrationReceiptTable)
+            .where(eq(SessionDiffMigrationReceiptTable.message_id, input.messageID))
+            .get()
+          if (existing) return { state: "skipped" as const }
+          const epochs = yield* validateEpochHashes(
+            tx as unknown as Database.Interface["db"],
+            input.sessionID,
+            input.messageID,
+            parsed,
+            next,
+          )
+          if ("failure" in epochs)
+            return yield* Effect.fail(new Invalid({ message: epochs.failure ?? "history authority validation failed" }))
+          const sessionSummary = yield* tx.get<{ data: string | null; body: string | null }>(sql`
+            SELECT CAST(summary_diffs AS TEXT) AS data,
+              CASE WHEN summary_diffs IS NULL THEN NULL ELSE json_object('diffs', json(summary_diffs)) END AS body
+            FROM session
+            WHERE id = ${input.sessionID}
+          `)
+          if (!sessionSummary) return yield* Effect.fail(new Invalid({ message: "runtime capture Session is missing" }))
+          const expectedMessageDataHash = Hash.sha256(current.data)
+          const expectedSessionSummaryHash = Hash.sha256(sessionSummary.data ?? "null")
+          yield* tx
+            .run(sql`
+              INSERT INTO event_artifact (
+                artifact_id, event_id, aggregate_id, seq, kind,
+                original_data_hash, canonical_data_hash, canonical_data,
+                body_hash, body_bytes, chunk_count, codec_version, created_at
+              ) VALUES (
+                ${artifactID}, ${input.sourceEventID}, ${input.sessionID}, ${source.seq}, 'legacy_message_diff',
+                ${originalDataHash}, ${Hash.sha256(canonicalText)}, ${canonicalText},
+                ${bodyHash}, ${body.byteLength}, ${bodyChunks.length}, 2, ${now}
+              ) ON CONFLICT DO NOTHING
+            `)
+            .pipe(Effect.orDie)
+          yield* Effect.forEach(
+            bodyChunks,
+            (chunk, index) =>
+              tx
+                .run(sql`
+                  INSERT INTO event_artifact_chunk (artifact_id, chunk_index, data, chunk_hash)
+                  VALUES (${artifactID}, ${index}, ${chunk}, ${Hash.sha256(chunk)})
+                  ON CONFLICT DO NOTHING
+                `)
+                .pipe(Effect.orDie),
+            { discard: true },
+          )
+          // The receipt FK targets event_artifact, so the artifact rows must exist first; the
+          // receipt_guard trigger then requires the prepared receipt before any file rows land.
+          yield* tx
+            .insert(SessionDiffMigrationReceiptTable)
+            .values({
+              message_id: input.messageID,
+              session_id: input.sessionID,
+              artifact_id: artifactID,
+              source_event_id: input.sourceEventID,
+              expected_message_data_hash: expectedMessageDataHash,
+              expected_session_summary_hash: expectedSessionSummaryHash,
+              canonicalizer_version: 2,
+              canonicalization_version: HistoryAuthority.CANONICALIZATION_VERSION,
+              epoch_hashes: epochs.values,
+              state: "prepared",
+              created_at: now,
+              updated_at: now,
+            })
+            .run()
+          for (const file of files) {
+            const chunkCount = Math.max(1, Math.ceil(file.patch.byteLength / FILE_CHUNK_BYTES))
+            yield* tx
+              .insert(SessionDiffArtifactFileTable)
+              .values({
+                artifact_id: artifactID,
+                file_index: file.index,
+                path: file.path,
+                path_key: file.pathKey,
+                additions: file.additions,
+                deletions: file.deletions,
+                status: file.status,
+                patch_hash: Hash.sha256(file.patch),
+                patch_bytes: file.patch.byteLength,
+                patch_chunk_count: chunkCount,
+              })
+              .run()
+            yield* Effect.forEach(
+              Array.from(
+                { length: chunkCount },
+                (_, index) => file.patch.subarray(index * FILE_CHUNK_BYTES, (index + 1) * FILE_CHUNK_BYTES),
+              ),
+              (data, index) =>
+                tx
+                  .insert(SessionDiffArtifactFileChunkTable)
+                  .values({
+                    artifact_id: artifactID,
+                    file_index: file.index,
+                    chunk_index: index,
+                    data,
+                    chunk_hash: Hash.sha256(data),
+                  })
+                  .run(),
+              { discard: true },
+            )
+          }
+          const updated = yield* tx
+            .update(MessageTable)
+            .set({
+              data: sql`json(${nextData})` as unknown as typeof MessageTable.$inferInsert.data,
+              time_updated: now,
+            })
+            .where(
+              and(
+                eq(MessageTable.id, input.messageID),
+                eq(MessageTable.session_id, input.sessionID),
+                sql`CAST(${MessageTable.data} AS TEXT) = ${current.data}`,
+              ),
+            )
+            .returning({ data: sql<string>`CAST(${MessageTable.data} AS TEXT)` })
+            .get()
+          if (!updated)
+            return yield* Effect.fail(new Invalid({ message: "runtime capture message compare-and-swap lost" }))
+          if (Hash.sha256(updated.data) !== Hash.sha256(nextData))
+            return yield* Effect.die(new Error(`Runtime diff message bytes diverged: ${input.messageID}`))
+          let summaryNulled = false
+          if (sessionSummary.data !== null && sessionSummary.body !== null && Hash.sha256(sessionSummary.body) === bodyHash) {
+            const sessionUpdated = yield* tx
+              .update(SessionTable)
+              .set({ summary_diffs: null })
+              .where(
+                and(
+                  eq(SessionTable.id, input.sessionID),
+                  sql`CAST(${SessionTable.summary_diffs} AS TEXT) = ${sessionSummary.data}`,
+                ),
+              )
+              .returning({ id: SessionTable.id })
+              .get()
+            if (!sessionUpdated)
+              return yield* Effect.fail(new Invalid({ message: "runtime capture Session summary compare-and-swap lost" }))
+            summaryNulled = true
+          }
+          yield* tx
+            .update(SessionDiffMigrationReceiptTable)
+            .set({
+              state: "committed",
+              committed_message_data_hash: Hash.sha256(updated.data),
+              committed_session_summary_hash: summaryNulled ? NULL_SUMMARY_HASH : expectedSessionSummaryHash,
+              updated_at: now,
+              committed_at: now,
+            })
+            .where(
+              and(
+                eq(SessionDiffMigrationReceiptTable.message_id, input.messageID),
+                eq(SessionDiffMigrationReceiptTable.state, "prepared"),
+              ),
+            )
+            .run()
+          return { state: "captured" as const, artifact: descriptor }
+        }),
+      // Same WAL/deferred rationale as migrate: validation reads stay on one snapshot without
+      // reserving the writer; concurrent commits surface as CAS misses instead of stale authority.
+      { behavior: "deferred" },
+    )
+    .pipe(Effect.orDie)
+})
 
 function migrationBudget(db: Database.Interface["db"], candidate: Candidate) {
   return db

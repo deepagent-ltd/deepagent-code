@@ -192,6 +192,34 @@ describe("startGoal + runToCompletion", () => {
     expect(outcome).toBe("needs_human")
   })
 
+  test("BUG-004 lock: budget exhaustion halts the driver (never loops past maxTicks)", async () => {
+    // An executor that never completes the plan and never makes progress: the ONLY thing allowed to
+    // stop the drive is the budget ceiling (maxTicks). stallThreshold is set high so stall cannot fire
+    // first — this pins that the loop's hard budget is what halts the driver, and that it runs at most
+    // maxTicks executor turns (the pre-execution ceiling), never an unbounded continuation.
+    const planDocId = materializePlanDoc({ store, sessionId: SESSION, plan: plan([step("a", "pending")]) })
+    let execCount = 0
+    const deps = controllerDeps({
+      executor: () =>
+        Effect.sync(() => {
+          execCount += 1
+          return { tokensUsed: 10 }
+        }),
+    })
+    const { handle } = await Effect.runPromise(
+      startGoal({
+        deps,
+        planDocId,
+        criteria: [{ kind: "plan_complete" }],
+        limits: { maxTicks: 2, maxTokens: 10_000, maxWallclockMs: 10_000 },
+        stallThreshold: 99,
+      }),
+    )
+    const outcome = await Effect.runPromise(runToCompletion({ deps, handle }))
+    expect(outcome).toBe("needs_human")
+    expect(execCount).toBeLessThanOrEqual(2)
+  })
+
   test("shouldPause suspends without a terminal outcome (resumes on next run)", async () => {
     const planDocId = materializePlanDoc({ store, sessionId: SESSION, plan: plan([step("a", "pending")]) })
     const deps = controllerDeps()

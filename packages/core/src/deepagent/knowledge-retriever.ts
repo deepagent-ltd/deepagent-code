@@ -2,7 +2,7 @@ import type { AgentMode } from "./mode"
 import { knowledgeEnabled, strategyMethodologyEnabled, domainKnowledgeEnabled } from "./mode"
 import type { KnowledgeRefProjection, KnowledgeSynthesis, TaskContext, ToolContext } from "./prompt-policy"
 import * as knowledgeSource from "./knowledge-source"
-import { type ProblemProfile, type ActivateOptions } from "./domain-pack"
+import { type ProblemProfile, type ActivateOptions, overridePackIds } from "./domain-pack"
 import * as Registry from "./domain-pack-registry"
 import type { ExtendedProblemProfile } from "./domain-pack-registry"
 import { DeepAgentReleasedSnapshot, SnapshotIntegrityError } from "./released-snapshot"
@@ -39,6 +39,10 @@ export type RetrievalInput = {
   readonly blockedRefs?: readonly string[]
   readonly profile?: ProblemProfile // V3: activates domain packs (docs/31 §2)
   readonly domainOptions?: ActivateOptions // override / threshold for domain activation
+  // FEAT-002: the authoritative run profile, built ONCE by the gateway (profile-builder). When
+  // present, pack activation uses it verbatim so the recorded active_pack_set and the retrieval
+  // constraints share one source of truth. Absent => profileFromInput() fallback (legacy path).
+  readonly profileOverride?: ExtendedProblemProfile
   // V3.2.1 decision B (docs/34 §8): workspace isolation by path. When set, durable retrieval unions
   // user-global knowledge with project-shared knowledge for THIS workspace; project-shared knowledge
   // from OTHER workspaces is never read (different on-disk store). Absent => user-global only. The
@@ -1026,13 +1030,21 @@ const profileFromInput = (input: RetrievalInput): ExtendedProblemProfile => {
     ],
     repo_signals: [taskText(input), ...(input.profile?.signals ?? [])],
     round_signals: [...new Set(input.previousFailures > 0 ? ["previous_round_failure"] : [])],
-    user_overrides: input.domainOptions?.override ? [input.domainOptions.override] : [],
+    // FEAT-001: merge legacy single `override` with multi-pin `overrides` (GUI pinned packs).
+    user_overrides: [...overridePackIds(input.domainOptions)],
   }
 }
 
-const activateKnowledgePacks = (input: RetrievalInput): KnowledgeActivation => {
-  const profile = profileFromInput(input)
-  const threshold = input.domainOptions?.threshold ?? 0.5
+// FEAT-002: the pack activation computed from ONE profile — score → threshold → user overrides →
+// dependency/conflict resolution → core fallback packs. Exported so the gateway records the run's
+// active_pack_set from the exact same activation its retrieval constrains on (single authority).
+export type PackActivation = {
+  readonly activePackIds: readonly string[]
+  readonly primaryPackIds: readonly string[]
+  readonly activeDomains: readonly string[]
+}
+
+export const activationForProfile = (profile: ExtendedProblemProfile, threshold = 0.5): PackActivation => {
   const manifests = Registry.discover()
   const selected = Registry.score(profile, manifests)
     .filter((s) => s.score >= threshold)
@@ -1049,6 +1061,24 @@ const activateKnowledgePacks = (input: RetrievalInput): KnowledgeActivation => {
       .filter((id) => !CORE_FALLBACK_PACKS.includes(id as (typeof CORE_FALLBACK_PACKS)[number]))
       .sort(),
     activeDomains: [...new Set(activeManifests.flatMap((m) => m.domains))].sort(),
+  }
+}
+
+const activateKnowledgePacks = (input: RetrievalInput): KnowledgeActivation => {
+  // FEAT-002: prefer the gateway-supplied authoritative profile; profileFromInput is the fallback
+  // when no profileOverride is handed in (legacy/unpinned callers keep their previous behavior).
+  const profile = input.profileOverride
+    ? {
+        ...input.profileOverride,
+        // Keep honoring domainOptions pins even when a profileOverride is supplied (FEAT-001).
+        user_overrides: [
+          ...new Set([...input.profileOverride.user_overrides, ...overridePackIds(input.domainOptions)]),
+        ],
+      }
+    : profileFromInput(input)
+  const threshold = input.domainOptions?.threshold ?? 0.5
+  return {
+    ...activationForProfile(profile, threshold),
     keywords: keywordsForTask(input),
   }
 }

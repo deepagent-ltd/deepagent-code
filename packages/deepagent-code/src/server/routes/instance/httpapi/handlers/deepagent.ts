@@ -1,8 +1,12 @@
 import path from "node:path"
-import * as nodeFs from "node:fs"
+import { createHash } from "node:crypto"
+import { sql } from "drizzle-orm"
 import * as Log from "@deepagent-code/core/util/log"
 import { Config } from "@/config/config"
 import { configureGateway, reviewRunsDir } from "@/deepagent/config"
+import { readPinnedPacks, writePinnedPacks } from "@deepagent-code/core/deepagent/pinned-packs"
+import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
+import { LMNEvents } from "@deepagent-code/core/deepagent/lmn-events"
 import { buildProfile } from "@/deepagent/profile-detector"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { Effect } from "effect"
@@ -106,6 +110,70 @@ const projectPlanReceipt = (receipt: PlanEditReceipt) => ({
 
 const dbgLog = Log.create({ service: "deepagent.packs.debug" })
 
+// FEAT-003 — pack pin/unpin eventing: after the pinned-set file is durably written, the handler
+// publishes `pack.changed` so downstream surfaces are NOT left waiting for their next natural
+// recomputation. BENEFIT BOUNDARY (must not be widened without review — mirrors the
+// LMNEvents.PACK_CHANGED contract):
+//   - the federation four graphs do NOT read pack scope (the knowledge adapter only ever consumes
+//     released snapshots) — no federation-side reaction is expected from this event;
+//   - intended consumers are legacy retrieval-surface audit + UI notification, subscribing on demand.
+//     This producer only guarantees the event is emitted and subscribable; no consumer is added here.
+//
+// IDEMPOTENCY KEY = hash of the AFTER-WRITE pinned set (workspace-scoped): repeated pin/unpin clicks
+// that leave the SAME set never re-publish (the bus dedupes on idempotency_key). `action` is folded in
+// so a pin/unpin pair passing through the same set is not swallowed, and the workspace path is hashed
+// in so identical sets in different workspaces never collide on the shared bus DB.
+export const packChangedIdempotencyKey = (input: {
+  readonly workspacePath: string
+  readonly action: "pin" | "unpin"
+  readonly pinnedIds: readonly string[]
+}): string => {
+  const sha = (value: string) => createHash("sha256").update(value).digest("hex")
+  const setHash = sha([...new Set(input.pinnedIds)].sort().join(","))
+  return `pack.changed:${sha(input.workspacePath)}:${input.action}:${setHash}`
+}
+
+// Publish pack.changed for a committed pin/unpin. BEST-EFFORT: the pinned-set file write already
+// succeeded and stays authoritative — a bus failure must never fail the route (log, never throw).
+export const publishPackChanged = (
+  bus: DeepAgentEventBus.Interface,
+  input: {
+    readonly workspacePath: string
+    readonly packId: string
+    readonly action: "pin" | "unpin"
+    readonly pinnedIds: readonly string[]
+  },
+): Effect.Effect<void> =>
+  bus
+    .publish({
+      type: LMNEvents.PACK_CHANGED,
+      source: "system",
+      workspaceID: input.workspacePath,
+      actorID: SERVER_USER_ID,
+      idempotencyKey: packChangedIdempotencyKey(input),
+      priority: "normal",
+      payload: {
+        workspacePath: input.workspacePath,
+        packId: input.packId,
+        action: input.action,
+        pinnedIds: [...new Set(input.pinnedIds)].sort(),
+      },
+    })
+    .pipe(
+      Effect.asVoid,
+      Effect.catchCause((cause) =>
+        Effect.logError("pack.changed publish failed (pin/unpin file write already committed)").pipe(
+          Effect.annotateLogs({
+            reason: "publish_error",
+            workspacePath: input.workspacePath,
+            packId: input.packId,
+            action: input.action,
+            cause: String(cause),
+          }),
+        ),
+      ),
+    )
+
 // §C.4 — the server-side ceiling on Expert-Panel debate rounds a single consult may request. Round 1
 // plus up to 2 debate rounds: enough for opinions to converge (the orchestrator also early-stops on a
 // stable verdict distribution) while bounding the fan-out (one subagent turn per lens per round).
@@ -152,6 +220,9 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
     const goals = yield* GoalManager.Service
     const database = yield* Database.Service
     const locationIdentity = yield* LocationIdentity.Service
+    // FEAT-003 — the §A2 bus packsPin/packsUnpin publish pack.changed onto. Available at this layer
+    // (the route runtime provides DeepAgentEventBus.defaultLayer — same seam the IM handlers use).
+    const eventBus = yield* DeepAgentEventBus.Service
 
     // Build a reviewer-subagent turn runner scoped to a session — the panelist seam consultPanel needs.
     // Reuses makeTaskSubagentRunner (the same child-session + permission-derivation path the goal loop
@@ -454,18 +525,31 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
     })
 
     const releasedScope = Effect.fn("DeepAgentHttpApi.releasedScope")(function* (dir: string) {
+      const legacyProjectId = AgentGateway.DeepAgentDurableKnowledgeStore.projectIdForWorkspace(dir)
       const identity = yield* locationIdentity.resolve({
         boundary: { kind: "implicit_local" },
         directory: AbsolutePath.make(dir),
         project: {
           kind: "registered_root",
-          observedProjectId: AgentGateway.DeepAgentDurableKnowledgeStore.projectIdForWorkspace(dir),
+          observedProjectId: legacyProjectId,
         },
       })
+      // Self-heal scope identities recorded before the canonical observed-project convention (e.g.
+      // the location-index shadow once wrote the "global" sentinel project id): the released-scope
+      // guard pins observed_project_id to the canonical durable knowledge project id.
+      if (identity.observedProjectId !== legacyProjectId) {
+        yield* database.db.run(
+          sql`UPDATE context_project_scope_identity SET observed_project_id = ${legacyProjectId}
+              WHERE security_namespace_id = ${identity.securityNamespaceId}
+                AND project_scope_key = ${identity.projectScopeKey}
+                AND project_kind = 'registered_root'
+                AND retired_at IS NULL`,
+        )
+      }
       return {
         securityNamespaceId: identity.securityNamespaceId,
         projectScopeKey: identity.projectScopeKey,
-        legacyProjectId: AgentGateway.DeepAgentDurableKnowledgeStore.projectIdForWorkspace(dir),
+        legacyProjectId,
       }
     })
 
@@ -605,20 +689,10 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
     })
 
     // docs/34 §9 S10: pinned packs persist per-workspace as a small JSON file under the memory dir.
-    const pinnedPacksFile = (memoryDir: string) => path.join(memoryDir, "pinned-packs.json")
-    const readPinned = (memoryDir: string): string[] => {
-      try {
-        const raw = nodeFs.readFileSync(pinnedPacksFile(memoryDir), "utf8")
-        const arr = JSON.parse(raw)
-        return Array.isArray(arr) ? arr.filter((x): x is string => typeof x === "string") : []
-      } catch {
-        return []
-      }
-    }
-    const writePinned = (memoryDir: string, ids: readonly string[]): void => {
-      nodeFs.mkdirSync(memoryDir, { recursive: true })
-      nodeFs.writeFileSync(pinnedPacksFile(memoryDir), JSON.stringify([...new Set(ids)].sort(), null, 2), "utf8")
-    }
+    // FEAT-001: read/write live in the shared core module so the gateway runtime reads the exact
+    // same file the control plane writes (readPinnedPacks is fault-tolerant: missing/corrupt => []).
+    const readPinned = (memoryDir: string): string[] => readPinnedPacks(memoryDir)
+    const writePinned = (memoryDir: string, ids: readonly string[]): void => writePinnedPacks(memoryDir, ids)
 
     const packsActive = Effect.fn("DeepAgentHttpApi.packsActive")(function* () {
       const dir = yield* workspaceDir()
@@ -704,29 +778,49 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
 
     const packsPin = Effect.fn("DeepAgentHttpApi.packsPin")(function* (ctx) {
       const memoryDir = yield* workspaceMemoryDir()
-      return yield* Effect.try({
+      const workspacePath = yield* workspaceDir()
+      // FEAT-003: write first (file stays authoritative), then publish pack.changed with the
+      // AFTER-WRITE set — the idempotency key is that set's hash, so re-clicks dedupe on the bus.
+      const pinnedIds = yield* Effect.try({
         try: () => {
           writePinned(memoryDir, [...readPinned(memoryDir), ctx.payload.packId])
-          return { ok: true, packId: ctx.payload.packId }
+          return readPinned(memoryDir)
         },
         catch: (error) =>
           new DeepAgentPromotionError({ message: error instanceof Error ? error.message : String(error) }),
       })
+      yield* publishPackChanged(eventBus, {
+        workspacePath,
+        packId: ctx.payload.packId,
+        action: "pin",
+        pinnedIds,
+      })
+      return { ok: true, packId: ctx.payload.packId }
     })
 
     const packsUnpin = Effect.fn("DeepAgentHttpApi.packsUnpin")(function* (ctx) {
       const memoryDir = yield* workspaceMemoryDir()
-      return yield* Effect.try({
+      const workspacePath = yield* workspaceDir()
+      // FEAT-003: same contract as packsPin — the event fires even when unpinning the LAST pack
+      // (the after-write set is empty; its hash is still a valid, publishable key).
+      const pinnedIds = yield* Effect.try({
         try: () => {
           writePinned(
             memoryDir,
             readPinned(memoryDir).filter((id) => id !== ctx.payload.packId),
           )
-          return { ok: true, packId: ctx.payload.packId }
+          return readPinned(memoryDir)
         },
         catch: (error) =>
           new DeepAgentPromotionError({ message: error instanceof Error ? error.message : String(error) }),
       })
+      yield* publishPackChanged(eventBus, {
+        workspacePath,
+        packId: ctx.payload.packId,
+        action: "unpin",
+        pinnedIds,
+      })
+      return { ok: true, packId: ctx.payload.packId }
     })
 
     // V3.8.1 §G environment-fact use-gate handlers. The adoption service roots at the same gateway
