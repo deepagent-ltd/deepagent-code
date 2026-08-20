@@ -1,7 +1,7 @@
 {
   "name": "@deepagent-code/desktop",
   "private": true,
-  "version": "1.4.6",
+  "version": "1.4.7",
   "type": "module",
   "license": "AGPL-3.0-or-later",
   "homepage": "https://deepagent-code.ai",
