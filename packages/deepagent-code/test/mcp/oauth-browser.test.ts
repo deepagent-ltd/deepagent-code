@@ -1,8 +1,14 @@
-import { expect, mock, beforeEach } from "bun:test"
+import { afterAll, expect, mock, beforeEach } from "bun:test"
 import { EventEmitter } from "events"
 import { Deferred, Effect, Layer, Option } from "effect"
 import { awaitWithTimeout, testEffect } from "../lib/effect"
 import type { MCP as MCPNS } from "../../src/mcp/index"
+
+// Release the mock.module registrations below when this file finishes so
+// later files import the real modules.
+afterAll(() => {
+  mock.restore()
+})
 
 // Track open() calls and control failure behavior
 let openShouldFail = false

@@ -311,19 +311,41 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   // ONLY the runLoop steer drain — it does NOT activate the dormant experimentalEventSystem V2 runner.
   // Disable with DEEPAGENT_CODE_V4_STEERING=false.
   v4Steering: stableOn("DEEPAGENT_CODE_V4_STEERING"),
+  // BUG-004: maximum consecutive steer-absorption rounds within ONE activity run. When reached, the
+  // run loop stops absorbing and ends the activity; any still-pending steers are consumed by the
+  // NEXT drain cycle as a fresh activity instead of silently extending the old work without bound.
+  steerAbsorbLimit: positiveIntegerWithDefault("DEEPAGENT_CODE_STEER_ABSORB_LIMIT", 5),
+  // BUG-407-012 gap C: pre-dispatch deadline watchdog. DEFAULT OFF. When enabled, a maintenance
+  // sweep fails any legacy activity that stayed active past the deadline WITHOUT durable receipt /
+  // dispatch evidence, through the existing terminalization path with a typed terminal reason (so an
+  // exact retry remains possible). Activities that already have a receipt are never touched — the
+  // existing outcome-unknown recovery stays authoritative for those.
+  providerPreDispatchWatchdog: bool("DEEPAGENT_CODE_PROVIDER_PRE_DISPATCH_WATCHDOG"),
+  providerPreDispatchDeadlineMs: positiveIntegerWithDefault(
+    "DEEPAGENT_CODE_PROVIDER_PRE_DISPATCH_DEADLINE_MS",
+    10 * 60_000,
+  ),
   // BUG-407-007 staged authority cutover. `legacy` preserves the existing in-process permission and
   // no-progress owner. `durable` routes production legacy activities through the SQLite-backed
-  // objective/progress/permission authority. This deliberately ships legacy-owned until the live and
-  // packaged recovery gates are complete.
-  activityAuthority: Config.string("DEEPAGENT_CODE_ACTIVITY_AUTHORITY").pipe(
-    Config.withDefault("legacy"),
-    Config.map((value): "legacy" | "durable" => {
-      if (value === "legacy" || value === "durable") return value
-      throw new Error(
-        `Invalid DEEPAGENT_CODE_ACTIVITY_AUTHORITY="${value}". Must be one of: legacy, durable. Refusing to select an unknown activity authority.`,
-      )
-    }),
-  ),
+  // objective/progress/permission authority.
+  // FEAT-011 T3/T4/T6: the unified activity FACADE tools (activity_start/status/result/control).
+  // Staged OFF: the facade never duplicates lifecycle state — it delegates to the existing Task
+  // durable queue / GoalManager / PanelConsult runners and records session_facade_activity rows
+  // (fail-closed partial unique index per (parent_session, subkind) active). Default false until
+  // the release gate qualifies the delegation paths; enable with DEEPAGENT_CODE_ACTIVITY_FACADE=true.
+  activityFacade: bool("DEEPAGENT_CODE_ACTIVITY_FACADE"),
+  // RISK-003 ④ (BUG-407-010 legacy data governance): durable automated schedule for the legacy
+  // event canonicalizer. The canonicalizer itself is already wired (core event.ts
+  // canonicalizeLegacyArtifacts + the sync maintenance endpoint); this flag starts a bounded
+  // background loop that walks the backlog in small batches. DEFAULT OFF (conservative rollout —
+  // the governance runbook advances per-step on production copies). Failures only log; the loop
+  // never deletes events or VACUUMs. Enable with DEEPAGENT_CODE_LEGACY_EVENT_CANONICALIZER=true.
+  legacyEventCanonicalizer: bool("DEEPAGENT_CODE_LEGACY_EVENT_CANONICALIZER"),
+  // RISK-003 ① staged rollout: converge inline summary diffs onto the session_diff_artifact
+  // authority at write time (rewrites the message row to a compact descriptor). Staged OFF until
+  // the diff read path serves artifact descriptors and the §14 evidence chain (floor parity) is
+  // in place; until then the bug-407-010 hotfix contract holds (bound at read, storage untouched).
+  sessionDiffArtifactCapture: bool("DEEPAGENT_CODE_SESSION_DIFF_ARTIFACT_CAPTURE"),
   // PR-2: Streaming degeneration detector mode for reasoning outputs.
   // "off"    — detector is disabled; all output passes through unmodified.
   // "shadow" — detector runs and logs hits, but never triggers a circuit break.

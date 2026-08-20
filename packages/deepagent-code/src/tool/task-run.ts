@@ -765,6 +765,136 @@ export function recoverExpiredTaskRuns(input: { directory: string; now?: number;
             candidates,
             (candidate) =>
               Effect.gen(function* () {
+                // QUAL-005 (BUG-405-011 residue): a finalizing run whose executor died after
+                // sealing its structured completion (persistDegradedStructuredOutput /
+                // persistStructuredFinalizerResponse + sealed evidence) already holds a durable,
+                // bounded result. Recover it into its terminal state — mirroring classifyOnStartup —
+                // instead of destroying it as execution_lease_expired. Recovery only re-reads
+                // persisted material; it never invokes the provider, so bounded-retry semantics
+                // (maxAttempts: 2 + allowTextFallback) are preserved.
+                const structuredOutput = candidate.run.execution_spec?.structuredOutput
+                const recoveredCompletion =
+                  candidate.run.state === "finalizing" &&
+                  candidate.run.control_state === "open" &&
+                  candidate.run.interrupt_requested_at === null &&
+                  candidate.run.execution_owner &&
+                  (candidate.run.workspace_owner !== "run" ||
+                    ["retained", "submitted"].includes(candidate.run.worktree_state ?? "none")) &&
+                  isStructuredOutputContract(structuredOutput)
+                    ? yield* recoverStructuredOutputCompletionInTransaction(tx, {
+                        runID: candidate.run.run_id,
+                        childSessionID: candidate.run.child_session_id,
+                        ownerToken: candidate.run.execution_owner,
+                        claimGeneration: candidate.run.claim_generation,
+                        expectedVersion: candidate.run.version,
+                        attempt: candidate.run.attempts,
+                        rawResultMessageID: candidate.run.raw_result_message_id ?? undefined,
+                        contract: structuredOutput,
+                        now,
+                      })
+                    : undefined
+                if (recoveredCompletion) {
+                  const settled = yield* tx
+                    .update(TaskRunTable)
+                    .set({
+                      state: "completed",
+                      phase: "settled",
+                      control_state: "closed",
+                      reason:
+                        recoveredCompletion.structuredOutputReceipt.transport === "structured"
+                          ? "structured_output_valid"
+                          : recoveredCompletion.structuredOutputReceipt.transport === "text_fallback"
+                            ? "structured_output_text_fallback"
+                            : "structured_output_degraded_text",
+                      output: recoveredCompletion.output,
+                      structured_result_message_id: recoveredCompletion.structuredResultMessageID
+                        ? MessageID.make(recoveredCompletion.structuredResultMessageID)
+                        : null,
+                      structured_output_receipt: recoveredCompletion.structuredOutputReceipt,
+                      execution_owner: null,
+                      lease_expires_at: null,
+                      version: candidate.run.version + 1,
+                      time_updated: now,
+                      time_settled: now,
+                    })
+                    .where(
+                      and(
+                        eq(TaskRunTable.run_id, candidate.run.run_id),
+                        eq(TaskRunTable.version, candidate.run.version),
+                        eq(TaskRunTable.state, "finalizing"),
+                        eq(TaskRunTable.execution_owner, candidate.run.execution_owner!),
+                        eq(TaskRunTable.claim_generation, candidate.run.claim_generation),
+                        eq(TaskRunTable.control_state, "open"),
+                        isNull(TaskRunTable.interrupt_requested_at),
+                      ),
+                    )
+                    .returning()
+                    .get()
+                    .pipe(Effect.orDie)
+                  if (settled) {
+                    yield* tx
+                      .insert(TaskRunEventTable)
+                      .values({
+                        event_id: Identifier.ascending("event"),
+                        run_id: candidate.run.run_id,
+                        version: settled.version,
+                        type: "structured_response_recovered",
+                        from_state: "finalizing",
+                        to_state: "completed",
+                        reason:
+                          recoveredCompletion.structuredOutputReceipt.transport === "degraded_text"
+                            ? "persisted_degraded_receipt"
+                            : "persisted_structured_response",
+                        data: recoveredCompletion.structuredResultMessageID
+                          ? { response_message_id: recoveredCompletion.structuredResultMessageID }
+                          : { raw_message_id: candidate.run.raw_result_message_id },
+                        time_created: now,
+                      })
+                      .run()
+                      .pipe(Effect.orDie)
+                    if (
+                      candidate.run.effective_delivery_mode === "background" ||
+                      candidate.run.delivery_mode === "background"
+                    ) {
+                      const outboxID = `task-notify:${candidate.run.run_id}`
+                      const payload = {
+                        agent:
+                          typeof candidate.run.execution_spec?.agent === "string"
+                            ? candidate.run.execution_spec.agent
+                            : "subagent",
+                        text: `Background task completed. Call task_read({ task_id: "${candidate.run.child_session_id}" }) to read the result.`,
+                      }
+                      yield* tx
+                        .insert(TaskNotificationOutboxTable)
+                        .values({
+                          id: outboxID,
+                          run_id: candidate.run.run_id,
+                          event_kind: "terminal",
+                          correlation_id: outboxID,
+                          message_id: MessageID.ascending(
+                            `msg_task_notify_${Hash.sha256(outboxID).slice(0, 24)}`,
+                          ),
+                          parent_session_id: candidate.run.parent_session_id,
+                          directory: input.directory,
+                          payload,
+                          payload_hash: Hash.sha256(JSON.stringify(payload)),
+                          status: "pending",
+                          attempts: 0,
+                          available_at: now,
+                          time_created: now,
+                          time_updated: now,
+                        })
+                        .onConflictDoNothing()
+                        .run()
+                        .pipe(Effect.orDie)
+                    }
+                  }
+                  // Excluded from the returned runs: the caller projects each returned run as an
+                  // expired-error child session metadata (projectRecoveredSubagentRun). A recovered
+                  // completion is not an error; its foreground metadata is reconciled idempotently
+                  // by repairDurableSettledRunProjections on the next durable control-plane start.
+                  return undefined
+                }
                 const updated = yield* tx
                   .update(TaskRunTable)
                   .set({

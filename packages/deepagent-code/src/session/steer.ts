@@ -30,9 +30,9 @@ import { SessionActivityOwner } from "./activity-owner"
 // REUSE-VS-NEW: the core `SessionInput` model (packages/core/src/session/input.ts) already has a
 // steer data model (Delivery="steer", admit/promoteSteers). It is NOT reused directly because it is
 // fully EVENT-SOURCED: `admit` publishes a `PromptLifecycle.Admitted` event and rows only land via the
-// `SessionProjector` — a pipeline that is dormant in the live product (deepagent-code wires
-// `SessionExecution.noopLayer` and gates the V2 event system behind `experimentalEventSystem`, default
-// OFF). Worse, `promoteSteers` materializes into the V2 `session_message` store consumed by the
+// `SessionProjector` — a pipeline that is dormant in the live product (deepagent-code provides
+// `SessionV2.liveLayer` in the SessionPrompt layer, but gates the V2 event system behind
+// `experimentalEventSystem`, default OFF; the core default layer alone wires `SessionExecution.noopLayer`). Worse, `promoteSteers` materializes into the V2 `session_message` store consumed by the
 // dormant V2 runner's `entriesForRunner` — a DIFFERENT history store than the LIVE loop, which reads
 // the V1 `MessageTable` via `MessageV2.filterCompactedEffect`. Reusing it would force activating the
 // forbidden event system AND target the wrong history. So this is a clean, PLAIN durable buffer:

@@ -6,7 +6,9 @@ import { SessionTable } from "../session/sql"
 import type { SessionSchema } from "../session/schema"
 import type { CompletionCriterion } from "./goal-loop"
 
-export type ActivityKind = "legacy" | "v2"
+export type ActivityKind = "legacy" | "v2" | "facade"
+export type FacadeActivitySubkind = "task" | "goal" | "panel"
+export type FacadeActivityState = "active" | "settled" | "failed" | "interrupted" | "recovery_required"
 export type ActivityObjectiveState = "active" | "completed" | "needs_human" | "interrupted" | "recovery_required"
 export type PermissionRequestState =
   | "pending"
@@ -46,6 +48,40 @@ export const SessionActivityObjectiveTable = sqliteTable(
   (table) => [
     primaryKey({ columns: [table.activity_kind, table.activity_id] }),
     index("session_activity_objective_session_idx").on(table.session_id, table.state, table.updated_at),
+  ],
+)
+
+// FEAT-011 T1 — facade activity base table. Mirrors the session_legacy_activity terminal
+// semantics (active carries no settled_at/reason_code; terminal states require both) and the
+// v2 single-active invariant, scoped per parent session + subkind: opening a new facade
+// activity requires settling the previous active one of the same subkind first (BUG-004).
+export const SessionFacadeActivityTable = sqliteTable(
+  "session_facade_activity",
+  {
+    activity_id: text().primaryKey(),
+    subkind: text().$type<FacadeActivitySubkind>().notNull(),
+    parent_session_id: text()
+      .$type<SessionSchema.ID>()
+      .notNull()
+      .references(() => SessionTable.id, { onDelete: "cascade" }),
+    owner_session_id: text()
+      .$type<SessionSchema.ID>()
+      .references(() => SessionTable.id, { onDelete: "cascade" }),
+    spawn_tool_call_id: text(),
+    objective_text: text(),
+    budget_json: text({ mode: "json" }).$type<unknown>(),
+    state: text().$type<FacadeActivityState>().notNull(),
+    reason_code: text(),
+    source: text(),
+    created_at: integer().notNull(),
+    settled_at: integer(),
+    mutation_epoch: integer().notNull(),
+  },
+  (table) => [
+    uniqueIndex("session_facade_activity_active_idx")
+      .on(table.parent_session_id, table.subkind)
+      .where(sql`${table.state} = 'active'`),
+    index("session_facade_activity_parent_idx").on(table.parent_session_id, table.state, table.created_at),
   ],
 )
 

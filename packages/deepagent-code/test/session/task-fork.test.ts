@@ -3,6 +3,7 @@ import { Database } from "@deepagent-code/core/database/database"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { ModelV2 } from "@deepagent-code/core/model"
 import { SessionForkIntentTable } from "@deepagent-code/core/session/sql"
+import { SessionProjector } from "@deepagent-code/core/session/projector"
 import { Effect, Layer } from "effect"
 import { eq } from "drizzle-orm"
 import { MessageV2 } from "@/session/message-v2"
@@ -12,7 +13,11 @@ import { MessageID, PartID, SessionID } from "@/session/schema"
 import { TestInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 
-const it = testEffect(Layer.mergeAll(Session.defaultLayer, Database.defaultLayer))
+// QUAL-007: the core SessionProjector is the canonical V1-event projection path (session/message/part
+// rows); without it the minimal layer never materializes sessions created through events.
+const it = testEffect(
+  Layer.mergeAll(Session.defaultLayer.pipe(Layer.provide(SessionProjector.defaultLayer)), Database.defaultLayer),
+)
 const model = { providerID: ProviderV2.ID.make("test"), modelID: ModelV2.ID.make("test") }
 
 const addUser = Effect.fn("TaskForkTest.addUser")(function* (

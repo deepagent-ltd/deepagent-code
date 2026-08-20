@@ -21,6 +21,10 @@ export interface Interface {
   readonly register: (input: {
     readonly ownerToken: string
     readonly leaseMs: number
+    // Successor generation registration (BUG-407-009): the old token was fenced by lease expiry and
+    // this token continues the same ownership chain. Also installs the protocol-3 compatibility fence
+    // so a pre-successor binary refuses to open this database instead of re-quarantining the chain.
+    readonly successor?: boolean
     readonly now?: number
   }) => Effect.Effect<Lease, ConflictError>
   readonly heartbeat: (input: {
@@ -52,6 +56,7 @@ export const layer = Layer.effect(
     const register = Effect.fn("SessionProviderOwner.register")(function* (input: {
       readonly ownerToken: string
       readonly leaseMs: number
+      readonly successor?: boolean
       readonly now?: number
     }) {
       return yield* db
@@ -92,7 +97,7 @@ export function observedAtInTransaction(tx: Transaction): Effect.Effect<number> 
 
 function registerInTransaction(
   tx: Transaction,
-  input: { readonly ownerToken: string; readonly leaseMs: number },
+  input: { readonly ownerToken: string; readonly leaseMs: number; readonly successor?: boolean },
 ) {
   return Effect.gen(function* () {
     if (!input.ownerToken.trim()) return yield* new ConflictError({ reason: "owner_token_required" })
@@ -110,6 +115,14 @@ function registerInTransaction(
       .returning()
       .get()
     if (!inserted) return yield* new ConflictError({ reason: "owner_token_already_registered" })
+    if (input.successor)
+      yield* tx.run(sql`
+        INSERT INTO database_capability(
+          capability, minimum_reader_protocol, minimum_writer_protocol, installed_at
+        ) VALUES (
+          'provider_owner_successor_v1', 3, 3, ${databaseNow}
+        ) ON CONFLICT(capability) DO NOTHING
+      `)
     return lease(inserted)
   })
 }

@@ -32,6 +32,12 @@ function sameRegistration(left: Registration, right: Registration) {
   return left.id === right.id && left.version === right.version && left.url === right.url && left.pid === right.pid
 }
 
+// PARITY-003 (Wave 0): the daemon's spawn target is switchable. DEEPAGENT_CODE_DAEMON_BACKEND=legacy
+// mounts the full legacy deepagent-code server instead of the v2 `serve`; the legacy entrypoint is
+// resolved from DEEPAGENT_CODE_DAEMON_LEGACY_ENTRYPOINT. Read lazily so each call observes the
+// current environment.
+const backend = () => (process.env.DEEPAGENT_CODE_DAEMON_BACKEND === "legacy" ? "legacy" : "v2")
+
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -63,8 +69,30 @@ export const layer = Layer.effect(
       return createOpencodeClient({ baseUrl: url, headers: ServerAuth.headers({ password: yield* password() }) })
     })
 
+    // The legacy server exposes GET /global/health -> { healthy, version, runtimeId } guarded by
+    // the same Basic-auth credential, instead of the v2 /api/health SDK route.
+    const legacyHealth = Effect.fnUntraced(function* (info: Registration) {
+      const credential = yield* password()
+      const body = yield* Effect.tryPromise({
+        try: async () => {
+          const response = await fetch(`${info.url}/global/health`, {
+            headers: ServerAuth.headers({ password: credential }),
+            signal: AbortSignal.timeout(2_000),
+          })
+          if (!response.ok) throw new Error(`Legacy health endpoint responded ${response.status}`)
+          return (await response.json()) as { healthy?: boolean; version?: string }
+        },
+        catch: (cause) => new Error("Legacy health check failed", { cause }),
+      })
+      if (body?.healthy !== true) return yield* Effect.fail(new Error("Registered server is not healthy"))
+      // The legacy endpoint reports its own version; prefer it so compatible() keeps the same
+      // handshake semantics as the v2 registration file.
+      return typeof body.version === "string" ? { ...info, version: body.version } : info
+    })
+
     const healthy = Effect.fnUntraced(function* () {
       const info = yield* registration()
+      if (backend() === "legacy") return yield* legacyHealth(info)
       const client = yield* createClient(info.url)
       const response = yield* Effect.tryPromise(() => client.v2.health.get({ signal: AbortSignal.timeout(2_000) }))
       if (response.data?.healthy === true) return info
@@ -114,18 +142,37 @@ export const layer = Layer.effect(
       if (found?.version === InstallationVersion && compiled) return found.url
       if (found) yield* stopProcess(found).pipe(Effect.ignore)
 
-      const entrypoint = compiled ? undefined : process.argv[1]
-      if (!compiled && entrypoint === undefined)
-        return yield* Effect.fail(new Error("Failed to resolve CLI entrypoint"))
-      yield* Effect.try({
-        try: () => {
-          spawn(process.execPath, [...(entrypoint ? [entrypoint] : []), "serve", "--register"], {
-            detached: true,
-            stdio: "ignore",
-          }).unref()
-        },
-        catch: (cause) => new Error("Failed to start server", { cause }),
-      })
+      if (backend() === "legacy") {
+        // Wave 0: spawn the legacy deepagent-code CLI `serve --register`. The password is passed
+        // through the environment the legacy server already honors (DEEPAGENT_CODE_SERVER_PASSWORD).
+        const legacyEntrypoint = process.env.DEEPAGENT_CODE_DAEMON_LEGACY_ENTRYPOINT
+        if (!legacyEntrypoint)
+          return yield* Effect.fail(new Error("DEEPAGENT_CODE_DAEMON_LEGACY_ENTRYPOINT is required for the legacy backend"))
+        const credential = yield* password()
+        yield* Effect.try({
+          try: () => {
+            spawn(process.execPath, [legacyEntrypoint, "serve", "--register"], {
+              detached: true,
+              stdio: "ignore",
+              env: { ...process.env, DEEPAGENT_CODE_SERVER_PASSWORD: credential },
+            }).unref()
+          },
+          catch: (cause) => new Error("Failed to start legacy server", { cause }),
+        })
+      } else {
+        const entrypoint = compiled ? undefined : process.argv[1]
+        if (!compiled && entrypoint === undefined)
+          return yield* Effect.fail(new Error("Failed to resolve CLI entrypoint"))
+        yield* Effect.try({
+          try: () => {
+            spawn(process.execPath, [...(entrypoint ? [entrypoint] : []), "serve", "--register"], {
+              detached: true,
+              stdio: "ignore",
+            }).unref()
+          },
+          catch: (cause) => new Error("Failed to start server", { cause }),
+        })
+      }
 
       return yield* compatible().pipe(
         Effect.retry(Schedule.spaced("50 millis").pipe(Schedule.both(Schedule.recurs(100)))),

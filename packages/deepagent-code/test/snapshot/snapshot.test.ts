@@ -1097,6 +1097,42 @@ it.instance(
   { git: true },
 )
 
+// BUG-407-010 §14.2 release acceptance: a 4,500-file discovery must trip the candidate budget
+// deterministically at incident scale, keeping the returned file list and manifest below the
+// approved caps instead of materializing the full discovery output.
+it.instance(
+  "diffFull and diffManifest trip the discovery budget at 4500-file incident scale",
+  withTrackedSnapshot(({ tmp, snapshot, before }) =>
+    Effect.gen(function* () {
+      const incidentFiles = 4_500
+      yield* Effect.forEach(
+        Array.from({ length: incidentFiles }, (_, index) => index),
+        (index) => write(`${tmp.path}/incident/file-${String(index).padStart(4, "0")}.txt`, "content"),
+        { concurrency: 100, discard: true },
+      )
+      const after = yield* snapshot.track()
+      expect(after).toBeTruthy()
+
+      const diffs = yield* snapshot.diffFull(before, after!)
+      expect(diffs.length).toBe(Snapshot.DiffLimits.candidateFiles)
+      expect(diffs[0].file).toBe("incident/file-0000.txt")
+      expect(diffs.at(-1)?.file).toBe("incident/file-0999.txt")
+
+      const manifest = yield* snapshot.diffManifest(before, after!)
+      expect(manifest.completeness).toBe("truncated")
+      expect(manifest.truncationReasons).toContain("candidate_file_limit")
+      expect(manifest.files).toHaveLength(Snapshot.DiffLimits.candidateFiles)
+      expect(manifest.files.every((item) => item.patch === undefined)).toBe(true)
+      expect(manifest.totalFiles).toBe(incidentFiles)
+      expect(manifest.totalFilesExact).toBe(true)
+      expect(manifest.statisticsExact).toBe(false)
+      expect(Buffer.byteLength(JSON.stringify(manifest.files))).toBeLessThanOrEqual(Snapshot.DiffLimits.manifestBytes)
+    }),
+  ),
+  { git: true },
+  30_000,
+)
+
 it.instance(
   "diffManifest preserves visible statuses after a large ignored prefix",
   withTrackedSnapshot(({ tmp, snapshot, before }) =>

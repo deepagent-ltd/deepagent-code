@@ -474,11 +474,17 @@ export const layerWith = (options?: LayerOptions) =>
       const pumpRetries: Interface["pumpRetries"] = (nowArg) =>
         Effect.gen(function* () {
           const at = nowArg ?? now()
-          const due = yield* bus.dueRetries(at)
+          // RISK-001: claim our group's due rows before executing — dueRetries() was an unlocked
+          // global scan, so two processes could re-drive the same retry concurrently. The claim's
+          // lease (default 5min) must exceed worst-case processing time; if it lapses mid-handling
+          // another claimant may re-drive the same event (bounded duplicate, same as pre-fix).
+          const claim = yield* bus.claimDue({
+            subscriptionGroup: DISPATCH_GROUP,
+            claimantId: `event-dispatcher:${process.pid}`,
+            now: at,
+          })
           let redriven = 0
-          for (const delivery of due) {
-            // only our own group's deliveries — dueRetries is global across groups.
-            if (delivery.subscriptionGroup !== DISPATCH_GROUP) continue
+          for (const delivery of claim.deliveries) {
             const event = yield* bus.getByID(delivery.eventID)
             if (!event) {
               // event row gone (retention sweep?) — the delivery is unrecoverable; leave it for the DLQ.

@@ -2,6 +2,8 @@ import { NodeFileSystem } from "@effect/platform-node"
 import { ConfigV1 } from "@deepagent-code/core/v1/config/config"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { Database } from "@deepagent-code/core/database/database"
+import { DatabaseMigration } from "@deepagent-code/core/database/migration"
+import remoteCompactPersistenceMigration from "@deepagent-code/core/database/migration/20260820000000_remote_compact_persistence"
 import { LocationIdentity } from "@deepagent-code/core/context-federation/identity"
 import { LocationIdentityTable } from "@deepagent-code/core/context-federation/sql"
 import {
@@ -20,7 +22,7 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { WorkspaceV2 } from "@deepagent-code/core/workspace"
 import { FetchHttpClient } from "effect/unstable/http"
 import { expect } from "bun:test"
-import { Cause, Deferred, Duration, Effect, Exit, Fiber, Layer } from "effect"
+import { Cause, DateTime, Deferred, Duration, Effect, Exit, Fiber, Layer, Logger, References, Stream } from "effect"
 import path from "path"
 import { fileURLToPath, pathToFileURL } from "url"
 import { NamedError } from "@deepagent-code/core/util/error"
@@ -68,6 +70,7 @@ import { SessionPromptIntent } from "../../src/session/prompt-intent"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { SessionStatus } from "../../src/session/status"
 import { SessionV2 } from "@deepagent-code/core/session"
+import { SessionProjector } from "@deepagent-code/core/session/projector"
 import { SessionExecution } from "@deepagent-code/core/session/execution"
 import { SessionMessage } from "@deepagent-code/core/session/message"
 import { Prompt } from "@deepagent-code/core/session/prompt"
@@ -89,6 +92,8 @@ import { RepositoryCache } from "../../src/reference/repository-cache"
 import { TestInstance, testInstanceStoreLayer, tmpdirScoped } from "../fixture/fixture"
 import { InstanceStore } from "@/project/instance-store"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
+import { Global } from "@deepagent-code/core/global"
+import { LLMClient, RequestExecutor, WebSocketExecutor } from "@deepagent-code/llm/route"
 import { createHash } from "node:crypto"
 import { symlink } from "node:fs/promises"
 import { awaitWithTimeout, pollWithTimeout, testEffect } from "../lib/effect"
@@ -283,7 +288,40 @@ type PromptLayerOptions = {
   flags?: Partial<RuntimeFlags.Info>
   federation?: SessionFederatedContext.Interface
   plugin?: Plugin.Interface
+  // FEAT-010: lets a test swap the V2 session layer (default: SessionV2.defaultLayer with noop
+  // execution) so the V2 owner branch of loop() can be observed without a live V2 runner.
+  sessionV2?: Layer.Layer<SessionV2.Service, never, never>
 }
+
+// UPD-002: LLM.defaultLayer hardwires RuntimeFlags.defaultLayer, which would
+// freeze default flags (e.g. experimentalNativeLlm) for every instance. Mirror
+// the default wiring over `LLM.layer` so each harness's runtimeFlags wins.
+const testLLMLayer = (runtimeFlags: Layer.Layer<RuntimeFlags.Service>) =>
+  LLM.layer.pipe(
+    Layer.provide(Auth.defaultLayer),
+    Layer.provide(Config.defaultLayer),
+    Layer.provide(ProviderSvc.defaultLayer),
+    Layer.provide(Plugin.defaultLayer),
+    Layer.provide(
+      Layer.mergeAll(
+        AgentGateway.layer({ enabled: true, runsDir: Global.Path.agent.runs }),
+        LLMClient.layer.pipe(Layer.provide(Layer.mergeAll(RequestExecutor.defaultLayer, WebSocketExecutor.layer))),
+      ),
+    ),
+    Layer.provide(runtimeFlags),
+  )
+
+// UPD-005: the Gap 1/Gap 2 persistence migration is not registered in
+// migration.gen.ts yet (mainline registers it). Apply it over the tracked history
+// so compaction_run carries the mode columns the drizzle schema already declares.
+const database = Layer.effect(
+  Database.Service,
+  Effect.gen(function* () {
+    const service = yield* Database.Service
+    yield* DatabaseMigration.applyOnly(service.db, [remoteCompactPersistenceMigration])
+    return service
+  }),
+).pipe(Layer.provide(Database.defaultLayer))
 
 function makePrompt(input?: PromptLayerOptions) {
   const runtimeFlags = RuntimeFlags.layer({
@@ -295,7 +333,7 @@ function makePrompt(input?: PromptLayerOptions) {
   const deps = Layer.mergeAll(
     Session.defaultLayer,
     Snapshot.defaultLayer,
-    LLM.defaultLayer,
+    testLLMLayer(runtimeFlags),
     Env.defaultLayer,
     AgentSvc.defaultLayer,
     Command.defaultLayer,
@@ -309,7 +347,7 @@ function makePrompt(input?: PromptLayerOptions) {
     FSUtil.defaultLayer,
     BackgroundJob.defaultLayer,
     status,
-    Database.defaultLayer,
+    database,
     EventV2Bridge.defaultLayer,
     PromptEpoch.defaultLayer,
   ).pipe(Layer.provideMerge(infra))
@@ -350,6 +388,7 @@ function makePrompt(input?: PromptLayerOptions) {
         )
   const compact = SessionCompaction.layer.pipe(
     Layer.provide(runtimeFlags),
+    Layer.provide(RequestExecutor.defaultLayer),
     Layer.provideMerge(proc),
     Layer.provideMerge(deps),
   )
@@ -357,7 +396,7 @@ function makePrompt(input?: PromptLayerOptions) {
   // `deps`) so drained steers are visible to the loop's history reads.
   const steer = SessionSteer.layer.pipe(Layer.provideMerge(deps))
   const promptLayer = SessionPrompt.layer.pipe(
-    Layer.provide(SessionV2.defaultLayer),
+    Layer.provide(input?.sessionV2 ?? SessionV2.defaultLayer),
     Layer.provide(SessionProviderOwner.layer.pipe(Layer.provide(deps))),
     Layer.provide(testInstanceStoreLayer),
     Layer.provide(SessionRevert.defaultLayer),
@@ -427,6 +466,12 @@ const worldStateCompactionDisabled = testEffect(
   makeHttp({ flags: { softLandingCompaction: false, worldStateReinjection: false } }),
 )
 const noLLMServer = testEffect(makeHttpNoLLMServer())
+// UPD-002: native runtime ON so a Responses+format-capable family can take the
+// wire structured-output path end to end.
+const wireStructuredOutput = testEffect(makeHttp({ flags: { experimentalNativeLlm: true } }))
+// UPD-002: same provider family but default (AI SDK) runtime — asserts the
+// synthetic StructuredOutput path is retained when the wire path is unavailable.
+const wireCapableAiSdk = testEffect(makeHttp())
 const raceNoLLMServer = testEffect(makeHttpNoLLMServer({ processor: "blocking" }))
 const mutatingProviderHistoryTrigger: Plugin.Interface["trigger"] = (name, _input, output) =>
   Effect.sync(() => {
@@ -462,7 +507,7 @@ const federationAdapter = {
       if (!identity) return yield* Effect.die("prompt federation identity unavailable")
       const releasedKnowledgeBinding = DeepAgentReleasedSnapshot.binding(input.releasedKnowledgeSelection)
       yield* db
-        .insert(SessionActivityTable)
+        .insert(SessionActivityTable) // fixture-exempt: seeds active activity inside federation adapter stub
         .values({
           activity_id: "activity_prompt_adapter",
           session_id: input.session.id,
@@ -607,6 +652,7 @@ const federationAdapter = {
     Effect.sync(() => {
       federationTrace.push(`activity:${state}`)
     }),
+  settleOrphanedActivities: () => Effect.succeed(0),
   replayIndeterminate: () => Effect.die("not used"),
   releasedKnowledgeForActiveSession: () => Effect.succeed(undefined),
 } as unknown as SessionFederatedContext.Interface
@@ -627,6 +673,9 @@ const prepareFailureFederated = testEffect(
       contextFederationShadow: true,
       locationIndexesV2Shadow: true,
       contextProjectionV2: true,
+      // QUAL-006: pin tools OFF — this instance verifies the projection-prepare degradation path in
+      // isolation; the shipped default (tools ON) is covered by runtime-flags and the federated suite.
+      contextQueryToolsV2: false,
     },
     federation: {
       ...federationAdapter,
@@ -639,6 +688,10 @@ const shadowFederated = testEffect(
     flags: {
       contextFederationShadow: true,
       locationIndexesV2Shadow: true,
+      // QUAL-006: pin model-facing owners OFF — this instance verifies shadow-only behavior; the
+      // shipped defaults (both ON) are covered by runtime-flags and the federated suite.
+      contextProjectionV2: false,
+      contextQueryToolsV2: false,
     },
     federation: federationAdapter,
   }),
@@ -710,6 +763,50 @@ function providerCfgWithContext(url: string, context: number) {
             ...base.provider.test.models["test-model"],
             limit: { context, output: 10_000 },
           },
+        },
+      },
+    },
+  }
+}
+
+// UPD-002: a Responses-family, wire-format-capable provider (@ai-sdk/openai).
+// Official provider IDs ignore config.provider overrides, so this uses a
+// custom id; the `deepagent-code*` prefix keeps the native runtime status gate
+// happy while the npm package drives Responses wire lowering.
+// The baseline `test` provider stays registered (title/small-model paths), and
+// the build agent is pinned to the wire-capable model.
+function wireProviderCfg(url: string) {
+  const base = providerCfg(url)
+  return {
+    ...base,
+    agent: {
+      build: { model: "deepagent-code-wire/test-model" },
+    },
+    provider: {
+      ...base.provider,
+      "deepagent-code-wire": {
+        name: "Wire Test",
+        id: "deepagent-code-wire",
+        env: [],
+        npm: "@ai-sdk/openai",
+        models: {
+          "test-model": {
+            id: "test-model",
+            name: "Test Model",
+            attachment: false,
+            reasoning: false,
+            temperature: false,
+            tool_call: true,
+            release_date: "2025-01-01",
+            limit: { context: 100000, output: 10000 },
+            cost: { input: 0, output: 0 },
+            options: {},
+          },
+        },
+        options: {
+          apiKey: "test-key",
+          baseURL: url,
+          maxRetries: 0,
         },
       },
     },
@@ -1383,6 +1480,103 @@ it.instance("fingerprints the final persisted structured assistant", () =>
   }),
 )
 
+// UPD-002: wire-level structured output on a Responses + format-capable family.
+wireStructuredOutput.instance("delivers json_schema output through wire text.format", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(wireProviderCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({
+      title: "Wire structured output",
+      permission: [{ permission: "*", pattern: "*", action: "allow" }],
+    })
+    yield* llm.text('{"answer": 4}')
+    yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      noReply: true,
+      format: {
+        type: "json_schema",
+        schema: {
+          type: "object",
+          properties: { answer: { type: "number" } },
+          required: ["answer"],
+        },
+        retryCount: 1,
+      },
+      parts: [{ type: "text", text: "Return the answer." }],
+    })
+
+    const result = yield* prompt.loop({ sessionID: chat.id })
+
+    const wireRequest = (yield* llm.hits).find((item) => JSON.stringify(item.body).includes("Return the answer"))
+    expect(wireRequest).toBeDefined()
+    const body = wireRequest!.body
+    // Wire assertions: Responses endpoint, text.format lowered, NO synthesized
+    // StructuredOutput tool, and tool_choice is not forced to "required".
+    expect(wireRequest!.url.pathname).toBe("/v1/responses")
+    const text = body.text as Record<string, unknown> | undefined
+    expect(text?.format).toMatchObject({ type: "json_schema", name: "structured_output" })
+    expect((text?.format as Record<string, unknown> | undefined)?.schema).toMatchObject({
+      properties: { answer: { type: "number" } },
+    })
+    const tools = Array.isArray(body.tools) ? (body.tools as Array<Record<string, unknown>>) : []
+    expect(tools.some((tool) => tool.name === "StructuredOutput")).toBe(false)
+    expect(body.tool_choice).not.toBe("required")
+
+    expect(result.info.role).toBe("assistant")
+    if (result.info.role === "assistant") {
+      expect(result.info.structured).toEqual({ answer: 4 })
+      expect(result.info.finish).toBe("stop")
+    }
+  }),
+)
+
+// UPD-002: same wire-capable family but native runtime OFF ⇒ the AI SDK path
+// cannot carry the wire format, so the synthetic StructuredOutput tool stays.
+wireCapableAiSdk.instance("keeps the synthetic StructuredOutput path when the runtime is AI SDK", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(wireProviderCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({
+      title: "Synthetic structured output",
+      permission: [{ permission: "*", pattern: "*", action: "allow" }],
+    })
+    yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      noReply: true,
+      format: {
+        type: "json_schema",
+        schema: {
+          type: "object",
+          properties: { answer: { type: "number" } },
+          required: ["answer"],
+        },
+        retryCount: 1,
+      },
+      parts: [{ type: "text", text: "Return the answer." }],
+    })
+    yield* llm.tool("StructuredOutput", { answer: 4 })
+
+    const result = yield* prompt.loop({ sessionID: chat.id })
+
+    const syntheticRequest = (yield* llm.hits).find((item) => JSON.stringify(item.body).includes("Return the answer"))
+    expect(syntheticRequest).toBeDefined()
+    const body = syntheticRequest!.body
+    const tools = Array.isArray(body.tools) ? (body.tools as Array<Record<string, unknown>>) : []
+    expect(tools.some((tool) => tool.name === "StructuredOutput")).toBe(true)
+    expect(body.tool_choice).toBe("required")
+
+    expect(result.info.role).toBe("assistant")
+    if (result.info.role === "assistant") {
+      expect(result.info.structured).toEqual({ answer: 4 })
+      expect(result.info.finish).toBe("tool-calls")
+    }
+  }),
+)
+
 providerHistoryTransform.instance("isolates provider message transforms from durable history authority", () =>
   Effect.gen(function* () {
     const { llm } = yield* useServerConfig(providerCfg)
@@ -1712,7 +1906,7 @@ it.instance("recovers only compaction continuations that were durably not dispat
           .run()
           .pipe(Effect.orDie)
         yield* db
-          .insert(SessionToolRequestReceiptTable)
+          .insert(SessionToolRequestReceiptTable) // fixture-exempt: seeds preparing receipt with stale owner for recovery fixture
           .values({
             receipt_id: receiptID,
             request_ordinal: 1,
@@ -4336,6 +4530,47 @@ unix(
   30_000,
 )
 
+// BUG-407-008 §7.1 deterministic regressions: the computed activity-progress projection must be
+// derived from the durable progress authority on read, independent of whether the owning assistant
+// message carries a text part (reasoning-only / tool-only turns still project progress).
+unix(
+  "BUG-407-008 #5: a tool-only assistant turn still yields a computed activityProgress projection",
+  () =>
+    Effect.gen(function* () {
+      const { dir, llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({
+        title: "tool-only computed projection",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "run the tool" }],
+      })
+      yield* llm.tool("bash", { command: "echo progress-marker", description: "emit", workdir: path.resolve(dir) })
+      yield* llm.text("done")
+      yield* prompt.loop({ sessionID: chat.id })
+
+      const msgs = yield* MessageV2.filterCompactedEffect(chat.id)
+      const withTool = msgs.filter(
+        (item) => item.info.role === "assistant" && item.parts.some((p) => p.type === "tool"),
+      )
+      expect(withTool.length).toBeGreaterThan(0)
+      // The assistant message that owns the tool call carries a computed activityProgress derived
+      // from the durable progress authority — even though it may have no text part of its own.
+      const projected = withTool.find((item) => (item.info as SessionV1.Assistant).activityProgress)
+      expect(projected).toBeDefined()
+      const progress = projected ? (projected.info as SessionV1.Assistant).activityProgress : undefined
+      expect(progress?.revision).toBeGreaterThanOrEqual(0)
+      expect(progress?.activityID).toBeTruthy()
+    }),
+  { git: true },
+  30_000,
+)
+
 unixNoLLMServer(
   "cancel interrupts loop queued behind shell",
   () =>
@@ -5517,6 +5752,181 @@ noLLMServer.instance(
         // "wish" mode unrecognized and fall through to "direct_override".
         expect(submitted.info.metadata?.deepagent?.prompt_pipeline?.mode).toBe("intelligence")
       }
+    }),
+  30_000,
+)
+
+// FEAT-010: V2 owner fork observability lock-in. The fork logic itself is unchanged — these tests
+// pin the observation seams: (1) when the V2 owner branch is selected, the selection/receipt
+// correlation logs appear and the V2 runner is invoked; (2) the legacy path is unaffected and logs
+// owner=legacy; (3) the fork slog always carries the decision-factor snapshot.
+type CapturedLog = { message: string; level: string; annotations: Record<string, unknown> }
+const captureLogs = <A, E, R>(sink: CapturedLog[], fx: Effect.Effect<A, E, R>) =>
+  fx.pipe(
+    Effect.provide(
+      Logger.layer(
+        [
+          Logger.make(({ message, logLevel, fiber }) => {
+            sink.push({
+              message: String(message),
+              level: logLevel,
+              annotations: { ...fiber.getRef(References.CurrentLogAnnotations) },
+            })
+          }),
+        ],
+        { mergeWithExisting: false },
+      ),
+    ),
+  )
+
+const v2OwnerResumeCalls: string[] = []
+// FEAT-010: the stub replaces SessionV2.Service only; SessionProjector.defaultLayer is merged back
+// in because the default SessionV2 layer stack carries it, and it is the subscriber that persists
+// session/message rows from events (without it, Session.get fails with "Session not found").
+const v2OwnerStubLayer = Layer.merge(
+  Layer.succeed(
+    SessionV2.Service,
+    SessionV2.Service.of({
+      list: () => Effect.succeed([]),
+      create: () => Effect.die("v2 owner stub: create unused"),
+      get: () => Effect.die("v2 owner stub: get unused"),
+      messages: () => Effect.succeed([]),
+      message: () => Effect.succeed(undefined),
+      context: () =>
+        Effect.succeed([
+          new SessionMessage.Assistant({
+            id: SessionMessage.ID.create(),
+            type: "assistant",
+            agent: "build",
+            model: { id: ModelV2.ID.make("test-model"), providerID: ProviderV2.ID.make("test") },
+            content: [
+              new SessionMessage.AssistantText({ type: "text", id: "text-v2-owner-stub", text: "v2 owner reply" }),
+            ],
+            finish: "stop",
+            cost: 0,
+            time: { created: DateTime.makeUnsafe(Date.now()), completed: DateTime.makeUnsafe(Date.now()) },
+          }),
+        ]),
+      events: () => Stream.empty,
+      switchAgent: () => Effect.die("v2 owner stub: switchAgent unused"),
+      switchModel: () => Effect.die("v2 owner stub: switchModel unused"),
+      prompt: () => Effect.die("v2 owner stub: prompt unused"),
+      shell: () => Effect.die("v2 owner stub: shell unused"),
+      skill: () => Effect.die("v2 owner stub: skill unused"),
+      compact: () => Effect.die("v2 owner stub: compact unused"),
+      wait: () => Effect.die("v2 owner stub: wait unused"),
+      resume: (sessionID) =>
+        Effect.sync(() => {
+          v2OwnerResumeCalls.push(sessionID)
+        }),
+      interrupt: () => Effect.void,
+    }),
+  ),
+  SessionProjector.defaultLayer,
+)
+const v2Owner = testEffect(makeHttp({ flags: { coreV2ExecutionOwner: true }, sessionV2: v2OwnerStubLayer }))
+
+v2Owner.instance(
+  "V2 owner branch selected executes the V2 runner and emits selection + receipt-correlation logs",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({
+        title: "V2 owner fork",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "hello" }],
+      })
+      v2OwnerResumeCalls.length = 0
+      const logs: CapturedLog[] = []
+
+      const result = yield* captureLogs(logs, prompt.loop({ sessionID: chat.id }))
+
+      // The V2 owner branch was selected AND executed: the V2 runner resume fired once, the
+      // legacy LLM path was never touched, and the projected assistant came from the V2 context.
+      expect(v2OwnerResumeCalls).toEqual([chat.id])
+      expect(yield* llm.hits).toHaveLength(0)
+      expect(result.info.role).toBe("assistant")
+      expect(result.parts.some((part) => part.type === "text" && part.text === "v2 owner reply")).toBe(true)
+
+      // Fork slog: info level, owner selection + decision-factor snapshot.
+      const forks = logs.filter((entry) => entry.message === "v2 owner fork")
+      expect(forks.length).toBeGreaterThan(0)
+      for (const fork of forks) {
+        expect(fork.level).toBe("Info")
+        expect(fork.annotations).toMatchObject({
+          "session.id": chat.id,
+          owner: "v2",
+          releaseQualified: true,
+          coreV2ExecutionOwnerFlag: true,
+          coreV2ExecutionOwnerEnabled: true,
+          parityCampaign: "none",
+          ownerCampaign: "release",
+        })
+      }
+      // Selection log with the owner=selection reason + durable receipt correlation log.
+      expect(
+        logs.some(
+          (entry) =>
+            entry.message === "v2 owner branch selected" &&
+            entry.annotations.owner === "v2" &&
+            entry.annotations.reason === "rollout_gate_open",
+        ),
+      ).toBe(true)
+      expect(logs.some((entry) => entry.message === "v2 owner turn receipt")).toBe(true)
+    }),
+  30_000,
+)
+
+it.instance(
+  "legacy loop is unaffected by the fork observation and logs owner=legacy with decision factors",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({
+        title: "Legacy fork",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "hello" }],
+      })
+      yield* llm.text("world")
+      v2OwnerResumeCalls.length = 0
+      const logs: CapturedLog[] = []
+
+      const result = yield* captureLogs(logs, prompt.loop({ sessionID: chat.id }))
+
+      // Legacy behavior intact: the turn ran through the legacy provider and returned the reply.
+      expect(result.info.role).toBe("assistant")
+      expect(result.parts.some((part) => part.type === "text" && part.text === "world")).toBe(true)
+      expect(yield* llm.hits).toHaveLength(1)
+      expect(v2OwnerResumeCalls).toHaveLength(0)
+
+      // Fork slog still fires with the decision-factor snapshot, selecting legacy.
+      const forks = logs.filter((entry) => entry.message === "v2 owner fork")
+      expect(forks.length).toBeGreaterThan(0)
+      for (const fork of forks) {
+        expect(fork.level).toBe("Info")
+        expect(fork.annotations).toMatchObject({
+          "session.id": chat.id,
+          owner: "legacy",
+          releaseQualified: true,
+          coreV2ExecutionOwnerFlag: false,
+          coreV2ExecutionOwnerEnabled: false,
+        })
+      }
+      expect(logs.some((entry) => entry.message === "v2 owner branch selected")).toBe(false)
     }),
   30_000,
 )

@@ -4,6 +4,21 @@ import { ModelID, ProviderID, ProviderMetadata, RouteID } from "./ids"
 export const ProviderFailureClassification = Schema.Literal("context-overflow")
 export type ProviderFailureClassification = typeof ProviderFailureClassification.Type
 
+/**
+ * Where a transport failure occurred relative to request dispatch.
+ *
+ * - `pre-dispatch` — the request never reached the provider (DNS/TCP connect
+ *   failure, TLS handshake rejection, request encoding failure). Retrying is
+ *   safe: no physical request can have been billed.
+ * - `post-dispatch` — the request was (or may have been) delivered: response
+ *   headers arrived and the body stream broke, or the failure point is
+ *   ambiguous. Retrying would duplicate the physical request (double
+ *   billing), so these are never auto-retried; recovery belongs to the
+ *   provider-attempt replay channel.
+ */
+export const TransportPhase = Schema.Literals(["pre-dispatch", "post-dispatch"])
+export type TransportPhase = typeof TransportPhase.Type
+
 export class HttpRequestDetails extends Schema.Class<HttpRequestDetails>("LLM.HttpRequestDetails")({
   method: Schema.String,
   url: Schema.String,
@@ -123,11 +138,14 @@ export class TransportReason extends Schema.Class<TransportReason>("LLM.Error.Tr
   _tag: Schema.tag("Transport"),
   message: Schema.String,
   kind: Schema.optional(Schema.String),
+  phase: Schema.optional(TransportPhase),
   url: Schema.optional(Schema.String),
   http: Schema.optional(HttpContext),
 }) {
   get retryable() {
-    return false
+    // Only failures proven to predate dispatch are safe to re-send. Absent a
+    // phase (e.g. websocket transport errors) we conservatively refuse.
+    return this.phase === "pre-dispatch"
   }
 }
 

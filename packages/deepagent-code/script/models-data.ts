@@ -24,13 +24,25 @@ export async function loadModelsData(
     return result(configured, configuredFile)
   }
 
-  const modelsURL = (environment.DEEPAGENT_CODE_MODELS_URL?.trim() || "https://models.dev").replace(/\/$/, "")
-  const remote = await fetch(`${modelsURL}/api.json`, {
-    signal: AbortSignal.timeout(options.requestTimeoutMs ?? 10_000),
-  })
-    .then(async (response) => (response.ok ? catalog(await response.json()) : undefined))
-    .catch(() => undefined)
-  if (remote) {
+  // Clean-build policy: DEEPAGENT_CODE_MODELS_URL accepts a comma-separated ordered list of fresh
+  // remote endpoints. Default chain: models.dev (primary) then the Gitee mirror of
+  // deepagent-ltd/models.dev (hourly-synced, reachable from CN networks). Every source must serve
+  // the live catalog; we never fall back to a stale local snapshot — if all endpoints fail, the
+  // build fails closed.
+  const modelsURLs = (
+    environment.DEEPAGENT_CODE_MODELS_URL?.trim() ||
+    "https://models.dev,https://gitee.com/deepagent-ai/models.dev/raw/main"
+  )
+    .split(",")
+    .map((url) => url.trim().replace(/\/$/, ""))
+    .filter((url) => url.length > 0)
+  for (const modelsURL of modelsURLs) {
+    const remote = await fetch(`${modelsURL}/api.json`, {
+      signal: AbortSignal.timeout(options.requestTimeoutMs ?? 10_000),
+    })
+      .then(async (response) => (response.ok ? catalog(await response.json()) : undefined))
+      .catch(() => undefined)
+    if (!remote) continue
     if (options.cacheFile) {
       await persistCatalog(options.cacheFile, remote).catch((error) =>
         console.warn(
@@ -41,7 +53,9 @@ export async function loadModelsData(
     return result(remote, `${modelsURL}/api.json`)
   }
 
-  throw new Error(`Unable to load models.dev catalog from ${modelsURL}; refusing to use a local snapshot`)
+  throw new Error(
+    `Unable to load models.dev catalog from ${modelsURLs.join(", ")}; refusing to use a local snapshot`,
+  )
 }
 
 function result(data: Record<string, unknown>, source: string) {

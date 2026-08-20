@@ -3,7 +3,7 @@ import { createRoot } from "solid-js"
 import { createStore } from "solid-js/store"
 import type { Message, Part } from "@deepagent-code/sdk/v2/client"
 import { ServerScope } from "@/utils/server-scope"
-import { createDirSyncContext, runInflight } from "./directory-sync"
+import { applyOptimisticAdd, createDirSyncContext, mergeOptimisticPage, runInflight } from "./directory-sync"
 
 const state = () =>
   createStore({
@@ -412,6 +412,76 @@ describe("directory optimistic targeting", () => {
     if (result?.role === "assistant") expect(result.activityProgress).toEqual(canonical)
   })
 
+  test("conflict recovery refetches only the authoritative tail, not the whole session", async () => {
+    let messageCalls = 0
+    let sessionGetCalls = 0
+    const messageRequests: Array<{ limit: number; before?: string }> = []
+    let forcedStarted: (() => void) | undefined
+    const current = state()
+    const initial = { activityID: "activity-1", revision: 1, state: "progress" as const }
+    const canonical = { activityID: "activity-1", revision: 2, state: "final" as const }
+    const serverSync = {
+      child() {
+        return current
+      },
+      plan: {
+        async sync() {},
+      },
+    } as unknown as Parameters<typeof createDirSyncContext>[1]
+    const sync = createDirSyncContext("/repo/main", serverSync, {
+      scope: ServerScope.local,
+      createClient() {
+        return {
+          session: {
+            async get() {
+              sessionGetCalls += 1
+              return { data: { id: "ses_1" } }
+            },
+            async messages(input: { limit: number; before?: string }) {
+              messageCalls += 1
+              messageRequests.push({ limit: input.limit, before: input.before })
+              if (messageCalls === 3) forcedStarted?.()
+              const marker =
+                messageCalls === 2
+                  ? { activityID: "activity-conflict", revision: 0, state: "progress" as const }
+                  : messageCalls === 3
+                    ? canonical
+                    : initial
+              return {
+                data: [{ info: assistantMessage("msg_assistant", "ses_1", marker), parts: [] }],
+                response: { headers: new Headers(messageCalls === 1 ? { "x-next-cursor": "older" } : {}) },
+              }
+            },
+          },
+        }
+      },
+    } as unknown as Parameters<typeof createDirSyncContext>[2])
+    const sessionID = "ses_1"
+    current[1]("session", [current[0].session.length], { id: sessionID })
+    await sync.session.sync(sessionID, { force: true })
+
+    const forced = new Promise<void>((resolve) => {
+      forcedStarted = resolve
+    })
+    await sync.session.history.loadMore(sessionID)
+    await forced
+
+    expect(messageCalls).toBe(3)
+    // BUG-005 degradation: the recovery is a BOUNDED authoritative TAIL refetch (newest page, no
+    // `before`), NOT a full-session force reload — a full reload would re-fetch the session header.
+    expect(messageRequests[2]?.before).toBeUndefined()
+    expect(messageRequests[2]?.limit).toBeLessThanOrEqual(80)
+    expect(sessionGetCalls).toBe(1)
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const message = current[0].message[sessionID]?.[0]
+      if (message?.role === "assistant" && message.activityProgress?.revision === canonical.revision) break
+      await Promise.resolve()
+    }
+    const result = current[0].message[sessionID]?.[0]
+    expect(result?.role).toBe("assistant")
+    if (result?.role === "assistant") expect(result.activityProgress).toEqual(canonical)
+  })
+
   test("does not let an older forced response overwrite a marker received during the request", async () => {
     let release: (() => void) | undefined
     const current = state()
@@ -592,6 +662,105 @@ describe("directory optimistic targeting", () => {
     await forced
 
     expect(current[0].message[sessionID]).toEqual([])
+  })
+})
+
+describe("directory sync across the ID time wrap (BUG-407-012 root cause B)", () => {
+  // The 26th wrap of the 6-byte ID time field happened on 2026-08-14: the chronologically NEWER
+  // message carries a lexicographically SMALLER ID. These fixtures mirror the incident session.
+  const WRAP_OLD_ID = "msg_ffa88f0840015Xj7vIrcdNEJJB" // 2026-08-13 17:51:46
+  const WRAP_NEW_ID = "msg_00d62a3c4001KqYw3o8wBBH6qm" // 2026-08-17 09:42:43
+  const WRAP_OLD_TIME = 1786614706000
+  const WRAP_NEW_TIME = 1786930963000
+  const WRAP_OLD_PART = "prt_ffa88f084001aaaa"
+  const WRAP_NEW_PART = "prt_00d62a3c4001bbbb"
+
+  const wrapUserMessage = (id: string, sessionID: string, created: number): Message => ({
+    id,
+    sessionID,
+    role: "user",
+    time: { created },
+    agent: "assistant",
+    model: { providerID: "openai", modelID: "gpt" },
+  })
+
+  const wrapTextPart = (id: string, sessionID: string, messageID: string, start: number): Part =>
+    ({
+      id,
+      sessionID,
+      messageID,
+      type: "text",
+      text: id,
+      time: { start },
+    }) as Part
+
+  test("mergeOptimisticPage appends a wrapped newer optimistic message at the timeline tail", () => {
+    expect(WRAP_NEW_ID < WRAP_OLD_ID).toBe(true) // sanity: raw ID order is reversed
+    const older = wrapUserMessage(WRAP_OLD_ID, "ses_1", WRAP_OLD_TIME)
+    const newer = wrapUserMessage(WRAP_NEW_ID, "ses_1", WRAP_NEW_TIME)
+
+    const merged = mergeOptimisticPage({ session: [older], part: [], complete: true }, [{ message: newer, parts: [] }])
+
+    expect(merged.session.map((message) => message.id)).toEqual([WRAP_OLD_ID, WRAP_NEW_ID])
+  })
+
+  test("applyOptimisticAdd inserts a wrapped newer message after the older msg_ff... one", () => {
+    const older = wrapUserMessage(WRAP_OLD_ID, "ses_1", WRAP_OLD_TIME)
+    const newer = wrapUserMessage(WRAP_NEW_ID, "ses_1", WRAP_NEW_TIME)
+    const draft = { message: { ses_1: [older] }, part: {} } as {
+      message: Record<string, Message[] | undefined>
+      part: Record<string, Part[] | undefined>
+    }
+
+    applyOptimisticAdd(draft, { sessionID: "ses_1", message: newer, parts: [] })
+
+    expect(draft.message.ses_1?.map((message) => message.id)).toEqual([WRAP_OLD_ID, WRAP_NEW_ID])
+  })
+
+  test("a synced page keeps the server (time_created, id) order across the wrap", async () => {
+    const older = wrapUserMessage(WRAP_OLD_ID, "ses_1", WRAP_OLD_TIME)
+    const newer = wrapUserMessage(WRAP_NEW_ID, "ses_1", WRAP_NEW_TIME)
+    // Deliberately hand the page back-to-front plus a wrapped part pair in reversed order: the
+    // client-side re-sort must land on chronological order, not ID order.
+    const oldPart = wrapTextPart(WRAP_OLD_PART, "ses_1", WRAP_NEW_ID, WRAP_OLD_TIME)
+    const newPart = wrapTextPart(WRAP_NEW_PART, "ses_1", WRAP_NEW_ID, WRAP_NEW_TIME)
+    const current = state()
+    const serverSync = {
+      child() {
+        return current
+      },
+      plan: {
+        async sync() {},
+      },
+    } as unknown as Parameters<typeof createDirSyncContext>[1]
+    const sync = createDirSyncContext("/repo/main", serverSync, {
+      scope: ServerScope.local,
+      createClient() {
+        return {
+          session: {
+            async get() {
+              return { data: { id: "ses_1" } }
+            },
+            async messages() {
+              return {
+                data: [
+                  { info: older, parts: [] },
+                  { info: newer, parts: [newPart, oldPart] },
+                ],
+                response: { headers: new Headers() },
+              }
+            },
+          },
+        }
+      },
+    } as unknown as Parameters<typeof createDirSyncContext>[2])
+    const sessionID = "ses_1"
+    current[1]("session", [current[0].session.length], { id: sessionID })
+
+    await sync.session.sync(sessionID)
+
+    expect(current[0].message[sessionID]?.map((message) => message.id)).toEqual([WRAP_OLD_ID, WRAP_NEW_ID])
+    expect(current[0].part[WRAP_NEW_ID]?.map((part) => part.id)).toEqual([WRAP_OLD_PART, WRAP_NEW_PART])
   })
 })
 

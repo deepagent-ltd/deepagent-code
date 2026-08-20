@@ -11,6 +11,7 @@ import { EventV2Bridge } from "../../src/event-v2-bridge"
 import { Config } from "@/config/config"
 import { Provider } from "@/provider/provider"
 import { Session } from "@/session/session"
+import { SessionProjector } from "@deepagent-code/core/session/projector"
 import type { SessionID } from "../../src/session/schema"
 import { ShareNext } from "@/share/share-next"
 import { SessionShareTable } from "@deepagent-code/core/share/sql"
@@ -22,6 +23,9 @@ import { pollWithTimeout, testEffect } from "../lib/effect"
 
 const env = Layer.mergeAll(
   Session.defaultLayer,
+  // QUAL-007: the core SessionProjector materializes event-created sessions; without it message
+  // writes hit the session FK.
+  SessionProjector.defaultLayer,
   AccountRepo.defaultLayer,
   Database.defaultLayer,
   NodeFileSystem.layer,

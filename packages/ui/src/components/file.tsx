@@ -533,6 +533,11 @@ function preserve(viewer: Viewer) {
   }
 }
 
+// The diff virtualizer binds to the nearest overflow-y: auto/scroll ancestor. When no such
+// ancestor exists below an outer row-level virtualizer (e.g. the session timeline's virtua
+// scroller), both virtualizers share the same scroll root and inner height changes force the
+// outer one to re-measure. Callers enabling `virtualize` inside an outer virtualized list
+// should wrap the viewer in a bounded-height overflow-y: auto container (UX-001, message-part.tsx).
 function scrollParent(el: HTMLElement): HTMLElement | undefined {
   let parent = el.parentElement
   while (parent) {

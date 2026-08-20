@@ -34,7 +34,9 @@ const makeLayer = (opts: {
   return Layer.mergeAll(consumer, busLayer, flagLayer, database)
 }
 
-const seq0Command = (over?: Partial<{ sessionID: string; goalId: string; planDocId: string; seq: number }>) => ({
+const seq0Command = (
+  over?: Partial<{ sessionID: string; goalId: string; planDocId: string; seq: number; workspaceID: string }>,
+) => ({
   sessionID: "s1",
   goalId: "g1",
   planDocId: "plan-1",
@@ -77,6 +79,23 @@ describe("GoalTickConsumer — command identity", () => {
     })
     expect(recoverGoalTickRequest(request, { seq: 3, planVersion: 1, phase: "running" })).toBe("invalid")
   })
+
+  // FEATURE-003-407 residual: the durable event row's workspace_id drives groupsFor's workspace-scoped
+  // routing, so tickCommand must stamp the REAL workspace id there — never the sessionID.
+  test("tickCommand stamps the real workspaceID onto the event row (not the sessionID)", () => {
+    const cmd = GoalTickConsumer.tickCommand({ ...seq0Command(), workspaceID: "wrk_a" })
+    expect(cmd.workspaceID).toBe("wrk_a")
+    expect(cmd.workspaceID).not.toBe(cmd.payload && (cmd.payload as Record<string, unknown>).sessionID)
+    expect(cmd.payload).toMatchObject({ sessionID: "s1", workspaceID: "wrk_a" })
+    expect(cmd.actorID).toBe("s1") // the actor stays the session; only the routing column changes
+  })
+
+  test("tickCommand without a known workspace falls back to the bus global semantics (\"\")", () => {
+    const cmd = GoalTickConsumer.tickCommand(seq0Command())
+    expect(cmd.workspaceID).toBe("")
+    const resumed = GoalTickConsumer.resumeTickCommand(seq0Command())
+    expect(resumed.workspaceID).toBe("")
+  })
 })
 
 describe("GoalTickConsumer — command handling", () => {
@@ -101,6 +120,47 @@ describe("GoalTickConsumer — command handling", () => {
       )
       // if the consumer already emitted seq=1, this returns the SAME event id (dedup); prove the chain fired.
       expect(dup.idempotencyKey).toBe("goal:tick:g1:1")
+    }),
+  )
+})
+
+describe("GoalTickConsumer — event row workspace routing (FEATURE-003-407)", () => {
+  const it = testEffect(
+    makeLayer({
+      runTick: () => Effect.succeed({ progress: "continue", nextSeq: 1, nextExpectedPlanVersion: 1 } as StubResult),
+    }),
+  )
+
+  it.effect("publish persists the real workspaceID on the event row and the chain propagates it", () =>
+    Effect.gen(function* () {
+      const bus = yield* DeepAgentEventBus.Service
+      const consumer = yield* GoalTickConsumer.Service
+      const cmd = yield* publishTick(seq0Command({ goalId: "gwrk", workspaceID: "wrk_a" }))
+      // the durable row carries the REAL workspace — pre-fix it was the sessionID.
+      expect(cmd.workspaceID).toBe("wrk_a")
+      yield* consumer.handle(cmd)
+      // the re-emitted successor (seq=1) keeps the same real workspace; the dedup probe returns the
+      // winner row the consumer already persisted, so its workspaceID proves chain propagation.
+      const next = yield* bus.publish(
+        GoalTickConsumer.tickCommand(seq0Command({ goalId: "gwrk", seq: 1, workspaceID: "wrk_a" })),
+      )
+      expect(next.idempotencyKey).toBe("goal:tick:gwrk:1")
+      expect(next.workspaceID).toBe("wrk_a")
+    }),
+  )
+
+  it.effect("a workspace-bound consumer group is owed only its own workspace's tick events", () =>
+    Effect.gen(function* () {
+      const bus = yield* DeepAgentEventBus.Service
+      // groupsFor routes workspace-bound groups (workspace_id != "") by the event row's workspace_id.
+      yield* bus.registerConsumerGroup("scoped-grp", LMNEvents.GOAL_TICK_REQUESTED, "wrk_a")
+      const scoped = yield* publishTick(seq0Command({ goalId: "gscoped", workspaceID: "wrk_a" }))
+      const global = yield* publishTick(seq0Command({ goalId: "gglobal" })) // legacy command ⇒ "" row
+      expect(scoped.workspaceID).toBe("wrk_a")
+      expect(global.workspaceID).toBe("")
+      const due = yield* bus.dueRetries(2_000)
+      const ours = due.filter((d) => d.subscriptionGroup === "scoped-grp")
+      expect(ours.map((d) => d.eventID)).toEqual([scoped.id])
     }),
   )
 })

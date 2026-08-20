@@ -5,6 +5,12 @@ import os from "node:os"
 import path from "node:path"
 import { parseArgs } from "node:util"
 import { validateLiveLLMKeyFile } from "../packages/llm/script/live-llm/config"
+import {
+  matchRegisteredLiveLLMProvider,
+  recommendedLiveLLMKeyFile,
+  resolveLiveLLMProvider,
+  type ResolvedLiveLLMProvider,
+} from "../packages/deepagent-code/script/live-llm/providers"
 
 export type RunnerConfig = {
   baseURL: string
@@ -509,23 +515,31 @@ export function runnerEnvironment(
 export function validateRunnerConfig(input: unknown, baseDirectory = repository): RunnerConfig {
   if (!isRecord(input)) throw new Error("Live LLM config must be a JSON object")
   if ("apiKey" in input) {
+    const recommendedProviderID =
+      (typeof input.baseURL === "string" ? matchRegisteredLiveLLMProvider(input.baseURL)?.id : undefined) ??
+      "deepseek"
     throw new Error(
       "Legacy live LLM JSON field apiKey is not accepted; move the key to a chmod 600 one-line file and " +
-        "set apiKeyFile (recommended: ~/.deepagent/code/tmp/live-llm-deepseek.key)",
+        `set apiKeyFile (recommended: ${recommendedLiveLLMKeyFile(recommendedProviderID)})`,
     )
   }
   const baseURL = requiredString(input.baseURL, "baseURL")
-  if (!URL.canParse(baseURL)) throw new Error("baseURL must be a valid URL")
-  const endpoint = new URL(baseURL)
-  if (endpoint.protocol !== "https:" || endpoint.hostname !== "api.deepseek.com") {
-    throw new Error(
-      `Real LLM suites currently require the official https://api.deepseek.com endpoint, received ${baseURL}`,
-    )
+  const provider = resolveLiveLLMProvider(baseURL)
+  const explicitProviderID = optionalProviderID(input.providerID)
+  if (explicitProviderID && explicitProviderID !== provider.id) {
+    if (provider.registered) {
+      throw new Error(
+        `providerID "${explicitProviderID}" does not match the official ${provider.label} endpoint ` +
+          `${provider.baseURL} (providerID: ${provider.id})`,
+      )
+    }
+    provider.id = explicitProviderID
+    provider.label = explicitProviderID
   }
   const apiKeyFile = resolveKeyFile(requiredString(input.apiKeyFile, "apiKeyFile"), baseDirectory)
   const modelRevision = optionalString(input.modelRevision)
   return {
-    baseURL: baseURL.replace(/\/$/, ""),
+    baseURL: provider.baseURL,
     apiKeyFile,
     model: requiredString(input.model, "model"),
     ...(modelRevision ? { modelRevision } : {}),
@@ -534,6 +548,15 @@ export function validateRunnerConfig(input: unknown, baseDirectory = repository)
     evalRuns: integer(input.evalRuns, "evalRuns", 1, 20),
     installDependencies: boolean(input.installDependencies, "installDependencies"),
   }
+}
+
+/**
+ * Resolves the provider fingerprint from a validated runner config. The identifier is
+ * derived from the endpoint registry (never hardcoded), so evidence reports record the
+ * actual provider that served the suites.
+ */
+export function runnerProvider(config: Pick<RunnerConfig, "baseURL">): ResolvedLiveLLMProvider {
+  return resolveLiveLLMProvider(config.baseURL)
 }
 
 export async function validateSuiteManifest() {
@@ -580,6 +603,37 @@ export async function loadRealLLMSuiteInventory() {
   ).flat()
 }
 
+// QUAL-004: validateSuiteManifest only covers real-LLM suites; this closes
+// the remaining drift surface by checking EVERY registry entry that runs a
+// package script (`bun run <script>` or an explicit packageScript) against
+// the owning package.json. Suites invoking files directly (node ./scripts/…)
+// own their path and are skipped. Called before dry-run listing so stale
+// registry entries fail fast instead of dying mid-run.
+export async function validateRegistryScripts() {
+  const scripts = new Map<string, Set<string>>()
+  for (const packageName of ["llm", "core", "deepagent-code", "desktop"] as const) {
+    const payload: unknown = await Bun.file(path.join(repository, "packages", packageName, "package.json")).json()
+    if (!isRecord(payload) || !isRecord(payload.scripts)) {
+      throw new Error(`packages/${packageName}/package.json does not contain a scripts object`)
+    }
+    scripts.set(packageName, new Set(Object.keys(payload.scripts)))
+  }
+  const drift: string[] = []
+  for (const suite of suites) {
+    if (suite.package === "root") continue
+    const scriptName =
+      suite.packageScript ??
+      (suite.command[0] === "bun" && suite.command[1] === "run" ? suite.command[2] : undefined)
+    if (!scriptName) continue
+    if (!scripts.get(suite.package)?.has(scriptName)) {
+      drift.push(`${suite.id} → ${suite.package}:${scriptName}`)
+    }
+  }
+  if (drift.length) {
+    throw new Error(`Suite registry references package scripts that do not exist: ${drift.join(", ")}`)
+  }
+}
+
 async function main() {
   const options = parseArgs({
     args: Bun.argv.slice(2),
@@ -601,7 +655,9 @@ async function main() {
     )
   }
   const config = validateRunnerConfig(await Bun.file(configFile).json(), path.dirname(configFile))
+  const provider = runnerProvider(config)
   await validateSuiteManifest()
+  await validateRegistryScripts()
   if (!options["dry-run"]) await validateLiveLLMKeyFile(config.apiKeyFile)
   const selected = selectSuites({
     headless: options.headless,
@@ -612,7 +668,7 @@ async function main() {
   const realCount = selected.filter((suite) => suite.realLLM).length
   console.log(
     `Real LLM all-tests: ${selected.length} commands (${realCount} model suites), ` +
-      `model=${config.model}, endpoint=${config.baseURL}`,
+      `provider=${provider.id}, model=${config.model}, endpoint=${config.baseURL}`,
   )
   if (options["dry-run"]) {
     selected.forEach((suite, index) => console.log(`${index + 1}. ${suite.id}: ${suite.command.join(" ")}`))
@@ -713,7 +769,7 @@ async function main() {
             ? "passed"
             : "failed",
         fingerprint: {
-          providerID: "deepseek",
+          providerID: provider.id,
           baseURL: config.baseURL,
           modelID: config.model,
           modelRevision: config.modelRevision,
@@ -821,6 +877,16 @@ function optionalString(value: unknown) {
   if (value === undefined || value === null || value === "") return undefined
   if (typeof value !== "string") throw new Error("modelRevision must be a string")
   return value.trim() || undefined
+}
+
+function optionalProviderID(value: unknown) {
+  if (value === undefined || value === null || value === "") return undefined
+  if (typeof value !== "string") throw new Error("providerID must be a string")
+  const trimmed = value.trim()
+  if (!/^[a-z0-9][a-z0-9_-]*$/.test(trimmed)) {
+    throw new Error("providerID must match /^[a-z0-9][a-z0-9_-]*$/")
+  }
+  return trimmed
 }
 
 function integer(value: unknown, name: string, minimum: number, maximum: number) {

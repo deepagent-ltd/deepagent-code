@@ -90,7 +90,7 @@ This will walk you through installing the GitHub app, creating the workflow, and
               persist-credentials: false
 
           - name: Run deepagent-code
-            uses: deepagent-ltd/deepagent-code/github@github-v1.4.5
+            uses: deepagent-ltd/deepagent-code/github@github-v1.4.7
             env:
              ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
              GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

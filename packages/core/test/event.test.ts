@@ -1708,4 +1708,71 @@ describe("EventV2", () => {
       expect(received[0]?.data).toEqual({ id: aggregateID, text: "replayed" })
     }),
   )
+
+  // BUG-407-010 / REL-002: until the canonical owner handoff completes, a durable source fence
+  // (`event_sequence.write_fence_transfer_id` backed by an admitted transfer operation) must fail
+  // closed for both replay and local publish — no event may land on the fenced aggregate.
+  it.effect("a durable transfer write fence fails closed for replay and publish before handoff completes", () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2.Service
+      const { db } = yield* Database.Service
+      const aggregateID = "session-transfer-fenced"
+      // fixture-exempt: bare project/session rows exist only to satisfy the
+      // session_transfer_operation FK so the fence authority trigger admits the transfer.
+      yield* db.run(sql`
+        INSERT INTO project (id, worktree, sandboxes, time_created, time_updated)
+        VALUES ('project-transfer-fence', '/tmp/transfer-fence', '[]', 1, 1)
+      `)
+      // fixture-exempt: bare session row anchors the transfer fence aggregate (see above).
+      yield* db.run(sql`
+        INSERT INTO session (id, project_id, slug, directory, title, version, time_created, time_updated)
+        VALUES (${aggregateID}, 'project-transfer-fence', 'transfer-fence', '/tmp/transfer-fence', 'Transfer fence', 'test', 1, 1)
+      `)
+      yield* events.publish(SyncMessage, { id: aggregateID, text: "before handoff" })
+      // fixture-exempt: seeds an admitted (in-flight) transfer operation; the handoff never
+      // advances, so the source fence must keep the aggregate fail closed.
+      yield* db.run(sql`
+        INSERT INTO session_transfer_operation (
+          transfer_id, session_id, source_owner_id, target_owner_id,
+          source_event_seq, source_mutation_epoch, state, request_hash, created_at, updated_at
+        ) VALUES (
+          'transfer-fence', ${aggregateID}, 'source-owner', 'target-owner',
+          0, 0, 'admitted', ${"f".repeat(64)}, 1, 1
+        )
+      `)
+      yield* db
+        .update(EventSequenceTable)
+        .set({ write_fence_transfer_id: "transfer-fence" })
+        .where(eq(EventSequenceTable.aggregate_id, aggregateID))
+        .run()
+        .pipe(Effect.orDie)
+
+      const replayExit = yield* events
+        .replay(
+          {
+            id: EventV2.ID.create(),
+            type: EventV2.versionedType(SyncMessage.type, 1),
+            seq: 1,
+            aggregateID,
+            data: { id: aggregateID, text: "stolen" },
+          },
+          { ownerID: "target-owner", strictOwner: true },
+        )
+        .pipe(Effect.exit)
+      expect(String(replayExit)).toContain("is fenced by transfer transfer-fence")
+
+      const publishExit = yield* events
+        .publish(SyncMessage, { id: aggregateID, text: "local write after fence" })
+        .pipe(Effect.exit)
+      expect(String(publishExit)).toContain("is fenced by transfer transfer-fence")
+
+      const rows = yield* db
+        .select({ seq: EventTable.seq })
+        .from(EventTable)
+        .where(eq(EventTable.aggregate_id, aggregateID))
+        .all()
+        .pipe(Effect.orDie)
+      expect(rows.map((row) => row.seq)).toEqual([0])
+    }),
+  )
 })
