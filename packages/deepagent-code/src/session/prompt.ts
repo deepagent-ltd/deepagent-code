@@ -6108,7 +6108,16 @@ export const layer = Layer.effect(
                       sessionID: item.sessionID,
                       messageID: item.messageID,
                       cause,
+                      causeDetail: Cause.pretty(cause),
                     }),
+                    // BUG-407-009 §10.1 fail-closed: the continuation recovery capability is a
+                    // Maintenance deliverable, so a failed recovery must stop advertising the run as
+                    // recoverable — otherwise instance initialization re-wakes it indefinitely.
+                    Effect.andThen(
+                      compaction
+                        .failContinuationClosed({ runID: item.runID })
+                        .pipe(Effect.provideService(Database.Service, database)),
+                    ),
                   ),
                 ),
                 Effect.forkIn(scope),

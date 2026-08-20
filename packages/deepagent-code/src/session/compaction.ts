@@ -329,6 +329,11 @@ export interface Interface {
     activityID?: string
   }) => Effect.Effect<void>
   readonly recover: (sessionID: SessionID) => Effect.Effect<void>
+  // BUG-407-009 §10.1 fail-closed contract: when a committed compaction continuation cannot be
+  // recovered (the recovery capability itself is a Maintenance-milestone deliverable), the run must
+  // stop advertising itself as recoverable — otherwise instance initialization re-wakes it forever
+  // and floods the log. CAS pending/admitted/dispatching → failed; real recovery can revisit later.
+  readonly failContinuationClosed: (input: { runID: string }) => Effect.Effect<void>
   readonly recoverableContinuations: (projectID: Project.ID) => Effect.Effect<
     readonly {
       runID: string
@@ -2020,12 +2025,29 @@ export const layer = Layer.effect(
       }))
     })
 
+    const failContinuationClosed = Effect.fn("SessionCompaction.failContinuationClosed")(function* (input: {
+      runID: string
+    }) {
+      yield* db
+        .update(CompactionRunTable)
+        .set({ continuation_state: "failed" })
+        .where(
+          and(
+            eq(CompactionRunTable.run_id, input.runID),
+            inArray(CompactionRunTable.continuation_state, ["pending", "admitted", "dispatching"] as const),
+          ),
+        )
+        .run()
+        .pipe(Effect.orDie)
+    })
+
     return Service.of({
       isOverflow,
       prune,
       process: processCompaction,
       create,
       recover,
+      failContinuationClosed,
       recoverableContinuations,
       hasPending,
     })

@@ -148,5 +148,6 @@ export const migrations = (
     import("./migration/20260819120000_session_intent_confirmation_state"),
     import("./migration/20260820000000_remote_compact_persistence"),
     import("./migration/20260820120000_session_turn_stage_evidence"),
+    import("./migration/20260820130000_compaction_continuation_fail_closed"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

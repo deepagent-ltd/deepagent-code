@@ -107,9 +107,9 @@ describe("session turn stage evidence migration", () => {
     )
   })
 
-  test("orders after every registered migration", async () => {
-    for (const registered of migrations) {
-      if (registered.id === turnStageEvidenceMigration.id) continue
+  test("orders after every migration registered before it", async () => {
+    const index = migrations.findIndex((registered) => registered.id === turnStageEvidenceMigration.id)
+    for (const registered of migrations.slice(0, index)) {
       expect(turnStageEvidenceMigration.id > registered.id).toBe(true)
     }
   })
