@@ -174,7 +174,7 @@ const seedIndeterminateProviderTurn = Effect.fn("LegacyProviderResolutionTest.se
       .run()
       .pipe(Effect.orDie)
     yield* db
-      .insert(SessionActivityTable)
+      .insert(SessionActivityTable) // fixture-exempt: seeds active activity for legacy-resolution fixture
       .values({
         activity_id: input.activityID,
         session_id: input.session.id,
@@ -220,7 +220,7 @@ const seedIndeterminateProviderTurn = Effect.fn("LegacyProviderResolutionTest.se
       .run()
       .pipe(Effect.orDie)
     yield* db
-      .insert(SessionProviderAttemptTable)
+      .insert(SessionProviderAttemptTable) // fixture-exempt: seeds prepared attempt with stale owner for crash fixture
       .values({
         attempt_id: input.providerAttemptID,
         session_id: input.session.id,
@@ -237,7 +237,7 @@ const seedIndeterminateProviderTurn = Effect.fn("LegacyProviderResolutionTest.se
       .run()
       .pipe(Effect.orDie)
     yield* db
-      .insert(SessionToolRequestReceiptTable)
+      .insert(SessionToolRequestReceiptTable) // fixture-exempt: seeds receipt mid-state for legacy-resolution fixture
       .values({
         receipt_id: input.receiptID,
         request_ordinal: 1,

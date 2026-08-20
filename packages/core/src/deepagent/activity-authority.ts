@@ -23,6 +23,7 @@ import {
   SessionActivityPermissionOnceConsumptionTable,
   SessionActivityPermissionRequestTable,
   SessionActivityProgressObservationTable,
+  SessionFacadeActivityTable,
 } from "./activity-authority.sql"
 
 type DatabaseClient = Database.Interface["db"]
@@ -119,7 +120,7 @@ export type Reconstructed = {
 }
 
 export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("ActivityAuthority.NotFoundError", {
-  activityKind: Schema.Literals(["legacy", "v2"]),
+  activityKind: Schema.Literals(["legacy", "v2", "facade"]),
   activityID: Schema.String,
 }) {}
 
@@ -446,6 +447,11 @@ export const settle = Effect.fn("DeepAgentActivityAuthority.settle")(function* (
     .transaction(
       (tx) =>
         Effect.gen(function* () {
+          // FEAT-011 T2 — facade activities are fully isolated from the federation objective
+          // machinery (the objective/permission child tables keep ('legacy','v2') CHECKs), so
+          // settlement is raw CAS on the facade base table keyed by activity_id, mirroring the
+          // legacy branch shape. expectedVersion is the mutation_epoch CAS token.
+          if (input.activityKind === "facade") return yield* settleFacade(tx, input)
           const current = yield* tx.select().from(SessionActivityObjectiveTable).where(activityWhere(input)).get()
           if (!current) return yield* notFound(input)
           if (
@@ -538,6 +544,87 @@ export const settle = Effect.fn("DeepAgentActivityAuthority.settle")(function* (
     )
     .pipe(Effect.catchTag("EffectDrizzleQueryError", Effect.die), Effect.catchTag("SqlError", Effect.die))
 })
+
+// FEAT-011 T2 — facade settlement path. Facade activities never own a federation objective
+// row (the objective/permission child tables keep ('legacy','v2') CHECKs by design), so this
+// settles the facade base table directly with a CAS keyed by activity_id. Three-state mapping
+// mirrors the v2 branch: completed→'settled', interrupted→'interrupted', and
+// recovery_required→'failed' — the facade base has no recovery_required shape of its own, so a
+// recovery-required settlement is persisted as base state 'failed' (same modeling as the v2
+// federation base, where 'failed' means recovery is required). expectedVersion is the
+// mutation_epoch CAS token; the base legal-update trigger additionally enforces the one-shot
+// active→terminal transition with reason_code + settled_at.
+function settleFacade(
+  tx: Transaction,
+  input: ActivityRef & {
+    readonly expectedVersion: number
+    readonly state: "completed" | "interrupted" | "recovery_required"
+    readonly terminalReason: string
+  },
+) {
+  return Effect.gen(function* () {
+    const current = yield* tx
+      .select()
+      .from(SessionFacadeActivityTable)
+      .where(eq(SessionFacadeActivityTable.activity_id, input.activityID))
+      .get()
+    if (!current) return yield* notFound(input)
+    const baseState = input.state === "completed" ? "settled" : input.state === "recovery_required" ? "failed" : "interrupted"
+    const mapped = facadeObjective(current, input.state)
+    if (current.state === baseState && current.reason_code === input.terminalReason && current.settled_at !== null)
+      return mapped
+    if (current.mutation_epoch !== input.expectedVersion)
+      return yield* versionConflict(input.activityID, input.expectedVersion, current.mutation_epoch)
+    if (current.state !== "active")
+      return yield* new ConflictError({ entity: input.activityID, expected: "active", actual: current.state })
+    const now = yield* observedAtInTransaction(tx)
+    const updated = yield* tx
+      .update(SessionFacadeActivityTable)
+      .set({
+        state: baseState,
+        reason_code: input.terminalReason,
+        settled_at: now,
+        mutation_epoch: sql`${SessionFacadeActivityTable.mutation_epoch} + 1`,
+      })
+      .where(
+        and(
+          eq(SessionFacadeActivityTable.activity_id, input.activityID),
+          eq(SessionFacadeActivityTable.state, "active"),
+          eq(SessionFacadeActivityTable.mutation_epoch, input.expectedVersion),
+        ),
+      )
+      .returning()
+      .get()
+    if (!updated) return yield* versionConflict(input.activityID, input.expectedVersion, current.mutation_epoch)
+    return facadeObjective(updated, input.state)
+  })
+}
+
+// Projects a facade base row as the Objective shape settle callers expect (facade activities
+// carry no objective row). version maps mutation_epoch; settlement state maps back from the
+// base shape ('settled'→completed, 'failed'→recovery_required, otherwise as-is).
+function facadeObjective(
+  row: typeof SessionFacadeActivityTable.$inferSelect,
+  state: ActivityObjectiveState,
+): Objective {
+  return {
+    activityKind: "facade",
+    activityID: row.activity_id,
+    sessionID: row.parent_session_id,
+    version: row.mutation_epoch,
+    admissionFingerprint: "facade-spawn:" + (row.spawn_tool_call_id ?? row.activity_id),
+    ...(row.objective_text ? { objectiveText: row.objective_text } : {}),
+    completionCriteria: [],
+    enforcementState: "disabled",
+    state,
+    noProgressCount: 0,
+    latestObservationRevision: -1,
+    ...(row.reason_code ? { terminalReason: row.reason_code } : {}),
+    createdAt: row.created_at,
+    updatedAt: row.settled_at ?? row.created_at,
+    ...(row.settled_at !== null ? { settledAt: row.settled_at } : {}),
+  }
+}
 
 export const reconstruct = Effect.fn("DeepAgentActivityAuthority.reconstruct")(function* (input: ActivityRef) {
   const { db } = yield* Database.Service
@@ -812,11 +899,17 @@ const decidePermissionInternal = Effect.fn("DeepAgentActivityAuthority.decidePer
                 ? yield* tx.get<{ state: string }>(sql`
                     SELECT state FROM session_legacy_activity WHERE activity_id = ${request.activity_id}
                   `)
-                : yield* tx
-                    .select({ state: SessionActivityTable.state })
-                    .from(SessionActivityTable)
-                    .where(eq(SessionActivityTable.activity_id, request.activity_id))
-                    .get()
+                : request.activity_kind === "facade"
+                  ? yield* tx
+                      .select({ state: SessionFacadeActivityTable.state })
+                      .from(SessionFacadeActivityTable)
+                      .where(eq(SessionFacadeActivityTable.activity_id, request.activity_id))
+                      .get()
+                  : yield* tx
+                      .select({ state: SessionActivityTable.state })
+                      .from(SessionActivityTable)
+                      .where(eq(SessionActivityTable.activity_id, request.activity_id))
+                      .get()
             if (objective?.state !== "active" || base?.state !== "active")
               return yield* new ConflictError({
                 entity: request.activity_id,
@@ -981,17 +1074,30 @@ const decidePermissionInternal = Effect.fn("DeepAgentActivityAuthority.decidePer
                       WHERE activity_id = ${request.activity_id} AND state = 'active'
                       RETURNING activity_id
                     `)
-                  : yield* tx
-                      .update(SessionActivityTable)
-                      .set({ state: "interrupted", settled_at: now })
-                      .where(
-                        and(
-                          eq(SessionActivityTable.activity_id, request.activity_id),
-                          eq(SessionActivityTable.state, "active"),
-                        ),
-                      )
-                      .returning({ activityID: SessionActivityTable.activity_id })
-                      .get()
+                  : request.activity_kind === "facade"
+                    ? // FEAT-011 T2 — facade interruption mirrors the v2 branch (CAS on active).
+                      yield* tx
+                        .update(SessionFacadeActivityTable)
+                        .set({ state: "interrupted", reason_code: terminalReason, settled_at: now })
+                        .where(
+                          and(
+                            eq(SessionFacadeActivityTable.activity_id, request.activity_id),
+                            eq(SessionFacadeActivityTable.state, "active"),
+                          ),
+                        )
+                        .returning({ activityID: SessionFacadeActivityTable.activity_id })
+                        .get()
+                    : yield* tx
+                        .update(SessionActivityTable)
+                        .set({ state: "interrupted", settled_at: now })
+                        .where(
+                          and(
+                            eq(SessionActivityTable.activity_id, request.activity_id),
+                            eq(SessionActivityTable.state, "active"),
+                          ),
+                        )
+                        .returning({ activityID: SessionActivityTable.activity_id })
+                        .get()
               if (!base)
                 return yield* new ConflictError({
                   entity: request.activity_id,
@@ -1326,11 +1432,17 @@ export const consumeOnce = Effect.fn("DeepAgentActivityAuthority.consumeOnce")(f
               ? yield* tx.get<{ state: string }>(sql`
                   SELECT state FROM session_legacy_activity WHERE activity_id = ${request.activity_id}
                 `)
-              : yield* tx
-                  .select({ state: SessionActivityTable.state })
-                  .from(SessionActivityTable)
-                  .where(eq(SessionActivityTable.activity_id, request.activity_id))
-                  .get()
+              : request.activity_kind === "facade"
+                ? yield* tx
+                    .select({ state: SessionFacadeActivityTable.state })
+                    .from(SessionFacadeActivityTable)
+                    .where(eq(SessionFacadeActivityTable.activity_id, request.activity_id))
+                    .get()
+                : yield* tx
+                    .select({ state: SessionActivityTable.state })
+                    .from(SessionActivityTable)
+                    .where(eq(SessionActivityTable.activity_id, request.activity_id))
+                    .get()
           if (objective?.state !== "active" || base?.state !== "active")
             return yield* new ConflictError({
               entity: request.activity_id,
@@ -1460,11 +1572,17 @@ export const beginPermissionEffect = Effect.fn("DeepAgentActivityAuthority.begin
               ? yield* tx.get<{ state: string }>(sql`
                   SELECT state FROM session_legacy_activity WHERE activity_id = ${request.activity_id}
                 `)
-              : yield* tx
-                  .select({ state: SessionActivityTable.state })
-                  .from(SessionActivityTable)
-                  .where(eq(SessionActivityTable.activity_id, request.activity_id))
-                  .get()
+              : request.activity_kind === "facade"
+                ? yield* tx
+                    .select({ state: SessionFacadeActivityTable.state })
+                    .from(SessionFacadeActivityTable)
+                    .where(eq(SessionFacadeActivityTable.activity_id, request.activity_id))
+                    .get()
+                : yield* tx
+                    .select({ state: SessionActivityTable.state })
+                    .from(SessionActivityTable)
+                    .where(eq(SessionActivityTable.activity_id, request.activity_id))
+                    .get()
           if (objective?.state !== "active" || base?.state !== "active")
             return yield* new ConflictError({
               entity: request.activity_id,
@@ -1952,17 +2070,30 @@ function recoverPendingPermissionsInTransaction(
                   WHERE activity_id = ${request.activity_id} AND state = 'active'
                   RETURNING activity_id
                 `)
-              : yield* tx
-                  .update(SessionActivityTable)
-                  .set({ state: "interrupted", settled_at: now })
-                  .where(
-                    and(
-                      eq(SessionActivityTable.activity_id, request.activity_id),
-                      eq(SessionActivityTable.state, "active"),
-                    ),
-                  )
-                  .returning({ activityID: SessionActivityTable.activity_id })
-                  .get()
+              : request.activity_kind === "facade"
+                ? // FEAT-011 T2 — facade interruption mirrors the v2 branch (CAS on active).
+                  yield* tx
+                    .update(SessionFacadeActivityTable)
+                    .set({ state: "interrupted", reason_code: terminalReason, settled_at: now })
+                    .where(
+                      and(
+                        eq(SessionFacadeActivityTable.activity_id, request.activity_id),
+                        eq(SessionFacadeActivityTable.state, "active"),
+                      ),
+                    )
+                    .returning({ activityID: SessionFacadeActivityTable.activity_id })
+                    .get()
+                : yield* tx
+                    .update(SessionActivityTable)
+                    .set({ state: "interrupted", settled_at: now })
+                    .where(
+                      and(
+                        eq(SessionActivityTable.activity_id, request.activity_id),
+                        eq(SessionActivityTable.state, "active"),
+                      ),
+                    )
+                    .returning({ activityID: SessionActivityTable.activity_id })
+                    .get()
           if (!base)
             return yield* new ConflictError({
               entity: request.activity_id,
@@ -2191,17 +2322,31 @@ function recoverActivityToRequired(
             WHERE activity_id = ${objective.activity_id} AND state = 'active'
             RETURNING activity_id
           `)
-        : yield* tx
-            .update(SessionActivityTable)
-            .set({ state: "failed", settled_at: now })
-            .where(
-              and(
-                eq(SessionActivityTable.activity_id, objective.activity_id),
-                eq(SessionActivityTable.state, "active"),
-              ),
-            )
-            .returning({ activityID: SessionActivityTable.activity_id })
-            .get()
+        : objective.activity_kind === "facade"
+          ? // FEAT-011 T2 — facade recovery follows the v2 mapping: recovery_required is persisted
+            // as base state 'failed' (CAS on active), unlike legacy which keeps 'recovery_required'.
+            yield* tx
+              .update(SessionFacadeActivityTable)
+              .set({ state: "failed", reason_code: terminalReason, settled_at: now })
+              .where(
+                and(
+                  eq(SessionFacadeActivityTable.activity_id, objective.activity_id),
+                  eq(SessionFacadeActivityTable.state, "active"),
+                ),
+              )
+              .returning({ activityID: SessionFacadeActivityTable.activity_id })
+              .get()
+          : yield* tx
+              .update(SessionActivityTable)
+              .set({ state: "failed", settled_at: now })
+              .where(
+                and(
+                  eq(SessionActivityTable.activity_id, objective.activity_id),
+                  eq(SessionActivityTable.state, "active"),
+                ),
+              )
+              .returning({ activityID: SessionActivityTable.activity_id })
+              .get()
     if (!base)
       return yield* new ConflictError({
         entity: objective.activity_id,
@@ -2266,11 +2411,17 @@ function reconcilePermissionFanout(
           ? yield* tx.get<{ state: string }>(sql`
               SELECT state FROM session_legacy_activity WHERE activity_id = ${sibling.activity_id}
             `)
-          : yield* tx
-              .select({ state: SessionActivityTable.state })
-              .from(SessionActivityTable)
-              .where(eq(SessionActivityTable.activity_id, sibling.activity_id))
-              .get()
+          : sibling.activity_kind === "facade"
+            ? yield* tx
+                .select({ state: SessionFacadeActivityTable.state })
+                .from(SessionFacadeActivityTable)
+                .where(eq(SessionFacadeActivityTable.activity_id, sibling.activity_id))
+                .get()
+            : yield* tx
+                .select({ state: SessionActivityTable.state })
+                .from(SessionActivityTable)
+                .where(eq(SessionActivityTable.activity_id, sibling.activity_id))
+                .get()
       const expired = sibling.expires_at !== null && sibling.expires_at <= input.decidedAt
       const activityTerminal =
         !objective ||
@@ -2372,17 +2523,30 @@ function reconcilePermissionFanout(
               WHERE activity_id = ${sibling.activity_id} AND state = 'active'
               RETURNING activity_id
             `)
-          : yield* tx
-              .update(SessionActivityTable)
-              .set({ state: "interrupted", settled_at: input.decidedAt })
-              .where(
-                and(
-                  eq(SessionActivityTable.activity_id, sibling.activity_id),
-                  eq(SessionActivityTable.state, "active"),
-                ),
-              )
-              .returning({ activityID: SessionActivityTable.activity_id })
-              .get()
+          : sibling.activity_kind === "facade"
+            ? // FEAT-011 T2 — facade interruption mirrors the v2 branch (CAS on active).
+              yield* tx
+                .update(SessionFacadeActivityTable)
+                .set({ state: "interrupted", reason_code: terminalReason, settled_at: input.decidedAt })
+                .where(
+                  and(
+                    eq(SessionFacadeActivityTable.activity_id, sibling.activity_id),
+                    eq(SessionFacadeActivityTable.state, "active"),
+                  ),
+                )
+                .returning({ activityID: SessionFacadeActivityTable.activity_id })
+                .get()
+            : yield* tx
+                .update(SessionActivityTable)
+                .set({ state: "interrupted", settled_at: input.decidedAt })
+                .where(
+                  and(
+                    eq(SessionActivityTable.activity_id, sibling.activity_id),
+                    eq(SessionActivityTable.state, "active"),
+                  ),
+                )
+                .returning({ activityID: SessionActivityTable.activity_id })
+                .get()
       if (!interrupted)
         return yield* new ConflictError({
           entity: sibling.activity_id,

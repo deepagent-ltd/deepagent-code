@@ -3,8 +3,9 @@ name: typecheck
 on:
   push:
     branches: [dev]
+  # Gate every PR regardless of target branch: the typecheck baseline is easily polluted by stale
+  # worktrees/generated files, so keep it required and branch-agnostic.
   pull_request:
-    branches: [dev]
   workflow_dispatch:
 
 jobs:

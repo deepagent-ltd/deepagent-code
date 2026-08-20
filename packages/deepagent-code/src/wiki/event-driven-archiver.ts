@@ -18,6 +18,12 @@ import * as Log from "@deepagent-code/core/util/log"
 // only starts this consumer when the event-driven path is desired. It is idempotent and best-effort
 // (archiveSessionOnCompletion never throws), so double-delivery just re-projects the same archive.
 //
+// FEAT-006 SELF-LOOP GUARD (verified in tests): the archiver's archive writes now publish
+// wiki.page.changed, but this consumer keys ONLY on ARCHIVE_TRIGGER_TYPES (session.completed /
+// goal.completed) and wiki.page.changed is NOT one — the consumer-type filter isolates the loop by
+// construction, so archiver→event→archiver can never cascade (the persisted archive doc is also a
+// context_snapshot, outside EXECUTION_ARCHIVE_TYPES, so it can never be re-archived either).
+//
 // LAYERING: `deepagent-code`. Bridges the bus (core) to the archiver (deepagent-code).
 
 const log = Log.create({ service: "event-driven-archiver" })
@@ -88,7 +94,7 @@ export const layerWith = (options?: LayerOptions) =>
             yield* ack(event) // unarchivable, terminal — acking avoids an un-fixable retry loop.
             return false
           }
-          const outcome = yield* archiveSessionOnCompletion({ workspacePath, sessionID }).pipe(
+          const outcome = yield* archiveSessionOnCompletion({ workspacePath, sessionID, bus }).pipe(
             Effect.map((archive) => ({ ok: true as const, archive })),
             Effect.catchCause((cause) => Effect.succeed({ ok: false as const, cause })),
           )

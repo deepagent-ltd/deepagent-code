@@ -1,7 +1,14 @@
-import { expect, mock, beforeEach } from "bun:test"
+import { afterAll, expect, mock, beforeEach } from "bun:test"
 import { Cause, Effect, Exit } from "effect"
 import type { MCP as MCPNS } from "../../src/mcp/index"
 import { testEffect } from "../lib/effect"
+
+// The mock.module registrations below persist for the whole process unless
+// restored; release them when this file finishes so later files import the
+// real MCP SDK modules.
+afterAll(() => {
+  mock.restore()
+})
 
 // --- Mock infrastructure ---
 

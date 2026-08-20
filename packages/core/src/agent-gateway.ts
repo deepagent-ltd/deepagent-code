@@ -17,6 +17,7 @@ import { knowledgeEnabled, strategyMethodologyEnabled, domainKnowledgeEnabled, m
 import type { AgentMode } from "./deepagent/mode"
 import { resolveDeepAgentCodeHome } from "./deepagent/workspace"
 import * as KnowledgeRetriever from "./deepagent/knowledge-retriever"
+import { buildProfile as buildRunProfile } from "./deepagent/profile-builder"
 import type { ProblemProfile } from "./deepagent/domain-pack"
 import { DeepAgentDurableLearning, type Admission } from "./deepagent/durable-learning"
 import { writeFileAtomic } from "./deepagent/atomic-write"
@@ -543,6 +544,7 @@ import * as DeepAgentKnowledgeSource from "./deepagent/knowledge-source"
 import * as DeepAgentKnowledgeSeed from "./deepagent/knowledge-seed"
 import * as DeepAgentDurableKnowledgeStore from "./deepagent/durable-knowledge-store"
 import * as DeepAgentDomainPackRegistry from "./deepagent/domain-pack-registry"
+import { readPinnedPacks } from "./deepagent/pinned-packs"
 import * as DeepAgentPromotion from "./deepagent/promotion"
 import * as DeepAgentDocumentStore from "./deepagent/document-store"
 import * as DeepAgentRunGraph from "./deepagent/run-graph"
@@ -917,6 +919,12 @@ const ensureSessionStateForRun = (run: RunRecord): DeepAgentSessionState.Session
     runId: run.runID,
     workspacePath: workspacePathForInput(run.input) ?? existing?.workspacePath ?? process.cwd(),
     userRequest: userRequestForInput(run.input) ?? existing?.userRequest ?? null,
+    // FEAT-007: lock the run's active pack snapshot id onto the session state at the run entry, so
+    // the session prompt loop can attribute each tool-request receipt's
+    // context_active_pack_set_snapshot_id to the exact pack set that shaped this run's knowledge
+    // retrieval. Single authority (FEAT-002): activePackSnapshot is memoized per run and derives from
+    // the SAME activation the retriever constrains on, so the receipt never re-derives it.
+    packSnapshotId: activePackSnapshot(run).id,
   })
 }
 
@@ -1769,6 +1777,9 @@ const modelWorkPackage = (run: RunRecord) => {
   const selectedStrategyRefs = refIdsOfKind("strategy")
   const selectedMemoryRefs = refIdsOfKind("memory")
   const selectedMethodologyRefs = refIdsOfKind("methodology")
+  // FEAT-002: compute the pack snapshot ONCE per work package (previously 2+ calls per record
+  // build); the WeakMap inside activePackSnapshot keeps every other call site on the same value.
+  const packSnapshot = activePackSnapshot(run)
   return {
     schema_version: "model_work_package.v1",
     work_package_id: run.workPackageID,
@@ -1953,9 +1964,10 @@ const modelWorkPackage = (run: RunRecord) => {
     required_skill_refs: [],
     selected_methodology_refs: selectedMethodologyRefs,
     // docs/34 §9 S4/DAP-7: record the active domain pack set + locked snapshot so the run is
-    // reproducible. activePackSnapshot is derived from the run's problem profile via the registry.
-    active_pack_set: activePackSnapshot(run).packs.map((p) => p.id),
-    pack_snapshot_id: activePackSnapshot(run).id,
+    // reproducible. FEAT-002: derived from the run's single authoritative profile (same one
+    // retrieval consumed), so active_pack_set and the retrieval constraints share one source.
+    active_pack_set: packSnapshot.packs.map((p) => p.id),
+    pack_snapshot_id: packSnapshot.id,
     knowledge_retrieval: {
       enabled: knowledgeEnabled(run.agentMode),
       mode: knowledgeEnabled(run.agentMode) ? "bounded_retrieval_refs_only" : "disabled",
@@ -2986,6 +2998,10 @@ function parseAgentMode(value: string | undefined): AgentMode {
 const retrieveKnowledge = (run: RunRecord) => {
   const task = extractTaskContext(run)
   const workspacePath = workspacePathForInput(run.input)
+  // FEAT-001: GUI-pinned packs must reach retrieval. Pins persist in the workspace memory dir
+  // (<baseDir>/memory/pinned-packs.json) written by the packsPin/packsUnpin handlers; the gateway
+  // reads the SAME dir so the control plane and the runtime agree.
+  const pinned = pinnedPackIds()
   return KnowledgeRetriever.retrieve({
     mode: run.agentMode,
     task,
@@ -2993,6 +3009,11 @@ const retrieveKnowledge = (run: RunRecord) => {
     round: 1,
     previousFailures: 0,
     profile: extractProblemProfile(run),
+    // FEAT-002: the authoritative run profile (built once per run). The retriever uses it for
+    // pack activation instead of re-deriving one from task text, so retrieval's selected packs
+    // and the run record's active_pack_set come from the same profile.
+    profileOverride: profileForRun(run),
+    ...(pinned.length > 0 ? { domainOptions: { overrides: pinned } } : {}),
     // docs/34 §8: scope durable retrieval to the run's workspace path (unions user-global +
     // this workspace's project-shared). Absent workspace => user-global only.
     ...(workspacePath ? { workspacePath } : {}),
@@ -3058,35 +3079,60 @@ const extractProblemProfile = (run: RunRecord): ProblemProfile => {
   }
 }
 
+// FEAT-001: the workspace memory dir the HTTP handlers (deepagent-code) write pinned-packs.json to
+// is <gateway baseDir>/memory (dirname(runsDir)/memory == Global.Path.agent.data/memory in
+// production). The gateway derives it from its own configured storage home — no workspacePath
+// needed, since the pin file is per-instance, mirroring the handler's workspaceMemoryDir().
+const pinnedMemoryDir = (): string => path.join(path.resolve(current.baseDir ?? resolveDeepAgentCodeHome()), "memory")
+
+const pinnedPackIds = (): string[] => readPinnedPacks(pinnedMemoryDir())
+
+// FEAT-002: the SINGLE authoritative ExtendedProblemProfile producer for a run. The gateway used
+// to keep two competing truths — profileFromInput (regex-derived inside the retriever) and a
+// hardcoded profile for the recorded snapshot — so active_pack_set could diverge from the packs
+// retrieval actually constrained on. Now the gateway builds one profile at run entry (workspace
+// facts via profile-builder, the same logic deepagent-code's profile-detector re-exports) and both
+// knowledge retrieval (RetrievalInput.profileOverride) and the pack snapshot consume it. Built
+// once per run record: inputs are immutable and pins are read once, so the WeakMap cache makes
+// every downstream call site observe the identical profile.
+const runProfileCache = new WeakMap<RunRecord, DeepAgentDomainPackRegistry.ExtendedProblemProfile>()
+const profileForRun = (run: RunRecord): DeepAgentDomainPackRegistry.ExtendedProblemProfile => {
+  const cached = runProfileCache.get(run)
+  if (cached) return cached
+  const profile = buildRunProfile({
+    cwd: workspacePathForInput(run.input) ?? process.cwd(),
+    agentMode: run.agentMode,
+    scenarioMode: "intelligence",
+    userRequest: userRequestForInput(run.input) ?? run.input.feature ?? "",
+    userOverrides: pinnedPackIds(),
+  })
+  runProfileCache.set(run, profile)
+  return profile
+}
+
 // docs/34 §9 DAP-7: lock the active domain pack snapshot for a run so each run records the exact
-// pack set that shaped its knowledge retrieval. Best-effort: if the registry has no configured
-// dir or discover returns nothing, the snapshot is empty (no packs) — retrieval still works.
+// pack set that shaped its knowledge retrieval. FEAT-002: no hardcoded profile fields — the
+// snapshot is locked from the SAME activation (activationForProfile over profileForRun) that the
+// retriever constrains on, and memoized per run so the record build calls it effectively once.
+// Best-effort: if the registry has no configured dir or discover returns nothing, the snapshot is
+// empty (no packs) — retrieval still works.
+const packSnapshotCache = new WeakMap<RunRecord, DeepAgentDomainPackRegistry.PackSnapshot>()
 const activePackSnapshot = (run: RunRecord): DeepAgentDomainPackRegistry.PackSnapshot => {
+  const cached = packSnapshotCache.get(run)
+  if (cached) return cached
+  let snapshot: DeepAgentDomainPackRegistry.PackSnapshot
   if (!DeepAgentDomainPackRegistry.isRegistryConfigured()) {
-    return { id: "pack_snapshot:empty", packs: [], created_at: new Date().toISOString() }
-  }
-  try {
-    const signals = run.input.feature ?? ""
-    const profile: DeepAgentDomainPackRegistry.ExtendedProblemProfile = {
-      scenario_mode: "intelligence",
-      agent_strength: run.agentMode as DeepAgentDomainPackRegistry.ExtendedProblemProfile["agent_strength"],
-      task_kind: "implement",
-      code_domains: ["code"],
-      business_domains: [],
-      platforms: [],
-      languages: ["typescript"],
-      frameworks: [],
-      data_classes: [],
-      risk_markers: [],
-      repo_signals: [signals],
-      round_signals: [],
-      user_overrides: [],
+    snapshot = { id: "pack_snapshot:empty", packs: [], created_at: new Date().toISOString() }
+  } else {
+    try {
+      const activation = KnowledgeRetriever.activationForProfile(profileForRun(run))
+      snapshot = DeepAgentDomainPackRegistry.lockSnapshot(activation.activePackIds)
+    } catch {
+      snapshot = { id: "pack_snapshot:error", packs: [], created_at: new Date().toISOString() }
     }
-    const { snapshot } = DeepAgentDomainPackRegistry.activateForProfile(profile)
-    return snapshot
-  } catch {
-    return { id: "pack_snapshot:error", packs: [], created_at: new Date().toISOString() }
   }
+  packSnapshotCache.set(run, snapshot)
+  return snapshot
 }
 
 const activationMode = (mode: AgentMode) =>

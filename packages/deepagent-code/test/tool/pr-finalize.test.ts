@@ -14,6 +14,7 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Git } from "@/git"
 import { Session } from "@/session/session"
+import { SessionProjector } from "@deepagent-code/core/session/projector"
 import { createAgentWorktree } from "@/session/agent-worktree"
 import { SessionRunState } from "@/session/run-state"
 import { SessionStatus } from "@/session/status"
@@ -45,6 +46,9 @@ const layer = Layer.mergeAll(
   Config.defaultLayer,
   CrossSpawnSpawner.defaultLayer,
   Session.defaultLayer,
+  // QUAL-007: the core SessionProjector materializes event-created sessions; without it message
+  // writes hit the session FK.
+  SessionProjector.defaultLayer,
   SessionRunState.defaultLayer,
   SessionStatus.defaultLayer,
   Truncate.defaultLayer,

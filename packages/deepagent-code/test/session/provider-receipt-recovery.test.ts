@@ -636,7 +636,7 @@ function seed(db: Database.Interface["db"], options: { readonly releaseStaleOwne
       })
       .run()
     yield* db
-      .insert(SessionActivityTable)
+      .insert(SessionActivityTable) // fixture-exempt: seeds active activity for receipt-recovery fixture
       .values({
         activity_id: activityId,
         session_id: sessionId,
@@ -680,7 +680,7 @@ function seed(db: Database.Interface["db"], options: { readonly releaseStaleOwne
       })
       .run()
     yield* db
-      .insert(SessionProviderAttemptTable)
+      .insert(SessionProviderAttemptTable) // fixture-exempt: seeds attempt batch for receipt-recovery fixture
       .values([attempt(0), attempt(1), attempt(2), attempt(3), attempt(4)])
       .run()
     yield* Effect.forEach([0, 1, 2, 3], (providerTurnSeq) =>
@@ -694,7 +694,7 @@ function seed(db: Database.Interface["db"], options: { readonly releaseStaleOwne
         .run(),
     )
     yield* db
-      .insert(SessionToolRequestReceiptTable)
+      .insert(SessionToolRequestReceiptTable) // fixture-exempt: seeds receipt batch for receipt-recovery fixture
       .values([receipt(0), receipt(1), receipt(2), receipt(3)])
       .run()
     yield* db

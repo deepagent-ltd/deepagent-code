@@ -25,6 +25,7 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { MultiAgentRuntime } from "./multi-agent-runtime"
 import { EventDispatcher, DISPATCH_GROUP } from "./event-dispatcher"
 import { AgentHandoffConsumer, HANDOFF_GROUP } from "./agent-handoff-consumer"
+import { HandoffAdmission } from "@deepagent-code/core/deepagent/handoff-admission"
 import type { SubagentTurnRunner, SubagentTurnResult } from "./goal-loop-wiring"
 import { MessageID, SessionID } from "./schema"
 import { SessionCompletedPublisher } from "./session-completed-publisher"
@@ -660,6 +661,9 @@ const handoffConsumerLayer = Layer.effectDiscard(
 
 const executionRuntimeLayer = Layer.mergeAll(runtimeLayer, handoffConsumerLayer).pipe(
   Layer.provide(AgentExecution.layer),
+  // FEAT-008: durable handoff admission receipts (processing → accepted/rejected) consumed by the
+  // handoff consumer above.
+  Layer.provide(HandoffAdmission.layer),
 )
 
 // EventV2 is written by every Session, independently of the V4 feature flags. Keep retention running

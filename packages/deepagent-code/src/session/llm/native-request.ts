@@ -9,6 +9,7 @@ import {
   OpenAICompatible,
   OpenRouter,
 } from "@deepagent-code/llm/providers/compat"
+import { byProvider as OpenAICompatibleProfiles } from "@deepagent-code/llm/providers/openai-compatible-profile"
 import type { ModelMessage } from "ai"
 import type { Provider } from "@/provider/provider"
 import { isRecord } from "@/util/record"
@@ -33,6 +34,9 @@ export type RequestInput = {
   readonly providerOptions?: LLMRequest["providerOptions"]
   readonly headers?: Record<string, string>
   readonly metadata?: LLMRequest["metadata"]
+  // UPD-002: wire-level structured output (json_schema text.format). Only set
+  // when the turn takes the wire path — see LLMRequestPrep.shouldUseWireStructuredOutput.
+  readonly responseFormat?: { readonly name: string; readonly schema: Record<string, unknown> }
 }
 
 const providerMetadata = (value: unknown): ProviderMetadata | undefined => {
@@ -169,12 +173,20 @@ export const model = (input: Provider.Model | RequestInput, headers?: Record<str
   if (model.api.npm === "@ai-sdk/anthropic") return Anthropic.configure(options).model(model.api.id)
   if (model.api.npm === "@ai-sdk/google") return Google.configure(options).model(model.api.id)
   if (model.api.npm === "@ai-sdk/amazon-bedrock") return AmazonBedrock.configure(options).model(model.api.id)
-  if (model.api.npm === "@ai-sdk/openai-compatible")
-    return OpenAICompatible.configure({
+  if (model.api.npm === "@ai-sdk/openai-compatible") {
+    const configured = OpenAICompatible.configure({
       ...options,
       provider: String(model.providerID),
       baseURL: requireBaseURL(model, url),
-    }).model(model.api.id)
+    })
+    // Capability detection lives on the compatible profile: families that
+    // also serve the Responses API (currently deepseek) branch to the
+    // Responses route; everyone else stays on the Chat route.
+    const compatibleModel = OpenAICompatibleProfiles[String(model.providerID)]?.supportsResponses
+      ? configured.responses
+      : configured.chat
+    return compatibleModel(model.api.id)
+  }
   if (model.api.npm === "@openrouter/ai-sdk-provider") return OpenRouter.configure(options).model(model.api.id)
   throw new Error(`Native LLM request adapter does not support provider package ${model.api.npm}`)
 }
@@ -192,6 +204,11 @@ export const request = (input: RequestInput) => {
     generation: generation(input),
     providerOptions: input.providerOptions,
     metadata: input.metadata,
+    // UPD-002: lower the prepared wire format onto the canonical request so
+    // the Responses protocol emits `text.format` and validates the output.
+    responseFormat: input.responseFormat
+      ? { type: "json", name: input.responseFormat.name, schema: input.responseFormat.schema as JsonSchema }
+      : undefined,
   })
 }
 

@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, index, uniqueIndex } from "drizzle-orm/sqlite-core"
+import { index, integer, primaryKey, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core"
 import type { DeepAgentEvent } from "./deepagent-event"
 
 // V4.0 §A3 — durable persistence for the DeepAgent Event Bus. The design principle is "事件先持久化，
@@ -57,6 +57,16 @@ export const DeepAgentEventDeliveryTable = sqliteTable(
     attempts: integer().notNull(),
     last_error: text(),
     next_attempt_at: integer(),
+    // RISK-001: retry claim/lease. A pump atomically stamps token+claimant+lease before executing a
+    // due row; expired leases re-open the row for another claimant (migration 20260815120000).
+    claim_token: text(),
+    claimant_id: text(),
+    claimed_at: integer(),
+    lease_expires_at: integer(),
+    // RISK-006: denormalized event priority (written by publish) so dueRetries/claimDue can order
+    // high-priority work first without joining the event table. NULL = pre-migration rows, treated
+    // as "normal" by the ordering (migration 20260815130000).
+    priority: text().$type<DeepAgentEvent.EventPriority>(),
     created_at: integer().notNull(),
     updated_at: integer().notNull(),
   },
@@ -65,6 +75,8 @@ export const DeepAgentEventDeliveryTable = sqliteTable(
     uniqueIndex("deepagent_event_delivery_unique_idx").on(table.event_id, table.subscription_group),
     // retry scan: pending rows whose backoff has elapsed, oldest first.
     index("deepagent_event_delivery_due_idx").on(table.status, table.next_attempt_at),
+    // group-scoped claim scan (RISK-001).
+    index("deepagent_event_delivery_claim_idx").on(table.subscription_group, table.status, table.next_attempt_at),
   ],
 )
 
@@ -79,6 +91,9 @@ export const DeepAgentConsumerGroupTable = sqliteTable(
     group_id: text().primaryKey(),
     // null = wildcard (all event types); non-null = subscribe to one type only.
     type_filter: text(),
+    // RISK-006: the tenant this group consumes for. Default "" keeps pre-existing global/unscoped
+    // registrations valid (migration 20260815130000).
+    workspace_id: text().notNull().default(""),
     registered_at: integer().notNull(),
     // Updated on every live subscribe/unsubscribe so a sweep can distinguish stale registrations.
     last_seen_at: integer().notNull(),
@@ -86,6 +101,26 @@ export const DeepAgentConsumerGroupTable = sqliteTable(
   (table) => [
     // fast lookup: which groups are registered for a given event type?
     index("deepagent_consumer_group_type_idx").on(table.type_filter),
+    // RISK-006: tenant-scoped group scans.
+    index("deepagent_consumer_group_workspace_idx").on(table.workspace_id),
+  ],
+)
+
+// RISK-006 — durable fixed-window rate-limit buckets for the bus's tryPublish gate. One row per
+// (workspace, window); `window_start` is the epoch-aligned window start (floor(now / windowMs)).
+// The check-and-increment runs inside an immediate transaction, so N processes sharing the DB
+// enforce ONE combined quota per workspace (the in-memory Map gave each process its own ×N).
+export const DeepAgentRateLimitBucketTable = sqliteTable(
+  "deepagent_rate_limit_bucket",
+  {
+    workspace_id: text().notNull(),
+    window_start: integer().notNull(),
+    count: integer().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.workspace_id, table.window_start] }),
+    // sweepPublishLimiter prunes elapsed windows by window_start alone (cross-workspace).
+    index("deepagent_rate_limit_bucket_window_idx").on(table.window_start),
   ],
 )
 // §A4 event_dropped — the durable DROP LOG. One append-only row per event the router shed (a §A4

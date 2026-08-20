@@ -58,6 +58,7 @@ import { animate } from "motion"
 import { useLocation } from "@solidjs/router"
 import { attached, inline, kind } from "./message-file"
 import { readPartText } from "./message-part-text"
+import { chunkCacheKey, partChunks } from "./message-part-chunk"
 
 async function writeClipboard(text: string): Promise<boolean> {
   const body = typeof document === "undefined" ? undefined : document.body
@@ -273,6 +274,37 @@ function PacedMarkdown(props: { text: string; cacheKey: string; streaming: boole
     <Show when={value()}>
       <Markdown text={value()} cacheKey={props.cacheKey} streaming={props.streaming} />
     </Show>
+  )
+}
+
+// UX-002: chunking constants, boundary splitting and the streaming-safe chunk
+// decision live in ./message-part-chunk (pure module, unit-tested separately).
+
+// UX-002 lazy mount: each chunk wrapper carries content-visibility: auto so the
+// browser skips style/layout/paint of off-screen chunks entirely. Chosen over an
+// IntersectionObserver-based deferred mount because it is pure CSS: no observer
+// bookkeeping, no mount/unmount churn fighting with virtua row recycling, and the
+// Markdown parse cache still warms up on first scroll-past.
+const CHUNK_LAZY_STYLE: JSX.CSSProperties = {
+  "content-visibility": "auto",
+  "contain-intrinsic-size": "auto 480px",
+}
+
+// Chunks only exist once the part has completed (chunking is skipped while
+// streaming), so every chunk — including the last one — is rendered once through
+// the shared block cache. The streaming path stays monolithic (PacedMarkdown)
+// until completion, then the part flips to this chunked view in a single swap.
+function ChunkedText(props: { chunks: string[]; cacheKey: string }) {
+  return (
+    <div data-component="chunked-text" data-chunk-count={props.chunks.length}>
+      <For each={props.chunks}>
+        {(chunk, indexAccessor) => (
+          <div data-slot="text-chunk" data-chunk-index={indexAccessor()} style={CHUNK_LAZY_STYLE}>
+            <Markdown text={chunk} cacheKey={chunkCacheKey(props.cacheKey, indexAccessor())} streaming={false} />
+          </div>
+        )}
+      </For>
+    </div>
   )
 }
 
@@ -1301,6 +1333,18 @@ export interface ToolProps {
 
 export type ToolComponent = Component<ToolProps>
 
+// UX-001: when a tool diff is virtualized, give it a bounded, independently scrollable
+// container. file.tsx binds the diff virtualizer to the nearest overflow-y: auto/scroll
+// ancestor (see scrollParent()); without isolation the inner virtualizer would share the
+// session page's outer virtua row-level scroll root, and inner height changes would make
+// the outer virtualizer re-measure repeatedly (jitter). Bounding the height also keeps a
+// huge completed diff from stretching the timeline row indefinitely.
+const VIRTUAL_DIFF_SCROLL_STYLE: JSX.CSSProperties = { "max-height": "480px", "overflow-y": "auto" }
+
+function virtualDiffScrollStyle(enabled: boolean | undefined): JSX.CSSProperties | undefined {
+  return enabled ? VIRTUAL_DIFF_SCROLL_STYLE : undefined
+}
+
 const state: Record<
   string,
   {
@@ -1512,6 +1556,9 @@ PART_MAPPING["text"] = function TextPartDisplay(props) {
     () => props.message.role === "assistant" && typeof (props.message as AssistantMessage).time.completed !== "number",
   )
   const text = () => readPartText(data.store.part_text_accum_delta, part())
+  // UX-002: chunk only after the part stops streaming; split once, at paragraph
+  // boundaries, on completion.
+  const chunks = createMemo(() => partChunks(text(), streaming()))
   const isLastTextPart = createMemo(() => {
     const last = (data.store.part?.[props.message.id] ?? [])
       .filter((item): item is TextPart => item?.type === "text" && !!item.text?.trim())
@@ -1553,8 +1600,13 @@ PART_MAPPING["text"] = function TextPartDisplay(props) {
     <Show when={text()}>
       <div data-component="text-part" data-timeline-part-id={part().id}>
         <div data-slot="text-part-body">
-          <Show when={streaming()} fallback={<Markdown text={text()} cacheKey={part().id} streaming={false} />}>
-            <PacedMarkdown text={text()} cacheKey={part().id} streaming={streaming()} />
+          <Show
+            when={!chunks()}
+            fallback={<ChunkedText chunks={chunks()!} cacheKey={part().id} />}
+          >
+            <Show when={streaming()} fallback={<Markdown text={text()} cacheKey={part().id} streaming={false} />}>
+              <PacedMarkdown text={text()} cacheKey={part().id} streaming={streaming()} />
+            </Show>
           </Show>
         </div>
         <Show when={showCopy()}>
@@ -1605,12 +1657,19 @@ PART_MAPPING["reasoning"] = function ReasoningPartDisplay(props) {
     () => props.message.role === "assistant" && typeof (props.message as AssistantMessage).time.completed !== "number",
   )
   const text = () => readPartText(data.store.part_text_accum_delta, part())
+  // UX-002: see TextPartDisplay — never chunk while streaming.
+  const chunks = createMemo(() => partChunks(text(), streaming()))
 
   return (
     <Show when={text()}>
       <div data-component="reasoning-part" data-timeline-part-id={part().id}>
-        <Show when={streaming()} fallback={<Markdown text={text()} cacheKey={part().id} streaming={false} />}>
-          <PacedMarkdown text={text()} cacheKey={part().id} streaming={streaming()} />
+        <Show
+          when={!chunks()}
+          fallback={<ChunkedText chunks={chunks()!} cacheKey={part().id} />}
+        >
+          <Show when={streaming()} fallback={<Markdown text={text()} cacheKey={part().id} streaming={false} />}>
+            <PacedMarkdown text={text()} cacheKey={part().id} streaming={streaming()} />
+          </Show>
         </Show>
       </div>
     </Show>
@@ -2066,7 +2125,7 @@ ToolRegistry.register({
                 </Show>
               }
             >
-              <div data-component="edit-content">
+              <div data-component="edit-content" style={virtualDiffScrollStyle(props.virtualizeDiff)}>
                 <Dynamic component={fileComponent} mode="diff" virtualize={props.virtualizeDiff} {...fileCompProps()} />
               </div>
             </ToolFileAccordion>
@@ -2247,7 +2306,10 @@ ToolRegistry.register({
                           </StickyAccordionHeader>
                           <Accordion.Content>
                             <Show when={props.deferContent === false || visible()}>
-                              <div data-component="apply-patch-file-diff">
+                              <div
+                                data-component="apply-patch-file-diff"
+                                style={virtualDiffScrollStyle(props.virtualizeDiff)}
+                              >
                                 <Dynamic
                                   component={fileComponent}
                                   mode="diff"
@@ -2323,7 +2385,7 @@ ToolRegistry.register({
                 </Switch>
               }
             >
-              <div data-component="apply-patch-file-diff">
+              <div data-component="apply-patch-file-diff" style={virtualDiffScrollStyle(props.virtualizeDiff)}>
                 <Dynamic
                   component={fileComponent}
                   mode="diff"
