@@ -231,6 +231,12 @@ export interface Interface {
   readonly branchSummary: (input: RemoveInput) => Effect.Effect<BranchSummary, Error>
   // U3: merge the worktree branch back to the default branch (preflight + no auto-commit).
   readonly mergeBack: (input: RemoveInput) => Effect.Effect<MergeResult, Error>
+  /**
+   * RISK-002: automatic (no user confirmation) merge for the task tool's automatic write
+   * isolation success path. Unlike the interactive mergeBack it refuses a dirty parent checkout,
+   * commits the merge instead of staging it, and surfaces a failed abort as an error.
+   */
+  readonly mergeBackAutomatic: (input: RemoveInput) => Effect.Effect<MergeResult, Error>
   // L3c (subagent-control-plane-design.zh-CN.md §3.2.2)
   // Resolve an exact worktree identity without creating files, branches, or registrations. Callers
   // persist this plan before invoking ensureExact so crash recovery can adopt only the same resource.
@@ -921,6 +927,61 @@ export const layer: Layer.Layer<
       } satisfies MergeResult
     })
 
+    // RISK-002: merge-on-success for automatic task isolation. Safety rules (audit-mandated):
+    //  - parent checkout must be clean, otherwise the merge commit would swallow unrelated edits;
+    //  - the merge is committed (--no-ff) so success leaves a durable merge commit;
+    //  - on conflict the merge aborts and a FAILED abort is an error, never silently ignored;
+    //  - failure keeps the worktree (the caller's safeRemove refuses to delete unmerged work).
+    const mergeBackAutomatic = Effect.fn("Worktree.mergeBackAutomatic")(function* (input: RemoveInput) {
+      const ctx = yield* InstanceState.context
+      if (ctx.project.vcs !== "git")
+        return yield* new NotGitError({ message: "Worktrees are only supported for git projects" })
+      const entry = yield* resolveEntry(input.directory)
+      if (!entry?.branch) return yield* new MergeFailedError({ message: "Worktree has no branch to merge" })
+
+      const parentStatus = yield* safeGit(["status", "--porcelain"], ctx.worktree)
+      if (parentStatus.code !== 0 || parentStatus.text.split("\n").some((line) => line.trim()))
+        return {
+          merged: false,
+          conflicted: [],
+          message: "parent checkout has uncommitted changes; automatic merge skipped",
+        } satisfies MergeResult
+
+      const base = yield* gitSvc.defaultBranch(ctx.worktree).pipe(Effect.catch(() => Effect.succeed(undefined)))
+      if (!base) return yield* new MergeFailedError({ message: "Default branch not found" })
+
+      const merge = yield* git(["merge", "--no-ff", entry.branch, "-m", `Merge ${entry.branch} (task worktree)`], {
+        cwd: ctx.worktree,
+      })
+      if (merge.code !== 0) {
+        const conflicts = yield* safeGit(["diff", "--name-only", "--diff-filter=U"], ctx.worktree)
+        const files =
+          conflicts.code === 0
+            ? conflicts.text
+                .split("\n")
+                .map((l) => l.trim())
+                .filter(Boolean)
+            : []
+        const abort = yield* safeGit(["merge", "--abort"], ctx.worktree)
+        if (abort.code !== 0)
+          return yield* new MergeFailedError({
+            message: `Merge failed and merge --abort also failed; parent may be mid-merge: ${abort.stderr || abort.text}`,
+          })
+        return {
+          merged: false,
+          conflicted: files,
+          message: files.length
+            ? `Merge has conflicts in ${files.length} file(s); merge aborted, worktree preserved.`
+            : merge.stderr || merge.text || "Merge failed.",
+        } satisfies MergeResult
+      }
+      return {
+        merged: true,
+        conflicted: [],
+        message: `Merged ${entry.branch} into ${base.name}.`,
+      } satisfies MergeResult
+    })
+
     const planExact: Interface["planExact"] = Effect.fn("Worktree.planExact")(function* (input) {
       const ctx = yield* InstanceState.context
       if (ctx.project.vcs !== "git")
@@ -954,6 +1015,7 @@ export const layer: Layer.Layer<
       diff,
       branchSummary,
       mergeBack,
+      mergeBackAutomatic,
       planExact,
       // L3c: exact-match creation — no random-suffix fallback, caller holds receipt in task_run
       ensureExact: Effect.fn("Worktree.ensureExact")(function* (input: WorktreeExactInput) {

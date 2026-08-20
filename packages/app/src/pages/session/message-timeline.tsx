@@ -89,6 +89,58 @@ const emptyTools: ToolPart[] = []
 const emptyAssistantMessages: AssistantMessage[] = []
 const idle = { type: "idle" as const }
 
+// ---------------------------------------------------------------------------
+// UX-001: only virtualize large, completed tool diffs.
+// ---------------------------------------------------------------------------
+
+// Threshold semantics mirror VIRTUALIZE_BYTES (500KB) in packages/ui/src/components/file.tsx.
+const TOOL_DIFF_VIRTUALIZE_BYTES = 500_000
+
+function payloadStringLength(value: unknown) {
+  return typeof value === "string" ? value.length : 0
+}
+
+// Tool parts carry no dedicated "diff size" field and we intentionally avoid adding
+// schema/persistence for this, so the size is estimated conservatively from existing
+// string payloads on the completed part:
+//   1. state.metadata.filediff before/after/patch lengths (edit tool diff source)
+//   2. state.metadata.files[].patch/diff/before/after lengths (apply_patch diff source)
+//   3. fallback: state.output length as a coarse proxy (only universally available signal)
+export function toolDiffPayloadSize(part: PartType): number {
+  if (part.type !== "tool") return 0
+  const state = part.state
+  // Streaming (pending/running) and error parts have no stable size; virtualizing them
+  // would force repeated viewer resets as content grows (see file.tsx render reset logic).
+  if (state.status !== "completed") return 0
+  const metadata: Record<string, unknown> = state.metadata
+  let size = 0
+  const filediff = metadata.filediff
+  if (filediff && typeof filediff === "object") {
+    const fd = filediff as Record<string, unknown>
+    size = Math.max(size, payloadStringLength(fd.patch), payloadStringLength(fd.before), payloadStringLength(fd.after))
+  }
+  const files = metadata.files
+  if (Array.isArray(files)) {
+    for (const item of files) {
+      if (!item || typeof item !== "object") continue
+      const file = item as Record<string, unknown>
+      size = Math.max(
+        size,
+        payloadStringLength(file.patch),
+        payloadStringLength(file.diff),
+        payloadStringLength(file.before),
+        payloadStringLength(file.after),
+      )
+    }
+  }
+  if (size === 0) size = payloadStringLength(state.output)
+  return size
+}
+
+export function shouldVirtualizeToolDiff(part: PartType): boolean {
+  return toolDiffPayloadSize(part) > TOOL_DIFF_VIRTUALIZE_BYTES
+}
+
 // ForkBanner and BottomSpacer render their own top-level container (no TimelineRowFrame, which
 // assumes a per-turn `userMessageID`), so they're excluded from the framed-row union.
 type FramedTimelineRow = Exclude<TimelineRow.TimelineRow, { _tag: "BottomSpacer" | "ForkBanner" }>
@@ -436,6 +488,10 @@ function TimelineDiffView(props: { diff: SummaryDiff }) {
 
   return (
     <div data-slot="session-turn-diff-view" data-scrollable>
+      {/* UX-001: summary diffs stay non-virtualized. SummaryDiff only carries patch/addition
+          counts (no reliable size signal), the wrapper has overflow-y:auto but no bounded
+          height, so an inner virtualizer would still share the outer row-level scroll root.
+          Keeping virtualize={false} conservatively. */}
       <Dynamic component={fileComponent} mode="diff" virtualize={false} fileDiff={view.fileDiff} />
     </div>
   )
@@ -586,6 +642,12 @@ export function MessageTimeline(props: {
   })
   const parentTitle = createMemo(() => sessionTitle(parent()?.title) ?? language.t("command.session.new"))
   const getMsgParts = (msgId: string) => sync.data.part[msgId] ?? emptyParts
+  const activityProgressVisibility = createMemo(() =>
+    Timeline.activityProgressVisibility(
+      sessionMessages().filter((message): message is AssistantMessage => message.role === "assistant"),
+      getMsgParts,
+    ),
+  )
   const childTaskDescription = createMemo(() => {
     const id = sessionID()
     if (!id) return
@@ -616,6 +678,7 @@ export function MessageTimeline(props: {
             settings.general.showReasoningSummaries(),
             sessionStatus().type,
             activeMessageID() === userMessage.id,
+            activityProgressVisibility(),
           )
 
           return reuseTimelineRows(previous, rows)
@@ -1050,6 +1113,31 @@ export function MessageTimeline(props: {
     navigate(`/${params.dir}/session`)
   }
 
+  const exportSession = async (sessionID: string) => {
+    const session = sync.session.get(sessionID)
+    const base = (session?.title || sessionID).replace(/[^\w\u4e00-\u9fff-]+/g, "-").slice(0, 60) || sessionID
+    try {
+      const res = await sdk.client.session.exportSnapshot({ sessionID }, { throwOnError: true })
+      const bundle = typeof res.data === "string" ? res.data : JSON.stringify(res.data ?? {})
+      const url = URL.createObjectURL(new Blob([bundle], { type: "application/json" }))
+      const anchor = document.createElement("a")
+      anchor.href = url
+      anchor.download = `${base}-snapshot.json`
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+      URL.revokeObjectURL(url)
+      showToast({
+        variant: "success",
+        icon: "circle-check",
+        title: language.t("session.export.success"),
+      })
+    } catch (err) {
+      console.error("Failed to export session snapshot", err)
+      showToast({ title: language.t("common.requestFailed") })
+    }
+  }
+
   const archiveSession = async (sessionID: string) => {
     const session = sync.session.get(sessionID)
     if (!session) return
@@ -1304,7 +1392,8 @@ export function MessageTimeline(props: {
                 toolOpen={toolOpen[part().id] ?? defaultOpen()}
                 onToolOpenChange={(open) => setToolOpen(part().id, open)}
                 deferToolContent={false}
-                virtualizeDiff={false}
+                // UX-001: only completed + large tool diffs get virtualized; streaming parts stay false.
+                virtualizeDiff={shouldVirtualizeToolDiff(part())}
                 onFork={props.actions?.fork}
               />
             )}
@@ -1816,6 +1905,9 @@ export function MessageTimeline(props: {
                                 </DropdownMenu.ItemLabel>
                               </DropdownMenu.Item>
                             </Show>
+                            <DropdownMenu.Item onSelect={() => void exportSession(id)}>
+                              <DropdownMenu.ItemLabel>{language.t("session.export.action")}</DropdownMenu.ItemLabel>
+                            </DropdownMenu.Item>
                             <DropdownMenu.Item onSelect={() => void archiveSession(id)}>
                               <DropdownMenu.ItemLabel>{language.t("common.archive")}</DropdownMenu.ItemLabel>
                             </DropdownMenu.Item>

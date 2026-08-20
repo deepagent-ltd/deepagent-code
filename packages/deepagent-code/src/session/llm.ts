@@ -821,6 +821,9 @@ const live: Layer.Layer<
           headers: prepared.headers,
           abort: input.abort,
           metadata: prepared.metadata,
+          // UPD-002: wire-level structured output travels through the native
+          // runtime only; the AI SDK runtime keeps the synthetic-tool path.
+          responseFormat: prepared.responseFormat,
           durableAttempt: input.durableAttempt,
           requestSeal: requestReceipt
             ? ({ wireHash }) =>

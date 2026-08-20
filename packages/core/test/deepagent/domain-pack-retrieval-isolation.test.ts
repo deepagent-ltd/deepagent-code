@@ -6,6 +6,7 @@ import * as knowledgeSource from "../../src/deepagent/knowledge-source"
 import { seedCoreKnowledge } from "../../src/deepagent/knowledge-seed"
 import { openUserGlobalStore } from "../../src/deepagent/durable-knowledge-store"
 import { retrieve } from "../../src/deepagent/knowledge-retriever"
+import type { ActivateOptions } from "../../src/deepagent/domain-pack"
 import type { TaskContext, ToolContext } from "../../src/deepagent/prompt-policy"
 import type { Selection } from "../../src/deepagent/released-snapshot"
 import { releasedUserGlobalSelection } from "./released-selection-fixture"
@@ -33,7 +34,7 @@ const task = (userRequest: string): TaskContext => ({
   validationCommands: [],
 })
 
-const selectedRefs = (userRequest: string, releasedSelection: Selection) => {
+const selectedRefs = (userRequest: string, releasedSelection: Selection, domainOptions?: ActivateOptions) => {
   const result = retrieve({
     mode: "max",
     task: task(userRequest),
@@ -41,6 +42,7 @@ const selectedRefs = (userRequest: string, releasedSelection: Selection) => {
     round: 1,
     previousFailures: 0,
     releasedSelection,
+    ...(domainOptions ? { domainOptions } : {}),
   })
   return [...(result?.strategyRefs ?? []), ...(result?.methodologyRefs ?? [])]
 }
@@ -145,6 +147,42 @@ describe("domain pack retrieval isolation", () => {
         ["frontend_vue"],
         releasedSelection,
       )
+    })
+  })
+
+  // FEAT-001: pinned packs (user overrides) must force their refs into the selection even when
+  // the task text activates the pack nowhere.
+  describe("pinned packs (domainOptions overrides)", () => {
+    const genericTask = "rename a local helper function in the user service module"
+
+    test("unpinned generic task does not select gpu refs", () => {
+      withSeededKnowledge((releasedSelection) => {
+        expectDomainSelection(genericTask, [], releasedSelection, ["gpu"])
+      })
+    })
+
+    test("legacy single-value override still force-selects the pinned pack refs", () => {
+      withSeededKnowledge((releasedSelection) => {
+        const refs = selectedRefs(genericTask, releasedSelection, { override: "code.gpu-kernel" })
+        expect(refs.some((ref) => ref.includes("gpu"))).toBe(true)
+      })
+    })
+
+    test("multi-pin overrides force-select every pinned pack's refs", () => {
+      withSeededKnowledge((releasedSelection) => {
+        const refs = selectedRefs(genericTask, releasedSelection, { overrides: ["code.gpu-kernel"] })
+        expect(refs.some((ref) => ref.includes("gpu"))).toBe(true)
+      })
+    })
+
+    test("override and overrides merge without duplicates", () => {
+      withSeededKnowledge((releasedSelection) => {
+        const refs = selectedRefs(genericTask, releasedSelection, {
+          override: "code.gpu-kernel",
+          overrides: ["code.gpu-kernel"],
+        })
+        expect(refs.some((ref) => ref.includes("gpu"))).toBe(true)
+      })
     })
   })
 })

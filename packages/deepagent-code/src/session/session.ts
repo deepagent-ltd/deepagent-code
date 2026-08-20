@@ -74,7 +74,8 @@ import { Hash } from "@deepagent-code/core/util/hash"
 import { CanonicalJson } from "@deepagent-code/core/util/canonical-json"
 import { SessionPromptEpochTable } from "./prompt-epoch.sql"
 import { HistoryAuthority } from "./history-authority"
-import { Data } from "effect"
+import { SessionDiffArtifact } from "./diff-artifact"
+import { Cause, Data } from "effect"
 import { KeyedMutex } from "@deepagent-code/core/effect/keyed-mutex"
 
 const log = Log.create({ service: "session" })
@@ -1050,7 +1051,7 @@ export const layer: Layer.Layer<
           .pipe(Effect.orDie)
         if (existing && existing.session_id !== msg.sessionID)
           return yield* Effect.die(`Session.updateMessage: message ${msg.id} belongs to another Session`)
-        yield* events.publish(
+        const payload = yield* events.publish(
           SessionV1.Event.MessageUpdated,
           {
             sessionID: msg.sessionID,
@@ -1058,18 +1059,59 @@ export const layer: Layer.Layer<
           },
           {
             commit: () =>
+              // QUAL-007: upsert, not plain update — messages created through updateMessage (fork
+              // fixtures, synthetic boundaries) must land in MessageTable; #115's commit callback
+              // dropped the insert half of the old projector's insert-or-update semantics.
               db
-                .update(MessageTable)
-                .set({
+                .insert(MessageTable)
+                .values({
+                  id: msg.id,
+                  session_id: msg.sessionID,
+                  time_created: msg.time.created,
+                  time_updated: msg.time.created,
                   data: Object.fromEntries(
                     Object.entries(msg).filter(([key]) => key !== "id" && key !== "sessionID"),
                   ) as typeof MessageTable.$inferInsert.data,
                 })
-                .where(and(eq(MessageTable.id, msg.id), eq(MessageTable.session_id, msg.sessionID)))
+                .onConflictDoUpdate({
+                  target: MessageTable.id,
+                  set: {
+                    data: Object.fromEntries(
+                      Object.entries(msg).filter(([key]) => key !== "id" && key !== "sessionID"),
+                    ) as typeof MessageTable.$inferInsert.data,
+                  },
+                })
                 .run()
                 .pipe(Effect.orDie),
           },
         )
+        // RISK-003 ①: runtime diff artifact writer. A user message carrying inline summary.diffs is
+        // converged onto the session_diff_artifact authority (durable files/chunks + committed
+        // receipt + compact diffArtifact descriptor on the message row) right after the
+        // message.updated event commits, so new writes never accumulate inline FileDiff[] bodies.
+        // Best-effort by design: capture failures only log and leave the bounded inline diffs in
+        // place (backfill/maintenance can pick them up later); a turn must never break here.
+        if (
+          flags.sessionDiffArtifactCapture &&
+          msg.role === "user" &&
+          msg.summary &&
+          msg.summary.diffs.length > 0 &&
+          !msg.summary.diffArtifact
+        )
+          yield* SessionDiffArtifact.capture({
+            sessionID: msg.sessionID,
+            messageID: msg.id,
+            sourceEventID: payload.id,
+          }).pipe(
+            Effect.provideService(Database.Service, database),
+            Effect.catchCause((cause) =>
+              Effect.logWarning("session diff artifact runtime capture skipped", {
+                sessionID: msg.sessionID,
+                messageID: msg.id,
+                cause: Cause.pretty(cause),
+              }).pipe(Effect.as({ state: "skipped" as const })),
+            ),
+          )
         return msg
       }).pipe(Effect.withSpan("Session.updateMessage"))
 

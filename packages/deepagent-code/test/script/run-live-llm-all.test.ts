@@ -12,6 +12,7 @@ import {
   runnerEnvironment,
   selectSuites,
   suites,
+  validateRegistryScripts,
   validateRunnerConfig,
   validateSuiteManifest,
 } from "../../../../script/run-live-llm-all"
@@ -362,6 +363,19 @@ describe("all real LLM test runner", () => {
 
   test("registers every real LLM package script", async () => {
     await expect(validateSuiteManifest()).resolves.toBeUndefined()
+  })
+
+  test("every registered suite script exists in its owning package.json (QUAL-004)", async () => {
+    // Closes the gap left by validateSuiteManifest: det gates, setup, and
+    // desktop suites that run `bun run <script>` must also resolve, so a
+    // registry entry can never silently reference a removed script.
+    await expect(validateRegistryScripts()).resolves.toBeUndefined()
+    const scriptBacked = suites.filter(
+      (suite) =>
+        suite.package !== "root" &&
+        (suite.packageScript !== undefined || (suite.command[0] === "bun" && suite.command[1] === "run")),
+    )
+    expect(scriptBacked.length).toBeGreaterThanOrEqual(suites.length - 2)
   })
 
   test("reads normalized autonomous scores without turning partial credit into a gate", () => {

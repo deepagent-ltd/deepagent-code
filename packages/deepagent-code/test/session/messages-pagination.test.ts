@@ -3,6 +3,7 @@ import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { Database } from "@deepagent-code/core/database/database"
 import { Effect, Layer, Option } from "effect"
 import { Session as SessionNs } from "@/session/session"
+import { SessionProjector } from "@deepagent-code/core/session/projector"
 import { MessageV2 } from "../../src/session/message-v2"
 import { MessageID, PartID, type SessionID } from "../../src/session/schema"
 
@@ -14,7 +15,9 @@ import { ModelV2 } from "@deepagent-code/core/model"
 
 void Log.init({ print: false })
 
-const it = testEffect(Layer.mergeAll(SessionNs.defaultLayer, Database.defaultLayer))
+// QUAL-007: the core SessionProjector materializes event-created sessions; without it message
+// writes hit the session FK.
+const it = testEffect(Layer.mergeAll(SessionNs.defaultLayer, SessionProjector.defaultLayer, Database.defaultLayer))
 
 const withSession = <A, E, R>(
   fn: (input: { session: SessionNs.Interface; sessionID: SessionID }) => Effect.Effect<A, E, R>,

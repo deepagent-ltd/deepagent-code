@@ -7,6 +7,7 @@ import { PartTable, SessionHistoryStateTable, SessionWorldStateBaselineTable } f
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { APICallError } from "ai"
 import { Cause, Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect"
+import { HttpClientResponse } from "effect/unstable/http"
 import * as Stream from "effect/Stream"
 import { and, eq, inArray } from "drizzle-orm"
 import { Config } from "@/config/config"
@@ -27,6 +28,7 @@ import { SessionStatus } from "../../src/session/status"
 import { SessionSummary } from "../../src/session/summary"
 import { SessionV2 } from "@deepagent-code/core/session"
 import { SessionExecution } from "@deepagent-code/core/session/execution"
+import { Hash } from "@deepagent-code/core/util/hash"
 
 import type { Provider } from "@/provider/provider"
 import * as SessionProcessorModule from "../../src/session/processor"
@@ -37,11 +39,16 @@ import { CrossSpawnSpawner } from "@deepagent-code/core/cross-spawn-spawner"
 import { TestConfig } from "../fixture/config"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { PromptEpoch } from "@/session/prompt-epoch"
-import { CompactionArtifactTable, CompactionRunTable, CompactionSummaryAttemptTable } from "@/session/compaction-sql"
+import { CompactionArtifactTable, CompactionRunTable, CompactionSummaryAttemptTable, SessionCompactionEncryptedContentTable } from "@/session/compaction-sql"
 import { SessionPromptEpochTable } from "@/session/prompt-epoch.sql"
 import { LLMEvent, Usage } from "@deepagent-code/llm"
+import { RequestExecutor } from "@deepagent-code/llm/route"
+import { DatabaseMigration } from "@deepagent-code/core/database/migration"
+import remoteCompactPersistenceMigration from "@deepagent-code/core/database/migration/20260820000000_remote_compact_persistence"
+import { EncryptedContentStore } from "@/session/remote-compact"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { ModelV2 } from "@deepagent-code/core/model"
+import { SessionProjector } from "@deepagent-code/core/session/projector"
 
 void Log.init({ print: false })
 
@@ -238,6 +245,7 @@ function fake(
     get message() {
       return msg
     },
+    snapshotOutcome: {} satisfies Snapshot.TrackOutcome,
     updateToolCall: Effect.fn("TestSessionProcessor.updateToolCall")(() => Effect.succeed(undefined)),
     completeToolCall: Effect.fn("TestSessionProcessor.completeToolCall")(() => Effect.void),
     process: Effect.fn("TestSessionProcessor.process")(() => Effect.succeed(decision)),
@@ -265,6 +273,19 @@ function cfg(compaction?: ConfigV1.Info["compaction"]) {
   })
 }
 
+// UPD-005: the Gap 1/Gap 2 persistence migration is not registered in
+// migration.gen.ts yet (mainline registers it). Layer it over the tracked
+// history so compaction_run carries the mode columns the drizzle schema
+// already declares. applyOnly is tracked, hence idempotent.
+const database = Layer.effect(
+  Database.Service,
+  Effect.gen(function* () {
+    const service = yield* Database.Service
+    yield* DatabaseMigration.applyOnly(service.db, [remoteCompactPersistenceMigration])
+    return service
+  }),
+).pipe(Layer.provide(Database.defaultLayer))
+
 const deps = Layer.mergeAll(
   wide().layer,
   layer("continue"),
@@ -273,25 +294,33 @@ const deps = Layer.mergeAll(
   EventV2Bridge.defaultLayer,
   Config.defaultLayer,
   RuntimeFlags.layer({ experimentalEventSystem: true }),
-  Database.defaultLayer,
+  database,
   EventV2Bridge.defaultLayer,
   PromptEpoch.defaultLayer,
 )
 
 const env = Layer.mergeAll(
   SessionNs.defaultLayer,
-  Database.defaultLayer,
+  // QUAL-007: the core SessionProjector materializes event-created sessions; without it message
+  // writes hit the session FK.
+  SessionProjector.defaultLayer,
+  database,
   EventV2Bridge.defaultLayer,
   CrossSpawnSpawner.defaultLayer,
   PromptEpoch.defaultLayer,
-  SessionCompaction.layer.pipe(Layer.provide(SessionNs.defaultLayer), Layer.provideMerge(deps)),
+  SessionCompaction.layer.pipe(
+    Layer.provide(SessionNs.defaultLayer),
+    Layer.provide(RequestExecutor.defaultLayer),
+    Layer.provideMerge(deps),
+  ),
 )
 
 const it = testEffect(env)
 
 const compactionEnv = Layer.mergeAll(
   SessionNs.defaultLayer,
-  Database.defaultLayer,
+  SessionProjector.defaultLayer,
+  database,
   EventV2Bridge.defaultLayer,
   CrossSpawnSpawner.defaultLayer,
   PromptEpoch.defaultLayer,
@@ -304,6 +333,8 @@ type CompactionProcessOptions = {
   plugin?: Layer.Layer<Plugin.Service>
   provider?: ReturnType<typeof ProviderTest.fake>
   config?: Layer.Layer<Config.Service>
+  flags?: Partial<RuntimeFlags.Info>
+  executor?: Layer.Layer<RequestExecutor.Service>
 }
 
 function withCompaction(options?: CompactionProcessOptions) {
@@ -317,11 +348,19 @@ function compactionProcessLayer(options?: CompactionProcessOptions) {
     ? SessionProcessorModule.SessionProcessor.layer.pipe(
         Layer.provide(summary),
         Layer.provide(Image.defaultLayer),
-        Layer.provide(RuntimeFlags.layer({ experimentalEventSystem: true })),
+        Layer.provide(RuntimeFlags.layer({ experimentalEventSystem: true, ...options?.flags })),
         Layer.provide(status),
       )
     : layer(options?.result ?? "continue")
-  return Layer.mergeAll(SessionCompaction.layer.pipe(Layer.provide(processor)), processor, events, status).pipe(
+  return Layer.mergeAll(
+    SessionCompaction.layer.pipe(
+      Layer.provide(processor),
+      Layer.provide(options?.executor ?? RequestExecutor.defaultLayer),
+    ),
+    processor,
+    events,
+    status,
+  ).pipe(
     Layer.provide(SessionNs.defaultLayer),
     Layer.provide((options?.provider ?? wide()).layer),
     Layer.provide(Snapshot.defaultLayer),
@@ -332,9 +371,9 @@ function compactionProcessLayer(options?: CompactionProcessOptions) {
     Layer.provide(status),
     Layer.provide(events),
     Layer.provide(options?.config ?? Config.defaultLayer),
-    Layer.provide(RuntimeFlags.layer({ experimentalEventSystem: true })),
+    Layer.provide(RuntimeFlags.layer({ experimentalEventSystem: true, ...options?.flags })),
     Layer.provide(EventV2Bridge.defaultLayer),
-    Layer.provide(Database.defaultLayer),
+    Layer.provide(database),
     Layer.provide(PromptEpoch.defaultLayer),
   )
 }
@@ -889,6 +928,161 @@ describe("session.compaction.prune", () => {
           expect(part.state.time.compacted).toBeUndefined()
         }
       }),
+    ),
+  )
+
+  // UPD-005 — seeds a session whose history carries one completed non-protected tool result per
+  // user/assistant turn, followed by two trailing user messages so the prune scan's turns >= 2
+  // gate admits them.
+  const seedToolOutputs = (dir: string, outputs: string[]) =>
+    Effect.gen(function* () {
+      const ssn = yield* SessionNs.Service
+      const info = yield* ssn.create({})
+      const mkUser = () =>
+        ssn.updateMessage({
+          id: MessageID.ascending(),
+          role: "user",
+          sessionID: info.id,
+          agent: "build",
+          model: ref,
+          time: { created: Date.now() },
+        })
+      for (const output of outputs) {
+        const user = yield* mkUser()
+        const assistant: SessionV1.Assistant = {
+          id: MessageID.ascending(),
+          role: "assistant",
+          sessionID: info.id,
+          mode: "build",
+          agent: "build",
+          path: { cwd: dir, root: dir },
+          cost: 0,
+          tokens: { output: 0, input: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          modelID: ref.modelID,
+          providerID: ref.providerID,
+          parentID: user.id,
+          time: { created: Date.now() },
+          finish: "end_turn",
+        }
+        yield* ssn.updateMessage(assistant)
+        yield* ssn.updatePart({
+          id: PartID.ascending(),
+          messageID: assistant.id,
+          sessionID: info.id,
+          type: "tool",
+          callID: crypto.randomUUID(),
+          tool: "bash",
+          state: {
+            status: "completed",
+            input: {},
+            output,
+            title: "done",
+            metadata: {},
+            time: { start: Date.now(), end: Date.now() },
+          },
+        })
+      }
+      yield* mkUser()
+      yield* mkUser()
+      return info.id
+    })
+
+  const toolCompactionStamps = (msgs: SessionV1.WithParts[]) =>
+    msgs
+      .flatMap((msg) => msg.parts)
+      .filter((part): part is SessionV1.ToolPart => part.type === "tool")
+      .map((part) => (part.state.status === "completed" ? (part.state.time.compacted ?? null) : null))
+
+  it.live(
+    "protect is parameterized: a smaller protect window truncates more older tool results",
+    provideTmpdirInstance(
+      (dir) =>
+        Effect.gen(function* () {
+          const compact = yield* SessionCompaction.Service
+          const ssn = yield* SessionNs.Service
+          // 3 × 100_000 chars = 25k tokens each (Token.estimate = chars/4). Backwards scan with
+          // the DEFAULT protect (40k) keeps the newest (cumulative 25k ≤ 40k) and truncates the
+          // two older ones; the MICRO protect (10k) keeps none and truncates all three.
+          const output = "x".repeat(100_000)
+
+          const defaultID = yield* seedToolOutputs(dir, [output, output, output])
+          yield* compact.prune({ sessionID: defaultID })
+          const defaultStamps = toolCompactionStamps(yield* ssn.messages({ sessionID: defaultID }))
+          expect(defaultStamps.filter((stamp) => stamp !== null)).toHaveLength(2)
+          expect(defaultStamps).toEqual([expect.any(Number), expect.any(Number), null])
+
+          const microID = yield* seedToolOutputs(dir, [output, output, output])
+          yield* compact.prune({ sessionID: microID, protect: SessionCompaction.MICRO_COMPACT_PROTECT })
+          const microStamps = toolCompactionStamps(yield* ssn.messages({ sessionID: microID }))
+          expect(microStamps.filter((stamp) => stamp !== null)).toHaveLength(3)
+        }),
+      {
+        config: {
+          compaction: { prune: true },
+        },
+      },
+    ),
+  )
+
+  it.live(
+    "repeated prune is idempotent: the time.compacted guard prevents double truncation",
+    provideTmpdirInstance(
+      (dir) =>
+        Effect.gen(function* () {
+          const compact = yield* SessionCompaction.Service
+          const ssn = yield* SessionNs.Service
+          const output = "x".repeat(100_000)
+          const sessionID = yield* seedToolOutputs(dir, [output, output, output])
+
+          yield* compact.prune({ sessionID, protect: SessionCompaction.MICRO_COMPACT_PROTECT })
+          const firstStamps = toolCompactionStamps(yield* ssn.messages({ sessionID }))
+          expect(firstStamps.filter((stamp) => stamp !== null)).toHaveLength(3)
+
+          // Re-trigger with the SAME micro protect (repeated fallback entry) and then with the
+          // DEFAULT protect (hard-phase / turn-end prune): neither may re-truncate — the stamps
+          // must be byte-identical, proving the time.compacted guard short-circuits the scan.
+          yield* compact.prune({ sessionID, protect: SessionCompaction.MICRO_COMPACT_PROTECT })
+          yield* compact.prune({ sessionID })
+          const secondStamps = toolCompactionStamps(yield* ssn.messages({ sessionID }))
+          expect(secondStamps).toEqual(firstStamps)
+        }),
+      {
+        config: {
+          compaction: { prune: true },
+        },
+      },
+    ),
+  )
+
+  it.live(
+    "prune is deterministic: same messages + same protect ⇒ same truncated set",
+    provideTmpdirInstance(
+      (dir) =>
+        Effect.gen(function* () {
+          const compact = yield* SessionCompaction.Service
+          const ssn = yield* SessionNs.Service
+          // Heterogeneous sizes so the truncation set is non-trivial: newest (22.5k) stays under
+          // the 40k protect window, the two older ones (35k + 15k cumulative beyond it) are cut.
+          const outputs = ["a".repeat(60_000), "b".repeat(140_000), "c".repeat(90_000)]
+
+          const firstID = yield* seedToolOutputs(dir, outputs)
+          const secondID = yield* seedToolOutputs(dir, outputs)
+          yield* compact.prune({ sessionID: firstID })
+          yield* compact.prune({ sessionID: secondID })
+
+          const mask = (stamps: (number | null)[]) => stamps.map((stamp) => stamp !== null)
+          const firstMask = mask(toolCompactionStamps(yield* ssn.messages({ sessionID: firstID })))
+          const secondMask = mask(toolCompactionStamps(yield* ssn.messages({ sessionID: secondID })))
+          // The compaction summary-attempt requestHash is computed over the compacted projection;
+          // a divergent truncated set between replays would desync the durable attempt record.
+          expect(firstMask).toEqual(secondMask)
+          expect(firstMask).toEqual([true, true, false])
+        }),
+      {
+        config: {
+          compaction: { prune: true },
+        },
+      },
     ),
   )
 })
@@ -2072,9 +2266,11 @@ describe("session.compaction.process", () => {
         expect(captured).toContain("<previous-summary>")
         expect(captured).toContain("summary one")
         expect(captured.match(/summary one/g)?.length).toBe(1)
-        expect(captured).toContain("## Constraints & Preferences")
-        expect(captured).toContain("## Progress")
-      }).pipe(withCompaction({ llm: stub.layer }))
+        // UPD-005: the legacy worldStateReinjection=false path renders the structured nine-section
+        // template (replaces the pre-UPD-005 "## Constraints & Preferences" / "## Progress" markers).
+        expect(captured).toContain("1. Primary Request and Intent")
+        expect(captured).toContain("9. Next Steps")
+      }).pipe(withCompaction({ llm: stub.layer, flags: { worldStateReinjection: false } }))
     },
     { git: true },
   )
@@ -2176,6 +2372,227 @@ describe("session.compaction.process", () => {
       expect(part?.type).toBe("compaction")
       expect(part?.tail_start_id).toBeUndefined()
     }).pipe(withCompaction({ llm: stub.layer, config: cfg({ tail_turns: 2, preserve_recent_tokens: 500 }) }))
+  })
+
+  itCompaction.instance(
+    "renders the structured nine-section summary prompt on the legacy path",
+    () => {
+      const stub = llm()
+      let captured = ""
+      stub.push(reply("summary", (input) => (captured = JSON.stringify(input.messages))))
+      return Effect.gen(function* () {
+        const ssn = yield* SessionNs.Service
+        const session = yield* ssn.create({})
+        yield* createUserMessage(session.id, "older context")
+        yield* createSummaryCompaction(session.id)
+
+        const msgs = yield* ssn.messages({ sessionID: session.id })
+        const parent = msgs.at(-1)?.info.id
+        expect(parent).toBeTruthy()
+        yield* SessionCompaction.use.process({ parentID: parent!, messages: msgs, sessionID: session.id, auto: false })
+
+        expect(captured).toContain("1. Primary Request and Intent")
+        expect(captured).toContain("9. Next Steps")
+        expect(captured).toContain("<analysis>")
+        expect(captured).toContain("Respond with TEXT ONLY")
+        // Determinism: the template is a module-level constant, never the legacy free-form markers.
+        expect(SessionCompaction.STRUCTURED_SUMMARY_TEMPLATE).toContain("6. All User Messages")
+        expect(captured).not.toContain("## Goal")
+      }).pipe(withCompaction({ llm: stub.layer, flags: { worldStateReinjection: false } }))
+    },
+    { git: true },
+  )
+
+  itCompaction.instance(
+    "strips the analysis scratchpad before committing the summary",
+    () => {
+      const stub = llm()
+      stub.push(
+        reply(
+          "<analysis>scratch notes that must not survive</analysis>\n\n<summary>\n1. Primary Request and Intent:\n   - fix login\n</summary>",
+        ),
+      )
+      return Effect.gen(function* () {
+        const ssn = yield* SessionNs.Service
+        const session = yield* ssn.create({})
+        yield* createUserMessage(session.id, "older context")
+        yield* createSummaryCompaction(session.id)
+
+        const msgs = yield* ssn.messages({ sessionID: session.id })
+        const parent = msgs.at(-1)?.info.id
+        expect(parent).toBeTruthy()
+        const result = yield* SessionCompaction.use.process({
+          parentID: parent!,
+          messages: msgs,
+          sessionID: session.id,
+          auto: false,
+        })
+        expect(result).toBe("continue")
+
+        const summaryMessage = (yield* ssn.messages({ sessionID: session.id })).find(
+          (message) => message.info.role === "assistant" && message.info.summary,
+        )
+        const text = summaryMessage?.parts
+          .filter((part): part is SessionV1.TextPart => part.type === "text")
+          .map((part) => part.text)
+          .join("\n")
+        expect(text).toBeDefined()
+        expect(text).not.toContain("<analysis>")
+        expect(text).not.toContain("scratch notes")
+        expect(text).toContain("Summary:")
+        expect(text).toContain("fix login")
+
+        const { db } = yield* Database.Service
+        const run = yield* db
+          .select({ summary: CompactionRunTable.summary_text, state: CompactionRunTable.state })
+          .from(CompactionRunTable)
+          .where(eq(CompactionRunTable.session_id, session.id))
+          .get()
+          .pipe(Effect.orDie)
+        expect(run?.state).toBe("committed")
+        expect(run?.summary).not.toContain("scratch notes")
+        expect(run?.summary).toContain("fix login")
+      }).pipe(withCompaction({ llm: stub.layer }))
+    },
+    { git: true },
+  )
+})
+
+describe("session.compaction.stripSummaryAnalysis", () => {
+  test("strips the analysis scratchpad and unwraps the summary envelope", () => {
+    const out = SessionCompaction.stripSummaryAnalysis(
+      "<analysis>draft thoughts</analysis>\n\n<summary>\n1. Primary Request and Intent:\n   - fix login\n</summary>",
+    )
+    expect(out).not.toContain("draft thoughts")
+    expect(out).not.toContain("<summary>")
+    expect(out.startsWith("Summary:")).toBe(true)
+    expect(out).toContain("1. Primary Request and Intent:")
+  })
+
+  test("strips every analysis block when multiple are present", () => {
+    const out = SessionCompaction.stripSummaryAnalysis(
+      "<analysis>one</analysis>\n<summary>body</summary>\n<analysis>two</analysis>",
+    )
+    expect(out).not.toContain("one")
+    expect(out).not.toContain("two")
+    expect(out).toContain("body")
+  })
+
+  test("returns untagged text byte-for-byte unchanged", () => {
+    const text = "## Goal\n- legacy summary text"
+    expect(SessionCompaction.stripSummaryAnalysis(text)).toBe(text)
+  })
+
+  test("collapses blank lines left behind by stripping", () => {
+    const out = SessionCompaction.stripSummaryAnalysis(
+      "intro\n\n\n<analysis>x</analysis>\n\n\n<summary>kept</summary>",
+    )
+    expect(out).not.toMatch(/\n{3,}/)
+    expect(out).toContain("kept")
+  })
+})
+
+describe("session.compaction.selectPostCompactFileCandidates", () => {
+  const sessionID = SessionID.make("ses_post_compact_candidates")
+
+  const userMessage = (messageID: MessageID): SessionV1.WithParts => ({
+    info: {
+      id: messageID,
+      role: "user",
+      sessionID,
+      agent: "build",
+      model: ref,
+      time: { created: 0 },
+    },
+    parts: [],
+  })
+
+  const readMessage = (
+    messageID: MessageID,
+    reads: readonly { filePath: string; tool?: string; completed?: boolean }[],
+  ): SessionV1.WithParts => ({
+    info: userMessage(messageID).info,
+    parts: reads.map(
+      (read): SessionV1.ToolPart => ({
+        id: PartID.make(`prt_${Hash.sha256(`candidate-test:${messageID}:${read.filePath}`)}`),
+        messageID,
+        sessionID,
+        type: "tool",
+        callID: `call_${read.filePath}`,
+        tool: read.tool ?? "read",
+        state:
+          read.completed === false
+            ? {
+                status: "error",
+                input: { filePath: read.filePath },
+                error: "boom",
+                time: { start: 0, end: 0 },
+              }
+            : {
+                status: "completed",
+                input: { filePath: read.filePath },
+                output: "content",
+                title: "",
+                metadata: {},
+                time: { start: 0, end: 0 },
+              },
+      }),
+    ),
+  })
+
+  test("caps at POST_COMPACT_MAX_FILES_TO_RESTORE with most recent read first", () => {
+    const messages = [
+      readMessage(MessageID.make("msg_c1"), [{ filePath: "/repo/a.ts" }, { filePath: "/repo/b.ts" }]),
+      readMessage(MessageID.make("msg_c2"), [{ filePath: "/repo/c.ts" }, { filePath: "/repo/d.ts" }]),
+      readMessage(MessageID.make("msg_c3"), [
+        { filePath: "/repo/e.ts" },
+        { filePath: "/repo/f.ts" },
+        { filePath: "/repo/g.ts" },
+      ]),
+    ]
+    const candidates = SessionCompaction.selectPostCompactFileCandidates(messages)
+    expect(SessionCompaction.POST_COMPACT_MAX_FILES_TO_RESTORE).toBe(5)
+    expect(candidates.map((candidate) => candidate.filePath)).toEqual([
+      "/repo/g.ts",
+      "/repo/f.ts",
+      "/repo/e.ts",
+      "/repo/d.ts",
+      "/repo/c.ts",
+    ])
+  })
+
+  test("deduplicates by path keeping the most recent read", () => {
+    const messages = [
+      readMessage(MessageID.make("msg_d1"), [{ filePath: "/repo/old.ts" }]),
+      readMessage(MessageID.make("msg_d2"), [{ filePath: "/repo/new.ts" }]),
+      readMessage(MessageID.make("msg_d3"), [{ filePath: "/repo/old.ts" }]),
+    ]
+    const candidates = SessionCompaction.selectPostCompactFileCandidates(messages)
+    expect(candidates.map((candidate) => candidate.filePath)).toEqual(["/repo/old.ts", "/repo/new.ts"])
+    expect(candidates[0]?.messageID).toBe(MessageID.make("msg_d3"))
+  })
+
+  test("skips incomplete reads and non-read tools", () => {
+    const messages = [
+      readMessage(MessageID.make("msg_s1"), [
+        { filePath: "/repo/failed.ts", completed: false },
+        { filePath: "/repo/grep.ts", tool: "grep" },
+        { filePath: "/repo/kept.ts" },
+      ]),
+    ]
+    const candidates = SessionCompaction.selectPostCompactFileCandidates(messages)
+    expect(candidates.map((candidate) => candidate.filePath)).toEqual(["/repo/kept.ts"])
+  })
+
+  test("is a pure function (same input yields same output)", () => {
+    const messages = [
+      readMessage(MessageID.make("msg_p1"), [{ filePath: "/repo/a.ts" }]),
+      userMessage(MessageID.make("msg_p2")),
+    ]
+    expect(SessionCompaction.selectPostCompactFileCandidates(messages)).toEqual(
+      SessionCompaction.selectPostCompactFileCandidates(messages),
+    )
+    expect(SessionCompaction.selectPostCompactFileCandidates([])).toEqual([])
   })
 })
 
@@ -2472,5 +2889,155 @@ describe("SessionNs.getUsage", () => {
     expect(result.tokens.input).toBe(500)
     expect(result.tokens.cache.read).toBe(200)
     expect(result.tokens.cache.write).toBe(300)
+  })
+})
+
+// =============================================================================
+// UPD-005 Gap 2 (§4.2/§5): the remote compaction commit path.
+// =============================================================================
+describe("session.compaction.process remote mode (UPD-005 Gap 2)", () => {
+  const remoteModel = ProviderTest.model({
+    id: ModelV2.ID.make("gpt-5-mini"),
+    limit: { context: 100_000, output: 32_000 },
+  })
+  const remoteProvider = ProviderTest.fake({
+    model: remoteModel,
+    info: ProviderTest.info({ options: { apiKey: "test-openai-key" } }, remoteModel),
+  })
+  const remoteRef = {
+    providerID: ProviderV2.ID.make("openai"),
+    modelID: ModelV2.ID.make("gpt-5-mini"),
+  }
+
+  // Mock /responses/compact executor: a direct service stub (no HttpClient in
+  // the loop) answering every request with a compaction item.
+  const compactExecutor = (encryptedContent: string): Layer.Layer<RequestExecutor.Service> =>
+    Layer.succeed(
+      RequestExecutor.Service,
+      RequestExecutor.Service.of({
+        execute: (request) =>
+          Effect.succeed(
+            HttpClientResponse.fromWeb(
+              request,
+              new Response(
+                JSON.stringify({ output: [{ type: "compaction", id: "cmp_1", encrypted_content: encryptedContent }] }),
+                { headers: { "content-type": "application/json" } },
+              ),
+            ),
+          ),
+      }),
+    )
+
+  function createRemoteUserMessage(sessionID: SessionID, text: string) {
+    return Effect.gen(function* () {
+      const ssn = yield* SessionNs.Service
+      const msg = yield* ssn.updateMessage({
+        id: MessageID.ascending(),
+        role: "user",
+        sessionID,
+        agent: "build",
+        model: remoteRef,
+        time: { created: Date.now() },
+      })
+      yield* ssn.updatePart({
+        id: PartID.ascending(),
+        messageID: msg.id,
+        sessionID,
+        type: "text",
+        text,
+      })
+      return msg
+    })
+  }
+
+  itCompaction.instance(
+    "commits remote compaction: mode columns, durable blob, no summary and no marker part",
+    Effect.gen(function* () {
+      const db = (yield* Database.Service).db
+      // The migration is not registered in migration.gen.ts yet (mainline does
+      // that), so apply it explicitly — tracked, hence idempotent.
+      yield* DatabaseMigration.applyOnly(db, [remoteCompactPersistenceMigration])
+      const ssn = yield* SessionNs.Service
+      const session = yield* ssn.create({})
+      const msg = yield* createRemoteUserMessage(session.id, "compact me")
+      const msgs = yield* ssn.messages({ sessionID: session.id })
+
+      const result = yield* SessionCompaction.use.process({
+        parentID: msg.id,
+        messages: msgs,
+        sessionID: session.id,
+        auto: false,
+      }).pipe(withCompaction({ provider: remoteProvider, executor: compactExecutor("enc-remote-commit") }))
+      expect(result).toBe("stop")
+
+      // Run columns (§4.2): committed remote mode, blob pointer, no summary text.
+      const runs = yield* db.select().from(CompactionRunTable).all()
+      expect(runs).toHaveLength(1)
+      const run = runs[0]!
+      expect(run.state).toBe("committed")
+      expect(run.compaction_mode).toBe("remote_compact")
+      expect(run.encrypted_content_session).toBe(session.id)
+      expect(run.summary_text).toBeNull()
+      expect(run.completion_reason).toBe("manual")
+
+      // Store persistence (Gap 1): the blob is durably attributed.
+      const blob = yield* db
+        .select()
+        .from(SessionCompactionEncryptedContentTable)
+        .where(eq(SessionCompactionEncryptedContentTable.session_id, session.id))
+        .get()
+      expect(blob?.encrypted_content).toBe("enc-remote-commit")
+      expect(blob?.provider_id).toBe("openai")
+      expect(blob?.model_id).toBe("gpt-5-mini")
+      expect(blob?.source_run_id).toBe(run.run_id)
+      // A freshly bound store (i.e. after a restart) reads the blob back from the
+      // table — the compaction layer above has already finalized and unbound.
+      EncryptedContentStore.bind(db)
+      expect(EncryptedContentStore.get(session.id)).toBe("enc-remote-commit")
+      EncryptedContentStore.bind(undefined)
+
+      // No TEXT summary, no marker part: remote mode commits invisibly.
+      const after = yield* ssn.messages({ sessionID: session.id })
+      expect(after.some((message) => message.parts.some((part) => part.type === "compaction"))).toBe(false)
+      expect(after.some((message) => message.info.role === "assistant")).toBe(false)
+    }),
+  )
+})
+
+describe("remote compaction information-hole exemption", () => {
+  test("exempts committed remote runs that carry a blob pointer", () => {
+    expect(
+      SessionCompaction.remoteCompactionInformationHoleExempt({
+        compaction_mode: "remote_compact",
+        encrypted_content_session: "ses_remote",
+      }),
+    ).toBe(true)
+  })
+
+  test("keeps every other shape subject to the information-hole check", () => {
+    expect(
+      SessionCompaction.remoteCompactionInformationHoleExempt({
+        compaction_mode: "local_summary",
+        encrypted_content_session: "ses_remote",
+      }),
+    ).toBe(false)
+    expect(
+      SessionCompaction.remoteCompactionInformationHoleExempt({
+        compaction_mode: "remote_compact",
+        encrypted_content_session: null,
+      }),
+    ).toBe(false)
+    expect(
+      SessionCompaction.remoteCompactionInformationHoleExempt({
+        compaction_mode: "remote_compact",
+        encrypted_content_session: "",
+      }),
+    ).toBe(false)
+    expect(
+      SessionCompaction.remoteCompactionInformationHoleExempt({
+        compaction_mode: null,
+        encrypted_content_session: null,
+      }),
+    ).toBe(false)
   })
 })

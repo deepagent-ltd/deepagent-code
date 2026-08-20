@@ -381,6 +381,8 @@ import type {
   SessionCommandResponses,
   SessionContextAttemptResolveErrors,
   SessionContextAttemptResolveResponses,
+  SessionContextCohortErrors,
+  SessionContextCohortResponses,
   SessionContextDiagnosticsErrors,
   SessionContextDiagnosticsResponses,
   SessionCreateErrors,
@@ -395,10 +397,14 @@ import type {
   SessionDiffArtifactManifestResponses,
   SessionDiffErrors,
   SessionDiffResponses,
+  SessionExportSnapshotErrors,
+  SessionExportSnapshotResponses,
   SessionForkErrors,
   SessionForkResponses,
   SessionGetErrors,
   SessionGetResponses,
+  SessionImportSnapshotErrors,
+  SessionImportSnapshotResponses,
   SessionInitErrors,
   SessionInitResponses,
   SessionListErrors,
@@ -8484,6 +8490,44 @@ export class Session2 extends HeyApiClient {
   }
 
   /**
+   * Aggregate federated context selections across sessions
+   *
+   * FEAT-005: durable cohort aggregation over [sinceMs, untilMs], bucketed by readiness (ready/building/degraded/blocked) so rollout decisions are not skewed by cold-start noise.
+   */
+  public contextCohort<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      sinceMs: string
+      untilMs?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "sinceMs" },
+            { in: "query", key: "untilMs" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      SessionContextCohortResponses,
+      SessionContextCohortErrors,
+      ThrowOnError
+    >({
+      url: "/session/context/cohort",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
    * List provider recovery decisions
    *
    * List unresolved legacy provider outcomes that require explicit recovery.
@@ -8569,6 +8613,57 @@ export class Session2 extends HeyApiClient {
       ThrowOnError
     >({
       url: "/session/{sessionID}/provider-resolution",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Export a session snapshot
+   *
+   * Export the session's conversation (session + messages + parts) as a self-describing snapshot bundle (JSON). The bundle re-imports on another device as a fresh, continuable session.
+   */
+  public exportSnapshot<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "sessionID" }] }])
+    return (options?.client ?? this.client).get<
+      SessionExportSnapshotResponses,
+      SessionExportSnapshotErrors,
+      ThrowOnError
+    >({
+      url: "/session/{sessionID}/export",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Import a session snapshot
+   *
+   * Import a previously exported session bundle into the current instance as a fresh, continuable session (new IDs, re-rooted to the current project/directory).
+   */
+  public importSnapshot<ThrowOnError extends boolean = false>(
+    parameters: {
+      bundle: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "body", key: "bundle" }] }])
+    return (options?.client ?? this.client).post<
+      SessionImportSnapshotResponses,
+      SessionImportSnapshotErrors,
+      ThrowOnError
+    >({
+      url: "/session/import-snapshot",
       ...options,
       ...params,
       headers: {

@@ -2,6 +2,8 @@ import { NodeFileSystem } from "@effect/platform-node"
 import { ConfigV1 } from "@deepagent-code/core/v1/config/config"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { Database } from "@deepagent-code/core/database/database"
+import { DatabaseMigration } from "@deepagent-code/core/database/migration"
+import remoteCompactPersistenceMigration from "@deepagent-code/core/database/migration/20260820000000_remote_compact_persistence"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { FetchHttpClient } from "effect/unstable/http"
 import { expect } from "bun:test"
@@ -24,6 +26,7 @@ import { LLM } from "../../src/session/llm"
 import { MessageV2 } from "../../src/session/message-v2"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import { SessionCompaction } from "../../src/session/compaction"
+import { RequestExecutor } from "@deepagent-code/llm/route"
 import { SessionSummary } from "../../src/session/summary"
 import { Instruction } from "../../src/session/instruction"
 import { SessionProcessor } from "../../src/session/processor"
@@ -196,6 +199,18 @@ const infra = Layer.mergeAll(NodeFileSystem.layer, CrossSpawnSpawner.defaultLaye
 
 // steeringOn/steeringOff: the ONLY difference is the v4Steering flag, so tests can assert the
 // kill-switch cleanly. The steer buffer shares the same Database as Session (built over `deps`).
+// UPD-005: the Gap 1/Gap 2 persistence migration is not registered in
+// migration.gen.ts yet (mainline registers it). Apply it over the tracked history
+// so compaction_run carries the mode columns the drizzle schema already declares.
+const database = Layer.effect(
+  Database.Service,
+  Effect.gen(function* () {
+    const service = yield* Database.Service
+    yield* DatabaseMigration.applyOnly(service.db, [remoteCompactPersistenceMigration])
+    return service
+  }),
+).pipe(Layer.provide(Database.defaultLayer))
+
 function makePrompt(steering: boolean) {
   const flags = RuntimeFlags.layer({
     experimentalEventSystem: true,
@@ -219,7 +234,7 @@ function makePrompt(steering: boolean) {
     FSUtil.defaultLayer,
     BackgroundJob.defaultLayer,
     status,
-    Database.defaultLayer,
+    database,
     EventV2Bridge.defaultLayer,
     PromptEpoch.defaultLayer,
   ).pipe(Layer.provideMerge(infra))
@@ -250,7 +265,12 @@ function makePrompt(steering: boolean) {
     Layer.provide(flags),
     Layer.provideMerge(deps),
   )
-  const compact = SessionCompaction.layer.pipe(Layer.provide(flags), Layer.provideMerge(proc), Layer.provideMerge(deps))
+  const compact = SessionCompaction.layer.pipe(
+    Layer.provide(flags),
+    Layer.provide(RequestExecutor.defaultLayer),
+    Layer.provideMerge(proc),
+    Layer.provideMerge(deps),
+  )
   return SessionPrompt.layer.pipe(
     Layer.provide(SessionProviderOwner.layer.pipe(Layer.provide(deps))),
     Layer.provide(testInstanceStoreLayer),
