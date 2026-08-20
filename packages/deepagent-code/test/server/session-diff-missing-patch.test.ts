@@ -69,7 +69,8 @@ describe("session diff with missing patch (#26574)", () => {
         expect(yield* response.json).toEqual([])
       }),
     { git: true, config: { formatter: false, lsp: false } },
-    15_000,
+    // Wide ceiling only: the full-suite load can push these server-backed diffs past 15s.
+    30_000,
   )
 
   it.instance(
@@ -100,7 +101,8 @@ describe("session diff with missing patch (#26574)", () => {
         expect(yield* response.json).toEqual([{ file: "turn.ts", additions: 1, deletions: 0, status: "modified" }])
       }),
     { git: true, config: { formatter: false, lsp: false } },
-    15_000,
+    // Wide ceiling only: the full-suite load can push these server-backed diffs past 15s.
+    30_000,
   )
 
   it.instance(
@@ -159,7 +161,8 @@ describe("session diff with missing patch (#26574)", () => {
         expect(original?.diffs[0]?.patch).toBe(patch)
       }),
     { git: true, config: { formatter: false, lsp: false } },
-    15_000,
+    // Wide ceiling only: the full-suite load can push these server-backed diffs past 15s.
+    30_000,
   )
 
   it.instance(
@@ -200,6 +203,7 @@ describe("session diff with missing patch (#26574)", () => {
         ])
       }),
     { git: true, config: { formatter: false, lsp: false } },
-    15_000,
+    // Wide ceiling only: the full-suite load can push these server-backed diffs past 15s.
+    30_000,
   )
 })

@@ -84,6 +84,43 @@ describe("deepagentCode run (non-interactive subprocess)", () => {
     60_000,
   )
 
+  // PARITY-002: --permission-mode read-only mirrors the GUI read-only
+  // directory mode — mutating permissions are auto-rejected. In this harness
+  // the session root differs from the tmp home, so file tools surface the
+  // external_directory permission, which is part of the shared mutating set.
+  cliIt.concurrent(
+    "read-only permission mode rejects mutating permissions",
+    ({ llm, home, deepagentCode }) =>
+      Effect.gen(function* () {
+        yield* llm.tool("write", { filePath: path.join(home, "mutated.txt"), content: "nope\n" })
+        yield* llm.text("read-only flow completed")
+
+        const result = yield* deepagentCode.run("try to mutate", {
+          format: "json",
+          extraArgs: ["--permission-mode", "read-only"],
+        })
+        deepagentCode.expectExit(result, 0)
+
+        const events = deepagentCode.parseJsonEvents(result.stdout)
+        const permissions = events.filter((event) => event.type === "permission")
+        expect(permissions.length).toBeGreaterThan(0)
+        for (const event of permissions) {
+          expect(event.reply).toBe("reject")
+        }
+        expect(permissions).toContainEqual(
+          expect.objectContaining({
+            type: "permission",
+            reply: "reject",
+            request: expect.objectContaining({ permission: "external_directory" }),
+          }),
+        )
+        // The rejection must be effective: no mutation reached the disk.
+        const mutated = yield* Effect.promise(() => Bun.file(path.join(home, "mutated.txt")).exists())
+        expect(mutated).toBe(false)
+      }),
+    60_000,
+  )
+
   // Regression for #27371: an unknown model used to hang the process forever
   // waiting on a session.status === idle event that never arrived. The fix
   // makes the SDK call surface an error promptly so the process exits nonzero.

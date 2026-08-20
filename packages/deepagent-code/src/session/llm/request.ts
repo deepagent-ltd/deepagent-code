@@ -36,8 +36,77 @@ type McpServerRef = AgentGateway.McpServerRef
 import { jsonSchema, tool as aiTool, type ModelMessage, type Tool } from "ai"
 import type { Plugin } from "@/plugin"
 import { mergeDeep } from "remeda"
+import { byProvider as OpenAICompatibleProfiles } from "@deepagent-code/llm/providers/openai-compatible-profile"
 
 const USER_AGENT = `deepagent-code/${InstallationVersion}`
+
+// =============================================================================
+// UPD-002: wire-level structured output capability detection
+// =============================================================================
+// Two INDEPENDENT capability facts (hard constraint: never assume Responses ⇒
+// wire structured output):
+//
+// 1. "Responses family" — does the model speak the OpenAI Responses API?
+//    Declared by the compatible profile (`supportsResponses`, e.g. deepseek)
+//    or by the npm package that only serves Responses (openai/azure).
+// 2. "wire structured text format" — does the route actually honor
+//    `text.format` json_schema? This is deliberately narrower than the family:
+//    a Responses-capable provider may still lack constrained text output.
+//
+// CANONICAL capability declaration (UPD-002 residual): openai-compatible
+// families declare it on their profile (`supportsStructuredTextFormat`,
+// openai-compatible-profile.ts) — never assumed from Responses support. The
+// dedicated OpenAI/Azure packages are the reference Responses implementations
+// the wire lowering targets, so they are inherently format-capable. No
+// compatible family advertises it today (deepseek serves Responses but NOT
+// constrained `text.format`), so opting one in is a one-line profile flag,
+// not a code change here.
+const responsesFamily = (model: Provider.Model): boolean =>
+  model.api.npm === "@ai-sdk/openai" ||
+  model.api.npm === "@ai-sdk/azure" ||
+  (model.api.npm === "@ai-sdk/openai-compatible" &&
+    OpenAICompatibleProfiles[String(model.providerID)]?.supportsResponses === true)
+
+const supportsStructuredTextFormat = (model: Provider.Model): boolean => {
+  if (model.api.npm === "@ai-sdk/openai" || model.api.npm === "@ai-sdk/azure") return true
+  if (model.api.npm === "@ai-sdk/openai-compatible")
+    return OpenAICompatibleProfiles[String(model.providerID)]?.supportsStructuredTextFormat === true
+  return false
+}
+
+/**
+ * UPD-002: decide whether this turn delivers json_schema output through the
+ * wire (`text.format`) instead of the synthesized StructuredOutput tool.
+ *
+ * Requirements for wire mode — ALL must hold:
+ * - the user requested json_schema output
+ * - the turn is NOT a structured finalizer (finalizers keep the bounded
+ *   synthetic-tool semantics: FINALIZER_ATTEMPTS / retryCount / allow_text)
+ * - the native runtime will actually carry the request (wire lowering lives
+ *   in @deepagent-code/llm's Responses protocol; the AI SDK runtime has no
+ *   delivery path yet)
+ * - the model is a Responses family AND independently format-capable
+ *
+ * prompt.ts and prepare() must agree on this decision (prompt.ts decides
+ * whether to inject the synthetic tool; prepare() decides whether to lower
+ * `responseFormat`), so both call this single helper.
+ */
+export function shouldUseWireStructuredOutput(input: {
+  readonly user: SessionV1.User
+  readonly model: Provider.Model
+  readonly flags: RuntimeFlags.Info
+}): boolean {
+  if (input.user.format?.type !== "json_schema") return false
+  if (isStructuredFinalizerMetadata(input.user.metadata)) return false
+  if (!input.flags.experimentalNativeLlm) return false
+  return responsesFamily(input.model) && supportsStructuredTextFormat(input.model)
+}
+
+function isStructuredFinalizerMetadata(metadata: unknown): boolean {
+  if (!isRecord(metadata)) return false
+  if (!isRecord(metadata.deepagent)) return false
+  return isRecord(metadata.deepagent.structured_finalizer)
+}
 
 type PrepareInput = {
   readonly user: SessionV1.User
@@ -83,6 +152,10 @@ export type Prepared = {
   readonly messageTransformOptions: Record<string, any>
   readonly headers: Record<string, string>
   readonly releasedKnowledgeSelectedRefs: readonly DocumentRef[]
+  // UPD-002: wire-level structured output. Set only when the turn takes the
+  // wire path (see shouldUseWireStructuredOutput); the native runtime lowers
+  // it onto LLMRequest.responseFormat → Responses `text.format`.
+  readonly responseFormat?: { readonly name: string; readonly schema: Record<string, unknown> }
 }
 
 const mergeOptions = (target: Record<string, any>, source: Record<string, any> | undefined): Record<string, any> =>
@@ -325,7 +398,11 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
   }
 
   const instance = yield* InstanceState.context
-  const metadata = prepareMetadata(input, tools, instance.directory)
+  // UPD-002: wire structured-output decision. Must match prompt.ts's decision
+  // (single helper): wire ⇒ no synthesized StructuredOutput tool, and the
+  // format travels here instead; synthetic ⇒ responseFormat stays unset.
+  const wireStructuredOutput = shouldUseWireStructuredOutput(input)
+  const metadata = prepareMetadata(input, tools, instance.directory, wireStructuredOutput)
 
   const deepagentCodeProjectID = input.model.providerID.startsWith("deepagent-code") ? instance.project.id : undefined
 
@@ -357,6 +434,9 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
       ...headers,
     },
     releasedKnowledgeSelectedRefs,
+    ...(wireStructuredOutput && input.user.format?.type === "json_schema"
+      ? { responseFormat: { name: "structured_output", schema: input.user.format.schema } }
+      : {}),
   } satisfies Prepared
   if (input.flags.assembledRequestFingerprint)
     emitAssembledRequestFingerprint(input, prepared, validationCommands, volatileContextKind)
@@ -444,6 +524,7 @@ const prepareMetadata = (
   input: PrepareInput,
   tools: Record<string, Tool>,
   workspacePath: string,
+  wireStructuredOutput: boolean,
 ): Record<string, unknown> => {
   const agentMode = deepAgentAgentModeOverride(input.user.metadata)
   const deepagent =
@@ -459,6 +540,11 @@ const prepareMetadata = (
       parentSessionID: input.parentSessionID,
       agent: input.agent.name,
       workspacePath,
+      // UPD-002 receipt: record which structured-output delivery mode this
+      // request uses (wire text.format vs synthesized StructuredOutput tool).
+      ...(input.user.format?.type === "json_schema"
+        ? { structured_output_mode: wireStructuredOutput ? "wire_format" : "synthetic_tool" }
+        : {}),
     },
     deepagent: {
       ...(typeof deepagent.goal_id === "string" ? { goal_id: deepagent.goal_id } : {}),

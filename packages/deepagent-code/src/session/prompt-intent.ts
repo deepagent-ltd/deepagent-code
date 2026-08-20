@@ -21,7 +21,10 @@ import {
   SessionLegacyActivityTable,
   SessionLegacyActivityTerminalTable,
 } from "./activity-sql"
-import { SessionActivityObjectiveTable } from "@deepagent-code/core/deepagent/activity-authority.sql"
+import {
+  SessionActivityObjectiveTable,
+  SessionActivityPermissionEffectDispatchTable,
+} from "@deepagent-code/core/deepagent/activity-authority.sql"
 import { SessionToolRequestReceiptTable } from "./tool-request-receipt.sql"
 import { SessionActivityOwner } from "./activity-owner"
 import { pause as pauseAtActivityCrashPoint } from "./activity-crash-test"
@@ -56,7 +59,15 @@ export type Receipt = {
   readonly intentID: string
   readonly sessionID: SessionID
   readonly source: Source
-  readonly state: "preparing" | "admitting" | "admitted" | "canceled" | "superseded" | "failed"
+  readonly state:
+    | "preparing"
+    | "awaiting_confirmation"
+    | "selected"
+    | "admitting"
+    | "admitted"
+    | "canceled"
+    | "superseded"
+    | "failed"
   readonly variant?: Variant
   readonly payloadHash?: string
   readonly delivery?: Delivery
@@ -729,6 +740,7 @@ export const materializeTurn = Effect.fn("SessionPromptIntent.materializeTurn")(
               .get()
               .pipe(Effect.orDie))?.generation ?? -1) + 1
           const runOwnerToken = input.run?.ownerToken ?? SessionActivityOwner.processOwnerToken
+          let steerAdmissionID: string | undefined
           if (!existingActivity) {
             const active = yield* tx
               .select()
@@ -741,13 +753,89 @@ export const materializeTurn = Effect.fn("SessionPromptIntent.materializeTurn")(
               )
               .get()
               .pipe(Effect.orDie)
-            if (active)
-              return yield* Effect.fail(
-                new Conflict({
-                  intentID: input.receipt.intentID,
-                  reason: `legacy activity ${active.activity_id} requires recovery before a new turn`,
-                }),
-              )
+            if (active) {
+              // BUG-008 third leak window — admission adoption (route a).
+              //
+              // A turn that dies AFTER the session went busy but BEFORE its own
+              // materialization transaction commits leaves nothing behind; yet a
+              // steer admitted inside that window sees no active activity and
+              // creates a PLACEHOLDER activity (trigger = the steer admission,
+              // intent run_now/pending, zero run rows). The dead turn's outer
+              // hooks own no run, and recoverActiveActivities deliberately skips
+              // the run_now/pending/no-run shape, so the placeholder would block
+              // every later admission with "requires recovery before a new turn".
+              //
+              // The task's original adoption condition (active activity triggered
+              // by the SAME intent messageID) is unreachable: materialization is a
+              // single atomic transaction, so a same-intent retry can never
+              // observe its own half-written activity. The actually-observed leak
+              // (live steer-boundary suite) is the steer placeholder above, so
+              // adoption is generalized to it. In-place reuse of the placeholder
+              // row is forbidden by the state machine (trigger_admission_id is
+              // immutable and session_legacy_activity_admission rejects UPDATEs),
+              // so adoption takes the undo-and-reattach form below. Route b
+              // (terminalize at the creation point) was rejected: the placeholder
+              // is created by steer.admit, which cannot know a concurrent turn
+              // will materialize; destroying it there would drop legal steers.
+              const placeholderAdmission = yield* tx
+                .select()
+                .from(SessionActivityAdmissionTable)
+                .where(eq(SessionActivityAdmissionTable.admission_id, active.trigger_admission_id))
+                .get()
+                .pipe(Effect.orDie)
+              const placeholderIntent = placeholderAdmission?.legacy_intent_id
+                ? yield* tx
+                    .select()
+                    .from(SessionIntentTable)
+                    .where(eq(SessionIntentTable.intent_id, placeholderAdmission.legacy_intent_id))
+                    .get()
+                    .pipe(Effect.orDie)
+                : undefined
+              const placeholderRun = yield* tx
+                .select({ runID: SessionLegacyActivityRunTable.run_id })
+                .from(SessionLegacyActivityRunTable)
+                .where(eq(SessionLegacyActivityRunTable.activity_id, active.activity_id))
+                .get()
+                .pipe(Effect.orDie)
+              const adoptable =
+                placeholderAdmission?.delivery === "steer" &&
+                placeholderIntent !== undefined &&
+                placeholderIntent.execution_state === "pending" &&
+                placeholderIntent.execution_claim_id === null &&
+                placeholderIntent.mutation_epoch === session.mutationEpoch &&
+                placeholderRun === undefined
+              if (!adoptable)
+                return yield* Effect.fail(
+                  new Conflict({
+                    intentID: input.receipt.intentID,
+                    reason: `legacy activity ${active.activity_id} requires recovery before a new turn`,
+                  }),
+                )
+              // The placeholder is a zero-footprint reservation: no run, no
+              // progress, no terminal, never claimed. Undo it (delete the
+              // membership row, then the activity row — both have no DELETE
+              // triggers and no surviving references) and re-attach the steer
+              // admission to this turn's activity below, which converges on
+              // EXACTLY the durable state the healthy race ordering produces
+              // (turn materializes first, steer attaches as role "steer"), so
+              // drain/freeze/cancel/progress semantics downstream are unchanged.
+              yield* tx
+                .delete(SessionLegacyActivityAdmissionTable)
+                .where(eq(SessionLegacyActivityAdmissionTable.activity_id, active.activity_id))
+                .run()
+                .pipe(Effect.orDie)
+              yield* tx
+                .delete(SessionLegacyActivityTable)
+                .where(
+                  and(
+                    eq(SessionLegacyActivityTable.activity_id, active.activity_id),
+                    eq(SessionLegacyActivityTable.state, "active"),
+                  ),
+                )
+                .run()
+                .pipe(Effect.orDie)
+              steerAdmissionID = active.trigger_admission_id
+            }
             const latest = yield* tx
               .select({ ordinal: max(SessionLegacyActivityTable.ordinal) })
               .from(SessionLegacyActivityTable)
@@ -792,6 +880,29 @@ export const materializeTurn = Effect.fn("SessionPromptIntent.materializeTurn")(
             return yield* Effect.fail(
               new Conflict({ intentID: input.receipt.intentID, reason: "activity trigger membership conflicts" }),
             )
+          if (steerAdmissionID) {
+            // BUG-008 third window adoption, final step: re-attach the orphaned
+            // steer admission as role "steer" on the adopting activity. The
+            // steer's intent stays run_now/pending and is claimed by this turn's
+            // run at drain time, exactly as in the healthy race ordering.
+            const latestMembership = yield* tx
+              .select({ ordinal: max(SessionLegacyActivityAdmissionTable.ordinal) })
+              .from(SessionLegacyActivityAdmissionTable)
+              .where(eq(SessionLegacyActivityAdmissionTable.activity_id, activityID))
+              .get()
+              .pipe(Effect.orDie)
+            yield* tx
+              .insert(SessionLegacyActivityAdmissionTable)
+              .values({
+                activity_id: activityID,
+                admission_id: steerAdmissionID,
+                ordinal: (latestMembership?.ordinal ?? 0) + 1,
+                role: "steer",
+                attached_at: now,
+              })
+              .run()
+              .pipe(Effect.orDie)
+          }
           const claimed = yield* tx
             .update(SessionIntentTable)
             .set({ execution_state: "claimed", execution_claim_id: runID, execution_claimed_at: now })
@@ -1731,6 +1842,43 @@ export const settleProgressOnly = Effect.fn("SessionPromptIntent.settleProgressO
     })
     .pipe(Effect.orDie)
 })
+
+// The durable terminal guard (session_legacy_activity_permission_effect_terminal_guard) refuses to
+// move a legacy activity to a terminal state while one of its permission effect dispatches is still
+// `started` (and to `settled`/`interrupted` while one is `unknown`). On a host interrupt the
+// in-flight tool is concurrently finishing and settles its effect imminently; a caller that settles
+// the activity straight away races that settlement and dies on the guard. Wait for any `started`
+// effect to leave `started` before the caller picks the terminal state, reporting whether an
+// `unknown` (quarantined) effect remains so the caller can route to `recovery_required`.
+const PERMISSION_EFFECT_TERMINAL_WAIT_MS = 8_000
+export const awaitTerminalPermissionEffects = Effect.fn("SessionPromptIntent.awaitTerminalPermissionEffects")(
+  function* (input: { readonly activityID: string }) {
+    const { db } = yield* Database.Service
+    const deadline = Date.now() + PERMISSION_EFFECT_TERMINAL_WAIT_MS
+    while (true) {
+      const outstanding = yield* db
+        .select({ state: SessionActivityPermissionEffectDispatchTable.state })
+        .from(SessionActivityPermissionEffectDispatchTable)
+        .where(
+          and(
+            eq(SessionActivityPermissionEffectDispatchTable.activity_kind, "legacy"),
+            eq(SessionActivityPermissionEffectDispatchTable.activity_id, input.activityID),
+            inArray(SessionActivityPermissionEffectDispatchTable.state, ["started", "unknown"] as const),
+          ),
+        )
+        .all()
+        .pipe(Effect.orDie)
+      const started = outstanding.some((row) => row.state === "started")
+      if (!started) return { unresolvedUnknown: outstanding.length > 0, startedTimedOut: false }
+      if (Date.now() >= deadline)
+        return {
+          unresolvedUnknown: outstanding.some((row) => row.state === "unknown"),
+          startedTimedOut: true,
+        }
+      yield* Effect.sleep("25 millis")
+    }
+  },
+)
 
 export const finalizeActivityWithRevision = Effect.fn("SessionPromptIntent.finalizeActivityWithRevision")(
   function* (input: {

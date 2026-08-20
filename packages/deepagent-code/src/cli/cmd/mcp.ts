@@ -1,6 +1,6 @@
 import { cmd } from "./cmd"
 import { ConfigV1 } from "@deepagent-code/core/v1/config/config"
-import { effectCmd } from "../effect-cmd"
+import { effectCmd, fail } from "../effect-cmd"
 import { Cause } from "effect"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
@@ -17,7 +17,7 @@ import { AppRuntime } from "@/effect/app-runtime"
 import { InstallationVersion } from "@deepagent-code/core/installation/version"
 import path from "path"
 import { Global } from "@deepagent-code/core/global"
-import { modify, applyEdits } from "jsonc-parser"
+import { modify, applyEdits, parse } from "jsonc-parser"
 import { Filesystem } from "@/util/filesystem"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { EventV2 } from "@deepagent-code/core/event"
@@ -100,7 +100,10 @@ export const McpCommand = cmd({
   builder: (yargs) =>
     yargs
       .command(McpAddCommand)
+      .command(McpRemoveCommand)
+      .command(McpEditCommand)
       .command(McpListCommand)
+      .command(McpCatalogCommand)
       .command(McpAuthCommand)
       .command(McpLogoutCommand)
       .command(McpDebugCommand)
@@ -439,6 +442,211 @@ async function addMcpToConfig(name: string, mcpConfig: ConfigMCPV1.Info, configP
 
   return configPath
 }
+
+// PARITY-004 quick-win: `mcp remove` parity with the GUI delete button
+// (dialog-select-mcp.tsx). The server definition lives in a jsonc config file
+// (project or global), so removal is a jsonc edit that preserves comments —
+// same mechanism as addMcpToConfig above.
+function projectMcpConfigCandidates(baseDir: string) {
+  return [
+    path.join(baseDir, "deepagent-code.json"),
+    path.join(baseDir, "deepagent-code.jsonc"),
+    path.join(baseDir, ".deepagent-code", "deepagent-code.json"),
+    path.join(baseDir, ".deepagent-code", "deepagent-code.jsonc"),
+  ]
+}
+
+function globalMcpConfigCandidates() {
+  // Matches the files Config.get merges for the global scope (config/config.ts).
+  return ["config.jsonc", "config.json", "deepagent-code.jsonc", "deepagent-code.json"].map((file) =>
+    path.join(Global.Path.config, file),
+  )
+}
+
+async function removeMcpFromConfig(name: string, configPath: string) {
+  if (!(await Filesystem.exists(configPath))) return false
+  const text = await Filesystem.readText(configPath)
+  const parsed = parse(text) as { mcp?: Record<string, unknown> } | undefined
+  if (!parsed || typeof parsed !== "object" || !parsed.mcp || !(name in parsed.mcp)) return false
+  const edits = modify(text, ["mcp", name], undefined, {
+    formattingOptions: { tabSize: 2, insertSpaces: true },
+  })
+  await Filesystem.write(configPath, applyEdits(text, edits))
+  return true
+}
+
+// PARITY-004 long-tail: `mcp edit` modifies an EXISTING server definition in
+// place (updateMcpConfig semantics — the GUI edit dialog rewrites the same
+// entry). Same jsonc-preserving mechanism as add/remove: field-level edits via
+// jsonc-parser so comments and sibling keys survive.
+type McpEditPatch = {
+  url?: string
+  environment?: Record<string, string>
+  headers?: Record<string, string>
+  command?: string[]
+}
+
+async function editMcpInConfig(
+  name: string,
+  configPath: string,
+  patch: McpEditPatch,
+): Promise<{ edited: boolean; error?: string }> {
+  if (!(await Filesystem.exists(configPath))) return { edited: false }
+  const text = await Filesystem.readText(configPath)
+  const parsed = parse(text) as { mcp?: Record<string, ConfigMCPV1.Info> } | undefined
+  const existing = parsed && typeof parsed === "object" ? parsed.mcp?.[name] : undefined
+  if (!existing || typeof existing !== "object" || !("type" in existing)) return { edited: false }
+  if ((patch.url !== undefined || patch.headers !== undefined) && existing.type !== "remote") {
+    return { edited: false, error: `--url/--header only apply to remote servers ("${name}" is ${existing.type} in ${configPath})` }
+  }
+  if ((patch.environment !== undefined || patch.command?.length) && existing.type !== "local") {
+    return { edited: false, error: `--env/command only apply to local servers ("${name}" is ${existing.type} in ${configPath})` }
+  }
+  let result = text
+  const apply = (jsonPath: (string | number)[], value: unknown) => {
+    result = applyEdits(result, modify(result, jsonPath, value, { formattingOptions: { tabSize: 2, insertSpaces: true } }))
+  }
+  if (patch.url !== undefined) apply(["mcp", name, "url"], patch.url)
+  if (patch.command?.length) apply(["mcp", name, "command"], patch.command)
+  for (const [key, value] of Object.entries(patch.environment ?? {})) apply(["mcp", name, "environment", key], value)
+  for (const [key, value] of Object.entries(patch.headers ?? {})) apply(["mcp", name, "headers", key], value)
+  await Filesystem.write(configPath, result)
+  return { edited: true }
+}
+
+export const McpEditCommand = effectCmd({
+  command: "edit <name>",
+  describe: "edit an existing MCP server's configuration (url/env/header/command)",
+  builder: (yargs) =>
+    yargs
+      .positional("name", {
+        describe: "name of the MCP server",
+        type: "string",
+        demandOption: true,
+      })
+      .option("url", {
+        describe: "new URL for a remote MCP server",
+        type: "string",
+      })
+      .option("env", {
+        describe: "environment variable for a local MCP server (KEY=VALUE, merged)",
+        type: "string",
+        array: true,
+      })
+      .option("header", {
+        describe: "HTTP header for a remote MCP server (KEY=VALUE, merged)",
+        type: "string",
+        array: true,
+      }),
+  handler: Effect.fn("Cli.mcp.edit")(function* (args) {
+    const maybeCtx = yield* InstanceRef
+    if (!maybeCtx) return yield* Effect.die("InstanceRef not provided")
+    const ctx = maybeCtx
+    const command = (args["--"] ?? []) as string[]
+    if (!args.url && !args.env?.length && !args.header?.length && !command.length) {
+      return yield* fail("No changes provided. Use --url, --env, --header, or a command after --.")
+    }
+    if (args.url && !URL.canParse(args.url)) return yield* fail(`Invalid URL: ${args.url}`)
+    const entries = (values: string[], kind: string) =>
+      Object.fromEntries(
+        values.map((entry) => {
+          const index = entry.indexOf("=")
+          if (index < 1) throw new Error(`Invalid ${kind}: ${entry}. Expected KEY=VALUE`)
+          return [entry.slice(0, index), entry.slice(index + 1)]
+        }),
+      )
+    const patch: McpEditPatch = {
+      ...(args.url ? { url: args.url } : {}),
+      ...(args.env?.length ? { environment: entries(args.env, "environment variable") } : {}),
+      ...(args.header?.length ? { headers: entries(args.header, "HTTP header") } : {}),
+      ...(command.length ? { command } : {}),
+    }
+    const outcome = yield* Effect.promise(async () => {
+      const candidates = [...projectMcpConfigCandidates(ctx.worktree), ...globalMcpConfigCandidates()]
+      const editedFrom: string[] = []
+      let error: string | undefined
+      for (const configPath of candidates) {
+        const result = await editMcpInConfig(args.name, configPath, patch)
+        if (result.error) error ??= result.error
+        else if (result.edited) editedFrom.push(configPath)
+      }
+      return { editedFrom, error }
+    })
+    if (outcome.editedFrom.length === 0) return yield* fail(outcome.error ?? `MCP server not found: ${args.name}`)
+    for (const configPath of outcome.editedFrom) {
+      UI.println(UI.Style.TEXT_SUCCESS_BOLD + `Updated MCP server "${args.name}" in ${configPath}` + UI.Style.TEXT_NORMAL)
+    }
+  }),
+})
+
+export const McpRemoveCommand = effectCmd({
+  command: "remove <name>",
+  aliases: ["rm"],
+  describe: "remove an MCP server from the project or global config",
+  builder: (yargs) =>
+    yargs.positional("name", {
+      describe: "name of the MCP server",
+      type: "string",
+      demandOption: true,
+    }),
+  handler: Effect.fn("Cli.mcp.remove")(function* (args) {
+    const maybeCtx = yield* InstanceRef
+    if (!maybeCtx) return yield* Effect.die("InstanceRef not provided")
+    const ctx = maybeCtx
+    const removedFrom = yield* Effect.promise(async () => {
+      const candidates = [...projectMcpConfigCandidates(ctx.worktree), ...globalMcpConfigCandidates()]
+      const paths: string[] = []
+      for (const configPath of candidates) {
+        if (await removeMcpFromConfig(args.name, configPath)) paths.push(configPath)
+      }
+      return paths
+    })
+    if (removedFrom.length === 0) return yield* fail(`MCP server not found: ${args.name}`)
+    for (const configPath of removedFrom) {
+      UI.println(UI.Style.TEXT_SUCCESS_BOLD + `Removed MCP server "${args.name}" from ${configPath}` + UI.Style.TEXT_NORMAL)
+    }
+    UI.println(UI.Style.TEXT_DIM + "OAuth credentials (if any) remain; drop them with: deepagent-code mcp logout " + args.name + UI.Style.TEXT_NORMAL)
+  }),
+})
+
+// PARITY-004 quick-win: `mcp catalog` parity with the GUI preset catalog
+// (groups/mcp.ts `catalog` + dialog-add-mcp.tsx). The catalog is static
+// metadata (McpCatalog.list()) — listing connects nothing. `--format json`
+// keeps the output scriptable.
+export const McpCatalogCommand = effectCmd({
+  command: "catalog",
+  describe: "list preset MCP servers from the vetted catalog (metadata only)",
+  builder: (yargs) =>
+    yargs.option("format", {
+      describe: "output format",
+      type: "string",
+      choices: ["table", "json"],
+      default: "table",
+    }),
+  handler: Effect.fn("Cli.mcp.catalog")(function* (args) {
+    const entries = yield* MCP.Service.use((mcp) => mcp.catalog())
+    if (args.format === "json") {
+      console.log(JSON.stringify(entries, null, 2))
+      return
+    }
+    UI.empty()
+    prompts.intro("MCP Preset Catalog")
+    if (entries.length === 0) {
+      prompts.log.warn("No preset MCP servers in the catalog")
+      prompts.outro("Done")
+      return
+    }
+    for (const entry of entries) {
+      const creds = entry.credentials.length
+        ? ` (credentials: ${entry.credentials.map((credential) => credential.key).join(", ")})`
+        : ""
+      prompts.log.info(
+        `${entry.id} — ${entry.title} [${entry.transport}/${entry.riskTier}]${creds}\n    ${UI.Style.TEXT_DIM}${entry.description}${UI.Style.TEXT_NORMAL}`,
+      )
+    }
+    prompts.outro(`${entries.length} preset(s); enable one from the GUI MCP dialog or add it manually with: deepagent-code mcp add`)
+  }),
+})
 
 export const McpAddCommand = effectCmd({
   command: "add [name]",

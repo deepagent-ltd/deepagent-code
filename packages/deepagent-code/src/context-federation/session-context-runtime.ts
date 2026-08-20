@@ -80,6 +80,8 @@ export interface Interface {
     selection: SessionContext.Selection,
     state: "settled" | "failed" | "interrupted",
   ) => Effect.Effect<void, RuntimeError>
+  /** Restart recovery (BUG-003): settle every federation activity still marked `active`. */
+  readonly settleOrphanedActivities: () => Effect.Effect<number, RuntimeError>
   readonly replayIndeterminate: (input: {
     readonly session: Session.Info
     readonly attemptId: string
@@ -174,8 +176,12 @@ export const layer = Layer.effect(
           Effect.mapError(runtimeError),
         )
 
-    const resolve: Interface["resolve"] = (input) =>
-      Effect.gen(function* () {
+    const resolve: Interface["resolve"] = (input) => {
+      // BUG-003: when this call opens a fresh activity, any later failure before commit would
+      // otherwise leave a permanent `active` row (the partial unique index then blocks every new
+      // activity for the session). Track the opened id and roll it back to `interrupted` on error.
+      let openedActivityId: string | undefined
+      return Effect.gen(function* () {
         const handle = yield* runtime.current()
         if (!handle) return yield* new RuntimeError({ reason: "location_unavailable" })
         const now = input.now ?? Date.now()
@@ -286,11 +292,13 @@ export const layer = Layer.effect(
         if (inputIds.length === 0) return yield* new RuntimeError({ reason: "activity_input_missing" })
         const activity = current
           ? { activityId: current.activityId, triggerInputId: current.triggerInputId }
-          : yield* contexts.openActivity({
-              sessionId: SessionSchema.ID.make(input.session.id),
-              triggerInputId: inputIds[0]!,
-              now,
-            })
+          : yield* contexts
+              .openActivity({
+                sessionId: SessionSchema.ID.make(input.session.id),
+                triggerInputId: inputIds[0]!,
+                now,
+              })
+              .pipe(Effect.tap((opened) => Effect.sync(() => (openedActivityId = opened.activityId))))
         yield* contexts.attachInputs({ activityId: activity.activityId, inputIds, now })
         const resolved = yield* query.query({
           intent: "search",
@@ -334,7 +342,15 @@ export const layer = Layer.effect(
           envelope,
           observedLocationMutationEpoch: mutationEpoch,
         }
-      }).pipe(Effect.mapError((error) => (error instanceof RuntimeError ? error : runtimeError(error))))
+      }).pipe(
+        Effect.tapError(() =>
+          openedActivityId === undefined
+            ? Effect.void
+            : contexts.settleActivity({ activityId: openedActivityId, state: "interrupted" }).pipe(Effect.ignore),
+        ),
+        Effect.mapError((error) => (error instanceof RuntimeError ? error : runtimeError(error))),
+      )
+    }
 
     const commit = (input: {
       readonly sessionId: string
@@ -508,6 +524,28 @@ export const layer = Layer.effect(
         Effect.ensuring(authorization.remove(selection.sessionId)),
         Effect.mapError((error) => runtimeError(error)),
       )
+
+    const settleOrphanedActivities: Interface["settleOrphanedActivities"] = () =>
+      Effect.gen(function* () {
+        // Restart recovery (BUG-003), mirroring the global semantics of the legacy
+        // SessionPromptIntent.recoverActiveActivities: an activity still `active` at startup
+        // belongs to a dead run loop (the previous process died or was killed mid-turn) and would
+        // otherwise lock the session's partial unique index forever. Best-effort per row; real DB
+        // failures surface through the error channel.
+        const active = yield* database.db
+          .select({ activityId: SessionActivityTable.activity_id, sessionId: SessionActivityTable.session_id })
+          .from(SessionActivityTable)
+          .where(eq(SessionActivityTable.state, "active"))
+          .all()
+          .pipe(Effect.mapError(runtimeError))
+        yield* Effect.forEach(active, (row) =>
+          Effect.gen(function* () {
+            yield* contexts.settleActivity({ activityId: row.activityId, state: "interrupted" }).pipe(Effect.ignore)
+            yield* authorization.remove(row.sessionId).pipe(Effect.ignore)
+          }),
+        )
+        return active.length
+      })
 
     const replayIndeterminate: Interface["replayIndeterminate"] = (input) =>
       Effect.gen(function* () {
@@ -687,6 +725,7 @@ export const layer = Layer.effect(
       resolve,
       prepareProviderTurn,
       settleActivity,
+      settleOrphanedActivities,
       replayIndeterminate,
       releasedKnowledgeForActiveSession,
     })

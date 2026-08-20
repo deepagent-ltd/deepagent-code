@@ -17,6 +17,7 @@ import { AgentListProviderService } from "@deepagent-code/core/im/agent-list-pro
 import type { AgentDescriptor } from "@deepagent-code/core/im/mention-parser"
 import { RuntimeFlags } from "../../src/effect/runtime-flags"
 import { AgentHandoffConsumer } from "../../src/session/agent-handoff-consumer"
+import { HandoffAdmission } from "@deepagent-code/core/deepagent/handoff-admission"
 import { pollWithTimeout, testEffect } from "../lib/effect"
 
 // V4.0 §I — END-TO-END integration. Wires the real chain across all waves over one in-memory DB:
@@ -80,6 +81,7 @@ const makeLayer = (flags?: Partial<RuntimeFlags.Info>) => {
     Observability.layerWith({ now }),
     ApprovalQueue.layerWith({ now }),
     AgentExecution.layerWith({ now }),
+    HandoffAdmission.layerWith({ now }),
   ).pipe(Layer.provideMerge(database))
   // MultiAgentRuntime is the REAL DispatchPort the dispatcher hands routed events to.
   const runtime = Layer.unwrap(
@@ -242,6 +244,7 @@ describe("V4.1 durable handoff end-to-end", () => {
     Observability.layerWith({ now }),
     ApprovalQueue.layerWith({ now }),
     AgentExecution.layerWith({ now }),
+    HandoffAdmission.layerWith({ now }),
   ).pipe(Layer.provideMerge(database))
   let failed = false
   const handoffRuns: Array<{ readonly agent: string; readonly baseRef?: string }> = []

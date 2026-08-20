@@ -60,7 +60,10 @@ export function acquireDurableExecutorLease(input: {
         fs.mkdirSync(lockPath, { mode: 0o700 })
       } catch (error) {
         if (!hasCode(error, "EEXIST")) return
-        if (!leaseIsStale(lockPath, staleMs)) return
+        if (!leaseIsStale(lockPath, staleMs)) {
+          warnLiveStaleLeaseHolder({ directory: input.directory, lockPath, staleMs })
+          return
+        }
         if (!quarantineStaleLease(lockPath)) continue
         fs.mkdirSync(lockPath, { mode: 0o700 })
       }
@@ -124,6 +127,36 @@ export function releaseDurableExecutorLease(lease: DurableExecutorLease) {
     if (breakerPath) releaseBreaker(breakerPath)
     releaseDurableExecutorReservation(lease.directory)
   }
+}
+
+/**
+ * Alert when a lease is past its staleness window but its owner process is still alive, so the
+ * fail-closed refusal in leaseIsStale is observable instead of a silent startup stall.
+ */
+function warnLiveStaleLeaseHolder(input: { readonly directory: string; readonly lockPath: string; readonly staleMs: number }) {
+  const metadata = readMetadata(path.join(input.lockPath, "meta.json"))
+  if (!metadata || !processIsAlive(metadata.pid)) return
+  let leaseAgeMs: number | undefined
+  try {
+    leaseAgeMs = Date.now() - fs.statSync(path.join(input.lockPath, "heartbeat")).mtimeMs
+  } catch (error) {
+    if (!hasCode(error, "ENOENT")) return
+  }
+  if (leaseAgeMs === undefined) {
+    try {
+      leaseAgeMs = Date.now() - fs.statSync(input.lockPath).mtimeMs
+    } catch {
+      return
+    }
+  }
+  if (leaseAgeMs <= input.staleMs) return
+  console.warn("[durable-executor-lock] stale lease held by a live process; refusing takeover (fail-closed)", {
+    workspace: input.directory,
+    pid: metadata.pid,
+    leaseAgeMs,
+    staleMs: input.staleMs,
+    lockPath: input.lockPath,
+  })
 }
 
 function quarantineStaleLease(lockPath: string) {

@@ -14,6 +14,7 @@ import { ToolRegistry } from "@/tool/registry"
 import { Truncate } from "@/tool/truncate"
 import { and, eq } from "drizzle-orm"
 import { Session } from "@/session/session"
+import { SessionProjector } from "@deepagent-code/core/session/projector"
 import { MessageID } from "@/session/schema"
 import { TaskRecoveryTool } from "@/tool/task_recovery"
 import { testEffect } from "../lib/effect"
@@ -28,6 +29,9 @@ const it = testEffect(
     EventV2Bridge.defaultLayer,
     RuntimeFlags.layer(),
     Session.defaultLayer,
+    // QUAL-007: the core SessionProjector materializes event-created sessions; without it the
+    // TaskRunTable FK to the session row fails.
+    SessionProjector.defaultLayer,
     SessionRunState.defaultLayer,
     SessionStatus.defaultLayer,
     ToolRegistry.defaultLayer,

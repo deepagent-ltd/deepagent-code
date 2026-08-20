@@ -25,6 +25,7 @@ import { createOpencodeClient, type OpencodeClient, type ToolPart } from "@deepa
 import { FormatError, FormatUnknownError } from "../error"
 import { INTERACTIVE_INPUT_ERROR, resolveInteractiveStdin } from "./run/runtime.stdin"
 import { backgroundTask, createBackgroundSessions, createSessionTree, questionAnswers } from "./run/noninteractive"
+import { PERMISSION_MODES, permissionReplyFor, resolvePermissionMode, type PermissionMode } from "./run/permission-mode"
 import { Identifier } from "@deepagent-code/core/util/identifier"
 
 type ModelInput = Parameters<OpencodeClient["session"]["prompt"]>[0]["model"]
@@ -238,8 +239,17 @@ export const RunCommand = effectCmd({
       })
       .option("dangerously-skip-permissions", {
         type: "boolean",
-        describe: "auto-approve permissions that are not explicitly denied (dangerous!)",
+        describe: "alias for --permission-mode full-access: auto-approve permissions not explicitly denied (dangerous!)",
         default: false,
+      })
+      .option("permission-mode", {
+        type: "string",
+        choices: [...PERMISSION_MODES],
+        // No yargs default: resolvePermissionMode() defaults to "request" and
+        // must be able to tell an explicit --permission-mode apart from the
+        // absent flag when validating the --dangerously-skip-permissions alias.
+        describe:
+          "permission auto-response mode: request rejects every prompt, read-only rejects mutating tools (edit/write/patch/bash/task/external_directory) and approves the rest, full-access approves everything (dangerous!)",
       })
       .option("question-answer", {
         type: "string",
@@ -304,6 +314,13 @@ export const RunCommand = effectCmd({
 
       if (args.demo && !args.interactive) {
         die("--demo requires --interactive")
+      }
+
+      let permissionMode: PermissionMode = "request"
+      try {
+        permissionMode = resolvePermissionMode(args)
+      } catch (error) {
+        die(error instanceof Error ? error.message : String(error))
       }
 
       if (args.interactive && args.format === "json") {
@@ -845,24 +862,20 @@ export const RunCommand = effectCmd({
               const permission = event.properties
               if (!(await sessions.contains(permission.sessionID))) continue
 
-              if (args["dangerously-skip-permissions"]) {
-                await client.permission.reply({
-                  requestID: permission.id,
-                  reply: "once",
-                })
-                emit("permission", { request: permission, reply: "once" })
-              } else {
-                await client.permission.reply({
-                  requestID: permission.id,
-                  reply: "reject",
-                })
-                if (!emit("permission", { request: permission, reply: "reject" })) {
-                  UI.println(
-                    UI.Style.TEXT_WARNING_BOLD + "!",
-                    UI.Style.TEXT_NORMAL +
-                      `permission requested: ${permission.permission} (${permission.patterns.join(", ")}); auto-rejecting`,
-                  )
-                }
+              // Tri-state auto-responder (PARITY-002): request / read-only /
+              // full-access, mirroring the GUI directory approval modes.
+              const reply = permissionReplyFor(permissionMode, permission.permission)
+              await client.permission.reply({
+                requestID: permission.id,
+                reply,
+              })
+              if (!emit("permission", { request: permission, reply }) && reply === "reject") {
+                UI.println(
+                  UI.Style.TEXT_WARNING_BOLD + "!",
+                  UI.Style.TEXT_NORMAL +
+                    `permission requested: ${permission.permission} (${permission.patterns.join(", ")}); auto-rejecting` +
+                    (permissionMode === "read-only" ? " (read-only mode)" : ""),
+                )
               }
             }
 
