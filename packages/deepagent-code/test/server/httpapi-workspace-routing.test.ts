@@ -308,7 +308,8 @@ describe("HttpApi workspace routing middleware", () => {
           { contentType: "application/json" },
         ),
         HttpClient.execute,
-        Effect.timeout("2 seconds"),
+        // Wide ceiling only: under full-suite load the proxied round-trip can exceed 2s.
+        Effect.timeout("10 seconds"),
       )
 
       expect(response.status).toBe(201)

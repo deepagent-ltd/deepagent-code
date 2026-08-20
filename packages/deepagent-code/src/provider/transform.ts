@@ -4,9 +4,13 @@ import type { JSONSchema7 } from "@ai-sdk/provider"
 import type * as Provider from "./provider"
 import type * as ModelsDev from "@deepagent-code/core/models-dev"
 import { deepagentUpstreamProviderID } from "./compatibility"
+import { ToolPairing } from "@/session/llm/tool-pairing"
 import { iife } from "@/util/iife"
+import { Log } from "@deepagent-code/core/util/log"
 
 type Modality = NonNullable<ModelsDev.Model["modalities"]>["input"][number]
+
+const log = Log.create({ service: "provider-transform" })
 
 function mimeToModality(mime: string): Modality | undefined {
   if (mime.startsWith("image/")) return "image"
@@ -410,9 +414,47 @@ function unsupportedParts(msgs: ModelMessage[], model: Provider.Model): ModelMes
   })
 }
 
+// Same condition as the mistral scrub inside normalizeMessages; hoisted so
+// message() can tell the tool-pairing repairer to re-bridge tool→user gaps
+// its synthetic tool messages may introduce after the scrub has already run.
+function isMistralModel(model: Provider.Model) {
+  return (
+    model.providerID === "mistral" ||
+    model.api.id.toLowerCase().includes("mistral") ||
+    model.api.id.toLocaleLowerCase().includes("devstral")
+  )
+}
+
 export function message(msgs: ModelMessage[], model: Provider.Model, options: Record<string, unknown>) {
   msgs = unsupportedParts(msgs, model)
   msgs = normalizeMessages(msgs, model, options)
+  // UPD-001: repair tool_use/tool_result pairing (missing results, orphan
+  // results, duplicate callIDs). MUST stay after normalizeMessages: the
+  // mistral toolCallId scrub truncates IDs and can collide distinct IDs into
+  // duplicates that only exist post-scrub, so dedup has to run last. Existing
+  // scrub behavior is untouched.
+  //
+  // UPD-001 telemetry: collect WHAT the repairer changed and emit a structured
+  // record when it changed anything. The receipt's `call_ids` captures the
+  // PRE-repair projection, so a repaired wire body diverges from it; this log
+  // is the correlation that makes that divergence explainable (which call_ids
+  // were synthesized / stripped / deduped before the wire_request_hash was
+  // taken).
+  const pairingReport = ToolPairing.emptyRepairReport()
+  msgs = ToolPairing.repairToolPairing(msgs, {
+    bridgeToolUserGap: isMistralModel(model),
+    report: pairingReport,
+  })
+  if (!ToolPairing.repairReportIsEmpty(pairingReport)) {
+    log.info("tool pairing repaired the wire body (receipt call_ids record the pre-repair projection)", {
+      providerID: model.providerID,
+      modelID: model.id,
+      synthesizedResults: pairingReport.synthesizedResults,
+      strippedOrphanResults: pairingReport.strippedOrphanResults,
+      droppedDuplicates: pairingReport.droppedDuplicates,
+      bridgedToolUserGaps: pairingReport.bridgedToolUserGaps,
+    })
+  }
   if (
     (model.providerID === "anthropic" ||
       model.providerID === "google-vertex-anthropic" ||

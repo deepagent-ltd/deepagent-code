@@ -74,6 +74,7 @@ import { useSessionCommands } from "@/pages/session/use-session-commands"
 import { useSessionHashScroll } from "@/pages/session/use-session-hash-scroll"
 import { Identifier } from "@/utils/id"
 import { diffs as list } from "@/utils/diffs"
+import { messageOrderKey } from "@/utils/message-order"
 import { Persist, persisted } from "@/utils/persist"
 import { extractPromptFromParts } from "@/utils/prompt"
 import { same } from "@/utils/same"
@@ -384,6 +385,14 @@ export default function Page() {
     () => {
       const revert = revertMessageID()
       if (!revert) return userMessages()
+      // BUG-407-012 root cause B: the revert boundary is the TARGET message's time, not its ID —
+      // ID lexicographic order flips across the 6-byte ID time wrap. If the target is not in the
+      // loaded window, degrade to the legacy ID boundary instead of guessing a time.
+      const target = messages().find((m) => m.id === revert)
+      if (target) {
+        const bound = messageOrderKey(target)
+        return userMessages().filter((m) => messageOrderKey(m) < bound)
+      }
       return userMessages().filter((m) => m.id < revert)
     },
     emptyUserMessages,
@@ -391,6 +400,8 @@ export default function Page() {
       equals: same,
     },
   )
+  // The timeline arrays are maintained in (time, id) chronological order, so the last element is
+  // the latest message even when its wrapped `msg_00...` ID sorts before older `msg_ff...` IDs.
   const lastUserMessage = createMemo(() => visibleUserMessages().at(-1))
 
   createEffect(() => {
@@ -718,9 +729,14 @@ export default function Page() {
 
   createEffect(
     on(
-      () => visibleUserMessages().at(-1)?.id,
-      (lastId, prevLastId) => {
-        if (lastId && prevLastId && lastId > prevLastId) {
+      // BUG-407-012 root cause B: compare (time, id) order keys, not raw IDs — a wrapped
+      // `msg_00...` newest message is lexicographically smaller than the previous `msg_ff...` one.
+      () => {
+        const last = visibleUserMessages().at(-1)
+        return last ? messageOrderKey(last) : undefined
+      },
+      (lastOrder, prevOrder) => {
+        if (lastOrder && prevOrder && lastOrder > prevOrder) {
           setStore("messageId", undefined)
         }
       },

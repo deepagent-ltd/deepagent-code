@@ -10,6 +10,21 @@ describe("LMNEvents", () => {
     expect(LMNEvents.GOAL_COMPLETED).toBe("goal.completed")
     expect(LMNEvents.PANEL_VERDICT).toBe("panel.verdict")
     expect(LMNEvents.IM_MESSAGE_CREATED).toBe("im.message.created") // §B1 double-write
+    expect(LMNEvents.PACK_CHANGED).toBe("pack.changed") // FEAT-003 pack pin/unpin eventing
+    expect(LMNEvents.WIKI_PAGE_CHANGED).toBe("wiki.page.changed") // FEAT-006 wiki/knowledge change eventing
+  })
+
+  test("FEAT-003 pack.changed is a pure observation — NOT an approval-queue / archive trigger", () => {
+    expect(LMNEvents.isApprovalQueueCandidate(LMNEvents.PACK_CHANGED)).toBe(false)
+    expect(LMNEvents.isArchiveTrigger(LMNEvents.PACK_CHANGED)).toBe(false)
+  })
+
+  test("FEAT-006 wiki.page.changed is a pure observation — NOT an approval-queue / archive trigger", () => {
+    // The archive-trigger exclusion is the FEAT-006 SELF-LOOP GUARD: the event-driven archiver
+    // consumes only session.completed/goal.completed, so its own archive writes' wiki.page.changed
+    // can never re-trigger archival (no archiver→event→archiver cascade).
+    expect(LMNEvents.isApprovalQueueCandidate(LMNEvents.WIKI_PAGE_CHANGED)).toBe(false)
+    expect(LMNEvents.isArchiveTrigger(LMNEvents.WIKI_PAGE_CHANGED)).toBe(false)
   })
 
   test("§B im.message.created is NOT an approval-queue / archive trigger", () => {

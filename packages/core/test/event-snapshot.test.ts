@@ -535,4 +535,76 @@ describe("EventV2 canonical projection snapshots", () => {
       expect(yield* db.select().from(EventSnapshotChunkTable).all()).toEqual([])
     }),
   )
+
+  // RISK-003 ⑤ (BUG-407-010 §9.2/§11.4): the importable aggregate snapshot body. The bundle is
+  // the portable evidence form of the same authority the row/chunk wire transfer carries.
+  it.effect("exports an aggregate snapshot as an importable bundle and imports it into an empty database", () =>
+    Effect.gen(function* () {
+      const source = yield* EventV2.Service
+      const sourceDb = (yield* Database.Service).db
+      const bundleSessionID = SessionV2.ID.make("ses_snapshot_bundle_roundtrip")
+      yield* sourceDb.insert(ProjectTable).values({ id: projectID, worktree: AbsolutePath.make("/project"), sandboxes: [] }).run().pipe(Effect.orDie)
+      yield* source.publish(SessionV1.Event.Created, {
+        sessionID: bundleSessionID,
+        info: SessionV1.SessionInfo.make({
+          id: bundleSessionID, slug: "bundle", version: "test", projectID, directory: "/project", title: "bundle",
+          cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, time: { created: 1, updated: 1 },
+        }),
+      })
+      yield* source.publish(SessionV1.Event.MessageUpdated, {
+        sessionID: bundleSessionID,
+        info: {
+          id: SessionV1.MessageID.make("msg_bundle_one"),
+          sessionID: bundleSessionID,
+          role: "user" as const,
+          time: { created: 1 },
+          agent: "build",
+          model: { providerID: ProviderV2.ID.make("test"), modelID: ModelV2.ID.make("test") },
+          system: "bundled",
+        },
+      })
+      const snapshot = yield* source.checkpoint({
+        aggregateID: bundleSessionID,
+        throughSeq: EventV2.Cursor.make(1),
+        expectedLatest: EventV2.Cursor.make(1),
+        codec: "session-projection",
+        schemaVersion: 1,
+      })
+
+      const bundle = yield* source.exportSnapshotBundle!({ snapshotID: snapshot.snapshotID })
+      const parsed = JSON.parse(bundle) as Record<string, unknown>
+      expect(parsed.format).toBe(EventV2.SNAPSHOT_BUNDLE_FORMAT)
+      expect(typeof parsed.bundleHash).toBe("string")
+      expect((parsed.rows as unknown[]).length).toBeGreaterThan(0)
+
+      const tamperedChunk = JSON.parse(bundle) as { chunks: Record<string, string[]> }
+      const tamperedRowHash = Object.keys(tamperedChunk.chunks)[0]!
+      tamperedChunk.chunks[tamperedRowHash] = [...tamperedChunk.chunks[tamperedRowHash]!.slice(0, -1), Buffer.from("tampered").toString("base64")]
+      const tampered = JSON.stringify(tamperedChunk)
+
+      const tmp = yield* Effect.acquireRelease(Effect.promise(() => tmpdir()), (value) => Effect.promise(() => value[Symbol.asyncDispose]()))
+      const targetDatabase = Database.layerFromPath(path.join(tmp.path, "bundle-target.sqlite"))
+      const targetEvents = EventV2.layer.pipe(Layer.provide(targetDatabase))
+      const targetProjector = SessionProjector.layer.pipe(Layer.provide(targetEvents), Layer.provide(targetDatabase))
+      yield* Effect.gen(function* () {
+        const target = yield* EventV2.Service
+        const targetDb = (yield* Database.Service).db
+        yield* targetDb.insert(ProjectTable).values({ id: projectID, worktree: AbsolutePath.make("/project"), sandboxes: [] }).run().pipe(Effect.orDie)
+        const invalid = yield* target.importSnapshotBundle!("not-json").pipe(Effect.catchDefect(Effect.succeed))
+        expect(invalid).toBeInstanceOf(EventV2.InvalidSyncEventError)
+        const corrupted = yield* target.importSnapshotBundle!(tampered).pipe(Effect.catchDefect(Effect.succeed))
+        expect(corrupted).toBeInstanceOf(EventV2.InvalidSyncEventError)
+        expect(yield* targetDb.select().from(EventSnapshotRowTable).all()).toEqual([])
+
+        const imported = yield* target.importSnapshotBundle!(bundle)
+        expect(imported).toMatchObject({ snapshotID: snapshot.snapshotID, aggregateID: bundleSessionID, throughSeq: 1 })
+        expect(yield* targetDb.select().from(SessionTable).where(eq(SessionTable.id, bundleSessionID)).get().pipe(Effect.orDie)).toBeDefined()
+        expect(yield* targetDb.select().from(MessageTable).where(eq(MessageTable.id, SessionV1.MessageID.make("msg_bundle_one"))).get().pipe(Effect.orDie)).toBeDefined()
+        expect(yield* targetDb.select().from(EventSequenceTable).where(eq(EventSequenceTable.aggregate_id, bundleSessionID)).get().pipe(Effect.orDie))
+          .toMatchObject({ seq: 1, retention_floor_seq: 1, snapshot_id: snapshot.snapshotID })
+        yield* target.importSnapshotBundle!(bundle)
+        expect(yield* targetDb.select().from(EventSnapshotRowTable).where(eq(EventSnapshotRowTable.aggregate_id, bundleSessionID)).all()).not.toHaveLength(0)
+      }).pipe(Effect.provide(Layer.fresh(Layer.mergeAll(targetDatabase, targetEvents, targetProjector))))
+    }),
+  )
 })

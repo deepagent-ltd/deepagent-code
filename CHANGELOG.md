@@ -1,5 +1,16 @@
 # Changelog
 
+## Desktop 1.4.7 / DeepAgent Core V4.0.8 - Release hardening and data governance
+
+- Recover the two incident sessions through the formal abandoned path with a zero-provider-invocation oracle and fork smoke on production-snapshot copies; fence pre-successor binaries via a protocol-3 database capability so older builds refuse to open databases carrying successor ownership.
+- Fix the desktop startup crash in the session_intent rebuild migration on SQLite 3.51 (node runtime) and retry transient schema-lock failures in the migration runner.
+- Stop the infinite compaction-continuation recovery loop on startup: recovery failures now land fail-closed (pending → failed) through the widened continuation state machine, serialized per session, with warning-level telemetry.
+- Add durable turn stage evidence and a pre-dispatch watchdog for hung activities; order app timelines by (time, id) so wrapped opaque IDs never reorder messages.
+- Persist encrypted remote-compaction content per session and commit remote compaction runs with an opaque blob pointer instead of a text summary, exempt from information-hole validation.
+- Land RISK-003 data governance: runtime diff-artifact capture (staged behind a flag), a legacy event canonicalizer daemon, portable aggregate snapshot bundles, and a gate-ordered maintenance drill that reclaimed hundreds of MiB on production-snapshot copies (33,168 events deleted, VACUUM 5075 → 4311 MiB).
+- Add the release-evidence manifest infrastructure and archive the 2026-08-19/20 release gates; lock REL-002 wire-budget and discovery-budget regressions; retire the legacy activity authority in favor of the durable path.
+- Align Desktop 1.4.7, DeepAgent Core V4.0.8, and GitHub Action `github-v1.4.7` across package metadata, updater tags, and workflow references.
+
 ## Desktop 1.4.5 / DeepAgent Core V4.0.6 - Bounded planning and runtime hardening
 
 - Make compaction durable through explicit run/attempt lifecycle records and Prompt Epoch authority, with bounded text-only summary retries and typed terminal failures.

@@ -4,7 +4,7 @@ import { ProviderIcon } from "@deepagent-code/ui/provider-icon"
 import { Tag } from "@deepagent-code/ui/tag"
 import { showToast } from "@/utils/toast"
 import { popularProviders, useProviders } from "@/hooks/use-providers"
-import { createMemo, type Component, For, Show } from "solid-js"
+import { createMemo, createResource, type Component, For, Show } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useLanguage } from "@/context/language"
 import { useServerSDK } from "@/context/server-sdk"
@@ -12,6 +12,7 @@ import { useServerSync } from "@/context/server-sync"
 import { DialogConnectProvider } from "./dialog-connect-provider"
 import { DialogSelectProvider } from "./dialog-select-provider"
 import { DialogCustomProvider } from "./dialog-custom-provider"
+import { DialogConsoleAccount } from "./dialog-console-account"
 import { SettingsList } from "./settings-list"
 import { SettingsServerPicker, SettingsServerScope } from "./settings-server-picker"
 import { canRefreshProviderModels } from "./provider-model-refresh"
@@ -49,6 +50,12 @@ const SettingsProvidersContent: Component = () => {
   const serverSync = useServerSync()
   const providers = useProviders()
   const [refreshing, setRefreshing] = createStore<Record<string, boolean>>({})
+
+  // PARITY-004 / GUI 批 — Console 账号:消费 /experimental/console,显示活跃组织与可切换数量。
+  const [consoleState] = createResource(async () => {
+    const result = await serverSDK.client.experimental.console.get().catch(() => undefined)
+    return result?.data
+  })
 
   const isConfigCustom = (providerID: string) => {
     const provider = serverSync.data.config.provider?.[providerID]
@@ -180,6 +187,39 @@ const SettingsProvidersContent: Component = () => {
       </div>
 
       <div class="flex flex-col gap-8 max-w-[720px]">
+        <Show
+          when={(consoleState()?.switchableOrgCount ?? 0) > 0 || (consoleState()?.consoleManagedProviders.length ?? 0) > 0}
+        >
+          <div class="flex flex-col gap-1" data-component="console-account-section">
+            <h3 class="text-14-medium text-text-strong pb-2">
+              {language.t("settings.providers.section.consoleAccount")}
+            </h3>
+            <SettingsList>
+              <div class="flex flex-wrap items-center justify-between gap-4 min-h-16 py-3 border-b border-border-weak-base last:border-none">
+                <div class="flex flex-col min-w-0">
+                  <span class="text-14-medium text-text-strong truncate">
+                    {consoleState()?.activeOrgName ?? language.t("settings.providers.console.noOrg")}
+                  </span>
+                  <span class="text-12-regular text-text-weak">
+                    {language.t("settings.providers.console.managedCount", {
+                      count: consoleState()?.consoleManagedProviders.length ?? 0,
+                    })}
+                  </span>
+                </div>
+                <Button
+                  size="large"
+                  variant="ghost"
+                  onClick={() => {
+                    dialog.show(() => <DialogConsoleAccount />)
+                  }}
+                >
+                  {language.t("settings.providers.console.switchOrg")}
+                </Button>
+              </div>
+            </SettingsList>
+          </div>
+        </Show>
+
         <div class="flex flex-col gap-1" data-component="connected-providers-section">
           <h3 class="text-14-medium text-text-strong pb-2">{language.t("settings.providers.section.connected")}</h3>
           <SettingsList>

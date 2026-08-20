@@ -1,7 +1,7 @@
 import { describe, expect } from "bun:test"
 import { Effect, Fiber, Layer, Random, Ref } from "effect"
 import * as TestClock from "effect/testing/TestClock"
-import { Headers, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
+import { Headers, HttpClient, HttpClientError, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { LLM, LLMError } from "../src"
 import { LLMClient, RequestExecutor } from "../src/route"
 import * as OpenAIChat from "../src/protocols/openai-chat"
@@ -58,6 +58,54 @@ const countedResponsesLayer = (attempts: Ref.Ref<number>, responses: ReadonlyArr
       ),
     ),
   )
+
+type ScriptedOutcome =
+  | { readonly kind: "response"; readonly response: Response }
+  | { readonly kind: "transport"; readonly cause: unknown }
+
+// Scripts a mix of successful responses and raw transport failures (the shape
+// FetchHttpClient produces: HttpClientError wrapping a TransportError whose
+// `cause` carries the platform error code) so tests can exercise pre- and
+// post-dispatch classification without real network access.
+const scriptedOutcomesLayer = (attempts: Ref.Ref<number>, outcomes: ReadonlyArray<ScriptedOutcome>) =>
+  RequestExecutor.layer.pipe(
+    Layer.provide(
+      Layer.unwrap(
+        Effect.gen(function* () {
+          const cursor = yield* Ref.make(0)
+          return Layer.succeed(
+            HttpClient.HttpClient,
+            HttpClient.make((request) =>
+              Effect.gen(function* () {
+                yield* Ref.update(attempts, (value) => value + 1)
+                const index = yield* Ref.getAndUpdate(cursor, (value) => value + 1)
+                const outcome = outcomes[index] ?? outcomes[outcomes.length - 1]
+                if (!outcome) return yield* Effect.die(new Error("no scripted outcome"))
+                if (outcome.kind === "transport")
+                  return yield* Effect.fail(
+                    new HttpClientError.HttpClientError({
+                      reason: new HttpClientError.TransportError({ request, cause: outcome.cause }),
+                    }),
+                  )
+                return HttpClientResponse.fromWeb(request, outcome.response)
+              }),
+            ),
+          )
+        }),
+      ),
+    ),
+  )
+
+// TCP connect refused: proves the request never reached the provider.
+const connectRefusedCause = new TypeError("fetch failed", {
+  cause: Object.assign(new Error("connect ECONNREFUSED 10.0.0.1:443"), { code: "ECONNREFUSED" }),
+})
+// Mid-exchange reset: the request may already have been delivered.
+const connectionResetCause = new TypeError("fetch failed", {
+  cause: Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" }),
+})
+
+const busy503 = () => new Response("busy", { status: 503, headers: { "retry-after-ms": "0" } })
 
 const randomMidpoint = {
   nextDoubleUnsafe: () => 0.5,
@@ -491,6 +539,110 @@ describe("RequestExecutor", () => {
         ),
       )
     }).pipe(Effect.provideService(Random.Random, randomMidpoint)),
+  )
+
+  it.effect("retries pre-dispatch transport failures up to the transport budget", () =>
+    Effect.gen(function* () {
+      const attempts = yield* Ref.make(0)
+      return yield* Effect.gen(function* () {
+        const executor = yield* RequestExecutor.Service
+        const fiber = yield* executor.execute(request).pipe(Effect.flip, Effect.forkChild)
+
+        yield* Effect.yieldNow
+        yield* TestClock.adjust(600_000)
+        const error = yield* Fiber.join(fiber)
+
+        expectLLMError(error)
+        expect(error.reason).toMatchObject({ _tag: "Transport", phase: "pre-dispatch" })
+        expect(error.retryable).toBe(true)
+        // 1 initial attempt + 2 transport-budget retries.
+        expect(yield* Ref.get(attempts)).toBe(3)
+      }).pipe(
+        Effect.provide(scriptedOutcomesLayer(attempts, [{ kind: "transport", cause: connectRefusedCause }])),
+      )
+    }),
+  )
+
+  it.effect("does not retry post-dispatch transport failures", () =>
+    Effect.gen(function* () {
+      const attempts = yield* Ref.make(0)
+      return yield* Effect.gen(function* () {
+        const executor = yield* RequestExecutor.Service
+        const error = yield* executor.execute(request).pipe(Effect.flip)
+
+        expectLLMError(error)
+        expect(error.reason).toMatchObject({ _tag: "Transport", phase: "post-dispatch" })
+        expect(error.retryable).toBe(false)
+        expect(yield* Ref.get(attempts)).toBe(1)
+      }).pipe(
+        Effect.provide(scriptedOutcomesLayer(attempts, [{ kind: "transport", cause: connectionResetCause }])),
+      )
+    }),
+  )
+
+  it.effect("classifies ambiguous transport failures as post-dispatch", () =>
+    Effect.gen(function* () {
+      const attempts = yield* Ref.make(0)
+      return yield* Effect.gen(function* () {
+        const executor = yield* RequestExecutor.Service
+        const error = yield* executor.execute(request).pipe(Effect.flip)
+
+        expectLLMError(error)
+        expect(error.reason).toMatchObject({ _tag: "Transport", phase: "post-dispatch" })
+        expect(error.retryable).toBe(false)
+        expect(yield* Ref.get(attempts)).toBe(1)
+      }).pipe(
+        Effect.provide(
+          scriptedOutcomesLayer(attempts, [{ kind: "transport", cause: new TypeError("terminated") }]),
+        ),
+      )
+    }),
+  )
+
+  it.effect("tracks transport and status retry budgets independently", () =>
+    Effect.gen(function* () {
+      const attempts = yield* Ref.make(0)
+      return yield* Effect.gen(function* () {
+        const executor = yield* RequestExecutor.Service
+        const fiber = yield* executor.execute(request).pipe(Effect.forkChild)
+
+        yield* Effect.yieldNow
+        yield* TestClock.adjust(600_000)
+        const response = yield* Fiber.join(fiber)
+
+        // 503 -> ECONNREFUSED -> 503 -> 200: two status retries and one
+        // transport retry succeed because the budgets count independently.
+        // A shared budget of 2 would have stopped after the third attempt.
+        expect(response.status).toBe(200)
+        expect(yield* Ref.get(attempts)).toBe(4)
+      }).pipe(
+        Effect.provide(
+          scriptedOutcomesLayer(attempts, [
+            { kind: "response", response: busy503() },
+            { kind: "transport", cause: connectRefusedCause },
+            { kind: "response", response: busy503() },
+            { kind: "response", response: new Response("ok", { status: 200 }) },
+          ]),
+        ),
+      )
+    }),
+  )
+
+  it.effect("umbrella retry limit zero disables pre-dispatch transport retries", () =>
+    Effect.gen(function* () {
+      const attempts = yield* Ref.make(0)
+      return yield* Effect.gen(function* () {
+        const executor = yield* RequestExecutor.Service
+        const error = yield* executor.execute(request).pipe(Effect.flip)
+
+        expectLLMError(error)
+        expect(error.reason).toMatchObject({ _tag: "Transport", phase: "pre-dispatch" })
+        expect(yield* Ref.get(attempts)).toBe(1)
+      }).pipe(
+        Effect.provideService(RequestExecutor.CurrentRetryLimit, 0),
+        Effect.provide(scriptedOutcomesLayer(attempts, [{ kind: "transport", cause: connectRefusedCause }])),
+      )
+    }),
   )
 
   it.effect("does not retry after a successful response reaches stream parsing", () =>

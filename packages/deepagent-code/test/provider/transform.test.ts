@@ -1224,6 +1224,17 @@ describe("ProviderTransform.message - DeepSeek reasoning content", () => {
           },
         ],
       },
+      {
+        role: "tool",
+        content: [
+          {
+            type: "tool-result",
+            toolCallId: "test",
+            toolName: "bash",
+            output: { type: "text", value: "hello" },
+          },
+        ],
+      },
     ] as any[]
 
     const result = ProviderTransform.message(
@@ -1265,7 +1276,7 @@ describe("ProviderTransform.message - DeepSeek reasoning content", () => {
       {},
     )
 
-    expect(result).toHaveLength(1)
+    expect(result).toHaveLength(2)
     expect(result[0].content).toEqual([
       {
         type: "tool-call",
@@ -1388,6 +1399,24 @@ describe("ProviderTransform.message - surrogate sanitization", () => {
             input: { filePath: ".deepagent-code/tool/emoji.ts" },
           },
           {
+            type: "tool-call",
+            toolCallId: "call-2",
+            toolName: "Read",
+            input: { filePath: ".deepagent-code/tool/emoji.ts" },
+          },
+          {
+            type: "tool-call",
+            toolCallId: "call-3",
+            toolName: "Read",
+            input: { filePath: ".deepagent-code/tool/emoji.ts" },
+          },
+          {
+            type: "tool-call",
+            toolCallId: "call-4",
+            toolName: "Read",
+            input: { filePath: ".deepagent-code/tool/emoji.ts" },
+          },
+          {
             type: "tool-result",
             toolCallId: "call-2",
             toolName: "Read",
@@ -1408,23 +1437,40 @@ describe("ProviderTransform.message - surrogate sanitization", () => {
         ],
       },
       {
+        role: "assistant",
+        content: [
+          {
+            type: "tool-call",
+            toolCallId: "call-5",
+            toolName: "Read",
+            input: { filePath: ".deepagent-code/tool/emoji.ts" },
+          },
+          {
+            type: "tool-call",
+            toolCallId: "call-6",
+            toolName: "Read",
+            input: { filePath: ".deepagent-code/tool/emoji.ts" },
+          },
+        ],
+      },
+      {
         role: "tool",
         content: [
           {
             type: "tool-result",
-            toolCallId: "call-5",
+            toolCallId: "call-1",
             toolName: "Read",
             output: { type: "text", value: text("tool text") },
           },
           {
             type: "tool-result",
-            toolCallId: "call-6",
+            toolCallId: "call-5",
             toolName: "Read",
             output: { type: "error-text", value: text("tool error") },
           },
           {
             type: "tool-result",
-            toolCallId: "call-7",
+            toolCallId: "call-6",
             toolName: "Read",
             output: { type: "content", value: [{ type: "text", text: text("tool content") }] },
           },
@@ -1440,12 +1486,12 @@ describe("ProviderTransform.message - surrogate sanitization", () => {
     expect(result[3].content).toBe(expected("assistant string"))
     expect(result[4].content[0].text).toBe(expected("assistant text"))
     expect(result[4].content[1].text).toBe(expected("assistant reasoning"))
-    expect(result[4].content[3].output.value).toBe(expected("assistant tool text"))
-    expect(result[4].content[4].output.value).toBe(expected("assistant tool error"))
-    expect(result[4].content[5].output.value[0].text).toBe(expected("assistant tool content"))
-    expect(result[5].content[0].output.value).toBe(expected("tool text"))
-    expect(result[5].content[1].output.value).toBe(expected("tool error"))
-    expect(result[5].content[2].output.value[0].text).toBe(expected("tool content"))
+    expect(result[4].content[6].output.value).toBe(expected("assistant tool text"))
+    expect(result[4].content[7].output.value).toBe(expected("assistant tool error"))
+    expect(result[4].content[8].output.value[0].text).toBe(expected("assistant tool content"))
+    expect(result[6].content[0].output.value).toBe(expected("tool text"))
+    expect(result[6].content[1].output.value).toBe(expected("tool error"))
+    expect(result[6].content[2].output.value[0].text).toBe(expected("tool content"))
     expect(result[2].content[1]).toEqual({ type: "image", image: "data:image/png;base64,abcd" })
   })
 })
@@ -1667,11 +1713,17 @@ describe("ProviderTransform.message - anthropic empty content filtering", () => 
           { type: "tool-call", toolCallId: "123", toolName: "bash", input: { command: "ls" } },
         ],
       },
+      {
+        role: "tool",
+        content: [
+          { type: "tool-result", toolCallId: "123", toolName: "bash", output: { type: "text", value: "ok" } },
+        ],
+      },
     ] as any[]
 
     const result = ProviderTransform.message(msgs, anthropicModel, {})
 
-    expect(result).toHaveLength(1)
+    expect(result).toHaveLength(2)
     expect(result[0].content).toHaveLength(1)
     expect(result[0].content[0]).toEqual({
       type: "tool-call",
@@ -1769,11 +1821,18 @@ describe("ProviderTransform.message - anthropic empty content filtering", () => 
           { type: "tool-call", toolCallId: "toolu_2", toolName: "glob", input: { pattern: "**/*.pdf" } },
         ],
       },
+      {
+        role: "tool",
+        content: [
+          { type: "tool-result", toolCallId: "toolu_1", toolName: "read", output: { type: "text", value: "ok" } },
+          { type: "tool-result", toolCallId: "toolu_2", toolName: "glob", output: { type: "text", value: "ok" } },
+        ],
+      },
     ] as any[]
 
     const result = ProviderTransform.message(msgs, anthropicModel, {}) as any[]
 
-    expect(result).toHaveLength(1)
+    expect(result).toHaveLength(2)
     expect(result[0].content).toMatchObject([
       { type: "text", text: "I checked your home directory and looked for PDF files." },
       { type: "tool-call", toolCallId: "toolu_1", toolName: "read", input: { filePath: "/root" } },
