@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { SessionProviderOwner } from "@deepagent-code/core/context-federation/provider-owner"
 import { Database } from "@deepagent-code/core/database/database"
+import { sql } from "drizzle-orm"
 import { Cause, Effect, Exit, Layer, Option, Ref } from "effect"
 import { ContextFederationProviderOwnerRuntime } from "../../src/context-federation/provider-owner-runtime"
 
@@ -234,6 +235,18 @@ describe("RISK-004 drill: provider owner lease drift against the real store", ()
         expect(recovered).toBe(1)
         expect(yield* Ref.get(owner)).toEqual(rotated)
         expect(yield* Ref.get(healthy)).toBe(true)
+
+        // BUG-407-009 fence: successor registration atomically installs the protocol-3 capability
+        // row, so a pre-successor binary refuses to open this database (its startup recovery would
+        // re-quarantine the successor chain) instead of failing closed on the next open.
+        const fence = yield* (yield* Database.Service).db.get<{
+          minimum_reader_protocol: number
+          minimum_writer_protocol: number
+        }>(sql`
+          SELECT minimum_reader_protocol, minimum_writer_protocol FROM database_capability
+          WHERE capability = 'provider_owner_successor_v1'
+        `)
+        expect(fence).toEqual({ minimum_reader_protocol: 3, minimum_writer_protocol: 3 })
       }).pipe(
         Effect.provide(SessionProviderOwner.layer.pipe(Layer.provide(database))),
         Effect.provide(database),

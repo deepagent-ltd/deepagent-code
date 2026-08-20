@@ -59,7 +59,9 @@ function rotate<R>(input: TickInput<R>) {
     const current = yield* Ref.get(input.owner)
     const generation = current.generation + 1
     const ownerToken = nextOwnerToken({ ownerBase: input.ownerBase, generation })
-    const registered = yield* input.owners.register({ ownerToken, leaseMs: input.leaseMs }).pipe(Effect.exit)
+    const registered = yield* input.owners
+      .register({ ownerToken, leaseMs: input.leaseMs, successor: true })
+      .pipe(Effect.exit)
     if (Exit.isFailure(registered)) {
       yield* Effect.logError(
         `${input.label} owner generation rotation failed; retrying next tick: ${Cause.pretty(registered.cause)}`,
