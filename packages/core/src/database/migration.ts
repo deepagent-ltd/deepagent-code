@@ -1,13 +1,33 @@
 export * as DatabaseMigration from "./migration"
 
 import { sql } from "drizzle-orm"
-import { Effect, Semaphore } from "effect"
+import { Cause, Data, Effect, Exit, Schedule, Semaphore } from "effect"
 import type { EffectDrizzleSqlite } from "@deepagent-code/effect-drizzle-sqlite"
 import { migrations } from "./migration.gen"
 
 type Database = EffectDrizzleSqlite.EffectSQLiteDatabase
 type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0]
 const lock = Semaphore.makeUnsafe(1)
+
+// A migration DDL can fail transiently when another connection (a second desktop instance, a
+// lingering daemon, or an in-process worker) holds an active statement against the old schema:
+// SQLite returns SQLITE_LOCKED immediately and busy_timeout does not apply to schema locks.
+// The migration transaction rolls back cleanly, so retrying once the competing connection
+// releases is safe; without the retry a desktop startup dies on a transient race.
+class TransientLock extends Data.TaggedError("DatabaseMigration.TransientLock")<{ readonly detail: string }> {}
+
+const isLockError = (value: unknown): boolean => {
+  if (typeof value !== "object" || value === null) return false
+  const record = value as { code?: string; message?: string; cause?: unknown }
+  if (record.code === "SQLITE_LOCKED" || record.code === "SQLITE_BUSY") return true
+  if (typeof record.message === "string" && /(database is locked|database table is locked|database is busy)/i.test(record.message))
+    return true
+  return record.cause !== undefined ? isLockError(record.cause) : false
+}
+
+const isTransientLockCause = (cause: Cause.Cause<unknown>): boolean => cause.reasons.some(isLockError)
+
+const transientLockRetry = Schedule.spaced("2 seconds").pipe(Schedule.take(30))
 const historicalAliases = new Map([
   ["20260530232709_lovely_romulus", "20260511173437_session-metadata"],
   ["20260803000000_subagent_control_plane_l1", "20260803000001_subagent_control_plane_l1"],
@@ -113,18 +133,39 @@ function applyMigrations(db: Database, input: Migration[], requireLinearHistory:
 
     for (const migration of input) {
       if (completed.has(migration.id)) continue
-      yield* db.transaction((tx) =>
-        Effect.gen(function* () {
-          if (!process.env.DEEPAGENT_CODE_SKIP_MIGRATIONS) {
-            if (reconcileMergedHistory && migration.id === "20260812120000_legacy_provider_recovery")
-              yield* reconcileLegacyProviderRecovery(tx)
-            else yield* migration.up(tx)
-          }
-          yield* tx.run(
-            sql`INSERT INTO ${sql.identifier("migration")} (id, time_completed) VALUES (${migration.id}, ${Date.now()})`,
-          )
-        }),
-      )
+      yield* db
+        .transaction((tx) =>
+          Effect.gen(function* () {
+            if (!process.env.DEEPAGENT_CODE_SKIP_MIGRATIONS) {
+              if (reconcileMergedHistory && migration.id === "20260812120000_legacy_provider_recovery")
+                yield* reconcileLegacyProviderRecovery(tx)
+              else yield* migration.up(tx)
+            }
+            yield* tx.run(
+              sql`INSERT INTO ${sql.identifier("migration")} (id, time_completed) VALUES (${migration.id}, ${Date.now()})`,
+            )
+          }),
+        )
+        .pipe(
+          Effect.exit,
+          Effect.flatMap((exit) => {
+            if (Exit.isSuccess(exit)) return Effect.succeed(undefined)
+            if (isTransientLockCause(exit.cause)) return Effect.fail(new TransientLock({ detail: migration.id }))
+            return Effect.failCause(exit.cause)
+          }),
+          Effect.retry({ while: (error) => error instanceof TransientLock, schedule: transientLockRetry }),
+          Effect.exit,
+          Effect.flatMap((exit) => {
+            if (Exit.isSuccess(exit)) return Effect.succeed(undefined)
+            if (exit.cause.reasons.some((reason) => reason instanceof TransientLock))
+              return Effect.die(
+                new Error(
+                  `database migration ${migration.id} was blocked by another connection for 60s; close other DeepAgent Code windows and restart`,
+                ),
+              )
+            return Effect.failCause(exit.cause)
+          }),
+        )
     }
   })
 }

@@ -148,7 +148,16 @@ export default {
         SELECT ${columnNames} FROM session_intent
       `)
       yield* tx.run(`DROP TABLE session_intent`)
+      // SQLite >= 3.25 rewrites referencing trigger/view bodies during RENAME when foreign_keys
+      // is ON; triggers on OTHER tables (e.g. session_tool_request_resolution_validate_insert)
+      // reference the still-dropped legacy chain at this point and make the rewrite fail
+      // ("no such table: main.session_activity_progress"). The rename target is the same name as
+      // the original table, so no reference rewrite is needed — use the legacy behavior for this
+      // single statement. The desktop runtime (node:sqlite, SQLite 3.51) hits this; bun:sqlite's
+      // older engine does not, which is why tests and bun-driven drills were green.
+      yield* tx.run(`PRAGMA legacy_alter_table = ON`)
       yield* tx.run(`ALTER TABLE session_intent_rebuilt RENAME TO session_intent`)
+      yield* tx.run(`PRAGMA legacy_alter_table = OFF`)
       for (const index of intentIndexes) yield* tx.run(index.sql)
       if (hasExecutionColumns) {
         yield* tx.run(`

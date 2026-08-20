@@ -294,6 +294,9 @@ describe("session intent confirmation state migration", () => {
         }
 
         yield* DatabaseMigration.applyOnly(db, migrations.slice(migrationIndex, migrationIndex + 1))
+        // Apply the migrations registered after the intent rebuild too, so the full-history
+        // re-apply below asserts a true no-op against the current registry.
+        yield* DatabaseMigration.applyOnly(db, migrations.slice(migrationIndex + 1))
 
         const widenedCheck = yield* db.get<{ sql: string }>(
           `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'session_intent'`,
