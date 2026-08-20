@@ -44,8 +44,77 @@ function pagerCmd(): string[] {
 export const SessionCommand = cmd({
   command: "session",
   describe: "manage sessions",
-  builder: (yargs: Argv) => yargs.command(SessionListCommand).command(SessionDeleteCommand).demandCommand(),
+  builder: (yargs: Argv) =>
+    yargs
+      .command(SessionListCommand)
+      .command(SessionDeleteCommand)
+      .command(SessionRenameCommand)
+      .command(SessionArchiveCommand)
+      .demandCommand(),
   async handler() {},
+})
+
+// PARITY-004 long-tail: `session rename` / `session archive` parity with the
+// GUI session context menu. Same service calls as the httpapi session update
+// handler (setTitle / setArchived) — the CLI owns the local instance, so it
+// drives Session.Service directly like `session list` / `session delete`.
+export const SessionRenameCommand = effectCmd({
+  command: "rename <sessionID> <title>",
+  describe: "rename a session",
+  builder: (yargs) =>
+    yargs
+      .positional("sessionID", {
+        describe: "session ID to rename",
+        type: "string",
+        demandOption: true,
+      })
+      .positional("title", {
+        describe: "new title for the session",
+        type: "string",
+        demandOption: true,
+      }),
+  handler: Effect.fn("Cli.session.rename")(function* (args) {
+    const svc = yield* Session.Service
+    const sessionID = SessionID.make(args.sessionID)
+    yield* svc
+      .get(sessionID)
+      .pipe(Effect.catchIf(NotFoundError.isInstance, () => fail(`Session not found: ${args.sessionID}`)))
+    yield* svc.setTitle({ sessionID, title: args.title })
+    UI.println(UI.Style.TEXT_SUCCESS_BOLD + `Session ${args.sessionID} renamed to "${args.title}"` + UI.Style.TEXT_NORMAL)
+  }),
+})
+
+export const SessionArchiveCommand = effectCmd({
+  command: "archive <sessionID>",
+  describe: "archive a session (or restore it with --undo)",
+  builder: (yargs) =>
+    yargs
+      .positional("sessionID", {
+        describe: "session ID to archive",
+        type: "string",
+        demandOption: true,
+      })
+      .option("undo", {
+        describe: "restore an archived session",
+        type: "boolean",
+        default: false,
+      }),
+  handler: Effect.fn("Cli.session.archive")(function* (args) {
+    const svc = yield* Session.Service
+    const sessionID = SessionID.make(args.sessionID)
+    const session = yield* svc
+      .get(sessionID)
+      .pipe(Effect.catchIf(NotFoundError.isInstance, () => fail(`Session not found: ${args.sessionID}`)))
+    if (args.undo && !session.time.archived) {
+      return yield* fail(`Session ${args.sessionID} is not archived`)
+    }
+    yield* svc.setArchived({ sessionID, time: args.undo ? null : Date.now() })
+    UI.println(
+      UI.Style.TEXT_SUCCESS_BOLD +
+        (args.undo ? `Session ${args.sessionID} restored` : `Session ${args.sessionID} archived`) +
+        UI.Style.TEXT_NORMAL,
+    )
+  }),
 })
 
 export const SessionDeleteCommand = effectCmd({
@@ -140,6 +209,7 @@ function formatSessionJSON(sessions: Session.Info[]): string {
     title: session.title,
     updated: session.time.updated,
     created: session.time.created,
+    archived: session.time.archived ?? null,
     projectId: session.projectID,
     directory: session.directory,
   }))

@@ -10,7 +10,7 @@ import { SettingsListV2 } from "./parts/list"
 import { SettingsRowV2 } from "./parts/row"
 import "./settings-v2.css"
 
-type SourceFormat = "codex" | "claude"
+type SourceFormat = "codex" | "claude" | "deepagent"
 type SourceMode = SourceFormat | "custom"
 type Scope = "session" | "memory" | "skill"
 type ProgressEvent =
@@ -90,6 +90,7 @@ export const ImportSection: Component = () => {
   const [dryRun, setDryRun] = createSignal(false)
   const [copyLiveDb, setCopyLiveDb] = createSignal(true)
   const [cwdFilter, setCwdFilter] = createSignal("")
+  const [snapshotFile, setSnapshotFile] = createSignal<File | undefined>(undefined)
   const [running, setRunning] = createSignal(false)
   const [logs, setLogs] = createSignal<string[]>([])
   const [summary, setSummary] = createSignal<string>("")
@@ -113,6 +114,7 @@ export const ImportSection: Component = () => {
   const modeOptions = createMemo(() => [
     { value: "codex" as const, label: t("settings.import.preset.codex", "Codex") },
     { value: "claude" as const, label: t("settings.import.preset.claude", "Claude Code") },
+    { value: "deepagent" as const, label: t("settings.import.preset.deepagent", "DeepAgent Code (snapshot)") },
     { value: "custom" as const, label: t("settings.import.preset.custom", "Custom") },
   ])
   const formatOptions = createMemo(() => [
@@ -125,6 +127,42 @@ export const ImportSection: Component = () => {
     { id: "skill", icon: "bookmark" },
   ]
 
+  // DeepAgent Code snapshot import: read the chosen bundle file and POST it to
+  // /session/import-snapshot (server rebuilds a fresh, continuable session).
+  const runSnapshotImport = async (h: HttpBase | undefined) => {
+    try {
+      const file = snapshotFile()
+      if (!file) {
+        push(`  [error] ${t("settings.import.snapshot.noFile", "Choose a snapshot bundle file first")}`)
+        return
+      }
+      const bundle = await file.text()
+      const res = await fetch(`${h?.url ?? ""}/session/import-snapshot`, {
+        method: "POST",
+        headers: { "content-type": "application/json", ...authHeader(h) },
+        body: JSON.stringify({ bundle }),
+        signal: abort?.signal,
+      })
+      if (!res.ok) {
+        const text = await res.text().catch(() => res.statusText)
+        push(`  [error] HTTP ${res.status}: ${text.slice(0, 200)}`)
+        return
+      }
+      const result = (await res.json().catch(() => undefined)) as
+        | { sessionID?: string; messages?: number; parts?: number }
+        | undefined
+      push(
+        `  [session] imported ${result?.sessionID?.slice(0, 16) ?? ""}… · ${result?.messages ?? 0} messages · ${result?.parts ?? 0} parts`,
+      )
+      setSummary(t("settings.import.snapshot.done", "Snapshot imported as a new continuable session"))
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      push(`  [error] ${message}`)
+    } finally {
+      setRunning(false)
+    }
+  }
+
   const run = async () => {
     if (running()) return
     setLogs([])
@@ -134,6 +172,10 @@ export const ImportSection: Component = () => {
     const h = http()
     const src = format()
     push(`→ ${src}${mode() === "custom" ? ` (custom: ${sourcePath() || "default"})` : ` (default)`} · scopes: ${scopes().join(",")}${dryRun() ? " · dry-run" : ""}`)
+    if (src === "deepagent") {
+      await runSnapshotImport(h)
+      return
+    }
     try {
       await streamImport(
         h?.url ?? "",
@@ -217,6 +259,29 @@ export const ImportSection: Component = () => {
             onSelect={(option) => option && setMode(option.value)}
           />
         </SettingsRowV2>
+
+        <Show when={mode() === "deepagent"}>
+          <SettingsRowV2
+            title={t("settings.import.snapshot.file", "Snapshot bundle")}
+            description={t(
+              "settings.import.snapshot.file.hint",
+              "Choose an exported session snapshot bundle (.json). It imports as a new continuable session.",
+            )}
+          >
+            <div class="flex flex-col gap-2 w-full sm:w-[260px]">
+              <input
+                data-action="settings-import-snapshot-file"
+                type="file"
+                accept=".json,application/json"
+                disabled={running()}
+                onChange={(e) => setSnapshotFile(e.currentTarget.files?.[0])}
+              />
+              <Show when={snapshotFile()}>
+                {(file) => <span class="text-12-regular text-text-weak truncate">{file().name}</span>}
+              </Show>
+            </div>
+          </SettingsRowV2>
+        </Show>
 
         <Show when={mode() === "custom"}>
           <SettingsRowV2 title={t("settings.import.customPath", "Path")} description={t("settings.import.customPath.hint", "Absolute path to the agent data directory.")}>

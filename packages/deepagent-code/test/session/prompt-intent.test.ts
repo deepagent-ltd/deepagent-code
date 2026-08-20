@@ -704,7 +704,7 @@ describe("SessionPromptIntent", () => {
         delivery: "steer",
       })
       yield* db
-        .insert(SessionActivityAdmissionTable)
+        .insert(SessionActivityAdmissionTable) // fixture-exempt: seeds legacy-intent admission row for steer fixture
         .values({
           admission_id: admissionID,
           session_id: sessionID,
@@ -1520,7 +1520,7 @@ function preparingProviderReceipt(input: {
   readonly registryToolIDs: readonly string[]
 }) {
   return input.db
-    .insert(SessionToolRequestReceiptTable)
+    .insert(SessionToolRequestReceiptTable) // fixture-exempt: seeds preparing receipt for prompt-intent fixture
     .values({
       receipt_id: input.receiptID,
       request_ordinal: 1,

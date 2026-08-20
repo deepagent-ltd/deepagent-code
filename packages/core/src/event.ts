@@ -128,6 +128,44 @@ export type SerializedSnapshotChunk = {
   readonly chunkHash: string
 }
 
+// RISK-003 ⑤ (BUG-407-010 §9.2/§11.4): the portable, importable aggregate snapshot body.
+// The row/chunk transfer protocol (snapshotRows/snapshotChunks → stage* → importSnapshot) is the
+// durable DB-to-DB path used by warp/sync; this bundle serializes the same authority into one
+// JSON body (chunk data base64) that can be persisted as evidence and atomically imported into an
+// empty copy. `bundleHash` covers the snapshot header, the row manifest, and every chunk body.
+export const SNAPSHOT_BUNDLE_FORMAT = "aggregate-snapshot-bundle.v1"
+
+export const SnapshotBundle = Schema.Struct({
+  format: Schema.Literal(SNAPSHOT_BUNDLE_FORMAT),
+  snapshot: Schema.Struct({
+    snapshotID: Schema.String,
+    aggregateID: Schema.String,
+    throughSeq: NonNegativeInt,
+    syncSeq: NonNegativeInt,
+    codec: Schema.String,
+    schemaVersion: NonNegativeInt,
+    snapshotHash: Schema.String,
+    body: Schema.Record(Schema.String, Schema.Unknown),
+    ownerID: Schema.optional(Schema.String),
+    createdAt: NonNegativeInt,
+  }),
+  rows: Schema.Array(
+    Schema.Struct({
+      snapshotID: Schema.String,
+      rowIndex: NonNegativeInt,
+      tableName: Schema.String,
+      rowKey: Schema.String,
+      rowHash: Schema.String,
+      rowBytes: NonNegativeInt,
+      chunkCount: NonNegativeInt,
+      chainHash: Schema.String,
+    }),
+  ),
+  chunks: Schema.Record(Schema.String, Schema.Array(Schema.String)),
+  bundleHash: Schema.String,
+})
+export type SnapshotBundle = typeof SnapshotBundle.Type
+
 export type SnapshotProjectionRow = {
   readonly cursor: string
   readonly tableName: string
@@ -432,6 +470,8 @@ export interface Interface {
     row: SerializedSnapshotRow,
     chunks: readonly SerializedSnapshotChunk[],
   ) => Effect.Effect<void>
+  readonly exportSnapshotBundle?: (input: { readonly snapshotID: string }) => Effect.Effect<string>
+  readonly importSnapshotBundle?: (bundle: string) => Effect.Effect<SerializedSnapshot>
   readonly compact: (input: {
     readonly aggregateID: string
     readonly throughSeq: Cursor
@@ -1862,6 +1902,135 @@ export const layerWith = (layerOptions?: LayerOptions) =>
         }), { behavior: "immediate" }).pipe(Effect.orDie)
       }
 
+      function exportSnapshotBundle(input: { readonly snapshotID: string }) {
+        return Effect.gen(function* () {
+          const header = yield* db
+            .select({
+              snapshotID: EventSnapshotTable.snapshot_id,
+              aggregateID: EventSnapshotTable.aggregate_id,
+              throughSeq: EventSnapshotTable.through_seq,
+              syncSeq: EventSnapshotTable.sync_seq,
+              codec: EventSnapshotTable.codec,
+              schemaVersion: EventSnapshotTable.schema_version,
+              snapshotHash: EventSnapshotTable.snapshot_hash,
+              body: EventSnapshotTable.body,
+              ownerID: EventSnapshotTable.owner_id,
+              createdAt: EventSnapshotTable.created_at,
+            })
+            .from(EventSnapshotTable)
+            .where(eq(EventSnapshotTable.snapshot_id, input.snapshotID))
+            .get()
+            .pipe(Effect.orDie)
+          if (!header)
+            return yield* Effect.die(
+              new InvalidSyncEventError({ type: "snapshot", message: `Snapshot ${input.snapshotID} not found` }),
+            )
+          const snapshot: SerializedSnapshot = {
+            snapshotID: header.snapshotID,
+            aggregateID: header.aggregateID,
+            throughSeq: header.throughSeq,
+            syncSeq: header.syncSeq,
+            codec: header.codec,
+            schemaVersion: header.schemaVersion,
+            snapshotHash: header.snapshotHash,
+            body: header.body,
+            ...(header.ownerID ? { ownerID: header.ownerID } : {}),
+            createdAt: header.createdAt,
+          }
+          const rows: SerializedSnapshotRow[] = []
+          let after = -1
+          while (true) {
+            const page = yield* snapshotRows({ snapshotID: input.snapshotID, after })
+            rows.push(...page)
+            if (page.length === 0) break
+            after = page[page.length - 1]!.rowIndex
+          }
+          const chunks: Record<string, string[]> = {}
+          for (const row of rows) {
+            const encoded: string[] = []
+            let chunkAfter = -1
+            while (true) {
+              const page = yield* snapshotChunks({ rowHash: row.rowHash, after: chunkAfter })
+              if (page.length === 0) break
+              for (const chunk of page) encoded.push(chunk.data.toString("base64"))
+              chunkAfter = page[page.length - 1]!.chunkIndex
+            }
+            chunks[row.rowHash] = encoded
+          }
+          const bundle = { format: SNAPSHOT_BUNDLE_FORMAT, snapshot, rows, chunks }
+          const text = JSON.stringify({ ...bundle, bundleHash: hashJson(bundle) })
+          if (Buffer.byteLength(text) > SNAPSHOT_MAX_TOTAL_BYTES)
+            return yield* Effect.die(
+              new InvalidSyncEventError({
+                type: "snapshot",
+                message: `Snapshot ${input.snapshotID} bundle exceeds the transfer budget`,
+              }),
+            )
+          return text
+        })
+      }
+
+      function importSnapshotBundle(bundle: string) {
+        return Effect.gen(function* () {
+          if (Buffer.byteLength(bundle) > SNAPSHOT_MAX_TOTAL_BYTES)
+            return yield* Effect.die(
+              new InvalidSyncEventError({ type: "snapshot", message: "Snapshot bundle exceeds the transfer budget" }),
+            )
+          const decoded = Schema.decodeUnknownOption(Schema.UnknownFromJsonString)(bundle)
+          const parsed = decoded._tag === "Some" ? decoded.value : undefined
+          const candidate = Schema.decodeUnknownOption(SnapshotBundle)(parsed)
+          if (candidate._tag !== "Some")
+            return yield* Effect.die(
+              new InvalidSyncEventError({
+                type: "snapshot",
+                message: `Snapshot bundle is not a valid ${SNAPSHOT_BUNDLE_FORMAT} body`,
+              }),
+            )
+          const value = candidate.value
+          const { bundleHash, ...rest } = value
+          if (hashJson(rest) !== bundleHash)
+            return yield* Effect.die(
+              new InvalidSyncEventError({ type: "snapshot", message: "Snapshot bundle hash mismatch" }),
+            )
+          const snapshot: SerializedSnapshot = {
+            snapshotID: value.snapshot.snapshotID,
+            aggregateID: value.snapshot.aggregateID,
+            throughSeq: value.snapshot.throughSeq,
+            syncSeq: value.snapshot.syncSeq,
+            codec: value.snapshot.codec,
+            schemaVersion: value.snapshot.schemaVersion,
+            snapshotHash: value.snapshot.snapshotHash,
+            body: value.snapshot.body as Record<string, unknown>,
+            ...(value.snapshot.ownerID ? { ownerID: value.snapshot.ownerID } : {}),
+            createdAt: value.snapshot.createdAt,
+          }
+          // Stage bounded transfer pages (rows, then per-row chunks) before the authoritative
+          // import — the exact protocol the wire transfer uses, so staging CAS guards apply.
+          for (let index = 0; index < value.rows.length; index += SNAPSHOT_TRANSFER_ROWS) {
+            yield* stageSnapshotRows(snapshot, value.rows.slice(index, index + SNAPSHOT_TRANSFER_ROWS))
+          }
+          for (const row of value.rows) {
+            const encoded = value.chunks[row.rowHash]
+            if (!encoded || encoded.length !== row.chunkCount)
+              return yield* Effect.die(
+                new InvalidSyncEventError({
+                  type: "snapshot",
+                  message: `Snapshot bundle row ${row.rowIndex} chunks are missing`,
+                }),
+              )
+            const chunks = encoded.map((data, chunkIndex) => {
+              const buffer = Buffer.from(data, "base64")
+              return { rowHash: row.rowHash, chunkIndex, data: buffer, chunkHash: Hash.sha256(buffer) }
+            })
+            for (let index = 0; index < chunks.length; index += SNAPSHOT_TRANSFER_CHUNKS) {
+              yield* stageSnapshotChunks(snapshot, row, chunks.slice(index, index + SNAPSHOT_TRANSFER_CHUNKS))
+            }
+          }
+          yield* importSnapshot(snapshot)
+          return snapshot
+        })
+      }
+
       function compact(input: {
         readonly aggregateID: string
         readonly throughSeq: Cursor
@@ -2629,6 +2798,8 @@ export const layerWith = (layerOptions?: LayerOptions) =>
         snapshotChunks,
         stageSnapshotRows,
         stageSnapshotChunks,
+        exportSnapshotBundle,
+        importSnapshotBundle,
         backfillSyncIndex,
         remove,
         claim,

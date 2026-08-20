@@ -11,7 +11,10 @@ import { Token } from "../util/token"
 
 const DEFAULT_BUFFER = 20_000
 const DEFAULT_KEEP_TOKENS = 8_000
-const TOOL_OUTPUT_MAX_CHARS = 2_000
+// UPD-005: single source of truth for the compaction-side tool-output truncation budget.
+// deepagent-code/src/session/compaction.ts imports this constant (it used to keep a duplicate
+// 2_000 copy); keep the two call sites in sync by editing ONLY this definition.
+export const TOOL_OUTPUT_MAX_CHARS = 2_000
 const SUMMARY_OUTPUT_TOKENS = 4_096
 const SUMMARY_TEMPLATE = `Output exactly the Markdown structure shown inside <template> and keep the section order unchanged. Do not include the <template> tags in your response.
 <template>

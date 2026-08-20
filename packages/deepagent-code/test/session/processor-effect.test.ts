@@ -3,7 +3,7 @@ import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { PermissionV1 } from "@deepagent-code/core/v1/permission"
 import { Database } from "@deepagent-code/core/database/database"
 import { EventV2Bridge } from "@/event-v2-bridge"
-import { expect } from "bun:test"
+import { afterEach, expect } from "bun:test"
 import { tool } from "ai"
 import { Cause, Context, Deferred, Effect, Exit, Fiber, Layer, Scope, Stream } from "effect"
 import path from "path"
@@ -35,7 +35,7 @@ import { Snapshot } from "../../src/snapshot"
 import * as Log from "@deepagent-code/core/util/log"
 import { CrossSpawnSpawner } from "@deepagent-code/core/cross-spawn-spawner"
 import { WorkspaceRef } from "../../src/effect/instance-ref"
-import { provideTmpdirInstance, provideTmpdirServer } from "../fixture/fixture"
+import { disposeAllInstances, provideTmpdirInstance, provideTmpdirServer } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import { raw, reply, TestLLMServer } from "../lib/llm-server"
 import { RuntimeFlags } from "@/effect/runtime-flags"
@@ -66,6 +66,12 @@ import { count, eq } from "drizzle-orm"
 import { Tool } from "../../src/tool/tool"
 
 void Log.init({ print: false })
+
+// Dispose any instances loaded into the process-wide AppRuntime instance
+// store so this file leaves no shared state for files that run after it.
+afterEach(async () => {
+  await disposeAllInstances()
+})
 
 const summary = Layer.succeed(
   SessionSummary.Service,
@@ -330,7 +336,7 @@ const noProgressLLM = Layer.sync(LLM.Service, () => {
     },
   })
 })
-const durableFlags = RuntimeFlags.layer({ experimentalEventSystem: true, activityAuthority: "durable" })
+const durableFlags = RuntimeFlags.layer({ experimentalEventSystem: true })
 const durablePermission = Permission.layer.pipe(
   Layer.provide(EventV2Bridge.defaultLayer),
   Layer.provide(Database.defaultLayer),
@@ -687,7 +693,7 @@ const admitActivity = Effect.fn("test.admitActivity")(function* (sessionID: Sess
     .run()
     .pipe(Effect.orDie)
   yield* db
-    .insert(SessionActivityAdmissionTable)
+    .insert(SessionActivityAdmissionTable) // fixture-exempt: seeds legacy-intent admission row for processor fixture
     .values({
       admission_id: admissionID,
       session_id: sessionID,
@@ -2123,7 +2129,6 @@ itNoProgress.live(
           const { processors, session, provider } = yield* boot()
           const database = yield* Database.Service
           const permission = yield* Permission.Service
-          expect((yield* RuntimeFlags.Service).activityAuthority).toBe("durable")
           const chat = yield* session.create({})
           const parent = yield* user(chat.id, "read stable.ts until it changes")
           const activityID = yield* admitActivity(chat.id, parent.id)

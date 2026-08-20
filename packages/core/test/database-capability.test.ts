@@ -39,7 +39,7 @@ describe("database capability", () => {
           Effect.gen(function* () {
             const { db } = yield* Database.Service
             yield* db.run(sql`DROP TRIGGER database_capability_immutable_update`)
-            yield* db.run(sql`UPDATE database_capability SET minimum_reader_protocol = 3, minimum_writer_protocol = 3
+            yield* db.run(sql`UPDATE database_capability SET minimum_reader_protocol = 4, minimum_writer_protocol = 4
               WHERE capability = 'bounded_event_snapshot_v1'`)
           }).pipe(Effect.provide(Database.layerFromPath(filename))),
         ),
@@ -48,6 +48,31 @@ describe("database capability", () => {
         Effect.scoped(Database.Service.pipe(Effect.provide(Database.layerFromPath(filename)))).pipe(Effect.exit),
       )
       expect(exit._tag).toBe("Failure")
+    } finally {
+      await fs.rm(directory, { recursive: true, force: true })
+    }
+  })
+
+  test("opens a database marked with the successor fence at protocol 3", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "deepagent-code-db-capability-"))
+    const filename = path.join(directory, "database.db")
+    try {
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const { db } = yield* Database.Service
+            yield* db.run(sql`
+              INSERT INTO database_capability(
+                capability, minimum_reader_protocol, minimum_writer_protocol, installed_at
+              ) VALUES ('provider_owner_successor_v1', 3, 3, 0)
+            `)
+          }).pipe(Effect.provide(Database.layerFromPath(filename))),
+        ),
+      )
+      const exit = await Effect.runPromise(
+        Effect.scoped(Database.Service.pipe(Effect.provide(Database.layerFromPath(filename)))).pipe(Effect.exit),
+      )
+      expect(exit._tag).toBe("Success")
     } finally {
       await fs.rm(directory, { recursive: true, force: true })
     }

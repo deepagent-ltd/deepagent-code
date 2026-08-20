@@ -55,15 +55,13 @@ function makeLayer<R>(configEffect: Effect.Effect<Config.Interface | undefined, 
       const config = yield* configEffect
 
       const cleanup = Effect.fn("Truncate.cleanup")(function* () {
-        const cutoff = Identifier.timestamp(
-          Identifier.create("tool", "ascending", Date.now() - Duration.toMillis(RETENTION)),
-        )
+        const cutoff = Date.now() - Duration.toMillis(RETENTION)
         const entries = yield* fs.readDirectory(TRUNCATION_DIR).pipe(
           Effect.map((all) => all.filter((name) => name.startsWith("tool_"))),
           Effect.catch(() => Effect.succeed([])),
         )
         for (const entry of entries) {
-          if (Identifier.timestamp(entry) >= cutoff) continue
+          if (retainedTimestamp(entry) >= cutoff) continue
           yield* fs.remove(path.join(TRUNCATION_DIR, entry)).pipe(Effect.catch(() => Effect.void))
         }
       })
@@ -154,6 +152,18 @@ function makeLayer<R>(configEffect: Effect.Effect<Config.Interface | undefined, 
       return Service.of({ cleanup, write, output, limits })
     }),
   )
+}
+
+// Identifier timestamps pack epoch-ms into a 6-byte field, so they wrap every 2^36 ms (~795 days;
+// last wrap 2026-08-14). Unwrap relative to now so retention comparisons stay correct across wrap
+// boundaries — retention (7d) is far smaller than half a cycle, so the nearest-cycle lift is exact.
+function retainedTimestamp(entry: string) {
+  const cycle = 2 ** 36
+  const now = Date.now()
+  let ts = Identifier.timestamp(entry)
+  while (ts < now - cycle / 2) ts += cycle
+  while (ts > now + cycle / 2) ts -= cycle
+  return ts
 }
 
 export const layer = makeLayer(Effect.map(Config.Service, (config) => config))

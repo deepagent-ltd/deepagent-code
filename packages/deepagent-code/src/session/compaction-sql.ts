@@ -1,7 +1,12 @@
 // BUG-005: drizzle-orm type bindings for compaction_run and compaction_summary_attempt.
 import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core"
+import { SessionTable } from "@deepagent-code/core/session/sql"
 
 export type CompactionRunState = "requested" | "summarizing" | "committed" | "failed" | "indeterminate"
+// UPD-005 Gap 2: how a run compacted. 'local_summary' is the default/historical
+// path (TEXT summary committed); 'remote_compact' commits an opaque server-held
+// encrypted context instead (summary_text stays NULL — information-hole exempt).
+export type CompactionMode = "local_summary" | "remote_compact"
 export type CompactionContinuationState =
   | "pending"
   | "admitted"
@@ -52,6 +57,28 @@ export const CompactionRunTable = sqliteTable("compaction_run", {
   continuation_dispatching_at: integer(),
   continuation_terminal_at: integer(),
   continuation_error_code: text(),
+  // UPD-005 Gap 2 (migration 20260820000000_remote_compact_persistence).
+  compaction_mode: text().$type<CompactionMode>().notNull().default("local_summary"),
+  // Remote mode only: points at session_compaction_encrypted_content.session_id.
+  encrypted_content_session: text(),
+})
+
+// UPD-005 Gap 1: the ONE currently-valid `/responses/compact` encrypted context per
+// session (1:1; the write path upserts so only the latest blob survives). The blob
+// is cross-run / session-scoped — replayed on the next compaction — hence its own
+// table instead of a compaction_run column. provider_id is the same-provenance
+// guard checked before replay; session deletion cascades.
+export const SessionCompactionEncryptedContentTable = sqliteTable("session_compaction_encrypted_content", {
+  session_id: text()
+    .primaryKey()
+    .notNull()
+    .references(() => SessionTable.id, { onDelete: "cascade" }),
+  encrypted_content: text().notNull(),
+  provider_id: text().notNull(),
+  model_id: text(),
+  source_run_id: text(),
+  created_at: integer().notNull(),
+  updated_at: integer().notNull(),
 })
 
 export const CompactionSummaryAttemptTable = sqliteTable("compaction_summary_attempt", {

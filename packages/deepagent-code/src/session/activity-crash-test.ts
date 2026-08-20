@@ -11,6 +11,10 @@ export type Point =
   | "inside_revision_terminal_transaction"
   | "after_terminal_commit_before_publish"
   | "while_finalizing_before_follow_up_drain"
+  // BUG-407-008 §6.2 crash points (P1/P2/P6).
+  | "after_begin_progress_commit_before_provisional_event"
+  | "after_provisional_event_before_provider_dispatch"
+  | "after_progress_settle_before_next_admission"
 
 export function pause(point: Point) {
   if (process.env.DEEPAGENT_CODE_TEST_ACTIVITY_CRASH_POINT !== point) return Effect.void

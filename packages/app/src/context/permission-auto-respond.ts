@@ -1,5 +1,10 @@
 import { base64Encode } from "@deepagent-code/core/util/encode"
 
+// Mutating-tool set is shared with the CLI read-only mode (PARITY-002): the
+// GUI directory read-only guard and `run --permission-mode read-only` must
+// agree on which permissions are denied, so the constant lives in core.
+export { MUTATING_PERMISSIONS, isMutatingPermission } from "@deepagent-code/core/permission/mutating"
+
 export function acceptKey(sessionID: string, directory?: string) {
   if (!directory) return sessionID
   return `${base64Encode(directory)}/${sessionID}`
@@ -14,15 +19,6 @@ export function directoryAcceptKey(directory: string) {
 export function isDirectoryReadOnly(readOnly: Record<string, boolean>, directory: string) {
   const key = directoryAcceptKey(directory)
   return readOnly[key] ?? false
-}
-
-// Tools that write, execute, or otherwise mutate state — denied in read-only mode.
-// Everything else (read/glob/grep/list/lsp/webfetch/websearch/todowrite/…) is left to the
-// normal permission flow so the agent can still inspect the workspace.
-const MUTATING_PERMISSIONS = new Set(["edit", "write", "patch", "bash", "task", "external_directory"])
-
-export function isMutatingPermission(permission: string) {
-  return MUTATING_PERMISSIONS.has(permission)
 }
 
 function accepted(autoAccept: Record<string, boolean>, sessionID: string, directory?: string) {
