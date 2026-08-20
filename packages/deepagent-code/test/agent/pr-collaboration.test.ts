@@ -1,4 +1,4 @@
-import { describe, expect } from "bun:test"
+import { afterEach, describe, expect } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
 import { Effect, Layer } from "effect"
@@ -8,7 +8,13 @@ import { PRQueue } from "@/agent/pr-queue"
 import { coordinator, ensureSessionBranch } from "@/agent/pr-collaboration"
 import { ReviewVerdictContract } from "@/collaboration/review-contract"
 import { testEffect } from "../lib/effect"
-import { TestInstance } from "../fixture/fixture"
+import { disposeAllInstances, TestInstance } from "../fixture/fixture"
+
+// Dispose any instances loaded into the process-wide AppRuntime instance
+// store so this file leaves no shared state for files that run after it.
+afterEach(async () => {
+  await disposeAllInstances()
+})
 
 const layer = Layer.mergeAll(Git.defaultLayer, Worktree.defaultLayer, PRQueue.layer).pipe(
   Layer.provideMerge(Worktree.defaultLayer),

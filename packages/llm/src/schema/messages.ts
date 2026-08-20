@@ -394,9 +394,17 @@ export namespace ToolChoice {
   }
 }
 
+// UPD-002: the `json` variant carries wire-level structured-output details.
+// `name`/`strict` map onto OpenAI Responses' `text.format` json_schema shape;
+// they are optional so routes without wire structured output can ignore them.
 export const ResponseFormat = Schema.Union([
   Schema.Struct({ type: Schema.Literal("text") }),
-  Schema.Struct({ type: Schema.Literal("json"), schema: JsonSchema }),
+  Schema.Struct({
+    type: Schema.Literal("json"),
+    schema: JsonSchema,
+    name: Schema.optional(Schema.String),
+    strict: Schema.optional(Schema.Boolean),
+  }),
   Schema.Struct({ type: Schema.Literal("tool"), tool: ToolDefinitionSchema }),
 ]).pipe(Schema.toTaggedUnion("type"))
 export type ResponseFormat = Schema.Schema.Type<typeof ResponseFormat>

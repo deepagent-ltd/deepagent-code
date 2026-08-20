@@ -13,6 +13,14 @@ import { TaskReadTool } from "./task_read"
 import { TaskCloseTool } from "./task_close"
 import { TaskRecoveryTool } from "./task_recovery"
 import { PRFinalizeTool } from "./pr_finalize"
+import {
+  ActivityStartTool,
+  ActivityStatusTool,
+  ActivityResultTool,
+  ActivityControlTool,
+  ACTIVITY_FACADE_TOOL_IDS,
+} from "./activity_facade"
+import { FacadeActivity } from "@/session/facade-activity"
 import { DismissValidationTool } from "./dismiss_validation"
 import { Database } from "@deepagent-code/core/database/database"
 import { V2ProviderTurn } from "@deepagent-code/core/session/runner/v2-provider-turn"
@@ -199,6 +207,36 @@ const layerWithFacades: Layer.Layer<
     const querylog = yield* QueryLogTool
     const agent = yield* Agent.Service
 
+    // FEAT-011 T3/T4 — the unified activity facade (activity_start/status/result/control). Staged
+    // OFF by flag; the flag is the single visibility gate (flag off ⇒ zero tools even if an outer
+    // graph provides the dispatcher). When ON the dispatcher is resolved from the environment if
+    // an outer graph already provides it, otherwise built inline (hard requirements are only
+    // Database + RuntimeFlags — both already in this layer's requirement list — and every runner
+    // dependency resolves via serviceOption, so no caller of ToolRegistry.layer gains a new
+    // requirement).
+    const facadeActivityProvided = yield* Effect.serviceOption(FacadeActivity.Service)
+    const facadeActivity = !flags.activityFacade
+      ? undefined
+      : Option.isSome(facadeActivityProvided)
+        ? facadeActivityProvided.value
+        : yield* FacadeActivity.build
+    const activityFacadeTools = facadeActivity
+      ? yield* Effect.all({
+          activity_start: Tool.init(
+            yield* ActivityStartTool.pipe(Effect.provideService(FacadeActivity.Service, facadeActivity)),
+          ),
+          activity_status: Tool.init(
+            yield* ActivityStatusTool.pipe(Effect.provideService(FacadeActivity.Service, facadeActivity)),
+          ),
+          activity_result: Tool.init(
+            yield* ActivityResultTool.pipe(Effect.provideService(FacadeActivity.Service, facadeActivity)),
+          ),
+          activity_control: Tool.init(
+            yield* ActivityControlTool.pipe(Effect.provideService(FacadeActivity.Service, facadeActivity)),
+          ),
+        })
+      : undefined
+
     const state = yield* InstanceState.make<State>(
       Effect.fn("ToolRegistry.state")(function* (ctx) {
         const custom: Tool.Def[] = []
@@ -375,6 +413,14 @@ const layerWithFacades: Layer.Layer<
             ...(flags.debugTool ? [tool.debug] : []),
             ...(flags.experimentalQueryLogTool ? [tool.query_log] : []),
             ...(flags.experimentalPlanMode && flags.client === "cli" ? [tool.plan] : []),
+            ...(activityFacadeTools
+              ? [
+                  activityFacadeTools.activity_start,
+                  activityFacadeTools.activity_status,
+                  activityFacadeTools.activity_result,
+                  activityFacadeTools.activity_control,
+                ]
+              : []),
           ],
           task: tool.task,
           read: tool.read,
@@ -424,6 +470,9 @@ const layerWithFacades: Layer.Layer<
         )
       const filtered = [...registryState.builtin, ...registryState.custom].flatMap((tool) => {
         if (tool.id === PRFinalizeTool.id && input.agent.mode !== "primary") return []
+        // FEAT-011 T4: the activity facade tools are a PRIMARY-agent control surface — subagents
+        // never spawn/control activities through the facade (mirrors the pr_finalize gate).
+        if (ACTIVITY_FACADE_TOOL_IDS.has(tool.id) && input.agent.mode !== "primary") return []
         if (tool.id === CodeIntelTool.id) {
           return [projectRollout.enabled.contextQueryToolsV2 ? registryState.codeIntelV2 : registryState.codeIntelV1]
         }

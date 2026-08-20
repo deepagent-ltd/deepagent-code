@@ -120,6 +120,8 @@ type SessionView = {
     | "profile"
     | "debug"
     | "im"
+    // PARITY-001: cross-session cost/token overview panel.
+    | "stats"
     | "oversight"
     // Movable panel views can also live in the side panel.
     | "terminal"

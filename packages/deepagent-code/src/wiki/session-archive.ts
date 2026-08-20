@@ -1,4 +1,4 @@
-import { Effect } from "effect"
+import { Effect, Option } from "effect"
 import { existsSync, readdirSync, statSync } from "node:fs"
 import path from "node:path"
 import { Global } from "@deepagent-code/core/global"
@@ -14,6 +14,7 @@ import {
   type WikiEditGate,
 } from "./wiki-service"
 import { WikiSearchIndex } from "./search-index"
+import * as WikiEvents from "./wiki-events"
 
 /**
  * V3.9 §B — production wiring for the Wiki projection.
@@ -96,12 +97,22 @@ export const openWikiGraph = (input: { workspacePath?: string; sessionID?: strin
  * editKnowledge — omitted, the WikiService falls back to its DEFAULT_WIKI_EDIT_GATE (the minimum
  * floor). Production passes `buildWikiEditGate(memoryDir)` so a human edit goes through the SAME
  * validation gate (§B.3) as knowledge promotion (dedupe vs RejectedBuffer + replay/regression).
+ *
+ * FEAT-006: `workspacePath` is threaded into the service's event ports (labels wiki.page.changed
+ * payloads) and `bus` optionally injects the publish port. The (unmodified) handler construction
+ * point passes neither — editKnowledge then falls back to the DeepAgentEventBus.Service from its
+ * Effect runtime environment, which the route runtime provides (same seam the packs handlers use).
  */
 export const openWikiService = (input: {
   workspacePath?: string
   sessionID?: string
   gate?: WikiEditGate
-}): WikiService => (input.gate ? new WikiService(openWikiGraph(input), input.gate) : new WikiService(openWikiGraph(input)))
+  bus?: WikiEvents.WikiEventPublisher
+}): WikiService =>
+  new WikiService(openWikiGraph(input), input.gate, {
+    ...(input.bus ? { bus: input.bus } : {}),
+    ...(input.workspacePath ? { workspacePath: input.workspacePath } : {}),
+  })
 
 // A knowledge doc's type maps to the learning-candidate type space (which has no bare "knowledge" —
 // it is memory/strategy/methodology/anti_pattern). knowledge/memory → "memory"; strategy/methodology
@@ -170,12 +181,22 @@ export const openWikiSearchIndex = (input: { workspacePath?: string; sessionID?:
  * §B.6 session-completion trigger. Aggregates the session's trajectory into an ExecutionArchive.
  * Default-safe: never throws, returns null on any failure or when the session has no trajectory.
  * The caller (prompt.ts persistSuggestion) gates this on flags.experimentalWiki.
+ *
+ * FEAT-006: after the archive page is DURABLY persisted, publishes wiki.page.changed with the
+ * `archive` marker (idempotency key `wiki.page.changed:archive:<docId>:<version>`). `bus` may be
+ * injected explicitly (the event-driven archiver passes its own bus); otherwise the Effect
+ * environment's DeepAgentEventBus.Service is tried; neither available → no event (degraded no-op,
+ * archival itself is unaffected). SELF-LOOP SAFETY: this event is NOT an archive trigger
+ * (ARCHIVE_TRIGGER_TYPES = session.completed/goal.completed only), and the persisted doc is a
+ * `context_snapshot` — outside EXECUTION_ARCHIVE_TYPES — so it can never be re-archived into a
+ * later archive of the same session. No archiver→event→archiver cascade exists by construction.
  */
 export const archiveSessionOnCompletion = (input: {
   workspacePath: string
   sessionID: string
+  bus?: WikiEvents.WikiEventPublisher
 }): Effect.Effect<ExecutionArchive | null, never> =>
-  Effect.sync(() => {
+  Effect.gen(function* () {
     const graph = openWikiGraph({ workspacePath: input.workspacePath, sessionID: input.sessionID })
     const archive = buildExecutionArchive(graph, input.sessionID)
     if (archive.entries.length === 0) return null
@@ -184,17 +205,35 @@ export const archiveSessionOnCompletion = (input: {
     // new source of truth), rebuildable from the graph; it makes the assembled Markdown durably
     // available (e.g. for a Repo view) without an event bus. Idempotent via idSlug; best-effort — a
     // persist failure degrades to just returning the in-memory archive (matchCauseEffect below).
-    persistArchiveDoc(input.sessionID, archive)
+    const persisted = persistArchiveDoc(input.sessionID, archive)
+    if (persisted) {
+      // FEAT-006 — emit ONLY for a real persist (no doc → nothing changed → no event). Best-effort:
+      // publishWikiPageChanged swallows bus failures, so this can never fail the archive.
+      const bus = yield* WikiEvents.resolveBus(input.bus)
+      if (Option.isSome(bus))
+        yield* WikiEvents.publishWikiPageChanged(bus.value, {
+          workspacePath: input.workspacePath,
+          docId: persisted.id,
+          type: persisted.type,
+          version: persisted.version,
+          editor: "system:archiver",
+          archive: { sessionID: input.sessionID },
+        })
+    }
     return archive
   }).pipe(Effect.matchCauseEffect({ onFailure: () => Effect.succeed(null), onSuccess: Effect.succeed }))
 
 // Best-effort persistence of the rendered execution archive into the session's run-scoped context
 // store. Reuses the SAME context store root openWikiGraph reads, so a subsequent open projects it.
-const persistArchiveDoc = (sessionID: string, archive: ExecutionArchive): void => {
+// Returns the persisted Doc (needed by FEAT-006 to derive docId/version for the event's idempotency
+// key) or null when the session has no context store yet. DocumentStore.upsert is fingerprint-
+// idempotent: re-persisting an UNCHANGED archive returns the SAME doc at the SAME version, so the
+// wiki.page.changed idempotency key (docId+version) is stable across redelivered triggers.
+const persistArchiveDoc = (sessionID: string, archive: ExecutionArchive): Doc | null => {
   const ctxRoot = contextStoreRoot(sessionID)
-  if (!existsSync(ctxRoot)) return // no session context store yet → nothing to attach to; skip
+  if (!existsSync(ctxRoot)) return null // no session context store yet → nothing to attach to; skip
   const store = new DocumentStore(ctxRoot)
-  store.upsert({
+  return store.upsert({
     type: "context_snapshot",
     scope: `run:${sessionID}`,
     description: `execution archive ${sessionID}`,

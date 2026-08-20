@@ -28,7 +28,12 @@ manage MCP (Model Context Protocol) servers
 
 Commands:
   deepagent-code mcp add [name]     add an MCP server
+  deepagent-code mcp remove <name>  remove an MCP server from the project or global config
+                                                                                       [aliases: rm]
+  deepagent-code mcp edit <name>    edit an existing MCP server's configuration
+                                    (url/env/header/command)
   deepagent-code mcp list           list MCP servers and their status                  [aliases: ls]
+  deepagent-code mcp catalog        list preset MCP servers from the vetted catalog (metadata only)
   deepagent-code mcp auth [name]    authenticate with an OAuth-enabled MCP server
   deepagent-code mcp logout [name]  remove OAuth credentials for an MCP server
   deepagent-code mcp debug <name>   debug OAuth connection for an MCP server
@@ -112,8 +117,14 @@ Options:
                                                                                             [number]
   -i, --interactive                   run in direct interactive split-footer mode
                                                                           [boolean] [default: false]
-      --dangerously-skip-permissions  auto-approve permissions that are not explicitly denied
-                                      (dangerous!)                        [boolean] [default: false]
+      --dangerously-skip-permissions  alias for --permission-mode full-access: auto-approve
+                                      permissions not explicitly denied (dangerous!)
+                                                                          [boolean] [default: false]
+      --permission-mode               permission auto-response mode: request rejects every prompt,
+                                      read-only rejects mutating tools
+                                      (edit/write/patch/bash/task/external_directory) and approves
+                                      the rest, full-access approves everything (dangerous!)
+                                           [string] [choices: "request", "read-only", "full-access"]
       --question-answer               answer unattended Question prompts in order; repeat once per
                                       question (otherwise auto-reject)                       [array]
       --demo                          enable direct interactive demo slash commands; pass one as the
@@ -236,7 +247,9 @@ Options:
                                                                           [boolean] [default: false]
       --mdns-domain  custom domain name for mDNS service (default: deepagent-code.local)
                                                           [string] [default: "deepagent-code.local"]
-      --cors         additional domains to allow for CORS                      [array] [default: []]"
+      --cors         additional domains to allow for CORS                      [array] [default: []]
+      --register     register this server with the local CLI daemon (writes state/server.json)
+                                                                          [boolean] [default: false]"
 `;
 
 exports[`deepagentCode CLI help-text snapshots every documented command emits stable help text: deepagentCode web --help 1`] = `
@@ -367,8 +380,10 @@ exports[`deepagentCode CLI help-text snapshots every documented command emits st
 manage sessions
 
 Commands:
-  deepagent-code session list                list sessions
-  deepagent-code session delete <sessionID>  delete a session
+  deepagent-code session list                        list sessions
+  deepagent-code session delete <sessionID>          delete a session
+  deepagent-code session rename <sessionID> <title>  rename a session
+  deepagent-code session archive <sessionID>         archive a session (or restore it with --undo)
 
 Options:
   -h, --help        show help                                                              [boolean]
@@ -415,6 +430,126 @@ Options:
       --log-level   log level                   [string] [choices: "DEBUG", "INFO", "WARN", "ERROR"]
       --pure        run without external plugins                                           [boolean]
       --format      Output format                 [string] [choices: "json", "tsv"] [default: "tsv"]"
+`;
+
+exports[`deepagentCode CLI help-text snapshots every documented command emits stable help text: deepagentCode goal --help 1`] = `
+"deepagent-code goal
+
+inspect and control the goal loop of a session
+
+Commands:
+  deepagent-code goal status <sessionID>  show the active goal of a session
+  deepagent-code goal pause <sessionID>   pause the goal loop of a session
+  deepagent-code goal resume <sessionID>  resume the goal loop of a session
+  deepagent-code goal stop <sessionID>    stop the goal loop of a session
+
+Options:
+  -h, --help        show help                                                              [boolean]
+  -v, --version     show version number                                                    [boolean]
+      --print-logs  print logs to stderr                                                   [boolean]
+      --log-level   log level                   [string] [choices: "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure        run without external plugins                                           [boolean]"
+`;
+
+exports[`deepagentCode CLI help-text snapshots every documented command emits stable help text: deepagentCode worktree --help 1`] = `
+"deepagent-code worktree
+
+manage git worktrees for the current project
+
+Commands:
+  deepagent-code worktree list                list worktrees of the current project    [aliases: ls]
+  deepagent-code worktree create              create a new worktree
+  deepagent-code worktree remove <directory>  remove a worktree (fail-closed unless --force)
+                                                                                       [aliases: rm]
+
+Options:
+  -h, --help        show help                                                              [boolean]
+  -v, --version     show version number                                                    [boolean]
+      --print-logs  print logs to stderr                                                   [boolean]
+      --log-level   log level                   [string] [choices: "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure        run without external plugins                                           [boolean]"
+`;
+
+exports[`deepagentCode CLI help-text snapshots every documented command emits stable help text: deepagentCode oversight --help 1`] = `
+"deepagent-code oversight
+
+inspect the agent oversight plane (approvals, metrics)
+
+Commands:
+  deepagent-code oversight list     list pending approval queue items                  [aliases: ls]
+  deepagent-code oversight metrics  show oversight metrics (DLQ, success rate, conflict rate)
+
+Options:
+  -h, --help        show help                                                              [boolean]
+  -v, --version     show version number                                                    [boolean]
+      --print-logs  print logs to stderr                                                   [boolean]
+      --log-level   log level                   [string] [choices: "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure        run without external plugins                                           [boolean]"
+`;
+
+exports[`deepagentCode CLI help-text snapshots every documented command emits stable help text: deepagentCode panel --help 1`] = `
+"deepagent-code panel
+
+inspect the Expert Panel state
+
+Commands:
+  deepagent-code panel status <sessionID>  show the effective Expert Panel armed state for a session
+
+Options:
+  -h, --help        show help                                                              [boolean]
+  -v, --version     show version number                                                    [boolean]
+      --print-logs  print logs to stderr                                                   [boolean]
+      --log-level   log level                   [string] [choices: "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure        run without external plugins                                           [boolean]"
+`;
+
+exports[`deepagentCode CLI help-text snapshots every documented command emits stable help text: deepagentCode review --help 1`] = `
+"deepagent-code review
+
+inspect DeepAgent run reviews
+
+Commands:
+  deepagent-code review list  list recent DeepAgent run reviews                        [aliases: ls]
+
+Options:
+  -h, --help        show help                                                              [boolean]
+  -v, --version     show version number                                                    [boolean]
+      --print-logs  print logs to stderr                                                   [boolean]
+      --log-level   log level                   [string] [choices: "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure        run without external plugins                                           [boolean]"
+`;
+
+exports[`deepagentCode CLI help-text snapshots every documented command emits stable help text: deepagentCode wiki --help 1`] = `
+"deepagent-code wiki
+
+browse and search the project Wiki
+
+Commands:
+  deepagent-code wiki list           list Wiki pages                                   [aliases: ls]
+  deepagent-code wiki search <text>  full-text search over the Wiki
+
+Options:
+  -h, --help        show help                                                              [boolean]
+  -v, --version     show version number                                                    [boolean]
+      --print-logs  print logs to stderr                                                   [boolean]
+      --log-level   log level                   [string] [choices: "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure        run without external plugins                                           [boolean]"
+`;
+
+exports[`deepagentCode CLI help-text snapshots every documented command emits stable help text: deepagentCode packs --help 1`] = `
+"deepagent-code packs
+
+inspect domain packs
+
+Commands:
+  deepagent-code packs list  list active domain packs (or the full catalog with --all) [aliases: ls]
+
+Options:
+  -h, --help        show help                                                              [boolean]
+  -v, --version     show version number                                                    [boolean]
+      --print-logs  print logs to stderr                                                   [boolean]
+      --log-level   log level                   [string] [choices: "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure        run without external plugins                                           [boolean]"
 `;
 
 exports[`deepagentCode CLI help-text snapshots every documented command emits stable help text: deepagentCode mcp list --help 1`] = `
@@ -593,6 +728,328 @@ Options:
       --print-logs  print logs to stderr                                                   [boolean]
       --log-level   log level                   [string] [choices: "DEBUG", "INFO", "WARN", "ERROR"]
       --pure        run without external plugins                                           [boolean]"
+`;
+
+exports[`deepagentCode CLI help-text snapshots every documented command emits stable help text: deepagentCode session rename --help 1`] = `
+"deepagent-code session rename <sessionID> <title>
+
+rename a session
+
+Positionals:
+  sessionID  session ID to rename                                                [string] [required]
+  title      new title for the session                                           [string] [required]
+
+Options:
+  -h, --help        show help                                                              [boolean]
+  -v, --version     show version number                                                    [boolean]
+      --print-logs  print logs to stderr                                                   [boolean]
+      --log-level   log level                   [string] [choices: "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure        run without external plugins                                           [boolean]"
+`;
+
+exports[`deepagentCode CLI help-text snapshots every documented command emits stable help text: deepagentCode session archive --help 1`] = `
+"deepagent-code session archive <sessionID>
+
+archive a session (or restore it with --undo)
+
+Positionals:
+  sessionID  session ID to archive                                               [string] [required]
+
+Options:
+  -h, --help        show help                                                              [boolean]
+  -v, --version     show version number                                                    [boolean]
+      --print-logs  print logs to stderr                                                   [boolean]
+      --log-level   log level                   [string] [choices: "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure        run without external plugins                                           [boolean]
+      --undo        restore an archived session                           [boolean] [default: false]"
+`;
+
+exports[`deepagentCode CLI help-text snapshots every documented command emits stable help text: deepagentCode mcp edit --help 1`] = `
+"deepagent-code mcp edit <name>
+
+edit an existing MCP server's configuration (url/env/header/command)
+
+Positionals:
+  name  name of the MCP server                                                   [string] [required]
+
+Options:
+  -h, --help        show help                                                              [boolean]
+  -v, --version     show version number                                                    [boolean]
+      --print-logs  print logs to stderr                                                   [boolean]
+      --log-level   log level                   [string] [choices: "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure        run without external plugins                                           [boolean]
+      --url         new URL for a remote MCP server                                         [string]
+      --env         environment variable for a local MCP server (KEY=VALUE, merged)          [array]
+      --header      HTTP header for a remote MCP server (KEY=VALUE, merged)                  [array]"
+`;
+
+exports[`deepagentCode CLI help-text snapshots every documented command emits stable help text: deepagentCode goal status --help 1`] = `
+"deepagent-code goal status <sessionID>
+
+show the active goal of a session
+
+Positionals:
+  sessionID  session ID                                                          [string] [required]
+
+Options:
+  -h, --help        show help                                                              [boolean]
+  -v, --version     show version number                                                    [boolean]
+      --print-logs  print logs to stderr                                                   [boolean]
+      --log-level   log level                   [string] [choices: "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure        run without external plugins                                           [boolean]
+      --attach      attach to a running server (e.g. http://localhost:4096)                 [string]
+      --password    password for the attached server                                        [string]
+      --username    username for the attached server                                        [string]
+      --format      output format             [string] [choices: "table", "json"] [default: "table"]"
+`;
+
+exports[`deepagentCode CLI help-text snapshots every documented command emits stable help text: deepagentCode goal pause --help 1`] = `
+"deepagent-code goal pause <sessionID>
+
+pause the goal loop of a session
+
+Positionals:
+  sessionID  session ID                                                          [string] [required]
+
+Options:
+  -h, --help        show help                                                              [boolean]
+  -v, --version     show version number                                                    [boolean]
+      --print-logs  print logs to stderr                                                   [boolean]
+      --log-level   log level                   [string] [choices: "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure        run without external plugins                                           [boolean]
+      --attach      attach to a running server (e.g. http://localhost:4096)                 [string]
+      --password    password for the attached server                                        [string]
+      --username    username for the attached server                                        [string]
+      --format      output format             [string] [choices: "table", "json"] [default: "table"]"
+`;
+
+exports[`deepagentCode CLI help-text snapshots every documented command emits stable help text: deepagentCode goal resume --help 1`] = `
+"deepagent-code goal resume <sessionID>
+
+resume the goal loop of a session
+
+Positionals:
+  sessionID  session ID                                                          [string] [required]
+
+Options:
+  -h, --help        show help                                                              [boolean]
+  -v, --version     show version number                                                    [boolean]
+      --print-logs  print logs to stderr                                                   [boolean]
+      --log-level   log level                   [string] [choices: "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure        run without external plugins                                           [boolean]
+      --attach      attach to a running server (e.g. http://localhost:4096)                 [string]
+      --password    password for the attached server                                        [string]
+      --username    username for the attached server                                        [string]
+      --format      output format             [string] [choices: "table", "json"] [default: "table"]"
+`;
+
+exports[`deepagentCode CLI help-text snapshots every documented command emits stable help text: deepagentCode goal stop --help 1`] = `
+"deepagent-code goal stop <sessionID>
+
+stop the goal loop of a session
+
+Positionals:
+  sessionID  session ID                                                          [string] [required]
+
+Options:
+  -h, --help        show help                                                              [boolean]
+  -v, --version     show version number                                                    [boolean]
+      --print-logs  print logs to stderr                                                   [boolean]
+      --log-level   log level                   [string] [choices: "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure        run without external plugins                                           [boolean]
+      --attach      attach to a running server (e.g. http://localhost:4096)                 [string]
+      --password    password for the attached server                                        [string]
+      --username    username for the attached server                                        [string]
+      --format      output format             [string] [choices: "table", "json"] [default: "table"]"
+`;
+
+exports[`deepagentCode CLI help-text snapshots every documented command emits stable help text: deepagentCode worktree list --help 1`] = `
+"deepagent-code worktree list
+
+list worktrees of the current project
+
+Options:
+  -h, --help        show help                                                              [boolean]
+  -v, --version     show version number                                                    [boolean]
+      --print-logs  print logs to stderr                                                   [boolean]
+      --log-level   log level                   [string] [choices: "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure        run without external plugins                                           [boolean]
+      --attach      attach to a running server (e.g. http://localhost:4096)                 [string]
+      --password    password for the attached server                                        [string]
+      --username    username for the attached server                                        [string]
+      --format      output format             [string] [choices: "table", "json"] [default: "table"]"
+`;
+
+exports[`deepagentCode CLI help-text snapshots every documented command emits stable help text: deepagentCode worktree create --help 1`] = `
+"deepagent-code worktree create
+
+create a new worktree
+
+Options:
+  -h, --help           show help                                                           [boolean]
+  -v, --version        show version number                                                 [boolean]
+      --print-logs     print logs to stderr                                                [boolean]
+      --log-level      log level                [string] [choices: "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure           run without external plugins                                        [boolean]
+      --attach         attach to a running server (e.g. http://localhost:4096)              [string]
+      --password       password for the attached server                                     [string]
+      --username       username for the attached server                                     [string]
+      --format         output format          [string] [choices: "table", "json"] [default: "table"]
+      --name           worktree/branch name (default: auto-generated)                       [string]
+      --start-command  additional startup script to run after the project's start command   [string]"
+`;
+
+exports[`deepagentCode CLI help-text snapshots every documented command emits stable help text: deepagentCode worktree remove --help 1`] = `
+"deepagent-code worktree remove <directory>
+
+remove a worktree (fail-closed unless --force)
+
+Positionals:
+  directory  worktree directory to remove                                        [string] [required]
+
+Options:
+  -h, --help        show help                                                              [boolean]
+  -v, --version     show version number                                                    [boolean]
+      --print-logs  print logs to stderr                                                   [boolean]
+      --log-level   log level                   [string] [choices: "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure        run without external plugins                                           [boolean]
+      --force       remove even if the worktree has uncommitted changes   [boolean] [default: false]
+      --attach      attach to a running server (e.g. http://localhost:4096)                 [string]
+      --password    password for the attached server                                        [string]
+      --username    username for the attached server                                        [string]
+      --format      output format             [string] [choices: "table", "json"] [default: "table"]"
+`;
+
+exports[`deepagentCode CLI help-text snapshots every documented command emits stable help text: deepagentCode oversight list --help 1`] = `
+"deepagent-code oversight list
+
+list pending approval queue items
+
+Options:
+  -h, --help        show help                                                              [boolean]
+  -v, --version     show version number                                                    [boolean]
+      --print-logs  print logs to stderr                                                   [boolean]
+      --log-level   log level                   [string] [choices: "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure        run without external plugins                                           [boolean]
+      --attach      attach to a running server (e.g. http://localhost:4096)                 [string]
+      --password    password for the attached server                                        [string]
+      --username    username for the attached server                                        [string]
+      --format      output format             [string] [choices: "table", "json"] [default: "table"]"
+`;
+
+exports[`deepagentCode CLI help-text snapshots every documented command emits stable help text: deepagentCode oversight metrics --help 1`] = `
+"deepagent-code oversight metrics
+
+show oversight metrics (DLQ, success rate, conflict rate)
+
+Options:
+  -h, --help        show help                                                              [boolean]
+  -v, --version     show version number                                                    [boolean]
+      --print-logs  print logs to stderr                                                   [boolean]
+      --log-level   log level                   [string] [choices: "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure        run without external plugins                                           [boolean]
+      --attach      attach to a running server (e.g. http://localhost:4096)                 [string]
+      --password    password for the attached server                                        [string]
+      --username    username for the attached server                                        [string]
+      --format      output format             [string] [choices: "table", "json"] [default: "table"]
+      --from        window start (epoch ms)                                                 [string]
+      --to          window end (epoch ms)                                                   [string]"
+`;
+
+exports[`deepagentCode CLI help-text snapshots every documented command emits stable help text: deepagentCode panel status --help 1`] = `
+"deepagent-code panel status <sessionID>
+
+show the effective Expert Panel armed state for a session
+
+Positionals:
+  sessionID  session ID                                                          [string] [required]
+
+Options:
+  -h, --help        show help                                                              [boolean]
+  -v, --version     show version number                                                    [boolean]
+      --print-logs  print logs to stderr                                                   [boolean]
+      --log-level   log level                   [string] [choices: "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure        run without external plugins                                           [boolean]
+      --attach      attach to a running server (e.g. http://localhost:4096)                 [string]
+      --password    password for the attached server                                        [string]
+      --username    username for the attached server                                        [string]
+      --format      output format             [string] [choices: "table", "json"] [default: "table"]"
+`;
+
+exports[`deepagentCode CLI help-text snapshots every documented command emits stable help text: deepagentCode review list --help 1`] = `
+"deepagent-code review list
+
+list recent DeepAgent run reviews
+
+Options:
+  -h, --help        show help                                                              [boolean]
+  -v, --version     show version number                                                    [boolean]
+      --print-logs  print logs to stderr                                                   [boolean]
+      --log-level   log level                   [string] [choices: "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure        run without external plugins                                           [boolean]
+      --attach      attach to a running server (e.g. http://localhost:4096)                 [string]
+      --password    password for the attached server                                        [string]
+      --username    username for the attached server                                        [string]
+      --format      output format             [string] [choices: "table", "json"] [default: "table"]"
+`;
+
+exports[`deepagentCode CLI help-text snapshots every documented command emits stable help text: deepagentCode wiki list --help 1`] = `
+"deepagent-code wiki list
+
+list Wiki pages
+
+Options:
+  -h, --help        show help                                                              [boolean]
+  -v, --version     show version number                                                    [boolean]
+      --print-logs  print logs to stderr                                                   [boolean]
+      --log-level   log level                   [string] [choices: "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure        run without external plugins                                           [boolean]
+      --attach      attach to a running server (e.g. http://localhost:4096)                 [string]
+      --password    password for the attached server                                        [string]
+      --username    username for the attached server                                        [string]
+      --format      output format             [string] [choices: "table", "json"] [default: "table"]
+      --type        filter by page type                                                     [string]"
+`;
+
+exports[`deepagentCode CLI help-text snapshots every documented command emits stable help text: deepagentCode wiki search --help 1`] = `
+"deepagent-code wiki search <text>
+
+full-text search over the Wiki
+
+Positionals:
+  text  search text                                                              [string] [required]
+
+Options:
+  -h, --help        show help                                                              [boolean]
+  -v, --version     show version number                                                    [boolean]
+      --print-logs  print logs to stderr                                                   [boolean]
+      --log-level   log level                   [string] [choices: "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure        run without external plugins                                           [boolean]
+      --type        filter by page type                                                     [string]
+      --scope       filter by scope                                                         [string]
+      --attach      attach to a running server (e.g. http://localhost:4096)                 [string]
+      --password    password for the attached server                                        [string]
+      --username    username for the attached server                                        [string]
+      --format      output format             [string] [choices: "table", "json"] [default: "table"]"
+`;
+
+exports[`deepagentCode CLI help-text snapshots every documented command emits stable help text: deepagentCode packs list --help 1`] = `
+"deepagent-code packs list
+
+list active domain packs (or the full catalog with --all)
+
+Options:
+  -h, --help        show help                                                              [boolean]
+  -v, --version     show version number                                                    [boolean]
+      --print-logs  print logs to stderr                                                   [boolean]
+      --log-level   log level                   [string] [choices: "DEBUG", "INFO", "WARN", "ERROR"]
+      --pure        run without external plugins                                           [boolean]
+      --attach      attach to a running server (e.g. http://localhost:4096)                 [string]
+      --password    password for the attached server                                        [string]
+      --username    username for the attached server                                        [string]
+      --format      output format             [string] [choices: "table", "json"] [default: "table"]
+      --all         show the full installed catalog instead of the active set
+                                                                          [boolean] [default: false]"
 `;
 
 exports[`deepagentCode CLI help-text snapshots every documented command emits stable help text: deepagentCode github install --help 1`] = `

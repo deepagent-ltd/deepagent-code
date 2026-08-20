@@ -1,6 +1,12 @@
-import { describe, expect, mock, beforeEach } from "bun:test"
+import { afterAll, describe, expect, mock, beforeEach } from "bun:test"
 import { Effect } from "effect"
 import { testEffect } from "../lib/effect"
+
+// Release the mock.module registrations below when this file finishes so
+// later files import the real MCP SDK modules.
+afterAll(() => {
+  mock.restore()
+})
 
 // Track what options were passed to each transport constructor
 const transportCalls: Array<{

@@ -154,6 +154,60 @@ function parseJSON(value: unknown) {
   })
 }
 
+/**
+ * Structural view of `@deepagent-code/llm` `LLMError` values. Detection is
+ * structural (not instanceof) so the classification survives error wrapping
+ * across stream/runtime boundaries; the llm schema classes satisfy it.
+ */
+export interface LLMErrorShape {
+  readonly _tag: "LLM.Error"
+  readonly reason: {
+    readonly _tag: string
+    readonly message?: string | undefined
+    readonly phase?: "pre-dispatch" | "post-dispatch" | undefined
+    readonly status?: number | undefined
+  }
+}
+
+export function isLLMError(error: unknown): error is LLMErrorShape {
+  if (!isRecord(error) || error._tag !== "LLM.Error") return false
+  return isRecord(error.reason) && typeof error.reason._tag === "string"
+}
+
+/**
+ * Classification-first retry decision based on the llm package's error
+ * reason, used whenever a reason is available. The string heuristics in
+ * `retryable` remain only as the fallback for errors without a reason.
+ *
+ * - `RateLimit` / `ProviderInternal` (429 / 5xx): transient, retry.
+ * - `Transport`: retry ONLY for `phase: "pre-dispatch"` — the request never
+ *   reached the provider. Post-dispatch transport failures may already have
+ *   been billed, so re-sending them here would duplicate the physical
+ *   request; recovery belongs to provider-attempt replay.
+ * - Everything else (`InvalidRequest`, `Authentication`, `QuotaExceeded`,
+ *   `ContentPolicy`, `NoRoute`, `InvalidProviderOutput`, `UnknownProvider`)
+ *   is terminal: no retry, no fallback to message heuristics.
+ */
+export function retryableViaReason(error: LLMErrorShape): Retryable | undefined {
+  const reason = error.reason
+  switch (reason._tag) {
+    case "RateLimit":
+      return { message: reason.message ?? "Rate Limited" }
+    case "ProviderInternal":
+      return { message: reason.message ?? "Provider is overloaded" }
+    case "Transport":
+      return reason.phase === "pre-dispatch" ? { message: reason.message ?? "Provider connection failed" } : undefined
+    default:
+      return undefined
+  }
+}
+
+/** Retry decision for a raw stream failure plus its parsed `Err` form. */
+export function retryableFor(raw: unknown, parsed: Err, provider: string): Retryable | undefined {
+  if (isLLMError(raw)) return retryableViaReason(raw)
+  return retryable(parsed, provider)
+}
+
 export function policy(opts: {
   provider: string
   parse: (error: unknown) => Err
@@ -162,7 +216,9 @@ export function policy(opts: {
   return Schedule.fromStepWithMetadata(
     Effect.succeed((meta: Schedule.InputMetadata<unknown>) => {
       const error = opts.parse(meta.input)
-      const retry = retryable(error, opts.provider)
+      // Prefer the llm reason classification when the raw failure carries one;
+      // fall back to the string heuristics for SDK/plain errors.
+      const retry = retryableFor(meta.input, error, opts.provider)
       if (!retry) return Cause.done(meta.attempt)
       return Effect.gen(function* () {
         const wait = delay(meta.attempt, SessionV1.APIError.isInstance(error) ? error : undefined)

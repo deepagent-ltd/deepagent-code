@@ -10,6 +10,7 @@ import { FSUtil } from "@deepagent-code/core/fs-util"
 import { Global } from "@deepagent-code/core/global"
 import { LocationChangeJournal } from "@deepagent-code/core/location-index/change-journal"
 import { LocationCommitLock } from "@deepagent-code/core/location-index/commit-lock"
+import { projectIdForWorkspace } from "@deepagent-code/core/deepagent/durable-knowledge-store"
 import { AbsolutePath } from "@deepagent-code/core/schema"
 import { Context, Effect, Layer } from "effect"
 import { randomUUID } from "node:crypto"
@@ -40,12 +41,16 @@ export const layer = Layer.effect(
     const state = yield* InstanceState.make(
       Effect.fn("LocationIndexRuntime.instance")(function* (instance) {
         if (!flags.locationIndexesV2Shadow) return undefined
+        // Non-git instances resolve to the "global" sentinel project id, which is NOT a valid
+        // observed project for durable authorities: the released-knowledge scope guard pins
+        // context_project_scope_identity.observed_project_id to the canonical durable knowledge
+        // project id. Record that canonical id here so whichever resolver arrives first writes it.
         const identity = yield* identities.resolve({
           boundary: { kind: "implicit_local" },
           directory: AbsolutePath.make(instance.directory),
           project: instance.project.vcs === "git"
             ? { kind: "git", observedProjectId: instance.project.id }
-            : { kind: "registered_root", observedProjectId: instance.project.id },
+            : { kind: "registered_root", observedProjectId: projectIdForWorkspace(instance.directory) },
         })
         const built = yield* Layer.build(
           LocationIndexCoordinator.layer({

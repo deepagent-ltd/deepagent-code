@@ -112,6 +112,12 @@ export type SessionRunState = {
   // The last soft plan-gate warning claimed by a tool call. A stale latch can span many tool calls;
   // persisting its fingerprint prevents duplicate process-log warnings without touching history.
   lastPlanGateNudgeFingerprint: string | null
+  // FEAT-007: the locked active domain pack snapshot id of the LATEST gateway run for this session
+  // (`pack_snapshot:<hash>`, or the registry's empty/error sentinels). Recorded by the gateway at the
+  // run entry from the SAME activation knowledge retrieval constrains on (single authority, FEAT-002),
+  // and read by the session prompt loop to attribute each tool-request receipt's
+  // context_active_pack_set_snapshot_id. Null when no gateway run locked a snapshot for the session.
+  packSnapshotId: string | null
 }
 
 // V3.9 §D: session-state pointer to a running goal. The GoalLoop's GoalStatus (persisted in the
@@ -175,6 +181,7 @@ export const getOrCreate = (sessionId: string, mode: AgentMode): SessionRunState
     completedAt: null,
     lastAdmissionUserMessageId: undefined,
     lastPlanGateNudgeFingerprint: null,
+    packSnapshotId: null,
   }
   sessions.set(sessionId, state)
   saveToDisk()
@@ -679,6 +686,8 @@ function normalizeState(state: SessionRunState): SessionRunState {
     panelRounds: state.panelRounds ?? null,
     activeGoal: state.activeGoal ?? null,
     lastPlanGateNudgeFingerprint: state.lastPlanGateNudgeFingerprint ?? null,
+    // Backfill: sessions persisted before FEAT-007 have no pack snapshot attribution → null.
+    packSnapshotId: state.packSnapshotId ?? null,
   }
   // PR-4 migration cleanup: the legacy `suppressedFingerprints: string[]` field is carried through by
   // the `...state` spread above. Once its contents are migrated into `suppressedValidations`, drop the

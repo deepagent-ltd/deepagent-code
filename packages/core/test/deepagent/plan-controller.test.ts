@@ -102,6 +102,13 @@ describe("tool classification", () => {
     }
   })
 
+  test("FEAT-011 T5: facade activity_start/activity_control are mutating; status/result are read-only", () => {
+    expect(isMutatingTool("activity_start")).toBe(true)
+    expect(isMutatingTool("activity_control")).toBe(true)
+    expect(isMutatingTool("activity_status")).toBe(false)
+    expect(isMutatingTool("activity_result")).toBe(false)
+  })
+
   test("read/search/plan/task are never mutating (must pass even when stale)", () => {
     for (const t of ["read", "grep", "glob", "list", "search", "plan", "task", "webfetch"]) {
       expect(isMutatingTool(t)).toBe(false)

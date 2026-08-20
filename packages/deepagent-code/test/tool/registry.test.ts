@@ -145,6 +145,10 @@ const withBrokenPlugin = testEffect(
 const itNoCodeIntel = testEffect(
   Layer.mergeAll(registryLayer({ flags: { codeIntelTool: false } }), node, Agent.defaultLayer),
 )
+// FEAT-011 T4: the activity facade tools are staged behind DEEPAGENT_CODE_ACTIVITY_FACADE.
+const itActivityFacade = testEffect(
+  Layer.mergeAll(registryLayer({ flags: { activityFacade: true } }), node, Agent.defaultLayer),
+)
 const itContextToolsV2 = testEffect(
   Layer.mergeAll(
     registryLayer({
@@ -240,6 +244,94 @@ describe("tool.registry", () => {
           agent: reviewer,
         })).map((tool) => tool.id),
       ).not.toContain("pr_finalize")
+    }),
+  )
+
+  // FEAT-011 T4 — flag-gated visibility. The facade flag defaults OFF (staged), so the default
+  // registry output must carry ZERO activity_* tools (byte-identical visibility to pre-facade).
+  it.instance("hides all activity facade tools while DEEPAGENT_CODE_ACTIVITY_FACADE stays staged off", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const agents = yield* Agent.Service
+      const build = yield* agents.get("build")
+
+      const ids = yield* registry.ids()
+      expect(ids).not.toContain("activity_start")
+      expect(ids).not.toContain("activity_status")
+      expect(ids).not.toContain("activity_result")
+      expect(ids).not.toContain("activity_control")
+
+      const projected = (yield* registry.tools({
+        providerID: ProviderV2.ID.make("deepagent-code"),
+        modelID: ModelV2.ID.make("test"),
+        agent: build,
+      })).map((tool) => tool.id)
+      expect(projected.filter((id) => id.startsWith("activity_"))).toHaveLength(0)
+    }),
+    30_000,
+  )
+
+  itActivityFacade.instance("exposes activity facade tools to primary agents only when the flag is on", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const agents = yield* Agent.Service
+      const build = yield* agents.get("build")
+      const reviewer = yield* agents.get("reviewer")
+
+      const primary = (yield* registry.tools({
+        providerID: ProviderV2.ID.make("deepagent-code"),
+        modelID: ModelV2.ID.make("test"),
+        agent: build,
+      })).map((tool) => tool.id)
+      expect(primary).toContain("activity_start")
+      expect(primary).toContain("activity_status")
+      expect(primary).toContain("activity_result")
+      expect(primary).toContain("activity_control")
+
+      // Non-primary agents never see the facade (mirrors the pr_finalize projection fence).
+      const subagent = (yield* registry.tools({
+        providerID: ProviderV2.ID.make("deepagent-code"),
+        modelID: ModelV2.ID.make("test"),
+        agent: reviewer,
+      })).map((tool) => tool.id)
+      expect(subagent.filter((id) => id.startsWith("activity_"))).toHaveLength(0)
+    }),
+    30_000,
+  )
+
+  itActivityFacade.instance("activity facade tool schemas stay bounded (T6)", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const all = yield* registry.all()
+      const status = all.find((tool) => tool.id === "activity_status")
+      const start = all.find((tool) => tool.id === "activity_start")
+      if (!status || !start) throw new Error("activity facade tools missing from registry")
+
+      // status limit: hard ceiling 20.
+      expect(Result.isSuccess(Schema.decodeUnknownResult(status.parameters)({ limit: 20 }))).toBe(true)
+      expect(Result.isSuccess(Schema.decodeUnknownResult(status.parameters)({ limit: 21 }))).toBe(false)
+      expect(Result.isSuccess(Schema.decodeUnknownResult(status.parameters)({ limit: 0 }))).toBe(false)
+
+      // start: subkind is a closed enum, objective is required.
+      expect(Result.isSuccess(Schema.decodeUnknownResult(start.parameters)({ subkind: "task", objective: "x" }))).toBe(
+        true,
+      )
+      expect(Result.isSuccess(Schema.decodeUnknownResult(start.parameters)({ subkind: "other", objective: "x" }))).toBe(
+        false,
+      )
+      expect(Result.isSuccess(Schema.decodeUnknownResult(start.parameters)({ subkind: "goal" }))).toBe(false)
+
+      // budget fields must be positive integers when supplied.
+      expect(
+        Result.isSuccess(
+          Schema.decodeUnknownResult(start.parameters)({ subkind: "goal", objective: "x", budget: { maxTicks: 5 } }),
+        ),
+      ).toBe(true)
+      expect(
+        Result.isSuccess(
+          Schema.decodeUnknownResult(start.parameters)({ subkind: "goal", objective: "x", budget: { maxTicks: -1 } }),
+        ),
+      ).toBe(false)
     }),
   )
 

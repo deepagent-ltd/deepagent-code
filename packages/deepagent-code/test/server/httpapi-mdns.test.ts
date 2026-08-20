@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test"
+import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test"
 import * as Log from "@deepagent-code/core/util/log"
 import { withTimeout } from "../../src/util/timeout"
 
@@ -29,6 +29,12 @@ void mock.module("bonjour-service", () => ({
 
 // Import Server AFTER the mock so the MDNS module picks up the stub.
 const { Server } = await import("../../src/server/server")
+
+// Release the bonjour-service mock when this file finishes so later files
+// that import modules still unloaded see the real dependency.
+afterAll(() => {
+  mock.restore()
+})
 
 beforeEach(() => {
   events.length = 0

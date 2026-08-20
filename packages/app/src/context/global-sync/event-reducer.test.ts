@@ -546,6 +546,50 @@ describe("applyDirectoryEvent", () => {
     expect(refreshed).toEqual([sessionID])
   })
 
+  test("BUG-005: treats a same-activity revision mismatch as staleness, not a conflict", () => {
+    const sessionID = "ses_1"
+    const current = assistantMessage("msg_assistant", sessionID, {
+      activityID: "activity-1",
+      revision: 5,
+      state: "progress",
+    })
+    const [store, setStore] = createStore(baseState({ message: { [sessionID]: [current] } }))
+    const refreshed: string[] = []
+    const apply = (revision: number, state: "progress" | "final") =>
+      applyDirectoryEvent({
+        event: {
+          type: "message.updated",
+          properties: {
+            info: assistantMessage(current.id, sessionID, {
+              activityID: "activity-1",
+              revision,
+              state,
+            }),
+          },
+        },
+        store,
+        setStore,
+        push() {},
+        directory: "/tmp",
+        loadLsp() {},
+        refetchSession: (id) => refreshed.push(id),
+      })
+
+    // A stale page/event carrying an older revision must keep the higher one and never escalate.
+    apply(2, "progress")
+    expect(refreshed).toEqual([])
+    expect(
+      (store.message[sessionID]?.[0] as Extract<Message, { role: "assistant" }>).activityProgress?.revision,
+    ).toBe(5)
+
+    // A newer revision is adopted without triggering a canonical refresh either.
+    apply(7, "final")
+    expect(refreshed).toEqual([])
+    const progress = (store.message[sessionID]?.[0] as Extract<Message, { role: "assistant" }>).activityProgress
+    expect(progress?.revision).toBe(7)
+    expect(progress?.state).toBe("final")
+  })
+
   test("allows a same-revision activity marker to advance but never regress", () => {
     const sessionID = "ses_1"
     const provisional = assistantMessage("msg_assistant", sessionID, {
@@ -804,6 +848,83 @@ describe("applyDirectoryEvent", () => {
 
     expect(pushes).toEqual(["/tmp"])
     expect(lspLoads).toBe(1)
+  })
+})
+
+// BUG-407-012 root cause B: the 6-byte ID time field wrapped on 2026-08-14, so chronologically
+// NEWER messages/parts carry lexicographically SMALLER IDs (`msg_00...` < `msg_ff...`). Realtime
+// inserts must keep (time, id) chronological order instead of ID order.
+describe("message ordering across the ID time wrap (BUG-407-012)", () => {
+  const WRAP_OLD_ID = "msg_ffa88f0840015Xj7vIrcdNEJJB" // 2026-08-13 17:51:46
+  const WRAP_NEW_ID = "msg_00d62a3c4001KqYw3o8wBBH6qm" // 2026-08-17 09:42:43
+  const WRAP_OLD_TIME = 1786614706000
+  const WRAP_NEW_TIME = 1786930963000
+
+  const timedUserMessage = (id: string, sessionID: string, created: number) =>
+    ({ ...userMessage(id, sessionID), time: { created } }) as Message
+
+  const timedTextPart = (id: string, sessionID: string, messageID: string, start: number) =>
+    ({
+      id,
+      sessionID,
+      messageID,
+      type: "text",
+      text: id,
+      time: { start },
+    }) as Part
+
+  test("message.updated appends a chronologically newer msg_00... after the older msg_ff...", () => {
+    const sessionID = "ses_1"
+    expect(WRAP_NEW_ID < WRAP_OLD_ID).toBe(true) // sanity: raw ID order is reversed
+    const [store, setStore] = createStore(
+      baseState({ message: { [sessionID]: [timedUserMessage(WRAP_OLD_ID, sessionID, WRAP_OLD_TIME)] } }),
+    )
+
+    applyDirectoryEvent({
+      event: {
+        type: "message.updated",
+        properties: { info: timedUserMessage(WRAP_NEW_ID, sessionID, WRAP_NEW_TIME) },
+      },
+      store,
+      setStore,
+      push() {},
+      directory: "/tmp",
+      loadLsp() {},
+    })
+
+    expect(store.message[sessionID]?.map((message) => message.id)).toEqual([WRAP_OLD_ID, WRAP_NEW_ID])
+
+    // Identity-based removal still works in a (time, id)-ordered array.
+    applyDirectoryEvent({
+      event: { type: "message.removed", properties: { sessionID, messageID: WRAP_OLD_ID } },
+      store,
+      setStore,
+      push() {},
+      directory: "/tmp",
+      loadLsp() {},
+    })
+
+    expect(store.message[sessionID]?.map((message) => message.id)).toEqual([WRAP_NEW_ID])
+  })
+
+  test("message.part.updated appends a chronologically newer wrapped part at the tail", () => {
+    const sessionID = "ses_1"
+    const messageID = WRAP_NEW_ID
+    const oldPart = timedTextPart("prt_ffa88f084001aaaa", sessionID, messageID, WRAP_OLD_TIME)
+    const newPart = timedTextPart("prt_00d62a3c4001bbbb", sessionID, messageID, WRAP_NEW_TIME)
+    expect(newPart.id < oldPart.id).toBe(true) // sanity: raw ID order is reversed
+    const [store, setStore] = createStore(baseState({ part: { [messageID]: [oldPart] } }))
+
+    applyDirectoryEvent({
+      event: { type: "message.part.updated", properties: { part: newPart } },
+      store,
+      setStore,
+      push() {},
+      directory: "/tmp",
+      loadLsp() {},
+    })
+
+    expect(store.part[messageID]?.map((part) => part.id)).toEqual([oldPart.id, newPart.id])
   })
 })
 

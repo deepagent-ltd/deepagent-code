@@ -14,7 +14,7 @@ import {
   Google,
 } from "@deepagent-code/llm/providers/compat"
 import * as MainProviders from "@deepagent-code/llm/providers"
-import { OpenAIChat, OpenAICompatibleChat, OpenAIResponses } from "@deepagent-code/llm/protocols"
+import { OpenAIChat, OpenAICompatibleChat, OpenAICompatibleResponses, OpenAIResponses } from "@deepagent-code/llm/protocols"
 import * as AnthropicMessages from "@deepagent-code/llm/protocols/anthropic-messages"
 
 describe("public exports", () => {
@@ -41,6 +41,8 @@ describe("public exports", () => {
     expect(OpenAI.provider.responsesWebSocket).toBe(OpenAI.responsesWebSocket)
     expect(OpenAI.configure({ apiKey: "fixture" }).responses).toBeFunction()
     expect(OpenAICompatible.deepseek.model).toBeFunction()
+    expect(OpenAICompatible.deepseek.responses).toBeFunction()
+    expect(OpenAICompatible.deepseek.chat).toBeFunction()
     expect(Anthropic.model).toBeFunction()
     expect(CloudflareAIGateway.configure).toBeFunction()
     expect(CloudflareAIGateway.configure({ accountId: "fixture", gatewayApiKey: "fixture" }).model).toBeFunction()
@@ -67,6 +69,7 @@ describe("public exports", () => {
   test("protocol barrels expose supported low-level routes", () => {
     expect(OpenAIChat.route.id).toBe("openai-chat")
     expect(OpenAICompatibleChat.route.id).toBe("openai-compatible-chat")
+    expect(OpenAICompatibleResponses.route.id).toBe("openai-compatible-responses")
     expect(OpenAIResponses.route.id).toBe("openai-responses")
     expect(OpenAIResponses.webSocketRoute.id).toBe("openai-responses-websocket")
     expect(AnthropicMessages.route.id).toBe("anthropic-messages")
