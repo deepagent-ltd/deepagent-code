@@ -10,8 +10,6 @@ import { LocationMutation } from "../location-mutation"
 import { AppProcess } from "../process"
 import { PermissionV2 } from "../permission"
 import { Policy } from "../policy"
-import { makeLocationNode } from "../effect/app-node"
-import { ToolRegistry } from "./registry"
 import { ServerCapabilities } from "../server-capabilities"
 import { PositiveInt } from "../schema"
 import { Tool } from "./tool"
@@ -276,9 +274,3 @@ export const layer = Layer.effectDiscard(
       .pipe(Effect.orDie)
   }),
 )
-
-export const node = makeLocationNode({
-  name: "tool/bash",
-  layer,
-  deps: [ToolRegistry.node, LocationMutation.node, FSUtil.node, AppProcess.node, Config.node, PermissionV2.node, Policy.node],
-})

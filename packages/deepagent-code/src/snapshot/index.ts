@@ -98,10 +98,24 @@ type DiffRow = {
 
 type State = Omit<Interface, "init">
 
+// BUG-407-012 gap C: optional session attribution threaded into capture budget
+// warnings + the degraded outcome, so an over-budget snapshot can be attributed
+// to the session/activity that triggered it.
+export interface Attribution {
+  readonly sessionId?: string
+  readonly activityId?: string
+}
+
+export interface TrackOutcome {
+  readonly hash?: string
+  readonly degraded?: { readonly reason: string } & Record<string, unknown>
+}
+
 export interface Interface {
   readonly init: () => Effect.Effect<void>
   readonly cleanup: () => Effect.Effect<void>
-  readonly track: () => Effect.Effect<string | undefined>
+  readonly track: (attribution?: Attribution) => Effect.Effect<string | undefined>
+  readonly trackOutcome: (attribution?: Attribution) => Effect.Effect<TrackOutcome>
   readonly patch: (hash: string) => Effect.Effect<Patch>
   readonly restore: (snapshot: string) => Effect.Effect<void>
   readonly revert: (patches: Patch[]) => Effect.Effect<void>
@@ -284,7 +298,10 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
           yield* fs.writeFileString(target, text ? `${text}\n` : "").pipe(Effect.orDie)
         })
 
-        const add = Effect.fnUntraced(function* () {
+        // BUG-407-012 gap C: budget failures return a typed degraded attribution
+        // (reason + budget numbers) instead of a bare `false`, and budget warnings
+        // carry the session/activity attribution of the triggering turn.
+        const add = Effect.fnUntraced(function* (attribution?: Attribution) {
           yield* sync()
           const [diff, other] = yield* Effect.all(
             [
@@ -314,20 +331,30 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
               diffStderr: diff.stderr,
               otherCode: other.code,
               otherStderr: other.stderr,
+              ...attribution,
             })
-            return false
+            return { ok: false, degraded: { reason: "snapshot_discovery_failed", ...attribution } }
           }
 
           const tracked = diff.text.split("\0").filter(Boolean)
           const untracked = other.text.split("\0").filter(Boolean)
           const all = Array.from(new Set([...tracked, ...untracked]))
-          if (!all.length) return true
+          if (!all.length) return { ok: true }
           if (all.length > DiffLimits.captureCandidateFiles) {
             log.warn("snapshot capture exceeded candidate budget", {
               files: all.length,
               limit: DiffLimits.captureCandidateFiles,
+              ...attribution,
             })
-            return false
+            return {
+              ok: false,
+              degraded: {
+                reason: "snapshot_candidate_budget_exceeded",
+                files: all.length,
+                limit: DiffLimits.captureCandidateFiles,
+                ...attribution,
+              },
+            }
           }
 
           // Resolve source-repo ignore rules against the exact candidate set.
@@ -337,19 +364,21 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
             log.warn("failed to resolve snapshot ignore rules", {
               timedOut: ignored.timedOut,
               outputLimited: ignored.outputLimited,
+              ...attribution,
             })
-            return false
+            return { ok: false, degraded: { reason: "snapshot_ignore_resolution_failed", ...attribution } }
           }
 
           // Remove newly-ignored files from snapshot index to prevent re-adding
           if (ignored.files.size > 0) {
             const ignoredFiles = Array.from(ignored.files)
             log.info("removing gitignored files from snapshot", { count: ignoredFiles.length })
-            if (!(yield* drop(ignoredFiles))) return false
+            if (!(yield* drop(ignoredFiles)))
+              return { ok: false, degraded: { reason: "snapshot_index_drop_failed", ...attribution } }
           }
 
           const allow = all.filter((item) => !ignored.files.has(item))
-          if (!allow.length) return true
+          if (!allow.length) return { ok: true }
 
           const sizes = (yield* Effect.all(
             allow.map((item) =>
@@ -380,21 +409,48 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
               totalLimit: DiffLimits.captureTotalBytes,
               oversizedFile: oversized?.item,
               fileLimit: DiffLimits.captureFileBytes,
+              ...attribution,
             })
-            return false
+            return {
+              ok: false,
+              degraded: {
+                reason: "snapshot_source_budget_exceeded",
+                files: staged.length,
+                totalBytes,
+                totalLimit: DiffLimits.captureTotalBytes,
+                oversizedFile: oversized?.item,
+                fileLimit: DiffLimits.captureFileBytes,
+                ...attribution,
+              },
+            }
           }
           // Stage only the allowed candidate paths so snapshot updates stay scoped.
-          return yield* stage(staged)
+          return yield* stage(staged).pipe(
+            Effect.map((ok) => (ok ? { ok: true } : { ok: false, degraded: { reason: "snapshot_stage_failed", ...attribution } })),
+          )
         })
 
-        const capture = () =>
-          add().pipe(
+        const captureOutcome = (attribution?: Attribution): Effect.Effect<TrackOutcome> =>
+          add(attribution).pipe(
+            Effect.map((result) => (result.ok ? {} : { degraded: result.degraded })),
             Effect.timeoutOrElse({
               duration: DiffLimits.wallTime,
               orElse: () =>
-                Effect.logWarning("snapshot capture exceeded wall-time budget").pipe(Effect.as(false)),
+                Effect.logWarning("snapshot capture exceeded wall-time budget", attribution ?? {}).pipe(
+                  Effect.as({
+                    degraded: {
+                      reason: "snapshot_wall_time_budget_exceeded",
+                      wallTimeMs: Duration.toMillis(DiffLimits.wallTime),
+                      ...attribution,
+                    },
+                  }),
+                ),
             }),
           )
+
+        // Boolean shape for non-turn callers (patch/diff/revert).
+        const capture = (attribution?: Attribution) =>
+          captureOutcome(attribution).pipe(Effect.map((outcome) => !outcome.degraded))
 
         const cleanup = Effect.fnUntraced(function* () {
           return yield* locked(
@@ -414,10 +470,10 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
           )
         })
 
-        const track = Effect.fnUntraced(function* () {
+        const trackOutcome = Effect.fnUntraced(function* (attribution?: Attribution) {
           return yield* locked(
             Effect.gen(function* () {
-              if (!(yield* enabled())) return
+              if (!(yield* enabled())) return {}
               const existed = yield* exists(state.gitdir)
               yield* fs.ensureDir(state.gitdir).pipe(Effect.orDie)
               if (!existed) {
@@ -430,14 +486,27 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
                 yield* git(["--git-dir", state.gitdir, "config", "core.fsmonitor", "false"])
                 log.info("initialized")
               }
-              if (!(yield* capture())) return
+              const captured = yield* captureOutcome(attribution)
+              if (captured.degraded) return captured
               const result = yield* git(args(["write-tree"]), { cwd: state.directory })
-              if (result.code !== 0 || result.timedOut) return
+              if (result.code !== 0 || result.timedOut)
+                return {
+                  degraded: {
+                    reason: "snapshot_write_tree_failed",
+                    exitCode: result.code,
+                    timedOut: result.timedOut,
+                    ...attribution,
+                  },
+                }
               const hash = result.text.trim()
               log.info("tracking", { hash, cwd: state.directory, git: state.gitdir })
-              return hash
+              return { hash }
             }),
           )
+        })
+
+        const track = Effect.fnUntraced(function* (attribution?: Attribution) {
+          return (yield* trackOutcome(attribution)).hash
         })
 
         const patch = Effect.fnUntraced(function* (hash: string) {
@@ -1038,7 +1107,7 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
           Effect.forkScoped,
         )
 
-        return { cleanup, track, patch, restore, revert, diff, diffManifest, diffFullManifest, diffFull }
+        return { cleanup, track, trackOutcome, patch, restore, revert, diff, diffManifest, diffFullManifest, diffFull }
       }),
     )
 
@@ -1049,8 +1118,11 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Serv
       cleanup: Effect.fn("Snapshot.cleanup")(function* () {
         return yield* InstanceState.useEffect(state, (s) => s.cleanup())
       }),
-      track: Effect.fn("Snapshot.track")(function* () {
-        return yield* InstanceState.useEffect(state, (s) => s.track())
+      track: Effect.fn("Snapshot.track")(function* (attribution?: Attribution) {
+        return yield* InstanceState.useEffect(state, (s) => s.track(attribution))
+      }),
+      trackOutcome: Effect.fn("Snapshot.trackOutcome")(function* (attribution?: Attribution) {
+        return yield* InstanceState.useEffect(state, (s) => s.trackOutcome(attribution))
       }),
       patch: Effect.fn("Snapshot.patch")(function* (hash: string) {
         return yield* InstanceState.useEffect(state, (s) => s.patch(hash))

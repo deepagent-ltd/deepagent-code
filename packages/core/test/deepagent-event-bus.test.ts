@@ -1,10 +1,15 @@
-import { describe, expect } from "bun:test"
-import { Effect, Fiber, Layer, Stream } from "effect"
+import { describe, expect, test } from "bun:test"
+import { Context, Effect, Fiber, Layer, Stream } from "effect"
 import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
 import { DeepAgentEvent } from "@deepagent-code/core/deepagent/deepagent-event"
-import { DeepAgentEventTable, DeepAgentEventDropTable } from "@deepagent-code/core/deepagent/deepagent-event-sql"
+import {
+  DeepAgentEventTable,
+  DeepAgentEventDropTable,
+  DeepAgentEventDeliveryTable,
+  DeepAgentConsumerGroupTable,
+} from "@deepagent-code/core/deepagent/deepagent-event-sql"
 import { Database } from "@deepagent-code/core/database/database"
-import { eq } from "drizzle-orm"
+import { and, asc, eq } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
 
 // A deterministic mutable clock so retry-backoff / dedupe-window assertions are exact.
@@ -522,5 +527,245 @@ describe("DeepAgentEventBus publish latency (§F1)", () => {
         .pipe(Effect.orDie)
       expect(row?.ms).toBe(0)
     }),
+  )
+
+  it.effect("RISK-001: two claimants cannot claim the same due delivery", () =>
+    Effect.gen(function* () {
+      const bus = yield* DeepAgentEventBus.Service
+      setNow(20_000)
+      const event = yield* bus.publish(input({ idempotencyKey: "claim-1" }))
+      yield* bus.nack({ subscriptionGroup: "router", eventID: event.id, reason: "boom" })
+      // due at 21_000 (backoff base 1000)
+      const first = yield* bus.claimDue({ subscriptionGroup: "router", claimantId: "a", now: 21_000 })
+      const second = yield* bus.claimDue({ subscriptionGroup: "router", claimantId: "b", now: 21_000 })
+      expect(first.deliveries.map((d) => d.eventID)).toEqual([event.id])
+      expect(second.deliveries).toEqual([])
+    }),
+  )
+
+  it.effect("RISK-001: an expired lease becomes re-claimable, stale ack is a no-op", () =>
+    Effect.gen(function* () {
+      const bus = yield* DeepAgentEventBus.Service
+      setNow(30_000)
+      const event = yield* bus.publish(input({ idempotencyKey: "claim-2" }))
+      yield* bus.nack({ subscriptionGroup: "router", eventID: event.id, reason: "boom" })
+      const stale = yield* bus.claimDue({
+        subscriptionGroup: "router",
+        claimantId: "slow-worker",
+        now: 31_000,
+        leaseMs: 5_000,
+      })
+      expect(stale.deliveries).toHaveLength(1)
+      // lease expired at 36_000 → a fresh claimant wins the row.
+      const fresh = yield* bus.claimDue({
+        subscriptionGroup: "router",
+        claimantId: "fresh-worker",
+        now: 36_001,
+        leaseMs: 5_000,
+      })
+      expect(fresh.deliveries.map((d) => d.eventID)).toEqual([event.id])
+      // the stale token can no longer settle the delivery…
+      const staleAck = yield* bus.ackClaim({
+        subscriptionGroup: "router",
+        eventID: event.id,
+        claimToken: stale.claimToken,
+      })
+      expect(staleAck).toBe(false)
+      // …but the fresh token can.
+      const freshAck = yield* bus.ackClaim({
+        subscriptionGroup: "router",
+        eventID: event.id,
+        claimToken: fresh.claimToken,
+      })
+      expect(freshAck).toBe(true)
+      const due = yield* bus.dueRetries(99_999)
+      expect(due.filter((d) => d.eventID === event.id)).toEqual([])
+    }),
+  )
+
+  it.effect("RISK-001: nackClaim releases the claim and schedules backoff", () =>
+    Effect.gen(function* () {
+      const bus = yield* DeepAgentEventBus.Service
+      setNow(40_000)
+      const event = yield* bus.publish(input({ idempotencyKey: "claim-3" }))
+      yield* bus.nack({ subscriptionGroup: "router", eventID: event.id, reason: "boom" })
+      const claim = yield* bus.claimDue({ subscriptionGroup: "router", claimantId: "w", now: 41_000 })
+      const applied = yield* bus.nackClaim({
+        subscriptionGroup: "router",
+        eventID: event.id,
+        claimToken: claim.claimToken,
+        reason: "still failing",
+      })
+      expect(applied).toBe(true)
+      // claim released → immediately re-claimable once the new backoff (attempt 2 → +2000) elapses.
+      const early = yield* bus.claimDue({ subscriptionGroup: "router", claimantId: "w2", now: 41_001 })
+      expect(early.deliveries).toEqual([])
+      const later = yield* bus.claimDue({ subscriptionGroup: "router", claimantId: "w2", now: 43_000 })
+      expect(later.deliveries.map((d) => d.eventID)).toEqual([event.id])
+      expect(later.deliveries[0]?.attempts).toBe(2)
+    }),
+  )
+
+  it.effect("RISK-001: null-lease legacy rows remain claimable", () =>
+    Effect.gen(function* () {
+      const bus = yield* DeepAgentEventBus.Service
+      setNow(50_000)
+      const event = yield* bus.publish(input({ idempotencyKey: "claim-4" }))
+      // plain nack creates a pending row without claim columns (legacy shape)
+      yield* bus.nack({ subscriptionGroup: "router", eventID: event.id, reason: "boom" })
+      const claim = yield* bus.claimDue({ subscriptionGroup: "router", claimantId: "w", now: 51_000 })
+      expect(claim.deliveries.map((d) => d.eventID)).toEqual([event.id])
+    }),
+  )
+})
+
+describe("DeepAgentEventBus RISK-006 (multi-process extensions)", () => {
+  it.effect("consumer groups from different workspaces coexist (workspace_id persisted, default '')", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      const bus = yield* DeepAgentEventBus.Service
+      setNow(1_000)
+      yield* bus.registerConsumerGroup("grp-a", undefined, "wrk_a")
+      yield* bus.registerConsumerGroup("grp-b", "ci.failure", "wrk_b")
+      yield* bus.registerConsumerGroup("grp-legacy") // no workspaceID → "" (back-compat)
+      const rows = yield* db
+        .select()
+        .from(DeepAgentConsumerGroupTable)
+        .orderBy(asc(DeepAgentConsumerGroupTable.group_id))
+        .all()
+        .pipe(Effect.orDie)
+      expect(rows.map((r) => [r.group_id, r.workspace_id])).toEqual([
+        ["grp-a", "wrk_a"],
+        ["grp-b", "wrk_b"],
+        ["grp-legacy", ""],
+      ])
+      // RISK-006 residual — delivery routing is workspace-scoped: a wrk_a event is owed to the
+      // wrk_a group and the global ("") group, but NOT to the wrk_b group.
+      yield* bus.publish(input({ idempotencyKey: "ws-1", workspaceID: "wrk_a" }))
+      const due = yield* bus.dueRetries(2_000)
+      expect(due.map((d) => d.subscriptionGroup).sort()).toEqual(["grp-a", "grp-legacy"])
+      // unregister stays keyed by group_id only (compat)
+      yield* bus.unregisterConsumerGroup("grp-a")
+      const remaining = yield* db
+        .select({ group_id: DeepAgentConsumerGroupTable.group_id })
+        .from(DeepAgentConsumerGroupTable)
+        .orderBy(asc(DeepAgentConsumerGroupTable.group_id))
+        .all()
+        .pipe(Effect.orDie)
+      expect(remaining.map((r) => r.group_id)).toEqual(["grp-b", "grp-legacy"])
+      // re-registering upserts workspace_id (idempotent)
+      yield* bus.registerConsumerGroup("grp-b", "ci.failure", "wrk_c")
+      const moved = yield* db
+        .select({ workspace_id: DeepAgentConsumerGroupTable.workspace_id })
+        .from(DeepAgentConsumerGroupTable)
+        .where(eq(DeepAgentConsumerGroupTable.group_id, "grp-b"))
+        .get()
+        .pipe(Effect.orDie)
+      expect(moved?.workspace_id).toBe("wrk_c")
+    }),
+  )
+
+  it.effect("high/critical deliveries are returned by dueRetries/claimDue before normal/low", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      const bus = yield* DeepAgentEventBus.Service
+      setNow(100_000)
+      yield* bus.registerConsumerGroup("prio-grp", undefined, "wrk_p")
+      const low = yield* bus.publish(input({ idempotencyKey: "p-low", priority: "low", workspaceID: "wrk_p" }))
+      setNow(100_001)
+      const normal = yield* bus.publish(input({ idempotencyKey: "p-normal", priority: "normal", workspaceID: "wrk_p" }))
+      setNow(100_002)
+      const high = yield* bus.publish(input({ idempotencyKey: "p-high", priority: "high", workspaceID: "wrk_p" }))
+      setNow(100_003)
+      const critical = yield* bus.publish(input({ idempotencyKey: "p-crit", priority: "critical", workspaceID: "wrk_p" }))
+      // the event's priority is denormalized onto the delivery row at publish time.
+      const hiRow = yield* db
+        .select({ priority: DeepAgentEventDeliveryTable.priority })
+        .from(DeepAgentEventDeliveryTable)
+        .where(
+          and(
+            eq(DeepAgentEventDeliveryTable.event_id, high.id),
+            eq(DeepAgentEventDeliveryTable.subscription_group, "prio-grp"),
+          ),
+        )
+        .get()
+        .pipe(Effect.orDie)
+      expect(hiRow?.priority).toBe("high")
+      // dueRetries orders priority DESC even though normal was owed EARLIER than high/critical.
+      const due = yield* bus.dueRetries(100_004)
+      expect(due.map((d) => d.eventID)).toEqual([critical.id, high.id, normal.id, low.id])
+      // claimDue follows the same persistent ordering.
+      const claim = yield* bus.claimDue({ subscriptionGroup: "prio-grp", claimantId: "w", now: 100_004, limit: 10 })
+      expect(claim.deliveries.map((d) => d.eventID)).toEqual([critical.id, high.id, normal.id, low.id])
+    }),
+  )
+
+  it.effect("NULL-priority legacy delivery rows rank as normal in the ordering", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      const bus = yield* DeepAgentEventBus.Service
+      setNow(200_000)
+      yield* bus.registerConsumerGroup("null-grp", undefined, "wrk_n")
+      const low = yield* bus.publish(input({ idempotencyKey: "np-low", priority: "low", workspaceID: "wrk_n" }))
+      setNow(200_001)
+      const legacy = yield* bus.publish(input({ idempotencyKey: "np-legacy", workspaceID: "wrk_n" }))
+      setNow(200_002)
+      const high = yield* bus.publish(input({ idempotencyKey: "np-high", priority: "high", workspaceID: "wrk_n" }))
+      // simulate a pre-migration row: NULL priority reads back as "normal".
+      yield* db
+        .update(DeepAgentEventDeliveryTable)
+        .set({ priority: null })
+        .where(
+          and(
+            eq(DeepAgentEventDeliveryTable.event_id, legacy.id),
+            eq(DeepAgentEventDeliveryTable.subscription_group, "null-grp"),
+          ),
+        )
+        .run()
+        .pipe(Effect.orDie)
+      const due = yield* bus.dueRetries(200_003)
+      expect(due.map((d) => d.eventID)).toEqual([high.id, legacy.id, low.id])
+    }),
+  )
+})
+
+describe("DeepAgentEventBus RISK-006 durable rate limiter (multi-process semantics)", () => {
+  // The core multi-process test: TWO independent bus instances (each builds its own layer, exactly
+  // like two OS processes) over ONE shared DB must enforce ONE combined per-workspace quota — the
+  // old in-memory Map gave every instance its own (quota ×N). The ONE database layer is built
+  // once and handed to two bus layers built independently on top of it.
+  test("two bus instances sharing one DB enforce ONE combined quota per workspace", () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const dbService = Context.get(yield* Layer.build(Database.layerFromPath(":memory:")), Database.Service)
+        const mkBus = () =>
+          DeepAgentEventBus.layerWith({ now }).pipe(Layer.provide(Layer.succeed(Database.Service, dbService)))
+        const busA = Context.get(yield* Layer.build(mkBus()), DeepAgentEventBus.Service)
+        const busB = Context.get(yield* Layer.build(mkBus()), DeepAgentEventBus.Service)
+        const mkInput = (key: string, workspaceID: string): DeepAgentEvent.PublishInput => ({
+          type: "ci.failure",
+          source: "ci",
+          workspaceID,
+          payload: {},
+          idempotencyKey: key,
+        })
+        setNow(300_000)
+        // instance A consumes the whole limit=2 quota of wrk_mp.
+        const r1 = yield* busA.tryPublish(mkInput("mp-a1", "wrk_mp"), { limit: 2 })
+        const r2 = yield* busA.tryPublish(mkInput("mp-a2", "wrk_mp"), { limit: 2 })
+        expect("published" in r1).toBe(true)
+        expect("published" in r2).toBe(true)
+        // instance B (fresh in-memory state, SAME durable buckets) sees the quota already exhausted.
+        const dropped = yield* busB.tryPublish(mkInput("mp-b1", "wrk_mp"), { limit: 2 })
+        expect(dropped).toEqual({ dropped: "rate_limited" })
+        // …but another workspace's quota is untouched (still per-workspace, just durable now).
+        const other = yield* busB.tryPublish(mkInput("mp-b2", "wrk_other"), { limit: 2 })
+        expect("published" in other).toBe(true)
+        // crossing the fixed window re-admits (epoch-aligned windows agree across instances).
+        setNow(360_001)
+        const after = yield* busB.tryPublish(mkInput("mp-a3", "wrk_mp"), { limit: 2 })
+        expect("published" in after).toBe(true)
+      }).pipe(Effect.scoped),
+    ),
   )
 })

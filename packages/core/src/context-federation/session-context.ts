@@ -187,7 +187,7 @@ export interface Interface {
     readonly activityId: string
     readonly state: "settled" | "failed" | "interrupted"
     readonly now?: number
-  }) => Effect.Effect<Activity, Error>
+  }) => Effect.Effect<Activity | undefined, Error>
   readonly commitSelection: (input: CommitSelectionInput) => Effect.Effect<Selection, Error>
   readonly appendValidation: (input: ValidationInput) => Effect.Effect<string, Error>
   readonly hasValidValidation: (input: {
@@ -426,12 +426,16 @@ export const layer = Layer.effect(
       return yield* db
         .transaction((tx) =>
           Effect.gen(function* () {
+            // Idempotent settle (BUG-003): a missing row or one already in a terminal state is a
+            // no-op, not an error — multiple terminal paths (runLoop exit, resolve rollback,
+            // restart recovery) may legitimately race to settle the same activity. Real DB
+            // failures still surface through the error channel.
             const current = yield* tx
               .select()
               .from(SessionActivityTable)
               .where(eq(SessionActivityTable.activity_id, input.activityId))
               .get()
-            if (!current || current.state !== "active") return yield* new ActivityStateError()
+            if (!current || current.state !== "active") return undefined
             const settled = yield* tx
               .update(SessionActivityTable)
               .set({ state: input.state, settled_at: input.now ?? Date.now() })
@@ -440,7 +444,7 @@ export const layer = Layer.effect(
               )
               .returning()
               .get()
-            if (!settled) return yield* new ActivityStateError()
+            if (!settled) return undefined
             return activity(settled)
           }),
         )

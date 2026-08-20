@@ -56,6 +56,7 @@ import { BackgroundJob } from "@/background/job"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { DurableLearningRuntime } from "@/deepagent/learning-runtime"
+import { LegacyEventCanonicalizerRuntime } from "@/legacy-event-canonicalizer-runtime"
 
 export const AppLayer = Layer.mergeAll(
   Npm.defaultLayer,
@@ -86,6 +87,8 @@ export const AppLayer = Layer.mergeAll(
   EventV2Bridge.defaultLayer,
   SessionProjection.defaultLayer,
   DurableLearningRuntime.defaultLayer,
+  // RISK-003 ④: durable schedule for the legacy event canonicalizer (flag-gated, default OFF).
+  LegacyEventCanonicalizerRuntime.defaultLayer,
   SessionRunState.defaultLayer,
   SessionProcessor.defaultLayer,
   SessionCompaction.defaultLayer,
