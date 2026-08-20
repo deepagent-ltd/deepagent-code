@@ -1,6 +1,14 @@
 import { describe, expect, test } from "bun:test"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import type { NamedError } from "@deepagent-code/core/util/error"
+import {
+  LLMError,
+  ProviderInternalReason,
+  QuotaExceededReason,
+  RateLimitReason,
+  TransportReason,
+  type LLMErrorReason,
+} from "@deepagent-code/llm"
 import { APICallError } from "ai"
 import { setTimeout as sleep } from "node:timers/promises"
 import { Effect, Layer, Schedule, Schema } from "effect"
@@ -355,6 +363,86 @@ describe("session.retry.retryable", () => {
       "Usage limit reached. It will reset in 15 minutes. To continue using this model now, enable usage from your available balance",
     )
   })
+})
+
+describe("session.retry.reason classification", () => {
+  const llmError = (reason: LLMErrorReason) =>
+    new LLMError({ module: "RequestExecutor", method: "execute", reason })
+
+  test("detects llm errors structurally", () => {
+    expect(SessionRetry.isLLMError(llmError(new RateLimitReason({ message: "HTTP 429" })))).toBe(true)
+    // Wrapped/serialized shapes still classify.
+    expect(SessionRetry.isLLMError({ _tag: "LLM.Error", reason: { _tag: "RateLimit" } })).toBe(true)
+    expect(SessionRetry.isLLMError(new TypeError("terminated"))).toBe(false)
+    expect(SessionRetry.isLLMError({ _tag: "LLM.Error" })).toBe(false)
+  })
+
+  test("retries rate limit and provider internal reasons", () => {
+    expect(SessionRetry.retryableViaReason(llmError(new RateLimitReason({ message: "HTTP 429" })))).toEqual({
+      message: "HTTP 429",
+    })
+    expect(
+      SessionRetry.retryableViaReason(llmError(new ProviderInternalReason({ message: "HTTP 503", status: 503 }))),
+    ).toEqual({ message: "HTTP 503" })
+  })
+
+  test("retries only pre-dispatch transport reasons", () => {
+    expect(
+      SessionRetry.retryableViaReason(llmError(new TransportReason({ message: "connect failed", phase: "pre-dispatch" }))),
+    ).toEqual({ message: "connect failed" })
+    // Post-dispatch transport failures may already have been billed.
+    expect(
+      SessionRetry.retryableViaReason(llmError(new TransportReason({ message: "stream broke", phase: "post-dispatch" }))),
+    ).toBeUndefined()
+    expect(SessionRetry.retryableViaReason(llmError(new TransportReason({ message: "ws closed" })))).toBeUndefined()
+  })
+
+  test("terminal reasons are never retried", () => {
+    expect(
+      SessionRetry.retryableViaReason(llmError(new QuotaExceededReason({ message: "insufficient_quota" }))),
+    ).toBeUndefined()
+  })
+
+  test("classification wins over string heuristics when a reason is available", () => {
+    const quota = llmError(new QuotaExceededReason({ message: "rate limited: insufficient_quota" }))
+    // The heuristic alone would retry this parsed message.
+    const heuristicMatch = wrap("rate limit exceeded")
+    expect(SessionRetry.retryable(heuristicMatch, retryProvider)).toBeDefined()
+    expect(SessionRetry.retryableFor(quota, heuristicMatch, retryProvider)).toBeUndefined()
+  })
+
+  test("falls back to string heuristics without an llm reason", () => {
+    const raw = new TypeError("terminated")
+    const parsed = wrap(JSON.stringify({ type: "error", error: { type: "too_many_requests" } }))
+    expect(SessionRetry.retryableFor(raw, parsed, retryProvider)).toEqual({ message: "Too Many Requests" })
+  })
+
+  it.instance("policy classifies raw llm errors before heuristics run", () =>
+    Effect.gen(function* () {
+      const sessionID = SessionID.make("session-retry-classification")
+      const status = yield* SessionStatus.Service
+
+      const step = yield* Schedule.toStepWithMetadata(
+        SessionRetry.policy({
+          provider: "test",
+          parse: (e) => MessageV2.fromError(e, { providerID }),
+          set: (info) =>
+            status.set(sessionID, {
+              type: "retry",
+              attempt: info.attempt,
+              message: info.message,
+              next: info.next,
+            }),
+        }),
+      )
+      yield* step(llmError(new RateLimitReason({ message: "Provider request failed with HTTP 429" })))
+
+      expect(yield* status.get(sessionID)).toMatchObject({
+        type: "retry",
+        message: "Provider request failed with HTTP 429",
+      })
+    }),
+  )
 })
 
 describe("session.message-v2.fromError", () => {

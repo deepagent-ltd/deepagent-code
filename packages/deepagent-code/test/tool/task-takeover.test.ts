@@ -9,6 +9,7 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { Config } from "@/config/config"
 import { CrossSpawnSpawner } from "@deepagent-code/core/cross-spawn-spawner"
 import { Session } from "@/session/session"
+import { SessionProjector } from "@deepagent-code/core/session/projector"
 import type { SessionPrompt } from "../../src/session/prompt"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { SessionRunState } from "@/session/run-state"
@@ -36,6 +37,9 @@ const layer = (flags: Partial<RuntimeFlags.Info> = {}) =>
     Config.defaultLayer,
     CrossSpawnSpawner.defaultLayer,
     Session.defaultLayer,
+    // QUAL-007: the core SessionProjector materializes event-created sessions; without it message
+    // writes hit the session FK.
+    SessionProjector.defaultLayer,
     SessionRunState.defaultLayer,
     SessionStatus.defaultLayer,
     Truncate.defaultLayer,

@@ -1,6 +1,12 @@
-import { expect, mock, beforeEach } from "bun:test"
+import { afterAll, expect, mock, beforeEach } from "bun:test"
 import { Effect, Layer } from "effect"
 import { testEffect } from "../lib/effect"
+
+// Release the mock.module registrations below when this file finishes so
+// later files import the real MCP SDK modules.
+afterAll(() => {
+  mock.restore()
+})
 
 // Mock UnauthorizedError to match the SDK's class
 class MockUnauthorizedError extends Error {

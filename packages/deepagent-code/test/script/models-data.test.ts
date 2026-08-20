@@ -62,6 +62,20 @@ describe("models.dev build data", () => {
     )
   })
 
+  test("fails over to the next endpoint when the first one is unavailable", async () => {
+    const broken = Bun.serve({ port: 0, fetch: () => new Response(null, { status: 500 }) })
+    const healthy = Bun.serve({ port: 0, fetch: () => Response.json(catalog) })
+    const result = await loadModelsData({
+      environment: { DEEPAGENT_CODE_MODELS_URL: `${broken.url.origin}, ${healthy.url.origin}` },
+    }).finally(() => {
+      broken.stop(true)
+      healthy.stop(true)
+    })
+
+    expect(result.source).toBe(`${healthy.url.origin}/api.json`)
+    expect(JSON.parse(result.data)).toEqual(catalog)
+  })
+
   test("fails closed when models.dev is unavailable", async () => {
     await using directory = await fixture()
     const cacheFile = path.join(directory.root, "models.json")

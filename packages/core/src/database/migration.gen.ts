@@ -139,5 +139,15 @@ export const migrations = (
     import("./migration/20260813121129_v2_provider_parity_response_fingerprint"),
     import("./migration/20260813121200_v2_provider_parity_campaign_authority"),
     import("./migration/20260813150000_single_authority_snapshot_merge"),
+    import("./migration/20260815120000_event_delivery_claim_lease"),
+    import("./migration/20260815130000_event_multiprocess_extensions"),
+    import("./migration/20260816000000_handoff_admission_receipt"),
+    import("./migration/20260816073717_session_facade_activity"),
+    import("./migration/20260816080000_receipt_active_pack_set_attribution"),
+    import("./migration/20260816081000_session_context_reconciliation"),
+    import("./migration/20260819120000_session_intent_confirmation_state"),
+    import("./migration/20260820000000_remote_compact_persistence"),
+    import("./migration/20260820120000_session_turn_stage_evidence"),
+    import("./migration/20260820130000_compaction_continuation_fail_closed"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

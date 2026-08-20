@@ -8,6 +8,8 @@
 import { describe, expect } from "bun:test"
 import { Effect } from "effect"
 import { HttpClient } from "effect/unstable/http"
+import { access, readFile } from "node:fs/promises"
+import path from "node:path"
 import { cliIt } from "../../lib/cli-process"
 
 describe("deepagentCode serve (subprocess)", () => {
@@ -55,6 +57,66 @@ describe("deepagentCode serve (subprocess)", () => {
         // (typically 143 on POSIX). We just require resolution within a sane
         // window — anything else means the kill didn't take.
         expect(typeof code === "number" || code === null).toBe(true)
+      }),
+    60_000,
+  )
+  // PARITY-003 (Wave 0): `serve --register` writes the daemon registration
+  // protocol (state/server.json + SIGTERM cleanup) so the new CLI daemon can
+  // mount this legacy server. Covers the file contents, the authenticated
+  // health probe, and removal on shutdown.
+  cliIt.live(
+    "--register writes the daemon registration and removes it on SIGTERM",
+    ({ deepagentCode, home }) =>
+      Effect.gen(function* () {
+        const password = "parity-003-test-secret"
+        const file = path.join(home, ".deepagent", "code", "state", "server.json")
+        const server = yield* deepagentCode.serve({
+          extraArgs: ["--register"],
+          env: { DEEPAGENT_CODE_SERVER_PASSWORD: password },
+        })
+
+        // Registration appears shortly after the listening sentinel.
+        const registration = yield* Effect.promise(async () => {
+          for (let i = 0; i < 100; i++) {
+            try {
+              return JSON.parse(await readFile(file, "utf8")) as {
+                id: string
+                version: string
+                url: string
+                pid: number
+              }
+            } catch {
+              await new Promise((resolve) => setTimeout(resolve, 50))
+            }
+          }
+          throw new Error("server.json was not written within 5s of listening")
+        })
+        expect(registration.url).toBe(server.url)
+        expect(registration.pid).toBeGreaterThan(0)
+        expect(registration.id).toBeTruthy()
+        expect(registration.version).toBeTruthy()
+
+        // The daemon's legacy health probe: GET /global/health with Basic auth.
+        const auth = `Basic ${Buffer.from(`deepagent-code:${password}`).toString("base64")}`
+        const healthy = yield* Effect.promise(() =>
+          fetch(`${server.url}/global/health`, { headers: { Authorization: auth } }),
+        )
+        expect(healthy.status).toBe(200)
+        expect(yield* Effect.promise(() => healthy.json())).toMatchObject({ healthy: true })
+        const rejected = yield* Effect.promise(() => fetch(`${server.url}/global/health`))
+        expect(rejected.status).toBe(401)
+
+        // SIGTERM must remove the registration it owns and exit.
+        server.kill()
+        const code = yield* Effect.promise(() => server.exited)
+        expect(typeof code === "number" || code === null).toBe(true)
+        const removed = yield* Effect.promise(() =>
+          access(file).then(
+            () => false,
+            () => true,
+          ),
+        )
+        expect(removed).toBe(true)
       }),
     60_000,
   )

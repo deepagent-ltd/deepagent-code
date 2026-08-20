@@ -1638,3 +1638,86 @@ describe("OpenAI Responses route", () => {
     }),
   )
 })
+
+// UPD-002: wire-level structured output (text.format json_schema).
+describe("OpenAI Responses wire structured output", () => {
+  const wireSchema = {
+    type: "object",
+    properties: { answer: { type: "number" } },
+    required: ["answer"],
+  }
+  const wireRequest = LLM.updateRequest(request, {
+    responseFormat: { type: "json", schema: wireSchema, name: "answer_format" },
+  })
+
+  it.effect("lowers responseFormat json onto text.format", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(wireRequest)
+
+      expect(prepared.body.text).toEqual({
+        format: { type: "json_schema", name: "answer_format", schema: wireSchema },
+      })
+    }),
+  )
+
+  it.effect("defaults the format name and keeps strict opt-in absent", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.updateRequest(request, { responseFormat: { type: "json", schema: wireSchema } }),
+      )
+
+      expect(prepared.body.text?.format).toEqual({ type: "json_schema", name: "structured_output", schema: wireSchema })
+      expect(prepared.body.text?.format).not.toHaveProperty("strict")
+    }),
+  )
+
+  it.effect("omits text.format without a json responseFormat", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(request)
+
+      expect(prepared.body).not.toHaveProperty("text")
+    }),
+  )
+
+  it.effect("accepts well-formed JSON output under wire format", () =>
+    Effect.gen(function* () {
+      const body = sseEvents(
+        { type: "response.output_text.delta", item_id: "msg_1", delta: '{"ans' },
+        { type: "response.output_text.delta", item_id: "msg_1", delta: 'wer": 4}' },
+        { type: "response.completed", response: { id: "resp_wire" } },
+      )
+      const response = yield* LLMClient.generate(wireRequest).pipe(Effect.provide(fixedResponse(body)))
+
+      const text = response.events.filter((event) => event.type.startsWith("text"))
+      expect(text.length).toBeGreaterThan(0)
+      expect(response.events.some((event) => event.type === "finish")).toBe(true)
+    }),
+  )
+
+  it.effect("fails with InvalidProviderOutput when wire output is not JSON", () =>
+    Effect.gen(function* () {
+      const body = sseEvents(
+        { type: "response.output_text.delta", item_id: "msg_1", delta: "Sure! The answer is " },
+        { type: "response.output_text.delta", item_id: "msg_1", delta: "four." },
+        { type: "response.completed", response: { id: "resp_wire_bad" } },
+      )
+      const error = yield* LLMClient.generate(wireRequest).pipe(Effect.provide(fixedResponse(body)), Effect.flip)
+
+      expect(error).toBeInstanceOf(LLMError)
+      expect(error.reason).toMatchObject({ _tag: "InvalidProviderOutput" })
+      expect(error.message).toContain("not valid JSON")
+    }),
+  )
+
+  it.effect("does not validate text as JSON without a wire format", () =>
+    Effect.gen(function* () {
+      const body = sseEvents(
+        { type: "response.output_text.delta", item_id: "msg_1", delta: "plain prose" },
+        { type: "response.completed", response: { id: "resp_plain" } },
+      )
+      const response = yield* LLMClient.generate(request).pipe(Effect.provide(fixedResponse(body)))
+
+      expect(response.events.some((event) => event.type === "finish")).toBe(true)
+    }),
+  )
+})

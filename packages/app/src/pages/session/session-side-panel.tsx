@@ -43,6 +43,7 @@ import { SidePanelDebug } from "@/pages/session/side-panel-debug"
 import { SidePanelProfile } from "@/pages/session/side-panel-profile"
 import { SidePanelIM } from "@/pages/session/side-panel-im"
 import { SidePanelContext } from "@/pages/session/side-panel-context"
+import { SidePanelStats } from "@/pages/session/side-panel-stats"
 import { SidePanelDockHeader, SidePanelTerminal, SidePanelDebugConsole } from "@/pages/session/side-panel-terminal"
 import { ProblemsPanel } from "@/pages/session/problems-panel"
 import { PanelErrorBoundary } from "@/pages/session/panel-error-boundary"
@@ -65,6 +66,7 @@ type PanelMode =
   | "plugins"
   | "debug"
   | "profile"
+  | "stats"
   | "terminal"
   | "debug-console"
   | "problems"
@@ -117,6 +119,8 @@ const PANELS: readonly PanelDef[] = [
   { mode: "plugins", icon: "plugin", titleKey: "status.popover.tab.plugins", group: "dev", bucket: "narrow" },
   { mode: "debug", icon: "debug", titleKey: "session.panel.debug", group: "dev", bucket: "narrow" },
   { mode: "profile", icon: "profile", titleKey: "session.panel.profile", group: "dev", bucket: "narrow" },
+  // PARITY-001: cross-session cost/token overview aggregated from the synced session store.
+  { mode: "stats", icon: "dash", titleKey: "session.stats.title", group: "dev", bucket: "narrow" },
   // Dock — the movable panels; only surface here when docked to the side (see gating below).
   {
     mode: "terminal",
@@ -692,6 +696,9 @@ export function SessionSidePanel(props: {
                 </Match>
                 <Match when={isActive("profile")}>
                   <SidePanelProfile onClose={closePanel} />
+                </Match>
+                <Match when={isActive("stats")}>
+                  <SidePanelStats onClose={closePanel} />
                 </Match>
                 <Match when={isActive("im")}>
                   <SidePanelIM onClose={closePanel} />

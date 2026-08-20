@@ -286,6 +286,11 @@ function applyLegacySchemaOverrides(spec: OpenApiSpec) {
   const model = schemas.ProviderConfig?.properties?.models?.additionalProperties
   const variants = typeof model === "object" ? model.properties?.variants?.additionalProperties : undefined
   if (variants && typeof variants === "object") variants.additionalProperties = {}
+  // PARITY-004 模型启停服务端真相源:服务端 ConfigV2.Model 已支持 per-model `disabled`
+  // (plugin/provider.ts 映射 model.enabled=!disabled),但 OpenAPI 生成源未暴露该字段;
+  // 在此补齐,使 SDK Config 类型可读写 per-model disabled(与运行时行为一致)。
+  if (model && typeof model === "object" && model.properties && !model.properties.disabled)
+    model.properties.disabled = { type: "boolean" }
   const syncInfo = schemas.SyncEventSessionUpdated?.properties?.data?.properties?.info
   if (syncInfo?.properties) makePropertiesNullable(syncInfo.properties)
 }

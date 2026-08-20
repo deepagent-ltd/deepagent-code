@@ -14,6 +14,13 @@ import { containsDataPath } from "../global-path"
 const makeDatabase = EffectDrizzleSqlite.makeWithDefaults()
 type DatabaseShape = Effect.Success<typeof makeDatabase>
 
+// Compatibility protocol this runtime implements. Protocol 2 is the 1.4.5/1.4.6-era; protocol 3
+// marks databases that carry provider-owner successor generations (BUG-407-009 recovery fence): an
+// older binary that does not understand successor tokens must refuse to open such a database, or its
+// startup recovery would re-quarantine the successor state.
+export const SupportedReaderProtocol = 3
+export const SupportedWriterProtocol = 3
+
 export interface Interface {
   db: DatabaseShape
 }
@@ -43,10 +50,10 @@ export const layer = Layer.effect(
       minimum_writer_protocol: number
     }>("SELECT capability, minimum_reader_protocol, minimum_writer_protocol FROM database_capability")
     for (const capability of capabilities) {
-      if (capability.minimum_reader_protocol > 2 || capability.minimum_writer_protocol > 2)
+      if (capability.minimum_reader_protocol > SupportedReaderProtocol || capability.minimum_writer_protocol > SupportedWriterProtocol)
         return yield* Effect.die(
           new Error(
-            `Database capability ${capability.capability} requires reader protocol ${capability.minimum_reader_protocol} and writer protocol ${capability.minimum_writer_protocol}; this runtime supports protocol 2`,
+            `Database capability ${capability.capability} requires reader protocol ${capability.minimum_reader_protocol} and writer protocol ${capability.minimum_writer_protocol}; this runtime supports protocol ${SupportedWriterProtocol}`,
           ),
         )
     }

@@ -1326,6 +1326,7 @@ interface AttemptBundle {
   readonly structuredSettlement: { reason: StructuredOutputTerminalReason; receipt?: StructuredOutputReceipt }
   readonly submitWorktree: () => Effect.Effect<SubmittedPR | undefined, unknown>
   readonly teardownWorktree: (force: boolean) => Effect.Effect<unknown, unknown>
+  readonly mergeAutomaticWorktree: () => Effect.Effect<unknown, unknown>
 }
 
 type AttemptResult = {
@@ -2375,6 +2376,29 @@ export const TaskTool = Tool.define(
             ).pipe(Effect.ignore)
           })
 
+          // RISK-002: merge-on-success for automatic write isolation — the worker branch is merged
+          // back into the parent checkout (committed, non-fast-forward) BEFORE safeRemove. A dirty
+          // parent or a conflict preserves the worktree (safeRemove refuses unmerged work) and is
+          // surfaced to the parent instead of silently dropping the changes. Merge failures never
+          // fail a successful task.
+          const mergeAutomaticWorktree = Effect.fn("TaskTool.mergeAutomaticWorktree")(function* () {
+            if (!a.worktreeInfo || !automaticWriteIsolation) return
+            const worktreeOpt = yield* Effect.serviceOption(Worktree.Service)
+            if (Option.isNone(worktreeOpt)) return
+            const result = yield* worktreeOpt.value
+              .mergeBackAutomatic({ directory: a.worktreeInfo.directory })
+              .pipe(
+                Effect.catch((error) =>
+                  Effect.succeed({ merged: false as const, conflicted: [] as readonly string[], message: String(error) }),
+                ),
+              )
+            if (!result.merged)
+              yield* inject(
+                "error",
+                `Worker changes were NOT merged into the parent: ${result.message} The worktree is preserved at ${a.worktreeInfo.directory}.`,
+              ).pipe(Effect.ignore)
+          })
+
           // Automatically isolated write agents submit a scoped commit to the durable PR queue.
           // Explicit isolation stays detached and never enters the automatic collaboration flow.
           const parentDir = parent.directory
@@ -2411,6 +2435,7 @@ export const TaskTool = Tool.define(
             inject,
             submitWorktree,
             teardownWorktree,
+            mergeAutomaticWorktree,
           }
 
           if (allowExtend && (yield* background.extend({ id: a.nextSession.id, run: runTask() }))) {
@@ -2510,7 +2535,10 @@ export const TaskTool = Tool.define(
                 resolvedOutputSchema ? b.structuredSettlement.reason : "text_output_valid",
                 { output },
               )
-              if (!pr) yield* b.teardownWorktree(b.automaticWriteIsolation)
+              if (!pr) {
+                yield* b.mergeAutomaticWorktree()
+                yield* b.teardownWorktree(b.automaticWriteIsolation)
+              }
               return {
                 title: params.description,
                 metadata: { ...b.metadata, ...(pr ? { prId: pr.id, workerCommit: pr.workerCommit } : {}) },
@@ -2615,7 +2643,10 @@ export const TaskTool = Tool.define(
                   }),
                 },
               )
-              if (!pr) yield* b.teardownWorktree(b.automaticWriteIsolation)
+              if (!pr) {
+                yield* b.mergeAutomaticWorktree()
+                yield* b.teardownWorktree(b.automaticWriteIsolation)
+              }
               yield* b.inject("completed", output)
               return
             }
@@ -2858,6 +2889,24 @@ export const TaskTool = Tool.define(
             : worktreeOpt.value.safeRemove({ directory: worktreeInfo.directory })
         ).pipe(Effect.ignore)
       })
+      // RISK-002: merge-on-success for automatic write isolation (background run path; same
+      // semantics as the foreground helper — conflicts/dirty parent preserve the worktree and are
+      // reported; merge failures never fail a successful task).
+      const mergeAutomaticWorktree = Effect.fn("TaskTool.mergeAutomaticWorktree")(function* () {
+        if (!worktreeInfo || !automaticWriteIsolation || Option.isNone(worktreeOpt)) return
+        const result = yield* worktreeOpt.value
+          .mergeBackAutomatic({ directory: worktreeInfo.directory })
+          .pipe(
+            Effect.catch((error) =>
+              Effect.succeed({ merged: false as const, conflicted: [] as readonly string[], message: String(error) }),
+            ),
+          )
+        if (!result.merged)
+          yield* inject(
+            "error",
+            `Worker changes were NOT merged into the parent: ${result.message} The worktree is preserved at ${worktreeInfo.directory}.`,
+          ).pipe(Effect.ignore)
+      })
       const submitWorktree = Effect.fn("TaskTool.submitWorktree")(function* () {
         if (!worktreeInfo || !automaticWriteIsolation) return undefined
         if (!parent.directory || !git || !queue) {
@@ -2920,7 +2969,10 @@ export const TaskTool = Tool.define(
               }
             : {}),
         })
-        if (!pr) yield* teardownWorktree(automaticWriteIsolation)
+        if (!pr) {
+          yield* mergeAutomaticWorktree()
+          yield* teardownWorktree(automaticWriteIsolation)
+        }
         if (notifyParent) yield* inject("completed", completedOutput)
         return pr
       })

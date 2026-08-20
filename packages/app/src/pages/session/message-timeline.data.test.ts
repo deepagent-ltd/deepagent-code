@@ -8,8 +8,7 @@ mock.module("@deepagent-code/ui/message-part", () => ({
       type: "part",
       ref: { messageID: item.messageID, partID: item.part.id },
     })),
-  renderable: (part: Part, showReasoningSummaries = true) =>
-    part.type !== "reasoning" || showReasoningSummaries,
+  renderable: () => true,
 }))
 
 afterAll(() => mock.restore())
@@ -123,7 +122,7 @@ describe("message timeline activity progress", () => {
       },
     }) as Part
 
-  test("renders every progress revision for one activity", async () => {
+  test("shows only the latest settled progress for one activity", async () => {
     const { Timeline } = await import("./message-timeline.data")
     const messages = [assistant("msg_a0"), assistant("msg_a1")]
     const parts = new Map([
@@ -134,10 +133,10 @@ describe("message timeline activity progress", () => {
     const rows = Timeline.constructMessageRows(user, (id) => parts.get(id) ?? [], messages, 0, false, "idle", false)
     expect(
       rows.flatMap((row) => (row._tag === "AssistantPart" && row.group.type === "part" ? [row.group.ref.partID] : [])),
-    ).toEqual(["prt_progress_0", "prt_progress_1"])
+    ).toEqual(["prt_progress_1"])
   })
 
-  test("keeps progress revisions when the activity final arrives", async () => {
+  test("replaces settled progress with the activity final", async () => {
     const { Timeline } = await import("./message-timeline.data")
     const messages = [assistant("msg_a0"), assistant("msg_a1"), { ...assistant("msg_a2"), finish: "stop" }]
     const parts = new Map([
@@ -149,10 +148,10 @@ describe("message timeline activity progress", () => {
     const rows = Timeline.constructMessageRows(user, (id) => parts.get(id) ?? [], messages, 0, false, "idle", false)
     expect(
       rows.flatMap((row) => (row._tag === "AssistantPart" && row.group.type === "part" ? [row.group.ref.partID] : [])),
-    ).toEqual(["prt_progress_0", "prt_progress_1", "prt_final_2"])
+    ).toEqual(["prt_final_2"])
   })
 
-  test("keeps text parts across separate parent user rows", async () => {
+  test("collapses every text part in one activity across separate parent user rows", async () => {
     const { Timeline } = await import("./message-timeline.data")
     const user2 = { ...user, id: "msg_user_2" }
     const firstAssistant = assistant("msg_cross_a0")
@@ -174,6 +173,7 @@ describe("message timeline activity progress", () => {
       ],
     ])
     const getParts = (id: string) => parts.get(id) ?? []
+    const visibility = Timeline.activityProgressVisibility(messages, getParts)
     const firstRows = Timeline.constructMessageRows(
       user,
       getParts,
@@ -182,6 +182,7 @@ describe("message timeline activity progress", () => {
       false,
       "idle",
       false,
+      visibility,
     )
     const secondRows = Timeline.constructMessageRows(
       user2,
@@ -191,12 +192,9 @@ describe("message timeline activity progress", () => {
       false,
       "idle",
       false,
+      visibility,
     )
-    expect(
-      firstRows.flatMap((row) =>
-        row._tag === "AssistantPart" && row.group.type === "part" ? [row.group.ref.partID] : [],
-      ),
-    ).toEqual(["prt_progress_0", "prt_cross_old_plain"])
+    expect(firstRows.some((row) => row._tag === "AssistantPart")).toBe(false)
     expect(
       secondRows.flatMap((row) =>
         row._tag === "AssistantPart" && row.group.type === "part" ? [row.group.ref.partID] : [],
@@ -204,7 +202,7 @@ describe("message timeline activity progress", () => {
     ).toEqual(["prt_progress_1", "prt_cross_latest_plain"])
   })
 
-  test("keeps every text part in every revision", async () => {
+  test("applies one revision marker to every text part in the assistant message", async () => {
     const { Timeline } = await import("./message-timeline.data")
     const messages = [assistant("msg_multi_a0"), { ...assistant("msg_multi_a1"), finish: "stop" }]
     const plain = (messageID: string, id: string, text: string) =>
@@ -221,10 +219,10 @@ describe("message timeline activity progress", () => {
 
     expect(
       rows.flatMap((row) => (row._tag === "AssistantPart" && row.group.type === "part" ? [row.group.ref.partID] : [])),
-    ).toEqual(["prt_progress_0", "prt_old_plain", "prt_final_1", "prt_final_plain"])
+    ).toEqual(["prt_final_1", "prt_final_plain"])
   })
 
-  test("keeps reasoning summaries from every revision when enabled", async () => {
+  test("uses the message marker to collapse reasoning-only revisions", async () => {
     const { Timeline } = await import("./message-timeline.data")
     const messages = [
       {
@@ -247,33 +245,18 @@ describe("message timeline activity progress", () => {
 
     expect(
       rows.flatMap((row) => (row._tag === "AssistantPart" && row.group.type === "part" ? [row.group.ref.partID] : [])),
-    ).toEqual(["prt_reasoning_old", "prt_reasoning_latest"])
+    ).toEqual(["prt_reasoning_latest"])
   })
 
-  test("uses showReasoning as the explicit reasoning visibility control", async () => {
-    const { Timeline } = await import("./message-timeline.data")
-    const message = assistant("msg_reasoning_setting")
-    const reasoning = {
-      id: "prt_reasoning_setting",
-      sessionID: user.sessionID,
-      messageID: message.id,
-      type: "reasoning",
-      text: "summary",
-    } as Part
-    const getParts = () => [reasoning]
-
-    const hidden = Timeline.constructMessageRows(user, getParts, [message], 0, false, "idle", false)
-    const shown = Timeline.constructMessageRows(user, getParts, [message], 0, true, "idle", false)
-
-    expect(hidden.some((row) => row._tag === "AssistantPart")).toBe(false)
-    expect(shown.some((row) => row._tag === "AssistantPart")).toBe(true)
-  })
-
-  test("keeps an older tool revision when a later terminal message has no renderable parts", async () => {
+  test("hides an older tool revision when the latest terminal message has no renderable parts", async () => {
     const { Timeline } = await import("./message-timeline.data")
     const old = {
       ...assistant("msg_tool_old"),
       activityProgress: { activityID: "activity-tool", revision: 0, state: "progress" as const },
+    }
+    const terminal = {
+      ...assistant("msg_tool_terminal"),
+      activityProgress: { activityID: "activity-tool", revision: 1, state: "final" as const },
     }
     const tool = {
       id: "prt_tool_old",
@@ -285,8 +268,10 @@ describe("message timeline activity progress", () => {
       state: { status: "completed", input: {}, output: "pending", title: "poll", time: { start: 1, end: 2 } },
     } as Part
     const parts = new Map([[old.id, [tool]]])
-    const rows = Timeline.constructMessageRows(user, (id) => parts.get(id) ?? [], [old], 0, true, "idle", false)
+    const visibility = Timeline.activityProgressVisibility([old, terminal], (id) => parts.get(id) ?? [])
 
-    expect(rows.some((row) => row._tag === "AssistantPart")).toBe(true)
+    const rows = Timeline.constructMessageRows(user, (id) => parts.get(id) ?? [], [old], 0, true, "idle", false, visibility)
+
+    expect(rows.some((row) => row._tag === "AssistantPart")).toBe(false)
   })
 })

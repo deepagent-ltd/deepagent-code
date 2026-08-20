@@ -6,6 +6,9 @@ import { Effect, Fiber, Layer, Stream } from "effect"
 import { LLMNative } from "@/session/llm/native-request"
 import { LLMNativeRuntime } from "@/session/llm/native-runtime"
 import { FreeformTools } from "@/session/llm/freeform-tools"
+import { LLMRequestPrep } from "@/session/llm/request"
+import { RuntimeFlags } from "@/effect/runtime-flags"
+import type { SessionV1 } from "@deepagent-code/core/v1/session"
 import type { Provider } from "@/provider/provider"
 
 import { OAUTH_DUMMY_KEY } from "@/auth"
@@ -73,9 +76,57 @@ const providerInfo: Provider.Info = {
   models: {},
 }
 
+const deepseekModel: Provider.Model = {
+  ...baseModel,
+  id: ModelV2.ID.make("deepseek-reasoner"),
+  providerID: ProviderV2.ID.make("deepseek"),
+  api: {
+    id: "deepseek-reasoner",
+    url: "https://api.deepseek.com/v1",
+    npm: "@ai-sdk/openai-compatible",
+  },
+  name: "DeepSeek Reasoner",
+}
+
 const it = testEffect(
   LLMClient.layer.pipe(Layer.provide(Layer.mergeAll(RequestExecutor.defaultLayer, WebSocketExecutor.layer))),
 )
+
+// UPD-002 residual: the wire-structured-output capability is a CANONICAL declaration, never assumed
+// from Responses support. Locks the two independent facts: the reference OpenAI package is
+// format-capable, while a Responses-capable compatible family (deepseek) is NOT wire-format-capable
+// unless its profile opts in (none do today).
+describe("UPD-002 wire structured-output capability (canonical declaration)", () => {
+  const wireInput = (model: Provider.Model) => ({
+    user: { format: { type: "json_schema" }, metadata: {} } as unknown as SessionV1.User,
+    model,
+    flags: { experimentalNativeLlm: true } as RuntimeFlags.Info,
+  })
+
+  test("reference OpenAI package delivers json_schema over the wire", () => {
+    expect(LLMRequestPrep.shouldUseWireStructuredOutput(wireInput(baseModel))).toBe(true)
+  })
+
+  test("deepseek is Responses-family but NOT wire-format-capable (Responses ≠ format)", () => {
+    expect(LLMRequestPrep.shouldUseWireStructuredOutput(wireInput(deepseekModel))).toBe(false)
+  })
+
+  test("non-Responses providers never take the wire path", () => {
+    const anthropic = {
+      ...baseModel,
+      providerID: ProviderV2.ID.make("anthropic"),
+      api: { ...baseModel.api, npm: "@ai-sdk/anthropic" },
+    }
+    expect(LLMRequestPrep.shouldUseWireStructuredOutput(wireInput(anthropic))).toBe(false)
+  })
+
+  test("without the native runtime flag the wire path is off even for a capable model", () => {
+    const input = wireInput(baseModel)
+    expect(
+      LLMRequestPrep.shouldUseWireStructuredOutput({ ...input, flags: { experimentalNativeLlm: false } as RuntimeFlags.Info }),
+    ).toBe(false)
+  })
+})
 
 function responsesStream(chunks: unknown[]) {
   return new Response(chunks.map((chunk) => `data: ${JSON.stringify(chunk)}`).join("\n\n") + "\n\n", {
@@ -366,6 +417,31 @@ describe("session.llm-native.request", () => {
     expect(compatible.route.id).toBe("openai-compatible-chat")
     expect(compatible.route.endpoint.baseURL).toBe("https://ai.example.test/v1")
 
+    // Capability-based fork: deepseek profiles declare `supportsResponses`,
+    // so they land on the Responses route with deepseek provider ownership —
+    // never the hardcoded openai route/provider.
+    const deepseek = LLMNative.model({
+      model: deepseekModel,
+      apiKey: "test-key",
+      messages: [],
+    })
+    expect(deepseek.route.id).toBe("openai-compatible-responses")
+    expect(String(deepseek.provider)).toBe("deepseek")
+    expect(String(deepseek.provider)).not.toBe("openai")
+    expect(deepseek.route.endpoint.baseURL).toBe("https://api.deepseek.com/v1")
+
+    const groq = LLMNative.model({
+      model: {
+        ...baseModel,
+        providerID: ProviderV2.ID.make("groq"),
+        api: { ...baseModel.api, url: "https://api.groq.com/openai/v1", npm: "@ai-sdk/openai-compatible" },
+      },
+      apiKey: "test-key",
+      messages: [],
+    })
+    expect(groq.route.id).toBe("openai-compatible-chat")
+    expect(String(groq.provider)).toBe("groq")
+
     const openrouter = LLMNative.model({
       model: { ...baseModel, api: { ...baseModel.api, url: "", npm: "@openrouter/ai-sdk-provider" } },
       apiKey: "test-key",
@@ -419,7 +495,7 @@ describe("session.llm-native.request", () => {
         provider: { ...providerInfo, id: ProviderV2.ID.make("google") },
         auth: undefined,
       }),
-    ).toEqual({ type: "unsupported", reason: "provider is not openai, deepagent-code, anthropic, or deepagent" })
+    ).toEqual({ type: "unsupported", reason: "provider is not openai, deepagent-code, anthropic, deepagent, or deepseek" })
     expect(
       LLMNativeRuntime.status({
         model: baseModel,
@@ -450,6 +526,22 @@ describe("session.llm-native.request", () => {
         auth: undefined,
       }),
     ).toEqual({ type: "unsupported", reason: "API key is not configured" })
+  })
+
+  test("enables native runtime for deepseek API-key models", () => {
+    expect(
+      LLMNativeRuntime.status({
+        model: deepseekModel,
+        provider: {
+          ...providerInfo,
+          id: ProviderV2.ID.make("deepseek"),
+          name: "DeepSeek",
+          env: ["DEEPSEEK_API_KEY"],
+          options: { apiKey: "test-deepseek-key" },
+        },
+        auth: undefined,
+      }),
+    ).toMatchObject({ type: "supported", apiKey: "test-deepseek-key" })
   })
 
   test("enables native runtime for Anthropic API-key models", () => {
@@ -782,6 +874,33 @@ describe("session.llm-native.request", () => {
         input: [{ type: "item_reference", id: "rs_1" }],
         store: true,
       },
+    }),
+  )
+
+  it.effect("compiles deepseek through the compatible Responses route without include/store", () =>
+    Effect.gen(function* () {
+      const prepared = yield* prepareNativeRequest({
+        model: deepseekModel,
+        apiKey: "test-deepseek-key",
+        messages: [{ role: "user", content: "hello" }],
+        // DeepSeek's Responses compatibility set has not been proven to
+        // support encrypted reasoning; family options keyed under `deepseek`
+        // must never surface OpenAI-only wire fields (include/store).
+        providerOptions: { deepseek: { store: false, include: ["reasoning.encrypted_content"] } },
+      })
+      expect(prepared).toMatchObject({
+        route: "openai-compatible-responses",
+        protocol: "openai-responses",
+        model: { id: "deepseek-reasoner", provider: "deepseek" },
+      })
+      expect(prepared.model.provider).not.toBe("openai")
+      expect(prepared.body).not.toHaveProperty("include")
+      expect(prepared.body).not.toHaveProperty("store")
+      expect(prepared.body).toMatchObject({
+        model: "deepseek-reasoner",
+        input: [{ role: "user", content: [{ type: "input_text", text: "hello" }] }],
+        stream: true,
+      })
     }),
   )
 

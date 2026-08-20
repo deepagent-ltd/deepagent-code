@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect"
+import { Effect, Option, Schema } from "effect"
 import type {
   Confidence,
   Doc,
@@ -7,6 +7,7 @@ import type {
   DocumentStore,
   LinkRel,
 } from "@deepagent-code/core/deepagent/document-store"
+import * as WikiEvents from "./wiki-events"
 
 /**
  * V3.9 §B — Repo & Wiki（人向监督层）: the WikiService.
@@ -335,9 +336,21 @@ const renderMarkdown = (doc: Doc, editable: boolean): string => {
 export class WikiService {
   private readonly gate: WikiEditGate
 
+  /**
+   * FEAT-006 event ports (both optional — the service degrades to its pre-FEAT-006 behavior without
+   * them): `bus` is the wiki-events port a committed editKnowledge publishes wiki.page.changed
+   * through; `workspacePath` labels the event payload (openWikiService threads it from its input).
+   * When `bus` is absent the editKnowledge Effect still tries the DeepAgentEventBus.Service from
+   * its runtime environment (the HTTP route runtime provides it — same seam the packs handlers
+   * use), so the unmodified handler construction point gets eventing without signature changes.
+   */
   constructor(
     private readonly graph: WikiGraph,
     gate: WikiEditGate = DEFAULT_WIKI_EDIT_GATE,
+    private readonly ports: {
+      readonly bus?: WikiEvents.WikiEventPublisher
+      readonly workspacePath?: string
+    } = {},
   ) {
     this.gate = gate
   }
@@ -395,8 +408,44 @@ export class WikiService {
         source: "human",
         evidence_refs: [`human:${input.editor.id}${input.editor.name ? `:${input.editor.name}` : ""}`],
       })
-      return this.crossLinks(updated.id).pipe(Effect.map((crossLinks) => this.pageOf(updated, crossLinks)))
+      // FEAT-006 — AFTER the write commits, publish wiki.page.changed (best-effort, never fails the
+      // edit). Idempotency key = docId+version (wiki-events), so a redelivered edit never
+      // double-publishes. Self-loop note: the event-driven archiver consumes ONLY archive triggers
+      // (session.completed/goal.completed), and wiki.page.changed is not one — no consumer of this
+      // event writes back into the wiki, so there is no producer→event→archiver cascade.
+      return this.emitPageChanged({
+        docId: updated.id,
+        type: updated.type,
+        version: updated.version,
+        editor: input.editor.id,
+      }).pipe(
+        Effect.flatMap(() => this.crossLinks(updated.id)),
+        Effect.map((crossLinks) => this.pageOf(updated, crossLinks)),
+      )
     })
+  }
+
+  // FEAT-006 — resolve the bus port (injected > Effect environment) and emit wiki.page.changed for
+  // a committed edit. Never fails: no bus wired → silent skip; publish error → logged + swallowed.
+  private emitPageChanged(change: {
+    readonly docId: string
+    readonly type: DocType
+    readonly version: number
+    readonly editor: string
+  }): Effect.Effect<void> {
+    return WikiEvents.resolveBus(this.ports.bus).pipe(
+      Effect.flatMap((bus) =>
+        Option.isNone(bus)
+          ? Effect.void
+          : WikiEvents.publishWikiPageChanged(bus.value, {
+              workspacePath: this.ports.workspacePath,
+              docId: change.docId,
+              type: change.type,
+              version: change.version,
+              editor: change.editor,
+            }),
+      ),
+    )
   }
 
   // §B.5 crossLinks: docs↔code from graph edges. A code_symbol edge whose target no longer resolves

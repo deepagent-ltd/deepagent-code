@@ -629,6 +629,7 @@ export const layer = Layer.effect(
         // (same shared index as the tool path + the first driver) so the resumed loop's plan reads/writes
         // stay coherent with any concurrent `plan` tool write on the same session.
         const store = DocumentStore.shared(goalStoreRoot(sessionID))
+        const session = yield* sessions.get(SessionID.make(sessionID)).pipe(Effect.orDie)
 
         // V4.1 §N DUAL-PATH resume. flag ON ⇒ RE-SEED the event chain rather than starting a BackgroundJob.
         // The paused command consumed the current normal cursor key without advancing state. Resume keeps
@@ -645,6 +646,10 @@ export const layer = Layer.effect(
                 planDocId: c.planDocId,
                 seq: tick?.seq ?? 0,
                 expectedPlanVersion,
+                // FEATURE-003-407 residual: re-stamp the real workspace id on resume too — the consumer
+                // chain carries it from the PAYLOAD, so without this the resumed chain (and its quiet-hours
+                // gate) would silently lose the workspace and degrade to the "" global fallback.
+                ...(session.workspaceID != null ? { workspaceID: String(session.workspaceID) } : {}),
               }),
             )
             .pipe(Effect.ignore)
@@ -652,7 +657,6 @@ export const layer = Layer.effect(
           return true
         }
 
-        const session = yield* sessions.get(SessionID.make(sessionID)).pipe(Effect.orDie)
         // Resume can't run without a model; if none resolves, don't crash — just report "not resumed".
         const modelOpt = yield* resolveGoalModel(session).pipe(Effect.option)
         if (Option.isNone(modelOpt)) return false

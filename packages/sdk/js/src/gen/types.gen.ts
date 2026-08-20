@@ -92,11 +92,11 @@ export type Event =
   | EventSessionIdle
   | EventSessionCompacted
   | EventPlanUpdated
+  | EventGoalUpdated
   | EventDebugStopped
   | EventDebugOutput
   | EventDebugTerminated
   | EventDebugUpdated
-  | EventGoalUpdated
   | EventVcsBranchUpdated
   | EventWorkspaceReady
   | EventWorkspaceFailed
@@ -1799,6 +1799,24 @@ export type GlobalEvent = {
       }
     | {
         id: string
+        type: "goal.updated"
+        properties: {
+          sessionID: string
+          goalId: string
+          planDocId: string
+          phase: string
+          ledger: {
+            ticks: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            tokens: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            cost: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            wallclockMs: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          }
+          stallCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          gaps: Array<string>
+        }
+      }
+    | {
+        id: string
         type: "debug.stopped"
         properties: {
           sessionId: string
@@ -1828,24 +1846,6 @@ export type GlobalEvent = {
         properties: {
           sessionId: string
           status: string
-        }
-      }
-    | {
-        id: string
-        type: "goal.updated"
-        properties: {
-          sessionID: string
-          goalId: string
-          planDocId: string
-          phase: string
-          ledger: {
-            ticks: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-            tokens: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-            cost: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-            wallclockMs: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-          }
-          stallCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-          gaps: Array<string>
         }
       }
     | {
@@ -2201,6 +2201,7 @@ export type ProviderConfig = {
           [key: string]: unknown
         }
       }
+      disabled?: boolean
     }
   }
   groups?: {
@@ -6993,6 +6994,25 @@ export type EventPlanUpdated = {
   }
 }
 
+export type EventGoalUpdated = {
+  id: string
+  type: "goal.updated"
+  properties: {
+    sessionID: string
+    goalId: string
+    planDocId: string
+    phase: string
+    ledger: {
+      ticks: number | "NaN" | "Infinity" | "-Infinity"
+      tokens: number | "NaN" | "Infinity" | "-Infinity"
+      cost: number | "NaN" | "Infinity" | "-Infinity"
+      wallclockMs: number | "NaN" | "Infinity" | "-Infinity"
+    }
+    stallCount: number | "NaN" | "Infinity" | "-Infinity"
+    gaps: Array<string>
+  }
+}
+
 export type EventDebugStopped = {
   id: string
   type: "debug.stopped"
@@ -7027,25 +7047,6 @@ export type EventDebugUpdated = {
   properties: {
     sessionId: string
     status: string
-  }
-}
-
-export type EventGoalUpdated = {
-  id: string
-  type: "goal.updated"
-  properties: {
-    sessionID: string
-    goalId: string
-    planDocId: string
-    phase: string
-    ledger: {
-      ticks: number | "NaN" | "Infinity" | "-Infinity"
-      tokens: number | "NaN" | "Infinity" | "-Infinity"
-      cost: number | "NaN" | "Infinity" | "-Infinity"
-      wallclockMs: number | "NaN" | "Infinity" | "-Infinity"
-    }
-    stallCount: number | "NaN" | "Infinity" | "-Infinity"
-    gaps: Array<string>
   }
 }
 
@@ -15380,6 +15381,72 @@ export type SessionContextAttemptResolveResponses = {
 export type SessionContextAttemptResolveResponse =
   SessionContextAttemptResolveResponses[keyof SessionContextAttemptResolveResponses]
 
+export type SessionContextCohortData = {
+  body?: never
+  path?: never
+  query: {
+    directory?: string
+    workspace?: string
+    sinceMs: string
+    untilMs?: string
+  }
+  url: "/session/context/cohort"
+}
+
+export type SessionContextCohortErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+}
+
+export type SessionContextCohortError = SessionContextCohortErrors[keyof SessionContextCohortErrors]
+
+export type SessionContextCohortResponses = {
+  /**
+   * Cohort-level federated context aggregation
+   */
+  200: {
+    window: {
+      sinceMs: number
+      untilMs: number
+    }
+    selections: number
+    sessions: number
+    tokens: number
+    readiness: {
+      ready: number
+      building: number
+      degraded: number
+      blocked: number
+    }
+    graphs: {
+      code: {
+        statuses: number
+        ready: number
+        notReady: number
+      }
+      knowledge: {
+        statuses: number
+        ready: number
+        notReady: number
+      }
+      memory: {
+        statuses: number
+        ready: number
+        notReady: number
+      }
+      documents: {
+        statuses: number
+        ready: number
+        notReady: number
+      }
+    }
+  }
+}
+
+export type SessionContextCohortResponse = SessionContextCohortResponses[keyof SessionContextCohortResponses]
+
 export type SessionProviderResolutionListData = {
   body?: never
   path: {
@@ -15484,6 +15551,68 @@ export type SessionProviderResolutionResolveResponses = {
 
 export type SessionProviderResolutionResolveResponse =
   SessionProviderResolutionResolveResponses[keyof SessionProviderResolutionResolveResponses]
+
+export type SessionExportSnapshotData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: never
+  url: "/session/{sessionID}/export"
+}
+
+export type SessionExportSnapshotErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionExportSnapshotError = SessionExportSnapshotErrors[keyof SessionExportSnapshotErrors]
+
+export type SessionExportSnapshotResponses = {
+  /**
+   * Session snapshot bundle as a JSON string
+   */
+  200: string
+}
+
+export type SessionExportSnapshotResponse = SessionExportSnapshotResponses[keyof SessionExportSnapshotResponses]
+
+export type SessionImportSnapshotData = {
+  body?: {
+    bundle: string
+  }
+  path?: never
+  query?: never
+  url: "/session/import-snapshot"
+}
+
+export type SessionImportSnapshotErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+}
+
+export type SessionImportSnapshotError = SessionImportSnapshotErrors[keyof SessionImportSnapshotErrors]
+
+export type SessionImportSnapshotResponses = {
+  /**
+   * Imported session summary
+   */
+  200: {
+    sessionID: string
+    messages: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    parts: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+}
+
+export type SessionImportSnapshotResponse = SessionImportSnapshotResponses[keyof SessionImportSnapshotResponses]
 
 export type SyncStartData = {
   body?: never

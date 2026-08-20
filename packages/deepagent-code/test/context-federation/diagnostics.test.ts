@@ -15,6 +15,8 @@ import {
   ProjectScopeIdentityTable,
   SecurityNamespaceTable,
 } from "@deepagent-code/core/context-federation/sql"
+import { ContextFederationRollout } from "@deepagent-code/core/context-federation/rollout"
+import { ContextActivationReceipt } from "../../src/context-federation/activation-receipt"
 import { Database } from "@deepagent-code/core/database/database"
 import { DeepAgentReleasedSnapshot } from "@deepagent-code/core/deepagent/released-snapshot"
 import { ProjectV2 } from "@deepagent-code/core/project"
@@ -42,6 +44,44 @@ const attemptId = "attempt_context_diagnostics"
 const securityNamespaceId = SecurityNamespaceID.make("sec_context_diagnostics")
 const projectScopeKey = ProjectScopeKey.make("prjctx_context_diagnostics")
 const releasedKnowledgeBinding = DeepAgentReleasedSnapshot.binding(undefined)
+// Typed federation fixture values the receipt columns demand: a not_requested decision whose
+// requested/enabled/project fields mirror between eligibility and activation (the semantic
+// guard compares them field-by-field as JSON).
+const fixtureRequested: ContextFederationRollout.Requested = {
+  contextFederationShadow: false,
+  locationIndexesV2Shadow: false,
+  contextProjectionV2: false,
+  contextQueryToolsV2: false,
+  coreV2ExecutionOwner: false,
+}
+const fixtureEligibility: ContextFederationRollout.ProjectDecision = {
+  requested: fixtureRequested,
+  enabled: fixtureRequested,
+  blocked: {},
+  project: { projectScopeKey, stage: "all", bucket: 0, selected: false, killSwitch: false },
+}
+const fixtureReadiness: ContextFederationRollout.DerivedContextDataReadiness = {
+  revision: "diagnostics-readiness",
+  state: "ready",
+  identityBound: true,
+  indexAvailable: true,
+  storageHealthy: true,
+  projectScopeKey,
+  reasons: [],
+  observedAt: 35,
+  expiresAt: 600_035,
+}
+const fixtureActivation: ContextActivationReceipt.Receipt = {
+  schemaVersion: 1,
+  recordedAt: 35,
+  readinessAgeMs: 0,
+  readinessExpiresInMs: 600_000,
+  outcome: "not_requested",
+  enabledCapabilities: [],
+  fallbackReasons: [],
+  decision: fixtureEligibility,
+  selection: { selectionId, projectionHash: "projection" },
+}
 
 describe("ContextFederationDiagnostics", () => {
   test("returns opaque evidence and requires durable terminal evidence before settle", async () => {
@@ -58,6 +98,7 @@ describe("ContextFederationDiagnostics", () => {
       resolve: () => Effect.die("not used"),
       prepareProviderTurn: () => Effect.die("not used"),
       settleActivity: () => Effect.void,
+      settleOrphanedActivities: () => Effect.succeed(0),
       replayIndeterminate: () => Effect.die("not used"),
       releasedKnowledgeForActiveSession: () => Effect.succeed(undefined),
     } satisfies SessionFederatedContext.Interface)
@@ -75,7 +116,7 @@ describe("ContextFederationDiagnostics", () => {
         yield* seed(db)
         const service = yield* ContextFederationDiagnostics.Service
         yield* db
-          .insert(SessionToolRequestReceiptTable)
+          .insert(SessionToolRequestReceiptTable) // fixture-exempt: bare preparing receipt; walked to the crashed state below
           .values({
             receipt_id: "receipt_context_legacy",
             request_ordinal: 1,
@@ -83,6 +124,12 @@ describe("ContextFederationDiagnostics", () => {
             user_message_id: inputId,
             assistant_message_id: null,
             provider_attempt_id: attemptId,
+            context_selection_id: selectionId,
+            released_knowledge_security_namespace_id: securityNamespaceId,
+            released_knowledge_project_scope_key: projectScopeKey,
+            released_knowledge_binding_state: releasedKnowledgeBinding.state,
+            released_knowledge_exact_refs: releasedKnowledgeBinding.exactRefs,
+            released_knowledge_exact_refs_fingerprint: releasedKnowledgeBinding.exactRefsFingerprint,
             provider_id: "provider-test",
             model_id: "model-test",
             protocol: "chat",
@@ -90,12 +137,88 @@ describe("ContextFederationDiagnostics", () => {
             permission_filtered_tool_ids: [],
             final_offered_tool_ids: [],
             call_ids: [],
-            provider_state: "indeterminate_after_crash",
-            request_state: "dispatched",
-            request_error_code: "provider_started_outcome_unknown_after_process_restart",
-            owner_token: "dead-process",
+            prompt_epoch: 0,
+            prompt_window_id: "window-receipt-context-legacy",
+            effective_history_hash: "history-receipt-context-legacy",
+            request_input_hash: "request",
+            context_eligibility: fixtureEligibility,
+            context_readiness: fixtureReadiness,
+            context_activation: fixtureActivation,
+            context_activation_fingerprint: "ab".repeat(32),
+            provider_state: "preparing",
+            owner_token: "diagnostics-stale-owner",
+            request_state: "prepared",
             created_at: 35,
           })
+          .run()
+        // seal selected refs once while still preparing.
+        yield* db
+          .update(SessionToolRequestReceiptTable)
+          .set({
+            released_knowledge_selected_refs: releasedKnowledgeBinding.exactRefs,
+            released_knowledge_selected_refs_fingerprint: releasedKnowledgeBinding.exactRefsFingerprint,
+          })
+          .where(eq(SessionToolRequestReceiptTable.receipt_id, "receipt_context_legacy"))
+          .run()
+        // seal the prepared turn (wire hashes must equal the attempt's sealed identity).
+        yield* db
+          .update(SessionToolRequestReceiptTable)
+          .set({
+            provider_state: "prepared",
+            final_request_hash: "ef".repeat(32),
+            provider_request_hash: "ef".repeat(32),
+            wire_request_hash: "ef".repeat(32),
+            prepared_turn_hash: "cd".repeat(32),
+            system_stable_hash: "aa".repeat(32),
+            system_volatile_hash: "bb".repeat(32),
+            tool_definition_hash: "cc".repeat(32),
+            adapter_prepared_at: 36,
+            final_offered_tool_ids: ["fixture_tool"],
+          })
+          .where(eq(SessionToolRequestReceiptTable.receipt_id, "receipt_context_legacy"))
+          .run()
+        // dispatch attempt then receipt (the wire guard matches them pairwise).
+        yield* db
+          .update(SessionProviderAttemptTable)
+          .set({ state: "dispatching" })
+          .where(eq(SessionProviderAttemptTable.attempt_id, attemptId))
+          .run()
+        yield* db
+          .update(SessionToolRequestReceiptTable)
+          .set({ provider_state: "dispatching", dispatching_at: 37 })
+          .where(eq(SessionToolRequestReceiptTable.receipt_id, "receipt_context_legacy"))
+          .run()
+        // simulate the crash: release the stale owner's lease, admit a recovery owner, then mark
+        // both rows indeterminate (the recovery guard demands exactly this lease pair).
+        yield* db.run(sql`
+          UPDATE session_provider_owner_lease
+          SET released_at = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
+          WHERE owner_token = 'diagnostics-stale-owner'
+        `)
+        yield* db.run(sql`
+          INSERT INTO session_provider_owner_lease (
+            owner_token, registered_at, heartbeat_at, lease_expires_at
+          ) VALUES (
+            'diagnostics-recovery-owner',
+            CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),
+            CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),
+            CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) + 60000
+          )
+        `)
+        yield* db
+          .update(SessionProviderAttemptTable)
+          .set({ state: "indeterminate_after_crash", error_code: "process_recovery" })
+          .where(eq(SessionProviderAttemptTable.attempt_id, attemptId))
+          .run()
+        yield* db
+          .update(SessionToolRequestReceiptTable)
+          .set({
+            provider_state: "indeterminate_after_crash",
+            terminal_at: 38,
+            request_state: "dispatched",
+            request_error_code: "provider_started_outcome_unknown_after_process_restart",
+          })
+          .where(eq(SessionToolRequestReceiptTable.receipt_id, "receipt_context_legacy"))
           .run()
         const bypass = yield* db
           .insert(SessionProviderAttemptResolutionTable)
@@ -190,6 +313,53 @@ describe("ContextFederationDiagnostics", () => {
       }).pipe(Effect.provide(diagnostics), Effect.provide(database), Effect.scoped),
     )
   })
+
+  test("cohort aggregates durable selections by readiness bucket over a window (FEAT-005)", async () => {
+    ContextFederationObservability.reset()
+    const database = Database.layerFromPath(":memory:")
+    const attemptLayer = SessionProviderAttempt.layer.pipe(Layer.provide(database))
+    const ownerLayer = SessionProviderOwner.layer.pipe(Layer.provide(database))
+    const sessionLayer = Layer.succeed(Session.Service, {
+      messages: () => Effect.sync(() => []),
+    } as unknown as Session.Interface)
+    const federationLayer = Layer.succeed(SessionFederatedContext.Service, {
+      recover: () => Effect.succeed(0),
+      resolve: () => Effect.die("not used"),
+      prepareProviderTurn: () => Effect.die("not used"),
+      settleActivity: () => Effect.void,
+      settleOrphanedActivities: () => Effect.succeed(0),
+      replayIndeterminate: () => Effect.die("not used"),
+      releasedKnowledgeForActiveSession: () => Effect.succeed(undefined),
+    } satisfies SessionFederatedContext.Interface)
+    const diagnostics = ContextFederationDiagnostics.layer.pipe(
+      Layer.provide(database),
+      Layer.provide(attemptLayer),
+      Layer.provide(ownerLayer),
+      Layer.provide(sessionLayer),
+      Layer.provide(federationLayer),
+    )
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const db = (yield* Database.Service).db
+        yield* seed(db)
+        const service = yield* ContextFederationDiagnostics.Service
+        // Window covering the seeded selection (created_at = 20). code/knowledge/memory are ready;
+        // documents is degraded → the selection folds to the WORST bucket (degraded), so cold-start
+        // noise is kept out of the "ready" cohort.
+        const cohort = yield* service.cohort({ sinceMs: 0, untilMs: 100 })
+        expect(cohort.selections).toBe(1)
+        expect(cohort.sessions).toBe(1)
+        expect(cohort.tokens).toBe(8)
+        expect(cohort.readiness).toEqual({ ready: 0, building: 0, degraded: 1, blocked: 0 })
+        expect(cohort.graphs.code).toMatchObject({ statuses: 1, ready: 1, notReady: 0 })
+        expect(cohort.graphs.documents).toMatchObject({ statuses: 1, ready: 0, notReady: 1 })
+        // A window that excludes the selection yields an empty cohort.
+        const empty = yield* service.cohort({ sinceMs: 1000, untilMs: 2000 })
+        expect(empty.selections).toBe(0)
+        expect(empty.readiness).toEqual({ ready: 0, building: 0, degraded: 0, blocked: 0 })
+      }).pipe(Effect.provide(diagnostics), Effect.provide(database), Effect.scoped),
+    )
+  })
 })
 
 function seed(db: Database.Interface["db"]) {
@@ -280,7 +450,7 @@ function seed(db: Database.Interface["db"]) {
       })
       .run()
     yield* db
-      .insert(SessionActivityTable)
+      .insert(SessionActivityTable) // fixture-exempt: seeds crash-recovery activity for diagnostics fixture
       .values({
         activity_id: activityId,
         session_id: sessionId,
@@ -354,7 +524,7 @@ function seed(db: Database.Interface["db"]) {
       )
     `)
     yield* db
-      .insert(SessionProviderAttemptTable)
+      .insert(SessionProviderAttemptTable) // fixture-exempt: admitted prepared attempt; the test body walks it to the crashed state
       .values({
         attempt_id: attemptId,
         session_id: sessionId,
@@ -365,16 +535,20 @@ function seed(db: Database.Interface["db"]) {
         request_hash: "request",
         provider_id: "provider-test",
         owner_token: "diagnostics-stale-owner",
-        state: "indeterminate_after_crash",
+        state: "prepared",
         created_at: 30,
-        error_code: "process_recovery",
       })
       .run()
-    yield* db.run(sql`
-      UPDATE session_provider_owner_lease
-      SET released_at = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
-      WHERE owner_token = 'diagnostics-stale-owner'
-    `)
+    // Seal the attempt's wire identity once (prepared→prepared), the sole admission path; the
+    // receipt sealed later must carry these exact hashes.
+    yield* db
+      .update(SessionProviderAttemptTable)
+      .set({
+        prepared_turn_hash: "cd".repeat(32),
+        wire_request_hash: "ef".repeat(32),
+      })
+      .where(eq(SessionProviderAttemptTable.attempt_id, attemptId))
+      .run()
   })
 }
 

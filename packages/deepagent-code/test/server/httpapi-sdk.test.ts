@@ -994,7 +994,12 @@ describe("HttpApi SDK", () => {
 
         expect(session.status).toBe(200)
         expect(prompt.status).toBe(200)
-        expect(JSON.stringify(inputs[0])).toContain("project-rest-skill")
+        // Locate the request that carries the user prompt rather than assuming inputs[0]: under
+        // load an auxiliary request (title/summary/etc.) can reach the fake LLM first, and the
+        // skill-context guarantee belongs to the prompt request specifically.
+        const promptInput = inputs.find((input) => JSON.stringify(input).includes("hello skill context"))
+        expect(promptInput).toBeDefined()
+        expect(JSON.stringify(promptInput)).toContain("project-rest-skill")
       }),
     ),
   )

@@ -44,6 +44,8 @@ type StreamInput = {
   readonly headers: Record<string, string>
   readonly abort: AbortSignal
   readonly metadata?: Record<string, unknown>
+  // UPD-002: wire-level structured output forwarded from LLMRequestPrep.Prepared.
+  readonly responseFormat?: { readonly name: string; readonly schema: Record<string, unknown> }
   readonly durableAttempt?: boolean
   readonly requestSeal?: RequestExecutor.RequestSeal["seal"]
 }
@@ -61,9 +63,13 @@ function statusWithFetch(
     providerID !== "openai" &&
     providerID !== "anthropic" &&
     providerID !== "deepagent" &&
+    providerID !== "deepseek" &&
     !providerID.startsWith("deepagent-code")
   )
-    return { type: "unsupported", reason: "provider is not openai, deepagent-code, anthropic, or deepagent" }
+    return {
+      type: "unsupported",
+      reason: "provider is not openai, deepagent-code, anthropic, deepagent, or deepseek",
+    }
   const npm = input.model.api.npm
   if (npm !== "@ai-sdk/openai" && npm !== "@ai-sdk/openai-compatible" && npm !== "@ai-sdk/anthropic")
     return { type: "unsupported", reason: "provider package is not OpenAI, OpenAI-compatible, or Anthropic" }
@@ -116,6 +122,7 @@ export function stream(input: StreamInput): StreamResult {
     providerOptions: ProviderTransform.providerOptions(input.model, input.providerOptions ?? {}),
     headers: { ...providerHeaders(input.provider.options.headers), ...input.headers },
     metadata: input.metadata,
+    responseFormat: input.responseFormat,
   })
   const stream = Stream.scoped(
     Stream.unwrap(

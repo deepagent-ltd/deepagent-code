@@ -292,7 +292,18 @@ export const SessionIntentTable = sqliteTable(
       .notNull()
       .references(() => SessionTable.id, { onDelete: "cascade" }),
     source: text().$type<"composer" | "intelligence" | "followup" | "rewrite">().notNull(),
-    state: text().$type<"preparing" | "admitting" | "admitted" | "canceled" | "superseded" | "failed">().notNull(),
+    state: text()
+      .$type<
+        | "preparing"
+        | "awaiting_confirmation"
+        | "selected"
+        | "admitting"
+        | "admitted"
+        | "canceled"
+        | "superseded"
+        | "failed"
+      >()
+      .notNull(),
     selected_variant: text().$type<"original" | "rewritten">(),
     selected_payload_hash: text(),
     delivery: text().$type<"turn" | SessionInput.Delivery>(),

@@ -487,6 +487,9 @@ export type ProcessorDecision =
 
 export interface Handle {
   readonly message: SessionV1.Assistant
+  // BUG-407-012 gap C: outcome of the pre-stream snapshot capture, so the turn
+  // boundary layer can persist `snapshot_finished` / `snapshot_degraded` evidence.
+  readonly snapshotOutcome: Snapshot.TrackOutcome
   readonly updateToolCall: (
     toolCallID: string,
     update: (part: SessionV1.ToolPart) => SessionV1.ToolPart,
@@ -534,6 +537,11 @@ type Input = {
    */
   sequenceTracker?: ToolSequenceTracker
   planTracker?: PlanProtocolTracker
+  /**
+   * BUG-407-012 gap C: legacy activity identity for snapshot budget attribution.
+   * Absent when the caller has no activity binding (legacy paths).
+   */
+  activityID?: string
   loopPolicy?: "ask" | "error"
   noProgressLimit?: number
 }
@@ -601,7 +609,11 @@ export const layer = Layer.effect(
       // Pre-capture snapshot before the LLM stream starts. The AI SDK
       // may execute tools internally before emitting start-step events,
       // so capturing inside the event handler can be too late.
-      const initialSnapshot = yield* snapshot.track()
+      const snapshotOutcome = yield* snapshot.trackOutcome({
+        sessionId: input.sessionID,
+        ...(input.activityID ? { activityId: input.activityID } : {}),
+      })
+      const initialSnapshot = snapshotOutcome.hash
       const ctx: ProcessorContext = {
         assistantMessage: input.assistantMessage,
         sessionID: input.sessionID,
@@ -680,7 +692,6 @@ export const layer = Layer.effect(
 
       const observeDurableTurn = Effect.fn("SessionProcessor.observeDurableTurn")(function* () {
         if (
-          flags.activityAuthority !== "durable" ||
           ctx.loopPolicy !== "ask" ||
           ctx.assistantMessage.summary ||
           ctx.activityToolNames.size === 0
@@ -689,10 +700,17 @@ export const layer = Layer.effect(
         const activity = yield* SessionPromptIntent.activeActivityForSession(ctx.sessionID).pipe(
           Effect.provideService(Database.Service, database),
         )
-        if (!activity)
-          return yield* Effect.die(
-            new Error(`durable activity authority has no active legacy activity: ${ctx.sessionID}`),
-          )
+        if (!activity) {
+          // The durable authority governs ADMITTED legacy activities. A turn driven without an
+          // admitted activity (direct legacy loop entry, recovery edge windows, seeded history)
+          // keeps legacy semantics: policy evaluation still applies, but there is no durable
+          // objective/progress/no-progress governance to observe. Skipping here must not defect —
+          // dying would crash every un-admitted turn the moment any tool settles.
+          slog.warn("durable observation skipped: no active legacy activity for session", {
+            activityToolCount: ctx.activityToolNames.size,
+          })
+          return
+        }
         const current = yield* DeepAgentActivityAuthority.reconstruct({
           activityKind: "legacy",
           activityID: activity.activityID,
@@ -939,7 +957,7 @@ export const layer = Layer.effect(
             attachments: output.attachments,
           },
         })
-        if (flags.activityAuthority === "durable" && ctx.loopPolicy === "ask") {
+        if (ctx.loopPolicy === "ask") {
           const workspaceRevision = yield* snapshot.track()
           const resultFingerprint =
             match.part.tool && ctx.sequenceTracker
@@ -1033,7 +1051,7 @@ export const layer = Layer.effect(
             time: { start: match.part.state.time.start, end: Date.now() },
           },
         })
-        if (flags.activityAuthority === "durable" && ctx.loopPolicy === "ask") {
+        if (ctx.loopPolicy === "ask") {
           const workspaceRevision = yield* snapshot.track()
           const message = errorMessage(error)
           const evidenceFingerprint = Hash.sha256(
@@ -1436,24 +1454,6 @@ export const layer = Layer.effect(
                     }),
                   )
                 }
-                if (flags.activityAuthority === "durable") {
-                  ctx.sequenceTracker.setTriggered(detected.sequenceKey)
-                  return
-                }
-                const agent = yield* agents.get(ctx.assistantMessage.agent)
-                yield* permission.ask({
-                  permission: "doom_loop",
-                  patterns: [value.name],
-                  sessionID: ctx.assistantMessage.sessionID,
-                  metadata: {
-                    tool: value.name,
-                    input,
-                    period: detected.period,
-                    count: detected.count,
-                  },
-                  always: [value.name],
-                  ruleset: agent.permission,
-                })
                 ctx.sequenceTracker.setTriggered(detected.sequenceKey)
               }
               // Tracker handles all detection for this call; skip legacy path.
@@ -1498,18 +1498,8 @@ export const layer = Layer.effect(
                 }),
               )
             }
-
-            if (flags.activityAuthority === "durable") return
-
-            const agent = yield* agents.get(ctx.assistantMessage.agent)
-            yield* permission.ask({
-              permission: "doom_loop",
-              patterns: [value.name],
-              sessionID: ctx.assistantMessage.sessionID,
-              metadata: { tool: value.name, input },
-              always: [value.name],
-              ruleset: agent.permission,
-            })
+            // Interactive policies surface the doom loop through the durable no-progress authority
+            // (recorded on the activity), not through a permission prompt.
             return
           }
 
@@ -2223,6 +2213,7 @@ export const layer = Layer.effect(
         get message() {
           return ctx.assistantMessage
         },
+        snapshotOutcome,
         updateToolCall,
         completeToolCall,
         process,
