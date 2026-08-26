@@ -1,0 +1,396 @@
+import { Config, ConfigProvider, Context, Effect, Layer, Option } from "effect"
+import { ConfigService } from "@/effect/config-service"
+import { InstallationVersion } from "@deepagent-code/core/installation/version"
+
+const bool = (name: string) => Config.boolean(name).pipe(Config.withDefault(false))
+// A capability that ships ON by default but can be explicitly disabled with `=false` (U5: background
+// subagents are promoted from experimental to a stable local capability in V3.3).
+const stableOn = (name: string) => Config.boolean(name).pipe(Config.withDefault(true))
+const positiveInteger = (name: string) =>
+  Config.number(name).pipe(
+    Config.map((value) => (Number.isInteger(value) && value > 0 ? value : undefined)),
+    Config.orElse(() => Config.succeed(undefined)),
+  )
+const positiveIntegerWithDefault = (name: string, fallback: number) =>
+  Config.number(name).pipe(
+    Config.map((value) => (Number.isInteger(value) && value > 0 ? value : fallback)),
+    Config.orElse(() => Config.succeed(fallback)),
+  )
+export const DEFAULT_SUBAGENT_TIMEOUT_MS = 30 * 60_000
+export const DEFAULT_SUBAGENT_OUTPUT_MAX_CHARS = 8_000
+export const isCoreV2OnlyVersion = (version: string) => /^1\.4\.8(?:[.-]|$)/.test(version)
+const experimental = bool("DEEPAGENT_CODE_EXPERIMENTAL")
+const enabledByExperimental = (name: string) =>
+  Config.all({ experimental, enabled: Config.boolean(name).pipe(Config.option) }).pipe(
+    Config.map((flags) => Option.getOrElse(flags.enabled, () => flags.experimental)),
+  )
+
+export class Service extends ConfigService.Service<Service>()("@deepagent-code/RuntimeFlags", {
+  autoShare: bool("DEEPAGENT_CODE_AUTO_SHARE"),
+  pure: bool("DEEPAGENT_CODE_PURE"),
+  disableDefaultPlugins: bool("DEEPAGENT_CODE_DISABLE_DEFAULT_PLUGINS"),
+  disableEmbeddedWebUi: bool("DEEPAGENT_CODE_DISABLE_EMBEDDED_WEB_UI"),
+  disableExternalSkills: bool("DEEPAGENT_CODE_DISABLE_EXTERNAL_SKILLS"),
+  disableLspDownload: bool("DEEPAGENT_CODE_DISABLE_LSP_DOWNLOAD"),
+  disableClaudeCodePrompt: Config.all({
+    broad: bool("DEEPAGENT_CODE_DISABLE_CLAUDE_CODE"),
+    direct: bool("DEEPAGENT_CODE_DISABLE_CLAUDE_CODE_PROMPT"),
+  }).pipe(Config.map((flags) => flags.broad || flags.direct)),
+  disableClaudeCodeSkills: Config.all({
+    broad: bool("DEEPAGENT_CODE_DISABLE_CLAUDE_CODE"),
+    direct: bool("DEEPAGENT_CODE_DISABLE_CLAUDE_CODE_SKILLS"),
+  }).pipe(Config.map((flags) => flags.broad || flags.direct)),
+  enableExa: Config.all({
+    experimental,
+    enabled: bool("DEEPAGENT_CODE_ENABLE_EXA"),
+    legacy: bool("DEEPAGENT_CODE_EXPERIMENTAL_EXA"),
+  }).pipe(Config.map((flags) => flags.experimental || flags.enabled || flags.legacy)),
+  enableParallel: Config.all({
+    enabled: bool("DEEPAGENT_CODE_ENABLE_PARALLEL"),
+    legacy: bool("DEEPAGENT_CODE_EXPERIMENTAL_PARALLEL"),
+  }).pipe(Config.map((flags) => flags.enabled || flags.legacy)),
+  enableExperimentalModels: bool("DEEPAGENT_CODE_ENABLE_EXPERIMENTAL_MODELS"),
+  enableQuestionTool: bool("DEEPAGENT_CODE_ENABLE_QUESTION_TOOL"),
+  experimentalReferences: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_REFERENCES"),
+  // U5 (V3.3): promoted from experimental to a stable LOCAL capability — background subagents are on
+  // by default. NOTE: this is local, non-durable (process restart loses live jobs); cross-restart
+  // recovery + remote/cloud agents are deferred to V3.4 (S1 §10). Disable with =false.
+  experimentalBackgroundSubagents: stableOn("DEEPAGENT_CODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS"),
+  // Attempt wall limit. Expiry interrupts the same child and preserves partial work for explicit
+  // recovery. It never starts a replacement child or replays provider/tool work automatically.
+  subagentTimeoutMs: positiveIntegerWithDefault("DEEPAGENT_CODE_SUBAGENT_TIMEOUT_MS", DEFAULT_SUBAGENT_TIMEOUT_MS),
+  // Subagent control plane rollout gate (L0 design, subagent-control-plane-design.zh-CN.md §13.3).
+  //
+  //  "legacy"  — keep the current SessionPrompt execution path without automatic takeover.
+  //  "shadow"  — RESERVED for future use. Legacy lifecycle authority remains; durable coordinator
+  //              records non-authoritative comparison artifacts only. Currently routes identically
+  //              to "legacy". DO NOT use in production until §4 cutover protocol is implemented.
+  //  "durable" — all lifecycle owned by the durable TaskCoordinator (L4+); takeover permanently
+  //              removed; SessionPrompt driven through LegacySubagentExecutor.
+  //              REQUIRES: L1 migration applied, L3 provisioner wired, start/settle fences complete.
+  //
+  // Unknown values fail closed to "legacy". Once set to "durable" it MUST NOT be rolled back to
+  // re-enable takeover (design §13.4). Mode is per-SQLite/Location — mixing modes across processes
+  // sharing the same database is prohibited (design §4.4).
+  subagentControlPlane: Config.string("DEEPAGENT_CODE_SUBAGENT_CONTROL_PLANE").pipe(
+    Config.withDefault("legacy"),
+    Config.map((value): "legacy" | "shadow" | "durable" => {
+      if (value === "legacy" || value === "shadow" || value === "durable") return value
+      throw new Error(
+        `Invalid DEEPAGENT_CODE_SUBAGENT_CONTROL_PLANE="${value}". Must be one of: legacy, shadow, durable. Refusing to start with unknown mode.`,
+      )
+    }),
+  ),
+  // Parent injection is bounded by default. The complete result remains durable in the child Session
+  // and the truncated envelope carries the task_read recovery pointer.
+  subagentOutputMaxChars: positiveIntegerWithDefault(
+    "DEEPAGENT_CODE_SUBAGENT_OUTPUT_MAX_CHARS",
+    DEFAULT_SUBAGENT_OUTPUT_MAX_CHARS,
+  ),
+  subagentResearchStepLimit: positiveInteger("DEEPAGENT_CODE_SUBAGENT_RESEARCH_STEP_LIMIT"),
+  subagentResearchWallMs: positiveInteger("DEEPAGENT_CODE_SUBAGENT_RESEARCH_WALL_MS"),
+  subagentNoProgressLimit: positiveInteger("DEEPAGENT_CODE_SUBAGENT_NO_PROGRESS_LIMIT"),
+  subagentPermissionTimeoutMs: positiveInteger("DEEPAGENT_CODE_SUBAGENT_PERMISSION_TIMEOUT_MS"),
+  experimentalLspTy: bool("DEEPAGENT_CODE_EXPERIMENTAL_LSP_TY"),
+  experimentalLspTool: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_LSP_TOOL"),
+  // V3.8 App-A C2.5 (Stage 5): query_log tool — lets the agent retrieve slices of the append-only
+  // Conversation Log (full reasoning / edited-withdrawn originals / untruncated tool IO) on demand.
+  // Promoted ON by default: the WRITE side is now wired (SessionPrompt.runLoop drives
+  // ConversationLogWriter each iteration + a final pass), so the log is actually populated and the
+  // read tool returns real entries. The writer is default-safe (matchCauseEffect → no-op on any fs
+  // failure), so enabling the tool by default cannot crash a turn. Set `=false` to disable.
+  experimentalQueryLogTool: stableOn("DEEPAGENT_CODE_EXPERIMENTAL_QUERY_LOG"),
+  // V3.8 App-A Stage 1: maintain the Session Ledger alongside compaction (parse each compaction
+  // summary into structured ledger entries + persist as the `ledger` DocType). Coexists with V1
+  // compaction — does NOT replace the assembly path. Default OFF (gated grey rollout, C6 §1). Enable
+  // with DEEPAGENT_CODE_EXPERIMENTAL_CONTEXT_LEDGER.
+  experimentalContextLedger: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_CONTEXT_LEDGER"),
+  // L6 (V3.4): code_intel (symbol-driven AI IDE entry) ships ON by default and is promoted out of
+  // the experimental gate — `=false` disables. grep is never disabled; no-server files fall back.
+  codeIntelTool: stableOn("DEEPAGENT_CODE_CODE_INTEL_TOOL"),
+  // P3A (S1-v3.5): profile tool (symbol/region-driven PAP profiling entry). Ships ON by default;
+  // set =false to disable. Requires R0 privilege gate + execution approval at runtime.
+  profileTool: stableOn("DEEPAGENT_CODE_PROFILE_TOOL"),
+  // D3 (S1-v3.5): debug tool (DAP symbol-driven debugger entry). Ships ON by default;
+  // set =false to disable. Requires R0 privilege gate + execution approval at runtime.
+  debugTool: stableOn("DEEPAGENT_CODE_DEBUG_TOOL"),
+  // M7 (S1-v3.4): when a connected MCP server's tier derives to `read_only` (catalog-matched), its
+  // tools auto-allow without a per-call prompt. ON by default (the V3.4 design). Set `=false` to
+  // restore the pre-M7 behavior where EVERY MCP tool call goes through `ctx.ask` — a defense-in-depth
+  // escape hatch for users who want the human checkpoint on read-only servers too.
+  mcpReadOnlyAutoAllow: stableOn("DEEPAGENT_CODE_MCP_READONLY_AUTO_ALLOW"),
+  experimentalOxfmt: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_OXFMT"),
+  experimentalPlanMode: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_PLAN_MODE"),
+  experimentalEventSystem: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_EVENT_SYSTEM"),
+  experimentalWorkspaces: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_WORKSPACES"),
+  // Four-graph federation ships ON after the C4 qualification gates. The Core V2 execution owner
+  // remains independently contained until the migration's durable cohort authority is available.
+  contextFederationShadow: stableOn("DEEPAGENT_CODE_CONTEXT_FEDERATION_SHADOW"),
+  locationIndexesV2Shadow: stableOn("DEEPAGENT_CODE_LOCATION_INDEXES_V2_SHADOW"),
+  contextProjectionV2: stableOn("DEEPAGENT_CODE_CONTEXT_PROJECTION_V2"),
+  contextQueryToolsV2: stableOn("DEEPAGENT_CODE_CONTEXT_QUERY_TOOLS_V2"),
+  // M-1 containment: execution remains closed until a durable M10 cohort authorization exists.
+  coreV2ExecutionOwner: bool("DEEPAGENT_CODE_CORE_V2_EXECUTION_OWNER"),
+  // Internal 1.4.8 V2-only profile: when enabled, an unavailable/unqualified V2 owner fails closed
+  // instead of entering the legacy SessionPrompt executor. This is a kill switch for admission,
+  // never a legacy fallback selector.
+  coreV2Only: Config.all({
+    forcedByVersion: Config.succeed(isCoreV2OnlyVersion(InstallationVersion)),
+    explicit: bool("DEEPAGENT_CODE_CORE_V2_ONLY"),
+  }).pipe(Config.map((value) => value.forcedByVersion || value.explicit)),
+  contextFederationKillSwitch: bool("DEEPAGENT_CODE_CONTEXT_FEDERATION_KILL_SWITCH"),
+  contextFederationRolloutStage: Config.string("DEEPAGENT_CODE_CONTEXT_FEDERATION_ROLLOUT_STAGE").pipe(
+    Config.withDefault("all"),
+    Config.map((value) => {
+      if (value === "internal") return value
+      if (value === "percentage") return value
+      if (value === "all") return value
+      return "shadow" as const
+    }),
+  ),
+  contextFederationRolloutPercent: Config.number("DEEPAGENT_CODE_CONTEXT_FEDERATION_ROLLOUT_PERCENT").pipe(
+    Config.withDefault(0),
+    Config.map((value) => (Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : 0)),
+  ),
+  contextFederationInternalProjects: Config.string("DEEPAGENT_CODE_CONTEXT_FEDERATION_INTERNAL_PROJECTS").pipe(
+    Config.withDefault(""),
+    Config.map((value) =>
+      value
+        .split(",")
+        .map((project) => project.trim())
+        .filter(Boolean),
+    ),
+  ),
+  // V3.9 §C: Expert Panel（会诊机制）— differentiated expert lenses answer one frozen high-risk
+  // question independently, aggregated by a deterministic non-LLM Arbiter. SHIPS ON by default (mode
+  // redesign: mature capabilities are always present, flags are only a kill-switch — mirrors Codex's
+  // stable-default features). Set DEEPAGENT_CODE_EXPERIMENTAL_EXPERT_PANEL=false to disable. The
+  // Arbiter is a pure function; this flag only gates the session-driven Convener orchestration.
+  experimentalExpertPanel: stableOn("DEEPAGENT_CODE_EXPERIMENTAL_EXPERT_PANEL"),
+  // V3.9 §B: Repo & Wiki（人向监督层）— the human-facing PROJECTION layer over the four graphs (not a
+  // fifth store): render doc/code nodes as Markdown, full-text search, docs↔code cross-links, and a
+  // per-session execution archive. Knowledge/Memory pages are governable (edit → new version + human
+  // provenance via evidence-gate); Document/Code pages are read-only; sealed scope is NEVER projected
+  // (INV-7). SHIPS ON by default (kill-switch only; it is pure projection + reuse of the existing
+  // promote/reject pipeline, so it is rollback-safe). Set DEEPAGENT_CODE_EXPERIMENTAL_WIKI=false to disable.
+  experimentalWiki: stableOn("DEEPAGENT_CODE_EXPERIMENTAL_WIKI"),
+  // V3.9 §D: Goal Loop（自主长跑原语）— a supervised, cross-tick control loop that drives 计划→执行→验证→
+  // 迭代 against an OBJECTIVELY decidable completion criterion until met or a HARD stop limit fires. The
+  // Controller + deterministic Grader live in core (`deepagent/goal-loop.ts`, PURE with injected ports);
+  // this flag gates the deepagent-code WIRING (GraderPorts → validation runner / LSP diagnostics /
+  // reviewer / Panel; step executor → SessionPrompt; rollback → revert) plus the loop/design worker
+  // native agent. SHIPS ON by default (kill-switch only; the schemas are additive and the loop cannot
+  // start without objective criteria + hard limits, so it is safe on by default — this is what powers
+  // the loop/design collaboration modes). Set DEEPAGENT_CODE_EXPERIMENTAL_GOAL_LOOP=false to disable.
+  experimentalGoalLoop: stableOn("DEEPAGENT_CODE_EXPERIMENTAL_GOAL_LOOP"),
+  // §16.3 order 3 caller wiring: drives subagent turn runners (goal loop / panel / facade / HTTP
+  // panel route) through the V2 typed adapter seam — durable admission + explicit drain join,
+  // seam-side structured validation, V2→V1 mirroring, and per-turn revert evidence — instead of
+  // legacy prompt orchestration. OFF by default (rollout gate; the V2 runner checklist still has
+  // open items). When ON, V2 is authoritative: a failed V2 turn fails the turn, there is no legacy
+  // fallback. The production compositions (AppRuntime root graph, instance HTTP route root) export
+  // the shared SessionV2.liveLayer singleton for the seam; compositions without it stay on the
+  // legacy path even with the flag on (the seam resolves via serviceOption).
+  experimentalV2SubagentDrive: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_V2_SUBAGENT_DRIVE"),
+  experimentalIconDiscovery: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_ICON_DISCOVERY"),
+  outputTokenMax: positiveInteger("DEEPAGENT_CODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX"),
+  // V4.0.1 P0: three-layer SOFT-LANDING compaction (reminder → fallback "death notes" → hard rollover).
+  // Before a hard LLM-summary compaction, the turn loop gives the model a reminder (soft line) and then a
+  // one-shot forced "临终笔记" fallback message (all tools retained) so it can flush un-persisted decisions /
+  // next-step intent into the durable plan doc BEFORE lossy summarization. Pure-additive, strictly safer
+  // default (loses less on compaction), no autonomous side effects → SHIPS ON (mirrors v4Steering posture).
+  // With `=false`, overflowStatus() collapses to the pre-V4.0.1 single-threshold ok/hard behavior (逐字节
+  // equivalent). Also respects DEEPAGENT_CODE_DISABLE_AUTOCOMPACT (no compaction → no soft-landing).
+  softLandingCompaction: stableOn("DEEPAGENT_CODE_SOFT_LANDING_COMPACTION"),
+  // V4.0.1 P0b: OUTPUT soft-landing — when a response is cut off at the output-token ceiling
+  // (finish === "length") with no pending tool call, instead of ending the turn (the pre-V4.0.1 behavior),
+  // inject a "continue from where you were cut off, do not repeat" tail message and loop once more so the
+  // model resumes. Bounded by OUTPUT_CONTINUATION_MAX consecutive continuations (reset on any natural stop)
+  // to prevent an infinite loop. Improves on Codex, which treats an output-cap hit as a retryable stream
+  // error and re-sends the identical request (re-hitting the same cap). Pure-additive, strictly better
+  // default (a truncated long answer now completes instead of stopping mid-sentence) → SHIPS ON. With
+  // `=false` a length-capped response ends the turn exactly as before V4.0.1.
+  outputSoftLanding: stableOn("DEEPAGENT_CODE_OUTPUT_SOFT_LANDING"),
+  // V4.0.1 P2: goal BUDGET soft-notify — when cost/maxCost crosses tiered fractions (default [0.7, 0.9]),
+  // inject a "converge, don't expand" reminder into the next tick's step-prompt TAIL (never the prefix),
+  // mirroring Codex's <rollout_budget>. Pure-additive reminder with NO halting behavior change → SHIPS ON.
+  // With `=false` no budget notice is injected (pre-V4.0.1 behavior).
+  goalBudgetSoftNotify: stableOn("DEEPAGENT_CODE_GOAL_BUDGET_SOFT_NOTIFY"),
+  // V4.0.1 P2: goal NET-token budget accounting. When on, BudgetLedger.tokens accumulates NET generation
+  // (output + max(0, input − carriedPrefixTokens)) instead of gross throughput, so a long task's ledger no
+  // longer inflates linearly from the repeated static prefix each tick. This CHANGES the accumulation
+  // semantics of an already-persisted ledger, so it defaults OFF and only applies to goals CREATED after it
+  // is enabled (each goal stamps a `budgetTokenScope: "gross" | "net"` marker; loadState picks the
+  // accumulation by marker — never mid-flight). NOTE: token overflow no longer halts a goal regardless of
+  // this flag (that halt was removed in P2); this flag only governs the ledger COUNTING convention.
+  // Promoted ON (V4.0.1): net accounting is the CORRECT ledger convention (a long task's ledger no longer
+  // inflates linearly from the repeated static prefix). Safe as a default because it is stamped PER-GOAL at
+  // creation via `budgetTokenScope` — only goals created after this is on accumulate "net"; every
+  // already-persisted ledger keeps its stamped "gross" scope and is never re-interpreted mid-flight. Set
+  // `=false` to force new goals back to the pre-V4.0.1 gross throughput accounting.
+  goalNetTokenBudget: stableOn("DEEPAGENT_CODE_GOAL_NET_TOKEN_BUDGET"),
+  // V4.0.1 P1: World State / summary responsibility separation. When on, the compaction summary is narrowed
+  // to four buckets (progress+decisions / constraints+prefs / next steps / data references) and files /
+  // env / diagnostics are carried by a snapshot-diff World State layer re-injected as a TAIL user block at
+  // tick start (never the static prefix). Every committed compaction window persists and projects its own
+  // full World State baseline regardless of this compatibility flag; allowing a baseline-free window would
+  // make PromptEpoch incomplete and reopen the manual-compaction information gap. Also opens an "always load World
+  // State" path for the goal-worker (P3(d)), bypassing shouldLoadBridge's general short-circuit. Because it
+  // alters context assembly. Promoted ON (V4.0.1): it is a pure tail-only re-injection (never the static
+  // prefix) and the summary narrowing keeps the LLM summary focused, so it is safe as a default; with
+  // `=false` the summary keeps the legacy "record everything" template and goal-loop tick injection remains
+  // disabled. The compaction baseline is an authority invariant rather than optional feature behavior.
+  worldStateReinjection: stableOn("DEEPAGENT_CODE_WORLD_STATE_REINJECTION"),
+  // T3 (S1-v3.4): how many narrowing attempts a 🟡 stall is given before it escalates to 🔴.
+  // Default 1 (one focused retry, then hand off). `positiveInteger` → undefined when unset/invalid,
+  // so the loop applies its own default of 1.
+  microbatchNarrowLimit: positiveInteger("DEEPAGENT_CODE_MICROBATCH_NARROW_LIMIT"),
+  bashDefaultTimeoutMs: positiveInteger("DEEPAGENT_CODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS"),
+  experimentalNativeLlm: bool("DEEPAGENT_CODE_EXPERIMENTAL_NATIVE_LLM"),
+  // Diagnostic-only request assembly event. Default OFF: when enabled, request preparation emits only
+  // Process-local HMAC fingerprints, aggregate counts, and existing request/session identifiers only —
+  // never raw prompt, message, tool, header, metadata, or credential values.
+  assembledRequestFingerprint: bool("DEEPAGENT_CODE_ASSEMBLED_REQUEST_FINGERPRINT"),
+  // BUG-010 diagnostic gate. Normal receipts persist decoded argument hashes only. Raw provider
+  // chunks are provider-specific and potentially numerous, so inspect them only for an explicit gate.
+  toolArgumentRawReceipt: bool("DEEPAGENT_CODE_TOOL_ARGUMENT_RAW_RECEIPT"),
+  experimentalWebSockets: bool("DEEPAGENT_CODE_EXPERIMENTAL_WEBSOCKETS"),
+  // ── V4.0 event-driven Agent-OS — DEFAULT OFF (production-safe, operator opt-in) ──────────────────
+  // Per §H3 (Feature Flags: all six ship OFF) and §H1 (staged rollout: shadow → low-risk → push
+  // manual-confirm → multi-agent gradually), every V4 CAPABILITY defaults OFF in production. This is the
+  // pre-V4 (V3.8-equivalent) behavior by default; a deployment turns capabilities on deliberately as it
+  // advances the rollout. IMPORTANT: the always-on SAFETY GATES (security-gate, rate-limit) are NOT
+  // gated by these flags — they run regardless once wired; these flags gate only the V4 capabilities
+  // themselves, never the safety checks. Each flag is an independent OPT-IN: set the env var `=true` to
+  // enable one capability for verification or a staged rollout. `bool(name)` = default false, override
+  // on with `=true`; the `RuntimeFlags.layer({...})` test helper can also force any flag on
+  // programmatically (tests opt into the behavior they exercise).
+  //
+  // §A/§B: route inbound IM messages through the DeepAgent Event Bus (im.message.created → Router →
+  // Scheduler) alongside the legacy path (double-write). Enable with DEEPAGENT_CODE_V4_EVENT_DRIVEN_IM=true.
+  v4EventDrivenIm: bool("DEEPAGENT_CODE_V4_EVENT_DRIVEN_IM"),
+  // §A4: allow the agent to PUSH proactively (monitor/schedule/ci-driven outbound), through the §B2
+  // policy gate (rate-limit, quiet-hours, group-membership, workspace-push-permission). PROMOTED ON
+  // by default (V4.0.4 3b): the policy's hasWorkspacePushPermission fact defaults to false, so
+  // deliveries are blocked until a workspace explicitly enables push — making the runtime safe with
+  // the flag on. Set DEEPAGENT_CODE_V4_AGENT_PUSH_ENABLED=false to revert to inert posture.
+  v4AgentPushEnabled: stableOn("DEEPAGENT_CODE_V4_AGENT_PUSH_ENABLED"),
+  // §C: the Multi-Agent Runtime (coordinated multi-agent execution over the bus + agent.task.*
+  // coordination). This is the master switch that starts the event-runtime daemons — including the V4.1
+  // §N event-driven goal-tick chain (GoalTickConsumer + cold-recovery port). PROMOTED ON by default (V4.1):
+  // the daemon audit is GO (every gated daemon is complete + correctly started, InstanceRef-die fix at both
+  // sites, approval keys match, goal.tick is now a real consumed command with cross-process cold recovery),
+  // and autonomous level_2 edits are the INTENDED semantic of this flag (governed by each agent descriptor's
+  // declared autonomy ceiling, guarded by the four-layer SecurityGate + Approval Queue + concurrency cap +
+  // file locks + trusted-source gating on external events — external webhooks stay fail-closed until an
+  // operator opts their source into the workspace trustedSources). Set
+  // DEEPAGENT_CODE_V4_MULTI_AGENT_RUNTIME=false to restore the pre-V4 (V3.8-equivalent) inert posture: no
+  // daemons subscribe, ticks run via the in-process BackgroundJob driver, nothing is autonomous.
+  v4MultiAgentRuntime: stableOn("DEEPAGENT_CODE_V4_MULTI_AGENT_RUNTIME"),
+  // Finer-grained flag: enables ONLY the goal-tick event chain without the full v4MultiAgentRuntime
+  // daemon stack. When this flag is on (or v4MultiAgentRuntime is on), goal ticks are driven by the
+  // GoalTickConsumer via GOAL_TICK_REQUESTED events rather than the in-process BackgroundJob for-loop.
+  // Default OFF so existing sessions are unaffected until explicitly opted in.
+  v4GoalTickEventDriven: bool("DEEPAGENT_CODE_V4_GOAL_TICK_EVENT_DRIVEN"),
+  // NOTE: there is deliberately NO separate "autonomy level 2" flag. The §D autonomy gate
+  // (AutonomyPolicy.decide in multi-agent-runtime.ts) is driven purely by each agent's DECLARED autonomy
+  // ceiling in its descriptor — a flag could only ever have MASKED that, and a former
+  // v4AgentAutonomyLevel2 flag was inert (advertised in /global/capabilities but wired to neither the UI
+  // nor the gate), so it was removed rather than left as a control that controls nothing. Enabling
+  // v4MultiAgentRuntime authorizes autonomous action up to each agent's own ceiling (builtin fixers are
+  // level_2 = act-then-report), guarded by the four-layer SecurityGate + Approval Queue + concurrency cap
+  // + file locks + trusted-source gating on external events. To restrict autonomy, tighten the agent
+  // descriptors' `autonomy` levels — config can only tighten a ceiling, never raise it.
+  // §B: threaded conversations (thread query + reply grouping on the IM surface). Default OFF (known
+  // correctness bugs pending). Enable with DEEPAGENT_CODE_V4_THREAD_ENABLED=true.
+  v4ThreadEnabled: bool("DEEPAGENT_CODE_V4_THREAD_ENABLED"),
+  // §B: inbound file/attachment upload on the IM surface (im_attachments + local-disk storage). Enable
+  // with DEEPAGENT_CODE_V4_FILE_UPLOAD_ENABLED=true.
+  v4FileUploadEnabled: bool("DEEPAGENT_CODE_V4_FILE_UPLOAD_ENABLED"),
+  // §M: the Expert Panel AUTO-CONVENE consumer — auto-summons an Expert Panel for high-risk events
+  // (destructive migrations, security alerts, architecture changes) per PanelConvenePolicy, routing a
+  // needs_human verdict to the §D2 Approval Queue. PROMOTED ON by default (V4.0.4 3b): idempotency
+  // guard (causationID) + deterministic idempotencyKey prevent double-convening on re-delivery.
+  // Set DEEPAGENT_CODE_V4_PANEL_AUTO_CONVENE=false to disable automatic panel fan-out.
+  v4PanelAutoConvene: stableOn("DEEPAGENT_CODE_V4_PANEL_AUTO_CONVENE"),
+  // §L: the EVENT-DRIVEN execution archiver TRIGGER. PROMOTED ON by default (V4.0.4 3b): the
+  // SessionCompletedPublisher fires at most once per 45-second debounce window per session, is
+  // root-session-only, and is idempotent (idempotencyKey = "session-completed:<id>:<firetime>").
+  // The EventDrivenArchiver consumer is already live (v4MultiAgentRuntime is stableOn). Set
+  // DEEPAGENT_CODE_V4_EVENT_DRIVEN_ARCHIVE=false to restore the V3.9 inline-archive-only path.
+  v4EventDrivenArchive: stableOn("DEEPAGENT_CODE_V4_EVENT_DRIVEN_ARCHIVE"),
+  // V4.1 §S1.1: mid-turn STEERING — a user message that arrives while a turn is in flight is buffered
+  // in a durable per-session steer queue and ABSORBED at the next model-request boundary of the live
+  // turn loop (SessionPrompt.runLoop), appended as an ordinary tail user message (never aborting the
+  // in-flight stream/tools). Unlike the HIGH-RISK V4 autonomy flags, steering is a pure-additive
+  // soft-absorb with NO autonomous side effects, so it SHIPS ON by default — it is the foundational
+  // interactive primitive. It is nonetheless a real kill-switch: with `=false` the drain never runs and
+  // behavior is exactly the pre-steering path (busy sessions await / BusyError as before). This gates
+  // ONLY the runLoop steer drain — it does NOT activate the dormant experimentalEventSystem V2 runner.
+  // Disable with DEEPAGENT_CODE_V4_STEERING=false.
+  v4Steering: stableOn("DEEPAGENT_CODE_V4_STEERING"),
+  // BUG-004: maximum consecutive steer-absorption rounds within ONE activity run. When reached, the
+  // run loop stops absorbing and ends the activity; any still-pending steers are consumed by the
+  // NEXT drain cycle as a fresh activity instead of silently extending the old work without bound.
+  steerAbsorbLimit: positiveIntegerWithDefault("DEEPAGENT_CODE_STEER_ABSORB_LIMIT", 5),
+  // provider lifecycle gap C: pre-dispatch deadline watchdog. DEFAULT OFF. When enabled, a maintenance
+  // sweep fails any legacy activity that stayed active past the deadline WITHOUT durable receipt /
+  // dispatch evidence, through the existing terminalization path with a typed terminal reason (so an
+  // exact retry remains possible). Activities that already have a receipt are never touched — the
+  // existing outcome-unknown recovery stays authoritative for those.
+  providerPreDispatchWatchdog: bool("DEEPAGENT_CODE_PROVIDER_PRE_DISPATCH_WATCHDOG"),
+  providerPreDispatchDeadlineMs: positiveIntegerWithDefault(
+    "DEEPAGENT_CODE_PROVIDER_PRE_DISPATCH_DEADLINE_MS",
+    10 * 60_000,
+  ),
+  // permission authority staged authority cutover. `legacy` preserves the existing in-process permission and
+  // no-progress owner. `durable` routes production legacy activities through the SQLite-backed
+  // objective/progress/permission authority.
+  // FEAT-011 T3/T4/T6: the unified activity FACADE tools (activity_start/status/result/control).
+  // Staged OFF: the facade never duplicates lifecycle state — it delegates to the existing Task
+  // durable queue / GoalManager / PanelConsult runners and records session_facade_activity rows
+  // (fail-closed partial unique index per (parent_session, subkind) active). Default false until
+  // the release gate qualifies the delegation paths; enable with DEEPAGENT_CODE_ACTIVITY_FACADE=true.
+  activityFacade: bool("DEEPAGENT_CODE_ACTIVITY_FACADE"),
+  // RISK-003 ④ (event maintenance legacy data governance): durable automated schedule for the legacy
+  // event canonicalizer. The canonicalizer itself is already wired (core event.ts
+  // canonicalizeLegacyArtifacts + the sync maintenance endpoint); this flag starts a bounded
+  // background loop that walks the backlog in small batches. DEFAULT OFF (conservative rollout —
+  // the governance runbook advances per-step on production copies). Failures only log; the loop
+  // never deletes events or VACUUMs. Enable with DEEPAGENT_CODE_LEGACY_EVENT_CANONICALIZER=true.
+  legacyEventCanonicalizer: bool("DEEPAGENT_CODE_LEGACY_EVENT_CANONICALIZER"),
+  // RISK-003 ① staged rollout: converge inline summary diffs onto the session_diff_artifact
+  // authority at write time (rewrites the message row to a compact descriptor). Staged OFF until
+  // the diff read path serves artifact descriptors and the §14 evidence chain (floor parity) is
+  // in place; until then the event-maintenance hotfix contract holds (bound at read, storage untouched).
+  sessionDiffArtifactCapture: bool("DEEPAGENT_CODE_SESSION_DIFF_ARTIFACT_CAPTURE"),
+  // PR-2: Streaming degeneration detector mode for reasoning outputs.
+  // "off"    — detector is disabled; all output passes through unmodified.
+  // "shadow" — detector runs and logs hits, but never triggers a circuit break.
+  // "enforce"— detector triggers a circuit break on confirmed degeneration (default, production-on).
+  // Set DEEPAGENT_CODE_REASONING_DEGENERATION_MODE=shadow or =off to reduce enforcement.
+  degenerationDetectorMode: Config.string("DEEPAGENT_CODE_REASONING_DEGENERATION_MODE").pipe(
+    Config.withDefault("enforce"),
+  ),
+  client: Config.string("DEEPAGENT_CODE_CLIENT").pipe(Config.withDefault("cli")),
+}) {}
+
+export type Info = Context.Service.Shape<typeof Service>
+
+const emptyConfigLayer = Service.defaultLayer.pipe(
+  Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({}))),
+  Layer.orDie,
+)
+
+export const layer = (overrides: Partial<Info> = {}) =>
+  Layer.effect(
+    Service,
+    Effect.gen(function* () {
+      const flags = yield* Service
+      return Service.of({ ...flags, ...overrides })
+    }),
+  ).pipe(Layer.provide(emptyConfigLayer))
+
+export const defaultLayer = Service.defaultLayer.pipe(Layer.orDie)
+
+export * as RuntimeFlags from "./runtime-flags"

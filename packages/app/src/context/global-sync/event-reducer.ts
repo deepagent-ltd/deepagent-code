@@ -1,0 +1,505 @@
+import { Binary } from "@deepagent-code/core/util/binary"
+import { produce, reconcile, type SetStoreFunction, type Store } from "solid-js/store"
+import type {
+  Message,
+  Part,
+  PermissionRequest,
+  Project,
+  QuestionRequest,
+  Session,
+  SessionStatus,
+  SnapshotFileDiff,
+} from "@deepagent-code/sdk/v2/client"
+import type { State, VcsCache, SessionPlan, SessionGoal, SessionPlanUpdateOptions } from "./types"
+import { trimSessions } from "./session-trim"
+import { dropSessionCaches } from "./session-cache"
+import { diffs as list, message as clean } from "@/utils/diffs"
+// provider lifecycle root cause B: message/part arrays are kept in (time, id) chronological order, not
+// ID lexicographic order — the 6-byte ID time field wraps every 2^36 ms, so ID order alone is
+// not time order. Bare-ID events (remove/delta) must locate by identity scan, not binary search.
+import { findMessageIndex, findPartIndex, locateMessage, locatePart } from "@/utils/message-order"
+import { promptAdmissionClientMessageID } from "./prompt-admission"
+
+const SKIP_PARTS = new Set(["patch", "step-start", "step-finish"])
+
+type AssistantMessage = Extract<Message, { role: "assistant" }>
+type ActivityProgress = NonNullable<AssistantMessage["activityProgress"]>
+
+function activityProgress(value: unknown): ActivityProgress | undefined {
+  if (!value || typeof value !== "object") return
+  const marker = value as Record<string, unknown>
+  if (typeof marker.activityID !== "string" || marker.activityID.length === 0) return
+  if (typeof marker.revision !== "number" || !Number.isInteger(marker.revision) || marker.revision < 0) return
+  if (
+    !["provisional", "progress", "final", "interrupted", "recovery_required", "failed"].includes(
+      String(marker.state),
+    )
+  )
+    return
+  if (marker.terminalReason !== undefined && typeof marker.terminalReason !== "string") return
+  return value as ActivityProgress
+}
+
+export function mergeMessage(current: Message, incoming: Message) {
+  if (current.role !== "assistant" || incoming.role !== "assistant") return { message: incoming, conflict: false }
+  const existing = activityProgress(current.activityProgress)
+  const next = activityProgress(incoming.activityProgress)
+  if (incoming.activityProgress && !next)
+    return {
+      message: { ...incoming, activityProgress: existing },
+      conflict: true,
+    }
+  if (!existing) return { message: incoming, conflict: false }
+  if (!next) return { message: { ...incoming, activityProgress: existing }, conflict: false }
+  if (existing.activityID !== next.activityID)
+    return { message: { ...incoming, activityProgress: existing }, conflict: true }
+  // BUG-005: revisions are monotonic within one activity (server commits revision+1). The paged
+  // snapshot routinely lags behind the realtime stream, so a revision mismatch is staleness, not a
+  // conflict — take the higher revision instead of escalating to a whole-session force reload.
+  if (existing.revision !== next.revision)
+    return existing.revision > next.revision
+      ? { message: { ...incoming, activityProgress: existing }, conflict: false }
+      : { message: incoming, conflict: false }
+  if (existing.state === next.state) return { message: incoming, conflict: false }
+  const rank = (progress: ActivityProgress) =>
+    progress.state === "provisional" ? 0 : progress.state === "progress" ? 1 : 2
+  if (rank(next) > rank(existing)) return { message: incoming, conflict: false }
+  if (rank(next) < rank(existing))
+    return { message: { ...incoming, activityProgress: existing }, conflict: false }
+  return { message: { ...incoming, activityProgress: existing }, conflict: true }
+}
+
+export function applyGlobalEvent(input: {
+  event: { type: string; properties?: unknown }
+  project: Project[]
+  setGlobalProject: (next: Project[] | ((draft: Project[]) => Project[])) => void
+  refresh: () => void
+}) {
+  if (input.event.type === "global.disposed" || input.event.type === "server.connected") {
+    input.refresh()
+    return
+  }
+
+  if (input.event.type !== "project.updated") return
+  const properties = input.event.properties as Project
+  const result = Binary.search(input.project, properties.id, (s) => s.id)
+  if (result.found) {
+    input.setGlobalProject(
+      produce((draft) => {
+        draft[result.index] = { ...draft[result.index], ...properties }
+      }),
+    )
+    return
+  }
+  input.setGlobalProject(
+    produce((draft) => {
+      draft.splice(result.index, 0, properties)
+    }),
+  )
+}
+
+function cleanupSessionCaches(setStore: SetStoreFunction<State>, sessionID: string) {
+  if (!sessionID) return
+  setStore(
+    produce((draft) => {
+      dropSessionCaches(draft, [sessionID])
+    }),
+  )
+}
+
+export function cleanupDroppedSessionCaches(store: Store<State>, setStore: SetStoreFunction<State>, next: Session[]) {
+  const keep = new Set(next.map((item) => item.id))
+  const stale = [
+    ...Object.keys(store.message),
+    ...Object.keys(store.session_diff),
+    ...Object.keys(store.todo),
+    ...Object.keys(store.permission),
+    ...Object.keys(store.question),
+    ...Object.keys(store.session_status),
+    ...Object.values(store.part)
+      .map((parts) => parts?.find((part) => !!part?.sessionID)?.sessionID)
+      .filter((sessionID): sessionID is string => !!sessionID),
+  ].filter((sessionID, index, list) => !keep.has(sessionID) && list.indexOf(sessionID) === index)
+  if (stale.length === 0) return
+  setStore(
+    produce((draft) => {
+      dropSessionCaches(draft, stale)
+    }),
+  )
+}
+
+export function applyDirectoryEvent(input: {
+  event: { type: string; properties?: unknown }
+  store: Store<State>
+  setStore: SetStoreFunction<State>
+  push: (directory: string) => void
+  directory: string
+  loadLsp: () => void
+  vcsCache?: VcsCache
+  setSessionPlan?: (
+    sessionID: string,
+    plan: SessionPlan | undefined,
+    options?: SessionPlanUpdateOptions,
+  ) => void
+  setSessionGoal?: (sessionID: string, goal: SessionGoal | undefined) => void
+  refetchSession?: (sessionID: string) => void
+  retainedLimit?: number
+}) {
+  const event = input.event
+  const limit = Math.max(input.store.limit, input.retainedLimit ?? 0)
+  switch (event.type) {
+    case "server.instance.disposed": {
+      input.push(input.directory)
+      return
+    }
+    case "session.created": {
+      const info = (event.properties as { info: Session }).info
+      const result = Binary.search(input.store.session, info.id, (s) => s.id)
+      if (result.found) {
+        input.setStore("session", result.index, reconcile(info))
+        break
+      }
+      const next = input.store.session.slice()
+      next.splice(result.index, 0, info)
+      const trimmed = trimSessions(next, { limit, permission: input.store.permission })
+      input.setStore("session", reconcile(trimmed, { key: "id" }))
+      cleanupDroppedSessionCaches(input.store, input.setStore, trimmed)
+      if (!info.parentID) input.setStore("sessionTotal", (value) => value + 1)
+      break
+    }
+    case "session.updated": {
+      const info = (event.properties as { info: Session }).info
+      const result = Binary.search(input.store.session, info.id, (s) => s.id)
+      if (info.time.archived) {
+        if (input.store.session[result.index]!.time.archived === info.time.archived) break
+        if (result.found) {
+          input.setStore(
+            "session",
+            produce((draft) => {
+              draft.splice(result.index, 1)
+            }),
+          )
+        }
+        cleanupSessionCaches(input.setStore, info.id)
+        if (info.parentID) break
+        input.setStore("sessionTotal", (value) => Math.max(0, value - 1))
+        break
+      }
+      if (result.found) {
+        input.setStore("session", result.index, reconcile(info))
+        break
+      }
+      const next = input.store.session.slice()
+      next.splice(result.index, 0, info)
+      const trimmed = trimSessions(next, { limit, permission: input.store.permission })
+      input.setStore("session", reconcile(trimmed, { key: "id" }))
+      cleanupDroppedSessionCaches(input.store, input.setStore, trimmed)
+      // Genuinely new (re)insert — e.g. unarchive re-adds a row that was removed on archive.
+      // Mirror session.created so archive→restore cycles don't permanently drift the counter down.
+      if (!info.parentID) input.setStore("sessionTotal", (value) => value + 1)
+      break
+    }
+    case "session.deleted": {
+      const info = (event.properties as { info: Session }).info
+      const result = Binary.search(input.store.session, info.id, (s) => s.id)
+      if (result.found) {
+        input.setStore(
+          "session",
+          produce((draft) => {
+            draft.splice(result.index, 1)
+          }),
+        )
+      }
+      cleanupSessionCaches(input.setStore, info.id)
+      if (info.parentID) break
+      input.setStore("sessionTotal", (value) => Math.max(0, value - 1))
+      break
+    }
+    case "session.diff": {
+      const props = event.properties as { sessionID: string; diff: SnapshotFileDiff[] }
+      input.setStore("session_diff", props.sessionID, reconcile(list(props.diff), { key: "file" }))
+      break
+    }
+    // NOTE: the `todo.updated` event handler was removed when task tracking unified onto the plan
+    // system. The backend no longer emits `todo.updated` (both todowrite tool writers were removed),
+    // and the dock renders the plan exclusively. See `plan.updated` below for the live task source.
+    case "plan.updated": {
+      // The live plan (goal + steps + progress) from the `plan` tool. Stored under a distinct
+      // session_plan key so it persists when the session goes idle.
+      const props = event.properties as {
+        sessionID: string
+        plan_id: string
+        plan_version: number
+        goal: string
+        assumptions: string[]
+        active_step_id: string | null
+        steps: SessionPlan["steps"]
+        done: number
+        total: number
+      }
+      input.setSessionPlan?.(props.sessionID, {
+        plan_id: props.plan_id,
+        plan_version: props.plan_version,
+        goal: props.goal,
+        assumptions: props.assumptions,
+        active_step_id: props.active_step_id,
+        steps: props.steps,
+        done: props.done,
+        total: props.total,
+      }, { source: "event" })
+      break
+    }
+    case "goal.updated": {
+      // V3.9 §D: the live Goal Loop status from the driver. Stored under a distinct session_goal key
+      // (like session_plan) so the status bar persists while the session is idle between ticks. A
+      // terminal phase does NOT clear it — the UI shows the final state until the user dismisses/restarts.
+      const props = event.properties as {
+        sessionID: string
+        goalId: string
+        planDocId: string
+        phase: string
+        ledger: SessionGoal["ledger"]
+        stallCount: number
+        gaps: string[]
+      }
+      input.setSessionGoal?.(props.sessionID, {
+        goalId: props.goalId,
+        planDocId: props.planDocId,
+        phase: props.phase,
+        ledger: props.ledger,
+        stallCount: props.stallCount,
+        gaps: props.gaps,
+      })
+      break
+    }
+    case "session.status": {
+      const props = event.properties as { sessionID: string; status: SessionStatus }
+      input.setStore("session_status", props.sessionID, reconcile(props.status))
+      break
+    }
+    case "message.updated": {
+      const info = clean((event.properties as { info: Message }).info)
+      const clientMessageID = promptAdmissionClientMessageID(info)
+      if (clientMessageID && clientMessageID !== info.id) {
+        input.setStore(
+          produce((draft) => {
+            const messages = draft.message[info.sessionID]
+            if (messages) {
+              const index = findMessageIndex(messages, clientMessageID)
+              if (index !== -1) messages.splice(index, 1)
+            }
+            const parts = draft.part[clientMessageID]
+            if (parts) {
+              for (const part of parts) delete draft.part_text_accum_delta[part.id]
+            }
+            delete draft.part[clientMessageID]
+          }),
+        )
+      }
+      const messages = input.store.message[info.sessionID]
+      if (!messages) {
+        input.setStore("message", info.sessionID, [info])
+        break
+      }
+      const result = locateMessage(messages, info)
+      if (result.found) {
+        const existing = messages[result.index]!
+        const merged = mergeMessage(existing, info)
+        input.setStore("message", info.sessionID, result.index, reconcile(merged.message))
+        if (merged.conflict) {
+          console.error("Conflicting activity progress update", {
+            sessionID: info.sessionID,
+            messageID: info.id,
+            existing: existing.role === "assistant" ? existing.activityProgress : undefined,
+            incoming: info.role === "assistant" ? info.activityProgress : undefined,
+          })
+          input.refetchSession?.(info.sessionID)
+        }
+        break
+      }
+      input.setStore(
+        "message",
+        info.sessionID,
+        produce((draft) => {
+          draft.splice(result.index, 0, info)
+        }),
+      )
+      break
+    }
+    case "message.removed": {
+      const props = event.properties as { sessionID: string; messageID: string }
+      input.setStore(
+        produce((draft) => {
+          const messages = draft.message[props.sessionID]
+          if (messages) {
+            const index = findMessageIndex(messages, props.messageID)
+            if (index !== -1) messages.splice(index, 1)
+          }
+          const parts = draft.part[props.messageID]
+          if (parts) {
+            for (const part of parts) {
+              delete draft.part_text_accum_delta[part.id]
+            }
+          }
+          delete draft.part[props.messageID]
+        }),
+      )
+      break
+    }
+    case "message.part.updated": {
+      const part = (event.properties as { part: Part }).part
+      if (SKIP_PARTS.has(part.type)) break
+      input.setStore(
+        produce((draft) => {
+          delete draft.part_text_accum_delta[part.id]
+        }),
+      )
+      const parts = input.store.part[part.messageID]
+      if (!parts) {
+        input.setStore("part", part.messageID, [part])
+        break
+      }
+      const result = locatePart(parts, part)
+      if (result.found) {
+        input.setStore("part", part.messageID, result.index, reconcile(part))
+        break
+      }
+      input.setStore(
+        "part",
+        part.messageID,
+        produce((draft) => {
+          draft.splice(result.index, 0, part)
+        }),
+      )
+      break
+    }
+    case "message.part.removed": {
+      const props = event.properties as { messageID: string; partID: string }
+      input.setStore(
+        produce((draft) => {
+          delete draft.part_text_accum_delta[props.partID]
+        }),
+      )
+      const parts = input.store.part[props.messageID]
+      if (!parts) break
+      const index = findPartIndex(parts, props.partID)
+      if (index !== -1) {
+        input.setStore(
+          produce((draft) => {
+            const list = draft.part[props.messageID]
+            if (!list) return
+            const next = findPartIndex(list, props.partID)
+            if (next === -1) return
+            list.splice(next, 1)
+            if (list.length === 0) delete draft.part[props.messageID]
+          }),
+        )
+      }
+      break
+    }
+    case "message.part.delta": {
+      const props = event.properties as { messageID: string; partID: string; field: string; delta: string }
+      const parts = input.store.part[props.messageID]
+      if (!parts) break
+      const index = findPartIndex(parts, props.partID)
+      if (index === -1) break
+      input.setStore("part_text_accum_delta", props.partID, (existing) => (existing ?? "") + props.delta)
+      input.setStore(
+        "part",
+        props.messageID,
+        produce((draft) => {
+          const part = draft[index]
+          const field = props.field as keyof typeof part
+          const existing = part[field] as string | undefined
+          ;(part[field] as string) = (existing ?? "") + props.delta
+        }),
+      )
+      break
+    }
+    case "vcs.branch.updated": {
+      const props = event.properties as { branch?: string }
+      if (input.store.vcs?.branch === props.branch) break
+      const next = { ...input.store.vcs, branch: props.branch }
+      input.setStore("vcs", next)
+      if (input.vcsCache) input.vcsCache.setStore("value", next)
+      break
+    }
+    case "permission.asked": {
+      const permission = event.properties as PermissionRequest
+      const permissions = input.store.permission[permission.sessionID]
+      if (!permissions) {
+        input.setStore("permission", permission.sessionID, [permission])
+        break
+      }
+      const result = Binary.search(permissions, permission.id, (p) => p.id)
+      if (result.found) {
+        input.setStore("permission", permission.sessionID, result.index, reconcile(permission))
+        break
+      }
+      input.setStore(
+        "permission",
+        permission.sessionID,
+        produce((draft) => {
+          draft.splice(result.index, 0, permission)
+        }),
+      )
+      break
+    }
+    case "permission.replied": {
+      const props = event.properties as { sessionID: string; requestID: string }
+      const permissions = input.store.permission[props.sessionID]
+      if (!permissions) break
+      const result = Binary.search(permissions, props.requestID, (p) => p.id)
+      if (!result.found) break
+      input.setStore(
+        "permission",
+        props.sessionID,
+        produce((draft) => {
+          draft.splice(result.index, 1)
+        }),
+      )
+      break
+    }
+    case "question.asked": {
+      const question = event.properties as QuestionRequest
+      const questions = input.store.question[question.sessionID]
+      if (!questions) {
+        input.setStore("question", question.sessionID, [question])
+        break
+      }
+      const result = Binary.search(questions, question.id, (q) => q.id)
+      if (result.found) {
+        input.setStore("question", question.sessionID, result.index, reconcile(question))
+        break
+      }
+      input.setStore(
+        "question",
+        question.sessionID,
+        produce((draft) => {
+          draft.splice(result.index, 0, question)
+        }),
+      )
+      break
+    }
+    case "question.replied":
+    case "question.rejected": {
+      const props = event.properties as { sessionID: string; requestID: string }
+      const questions = input.store.question[props.sessionID]
+      if (!questions) break
+      const result = Binary.search(questions, props.requestID, (q) => q.id)
+      if (!result.found) break
+      input.setStore(
+        "question",
+        props.sessionID,
+        produce((draft) => {
+          draft.splice(result.index, 1)
+        }),
+      )
+      break
+    }
+    case "lsp.updated": {
+      input.loadLsp()
+      break
+    }
+  }
+}

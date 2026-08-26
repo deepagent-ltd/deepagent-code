@@ -1,0 +1,50 @@
+.DS_Store
+node_modules
+.worktrees
+.sst
+.env
+.env.local
+.idea
+.vscode
+.codex
+*~
+playground
+tmp
+dist
+ts-dist
+.turbo
+# Web/edge build artifacts (nitro .output, cloudflare .wrangler) - e.g. packages/console, packages/stats
+.output
+.wrangler
+packages/console/app/public/sitemap.xml
+**/.serena
+.serena/
+**/.omo
+.omo/
+/result
+refs
+Session.vim
+/deepagent-code.json
+a.out
+target
+.scripts
+.direnv/
+
+# Local dev files
+deepagent-code-dev
+UPCOMING_CHANGELOG.md
+logs/
+/packages/storybook/debug-storybook.log
+*.bun-build
+tsconfig.tsbuildinfo
+/packages/*/.artifacts/
+/script/live-llm.config.local.json
+
+# Internal design and release artifacts are local-only. Stable public documentation belongs in
+# README files, language documentation, or the reviewed design/ tree.
+/docs/
+/release-evidence/
+/specs/v2/
+
+# Non-code domain packs — own git repo (deepagent-domain), not tracked by main repo.
+extra-domain/

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:sim:seed-nondeterminism",
+  "type": "failure_dossier",
+  "description": "A simulation produces different results on repeated runs with the same seed because parallel reductions summed in varying order.",
+  "body": "Failure mode: a parallel reduction accumulates floating-point contributions in a nondeterministic order, so rounding differences make the same-seed run produce different bits each time. Detection signals: results that differ across runs despite a fixed seed, divergence that grows with thread count, and reproducibility returning when run single-threaded. Do not treat the variation as acceptable noise in a regression. Safer fallback: enforce a deterministic reduction order or use a reproducible reduction, then confirm same-seed runs match across thread counts.",
+  "domain": "simulation",
+  "scope_hint": "code.simulation:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.simulation:human_authored",
+  "pack_id": "code.simulation"
+}

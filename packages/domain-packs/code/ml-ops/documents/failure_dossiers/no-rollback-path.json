@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:mlops:no-rollback-path",
+  "type": "failure_dossier",
+  "description": "A bad model promotion cannot be reverted quickly because the prior version was unloaded and untested for rollback.",
+  "body": "Failure mode: a newly promoted model regresses in production, but the previous version was unloaded and the rollback procedure was never tested, so recovery requires a slow rebuild while users suffer. Detection signals: a serving config with no warm prior version and no rehearsed rollback drill, plus an incident timeline dominated by recovery rather than detection. Do not improvise a rollback during the incident by rebuilding from scratch. Safer fallback: keep the last-good version warm and registered, rehearse a one-switch rollback as a drill, and treat any deployment lacking a tested rollback as blocked until the path is verified.",
+  "domain": "mlops",
+  "scope_hint": "code.mlops:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mlops:human_authored",
+  "pack_id": "code.mlops"
+}

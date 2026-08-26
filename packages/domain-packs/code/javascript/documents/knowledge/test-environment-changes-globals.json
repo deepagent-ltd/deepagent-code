@@ -1,0 +1,11 @@
+{
+  "ref_id": "knowledge:javascript:test-environment-changes-globals",
+  "type": "knowledge",
+  "description": "Node, jsdom, happy-dom, and browser runners expose different globals and event behavior.",
+  "body": "Use when tests pass but runtime fails, or when DOM APIs appear in Node tests. Do not infer production browser behavior from jsdom without a smoke. Check runner config and setup files before editing implementation. Verify in the intended environment or add environment-specific tests. Risk boundary includes false positives around layout, navigation, canvas, and storage APIs. Use when JavaScript Runtime and Tooling work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: use the fact to constrain the change and test plan; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "javascript",
+  "scope_hint": "code.javascript:knowledges",
+  "evidence_strength": "strong",
+  "provenance_tag": "code.javascript:seed:official_docs_and_common_tooling_behavior:paraphrased",
+  "pack_id": "code.javascript"
+}

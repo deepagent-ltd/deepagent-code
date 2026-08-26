@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:k8s:rbac-model-roles-and-bindings",
+  "type": "knowledge",
+  "title": "RBAC roles, bindings, and aggregation",
+  "description": "Roles/ClusterRoles grant verbs on resources; RoleBindings/ClusterRoleBindings attach them to subjects; permissions are additive with no deny.",
+  "body": "Use when designing or reviewing access. A Role is namespace-scoped; a ClusterRole is cluster-wide or reusable across namespaces. A RoleBinding attaches a Role (or ClusterRole) to subjects within a namespace; a ClusterRoleBinding grants cluster-wide. RBAC is purely additive: there is no deny rule, so effective permission is the union of all bindings and wildcards expand silently. Do not rely on a 'deny' that does not exist or assume a narrow binding offsets a broad ClusterRoleBinding. Actions: enumerate bindings, prefer namespaced Roles, avoid wildcards, use kubectl auth can-i to verify. Validation signals include can-i reflecting only intended access. Risk boundary: a broad ClusterRoleBinding (e.g., to system:authenticated) is a privilege-escalation risk and a blocking finding.",
+  "domain": "kubernetes",
+  "scope_hint": "platform.kubernetes:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.kubernetes",
+  "pack_id": "platform.kubernetes"
+}

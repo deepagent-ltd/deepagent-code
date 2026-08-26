@@ -1,0 +1,474 @@
+[
+  {
+    "ref_id": "knowledge:frontend_performance:hydration-cost",
+    "type": "knowledge",
+    "title": "Hydration Cost",
+    "summary": "Hydration can create main-thread work and mismatch failures.",
+    "domains": [
+      "performance",
+      "frontend",
+      "browser"
+    ],
+    "triggers": [
+      "hydration",
+      "create",
+      "main",
+      "thread",
+      "work",
+      "mismatch",
+      "failures",
+      "apps"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.performance"
+  },
+  {
+    "ref_id": "knowledge:frontend_performance:layout-shift-user-impact",
+    "type": "knowledge",
+    "title": "Layout Shift User Impact",
+    "summary": "Layout shifts harm usability even when final DOM is correct.",
+    "domains": [
+      "performance",
+      "frontend",
+      "browser"
+    ],
+    "triggers": [
+      "layout",
+      "shifts",
+      "harm",
+      "usability",
+      "even",
+      "when",
+      "final",
+      "correct"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.performance"
+  },
+  {
+    "ref_id": "knowledge:frontend_performance:third-party-script-risk",
+    "type": "knowledge",
+    "title": "Third Party Script Risk",
+    "summary": "Third-party scripts add network, execution, privacy, and failure risk.",
+    "domains": [
+      "performance",
+      "frontend",
+      "browser"
+    ],
+    "triggers": [
+      "third",
+      "party",
+      "scripts",
+      "network",
+      "execution",
+      "privacy",
+      "failure",
+      "risk"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.performance"
+  },
+  {
+    "ref_id": "methodology:frontend_performance:bundle-delta-review",
+    "type": "methodology",
+    "title": "Bundle Delta Review",
+    "summary": "Review bundle diff and lazy-loading impact for dependency/UI changes.",
+    "domains": [
+      "performance",
+      "frontend",
+      "browser"
+    ],
+    "triggers": [
+      "review",
+      "bundle",
+      "diff",
+      "lazy",
+      "loading",
+      "impact",
+      "dependency",
+      "changes"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.performance"
+  },
+  {
+    "ref_id": "methodology:frontend_performance:frontend-profile-pass",
+    "type": "methodology",
+    "title": "Frontend Profile Pass",
+    "summary": "Record browser performance trace for changed interaction or page load.",
+    "domains": [
+      "performance",
+      "frontend",
+      "browser"
+    ],
+    "triggers": [
+      "record",
+      "browser",
+      "performance",
+      "trace",
+      "changed",
+      "interaction",
+      "page",
+      "load"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.performance"
+  },
+  {
+    "ref_id": "methodology:frontend_performance:web-vitals-regression",
+    "type": "methodology",
+    "title": "Web Vitals Regression",
+    "summary": "Compare web vitals before and after on representative viewport/network.",
+    "domains": [
+      "performance",
+      "frontend",
+      "browser"
+    ],
+    "triggers": [
+      "compare",
+      "vitals",
+      "before",
+      "after",
+      "representative",
+      "viewport",
+      "network",
+      "steps"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.performance"
+  },
+  {
+    "ref_id": "skill:frontend_performance:capture-browser-performance",
+    "type": "skill",
+    "title": "Capture Browser Performance",
+    "summary": "Capture browser performance evidence for a changed route or interaction.",
+    "domains": [
+      "performance",
+      "frontend",
+      "browser"
+    ],
+    "triggers": [
+      "capture",
+      "browser",
+      "performance",
+      "evidence",
+      "changed",
+      "route",
+      "interaction",
+      "inputs"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.performance"
+  },
+  {
+    "ref_id": "strategy:frontend_performance:asset-budget",
+    "type": "strategy",
+    "title": "Asset Budget",
+    "summary": "Images, fonts, and third-party scripts need explicit budgets.",
+    "domains": [
+      "performance",
+      "frontend",
+      "browser"
+    ],
+    "triggers": [
+      "images",
+      "fonts",
+      "third",
+      "party",
+      "scripts",
+      "need",
+      "explicit",
+      "budgets"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.performance"
+  },
+  {
+    "ref_id": "strategy:frontend_performance:avoid-render-churn",
+    "type": "strategy",
+    "title": "Avoid Render Churn",
+    "summary": "Prevent unnecessary rerenders and layout recalculation in hot UI paths.",
+    "domains": [
+      "performance",
+      "frontend",
+      "browser"
+    ],
+    "triggers": [
+      "prevent",
+      "unnecessary",
+      "rerenders",
+      "layout",
+      "recalculation",
+      "paths",
+      "state",
+      "granularity"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.performance"
+  },
+  {
+    "ref_id": "strategy:frontend_performance:measure-user-path",
+    "type": "strategy",
+    "title": "Measure User Path",
+    "summary": "Measure frontend performance on the user path, not only bundle size.",
+    "domains": [
+      "performance",
+      "frontend",
+      "browser"
+    ],
+    "triggers": [
+      "measure",
+      "frontend",
+      "performance",
+      "user",
+      "path",
+      "only",
+      "bundle",
+      "size"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.performance"
+  },
+  {
+    "ref_id": "strategy:frontend_performance:profile-long-tasks",
+    "type": "strategy",
+    "title": "Profile Long Tasks",
+    "summary": "Use browser performance tools to identify long tasks and main-thread stalls.",
+    "domains": [
+      "performance",
+      "frontend",
+      "browser"
+    ],
+    "triggers": [
+      "browser",
+      "performance",
+      "tools",
+      "identify",
+      "long",
+      "tasks",
+      "main",
+      "thread"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.performance"
+  },
+  {
+    "ref_id": "strategy:frontend_performance:budget-core-web-vitals",
+    "type": "strategy",
+    "title": "Set and defend Core Web Vitals budgets",
+    "summary": "Hold LCP, CLS, and INP to explicit field-aligned thresholds and treat a regression past budget as a release blocker.",
+    "domains": [
+      "frontend",
+      "performance",
+      "browser"
+    ],
+    "triggers": [
+      "lcp",
+      "cls",
+      "inp",
+      "core web vitals",
+      "budget",
+      "threshold"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.performance"
+  },
+  {
+    "ref_id": "strategy:frontend_performance:split-and-defer-bundles",
+    "type": "strategy",
+    "title": "Split and defer non-critical JavaScript",
+    "summary": "Code-split by route and interaction, lazy-load below-the-fold and rarely-used modules, and keep the critical path bundle small.",
+    "domains": [
+      "frontend",
+      "performance",
+      "browser"
+    ],
+    "triggers": [
+      "code splitting",
+      "lazy load",
+      "dynamic import",
+      "bundle",
+      "chunk",
+      "defer"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.performance"
+  },
+  {
+    "ref_id": "methodology:frontend_performance:image-and-font-optimization",
+    "type": "methodology",
+    "title": "Optimize images and fonts on the load path",
+    "summary": "Right-size, format, and lazy-load images and control font loading so media does not dominate LCP or cause layout shift.",
+    "domains": [
+      "frontend",
+      "performance",
+      "browser"
+    ],
+    "triggers": [
+      "image",
+      "font",
+      "lcp",
+      "lazy",
+      "webp",
+      "font-display"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.performance"
+  },
+  {
+    "ref_id": "knowledge:frontend_performance:inp-reflects-main-thread",
+    "type": "knowledge",
+    "title": "INP reflects main-thread responsiveness",
+    "summary": "Interaction to Next Paint is driven by long tasks blocking the main thread between an input and its visual response.",
+    "domains": [
+      "frontend",
+      "performance",
+      "browser"
+    ],
+    "triggers": [
+      "inp",
+      "long task",
+      "main thread",
+      "input delay",
+      "responsiveness",
+      "blocking"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.performance"
+  },
+  {
+    "ref_id": "skill:frontend_performance:analyze-bundle-composition",
+    "type": "skill",
+    "title": "Analyze bundle composition for a change",
+    "summary": "Run a bundle analyzer for the changed build and report the largest modules, duplicates, and the initial-path size delta.",
+    "domains": [
+      "frontend",
+      "performance",
+      "browser"
+    ],
+    "triggers": [
+      "bundle analyzer",
+      "chunk",
+      "tree shaking",
+      "duplicate",
+      "size delta",
+      "module"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.performance"
+  }
+]

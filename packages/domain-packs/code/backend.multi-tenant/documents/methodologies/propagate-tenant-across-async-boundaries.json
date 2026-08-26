@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:mt:propagate-tenant-across-async-boundaries",
+  "type": "methodology",
+  "title": "Propagate tenant context across async boundaries",
+  "description": "A procedure to thread the authenticated tenant through queues, jobs, and downstream calls so scope is never lost.",
+  "body": "Use when work crosses from a request into a queue, background job, or another service. Do not assume tenant context is implicitly carried across the boundary. Steps: capture the resolved tenant at the edge; embed it in the message or job payload and any downstream call metadata; on the consuming side, re-establish the tenant context before any data access; add a test exercising the full async path. Validation signals include a job and a downstream call operating under the originating tenant. Risk boundary: a dropped tenant context can cause work to touch the wrong tenant's data, so make propagation explicit and verify across every async hop, escalating any gap.",
+  "domain": "multi_tenant",
+  "scope_hint": "code.backend.multi-tenant:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.multi-tenant",
+  "pack_id": "code.backend.multi-tenant"
+}

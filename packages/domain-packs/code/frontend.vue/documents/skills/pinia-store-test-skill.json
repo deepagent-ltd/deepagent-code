@@ -1,0 +1,11 @@
+{
+  "ref_id": "skill:frontend_vue:pinia-store-test-skill",
+  "type": "skill",
+  "description": "Run focused store and component-consumer tests around Pinia state/action changes.",
+  "body": "Inputs: changed store and consumers. Actions: find store tests, component tests, and route smoke; exercise action pending/success/error state; check storeToRefs/reactivity usage. Do not validate only direct state assignment when async actions changed. Verification is test output plus rendered consumer state. Risk boundary: persisted store schema changes need migration evidence. Use when Vue Frontend Engineering work touches visible UI behavior, browser console output, DOM state, assets, viewport behavior, and interaction evidence. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: run the documented inspection and validation workflow; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include browser smoke, component tests, viewport screenshots, console/network checks, and accessibility assertions. Risk boundary: escalate or stop when the task involves visual regressions, inaccessible interaction, hydration mismatch, and browser-only failures, missing owner evidence, or live external state.",
+  "domain": "frontend_vue",
+  "scope_hint": "code.frontend.vue:skills",
+  "evidence_strength": "medium",
+  "provenance_tag": "code.frontend.vue:seed:vue_nuxt_pinia_vite_docs:paraphrased",
+  "pack_id": "code.frontend.vue"
+}

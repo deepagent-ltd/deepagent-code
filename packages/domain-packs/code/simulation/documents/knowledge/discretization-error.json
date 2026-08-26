@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:sim:discretization-error",
+  "type": "knowledge",
+  "title": "Discretization error and order of accuracy",
+  "description": "Replacing continuous operators with discrete approximations introduces error that shrinks with step size at the method's order.",
+  "body": "Use when reasoning about the gap between a simulation and the true continuous solution. Do not attribute all error to floating point, since discretization error usually dominates at practical step sizes. Actions: identify the discretization order, predict how error scales with step size, and confirm the scaling in a convergence study. Validation signals include error shrinking at the predicted rate and the dominant error source identified as discretization rather than rounding. Risk boundary: a scheme whose order is lower than intended wastes refinement, so flag an observed order below theory as an implementation defect.",
+  "domain": "simulation",
+  "scope_hint": "code.simulation:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.simulation",
+  "pack_id": "code.simulation"
+}

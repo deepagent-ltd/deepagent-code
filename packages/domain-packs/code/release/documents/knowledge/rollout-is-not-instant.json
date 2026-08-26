@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:release:rollout-is-not-instant",
+  "type": "knowledge",
+  "title": "A deploy is a propagating process, not an instant switch",
+  "description": "New versions reach instances, caches, and clients over time, so old and new code run concurrently and must stay mutually compatible during the window.",
+  "body": "Use when reasoning about why a deploy caused intermittent errors or schema mismatches. During any rollout, requests are served by a mix of old and new instances, CDNs hold stale assets, and clients cache old bundles, so a change that assumes everyone upgraded at once breaks the transition. Do not ship a database or API change that the previous version cannot tolerate in the same window. Actions: make schema and contract changes additive and two-phase (expand then contract), and verify old and new versions interoperate. Validation signals include a mixed-version integration test and traces showing no errors during the rollout window. Risk boundary: a non-backward-compatible change deployed in one shot risks an outage; require an expand/contract migration and escalate single-shot breaking deploys.",
+  "domain": "code",
+  "scope_hint": "code.release:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.release",
+  "pack_id": "code.release"
+}

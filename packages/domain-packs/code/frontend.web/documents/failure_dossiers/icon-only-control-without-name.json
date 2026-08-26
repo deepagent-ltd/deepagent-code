@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:frontend_web:icon-only-control-without-name",
+  "type": "failure_dossier",
+  "description": "An icon-only or custom control was visually obvious but had no accessible name or keyboard behavior.",
+  "body": "Failure mode: mouse users can infer and click an icon, but screen reader users and role-based tests cannot identify it, or keyboard users cannot activate it. Diagnostic trigger: controls are implemented with bare SVGs, divs, spans, or buttons whose only content is decorative. Do-not-use signal: do not accept visual affordance as sufficient semantics. Recovery: prefer a native button or link, add visible text or a precise accessible name, preserve focus visibility, and test keyboard activation. Risk boundary: generic labels such as 'button' or duplicated aria labels are still failures when several controls share the same name.",
+  "domain": "web",
+  "scope_hint": "code.frontend.web:failure_dossiers",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.web:a11y_failure_pattern",
+  "pack_id": "code.frontend.web"
+}

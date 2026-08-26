@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:eval:calibrate-an-llm-judge",
+  "type": "methodology",
+  "title": "Calibrate an LLM judge",
+  "description": "Measure judge-human agreement on a labeled sample and control known biases before using the judge at scale.",
+  "body": "Steps: 1. Take a sample of outputs and obtain human labels or rankings. 2. Run the judge on the same sample. 3. Measure agreement (correlation, kappa, or accuracy) between judge and human. 4. Probe for position, length, and self-preference bias and mitigate (randomize order, control length). 5. Only scale the judge if agreement clears a threshold, and report it with results. Rollback point: before trusting judge scores for a decision. Validation: judge-human agreement is measured and biases are controlled, or the judge is labeled unreliable.",
+  "domain": "eval",
+  "scope_hint": "code.eval:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.eval",
+  "pack_id": "code.eval"
+}

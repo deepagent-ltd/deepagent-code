@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:serving:optimize-tail-not-mean",
+  "type": "strategy",
+  "title": "Optimize p99, not average latency",
+  "description": "Tune and report tail latency under realistic concurrency, because the slowest requests define the user experience and SLO.",
+  "body": "Use when measuring or tuning serving performance. Do not report mean latency from a single-request benchmark — it hides queueing, batching stalls, and GC/cold-path spikes that dominate the tail. Actions: load-test at realistic concurrency, measure p95/p99/p99.9, and tune batching/queue limits against the tail. Validation signals include a p99 under the SLO at target QPS and a latency histogram, not just an average. Risk boundary: a system that looks fast on average can violate the SLO for the slowest 1% of users; require tail measurement under load before declaring it ready.",
+  "domain": "model_serving",
+  "scope_hint": "code.model-serving:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.model-serving",
+  "pack_id": "code.model-serving"
+}

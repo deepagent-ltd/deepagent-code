@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:agent:guard-against-no-progress",
+  "type": "strategy",
+  "title": "Guard against no-progress loops",
+  "description": "Detect when iterations stop changing state (repeated actions, identical results) and halt rather than burning steps.",
+  "body": "Use when an agent can repeat actions or get stuck. Do not assume the step cap alone is enough, and avoid letting the agent retry the same failing tool call indefinitely. Actions: track a signature of each step's action and result, detect repetition or absence of state change across a window, and halt or change strategy when no progress is seen. Validation signals include a test where a tool repeatedly returns the same error and the loop breaks before the step cap. Risk boundary: a stalled loop that keeps invoking a side-effecting tool can amplify damage; halt and escalate rather than retrying.",
+  "domain": "agent",
+  "scope_hint": "code.agent:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.agent",
+  "pack_id": "code.agent"
+}

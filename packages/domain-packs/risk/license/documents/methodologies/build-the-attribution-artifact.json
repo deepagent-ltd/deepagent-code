@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:lic:build-the-attribution-artifact",
+  "type": "methodology",
+  "title": "Build the attribution/NOTICE artifact",
+  "description": "Assemble a complete THIRD-PARTY notice from collected copyright lines and license texts, then verify completeness.",
+  "body": "Steps: 1. Enumerate every component that ships in the artifact. 2. Extract each component's copyright statement and full license text. 3. Concatenate them into a NOTICE/THIRD-PARTY-LICENSES file keyed by component and version. 4. For Apache-2.0 components, also carry any upstream NOTICE file contents verbatim. 5. Diff the result against the committed file in CI. Rollback point: before replacing the committed notice. Validation: regenerating yields no diff, and every attribution-requiring component appears with its copyright and license text.",
+  "domain": "license",
+  "scope_hint": "risk.license:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.license",
+  "pack_id": "risk.license"
+}

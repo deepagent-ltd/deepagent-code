@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:mlops:lineage-graph",
+  "type": "knowledge",
+  "title": "Data and model lineage as a graph",
+  "description": "How dataset versions, code commits, runs, and model versions form a lineage DAG that makes incidents explainable.",
+  "body": "Use when an incident demands tracing a bad prediction back to its origins. Lineage is a directed graph: dataset snapshot to training run to model version to deployment, each edge carrying a hash or id. Do not store only the final model — without upstream edges you cannot answer which data produced a behavior. Actions: record edges at each stage, query the graph to find a model's inputs, and verify the edges resolve to existing artifacts. Validation signals include a lineage query returning the dataset and commit for a model and a schema linking runs to deployments. Risk boundary: a broken lineage edge makes a regulated audit impossible; if edges are missing, escalate and reconstruct provenance before responding to the audit.",
+  "domain": "mlops",
+  "scope_hint": "code.mlops:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mlops",
+  "pack_id": "code.mlops"
+}

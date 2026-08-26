@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:asm:registers-and-calling-conventions",
+  "type": "knowledge",
+  "title": "Register files and calling conventions",
+  "description": "Each ABI splits registers into caller-saved (scratch) and callee-saved (preserved) and assigns specific registers to arguments and return values.",
+  "body": "Use when reasoning about register usage across calls. The ABI designates argument registers (e.g. rdi/rsi/rdx... on System V x86-64, x0-x7 on AArch64), a return register, caller-saved registers a callee may freely trash, and callee-saved registers a callee must preserve. Do not assume a register survives a call unless it is callee-saved, and do not clobber a callee-saved register without restoring it. Actions: consult the ABI table for the target and track which class each register is. Validation signals include correct interop with compiled code across the input range. Risk boundary: confusing caller- and callee-saved roles silently corrupts values across calls; the symptom is remote from the cause, so verify register classes against the ABI rather than guessing.",
+  "domain": "assembly",
+  "scope_hint": "code.assembly:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.assembly",
+  "pack_id": "code.assembly"
+}

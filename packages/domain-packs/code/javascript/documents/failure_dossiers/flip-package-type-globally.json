@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:javascript:flip-package-type-globally",
+  "type": "failure_dossier",
+  "description": "Flipping package type globally to fix one import",
+  "body": "Changing package.json type from commonjs to module or back can change every .js file under that package and break scripts, tests, or consumers. Treat this as a do-not-use signal unless the task is an explicit module migration with full validation. Safer path: patch the local boundary, use .mjs/.cjs where appropriate, or adjust the specific export.\n\nUse only as a diagnostic do-not-use signal; do not expose this as positive strategy, methodology, knowledge, skill, or memory.",
+  "domain": "javascript",
+  "scope_hint": "code.javascript:failure_dossiers",
+  "evidence_strength": "medium",
+  "provenance_tag": "code.javascript:failure_seed:paraphrased_common_failures",
+  "pack_id": "code.javascript"
+}

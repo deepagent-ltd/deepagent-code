@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:stream:event-vs-processing-time",
+  "type": "knowledge",
+  "title": "Event time versus processing time",
+  "description": "Why event time gives deterministic results and how watermarks track progress through event time.",
+  "body": "Use when reasoning about which clock a streaming computation should follow. Event time is when an event actually occurred; processing time is when the engine handled it. Do not aggregate on processing time when correctness under replay matters — replays and delays shift processing time but not event time. Watermarks are the engine's estimate that no event earlier than time T remains, letting event-time windows close. Actions: assign event timestamps and watermarks, and reason about completeness via the watermark. Validation signals include reproducible aggregates across replays and watermark-driven window firing. Risk boundary: a stalled watermark blocks all event-time output; if windows freeze, escalate to inspect watermark progress before assuming missing data.",
+  "domain": "streaming",
+  "scope_hint": "code.streaming:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.streaming",
+  "pack_id": "code.streaming"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "knowledge:swift:runtime-errors-differ",
+  "type": "knowledge",
+  "description": "In Swift, a clean build does not prevent force-unwrap crashes on nil, retain cycles, and data races flagged by strict concurrency.",
+  "body": "In Swift, passing the type checker, where optionals and protocol conformances must resolve says nothing about runtime: force-unwrap crashes on nil, retain cycles, and data races flagged by strict concurrency surface only when the code actually runs. Use when a change touches control flow, IO, concurrency, or data shapes that the build cannot prove safe. Do not use a green compile as evidence that behavior is correct, and avoid shipping without exercising the path. Actions: run swift test (XCTest/swift-testing) on the affected target, reproduce the runtime path, and where relevant run Instruments leaks and ARC retain-cycle inspection to catch latent defects. Validation signals include the test/trace logs, a clean Instruments leaks and ARC retain-cycle inspection run, and observed correct output on representative input. Risk boundary: escalate or hold the change when the failure mode is data loss or memory corruption you cannot reproduce locally.",
+  "domain": "swift",
+  "scope_hint": "code.swift:knowledge",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.swift:skill_survey",
+  "pack_id": "code.swift"
+}

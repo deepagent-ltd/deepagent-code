@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:edge:prefer-stale-while-revalidate",
+  "type": "strategy",
+  "title": "Serve stale-while-revalidate for resilience",
+  "description": "Use stale-while-revalidate and stale-if-error so users get fast cached responses while refresh happens in the background.",
+  "body": "Use when freshness can tolerate brief staleness and availability matters. Do not force synchronous revalidation on every near-expiry request — it adds origin latency to the user path. Actions: set stale-while-revalidate so the edge serves stale content and refreshes asynchronously, and stale-if-error to survive origin outages. Validation signals include low user-facing latency at expiry boundaries and continued serving during an origin error. Risk boundary: do not use stale windows for data that must be exact (prices, balances) — escalate to no-store or short max-age there.",
+  "domain": "cdn",
+  "scope_hint": "platform.cdn-edge:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cdn-edge",
+  "pack_id": "platform.cdn-edge"
+}

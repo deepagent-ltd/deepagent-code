@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:mlops:register-and-gate",
+  "type": "skill",
+  "title": "Register a model and attach a promotion gate",
+  "description": "Concrete steps to log a run, register the artifact with lineage, and bind a gate that blocks regression.",
+  "body": "Use when wiring a trained model into a registry-backed promotion path. Do not hand-copy weights between environments — that loses lineage and bypasses gates. Actions: log the run with params/metrics/artifacts, register the best version with dataset hash and commit, attach an eval gate that compares to the incumbent on a frozen set, and transition to production only on pass. Validation signals include a registry version with resolvable lineage and a gate log recording the pass/fail decision. Risk boundary: a manual promotion skips every guardrail; if the gate cannot run, deny the transition and escalate to a human reviewer.",
+  "domain": "mlops",
+  "scope_hint": "code.mlops:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mlops",
+  "pack_id": "code.mlops"
+}

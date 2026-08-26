@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:ios:missing-privacy-usage-string",
+  "type": "failure_dossier",
+  "description": "Accessing a sensitive API (camera, location, photos) without its Info.plist usage-description string, crashing the app at use.",
+  "body": "Failure mode: the app calls a protected API but the required NSUsageDescription key is missing from Info.plist, so iOS terminates the app the moment it requests access. Detection signals: a hard crash exactly when a permission prompt would appear; a console message about a missing usage-description key; the crash only reproduces on the feature's first use. Do not access protected APIs without their usage string. Safer fallback: add a clear, specific usage-description string for every sensitive API used, request authorization in context at point of use, handle denial gracefully, and verify no missing-string crash before submission.",
+  "domain": "ios",
+  "scope_hint": "code.mobile.ios:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mobile.ios:human_authored",
+  "pack_id": "code.mobile.ios"
+}

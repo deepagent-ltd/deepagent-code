@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:hwpwr:apply-clock-gating",
+  "type": "strategy",
+  "title": "Apply clock gating to idle logic",
+  "description": "Gate clocks to registers that hold their value so they stop toggling, using glitch-free gating cells.",
+  "body": "Use when a block has registers that retain state across many idle cycles. Do not hand-code a clock gate with combinational logic, since that risks glitches on the clock. Actions: identify idle register banks, insert a glitch-free integrated clock-gating cell, and verify the enable logic in simulation. Validation signals include reduced dynamic power in the gated region and a clean gated clock with no glitches in the waveform. Risk boundary: a glitchy gate can clock garbage into registers, so deny ad hoc combinational gating and use the library gating cell.",
+  "domain": "power_design",
+  "scope_hint": "hardware.power:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.power",
+  "pack_id": "hardware.power"
+}

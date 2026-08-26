@@ -1,0 +1,452 @@
+[
+  {
+    "ref_id": "strategy:tsdb:size-chunks-to-query-window",
+    "type": "strategy",
+    "title": "Size chunks to the query window",
+    "summary": "Choose hypertable chunk intervals so the working set spans a small number of chunks, balancing insert and query performance.",
+    "domains": [
+      "timeseries_db",
+      "influxdb",
+      "timescaledb",
+      "prometheus_tsdb"
+    ],
+    "triggers": [
+      "chunk",
+      "interval",
+      "hypertable",
+      "window",
+      "partition"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.timeseries"
+  },
+  {
+    "ref_id": "strategy:tsdb:downsample-before-retention",
+    "type": "strategy",
+    "title": "Downsample before dropping raw data",
+    "summary": "Build continuous aggregates at coarser resolution before retention deletes raw points, so history survives at lower granularity.",
+    "domains": [
+      "timeseries_db",
+      "influxdb",
+      "timescaledb",
+      "prometheus_tsdb"
+    ],
+    "triggers": [
+      "downsample",
+      "continuous aggregate",
+      "retention",
+      "rollup",
+      "resolution"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.timeseries"
+  },
+  {
+    "ref_id": "strategy:tsdb:bound-tag-cardinality",
+    "type": "strategy",
+    "title": "Bound tag/label cardinality",
+    "summary": "Keep tag value sets bounded; never put unbounded identifiers (user id, request id) in tags/labels.",
+    "domains": [
+      "timeseries_db",
+      "influxdb",
+      "timescaledb",
+      "prometheus_tsdb"
+    ],
+    "triggers": [
+      "cardinality",
+      "tag",
+      "label",
+      "series",
+      "unbounded"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.timeseries"
+  },
+  {
+    "ref_id": "strategy:tsdb:always-filter-by-time",
+    "type": "strategy",
+    "title": "Always filter by a time predicate",
+    "summary": "Every query carries a bounded time range so the planner prunes to relevant chunks instead of scanning all history.",
+    "domains": [
+      "timeseries_db",
+      "influxdb",
+      "timescaledb",
+      "prometheus_tsdb"
+    ],
+    "triggers": [
+      "time predicate",
+      "range",
+      "scan",
+      "prune",
+      "where"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.timeseries"
+  },
+  {
+    "ref_id": "strategy:tsdb:compress-cold-chunks",
+    "type": "strategy",
+    "title": "Compress cold chunks",
+    "summary": "Enable native columnar compression on chunks past the active write window to cut storage and speed scans.",
+    "domains": [
+      "timeseries_db",
+      "influxdb",
+      "timescaledb",
+      "prometheus_tsdb"
+    ],
+    "triggers": [
+      "compression",
+      "cold",
+      "columnar",
+      "storage",
+      "segment"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.timeseries"
+  },
+  {
+    "ref_id": "strategy:tsdb:choose-engine-by-write-shape",
+    "type": "strategy",
+    "title": "Choose engine by write and query shape",
+    "summary": "Match the TSDB (TimescaleDB vs InfluxDB vs Prometheus) to whether the workload is relational-join, high-ingest, or pull-based metrics.",
+    "domains": [
+      "timeseries_db",
+      "influxdb",
+      "timescaledb",
+      "prometheus_tsdb"
+    ],
+    "triggers": [
+      "engine",
+      "timescaledb",
+      "influxdb",
+      "prometheus",
+      "tradeoff"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.timeseries"
+  },
+  {
+    "ref_id": "methodology:tsdb:design-retention-and-rollup-tiers",
+    "type": "methodology",
+    "title": "Design retention and rollup tiers",
+    "summary": "Define a tiered lifecycle: raw → hourly → daily with matching retention so storage stays bounded and history survives.",
+    "domains": [
+      "timeseries_db",
+      "influxdb",
+      "timescaledb",
+      "prometheus_tsdb"
+    ],
+    "triggers": [
+      "retention",
+      "tier",
+      "rollup",
+      "lifecycle",
+      "aggregate"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.timeseries"
+  },
+  {
+    "ref_id": "methodology:tsdb:diagnose-cardinality-growth",
+    "type": "methodology",
+    "title": "Diagnose runaway cardinality",
+    "summary": "Trace which tag/measurement drives series growth and bound it before the instance degrades.",
+    "domains": [
+      "timeseries_db",
+      "influxdb",
+      "timescaledb",
+      "prometheus_tsdb"
+    ],
+    "triggers": [
+      "cardinality",
+      "diagnose",
+      "series",
+      "growth",
+      "tag"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.timeseries"
+  },
+  {
+    "ref_id": "methodology:tsdb:tune-chunk-interval-empirically",
+    "type": "methodology",
+    "title": "Tune chunk interval empirically",
+    "summary": "Measure chunk count, size, and query pruning under real load, then adjust the interval rather than guessing.",
+    "domains": [
+      "timeseries_db",
+      "influxdb",
+      "timescaledb",
+      "prometheus_tsdb"
+    ],
+    "triggers": [
+      "chunk",
+      "tune",
+      "interval",
+      "measure",
+      "prune"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.timeseries"
+  },
+  {
+    "ref_id": "methodology:tsdb:validate-late-data-handling",
+    "type": "methodology",
+    "title": "Validate late-arriving data handling",
+    "summary": "Confirm out-of-order and delayed points land in the right chunk and trigger aggregate refresh.",
+    "domains": [
+      "timeseries_db",
+      "influxdb",
+      "timescaledb",
+      "prometheus_tsdb"
+    ],
+    "triggers": [
+      "late data",
+      "out of order",
+      "backfill",
+      "refresh",
+      "window"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.timeseries"
+  },
+  {
+    "ref_id": "knowledge:tsdb:hypertable-chunking-model",
+    "type": "knowledge",
+    "title": "Hypertable chunking model",
+    "summary": "Time-series engines partition data into time-bounded chunks so writes hit recent chunks and queries prune by time.",
+    "domains": [
+      "timeseries_db",
+      "influxdb",
+      "timescaledb",
+      "prometheus_tsdb"
+    ],
+    "triggers": [
+      "hypertable",
+      "chunk",
+      "partition",
+      "time",
+      "prune"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.timeseries"
+  },
+  {
+    "ref_id": "knowledge:tsdb:tag-cardinality-cost",
+    "type": "knowledge",
+    "title": "Why tag cardinality dominates cost",
+    "summary": "Each unique tag-value combination is a separate series with its own index entry and memory; cardinality grows multiplicatively across tags.",
+    "domains": [
+      "timeseries_db",
+      "influxdb",
+      "timescaledb",
+      "prometheus_tsdb"
+    ],
+    "triggers": [
+      "cardinality",
+      "series",
+      "index",
+      "memory",
+      "tag"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.timeseries"
+  },
+  {
+    "ref_id": "knowledge:tsdb:continuous-aggregate-semantics",
+    "type": "knowledge",
+    "title": "Continuous aggregate semantics",
+    "summary": "Continuous aggregates incrementally materialize rollups over a refresh window; data outside the refreshed range is not yet reflected.",
+    "domains": [
+      "timeseries_db",
+      "influxdb",
+      "timescaledb",
+      "prometheus_tsdb"
+    ],
+    "triggers": [
+      "continuous aggregate",
+      "refresh",
+      "materialize",
+      "rollup",
+      "window"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.timeseries"
+  },
+  {
+    "ref_id": "knowledge:tsdb:retention-and-compression-interaction",
+    "type": "knowledge",
+    "title": "Retention and compression interaction",
+    "summary": "Retention drops whole cold chunks while compression makes cold chunks columnar and largely immutable; ordering matters.",
+    "domains": [
+      "timeseries_db",
+      "influxdb",
+      "timescaledb",
+      "prometheus_tsdb"
+    ],
+    "triggers": [
+      "retention",
+      "compression",
+      "cold",
+      "immutable",
+      "chunk"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.timeseries"
+  },
+  {
+    "ref_id": "skill:tsdb:inspect-chunk-and-cardinality",
+    "type": "skill",
+    "title": "Inspect chunks and cardinality",
+    "summary": "Report chunk count/sizes and per-tag series cardinality to ground tuning decisions in measured state.",
+    "domains": [
+      "timeseries_db",
+      "influxdb",
+      "timescaledb",
+      "prometheus_tsdb"
+    ],
+    "triggers": [
+      "inspect",
+      "chunk",
+      "cardinality",
+      "report",
+      "measure"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.timeseries"
+  },
+  {
+    "ref_id": "skill:tsdb:check-query-chunk-pruning",
+    "type": "skill",
+    "title": "Check query chunk pruning",
+    "summary": "Run EXPLAIN on a time-series query and report whether the planner prunes to the expected chunks.",
+    "domains": [
+      "timeseries_db",
+      "influxdb",
+      "timescaledb",
+      "prometheus_tsdb"
+    ],
+    "triggers": [
+      "explain",
+      "prune",
+      "plan",
+      "query",
+      "chunk"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.timeseries"
+  }
+]

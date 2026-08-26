@@ -1,0 +1,450 @@
+[
+  {
+    "ref_id": "strategy:sigproc:choose-fft-length-radix",
+    "type": "strategy",
+    "title": "Choose FFT length and radix for the workload",
+    "summary": "Select FFT size as a power of two near the signal length and pick a radix the target hardware accelerates, padding rather than truncating.",
+    "domains": [
+      "signal_processing",
+      "dsp",
+      "fft",
+      "filter",
+      "adc_dac"
+    ],
+    "triggers": [
+      "fft",
+      "fft length",
+      "zero pad",
+      "radix"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.signal-processing"
+  },
+  {
+    "ref_id": "strategy:sigproc:fir-vs-iir-selection",
+    "type": "strategy",
+    "title": "Pick FIR or IIR by phase and stability needs",
+    "summary": "Choose FIR for guaranteed stability and linear phase, IIR when low order and sharp cutoff matter more than phase linearity.",
+    "domains": [
+      "signal_processing",
+      "dsp",
+      "fft",
+      "filter",
+      "adc_dac"
+    ],
+    "triggers": [
+      "fir filter",
+      "iir filter",
+      "linear phase",
+      "stability"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.signal-processing"
+  },
+  {
+    "ref_id": "strategy:sigproc:fixed-vs-float-datapath",
+    "type": "strategy",
+    "title": "Decide fixed-point versus floating-point datapath",
+    "summary": "Prototype the chain in floating point, then move to fixed point only where power or area demands it and the error budget allows.",
+    "domains": [
+      "signal_processing",
+      "dsp",
+      "fft",
+      "filter",
+      "adc_dac"
+    ],
+    "triggers": [
+      "fixed point",
+      "floating point",
+      "quantization",
+      "word length"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.signal-processing"
+  },
+  {
+    "ref_id": "strategy:sigproc:nyquist-guard-band",
+    "type": "strategy",
+    "title": "Set sample rate against Nyquist with a guard band",
+    "summary": "Choose a sample rate above twice the highest frequency of interest plus a margin so the anti-alias filter has a realizable transition band.",
+    "domains": [
+      "signal_processing",
+      "dsp",
+      "fft",
+      "filter",
+      "adc_dac"
+    ],
+    "triggers": [
+      "nyquist",
+      "sample rate",
+      "anti-alias",
+      "sampling"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.signal-processing"
+  },
+  {
+    "ref_id": "strategy:sigproc:window-for-leakage",
+    "type": "strategy",
+    "title": "Select a window to control spectral leakage",
+    "summary": "Match the analysis window to whether you need to resolve close tones or measure amplitude accurately, trading main-lobe width against side-lobe level.",
+    "domains": [
+      "signal_processing",
+      "dsp",
+      "fft",
+      "filter",
+      "adc_dac"
+    ],
+    "triggers": [
+      "windowing",
+      "spectral leakage",
+      "hann window",
+      "side lobe"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.signal-processing"
+  },
+  {
+    "ref_id": "strategy:sigproc:convolution-overlap-add",
+    "type": "strategy",
+    "title": "Implement long convolution via overlap-add",
+    "summary": "For filtering a long stream with a fixed kernel, block the input and use FFT-based overlap-add instead of direct time-domain convolution.",
+    "domains": [
+      "signal_processing",
+      "dsp",
+      "fft",
+      "filter",
+      "adc_dac"
+    ],
+    "triggers": [
+      "convolution",
+      "overlap add",
+      "fft convolution",
+      "streaming filter"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.signal-processing"
+  },
+  {
+    "ref_id": "methodology:sigproc:verify-fft-against-dft",
+    "type": "methodology",
+    "title": "Verify an FFT implementation against a reference DFT",
+    "summary": "Cross-check a custom FFT against a naive DFT and an inverse round trip before trusting it in a pipeline.",
+    "domains": [
+      "signal_processing",
+      "dsp",
+      "fft",
+      "filter",
+      "adc_dac"
+    ],
+    "triggers": [
+      "fft verification",
+      "dft reference",
+      "parseval",
+      "round trip"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.signal-processing"
+  },
+  {
+    "ref_id": "methodology:sigproc:fir-spec-to-coefficients",
+    "type": "methodology",
+    "title": "Design an FIR filter from spec to coefficients",
+    "summary": "Translate passband, stopband, and ripple requirements into a tap count and coefficient set using a windowed or equiripple method.",
+    "domains": [
+      "signal_processing",
+      "dsp",
+      "fft",
+      "filter",
+      "adc_dac"
+    ],
+    "triggers": [
+      "fir design",
+      "filter spec",
+      "tap count",
+      "equiripple"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.signal-processing"
+  },
+  {
+    "ref_id": "methodology:sigproc:quantize-fixed-point-chain",
+    "type": "methodology",
+    "title": "Profile and quantize a fixed-point DSP chain",
+    "summary": "Measure per-stage dynamic range from a floating reference, then assign word lengths and verify the quantized chain against the error budget.",
+    "domains": [
+      "signal_processing",
+      "dsp",
+      "fft",
+      "filter",
+      "adc_dac"
+    ],
+    "triggers": [
+      "fixed point",
+      "quantization",
+      "dynamic range",
+      "word length"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.signal-processing"
+  },
+  {
+    "ref_id": "methodology:sigproc:adc-dac-bringup",
+    "type": "methodology",
+    "title": "Bring up an ADC and DAC sampling pipeline",
+    "summary": "Validate clocking, full-scale range, and loopback fidelity before trusting captured or generated samples.",
+    "domains": [
+      "signal_processing",
+      "dsp",
+      "fft",
+      "filter",
+      "adc_dac"
+    ],
+    "triggers": [
+      "adc",
+      "dac",
+      "loopback",
+      "converter bringup"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.signal-processing"
+  },
+  {
+    "ref_id": "knowledge:sigproc:dft-bin-resolution",
+    "type": "knowledge",
+    "title": "DFT math and bin frequency resolution",
+    "summary": "The DFT maps N time samples to N frequency bins spaced at sample_rate over N, fixing the achievable frequency resolution.",
+    "domains": [
+      "signal_processing",
+      "dsp",
+      "fft",
+      "filter",
+      "adc_dac"
+    ],
+    "triggers": [
+      "dft",
+      "bin resolution",
+      "frequency bin",
+      "zero padding"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.signal-processing"
+  },
+  {
+    "ref_id": "knowledge:sigproc:fir-iir-tradeoffs",
+    "type": "knowledge",
+    "title": "FIR versus IIR filter tradeoffs",
+    "summary": "FIR filters are always stable with linear phase but need many taps, while IIR filters reach sharp cutoffs at low order with nonlinear phase.",
+    "domains": [
+      "signal_processing",
+      "dsp",
+      "fft",
+      "filter",
+      "adc_dac"
+    ],
+    "triggers": [
+      "fir vs iir",
+      "filter tradeoff",
+      "group delay",
+      "limit cycle"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.signal-processing"
+  },
+  {
+    "ref_id": "knowledge:sigproc:quantization-noise-range",
+    "type": "knowledge",
+    "title": "Quantization noise and dynamic range in fixed point",
+    "summary": "Each added bit improves the signal-to-quantization-noise ratio by about six decibels, setting the dynamic range a word length can represent.",
+    "domains": [
+      "signal_processing",
+      "dsp",
+      "fft",
+      "filter",
+      "adc_dac"
+    ],
+    "triggers": [
+      "quantization noise",
+      "dynamic range",
+      "snr",
+      "accumulator"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.signal-processing"
+  },
+  {
+    "ref_id": "knowledge:sigproc:nyquist-aliasing",
+    "type": "knowledge",
+    "title": "Nyquist sampling and aliasing",
+    "summary": "Frequencies above half the sample rate fold back into the baseband as aliases that cannot be separated after sampling.",
+    "domains": [
+      "signal_processing",
+      "dsp",
+      "fft",
+      "filter",
+      "adc_dac"
+    ],
+    "triggers": [
+      "nyquist",
+      "aliasing",
+      "fold frequency",
+      "anti-alias filter"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.signal-processing"
+  },
+  {
+    "ref_id": "skill:sigproc:compute-bin-frequency",
+    "type": "skill",
+    "title": "Compute FFT bin center frequency",
+    "summary": "Convert a bin index into its center frequency using the sample rate and transform length.",
+    "domains": [
+      "signal_processing",
+      "dsp",
+      "fft",
+      "filter",
+      "adc_dac"
+    ],
+    "triggers": [
+      "bin frequency",
+      "fft index",
+      "frequency calculation"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.signal-processing"
+  },
+  {
+    "ref_id": "skill:sigproc:cutoff-to-normalized-frequency",
+    "type": "skill",
+    "title": "Convert filter cutoff to normalized frequency",
+    "summary": "Express a cutoff in hertz as a fraction of the sample rate so filter design tools receive the correct normalized value.",
+    "domains": [
+      "signal_processing",
+      "dsp",
+      "fft",
+      "filter",
+      "adc_dac"
+    ],
+    "triggers": [
+      "normalized frequency",
+      "cutoff",
+      "filter design input"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.signal-processing"
+  }
+]

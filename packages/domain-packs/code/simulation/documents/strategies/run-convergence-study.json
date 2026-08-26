@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:sim:run-convergence-study",
+  "type": "strategy",
+  "title": "Run a convergence study to confirm order",
+  "description": "Halve the step or refine the mesh repeatedly and confirm error shrinks at the method's theoretical rate.",
+  "body": "Use when verifying that a discretization is implemented correctly. Do not assume a small error means correctness, since a bug can produce small but wrong-order error. Actions: run the simulation at several step sizes, compute error against a reference at each, and fit the observed order of convergence. Validation signals include error decreasing at the expected rate and the fitted order matching the method's theory. Risk boundary: an observed order below theory signals a discretization bug, so escalate to inspecting the scheme rather than just refining further.",
+  "domain": "simulation",
+  "scope_hint": "code.simulation:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.simulation",
+  "pack_id": "code.simulation"
+}

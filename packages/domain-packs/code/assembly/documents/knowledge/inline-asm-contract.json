@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:asm:inline-asm-contract",
+  "type": "knowledge",
+  "title": "The inline-asm contract with the compiler",
+  "description": "Inline asm is opaque to the optimizer, so its operand constraints, clobbers, and volatility are the only information the compiler has about its effects.",
+  "body": "Use when reasoning about why inline asm misbehaves at high optimization. The compiler cannot see inside an asm block; it relies entirely on the declared input/output constraints, the clobber list (registers, 'cc' flags, 'memory'), and the volatile marker to schedule code around it. If the declaration understates what the block does, the optimizer may reuse a clobbered register, drop a side-effecting block, or reorder it. Do not treat the constraint list as documentation — it is a binding contract. Actions: declare every effect truthfully and test at -O2/-O3. Validation signals include identical results across optimization levels matching a reference. Risk boundary: an understated clobber is a latent miscompile that surfaces only when the optimizer happens to reuse the register; treat the declaration as correctness-critical.",
+  "domain": "assembly",
+  "scope_hint": "code.assembly:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.assembly",
+  "pack_id": "code.assembly"
+}

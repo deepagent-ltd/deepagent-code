@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:finetune:capability-collapse",
+  "type": "failure_dossier",
+  "description": "A fine-tune raises task accuracy while silently destroying general capabilities.",
+  "body": "Failure mode: training many epochs on a narrow task corpus at a high learning rate raises the task metric but the model forgets general reasoning, instruction following, or safety behavior (catastrophic forgetting). Detection signals: a strong task-eval gain paired with a clear drop on a general-capability or safety holdout, and qualitative breakage on adjacent prompts. Do not ship because the headline task number improved. Safer fallback: switch to low-rank adapters with a small learning rate, blend in general/instruction data, early-stop on the capability holdout, and treat any holdout regression as a blocking gate before release.",
+  "domain": "fine_tuning",
+  "scope_hint": "code.fine-tuning:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.fine-tuning:human_authored",
+  "pack_id": "code.fine-tuning"
+}

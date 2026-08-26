@@ -1,0 +1,487 @@
+[
+  {
+    "ref_id": "knowledge:java_jvm:build-tool-scope",
+    "type": "knowledge",
+    "title": "Build Tool Scope",
+    "summary": "Maven and Gradle module scope affects tests and dependencies.",
+    "domains": [
+      "java_jvm",
+      "java",
+      "jvm",
+      "code"
+    ],
+    "triggers": [
+      "maven",
+      "gradle",
+      "module",
+      "scope",
+      "affects",
+      "tests",
+      "dependencies"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.java-jvm"
+  },
+  {
+    "ref_id": "knowledge:java_jvm:generated-code-drift",
+    "type": "knowledge",
+    "title": "Generated Code Drift",
+    "summary": "In Java/JVM, never hand-edit annotation-processor output (Lombok, Dagger, MapStruct) and generated-sources; change the source and rerun the generator.",
+    "domains": [
+      "java_jvm",
+      "java",
+      "jvm",
+      "code"
+    ],
+    "triggers": [
+      "generated",
+      "code",
+      "must",
+      "tied",
+      "regeneration",
+      "commands",
+      "hand",
+      "edit"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.java-jvm"
+  },
+  {
+    "ref_id": "knowledge:java_jvm:runtime-errors-differ",
+    "type": "knowledge",
+    "title": "Runtime Errors Differ",
+    "summary": "In Java/JVM, a clean build does not prevent NullPointerException, ClassCastException, and ConcurrentModificationException at runtime.",
+    "domains": [
+      "java_jvm",
+      "java",
+      "jvm",
+      "code"
+    ],
+    "triggers": [
+      "compile",
+      "success",
+      "does",
+      "guarantee",
+      "runtime",
+      "behavior",
+      "representative",
+      "tests"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.java-jvm"
+  },
+  {
+    "ref_id": "knowledge:java_jvm:toolchain-is-contract",
+    "type": "knowledge",
+    "title": "Toolchain Is Contract",
+    "summary": "In Java/JVM, the JDK version, bytecode target, and JIT/GC configuration are part of the contract and changing them changes behavior.",
+    "domains": [
+      "java_jvm",
+      "java",
+      "jvm",
+      "code"
+    ],
+    "triggers": [
+      "compiler",
+      "formatter",
+      "package",
+      "manager",
+      "test",
+      "runner",
+      "part",
+      "language"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.java-jvm"
+  },
+  {
+    "ref_id": "methodology:java_jvm:dependency-update-check",
+    "type": "methodology",
+    "title": "Dependency Update Check",
+    "summary": "In Java/JVM, when the dependency tree (mvn dependency:tree), version conflicts, and classpath/module-path ordering change, verify the lockfile, generated artifacts, and a runtime smoke.",
+    "domains": [
+      "java_jvm",
+      "java",
+      "jvm",
+      "code"
+    ],
+    "triggers": [
+      "when",
+      "dependencies",
+      "change",
+      "inspect",
+      "lockfile",
+      "generated",
+      "artifacts",
+      "runtime"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.java-jvm"
+  },
+  {
+    "ref_id": "methodology:java_jvm:interop-boundary-check",
+    "type": "methodology",
+    "title": "Interop Boundary Check",
+    "summary": "In Java/JVM, validate the deserialization, reflection access, and JNI/native boundaries where external data crosses in.",
+    "domains": [
+      "java_jvm",
+      "java",
+      "jvm",
+      "code"
+    ],
+    "triggers": [
+      "validate",
+      "module",
+      "shell",
+      "serialization",
+      "boundaries",
+      "steps",
+      "identify",
+      "boundary"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.java-jvm"
+  },
+  {
+    "ref_id": "methodology:java_jvm:language-gate-loop",
+    "type": "methodology",
+    "title": "Language Gate Loop",
+    "summary": "In Java/JVM, run the package-local gate, fix the first owned diagnostic, rerun, then broaden.",
+    "domains": [
+      "java_jvm",
+      "java",
+      "jvm",
+      "code"
+    ],
+    "triggers": [
+      "package",
+      "local",
+      "gate",
+      "first",
+      "owned",
+      "diagnostic",
+      "rerun",
+      "then"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.java-jvm"
+  },
+  {
+    "ref_id": "skill:java_jvm:run-language-gate",
+    "type": "skill",
+    "title": "Run Language Gate",
+    "summary": "In Java/JVM, run the package-local validation gate (the Maven/Gradle module task (mvn -pl / gradle :module:test) with the right JDK toolchain) and summarize the diagnostics.",
+    "domains": [
+      "java_jvm",
+      "java",
+      "jvm",
+      "code"
+    ],
+    "triggers": [
+      "package",
+      "local",
+      "language",
+      "validation",
+      "gate",
+      "summarize",
+      "diagnostics",
+      "inputs"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.java-jvm"
+  },
+  {
+    "ref_id": "strategy:java_jvm:boundary-validation",
+    "type": "strategy",
+    "title": "Boundary Validation",
+    "summary": "In Java/JVM, validate external input at the deserialization, reflection access, and JNI/native boundaries before internal use.",
+    "domains": [
+      "java_jvm",
+      "java",
+      "jvm",
+      "code"
+    ],
+    "triggers": [
+      "validate",
+      "external",
+      "input",
+      "language",
+      "runtime",
+      "boundaries",
+      "parsing",
+      "serialization"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.java-jvm"
+  },
+  {
+    "ref_id": "strategy:java_jvm:diagnostic-first",
+    "type": "strategy",
+    "title": "Diagnostic First",
+    "summary": "In Java/JVM, read the first javac error or the root-cause stack-trace frame in your package before making speculative edits.",
+    "domains": [
+      "java_jvm",
+      "java",
+      "jvm",
+      "code"
+    ],
+    "triggers": [
+      "compiler",
+      "runtime",
+      "diagnostics",
+      "before",
+      "speculative",
+      "edits",
+      "read",
+      "first"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.java-jvm"
+  },
+  {
+    "ref_id": "strategy:java_jvm:idiom-preserving-change",
+    "type": "strategy",
+    "title": "Idiom Preserving Change",
+    "summary": "In Java/JVM, prefer established idioms (Optional over null, try-with-resources, checked-exception discipline, and immutable value types) over generic rewrites.",
+    "domains": [
+      "java_jvm",
+      "java",
+      "jvm",
+      "code"
+    ],
+    "triggers": [
+      "prefer",
+      "local",
+      "idioms",
+      "standard",
+      "tooling",
+      "over",
+      "generic",
+      "rewrites"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.java-jvm"
+  },
+  {
+    "ref_id": "strategy:java_jvm:package-local-command",
+    "type": "strategy",
+    "title": "Package Local Command",
+    "summary": "In Java/JVM, use the package-local commands (the Maven/Gradle module task (mvn -pl / gradle :module:test) with the right JDK toolchain) rather than a root or generic command.",
+    "domains": [
+      "java_jvm",
+      "java",
+      "jvm",
+      "code"
+    ],
+    "triggers": [
+      "package",
+      "local",
+      "build",
+      "test",
+      "typecheck",
+      "commands",
+      "this",
+      "language"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.java-jvm"
+  },
+  {
+    "ref_id": "strategy:java_jvm:use-streams-without-side-effects",
+    "type": "strategy",
+    "title": "Use streams for pure transformations, not side effects",
+    "summary": "Express data transformations as side-effect-free stream pipelines with collectors, and fall back to loops when mutation or early exit fits better.",
+    "domains": [
+      "java",
+      "jvm",
+      "code"
+    ],
+    "triggers": [
+      "stream",
+      "collect",
+      "map",
+      "filter",
+      "side effect",
+      "collector"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.java-jvm"
+  },
+  {
+    "ref_id": "strategy:java_jvm:resolve-dependency-conflicts",
+    "type": "strategy",
+    "title": "Resolve transitive dependency version conflicts",
+    "summary": "Read the dependency tree, understand the build tool's conflict-resolution rule, and pin versions via a BOM or constraints instead of guessing.",
+    "domains": [
+      "java",
+      "jvm",
+      "code"
+    ],
+    "triggers": [
+      "dependency",
+      "conflict",
+      "transitive",
+      "bom",
+      "mvn dependency:tree",
+      "version"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.java-jvm"
+  },
+  {
+    "ref_id": "methodology:java_jvm:tune-gc-from-evidence",
+    "type": "methodology",
+    "title": "Tune JVM garbage collection from GC logs, not guesses",
+    "summary": "Capture GC logs and heap behavior, identify whether pauses or allocation rate is the problem, and adjust collector or heap settings with evidence.",
+    "domains": [
+      "java",
+      "jvm",
+      "code"
+    ],
+    "triggers": [
+      "gc",
+      "garbage collection",
+      "g1",
+      "zgc",
+      "heap",
+      "pause"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.java-jvm"
+  },
+  {
+    "ref_id": "skill:java_jvm:microbenchmark-with-jmh",
+    "type": "skill",
+    "title": "Microbenchmark with JMH and report honest numbers",
+    "summary": "Run a JMH benchmark with warmup, forks, and Blackhole to defeat JIT dead-code elimination, then report throughput with error bounds.",
+    "domains": [
+      "java",
+      "jvm",
+      "code"
+    ],
+    "triggers": [
+      "jmh",
+      "benchmark",
+      "blackhole",
+      "warmup",
+      "fork",
+      "jit"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.java-jvm"
+  }
+]

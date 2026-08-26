@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:backend_api:generic-500-for-domain-error",
+  "type": "failure_dossier",
+  "description": "Returning 500 for validation or domain conflicts breaks client behavior.",
+  "body": "Use specific status/error codes for expected client-actionable failures.\n\nUse only as a diagnostic do-not-use signal; do not expose this as positive strategy, methodology, or memory. Use when a proposed approach skips repository conventions, toolchain files, changed symbols, validation commands, and runtime output or claims success without domain evidence. Do not use this dossier as a positive implementation strategy; it is a do-not-use signal. Actions: block the shortcut, name the missing evidence, and switch to a safer methodology or ask for human approval. Validation signals include absence or contradiction in package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: treat repeated recurrence as a blocker when it can cause broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes.",
+  "domain": "api",
+  "scope_hint": "code.backend.api:failure_dossiers",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.backend.api",
+  "pack_id": "code.backend.api"
+}

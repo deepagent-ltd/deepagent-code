@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:security:security-review-flow",
+  "type": "methodology",
+  "title": "Security review flow",
+  "description": "Review input, identity, authorization, sink, output, logs, and audit evidence in that order.",
+  "body": "Use for review or implementation tasks with security markers. Do not use as a replacement for domain-specific cryptography, protocol, or framework guidance. Steps: first identify entry points and attacker-controlled fields; then verify authentication and authorization are distinct; then trace to dangerous sinks; then inspect outputs, logs, and telemetry for disclosure; finally require negative tests and an evidence summary. Validation signals include a completed path trace and at least one denied-path test or reproducible review finding. Risk boundary: stop and escalate when the path crosses production credentials, tenant boundaries, or irreversible permission changes. Use when Security Risk Controls work touches trust boundaries, authorization decisions, dangerous sinks, secrets, and dependency execution. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: follow the ordered review, edit, and validation sequence; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include negative security tests, server-side checks, sink payload tests, and secret scans. Risk boundary: escalate or stop when the task involves client-only controls, injection, credential leakage, permissive fallback, and unsafe dependency changes, missing owner evidence, or live external state.",
+  "domain": "security",
+  "scope_hint": "risk.security:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.security",
+  "pack_id": "risk.security"
+}

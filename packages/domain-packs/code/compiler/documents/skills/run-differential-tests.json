@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:comp:run-differential-tests",
+  "type": "skill",
+  "title": "Run differential and round-trip tests",
+  "description": "Compile a program corpus at different optimization levels (and parse/print round-trip) and report any behavioral divergence.",
+  "body": "Use when validating a compiler change for correctness. Actions: run a corpus of programs through the compiler at multiple optimization levels, compare observable output (and parse/print round-trip idempotence), and report any program whose behavior diverges between levels with the minimal reproducing input. Do not declare a pass correct from a single hand-picked example. This skill exposes capability only and must not run untrusted corpus programs without runtime sandboxing/permission. Validation signals include identical observable results across opt levels on the whole corpus. Risk boundary: any divergence between optimized and unoptimized output is a likely miscompilation; flag it as blocking rather than dismissing it as a test-corpus issue.",
+  "domain": "compiler",
+  "scope_hint": "code.compiler:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.compiler",
+  "pack_id": "code.compiler"
+}

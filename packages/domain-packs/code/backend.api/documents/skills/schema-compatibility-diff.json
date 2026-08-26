@@ -1,0 +1,11 @@
+{
+  "ref_id": "skill:backend_api:schema-compatibility-diff",
+  "type": "skill",
+  "description": "Compare API schema outputs or generated clients to classify compatibility risk.",
+  "body": "Inputs: schema source files, generation command if available, before/after diff target, and expected compatibility intent. Procedure: locate OpenAPI, GraphQL, RPC, JSON Schema, protobuf, or generated client artifacts; regenerate when the project provides a command; diff operation names, fields, requiredness, enum values, nullability, status/error envelopes, and generated client types; classify each difference as additive, compatible behavior change, or breaking change. This skill does not approve product-level versioning decisions. Outputs: diff summary, breaking candidates, compatible additions, and commands run. Validation signals include deterministic schema generation, expected client compilation, and no unversioned removal or narrowing unless explicitly approved. Failure handling: when no schema artifact exists, fall back to route smoke and mark schema diff unavailable. Use when Backend API work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: run the documented inspection and validation workflow; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "api",
+  "scope_hint": "code.backend.api:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.api:schema_diff_skill",
+  "pack_id": "code.backend.api"
+}

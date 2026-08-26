@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:apidesign:audit-cross-endpoint-consistency",
+  "type": "methodology",
+  "title": "Audit a surface for cross-endpoint consistency",
+  "description": "A procedure to review an existing API for divergent naming, shapes, and error handling and to converge it.",
+  "body": "Use when an API has grown organically and feels inconsistent. Do not fix one endpoint in isolation. Steps: inventory resources, field names, casing, error shapes, and paging across endpoints; identify the same concept modeled differently; define the target convention; converge additively and deprecate the outliers. Validation signals include a single predictable shape per concept and a lint pass against the style guide. Risk boundary: changing shapes can break clients, so converge through additive aliases and deprecation rather than in-place renames.",
+  "domain": "api_design",
+  "scope_hint": "code.api-design:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.api-design",
+  "pack_id": "code.api-design"
+}

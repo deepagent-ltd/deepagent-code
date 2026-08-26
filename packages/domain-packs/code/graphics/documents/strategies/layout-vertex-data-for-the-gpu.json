@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:gfx:layout-vertex-data-for-the-gpu",
+  "type": "strategy",
+  "title": "Lay out vertex and buffer data for the GPU",
+  "description": "Pack attributes and uniforms to honor alignment rules and cache locality so the GPU fetches data efficiently and correctly.",
+  "body": "Use when defining vertex attributes, uniform/storage buffers, or push constants. Do not ignore std140/std430 alignment (vec3 padded to 16 bytes), and avoid scattered per-attribute buffers when interleaving improves locality. Actions: match the CPU struct layout to the shader's expected alignment, interleave hot attributes, and validate offsets with the reflection/validation layer. Validation signals include matching CPU/GPU struct sizes and correct values read in the shader. Risk boundary: a silent alignment mismatch reads garbage uniforms and renders subtly wrong output; verify buffer offsets via reflection rather than assuming the compiler agreed.",
+  "domain": "graphics",
+  "scope_hint": "code.graphics:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.graphics",
+  "pack_id": "code.graphics"
+}

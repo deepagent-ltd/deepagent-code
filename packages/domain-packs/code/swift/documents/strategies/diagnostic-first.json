@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:swift:diagnostic-first",
+  "type": "strategy",
+  "description": "In Swift, read the first type-checker diagnostic and its fix-it suggestion before making speculative edits.",
+  "body": "In Swift, the toolchain already points at the real problem, so the first type-checker diagnostic and its fix-it suggestion should guide the edit rather than a guess. Use when the type checker, where optionals and protocol conformances must resolve or swift build -warnings-as-errors and the Xcode static analyzer reports an error or warning. Do not start editing before reading the diagnostic, and avoid changing code you have not confirmed is implicated. Actions: read the first actionable diagnostic and the owned frame, inspect that location, make the smallest fix, then rerun swift test (XCTest/swift-testing) on the affected target. Validation signals include the resolved diagnostic, a passing focused test, and no new warnings from swift build -warnings-as-errors and the Xcode static analyzer. Risk boundary: if the diagnostic exposes a deeper design fault, escalate rather than papering over it.",
+  "domain": "swift",
+  "scope_hint": "code.swift:strategies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.swift:skill_survey",
+  "pack_id": "code.swift"
+}

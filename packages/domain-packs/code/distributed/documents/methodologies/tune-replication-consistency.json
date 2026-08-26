@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:dist:tune-replication-consistency",
+  "type": "methodology",
+  "title": "Tune replication for a target consistency",
+  "description": "Map a required consistency level to concrete replication factor and quorum settings, then verify the guarantee holds.",
+  "body": "Steps: 1. State the required guarantee (linearizable, read-your-writes, monotonic, or eventual). 2. Choose N, then derive R/W: linearizable needs R + W > N with synchronous quorum acks; eventual permits W=1 with async repair. 3. Decide read-repair and anti-entropy (Merkle-tree sync) for the eventual path. 4. Build a test that performs an acked write then a read and asserts the promised staleness bound. 5. Measure latency cost of the chosen quorum. Rollback point: before lowering W on a live keyspace. Validation: the staleness test passes for the claimed level and anti-entropy converges divergent replicas; compare observed staleness against the documented guarantee.",
+  "domain": "distributed",
+  "scope_hint": "code.distributed:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.distributed",
+  "pack_id": "code.distributed"
+}

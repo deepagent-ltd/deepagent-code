@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:orch:dag-scheduling-model",
+  "type": "knowledge",
+  "title": "How DAG scheduling and execution dates work",
+  "description": "Why orchestrators run a logical/execution date per interval and how that date parameterizes idempotent tasks.",
+  "body": "Use when reasoning about when and for what date a DAG run executes. Orchestrators schedule one run per interval, each tagged with a logical/execution date representing the data window it covers, and tasks should derive their inputs and outputs from that date. Do not use the wall-clock 'now' inside a task — backfills and retries then process the wrong window. Actions: reference the execution date for partitions and queries so any run is reproducible. Validation signals include a backfilled run for a past date producing that date's output and a rerun reproducing it. Risk boundary: using wall-clock time breaks backfills silently; if a task reads 'now', treat it as non-reproducible and escalate to parameterize it by execution date.",
+  "domain": "orchestration",
+  "scope_hint": "code.data-pipeline-orchestration:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-pipeline-orchestration",
+  "pack_id": "code.data-pipeline-orchestration"
+}

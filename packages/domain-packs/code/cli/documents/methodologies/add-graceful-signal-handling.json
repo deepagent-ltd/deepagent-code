@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:cli:add-graceful-signal-handling",
+  "type": "methodology",
+  "title": "Add graceful signal handling",
+  "description": "Introduce SIGINT/SIGTERM handlers that make in-flight writes atomic and clean up resources before exiting.",
+  "body": "Steps: 1. Inventory resources the tool holds mid-run: open output files, temp files, child processes, locks. 2. Make output atomic: write to a temp file and rename on success so an interrupt never leaves a partial real file. 3. Install SIGINT/SIGTERM handlers that flush, remove temp files, and terminate/wait on children. 4. Exit with 128+signal so callers can detect interruption. 5. Test by interrupting mid-run and inspecting the filesystem and process table. Rollback point: before changing output to temp+rename (verify consumers tolerate it). Validation: an interrupted run leaves no partial files and no orphaned children; ignoring signals or writing in place is the failure this prevents.",
+  "domain": "cli",
+  "scope_hint": "code.cli:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.cli",
+  "pack_id": "code.cli"
+}

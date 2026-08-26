@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:sim:choose-ode-solver",
+  "type": "strategy",
+  "title": "Choose an ODE solver for stiffness and accuracy",
+  "description": "Match the integrator to the system's stiffness and accuracy needs, preferring implicit methods for stiff dynamics.",
+  "body": "Use when integrating a system of differential equations. Do not default to explicit Euler for a stiff system, since it forces impractically tiny steps to stay stable. Actions: assess stiffness from the spread of time constants, pick an explicit method like RK4 for non-stiff problems, and switch to an implicit solver when stiffness dominates. Validation signals include a stable solution at a practical step size and error matching the method's order in a convergence study. Risk boundary: a wrong solver choice either diverges or crawls, so escalate to an adaptive or implicit method when an explicit solver cannot stay stable at a usable step.",
+  "domain": "simulation",
+  "scope_hint": "code.simulation:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.simulation",
+  "pack_id": "code.simulation"
+}

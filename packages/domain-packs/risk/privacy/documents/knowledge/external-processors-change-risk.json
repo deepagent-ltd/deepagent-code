@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:privacy:external-processors-change-risk",
+  "type": "knowledge",
+  "title": "External processors change privacy risk",
+  "description": "Sending personal data to third-party APIs, analytics, storage, support, or model providers changes exposure, retention, and deletion assumptions.",
+  "body": "Use when adding outbound calls, webhooks, SaaS integrations, analytics, error reporting, or model APIs. Do not approve contracts or vendor terms. Actions: minimize fields, confirm purpose, avoid secrets and regulated data, and require human review for new processors. Validation signals include request payload tests and configuration gating. Risk boundary: new external personal-data destination requires human gate. Use when Privacy Risk Controls work touches personal-data classes, sinks, retention, consent, logs, prompts, and exports. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: use the fact to constrain the change and test plan; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include data inventory, redaction tests, retention checks, export/delete tests, and approval evidence. Risk boundary: escalate or stop when the task involves PII disclosure, consent bypass, retention drift, and unapproved processor expansion, missing owner evidence, or live external state.",
+  "domain": "privacy",
+  "scope_hint": "risk.privacy:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.privacy",
+  "pack_id": "risk.privacy"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:comp:audit-trail-properties",
+  "type": "knowledge",
+  "title": "What makes an audit trail trustworthy",
+  "description": "A compliance-grade trail is complete, attributable, time-ordered, and tamper-evident, which ordinary application logs are not.",
+  "body": "Use when deciding whether existing logging satisfies an audit requirement. A trustworthy trail is complete (every controlled action is recorded), attributable (tied to a specific authenticated principal, not a shared service account), time-ordered with a reliable clock, and tamper-evident (alterations are blocked or detectable). Ordinary application logs usually fail one or more: they drop events under load, use shared identities, or live in a store the app can edit and rotate. Do not equate having logs with having an audit trail. Actions: check each property and inspect the write path and permissions. Validation signals include a test proving each controlled action emits exactly one attributable, immutable record. Risk boundary: a trail missing attribution or tamper-evidence cannot be relied on for an assessment; escalate.",
+  "domain": "compliance",
+  "scope_hint": "risk.compliance:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.compliance",
+  "pack_id": "risk.compliance"
+}

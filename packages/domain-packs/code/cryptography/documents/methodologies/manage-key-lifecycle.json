@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:crypto:manage-key-lifecycle",
+  "type": "methodology",
+  "title": "Manage the key lifecycle and rotation",
+  "description": "Generate, store, rotate, and retire keys with a key-management system so a compromised or aged key has bounded impact.",
+  "body": "Steps: 1. Generate keys in or backed by a KMS/HSM; never hardcode or commit keys. 2. Use envelope encryption: a data key encrypts data, a KMS-held key encrypts the data key. 3. Tag each ciphertext with a key id/version so multiple key generations can coexist. 4. Rotate on a schedule and on suspected compromise; re-encrypt or support lazy re-wrap. 5. Retire old keys only after all data is migrated, and audit access. Rollback point: before retiring a key any ciphertext still references. Validation: ciphertexts carry a key id, rotation produces a new version without downtime, and old data still decrypts; deleting a key still in use is unrecoverable data loss, so verify references first.",
+  "domain": "cryptography",
+  "scope_hint": "code.cryptography:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.cryptography",
+  "pack_id": "code.cryptography"
+}

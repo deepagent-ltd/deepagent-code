@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:ios:swiftui-declarative-data-flow",
+  "type": "knowledge",
+  "title": "SwiftUI's declarative data flow",
+  "description": "A SwiftUI view is a function of its state; you mutate state and the framework recomputes the view, rather than mutating views directly.",
+  "body": "Use when reasoning about SwiftUI behavior versus UIKit. SwiftUI views are value types describing UI for the current state; the framework diffs and re-renders when an observed source (@State, @Published via @StateObject/@ObservedObject, @EnvironmentObject) changes. You never imperatively set a label's text — you change state. Do not mutate UI directly or expect a non-observed property change to refresh anything. Actions: model each piece of UI as derived from observable state. Validation signals include views updating purely from state changes. Risk boundary: mutating non-observed data leaves the UI stale with no error, and misusing @State vs @StateObject can recreate or lose state on re-render — getting the ownership wrapper right is the core mental model.",
+  "domain": "ios",
+  "scope_hint": "code.mobile.ios:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mobile.ios",
+  "pack_id": "code.mobile.ios"
+}

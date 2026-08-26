@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:orch:idempotent-tasks-by-date",
+  "type": "strategy",
+  "title": "Make every task idempotent per execution date",
+  "description": "Parameterize tasks by the run's logical date and write so that rerunning the same date overwrites rather than duplicates.",
+  "body": "Use when a task writes data and could be retried or backfilled. Do not append unconditionally — a retry or backfill then duplicates rows and corrupts downstream aggregates. Actions: parameterize the task by its execution/logical date, delete-and-replace or merge the target partition for that date, and verify a second run for the same date yields identical output. Validation signals include a rerun producing the same partition with no duplication and a backfill matching the original scheduled output. Risk boundary: a non-idempotent task makes retries and backfills unsafe; if a task cannot overwrite its own date partition cleanly, treat it as unsafe to retry and escalate to redesign the write before enabling automatic retries.",
+  "domain": "orchestration",
+  "scope_hint": "code.data-pipeline-orchestration:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-pipeline-orchestration",
+  "pack_id": "code.data-pipeline-orchestration"
+}

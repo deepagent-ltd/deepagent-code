@@ -1,0 +1,71 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "platform.terraform",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "terraform",
+      "iac",
+      "infrastructure",
+      "hcl"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for platform.terraform: HCL provider blocks, remote tfstate with locking, terraform plan vs apply, module composition, drift detection, and import of existing infrastructure"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "write a bash script to rotate local log files"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "terraform hcl provider resource remote state locking plan apply drift module import tfstate secrets backend",
+  "expected_pack_id": "platform.terraform",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "platform.terraform L3 validation smoke",
+    "signals": [
+      "terraform plan reviewed with zero unexpected destroys",
+      "state lock acquired and released cleanly",
+      "post-apply plan shows no drift (no changes)",
+      "module input/output contract validated",
+      "no secrets present in state or plan output"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "platform.terraform diagnosis smoke",
+    "signals": [
+      "apply run without reviewing a saved plan",
+      "local state with no locking on a shared environment",
+      "hardcoded secret in a .tf file or variable default",
+      "drift between real infrastructure and state",
+      "resource replacement (destroy/create) not noticed before apply"
+    ]
+  },
+  "source_refs": [
+    "source:terraform-language-docs:paraphrased",
+    "source:iac-state-management-practice:paraphrased"
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:healthcare:phi-in-debug-export",
+  "type": "failure_dossier",
+  "description": "Including PHI in debug bundles or logs creates exposure risk.",
+  "body": "Redact or avoid export. Use when a proposed approach skips PHI flows, patient identifiers, consent state, audit events, clinical workflow boundaries, and access logs or claims success without domain evidence. Do not use this dossier as a positive implementation strategy; it is a do-not-use signal. Actions: block the shortcut, name the missing evidence, and switch to a safer methodology or ask for human approval. Validation signals include absence or contradiction in PHI minimization checks, access-control tests, audit-log assertions, consent-path review, and clinical owner approval where required. Risk boundary: treat repeated recurrence as a blocker when it can cause medical advice automation, PHI disclosure, unauthorized access, missing audit records, and regulated workflow ambiguity.",
+  "domain": "healthcare",
+  "scope_hint": "business.healthcare:failure",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:business.healthcare:skill_survey",
+  "pack_id": "business.healthcare"
+}

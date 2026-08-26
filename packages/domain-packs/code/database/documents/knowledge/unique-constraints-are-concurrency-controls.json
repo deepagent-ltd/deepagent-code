@@ -1,0 +1,11 @@
+{
+  "ref_id": "knowledge:database:unique-constraints-are-concurrency-controls",
+  "type": "knowledge",
+  "description": "Unique constraints protect invariants under concurrent writers better than application-only checks.",
+  "body": "Apply this when preventing duplicate usernames, external IDs, idempotency keys, slugs, memberships, or one-active-record invariants. Application-level pre-checks can race under concurrent requests; a database unique constraint or equivalent storage guard makes the invariant authoritative. This does not choose business uniqueness semantics. Execution impact: identify the exact columns and nullable behavior, backfill or deduplicate existing rows before adding the constraint, catch constraint violations and map them to stable application errors, and test concurrent or duplicate insert attempts. Validation signals include rejected duplicates, no existing duplicate rows, application error shape for violation, and migration dry-run success. Risk boundary: adding uniqueness without data cleanup can fail deployment or block writes. Use when Database Engineering work touches schema deltas, query shape, transaction ownership, constraints, locks, and data volume. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: use the fact to constrain the change and test plan; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include migration dry-runs, rollback checks, EXPLAIN output, constraint tests, and fixture data comparisons. Risk boundary: escalate or stop when the task involves data loss, long locks, non-rollbackable writes, silent query-plan regressions, and unsafe backfills, missing owner evidence, or live external state.",
+  "domain": "sql",
+  "scope_hint": "code.database:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database:constraint_concurrency_practice",
+  "pack_id": "code.database"
+}

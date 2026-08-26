@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:mt:audit-cross-tenant-leaks",
+  "type": "methodology",
+  "title": "Audit data paths for cross-tenant leaks",
+  "description": "A procedure to systematically check every read, write, cache, and job for a tenant scope and to add negative tests.",
+  "body": "Use when reviewing a multi-tenant codebase or before a release. Do not assume scoping is complete because the happy path works. Steps: enumerate every data-access path including background jobs, exports, and caches; verify each derives tenant from the principal and includes a tenant predicate; add a negative test per path that a foreign tenant is denied; check cache keys and aggregate queries. Validation signals include negative tests passing for every path and no unscoped access remaining. Risk boundary: any unscoped path is a high-severity leak, so block release on it and escalate findings to security.",
+  "domain": "multi_tenant",
+  "scope_hint": "code.backend.multi-tenant:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.multi-tenant",
+  "pack_id": "code.backend.multi-tenant"
+}

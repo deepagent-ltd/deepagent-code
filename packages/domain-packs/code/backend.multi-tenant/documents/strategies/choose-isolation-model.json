@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:mt:choose-isolation-model",
+  "type": "strategy",
+  "title": "Choose an isolation model deliberately",
+  "description": "Pick silo, pool, or bridge isolation per workload from the security, cost, and noisy-neighbor trade-offs rather than defaulting to shared everything.",
+  "body": "Use when designing how tenants share or separate infrastructure. Do not put every tenant in one shared pool without weighing isolation needs. Actions: assess data-sensitivity and blast-radius requirements; choose silo (dedicated resources) for the strictest tenants, pool (shared with logical separation) for density, or a bridge mix; document which tenants get which. Validation signals include a model whose isolation guarantees match each tenant's requirements and a documented mapping. Risk boundary: an under-isolated model for sensitive tenants is hard to reverse once data lands, so decide with security and escalate high-sensitivity tenants for review.",
+  "domain": "multi_tenant",
+  "scope_hint": "code.backend.multi-tenant:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.multi-tenant",
+  "pack_id": "code.backend.multi-tenant"
+}

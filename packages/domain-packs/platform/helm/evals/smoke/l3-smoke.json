@@ -1,0 +1,70 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "platform.helm",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "helm",
+      "helm_chart",
+      "chart_values",
+      "helm_release"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for platform.helm: chart templates values _helpers structure, values overriding precedence, helm upgrade rollback release history, helm template debugging, subcharts dependencies, hooks, schema validation"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "fix CSS layout shift"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "helm chart values precedence templates helpers upgrade rollback release history helm template subchart dependency hook schema validation",
+  "expected_pack_id": "platform.helm",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "platform.helm L3 validation smoke",
+    "signals": [
+      "helm template renders the chart with no errors and the diff against the live release shows only intended changes",
+      "helm lint and a values.schema.json validation pass for both default and override value sets",
+      "helm upgrade --atomic completes and helm history shows a new superseded->deployed revision",
+      "helm rollback restores the prior revision and the workload returns to a healthy ready state"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "platform.helm diagnosis smoke",
+    "signals": [
+      "A template render error traced to a nil pointer on a missing values key rather than a Kubernetes API problem",
+      "An override silently ignored because a parent set the same key at higher precedence than the values file",
+      "A subchart value not applied because it was not nested under the subchart's alias in the parent values",
+      "A failed upgrade left a pending-upgrade release because a pre-upgrade hook job never completed",
+      "Indentation/whitespace bug from missing nindent or a stray range producing invalid YAML"
+    ]
+  },
+  "source_refs": [
+    "helm-docs:values-files-and-precedence",
+    "helm-docs:chart-hooks-and-release-lifecycle"
+  ]
+}

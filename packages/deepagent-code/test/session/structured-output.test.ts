@@ -1,0 +1,575 @@
+import { describe, expect, test } from "bun:test"
+import { SessionV1 } from "@deepagent-code/core/v1/session"
+import { Exit, Schema } from "effect"
+import { MessageV2 } from "../../src/session/message-v2"
+import { SessionPrompt } from "../../src/session/prompt"
+import { SessionID, MessageID } from "../../src/session/schema"
+import { ToolInternal } from "../../src/tool/internal"
+
+const decodeFormat = Schema.decodeUnknownExit(SessionV1.Format)
+const decodeUser = Schema.decodeUnknownExit(SessionV1.User)
+const decodeAssistant = Schema.decodeUnknownExit(SessionV1.Assistant)
+
+describe("structured-output.OutputFormat", () => {
+  test("parses text format", () => {
+    const result = decodeFormat({ type: "text" })
+    expect(Exit.isSuccess(result)).toBe(true)
+    if (Exit.isSuccess(result)) {
+      expect(result.value.type).toBe("text")
+    }
+  })
+
+  test("parses json_schema format with defaults", () => {
+    const result = decodeFormat({
+      type: "json_schema",
+      schema: { type: "object", properties: { name: { type: "string" } } },
+    })
+    expect(Exit.isSuccess(result)).toBe(true)
+    if (Exit.isSuccess(result)) {
+      expect(result.value.type).toBe("json_schema")
+      if (result.value.type === "json_schema") {
+        expect(result.value.retryCount).toBe(2) // default value
+      }
+    }
+  })
+
+  test("parses json_schema format with custom retryCount", () => {
+    const result = decodeFormat({
+      type: "json_schema",
+      schema: { type: "object" },
+      retryCount: 5,
+    })
+    expect(Exit.isSuccess(result)).toBe(true)
+    if (Exit.isSuccess(result) && result.value.type === "json_schema") {
+      expect(result.value.retryCount).toBe(5)
+    }
+  })
+
+  test("rejects invalid type", () => {
+    const result = decodeFormat({ type: "invalid" })
+    expect(Exit.isFailure(result)).toBe(true)
+  })
+
+  test("rejects json_schema without schema", () => {
+    const result = decodeFormat({ type: "json_schema" })
+    expect(Exit.isFailure(result)).toBe(true)
+  })
+
+  test("rejects negative retryCount", () => {
+    const result = decodeFormat({
+      type: "json_schema",
+      schema: { type: "object" },
+      retryCount: -1,
+    })
+    expect(Exit.isFailure(result)).toBe(true)
+  })
+})
+
+describe("structured-output.StructuredOutputError", () => {
+  test("creates error with message and retries", () => {
+    const error = new SessionV1.StructuredOutputError({
+      message: "Failed to validate",
+      retries: 3,
+    })
+
+    expect(error.name).toBe("StructuredOutputError")
+    expect(error.data.message).toBe("Failed to validate")
+    expect(error.data.retries).toBe(3)
+  })
+
+  test("converts to object correctly", () => {
+    const error = new SessionV1.StructuredOutputError({
+      message: "Test error",
+      retries: 2,
+    })
+
+    const obj = error.toObject()
+    expect(obj.name).toBe("StructuredOutputError")
+    expect(obj.data.message).toBe("Test error")
+    expect(obj.data.retries).toBe(2)
+  })
+
+  test("isInstance correctly identifies error", () => {
+    const error = new SessionV1.StructuredOutputError({
+      message: "Test",
+      retries: 1,
+    })
+
+    expect(SessionV1.StructuredOutputError.isInstance(error)).toBe(true)
+    expect(SessionV1.StructuredOutputError.isInstance({ name: "other" })).toBe(false)
+  })
+})
+
+describe("structured-output.UserMessage", () => {
+  test("user message accepts outputFormat", () => {
+    const result = decodeUser({
+      id: MessageID.ascending(),
+      sessionID: SessionID.descending(),
+      role: "user",
+      time: { created: Date.now() },
+      agent: "default",
+      model: { providerID: "anthropic", modelID: "claude-3" },
+      outputFormat: {
+        type: "json_schema",
+        schema: { type: "object" },
+      },
+    })
+    expect(Exit.isSuccess(result)).toBe(true)
+  })
+
+  test("user message works without outputFormat (optional)", () => {
+    const result = decodeUser({
+      id: MessageID.ascending(),
+      sessionID: SessionID.descending(),
+      role: "user",
+      time: { created: Date.now() },
+      agent: "default",
+      model: { providerID: "anthropic", modelID: "claude-3" },
+    })
+    expect(Exit.isSuccess(result)).toBe(true)
+  })
+})
+
+// Regression: OutputFormatJsonSchema is a Schema.Class, so its ENCODER is instanceof-gated. A
+// user message whose `format` is a plain object literal (as the task tool built it) passes TS
+// structural typing and decode, but fails at encode when the message Info is serialized onto the
+// MessageUpdated sync event — the exact "Expected OutputFormatJsonSchema, got {...}" failure the
+// researcher subagent hit. These tests pin the encode path the old decode-only tests never touched.
+describe("structured-output.encode (sync-event serialization)", () => {
+  const encodeInfo = Schema.encodeUnknownExit(SessionV1.Info)
+  const userWith = (format: unknown) => ({
+    id: MessageID.ascending(),
+    sessionID: SessionID.descending(),
+    role: "user" as const,
+    time: { created: 1 },
+    agent: "researcher",
+    model: { providerID: "anthropic", modelID: "claude-3" },
+    format,
+  })
+  const jsonSchemaFormat = {
+    type: "json_schema" as const,
+    schema: { type: "object", properties: { module: { type: "string" } }, required: ["module"] },
+  }
+
+  test("a plain-object json_schema format does NOT survive Info encode (the original bug)", () => {
+    // Guards the invariant: a plain literal is unsafe. If a future refactor makes this pass, the
+    // instanceof gate has changed and the normalization below may no longer be load-bearing.
+    const result = encodeInfo(userWith(jsonSchemaFormat))
+    expect(Exit.isFailure(result)).toBe(true)
+  })
+
+  test("a decoded (normalized) json_schema format survives Info encode", () => {
+    const format = Schema.decodeUnknownSync(SessionV1.Format)(jsonSchemaFormat)
+    const result = encodeInfo(userWith(format))
+    expect(Exit.isSuccess(result)).toBe(true)
+    if (Exit.isSuccess(result)) {
+      const encoded = result.value as { format?: { type?: string } }
+      expect(encoded.format?.type).toBe("json_schema")
+    }
+  })
+
+  test("a constructed OutputFormatJsonSchema instance survives Info encode", () => {
+    const format = new SessionV1.OutputFormatJsonSchema({ ...jsonSchemaFormat, retryCount: 2 })
+    const result = encodeInfo(userWith(format))
+    expect(Exit.isSuccess(result)).toBe(true)
+  })
+
+  test("text format is instanceof-gated too: plain fails, decoded survives Info encode", () => {
+    // OutputFormatText is ALSO a Schema.Class, so normalization is load-bearing for both variants.
+    expect(Exit.isFailure(encodeInfo(userWith({ type: "text" })))).toBe(true)
+    const decoded = Schema.decodeUnknownSync(SessionV1.Format)({ type: "text" })
+    expect(Exit.isSuccess(encodeInfo(userWith(decoded)))).toBe(true)
+  })
+
+  // Read-path repair: rows persisted BEFORE the d6c325e write fix still hold a plain-object format on
+  // disk. MessageV2.normalizeFormat coerces them to instances when hydrating, so the messages endpoint
+  // can encode the response instead of throwing "Expected OutputFormatJsonSchema" and crashing the
+  // renderer (the app "restart" on clicking such a subagent session).
+  describe("normalizeFormat (legacy stored-row repair)", () => {
+    test("coerces a stored plain-object json_schema format so the Info encodes", () => {
+      const repaired = MessageV2.normalizeFormat(userWith(jsonSchemaFormat))
+      expect(Exit.isSuccess(encodeInfo(repaired))).toBe(true)
+      expect((repaired.format as { retryCount?: number }).retryCount).toBe(2) // decoding default filled
+    })
+
+    test("coerces a stored plain-object text format so the Info encodes", () => {
+      const repaired = MessageV2.normalizeFormat(userWith({ type: "text" }))
+      expect(Exit.isSuccess(encodeInfo(repaired))).toBe(true)
+    })
+
+    test("is idempotent on an already-constructed instance", () => {
+      const instance = new SessionV1.OutputFormatJsonSchema({ ...jsonSchemaFormat, retryCount: 5 })
+      const repaired = MessageV2.normalizeFormat(userWith(instance))
+      expect(repaired.format).toBe(instance) // untouched
+      expect(Exit.isSuccess(encodeInfo(repaired))).toBe(true)
+    })
+
+    test("leaves a message with no format untouched", () => {
+      const noFormat = { ...userWith(undefined) }
+      delete (noFormat as { format?: unknown }).format
+      const repaired = MessageV2.normalizeFormat(noFormat)
+      expect((repaired as { format?: unknown }).format).toBeUndefined()
+      expect(Exit.isSuccess(encodeInfo(repaired))).toBe(true)
+    })
+  })
+})
+
+describe("structured-output.AssistantMessage", () => {
+  const baseAssistantMessage = {
+    id: MessageID.ascending(),
+    sessionID: SessionID.descending(),
+    role: "assistant" as const,
+    parentID: MessageID.ascending(),
+    modelID: "claude-3",
+    providerID: "anthropic",
+    mode: "default",
+    agent: "default",
+    path: { cwd: "/test", root: "/test" },
+    cost: 0.001,
+    tokens: { input: 100, output: 50, reasoning: 0, cache: { read: 0, write: 0 } },
+    time: { created: Date.now() },
+  }
+
+  test("assistant message accepts structured", () => {
+    const result = decodeAssistant({
+      ...baseAssistantMessage,
+      structured: { company: "Anthropic", founded: 2021 },
+    })
+    expect(Exit.isSuccess(result)).toBe(true)
+    if (Exit.isSuccess(result)) {
+      expect(result.value.structured).toEqual({ company: "Anthropic", founded: 2021 })
+    }
+  })
+
+  test("assistant message works without structured_output (optional)", () => {
+    const result = decodeAssistant(baseAssistantMessage)
+    expect(Exit.isSuccess(result)).toBe(true)
+  })
+})
+
+describe("structured-output.createStructuredOutputTool", () => {
+  test("creates tool with description", () => {
+    const tool = SessionPrompt.createStructuredOutputTool({
+      schema: { type: "object" },
+      onSuccess: () => {},
+    })
+
+    expect(tool.description).toContain("structured format")
+    expect(ToolInternal.has(tool)).toBe(true)
+  })
+
+  test("creates tool with schema as inputSchema", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        company: { type: "string" },
+        founded: { type: "number" },
+      },
+      required: ["company"],
+    }
+
+    const tool = SessionPrompt.createStructuredOutputTool({
+      schema,
+      onSuccess: () => {},
+    })
+
+    // AI SDK wraps schema in { jsonSchema: {...} }
+    expect(tool.inputSchema).toBeDefined()
+    const inputSchema = tool.inputSchema as any
+    expect(inputSchema.jsonSchema?.properties?.company).toBeDefined()
+    expect(inputSchema.jsonSchema?.properties?.founded).toBeDefined()
+  })
+
+  test("strips $schema property from inputSchema", () => {
+    const schema = {
+      $schema: "http://json-schema.org/draft-07/schema#",
+      type: "object",
+      properties: { name: { type: "string" } },
+    }
+
+    const tool = SessionPrompt.createStructuredOutputTool({
+      schema,
+      onSuccess: () => {},
+    })
+
+    // AI SDK wraps schema in { jsonSchema: {...} }
+    const inputSchema = tool.inputSchema as any
+    expect(inputSchema.jsonSchema?.$schema).toBeUndefined()
+  })
+
+  test("execute calls onSuccess with valid args", async () => {
+    let capturedOutput: unknown
+
+    const tool = SessionPrompt.createStructuredOutputTool({
+      schema: { type: "object", properties: { name: { type: "string" } } },
+      onSuccess: (output) => {
+        capturedOutput = output
+      },
+    })
+
+    expect(tool.execute).toBeDefined()
+    const testArgs = { name: "Test Company" }
+    const result = await tool.execute!(testArgs, {
+      toolCallId: "test-call-id",
+      messages: [],
+      abortSignal: undefined as any,
+    })
+
+    expect(capturedOutput).toEqual(testArgs)
+    expect(result.output).toBe("Structured output captured successfully.")
+    expect(result.metadata.valid).toBe(true)
+  })
+
+  test("AI SDK validates schema before execute - missing required field", async () => {
+    // Note: The AI SDK validates the input against the schema BEFORE calling execute()
+    // So invalid inputs never reach the tool's execute function
+    // This test documents the expected schema behavior
+    const tool = SessionPrompt.createStructuredOutputTool({
+      schema: {
+        type: "object",
+        properties: {
+          name: { type: "string" },
+          age: { type: "number" },
+        },
+        required: ["name", "age"],
+      },
+      onSuccess: () => {},
+    })
+
+    // The schema requires both 'name' and 'age'
+    expect(tool.inputSchema).toBeDefined()
+    const inputSchema = tool.inputSchema as any
+    expect(inputSchema.jsonSchema?.required).toContain("name")
+    expect(inputSchema.jsonSchema?.required).toContain("age")
+  })
+
+  test("AI SDK validates schema types before execute - wrong type", async () => {
+    // Note: The AI SDK validates the input against the schema BEFORE calling execute()
+    // So invalid inputs never reach the tool's execute function
+    // This test documents the expected schema behavior
+    const tool = SessionPrompt.createStructuredOutputTool({
+      schema: {
+        type: "object",
+        properties: {
+          count: { type: "number" },
+        },
+        required: ["count"],
+      },
+      onSuccess: () => {},
+    })
+
+    // The schema defines 'count' as a number
+    expect(tool.inputSchema).toBeDefined()
+    const inputSchema = tool.inputSchema as any
+    expect(inputSchema.jsonSchema?.properties?.count?.type).toBe("number")
+  })
+
+  test("execute handles nested objects", async () => {
+    let capturedOutput: unknown
+
+    const tool = SessionPrompt.createStructuredOutputTool({
+      schema: {
+        type: "object",
+        properties: {
+          user: {
+            type: "object",
+            properties: {
+              name: { type: "string" },
+              email: { type: "string" },
+            },
+            required: ["name"],
+          },
+        },
+        required: ["user"],
+      },
+      onSuccess: (output) => {
+        capturedOutput = output
+      },
+    })
+
+    // Valid nested object - AI SDK validates before calling execute()
+    const validResult = await tool.execute!(
+      { user: { name: "John", email: "john@test.com" } },
+      {
+        toolCallId: "test-call-id",
+        messages: [],
+        abortSignal: undefined as any,
+      },
+    )
+
+    expect(capturedOutput).toEqual({ user: { name: "John", email: "john@test.com" } })
+    expect(validResult.metadata.valid).toBe(true)
+
+    // Verify schema has correct nested structure
+    const inputSchema = tool.inputSchema as any
+    expect(inputSchema.jsonSchema?.properties?.user?.type).toBe("object")
+    expect(inputSchema.jsonSchema?.properties?.user?.properties?.name?.type).toBe("string")
+    expect(inputSchema.jsonSchema?.properties?.user?.required).toContain("name")
+  })
+
+  test("execute handles arrays", async () => {
+    let capturedOutput: unknown
+
+    const tool = SessionPrompt.createStructuredOutputTool({
+      schema: {
+        type: "object",
+        properties: {
+          tags: {
+            type: "array",
+            items: { type: "string" },
+          },
+        },
+        required: ["tags"],
+      },
+      onSuccess: (output) => {
+        capturedOutput = output
+      },
+    })
+
+    // Valid array - AI SDK validates before calling execute()
+    const validResult = await tool.execute!(
+      { tags: ["a", "b", "c"] },
+      {
+        toolCallId: "test-call-id",
+        messages: [],
+        abortSignal: undefined as any,
+      },
+    )
+
+    expect(capturedOutput).toEqual({ tags: ["a", "b", "c"] })
+    expect(validResult.metadata.valid).toBe(true)
+
+    // Verify schema has correct array structure
+    const inputSchema = tool.inputSchema as any
+    expect(inputSchema.jsonSchema?.properties?.tags?.type).toBe("array")
+    expect(inputSchema.jsonSchema?.properties?.tags?.items?.type).toBe("string")
+  })
+
+  test("toModelOutput returns text value", async () => {
+    const tool = SessionPrompt.createStructuredOutputTool({
+      schema: { type: "object" },
+      onSuccess: () => {},
+    })
+
+    expect(tool.toModelOutput).toBeDefined()
+    const modelOutput = await Promise.resolve(
+      tool.toModelOutput!({
+        toolCallId: "test-call-id",
+        input: {},
+        output: {
+          output: "Test output",
+        },
+      }),
+    )
+
+    expect(modelOutput.type).toBe("text")
+    if (modelOutput.type !== "text") throw new Error("expected text model output")
+    expect(modelOutput.value).toBe("Test output")
+  })
+
+  // Note: Retry behavior is handled by the AI SDK and the prompt loop, not the tool itself
+  // The tool simply calls onSuccess when execute() is called with valid args
+  // See prompt.ts loop() for actual retry logic
+})
+
+// P1: schema-aware system prompt — injects top-level field names so the model knows
+// the exact fields during extended-thinking (xhigh) reasoning, preventing the
+// infinite loop caused by the model guessing wrong field names (e.g. "summary" instead
+// of "module" for ResearchResult).
+describe("structured-output.buildStructuredOutputSystemPrompt", () => {
+  test("includes field names in the prompt", () => {
+    const result = SessionPrompt.buildStructuredOutputSystemPrompt({
+      type: "object",
+      properties: {
+        module: { type: "string" },
+        mechanism: { type: "string" },
+        keyFiles: { type: "array" },
+      },
+    })
+    expect(result).toContain("module")
+    expect(result).toContain("mechanism")
+    expect(result).toContain("keyFiles")
+    expect(result).toContain("StructuredOutput")
+  })
+
+  test("falls back gracefully when schema has no properties", () => {
+    const result = SessionPrompt.buildStructuredOutputSystemPrompt({ type: "object" })
+    expect(result).toContain("StructuredOutput")
+    // should not contain a field hint line
+    expect(result).not.toContain("Required fields:")
+  })
+
+  test("falls back gracefully for empty schema", () => {
+    const result = SessionPrompt.buildStructuredOutputSystemPrompt({})
+    expect(result).toContain("StructuredOutput")
+    expect(result).not.toContain("Required fields:")
+  })
+
+  test("uses ONLY exact field names, not descriptions or types", () => {
+    const result = SessionPrompt.buildStructuredOutputSystemPrompt({
+      type: "object",
+      properties: {
+        summary: { type: "string", description: "A long description here" },
+        findings: { type: "array" },
+      },
+    })
+    expect(result).toContain("summary")
+    expect(result).toContain("findings")
+    // should not leak the description text into the prompt
+    expect(result).not.toContain("A long description here")
+  })
+})
+
+describe("structured-output.buildStructuredOutputRuntimeTail", () => {
+  test("keeps schema and bounded finalizer guidance in one ephemeral tail", () => {
+    const result = SessionPrompt.buildStructuredOutputRuntimeTail(
+      {
+        type: "json_schema",
+        schema: {
+          type: "object",
+          properties: { findings: { type: "array" }, verdict: { type: "string" } },
+        },
+        retryCount: 1,
+      },
+      true,
+    )
+
+    expect(result).toContain("findings, verdict")
+    expect(result).toContain("bounded finalizer turn")
+  })
+
+  test("text turns add no volatile structured-output tail", () => {
+    expect(SessionPrompt.buildStructuredOutputRuntimeTail({ type: "text" }, false)).toBe("")
+  })
+
+  test("text-compatible finalizers remain bounded and forbid tool use", () => {
+    const result = SessionPrompt.buildStructuredOutputRuntimeTail({ type: "text" }, true, true)
+
+    expect(result).toContain("bounded finalizer turn")
+    expect(result).toContain("exactly one JSON value")
+    expect(result).toContain("No research")
+    expect(result).toContain("tool use")
+  })
+})
+
+// P0: extractSchemaTopLevelFields — utility that drives both the system-prompt injection
+// and the retry-cap corrective hint.
+describe("structured-output.extractSchemaTopLevelFields", () => {
+  test("returns top-level property names", () => {
+    const fields = SessionPrompt.extractSchemaTopLevelFields({
+      type: "object",
+      properties: { module: {}, mechanism: {}, keyFiles: {} },
+    })
+    expect(fields).toEqual(["module", "mechanism", "keyFiles"])
+  })
+
+  test("returns empty array when no properties", () => {
+    expect(SessionPrompt.extractSchemaTopLevelFields({ type: "object" })).toEqual([])
+    expect(SessionPrompt.extractSchemaTopLevelFields({})).toEqual([])
+  })
+
+  test("returns empty array for non-object/null schema", () => {
+    expect(SessionPrompt.extractSchemaTopLevelFields(null as any)).toEqual([])
+    expect(SessionPrompt.extractSchemaTopLevelFields(undefined as any)).toEqual([])
+  })
+})

@@ -1,0 +1,436 @@
+[
+  {
+    "ref_id": "strategy:gcp:cloud-run-concurrency-scaling",
+    "type": "strategy",
+    "title": "Tune Cloud Run concurrency and instance bounds for the workload shape",
+    "summary": "Set per-instance concurrency to match the app's parallelism, use minScale to defeat cold starts, and cap maxScale to bound cost and downstream load.",
+    "domains": [
+      "gcp",
+      "cloud_run",
+      "gke",
+      "bigquery",
+      "gcp_iam"
+    ],
+    "triggers": [
+      "cloud run",
+      "concurrency",
+      "min instances"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud.gcp"
+  },
+  {
+    "ref_id": "strategy:gcp:bigquery-partition-cluster-cost",
+    "type": "strategy",
+    "title": "Partition and cluster BigQuery tables to bound scanned bytes",
+    "summary": "Partition on a date/ingestion column and cluster on high-selectivity filters so queries prune data, then guard with maximum-bytes-billed.",
+    "domains": [
+      "gcp",
+      "cloud_run",
+      "gke",
+      "bigquery",
+      "gcp_iam"
+    ],
+    "triggers": [
+      "bigquery",
+      "partitioning",
+      "scanned bytes"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud.gcp"
+  },
+  {
+    "ref_id": "strategy:gcp:workload-identity-no-keys",
+    "type": "strategy",
+    "title": "Authenticate workloads with Workload Identity, never exported keys",
+    "summary": "Bind a Kubernetes/Cloud Run service identity to a Google service account so credentials are issued automatically instead of shipping JSON key files.",
+    "domains": [
+      "gcp",
+      "cloud_run",
+      "gke",
+      "bigquery",
+      "gcp_iam"
+    ],
+    "triggers": [
+      "workload identity",
+      "service account",
+      "no keys"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud.gcp"
+  },
+  {
+    "ref_id": "strategy:gcp:iam-binding-resource-hierarchy",
+    "type": "strategy",
+    "title": "Grant IAM at the lowest node in the resource hierarchy",
+    "summary": "Bind predefined roles to a principal at the project/dataset/bucket level rather than the organization, respecting policy inheritance.",
+    "domains": [
+      "gcp",
+      "cloud_run",
+      "gke",
+      "bigquery",
+      "gcp_iam"
+    ],
+    "triggers": [
+      "iam binding",
+      "predefined role",
+      "resource hierarchy"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud.gcp"
+  },
+  {
+    "ref_id": "strategy:gcp:gke-autopilot-vs-standard",
+    "type": "strategy",
+    "title": "Choose GKE Autopilot or Standard by operational ownership",
+    "summary": "Pick Autopilot when you want Google to manage nodes and pay per-pod, Standard when you need node-level control, then set requests so scheduling works.",
+    "domains": [
+      "gcp",
+      "cloud_run",
+      "gke",
+      "bigquery",
+      "gcp_iam"
+    ],
+    "triggers": [
+      "gke",
+      "autopilot",
+      "node pool"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud.gcp"
+  },
+  {
+    "ref_id": "strategy:gcp:gcs-uniform-access-cdn",
+    "type": "strategy",
+    "title": "Serve GCS with uniform bucket-level access and signed URLs",
+    "summary": "Enable uniform bucket-level access to disable per-object ACLs, control reads through IAM, and share privately via signed URLs or Cloud CDN.",
+    "domains": [
+      "gcp",
+      "cloud_run",
+      "gke",
+      "bigquery",
+      "gcp_iam"
+    ],
+    "triggers": [
+      "gcs bucket",
+      "uniform access",
+      "signed url"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud.gcp"
+  },
+  {
+    "ref_id": "methodology:gcp:iam-permission-error-triage",
+    "type": "methodology",
+    "title": "Triage a GCP permission error through inheritance and conditions",
+    "summary": "Use Policy Troubleshooter and the resource hierarchy to find the missing role at the right node before granting anything.",
+    "domains": [
+      "gcp",
+      "cloud_run",
+      "gke",
+      "bigquery",
+      "gcp_iam"
+    ],
+    "triggers": [
+      "permission denied",
+      "policy troubleshooter",
+      "iam triage"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud.gcp"
+  },
+  {
+    "ref_id": "methodology:gcp:bigquery-cost-optimization",
+    "type": "methodology",
+    "title": "Cut a BigQuery query's cost with dry-runs and the query plan",
+    "summary": "Measure bytes-scanned with --dry_run, read the execution plan stages, then add pruning, clustering, or materialization.",
+    "domains": [
+      "gcp",
+      "cloud_run",
+      "gke",
+      "bigquery",
+      "gcp_iam"
+    ],
+    "triggers": [
+      "bigquery cost",
+      "dry run",
+      "query plan"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud.gcp"
+  },
+  {
+    "ref_id": "methodology:gcp:cloud-run-cold-start-triage",
+    "type": "methodology",
+    "title": "Diagnose Cloud Run cold starts and latency",
+    "summary": "Separate scheduling cold start, container init time, and CPU-throttling-during-startup using request logs and the startup CPU boost.",
+    "domains": [
+      "gcp",
+      "cloud_run",
+      "gke",
+      "bigquery",
+      "gcp_iam"
+    ],
+    "triggers": [
+      "cloud run cold start",
+      "latency triage",
+      "startup boost"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud.gcp"
+  },
+  {
+    "ref_id": "methodology:gcp:vpc-sc-perimeter-debug",
+    "type": "methodology",
+    "title": "Debug a request blocked by a VPC Service Controls perimeter",
+    "summary": "Read the unique violation reason from the audit log and adjust ingress/egress rules or access levels rather than removing the perimeter.",
+    "domains": [
+      "gcp",
+      "cloud_run",
+      "gke",
+      "bigquery",
+      "gcp_iam"
+    ],
+    "triggers": [
+      "vpc service controls",
+      "perimeter",
+      "egress rule"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud.gcp"
+  },
+  {
+    "ref_id": "knowledge:gcp:iam-policy-inheritance-model",
+    "type": "knowledge",
+    "title": "GCP IAM resource hierarchy and policy inheritance",
+    "summary": "Explains how allow policies set at org/folder/project inherit downward, how the union of bindings applies, and the role of deny policies and conditions.",
+    "domains": [
+      "gcp",
+      "cloud_run",
+      "gke",
+      "bigquery",
+      "gcp_iam"
+    ],
+    "triggers": [
+      "iam inheritance",
+      "resource hierarchy",
+      "allow policy"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud.gcp"
+  },
+  {
+    "ref_id": "knowledge:gcp:bigquery-slot-model",
+    "type": "knowledge",
+    "title": "BigQuery slots, on-demand vs reservations, and pricing",
+    "summary": "Covers the slot as the unit of compute, on-demand bytes-billed vs flat-rate reservations, and how concurrency contends for slots.",
+    "domains": [
+      "gcp",
+      "cloud_run",
+      "gke",
+      "bigquery",
+      "gcp_iam"
+    ],
+    "triggers": [
+      "bigquery slots",
+      "reservation",
+      "on-demand pricing"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud.gcp"
+  },
+  {
+    "ref_id": "knowledge:gcp:cloud-run-execution-model",
+    "type": "knowledge",
+    "title": "Cloud Run request lifecycle, CPU allocation, and concurrency",
+    "summary": "Explains per-instance concurrency, CPU allocated only during requests vs always-on, autoscaling on concurrency, and the container contract.",
+    "domains": [
+      "gcp",
+      "cloud_run",
+      "gke",
+      "bigquery",
+      "gcp_iam"
+    ],
+    "triggers": [
+      "cloud run lifecycle",
+      "cpu allocation",
+      "request concurrency"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud.gcp"
+  },
+  {
+    "ref_id": "knowledge:gcp:gke-networking-identity",
+    "type": "knowledge",
+    "title": "GKE networking, metadata server, and Workload Identity plumbing",
+    "summary": "Explains how GKE pods reach Google APIs via the GKE metadata server, why node pools must enable the feature, and VPC-native IP allocation.",
+    "domains": [
+      "gcp",
+      "cloud_run",
+      "gke",
+      "bigquery",
+      "gcp_iam"
+    ],
+    "triggers": [
+      "gke networking",
+      "metadata server",
+      "ip aliasing"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud.gcp"
+  },
+  {
+    "ref_id": "skill:gcp:bind-workload-identity",
+    "type": "skill",
+    "title": "Bind a workload to a service account via Workload Identity",
+    "summary": "Wire a GKE KSA or Cloud Run service to a least-privilege Google service account so no key file is ever exported.",
+    "domains": [
+      "gcp",
+      "cloud_run",
+      "gke",
+      "bigquery",
+      "gcp_iam"
+    ],
+    "triggers": [
+      "configure workload identity",
+      "ksa gsa binding",
+      "runtime service account"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud.gcp"
+  },
+  {
+    "ref_id": "skill:gcp:scope-bigquery-query-cost",
+    "type": "skill",
+    "title": "Bound a BigQuery query's cost before running it",
+    "summary": "Apply maximum_bytes_billed, partition filters, and a dry-run so an expensive query cannot silently scan terabytes.",
+    "domains": [
+      "gcp",
+      "cloud_run",
+      "gke",
+      "bigquery",
+      "gcp_iam"
+    ],
+    "triggers": [
+      "limit bigquery cost",
+      "maximum bytes billed",
+      "dry run query"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud.gcp"
+  }
+]

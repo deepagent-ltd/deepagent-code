@@ -1,0 +1,11 @@
+{
+  "ref_id": "skill:csharp_dotnet:aspnet-endpoint-smoke",
+  "type": "skill",
+  "description": "Validate changed endpoint behavior through status, body, headers, logs, and cancellation when available.",
+  "body": "Inputs: changed route or middleware and existing test harness. Actions: find WebApplicationFactory/TestServer or project route tests, run focused tests, or start local app only if repo convention supports it; check status codes, problem details, and error logs. Do not deploy or hit production. Verification is route-level pass/fail evidence. Use when C# / .NET Engineering work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: run the documented inspection and validation workflow; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "csharp_dotnet",
+  "scope_hint": "code.csharp-dotnet:skills",
+  "evidence_strength": "medium",
+  "provenance_tag": "code.csharp-dotnet:seed:dotnet_cli_csharp_docs:paraphrased",
+  "pack_id": "code.csharp-dotnet"
+}

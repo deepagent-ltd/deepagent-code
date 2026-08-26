@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:dq:drift-types",
+  "type": "knowledge",
+  "title": "Types of drift and what each means",
+  "description": "Data drift (input distribution shifts), concept drift (input-output relationship changes), and schema drift (structure changes) need different responses.",
+  "body": "Use when interpreting a monitoring alert. Covariate/data drift means inputs shifted but the underlying relationship holds; concept drift means the relationship between inputs and target changed (the model is now wrong even on familiar inputs); schema drift means structure changed (new/renamed columns). Each demands a different fix: investigate source vs retrain vs update the contract. Do not lump them together. Actions: classify the drift before responding. Validation signals include a drift metric plus evidence of which type. Risk boundary: misclassifying concept drift as benign covariate drift leaves a quietly-wrong model in production.",
+  "domain": "data_quality",
+  "scope_hint": "code.data-quality:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-quality",
+  "pack_id": "code.data-quality"
+}

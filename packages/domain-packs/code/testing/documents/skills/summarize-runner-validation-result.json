@@ -1,0 +1,11 @@
+{
+  "ref_id": "skill:testing:summarize-runner-validation-result",
+  "type": "skill",
+  "description": "Summarize validation output into a bounded runner-truth record without adding another model call.",
+  "body": "Use when a test, typecheck, lint, build, or smoke command has produced output that must be reported accurately. Do not use for changing tests, updating snapshots, or inferring broad validation from a missing command. Actions: capture command, cwd, exit code, pass/fail/timeout/skipped status, first actionable diagnostic, and whether output was truncated; compare against the user's requested scope; then answer with verified, unverified, or failed status. Validation signals include command log, structured runner result, stderr snippet, failing test name, and rerun after repair. Risk boundary: keep the summary bounded; do not paste full logs unless the user asks, and do not mark completion when the result is unverified.",
+  "domain": "testing",
+  "scope_hint": "code.testing:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.testing:docs38",
+  "pack_id": "code.testing"
+}

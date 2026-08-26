@@ -1,0 +1,69 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.database.timeseries",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "timeseries_db",
+      "influxdb",
+      "timescaledb"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.database.timeseries: hypertable chunking, downsampling, retention policy, continuous aggregates, tag cardinality"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "implement OAuth callback handling in the auth service"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "time series database hypertable chunk downsampling retention policy continuous aggregate tag cardinality time bucket compression",
+  "expected_pack_id": "code.database.timeseries",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "code.database.timeseries L3 validation smoke",
+    "signals": [
+      "chunk interval sized to query window",
+      "continuous aggregate refresh lag bounded",
+      "retention policy drops old chunks",
+      "cardinality stays under capacity budget"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "code.database.timeseries diagnosis smoke",
+    "signals": [
+      "tag cardinality explosion from unbounded label",
+      "missing retention policy growing storage unbounded",
+      "query scans all chunks (no time predicate)",
+      "late-arriving data outside chunk window",
+      "downsampling rollup gap"
+    ]
+  },
+  "source_refs": [
+    "source:timescaledb-docs:paraphrased",
+    "source:influxdb-schema-design:paraphrased"
+  ]
+}

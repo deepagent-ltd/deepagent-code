@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:gfx:diagnose-shader-compile-failure",
+  "type": "methodology",
+  "title": "Diagnose a shader compile or link failure",
+  "description": "Read the compiler/validation diagnostics and reconcile interface mismatches between pipeline stages.",
+  "body": "Steps: 1. Read the full compiler log; the first error usually causes the cascade. 2. Check stage interface matching: vertex outputs must match fragment inputs by location/name and type. 3. Verify uniform/descriptor bindings match the pipeline layout. 4. Confirm the shading language version and required extensions are declared. 5. Recompile through the validation/SPIR-V toolchain to catch undefined behavior the driver tolerates. Rollback point: before editing the pipeline layout. Validation: shaders compile and link clean and the validation layer reports no interface mismatch; do not silence a warning by deleting the offending output without checking the consumer stage.",
+  "domain": "graphics",
+  "scope_hint": "code.graphics:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.graphics",
+  "pack_id": "code.graphics"
+}

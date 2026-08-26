@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:refactor:small-steps-keep-bisectability",
+  "type": "knowledge",
+  "title": "Small steps keep refactors bisectable",
+  "description": "A sequence of small, individually-green refactor commits lets a regression be located by bisection, unlike one large mixed commit.",
+  "body": "Use when planning how to sequence a larger refactor. Each step that compiles and passes tests on its own keeps history bisectable, so if a regression appears later git bisect lands on a small, understandable change; one giant commit collapses that signal. Do not batch many unrelated structural edits into a single commit. Actions: refactor in small steps, run the suite between each, and commit at green points. Validation signals include each commit passing tests and a clean bisect when hunting a later regression. Risk boundary: a large mixed commit makes regressions expensive to locate; keep steps small enough that any one is easy to revert.",
+  "domain": "code",
+  "scope_hint": "code.refactor:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.refactor",
+  "pack_id": "code.refactor"
+}

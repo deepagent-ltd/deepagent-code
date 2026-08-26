@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:lic:track-redistribution-obligations",
+  "type": "strategy",
+  "title": "Track redistribution obligations per shipping channel",
+  "description": "Map each obligation (source offer, notice, modification disclosure) to the specific way the artifact is delivered.",
+  "body": "Use when the same code ships through more than one channel (binary download, container, SDK, hosted service). Do not assume an obligation that is satisfied for one channel is satisfied for all. Actions: for each copyleft or reciprocal component, list its trigger (conveying a binary, modifying the source, network use) and record how the matching obligation (written offer of source, notice inclusion, source publication) is met per channel. Validation signals include an obligations table linking component to channel to fulfillment evidence. Risk boundary: an obligation triggered by a channel with no recorded fulfillment is blocking; escalate before that channel ships.",
+  "domain": "license",
+  "scope_hint": "risk.license:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.license",
+  "pack_id": "risk.license"
+}

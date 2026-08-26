@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:vdb:plan-capacity-for-a-vector-index",
+  "type": "methodology",
+  "title": "Plan capacity for a vector index",
+  "description": "Estimate index memory from vector count, dimensionality, and index overhead before provisioning.",
+  "body": "Use when sizing hardware for a vector workload. Actions: compute raw vector bytes as rows times dimensions times 4 (float32), add the index structural overhead (HNSW graph edges scale with the connectivity parameter; IVFFlat adds list centroids), and include headroom for query-time work and growth. Compare the total to available RAM and decide between scaling up, quantizing, or sharding. Verify by building on a representative subset and extrapolating linearly. Validation signals include the measured index size matching the estimate and the build fitting within the memory budget. Risk boundary: underestimating HNSW overhead causes a build-time OOM that can take down the instance, so validate on a subset and leave explicit headroom before a full build.",
+  "domain": "vector_db",
+  "scope_hint": "code.database.vector:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.vector",
+  "pack_id": "code.database.vector"
+}

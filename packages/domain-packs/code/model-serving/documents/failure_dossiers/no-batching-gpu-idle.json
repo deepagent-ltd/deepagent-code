@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:serving:no-batching-gpu-idle",
+  "type": "failure_dossier",
+  "description": "Serving one request at a time so the accelerator idles between calls and throughput collapses while requests queue.",
+  "body": "Failure mode: the server processes requests serially with no batching, so the GPU sits idle between calls and a backlog forms even though per-request compute is fast. Detection signals: GPU utilization low while a request queue grows; throughput far below the accelerator's batched capacity; latency rising from queue wait, not compute. Do not serve a batch-efficient accelerator one request at a time. Safer fallback: enable dynamic or continuous batching with a max size and queue timeout, then confirm utilization and throughput rise without breaching p99.",
+  "domain": "model_serving",
+  "scope_hint": "code.model-serving:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.model-serving:human_authored",
+  "pack_id": "code.model-serving"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:pcb:differential-skew-common-mode",
+  "type": "failure_dossier",
+  "description": "A differential interface fails emissions or link tests because intra-pair length mismatch converts signal into common-mode noise.",
+  "body": "Failure mode: the two traces of a pair differ in length so their signals arrive skewed, producing common-mode current that radiates and degrades the link. Detection signals: common-mode emissions on the pair, link errors at higher rates, and a measured intra-pair skew above the budget. Do not add a common-mode choke as the only remedy while the skew is uncorrected. Safer fallback: tune the shorter trace at the point of mismatch to match lengths within the budget and re-verify skew and emissions.",
+  "domain": "pcb",
+  "scope_hint": "hardware.pcb:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.pcb:human_authored",
+  "pack_id": "hardware.pcb"
+}

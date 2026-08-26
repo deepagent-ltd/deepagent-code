@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:performance:tuned-on-noisy-machine",
+  "type": "failure_dossier",
+  "description": "Drawing performance conclusions from a shared or thermally throttled machine where background load swamps the signal.",
+  "body": "Failure mode: benchmarks run on a laptop under other load or a shared CI box with variable neighbors, so measured differences reflect environment noise, not the code change, producing irreproducible conclusions. Detection signals: results differ by run-of-day; CPU frequency scaling or throttling visible; rerun on a quiet host disagrees. Do not treat a single run on a noisy host as authoritative. Safer fallback: pin the environment (governor, isolation), record machine state, repeat runs, and flag environment variance rather than reporting the delta as a real regression or gain.",
+  "domain": "code",
+  "scope_hint": "code.performance:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.performance:human_authored",
+  "pack_id": "code.performance"
+}

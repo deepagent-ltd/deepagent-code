@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:android:anr-and-the-main-thread",
+  "type": "knowledge",
+  "title": "ANRs and the main thread",
+  "description": "Android shows an Application Not Responding dialog and may kill the app when the main thread is blocked too long, so UI-thread work must be trivial.",
+  "body": "Use when reasoning about responsiveness. The main (UI) thread handles input, drawing, and lifecycle callbacks; if it's blocked for roughly five seconds (or input isn't handled in time), the system raises an ANR and can terminate the app. Disk, network, database, and heavy computation are all too slow to run there. Do not do I/O or long work on the main thread. Actions: offload to coroutines/background dispatchers and keep UI-thread work to quick state updates. Validation signals include no ANRs in Play vitals and a clean StrictMode. Risk boundary: even occasionally-slow main-thread work (a cache miss, a big response) crosses the ANR threshold under bad conditions, producing user-visible freezes and crashes — keep the UI thread non-blocking by design.",
+  "domain": "android",
+  "scope_hint": "code.mobile.android:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mobile.android",
+  "pack_id": "code.mobile.android"
+}

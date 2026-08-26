@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:typescript:generated-types-hand-edited",
+  "type": "failure_dossier",
+  "description": "Hand-editing generated TypeScript declarations or SDK output creates drift from the source contract.",
+  "body": "Failure mode: generated .d.ts, SDK clients, GraphQL types, OpenAPI clients, or build outputs are edited manually to satisfy typecheck. The next generation overwrites the change or runtime behavior remains incompatible with declarations. Diagnostic signal: generated file headers, generator scripts, schema sources, or checked-in build artifacts changed without running the generator. Do not rely on the edited generated file as proof. Recovery is to modify the source schema or generator input, run the package generator, and validate consumers against regenerated output. Use when a proposed approach skips repository conventions, toolchain files, changed symbols, validation commands, and runtime output or claims success without domain evidence. Do not use this dossier as a positive implementation strategy; it is a do-not-use signal. Actions: block the shortcut, name the missing evidence, and switch to a safer methodology or ask for human approval. Validation signals include absence or contradiction in package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: treat repeated recurrence as a blocker when it can cause broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes.",
+  "domain": "typescript",
+  "scope_hint": "code.typescript:failure_dossiers",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.typescript:human_authored",
+  "pack_id": "code.typescript"
+}

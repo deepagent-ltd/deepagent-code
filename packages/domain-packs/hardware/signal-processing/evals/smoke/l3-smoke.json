@@ -1,0 +1,71 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "hardware.signal-processing",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "signal_processing",
+      "dsp",
+      "fft",
+      "filter",
+      "adc_dac"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for hardware.signal-processing: FFT/DFT, FIR/IIR filter design, fixed vs floating point, Nyquist sampling, windowing and spectral leakage, convolution"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "implement a REST API endpoint with request validation"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "fft dft fir iir filter design nyquist sampling windowing spectral leakage convolution fixed point quantization",
+  "expected_pack_id": "hardware.signal-processing",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "hardware.signal-processing L3 validation smoke",
+    "signals": [
+      "round-trip FFT then inverse FFT reconstructs the input within floating-point tolerance",
+      "designed filter magnitude response meets passband ripple and stopband attenuation spec",
+      "no aliased energy appears above the Nyquist frequency in the captured spectrum",
+      "fixed-point chain output matches the floating-point reference within the budgeted quantization error"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "hardware.signal-processing diagnosis smoke",
+    "signals": [
+      "unexpected high-frequency tone indicates aliasing from an undersampled or missing anti-alias filter",
+      "smeared spectral peaks across many bins point to rectangular-window leakage",
+      "growing or oscillating IIR output signals a pole outside the unit circle",
+      "sudden sign flips in fixed-point output reveal accumulator overflow and wraparound",
+      "a DC offset in every bin suggests a missing fftshift or mishandled zero bin"
+    ]
+  },
+  "source_refs": [
+    "source:ieee-1057-adc:paraphrased",
+    "source:oppenheim-dsp:paraphrased"
+  ]
+}

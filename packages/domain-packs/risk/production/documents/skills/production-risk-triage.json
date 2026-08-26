@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:risk.production:production-risk-triage",
+  "type": "skill",
+  "title": "Production Risk Triage",
+  "description": "Classify production impact, external-state writes, approval needs, validation gates, and rollback requirements.",
+  "body": "Inputs: user request, changed files, scripts, manifests, migrations, CI/release config, and repo signals. Use before production-sensitive edits or reviews. Do not deploy, migrate, or alter live resources. Procedure: identify live-user impact, durable state, target environment, reversibility, monitoring, and human owner. Output: risk class, required checks, blocked actions, and approval request. Validation signals include concrete paths and dry-run or test evidence. Use when Production Change Risk Controls work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: run the documented inspection and validation workflow; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "production",
+  "scope_hint": "risk.production:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.production",
+  "pack_id": "risk.production"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:gcp:gcs-uniform-access-cdn",
+  "type": "strategy",
+  "title": "Serve GCS with uniform bucket-level access and signed URLs",
+  "description": "Enable uniform bucket-level access to disable per-object ACLs, control reads through IAM, and share privately via signed URLs or Cloud CDN.",
+  "body": "Use when configuring a Cloud Storage bucket or sharing objects. Do not rely on legacy per-object ACLs or grant allUsers to share a single file. Actions: enable uniform bucket-level access so IAM alone governs reads, keep public access prevention on, generate V4 signed URLs for time-limited private sharing, and front public static assets with Cloud CDN backed by the bucket. Validation signals include the bucket showing uniform access enabled, public access prevention enforced, and a signed URL expiring as configured. Risk boundary: granting allUsers/allAuthenticatedUsers or disabling public access prevention is human-gated.",
+  "domain": "gcp",
+  "scope_hint": "platform.cloud.gcp:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.gcp",
+  "pack_id": "platform.cloud.gcp"
+}

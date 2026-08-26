@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:ui_frontend_vue:browser-visual-state-matrix",
+  "type": "strategy",
+  "description": "Exercise visible Vue states across data loading, empty, error, interactive, route, and responsive cases.",
+  "body": "Use for user-facing Vue components/pages. Do not finish with only compile success when layout or interaction changed. Render the page/component, interact with controls, check console/network errors, and sample affected viewports. Verify text does not overlap and state transitions update reactively. Risk boundary: generic a11y/web rules still come from code.frontend.web. Use when Vue Frontend Engineering work touches visible UI behavior, browser console output, DOM state, assets, viewport behavior, and interaction evidence. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: choose the smallest direction that preserves the domain contract; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include browser smoke, component tests, viewport screenshots, console/network checks, and accessibility assertions. Risk boundary: escalate or stop when the task involves visual regressions, inaccessible interaction, hydration mismatch, and browser-only failures, missing owner evidence, or live external state.",
+  "domain": "frontend_vue",
+  "scope_hint": "code.frontend.vue:strategys",
+  "evidence_strength": "medium",
+  "provenance_tag": "code.frontend.vue:seed:vue_nuxt_pinia_vite_docs:paraphrased",
+  "pack_id": "code.frontend.vue"
+}

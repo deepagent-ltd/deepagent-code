@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:hwpwr:power-aware-simulation",
+  "type": "methodology",
+  "title": "Run power-aware simulation across states",
+  "description": "Simulate with the power-intent file active so isolation, retention, and power-up sequencing are exercised.",
+  "body": "Use when verifying a design with multiple power states before tapeout. Do not rely on functional simulation alone, since it ignores isolation and retention behavior. Actions: load the power-intent file into the simulator, drive every power-down and wake transition, and verify state restores and isolation clamps correctly. Validation signals include correct retention restore after each cycle and no X propagation from gated domains. Risk boundary: an unexercised transition can hide a fatal corruption, so deny tapeout until every power-state transition is simulated.",
+  "domain": "power_design",
+  "scope_hint": "hardware.power:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.power",
+  "pack_id": "hardware.power"
+}

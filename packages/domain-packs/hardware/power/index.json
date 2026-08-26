@@ -1,0 +1,452 @@
+[
+  {
+    "ref_id": "strategy:hwpwr:apply-clock-gating",
+    "type": "strategy",
+    "title": "Apply clock gating to idle logic",
+    "summary": "Gate clocks to registers that hold their value so they stop toggling, using glitch-free gating cells.",
+    "domains": [
+      "power_design",
+      "clock_gating",
+      "low_power",
+      "voltage_domain",
+      "power_analysis"
+    ],
+    "triggers": [
+      "clock gating",
+      "icg cell",
+      "dynamic power",
+      "enable"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.power"
+  },
+  {
+    "ref_id": "strategy:hwpwr:power-gate-with-isolation",
+    "type": "strategy",
+    "title": "Power-gate domains with isolation and retention",
+    "summary": "Shut off a domain only after adding isolation cells on its outputs and retention on state that must survive.",
+    "domains": [
+      "power_design",
+      "clock_gating",
+      "low_power",
+      "voltage_domain",
+      "power_analysis"
+    ],
+    "triggers": [
+      "power gating",
+      "isolation",
+      "retention",
+      "power down"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.power"
+  },
+  {
+    "ref_id": "strategy:hwpwr:partition-voltage-domains",
+    "type": "strategy",
+    "title": "Partition the design into voltage domains",
+    "summary": "Group logic by performance need into separate voltage domains and place level shifters on every crossing.",
+    "domains": [
+      "power_design",
+      "clock_gating",
+      "low_power",
+      "voltage_domain",
+      "power_analysis"
+    ],
+    "triggers": [
+      "voltage domain",
+      "level shifter",
+      "multi-voltage",
+      "domain crossing"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.power"
+  },
+  {
+    "ref_id": "strategy:hwpwr:reduce-dynamic-power",
+    "type": "strategy",
+    "title": "Reduce dynamic power at the activity source",
+    "summary": "Cut switching activity through gating, operand isolation, and avoiding needless toggling on wide buses.",
+    "domains": [
+      "power_design",
+      "clock_gating",
+      "low_power",
+      "voltage_domain",
+      "power_analysis"
+    ],
+    "triggers": [
+      "dynamic power",
+      "switching activity",
+      "operand isolation",
+      "activity factor"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.power"
+  },
+  {
+    "ref_id": "strategy:hwpwr:manage-leakage",
+    "type": "strategy",
+    "title": "Manage static leakage with cell choice and gating",
+    "summary": "Use high-threshold cells on non-critical paths and power-gate idle regions to cut leakage current.",
+    "domains": [
+      "power_design",
+      "clock_gating",
+      "low_power",
+      "voltage_domain",
+      "power_analysis"
+    ],
+    "triggers": [
+      "leakage power",
+      "static power",
+      "threshold voltage",
+      "high vt"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.power"
+  },
+  {
+    "ref_id": "strategy:hwpwr:specify-power-intent",
+    "type": "strategy",
+    "title": "Capture power intent in UPF or CPF",
+    "summary": "Declare power domains, supply nets, isolation, level shifters, and retention in a power-intent file the tools enforce.",
+    "domains": [
+      "power_design",
+      "clock_gating",
+      "low_power",
+      "voltage_domain",
+      "power_analysis"
+    ],
+    "triggers": [
+      "upf",
+      "cpf",
+      "power intent",
+      "power domain"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.power"
+  },
+  {
+    "ref_id": "methodology:hwpwr:power-aware-simulation",
+    "type": "methodology",
+    "title": "Run power-aware simulation across states",
+    "summary": "Simulate with the power-intent file active so isolation, retention, and power-up sequencing are exercised.",
+    "domains": [
+      "power_design",
+      "clock_gating",
+      "low_power",
+      "voltage_domain",
+      "power_analysis"
+    ],
+    "triggers": [
+      "power aware simulation",
+      "power state",
+      "isolation",
+      "retention"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.power"
+  },
+  {
+    "ref_id": "methodology:hwpwr:estimate-power-budget",
+    "type": "methodology",
+    "title": "Estimate the power budget from activity and leakage",
+    "summary": "Combine dynamic power from switching activity with static leakage to project total power against the budget.",
+    "domains": [
+      "power_design",
+      "clock_gating",
+      "low_power",
+      "voltage_domain",
+      "power_analysis"
+    ],
+    "triggers": [
+      "power budget",
+      "dynamic power",
+      "leakage",
+      "activity"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.power"
+  },
+  {
+    "ref_id": "methodology:hwpwr:analyze-ir-drop",
+    "type": "methodology",
+    "title": "Analyze IR drop across the power grid",
+    "summary": "Check that the supply voltage reaching each block stays within droop limits under peak switching current.",
+    "domains": [
+      "power_design",
+      "clock_gating",
+      "low_power",
+      "voltage_domain",
+      "power_analysis"
+    ],
+    "triggers": [
+      "ir drop",
+      "power grid",
+      "droop",
+      "power delivery"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.power"
+  },
+  {
+    "ref_id": "methodology:hwpwr:verify-retention-sequencing",
+    "type": "methodology",
+    "title": "Verify retention and power-up sequencing",
+    "summary": "Confirm save and restore controls and supply sequencing keep state correct across power cycles.",
+    "domains": [
+      "power_design",
+      "clock_gating",
+      "low_power",
+      "voltage_domain",
+      "power_analysis"
+    ],
+    "triggers": [
+      "retention",
+      "save restore",
+      "power-up sequence",
+      "supply ordering"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.power"
+  },
+  {
+    "ref_id": "knowledge:hwpwr:dynamic-vs-static-power",
+    "type": "knowledge",
+    "title": "Dynamic versus static power components",
+    "summary": "Dynamic power scales with activity, capacitance, and voltage squared, while static power comes from transistor leakage.",
+    "domains": [
+      "power_design",
+      "clock_gating",
+      "low_power",
+      "voltage_domain",
+      "power_analysis"
+    ],
+    "triggers": [
+      "dynamic power",
+      "static power",
+      "leakage",
+      "capacitance"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.power"
+  },
+  {
+    "ref_id": "knowledge:hwpwr:isolation-and-level-shifter-roles",
+    "type": "knowledge",
+    "title": "Roles of isolation cells and level shifters",
+    "summary": "Isolation cells clamp signals leaving a powered-down domain, while level shifters translate between voltage domains.",
+    "domains": [
+      "power_design",
+      "clock_gating",
+      "low_power",
+      "voltage_domain",
+      "power_analysis"
+    ],
+    "triggers": [
+      "isolation cell",
+      "level shifter",
+      "domain crossing",
+      "clamp"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.power"
+  },
+  {
+    "ref_id": "knowledge:hwpwr:retention-register-behavior",
+    "type": "knowledge",
+    "title": "How retention registers preserve state",
+    "summary": "Retention registers keep a shadow copy of state on an always-on supply so the main supply can be gated off.",
+    "domains": [
+      "power_design",
+      "clock_gating",
+      "low_power",
+      "voltage_domain",
+      "power_analysis"
+    ],
+    "triggers": [
+      "retention register",
+      "shadow latch",
+      "always-on",
+      "state preservation"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.power"
+  },
+  {
+    "ref_id": "knowledge:hwpwr:ir-drop-mechanism",
+    "type": "knowledge",
+    "title": "IR drop and its effect on timing",
+    "summary": "Current through the power grid's resistance lowers the local supply voltage, slowing logic in high-current regions.",
+    "domains": [
+      "power_design",
+      "clock_gating",
+      "low_power",
+      "voltage_domain",
+      "power_analysis"
+    ],
+    "triggers": [
+      "ir drop",
+      "supply droop",
+      "grid resistance",
+      "timing"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.power"
+  },
+  {
+    "ref_id": "skill:hwpwr:estimate-dynamic-power",
+    "type": "skill",
+    "title": "Estimate dynamic power from activity and voltage",
+    "summary": "Combine switching activity, load capacitance, frequency, and voltage to estimate a block's dynamic power.",
+    "domains": [
+      "power_design",
+      "clock_gating",
+      "low_power",
+      "voltage_domain",
+      "power_analysis"
+    ],
+    "triggers": [
+      "dynamic power",
+      "activity factor",
+      "capacitance",
+      "voltage"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.power"
+  },
+  {
+    "ref_id": "skill:hwpwr:identify-domain-crossing-cell",
+    "type": "skill",
+    "title": "Identify the required cell for a domain crossing",
+    "summary": "Given the source and destination power state and voltage, decide whether isolation, level shifting, or both are needed.",
+    "domains": [
+      "power_design",
+      "clock_gating",
+      "low_power",
+      "voltage_domain",
+      "power_analysis"
+    ],
+    "triggers": [
+      "domain crossing",
+      "isolation",
+      "level shifter",
+      "power intent"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.power"
+  }
+]

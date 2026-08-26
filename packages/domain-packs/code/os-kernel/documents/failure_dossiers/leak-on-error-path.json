@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:kernel:leak-on-error-path",
+  "type": "failure_dossier",
+  "description": "Returning early from a kernel error path without freeing allocations or dropping references, leaking memory and refcounts over uptime.",
+  "body": "Failure mode: a function allocates memory or takes a reference, then hits an error and returns without unwinding, so each failure leaks; over uptime the system slowly exhausts memory or pins objects that can never be freed. Detection signals: kmemleak reports growing leaks; free memory declines under repeated failure injection; an error return path lacks the matching kfree/put. Do not return from an error path without cleanup. Safer fallback: use goto-based ordered unwind labels so each error path frees exactly what was acquired, audit every early return, and verify with kmemleak under allocation fault injection.",
+  "domain": "kernel",
+  "scope_hint": "code.os-kernel:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.os-kernel:human_authored",
+  "pack_id": "code.os-kernel"
+}

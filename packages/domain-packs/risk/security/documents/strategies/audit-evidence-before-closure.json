@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:security:audit-evidence-before-closure",
+  "type": "strategy",
+  "title": "Audit evidence before closure",
+  "description": "Security-sensitive work is not closed until the decision, validation, and residual risk are recorded in reviewable evidence.",
+  "body": "Use when a task changes access control, secret handling, input validation, dependency trust, or externally reachable behavior. Do not use to create verbose reports for harmless refactors. Actions: retain file/line evidence, test command output, denied-case observations, and explicit residual risk in the final report or handoff. Validation signals include reproducible commands, changed tests, and links to review artifacts or issue IDs. Risk boundary: missing evidence for a high-risk change is itself a blocker and should trigger human review.",
+  "domain": "security",
+  "scope_hint": "risk.security:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.security",
+  "pack_id": "risk.security"
+}
