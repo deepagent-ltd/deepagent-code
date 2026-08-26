@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:mcp:lint-tool-schema-contract",
+  "type": "skill",
+  "title": "Lint an MCP tool's input/output schema contract",
+  "description": "Inspect a tool definition's JSON Schema for required fields, types, constraints, and a structured result shape, reporting gaps that make the contract ambiguous.",
+  "body": "Use when reviewing or adding an MCP tool definition. Actions: parse the tool's input schema and check that parameters have explicit types, descriptions, required/optional markers, and value constraints; confirm the result contract specifies structured content and an error shape rather than free text. Report each underspecified field with its path. Do not pass a tool whose inputs are untyped 'object' or whose results are unstructured strings. This skill exposes capability only and must not register or invoke the tool without runtime permission. Validation signals include a schema-validation pass and a sample call whose arguments and result validate against the schema. Risk boundary: a tool with side effects but no constrained schema is unsafe to expose; flag it for human review rather than approving.",
+  "domain": "code",
+  "scope_hint": "code.mcp:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mcp",
+  "pack_id": "code.mcp"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:prompt:handle-locale-and-i18n",
+  "type": "strategy",
+  "title": "Handle locale and i18n in preparation",
+  "description": "Locale, language, and formatting are explicit inputs to assembly so the same template serves multiple locales correctly.",
+  "body": "Use when the system serves more than one language or region. Do not hardcode English phrasing, date/number formats, or a single locale into the template, and avoid assuming the input language equals the output language. Actions: take locale as an explicit parameter, select localized template fragments, format dates/numbers per locale, and specify the desired output language in the prompt. Validation signals include a test that switching locale yields correctly localized formatting and language without altering the instruction structure. Risk boundary: a hardcoded locale silently mis-serves other regions; treat locale as a first-class input, not an afterthought.",
+  "domain": "prompt_pipeline",
+  "scope_hint": "code.prompt-pipeline:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.prompt-pipeline",
+  "pack_id": "code.prompt-pipeline"
+}

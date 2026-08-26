@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:fpgatf:fix-hold-violations",
+  "type": "strategy",
+  "title": "Resolve hold violations with skew and buffering",
+  "description": "Address negative hold slack on short paths through clock-skew constraints or delay insertion, not by slowing the clock.",
+  "body": "Use when STA flags hold violations on fast, short paths. Do not assume a slower clock fixes hold, because hold violations are largely independent of clock period. Actions: identify the short paths, check for missing clock-skew or uncertainty constraints, and let the tool insert delay or adjust skew. Validation signals include positive hold slack on the flagged paths and no remaining hold warnings in the summary. Risk boundary: hold violations cause functional failure regardless of frequency, so treat any remaining hold violation as a blocking defect before bitstream.",
+  "domain": "fpga_toolflow",
+  "scope_hint": "hardware.fpga-toolflow:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.fpga-toolflow",
+  "pack_id": "hardware.fpga-toolflow"
+}

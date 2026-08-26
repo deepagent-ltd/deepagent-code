@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:python:pytest-fixtures-and-parametrize",
+  "type": "methodology",
+  "title": "Structure tests with fixtures and parametrize",
+  "description": "Replace per-test setup duplication and copy-pasted assertions with scoped fixtures and parametrized cases that report each input separately.",
+  "body": "Steps: 1. Move shared setup (temp dirs, clients, sample data) into fixtures in conftest.py and pick the narrowest scope that is still correct (function < module < session). 2. Convert near-duplicate test functions into one @pytest.mark.parametrize with ids= so each case fails independently. 3. Use yield fixtures for teardown so cleanup runs even on failure. 4. Run `pytest -q --maxfail=1 -p no:cacheprovider` and confirm each parametrized id appears. Rollback point: before widening a fixture scope (session-scoped mutable state leaks between tests). Validation: every parametrized case shows its own pass/fail line and a deliberately broken input fails exactly one id. Risk boundary: session-scoped fixtures that mutate shared state cause order-dependent flakes; record the scope choice and rerun with -p no:randomly disabled to confirm independence.",
+  "domain": "python",
+  "scope_hint": "code.python:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.python",
+  "pack_id": "code.python"
+}

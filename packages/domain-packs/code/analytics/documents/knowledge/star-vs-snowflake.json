@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:analytics:star-vs-snowflake",
+  "type": "knowledge",
+  "title": "Star versus snowflake schema",
+  "description": "How a denormalized star trades storage for query simplicity while a normalized snowflake trades joins for reuse.",
+  "body": "Use when shaping dimensions around a fact table. A star schema keeps each dimension denormalized into one wide table, so queries join the fact to flat dimensions simply; a snowflake normalizes dimensions into sub-tables, saving storage and easing maintenance at the cost of extra joins. Do not snowflake by reflex — on columnar warehouses the storage savings rarely justify the join complexity. Actions: prefer star for query simplicity, snowflake only where a large dimension is widely reused or volatile. Validation signals include join counts matching the chosen schema and a query plan without surprise fan-out. Risk boundary: over-normalized dimensions can fan out and double-count measures; if a join multiplies fact rows, treat the schema as the cause before patching SQL.",
+  "domain": "analytics",
+  "scope_hint": "code.analytics:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.analytics",
+  "pack_id": "code.analytics"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:chain:audit-contract-for-known-vulns",
+  "type": "skill",
+  "title": "Audit a contract for known vulnerabilities",
+  "description": "Scan a Solidity contract for reentrancy, access-control, gas, and external-call issues and report each with location.",
+  "body": "Use when reviewing a smart contract before deployment. Actions: read the contract and run available static analysis (Slither/Mythril); check for state changes after external calls, unguarded privileged functions, tx.origin auth, unbounded loops, unchecked external return values, and on-chain secrets. Report each finding with file/line, severity, and the safer pattern. Do not deploy or send transactions during the audit. This skill exposes capability only and must not broadcast to any network without runtime permission. Validation signals include a findings list mapped to checks-effects-interactions, access-control, and gas remedies. Risk boundary: reentrancy, missing access control, and on-chain secrets are critical; recommend blocking deployment and human review rather than auto-fixing.",
+  "domain": "blockchain",
+  "scope_hint": "code.blockchain:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.blockchain",
+  "pack_id": "code.blockchain"
+}

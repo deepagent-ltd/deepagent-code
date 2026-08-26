@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:redis:streams-vs-pubsub-vs-lists",
+  "type": "knowledge",
+  "title": "Streams vs pub/sub vs lists",
+  "description": "Pub/sub is fire-and-forget, lists are simple queues, and streams add persistence, groups, and replay.",
+  "body": "Use when choosing a Redis messaging primitive. Pub/sub delivers to currently-connected subscribers only and retains nothing — fine for ephemeral notifications, lossy for work. A list with LPUSH/BRPOP is a simple durable queue but lacks acknowledgements and consumer groups, so an entry popped by a crashed worker is lost. Streams persist entries, support consumer groups with per-entry acks (XACK), redelivery of unacked entries (XPENDING/XCLAIM), and replay from any id. Do not use pub/sub or a bare list for at-least-once work. Actions: pick streams when loss is unacceptable. Validation signals include an offline consumer still receiving backlogged stream entries. Risk boundary: a list-based queue without reclaim loses in-flight work on a worker crash.",
+  "domain": "redis",
+  "scope_hint": "code.database.redis:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.redis",
+  "pack_id": "code.database.redis"
+}

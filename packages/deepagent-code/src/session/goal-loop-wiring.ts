@@ -1,0 +1,1243 @@
+import { DateTime, Effect, Option, Schema } from "effect"
+import { AgentGateway } from "@deepagent-code/core/agent-gateway"
+import type { DocumentStore } from "@deepagent-code/core/deepagent/document-store"
+import type {
+  ControllerDeps,
+  GraderPorts,
+  RollbackPort,
+  StepExecutor,
+  StepExecutorResult,
+} from "@deepagent-code/core/deepagent/goal-loop"
+import { budgetNotice } from "@deepagent-code/core/deepagent/goal-loop"
+import type { PlanDoc } from "@deepagent-code/core/deepagent/plan-controller"
+import type { ValidationResult } from "@deepagent-code/core/deepagent/round-state"
+import { SessionV1 } from "@deepagent-code/core/v1/session"
+import { SessionV2 } from "@deepagent-code/core/session"
+import { SessionMessage } from "@deepagent-code/core/session/message"
+import { Prompt } from "@deepagent-code/core/session/prompt"
+import { ModelV2 } from "@deepagent-code/core/model"
+import { ProviderV2 } from "@deepagent-code/core/provider"
+import type * as LSPClient from "../lsp/client"
+import { LSP } from "../lsp/lsp"
+import { runPanel } from "../panel/orchestrator"
+import { buildPanelistRunner, parseReviewResult, REVIEWER_SCHEMA } from "../panel/panelist-runner"
+import { DEFAULT_QUORUM_POLICY, type PanelLens, type PanelVerdict } from "../agent/schema/panel"
+import { ReviewResult } from "../agent/schema/orchestration"
+import { RuntimeFlags } from "../effect/runtime-flags"
+import { SessionPrompt } from "./prompt"
+import { refuseLegacyExecution } from "./legacy-execution-zero"
+import { collectVolatileFacts, refreshWorldState } from "./context-ledger"
+import { SessionRevert } from "./revert"
+import { recordTurnEvidence } from "./v2-turn-evidence"
+import { Snapshot } from "../snapshot"
+import { Session } from "./session"
+import { Agent } from "../agent/agent"
+import { deriveSubagentSessionPermission } from "../agent/subagent-permissions"
+import { MessageID, PartID, SessionID } from "./schema"
+import { runValidationCommands } from "../deepagent/validation-exec"
+import type { GoalSteerRelay, PendingGoalSteer } from "./goal-driver"
+import { runSubagentPrompt, type StructuredOutputReceipt } from "../tool/task"
+import { extractStructuredText, validateStructuredOutput } from "../tool/task-structured-output"
+import { boundDegradedRawResult, makeDegradedStructuredOutput } from "../tool/task-structured-output-evidence"
+
+/**
+ * V3.9 §D / §F.3 — Goal Loop production WIRING.
+ *
+ * `goal-loop.ts` (core) is a PURE controller + deterministic Grader over INJECTED ports (§D.3/§D.6):
+ * it CANNOT import LSP / panel / reviewer / SessionPrompt (all deepagent-code). This module is the
+ * missing half — it assembles a real `GraderPorts` + `RollbackPort` + `StepExecutor` from the live
+ * services and hands back a `ControllerDeps` so a caller does `makeGoalLoop(deps)`. Everything here is
+ * gated by `flags.experimentalGoalLoop` (§F.3): flag OFF ⇒ `makeGoalLoopWiring` yields `null` and the
+ * goal loop is simply unavailable — no service is touched, no effect on base behaviour, and NO import
+ * of wiki/panel changes anything (the three V3.9 flags are independently rollback-safe).
+ *
+ * The real port mappings (§D.3 "不新造打分模型" — reuse existing capabilities):
+ *   tests_pass     → `runValidationCommands` (the SAME validation runner the multi-round loop uses);
+ *                    `pass = allPassed(results)`.
+ *   no_diagnostics → `LSP.Service.diagnostics()`, reduced to the single highest severity present,
+ *                    mapped to a label ("error"/"warning"/"info"/"hint"); null when none.
+ *   reviewer_clean → a reviewer subagent turn (ReviewResult schema); `pass` iff no finding strictly
+ *                    exceeds `maxSeverity`.
+ *   panel_approves → `runPanel(...)` with a real lens-prompted panelist runner (§D.7 关键决策点召集
+ *                    panel); `decision = verdict.decision`.
+ *   rollback       → `SessionRevert.Service`, best-effort (never fatal).
+ *   step executor  → ONE `SessionPrompt` turn against the `goal-worker` agent (§D.6 不越权: the turn
+ *                    runs through the NORMAL session/tool permission path — the loop never elevates).
+ *
+ * The subagent turns (panelist / reviewer / step) all funnel through ONE injected `SubagentTurnRunner`
+ * port (`makeTaskSubagentRunner` is the real one — it creates a child session with derived permissions
+ * and drives one turn via the SAME `SessionPrompt` ops the `task` tool uses). Keeping it a port means
+ * the integration test can stub the leaf LLM I/O while every aggregator (Grader, arbiter, controller)
+ * runs for real.
+ */
+
+// ---------------------------------------------------------------------------------------------------
+// Severity mapping — LSP DiagnosticSeverity (1=Error, 2=Warning, 3=Information, 4=Hint) → the label
+// strings goal-loop.ts's SEVERITY_RANK understands. Lower LSP number = MORE severe.
+// ---------------------------------------------------------------------------------------------------
+
+const LSP_SEVERITY_LABEL: Record<number, string> = { 1: "error", 2: "warning", 3: "info", 4: "hint" }
+
+/** The single highest severity present across the diagnostics map, or null when there are none. */
+export const highestDiagnosticSeverity = (
+  diagnostics: Record<string, readonly LSPClient.Diagnostic[]>,
+): string | null => {
+  let best: number | null = null // lower number = more severe
+  for (const issues of Object.values(diagnostics)) {
+    for (const d of issues) {
+      const sev = typeof d.severity === "number" ? d.severity : 1 // undefined severity ⇒ treat as Error
+      if (best === null || sev < best) best = sev
+    }
+  }
+  return best === null ? null : (LSP_SEVERITY_LABEL[best] ?? "error")
+}
+
+// V4.0.1 P1 §3.3 — render the live LSP diagnostics into a compact World State `diagnostics` slot value:
+// the highest severity present + the count of files with issues. Deliberately terse (a snapshot, not a
+// dump) so the tail stays cheap + byte-stable when diagnostics are unchanged. Empty map ⇒ "clean".
+const renderDiagnosticsSlot = (diagnostics: Record<string, readonly LSPClient.Diagnostic[]>): string => {
+  const filesWithIssues = Object.values(diagnostics).filter((issues) => issues.length > 0).length
+  if (filesWithIssues === 0) return "clean (no diagnostics)"
+  const worst = highestDiagnosticSeverity(diagnostics) ?? "error"
+  const total = Object.values(diagnostics).reduce((n, issues) => n + issues.length, 0)
+  return `highest severity: ${worst}; ${total} issue(s) across ${filesWithIssues} file(s)`
+}
+
+// review severity ordering for the reviewer_clean gate (higher = more severe).
+const REVIEW_SEVERITY_RANK: Record<string, number> = { low: 1, medium: 2, high: 3, critical: 4 }
+const reviewRank = (s: string): number => REVIEW_SEVERITY_RANK[s.trim().toLowerCase()] ?? 99
+
+// ---------------------------------------------------------------------------------------------------
+// SubagentTurnRunner — the single real seam that drives ONE subagent turn. Production wires
+// `makeTaskSubagentRunner`; tests inject a stub. Never throws — a failure resolves to `ok:false`.
+// ---------------------------------------------------------------------------------------------------
+
+export type SubagentTurnResult = {
+  readonly ok: boolean
+  /** Stable machine-readable failure reason when `ok` is false. */
+  readonly reason?: string
+  /** The structured output object when an output schema was requested and the turn produced one. */
+  readonly structured: unknown | undefined
+  /** Finalizer transport receipt. Degraded text is never exposed as a schema-valid structured value. */
+  readonly structuredOutput?: StructuredOutputReceipt
+  /** The final text part (free-text turns). */
+  readonly text: string
+  /** GROSS input+output+reasoning tokens for this turn (0 when unknown). */
+  readonly tokensUsed: number
+  /**
+   * V4.0.1 P2 §4.4 — the granular breakdown feeding the goal's NET-token ledger (used only when the goal's
+   * budgetTokenScope is "net"; gross ignores them). `inputTokens` is the FULL billed input (prefix + new
+   * context, cache-adjusted); `outputTokens` is generation (output+reasoning); `carriedPrefixTokens` is
+   * the provider-reported CACHED prefix (cache.read + cache.write) — the best cheaply-available
+   * stable-prefix figure. The net ledger accrues `outputTokens + max(0, inputTokens − carriedPrefixTokens)`
+   * so a long task's ledger no longer inflates linearly from the repeated static prefix each tick. All
+   * default to undefined for stub runners (⇒ the net path falls back to tokensUsed).
+   */
+  readonly inputTokens?: number
+  readonly outputTokens?: number
+  readonly carriedPrefixTokens?: number
+  /** dollar cost for this turn (0 when unknown). */
+  readonly cost: number
+  /**
+   * §D/§E F3 — the id of the session the turn actually ran in (the created child session for the real
+   * runner). The goal-worker StepExecutor uses it to MIRROR the worker's plan-state back into the goal
+   * plan doc after the turn. Undefined when the runner does not create/expose a session (stubs).
+   */
+  readonly sessionID?: string
+  /**
+   * A durable source-control ref containing this turn's filesystem result. Event-driven DAG execution
+   * passes it to dependent turns so validation/review observes the exact upstream change.
+   */
+  readonly continuationRef?: string
+  /** Durable artifacts produced by the runner in addition to its child session. */
+  readonly artifacts?: ReadonlyArray<string>
+}
+
+export type SubagentTurnInput = {
+  readonly agentType: string
+  readonly prompt: string
+  /** Exact durable goal identity for a goal-worker tick. */
+  readonly goalId?: string
+  /** Optional JSON Schema forcing a structured final turn (reviewer / panelist). */
+  readonly outputSchema?: Record<string, unknown>
+  /**
+   * V4.0 §C — the workspace/directory the turn should be rooted in, for a runner that is NOT bound to a
+   * fixed parent session (the event-driven Multi-Agent Runtime creates a fresh root session per event
+   * in the triggering event's workspace). The goal-loop runner ignores these (it parents to the goal
+   * session). `workspaceID` is a genuine "wrk"-id or a directory-fallback; `directory` is the worktree.
+   */
+  readonly workspaceID?: string
+  readonly directory?: string
+  /** Durable parent Session that owns every child turn and collaboration artifact for one V4 event. */
+  readonly parentSessionID?: string
+  /**
+   * Event-driven write turns fail closed when a dedicated worktree cannot be created. Read-only turns may
+   * deliberately degrade to the event directory.
+   */
+  readonly requiresWriteIsolation?: boolean
+  /** Durable git ref from an upstream DAG dependency. The isolated turn starts from this ref, not HEAD. */
+  readonly baseRef?: string
+  /**
+   * §F2 trace — the triggering event's correlationID. When present, the runner STAMPS it onto the child
+   * session's `metadata.correlationID`. This is one HALF of the §F2 back-half: `Observability.trace` READS
+   * it back (json_extract over session metadata, scoped to the same correlationID + routing key) and
+   * appends the child session as a "session" node, so the trace follows correlationID from the event down
+   * into the child session's activity (its message / tool-call turns). The stamp is inert on its own — the
+   * trace-query read is what makes it observable. The goal-loop runner leaves this unset (its turns belong
+   * to the goal session's own trace); the event-driven Multi-Agent Runtime passes `event.correlationID ??
+   * event.id` so a coordinated turn's child session joins back to the triggering event.
+   */
+  readonly correlationID?: string
+  /**
+   * §C1/§G — the executing agent's declared per-turn wall-clock ceiling (limits.maxTurnDurationMs). The
+   * event turn runner bounds the turn with THIS when set, falling back to its fixed default otherwise.
+   * The goal-loop runner ignores it (its turns are bounded by the goal ledger). Unset ⇒ default timeout.
+   */
+  readonly maxTurnDurationMs?: number
+  /**
+   * §D/§E F3 — optional hook invoked with the child session id AFTER the session is created but BEFORE
+   * the prompt turn runs. The goal-worker StepExecutor uses it to SEED the child session's plan-state
+   * from the goal plan doc, so the worker's `plan` tool edits build on (and stay bound to) the goal's
+   * plan. Reviewer/panelist turns do not pass it. Never throws (best-effort).
+   */
+  readonly prepareSession?: (sessionID: string) => void
+}
+
+export type SubagentTurnRunner = (input: SubagentTurnInput) => Effect.Effect<SubagentTurnResult>
+
+/**
+ * V4.0.1 P1 §3.3/§3.6 — the per-tick World State provider. Called ONCE at the start of each tick (never
+ * per turn — bounds the git/diagnostics IO cost, §3.3): it collects the latest volatile facts, snapshot-
+ * diffs them into the project's World State doc, and returns the RENDERED tail block (or "" when there is
+ * nothing to inject / on any defect — it is default-safe and never fails the tick). Production wires this
+ * to `collectVolatileFacts` + live LSP diagnostics + `refreshWorldState`; tests inject a stub or omit it.
+ */
+export type WorldStateProvider = () => Effect.Effect<string>
+
+// ---------------------------------------------------------------------------------------------------
+// GraderPorts builder — assembles the four evaluator ports from the live services + the turn runner.
+// Each port lives on the `never` channel (a port must resolve to a concrete result, never fail the
+// loop): every effect below is wrapped so a defect degrades to the SAFE (unmet) result.
+// ---------------------------------------------------------------------------------------------------
+
+export type GraderPortsDeps = {
+  /** Reuses the workspace validation runner (same as the multi-round loop). */
+  readonly runValidation: (
+    commands: readonly string[],
+  ) => Effect.Effect<{ readonly pass: boolean; readonly results?: readonly ValidationResult[] }>
+  /**
+   * Live LSP diagnostics reduced to the single highest severity label, or null when genuinely clean.
+   * `checked: false` signals the diagnostics could NOT be computed (see the port doc in goal-loop.ts) —
+   * the grader treats that as an unmet gap rather than a vacuous pass.
+   */
+  readonly diagnostics: () => Effect.Effect<{ readonly maxSeverity: string | null; readonly checked: boolean }>
+  /** Drives ONE reviewer / panelist subagent turn. */
+  readonly runTurn: SubagentTurnRunner
+  /** The Expert Panel question builder — the caller pins the concrete question / lens set. */
+  readonly panelQuestion: () => PanelQuestionInput
+  /** Parent session id for the panel's concurrency semaphore. */
+  readonly parentSessionID: string
+  /**
+   * §F.3 — whether the Expert Panel (§C) is enabled (`flags.experimentalExpertPanel`). The Goal Loop
+   * MAY convene a panel at a decision point, but the panel is an INDEPENDENTLY-gated capability: when
+   * it is off, a `panel_approves` criterion must NOT silently run the panel under the goal-loop flag —
+   * it fail-closes to `needs_human` (never a silent approve). This is what makes the two flags
+   * independently rollback-safe: goal_loop can run with panel_approves criteria while the panel is off,
+   * and it degrades to human escalation rather than coupling the two flags.
+   */
+  readonly expertPanelEnabled: boolean
+}
+
+/** A minimal panel question the goal loop convenes at a decision point (§D.7 ×C). */
+export type PanelQuestionInput = {
+  readonly question: string
+  readonly codeRefs: readonly string[]
+  readonly lenses: readonly PanelLens[]
+  readonly maxRounds?: number
+}
+
+// §C: parseReviewResult / REVIEWER_SCHEMA / the panelist runner are shared with the standalone Expert
+// Panel entry via `panel/panelist-runner.ts` (single source of truth for how a lens panelist is driven
+// and how its ReviewResult maps to a PanelOpinion). This module keeps only the goal-loop-specific glue.
+
+// Catch BOTH typed failures AND defects (die) so a port always resolves to a concrete result and
+// never crashes the loop (the ports live on the `never` channel — see goal-loop.ts). `orElseSucceed`
+// alone only handles typed failures, not defects (e.g. a rejected Effect.promise from the runner).
+const safe = <A>(effect: Effect.Effect<A, unknown>, fallback: A): Effect.Effect<A> =>
+  effect.pipe(Effect.catchCause(() => Effect.succeed(fallback)))
+
+export const buildGraderPorts = (deps: GraderPortsDeps): GraderPorts => ({
+  runTests: (commands) => safe(deps.runValidation(commands), { pass: false }),
+  // A defect fallback is UNKNOWN, not clean: checked:false so the grader counts it as an unmet gap
+  // rather than vacuously satisfying no_diagnostics (the fail-open this replaced).
+  diagnostics: () => safe(deps.diagnostics(), { maxSeverity: null, checked: false }),
+  reviewerClean: (maxSeverity) =>
+    safe(
+      deps
+        .runTurn({
+          agentType: "reviewer",
+          prompt: `Review the current changes for the active goal. Report any finding whose severity exceeds "${maxSeverity}". Be adversarial and concrete.`,
+          outputSchema: REVIEWER_SCHEMA,
+        })
+        .pipe(
+          Effect.map((turn) => {
+            const review = parseReviewResult(turn.structured)
+            if (review == null) return { pass: false } // no confirmable clean result ⇒ NOT clean
+            const worst = review.findings.reduce((r, f) => Math.max(r, reviewRank(f.severity)), 0)
+            return { pass: worst <= reviewRank(maxSeverity) }
+          }),
+        ),
+      { pass: false },
+    ),
+  panelApproves: () =>
+    // §F.3: the panel is independently gated. When experimentalExpertPanel is OFF, do NOT convene a
+    // panel (that would couple the flags) — fail-closed to needs_human so the goal loop escalates to a
+    // human instead of silently approving or silently running a disabled capability.
+    !deps.expertPanelEnabled
+      ? Effect.succeed({ decision: "needs_human" })
+      : safe(
+          Effect.suspend(() => {
+            const q = deps.panelQuestion()
+            // The panelist runner is SHARED with the standalone Expert Panel entry (panelist-runner.ts):
+            // both convene identically-prompted lens panelists. deps.runTurn matches the PanelTurnRunner
+            // shape (agentType/prompt/outputSchema → { structured }).
+            return runPanel({
+              question: {
+                question: q.question,
+                codeRefs: q.codeRefs,
+                lenses: q.lenses,
+                maxRounds: q.maxRounds ?? 1,
+                policy: DEFAULT_QUORUM_POLICY,
+              },
+              runPanelist: buildPanelistRunner(deps.runTurn),
+              parentSessionID: deps.parentSessionID,
+            })
+          }).pipe(Effect.map((verdict: PanelVerdict) => ({ decision: verdict.decision }))),
+          // A panel that cannot run at all ⇒ escalate to a human, never a silent approve.
+          { decision: "needs_human" },
+        ),
+})
+
+// ---------------------------------------------------------------------------------------------------
+// StepExecutor + RollbackPort builders.
+// ---------------------------------------------------------------------------------------------------
+
+/**
+ * §D/§E F3 — the PLAN BRIDGE. The goal-worker runs in an isolated CHILD session (for permission
+ * derivation), but its `plan` tool reads/writes plan-state keyed by THAT child session id, while the
+ * Controller's grader reads the goal PLAN DOC from the store. Without a bridge the worker's plan edits
+ * never reach the graded plan (the §E F3 defect). This port makes the goal plan doc the single source
+ * of truth around each turn:
+ *   - `seedChildPlan(childId)`  : before the turn, copy the goal plan doc INTO the child's plan-state so
+ *                                 the worker's plan tool builds on the real plan (getPlan/setPlan hit it).
+ *   - `mirrorChildPlan(childId)`: after the turn, copy the child's resulting plan-state BACK into the
+ *                                 goal plan doc (a new version), so the grader + version-idempotency see
+ *                                 the worker's progress. Returns true iff the goal plan doc changed.
+ * Both are best-effort and pure w.r.t. the store; production wires them to AgentGateway + the store.
+ */
+export type PlanBridge = {
+  readonly seedChildPlan: (childSessionID: string) => void
+  readonly mirrorChildPlan: (childSessionID: string) => void
+}
+
+/**
+ * Build a StepExecutor that drives ONE goal-worker turn per tick (§D.6 一 tick = 一 SessionPrompt turn).
+ * When `planBridgeFor` is supplied (production), it is called PER TICK with that tick's goal plan doc id
+ * to obtain a PlanBridge bound to the right goal (the Controller reuses one executor across goals, and
+ * each tick carries its own `planDocId`). The bridge seeds the child session from the goal plan before
+ * the turn and mirrors the worker's edits back after — so the worker maintains its OWN goal's plan
+ * (§E.3 acceptance) even though it runs in an isolated, permission-derived child session.
+ */
+export const buildStepExecutor =
+  (
+    runTurn: SubagentTurnRunner,
+    planBridgeFor?: (planDocId: string) => PlanBridge,
+    /**
+     * V4.1 §S1.3 — the goal-steer RELAY (shared with the driver). At prompt-build time the executor
+     * `drainForPrompt()`s any staged goal-directed guidance and threads it into the step prompt as a
+     * clearly-marked USER GUIDANCE section. Draining here (not in the driver) is what lets the driver
+     * stamp EXACTLY the steers a real tick threaded — a tick that short-circuits before the executor runs
+     * never drains, so nothing is consumed. Omitted ⇒ no goal-tick steering (base behaviour).
+     */
+    steerRelay?: GoalSteerRelay,
+    /**
+     * V4.0.1 P2 §4.4/§4.5 — the `goalBudgetSoftNotify` flag (default ON in production). When true and the
+     * tick's cost has crossed a `softNotifyFractions` tier, `budgetNotice` is threaded into THIS tick's
+     * step-prompt tail (cache-safe — the step prompt IS the child turn's user message). Omitted ⇒ treated as
+     * off (no notice), i.e. pre-V4.0.1 behaviour.
+     */
+    budgetSoftNotify?: boolean,
+    /**
+     * V4.0.1 P1 §3.3 — the per-tick World State provider. When supplied (production with
+     * `worldStateReinjection` ON), it is invoked once at tick start; its rendered block is threaded into the
+     * step-prompt TAIL (before the budget notice). Omitted / undefined ⇒ no World State (base behaviour),
+     * so `worldStateReinjection=false` is byte-for-byte the pre-V4.0.1 prompt.
+     */
+    worldStateProvider?: WorldStateProvider,
+  ): StepExecutor =>
+  (input) => {
+    const planBridge = planBridgeFor?.(input.planDocId)
+    // §S1.3: pull the staged goal-steer into THIS tick's prompt (cache-safe — it becomes the child
+    // turn's user-message tail via renderStepPrompt, never a system prefix). Draining marks it as
+    // threaded-this-tick on the relay so the driver stamps exactly these ids consumed after the tick.
+    const steer = steerRelay ? steerRelay.drainForPrompt() : []
+    // P2 §4.4: compute the tiered COST soft-notice for this tick (gated by goalBudgetSoftNotify). It rides
+    // the step-prompt TAIL (never the prefix), so prompt-cache stability is preserved.
+    const notice = budgetSoftNotify === true ? budgetNotice(input.ledger, input.limits) : null
+    // P1 §3.3: refresh + render the World State ONCE at tick start (default-safe ⇒ "" on any defect). It
+    // rides the tail (before the budget notice) so it reaches the goal-worker every tick (P3(d) recall).
+    return (worldStateProvider ? worldStateProvider() : Effect.succeed(""))
+      .pipe(
+        Effect.flatMap((worldState) =>
+          runTurn({
+            agentType: "goal-worker",
+            goalId: input.goalId,
+            prompt: renderStepPrompt({ ...input, steer, budgetNotice: notice, worldState }),
+            ...(planBridge ? { prepareSession: (childId: string) => planBridge.seedChildPlan(childId) } : {}),
+          }),
+        ),
+      )
+      .pipe(
+        Effect.map((turn): StepExecutorResult => {
+          // Mirror the worker's plan-state back into the goal plan doc AFTER the turn (best-effort; a
+          // bridge defect must not fail the tick — the grader simply sees no plan advance and the loop
+          // treats it as no-progress, which stall detection ultimately catches).
+          if (planBridge && turn.sessionID) {
+            try {
+              planBridge.mirrorChildPlan(turn.sessionID)
+            } catch {
+              /* best-effort mirror */
+            }
+          }
+          return {
+            tokensUsed: turn.tokensUsed,
+            // P2 §4.4: surface the granular breakdown so the loop's NET ledger (budgetTokenScope "net") can
+            // subtract the carried (cached) prefix. Harmless under "gross" (ignored there).
+            ...(turn.inputTokens != null ? { inputTokens: turn.inputTokens } : {}),
+            ...(turn.outputTokens != null ? { outputTokens: turn.outputTokens } : {}),
+            ...(turn.carriedPrefixTokens != null ? { carriedPrefixTokens: turn.carriedPrefixTokens } : {}),
+            cost: turn.cost,
+            // Surface the CHILD session the turn ran in so a critical-failure rollback reverts THAT
+            // session (where the file edits live), not the parent goal session (which has none). Without
+            // this the loop reports `rolled_back` while the child's mutations stay on disk.
+            ...(turn.sessionID ? { executedSessionId: turn.sessionID } : {}),
+            // A turn that could not run at all is a critical failure for THIS tick → the loop rolls back.
+            ...(turn.ok ? {} : { critical: true }),
+          }
+        }),
+        // A defect never propagates: report it as a critical failure (the loop rolls back, not throws).
+        Effect.catchCause(() => Effect.succeed({ tokensUsed: 0, cost: 0, critical: true })),
+      )
+  }
+
+/**
+ * §D/§E F3 — the production PlanBridge over the goal plan doc + session-state. `store` holds the goal
+ * plan doc (`planDocId`, body = JSON PlanDoc, the grader's source of truth). `agentMode` seeds the
+ * child's session-state row. Both directions are defensive: a malformed/absent plan doc, a missing
+ * child plan, or an unchanged mirror are all safe no-ops (they never throw and never write a spurious
+ * version — the plan authority compare-and-commit path is a no-op when the body is unchanged, INV-4).
+ */
+export const makePlanBridge = (input: {
+  readonly store: DocumentStore
+  readonly planDocId: string
+  readonly agentMode: string
+}): PlanBridge => ({
+  seedChildPlan: (childSessionID) => {
+    const doc = input.store.get(input.planDocId)
+    if (!doc) return
+    let plan: unknown
+    try {
+      plan = JSON.parse(doc.body)
+    } catch {
+      return // malformed goal plan → nothing to seed; the worker will just start fresh
+    }
+    // Ensure the child has a session-state row, then bind its plan to the goal plan so the worker's
+    // `plan` tool (getPlan/setPlan keyed on the child id) reads and extends the REAL goal plan.
+    AgentGateway.DeepAgentSessionState.getOrCreate(childSessionID, input.agentMode as never)
+    const current = AgentGateway.DeepAgentPlanStore.getPlanDoc(childSessionID)
+    const ref = AgentGateway.DeepAgentPlanStore.planDocRef(childSessionID)
+    const expected = current && ref ? { plan_id: current.plan_id, doc_id: ref.id, version: ref.version } : null
+    const operation = current ? ("replan" as const) : ("create" as const)
+    const admitted = AgentGateway.DeepAgentPlanController.buildPlanFromWriteInput(
+      childSessionID,
+      {
+        operation,
+        expected_plan_id: current?.plan_id ?? null,
+        expected_version: ref?.version ?? null,
+        ...(operation === "replan" ? { replan_reason: "runtime_goal_bridge_seed" } : {}),
+        goal: (plan as PlanDoc).goal,
+        assumptions: (plan as PlanDoc).assumptions,
+        steps: (plan as PlanDoc).steps.map((step) => ({
+          step_id: step.step_id,
+          title: step.title,
+          status: step.status,
+          acceptance: step.acceptance ?? undefined,
+          assigned_agent: step.assigned_agent ?? undefined,
+          note: step.note ?? undefined,
+        })),
+        active_step_id: (plan as PlanDoc).active_step_id,
+      },
+      current,
+      expected,
+    )
+    const seeded = {
+      ...admitted,
+      steps: admitted.steps.map((step) => ({
+        ...step,
+        evidence: (plan as PlanDoc).steps.find((source) => source.step_id === step.step_id)?.evidence ?? [],
+      })),
+    }
+    const committed = AgentGateway.DeepAgentPlanStore.compareAndCommitPlan({
+      sessionId: childSessionID,
+      expected,
+      candidate: seeded,
+      origin: "runtime_goal_bridge",
+    })
+    AgentGateway.DeepAgentSessionState.bindPlan(childSessionID, committed.plan, current, committed.changed)
+  },
+  mirrorChildPlan: (childSessionID) => {
+    const childPlan = AgentGateway.DeepAgentSessionState.getPlan(childSessionID)
+    if (childPlan == null) return // the worker never touched the plan this turn → nothing to mirror
+    const doc = input.store.get(input.planDocId)
+    if (!doc) return
+    let goalPlan: PlanDoc
+    try {
+      goalPlan = JSON.parse(doc.body) as PlanDoc
+    } catch {
+      return
+    }
+    const childSteps = new Map(childPlan.steps.map((step) => [step.step_id, step] as const))
+    const steps = goalPlan.steps.map((step) => {
+      const child = childSteps.get(step.step_id)
+      if (!child) return step
+      return {
+        ...step,
+        status: child.status,
+        evidence: child.evidence ?? step.evidence,
+        note: child.note ?? step.note,
+      }
+    })
+    const activeStepId =
+      childPlan.active_step_id &&
+      steps.some((step) => step.step_id === childPlan.active_step_id && step.status === "active")
+        ? childPlan.active_step_id
+        : (steps.find((step) => step.status === "active")?.step_id ?? null)
+    // Goal workers may advance existing steps, attach runtime evidence, and explain blockers. They may
+    // not rewrite the goal, add/remove/re-title steps, or alter acceptance/assignment contracts.
+    // The plan authority preserves the same identity/evidence contracts and keeps an unchanged
+    // restricted projection as a no-op.
+    const candidate = { ...goalPlan, steps, active_step_id: activeStepId }
+    const admitted = AgentGateway.DeepAgentPlanController.buildPlanFromWriteInput(
+      goalPlan.session_id,
+      {
+        operation: "advance",
+        expected_plan_id: goalPlan.plan_id,
+        expected_version: doc.version,
+        goal: goalPlan.goal,
+        assumptions: goalPlan.assumptions,
+        steps: candidate.steps.map((step) => ({
+          step_id: step.step_id,
+          title: step.title,
+          status: step.status,
+          acceptance: step.acceptance ?? undefined,
+          assigned_agent: step.assigned_agent ?? undefined,
+          note: step.note ?? undefined,
+        })),
+        active_step_id: candidate.active_step_id,
+      },
+      goalPlan,
+      { plan_id: goalPlan.plan_id, doc_id: doc.id, version: doc.version },
+    )
+    AgentGateway.DeepAgentPlanStore.compareAndCommitPlanDocument(input.store, {
+      sessionId: goalPlan.session_id,
+      expected: { plan_id: goalPlan.plan_id, doc_id: doc.id, version: doc.version },
+      candidate: { ...admitted, steps: candidate.steps },
+      origin: "runtime_goal_bridge",
+    })
+  },
+})
+
+/**
+ * Build the goal-worker's per-tick step prompt. §S1.3: when the driver staged mid-run user guidance
+ * (drained from the goal session's steer buffer BETWEEN ticks), it is rendered as a clearly-marked
+ * "USER GUIDANCE (mid-run steering)" section at the TAIL of the prompt. This is cache-safe by
+ * construction: the step prompt IS the child turn's user message, so the guidance lands in the model
+ * INPUT tail — never in any cached system prefix. Placing it FIRST (before the advance instruction)
+ * makes the controller/step-selection weigh it when picking the next step.
+ */
+export const renderStepPrompt = (input: {
+  readonly goalId: string
+  readonly sessionId: string
+  readonly planDocId: string
+  readonly goal: string
+  readonly activeStepId: string | null
+  readonly activeStep: {
+    readonly step_id: string
+    readonly title: string
+    readonly status: string
+    readonly acceptance?: string | null
+  } | null
+  /** Unmet criteria from the previous tick, supplied by the durable Goal Loop state. */
+  readonly graderFeedback?: readonly string[]
+  /** §S1.3 — mid-run steering drained from the goal session's steer buffer, threaded into this turn. */
+  readonly steer?: ReadonlyArray<PendingGoalSteer>
+  /**
+   * V4.0.1 P2 §4.4 — the tiered COST soft-notice for this tick (or null). Appended to the TAIL of the
+   * step prompt (never the prefix), so it lands in the model INPUT tail like the steering block and never
+   * perturbs any cached system prefix. It is a converge nudge, NOT a stop signal — the loop keeps ticking.
+   */
+  readonly budgetNotice?: string | null
+  /**
+   * V4.0.1 P1 §3.3 — the rendered World State block (latest volatile facts: open files / git /
+   * diagnostics / env). Injected into the step-prompt TAIL so it reaches the goal-worker EVERY tick
+   * (P3(d) goal-worker recall — this is the gate-free channel that bypasses shouldLoadBridge's general
+   * short-circuit by construction). Placed AFTER the advance instruction but BEFORE the budget notice:
+   * World State is larger + more stable (snapshot-diff byte-stable across ticks), the budget notice is
+   * short + volatile, so keeping the most volatile content LAST preserves near-end prompt-cache stability.
+   */
+  readonly worldState?: string | null
+}): string => {
+  const steerLines =
+    input.steer && input.steer.length > 0
+      ? [
+          `USER GUIDANCE (mid-run steering): the user sent the following while this goal was running.`,
+          `Weigh it BEFORE deciding the next step; it may add a requirement, skip work, or re-prioritise.`,
+          ...input.steer.map((s) => `- ${s.text}`),
+          ``,
+        ]
+      : []
+  const graderLines =
+    input.graderFeedback && input.graderFeedback.length > 0
+      ? [
+          `GRADER FEEDBACK FROM THE PREVIOUS TICK:`,
+          `Address every unmet criterion before claiming completion.`,
+          ...input.graderFeedback.map((gap) => `- ${gap}`),
+          ``,
+        ]
+      : []
+  // P1 §3.3: the World State block rides the TAIL after the advance instruction. It is snapshot-diff
+  // byte-stable across ticks, so it sits BEFORE the (short/volatile) budget notice to keep the most
+  // volatile content last (near-end prompt-cache stability).
+  const worldStateLines = input.worldState && input.worldState.trim() ? [``, input.worldState.trim()] : []
+  // P2 §4.4: the budget notice rides the TAIL, after the fixed advance instruction, so it perturbs
+  // neither the cached system prefix nor the (also cache-relevant) leading instruction lines.
+  const budgetLines = input.budgetNotice ? [``, `BUDGET NOTICE: ${input.budgetNotice}`] : []
+  return [
+    ...steerLines,
+    ...graderLines,
+    `Goal objective: ${input.goal}`,
+    `Advance goal ${input.goalId}. Execute exactly ONE plan step of real progress this turn.`,
+    input.activeStep
+      ? `The active step is "${input.activeStep.step_id}": ${input.activeStep.title}`
+      : `No step is currently active. Read the plan, pick the next pending step, mark it active, and make progress.`,
+    ...(input.activeStep?.acceptance ? [`Its frozen acceptance criterion is: ${input.activeStep.acceptance}`] : []),
+    input.activeStep
+      ? `Do not rewrite the goal or plan structure. Complete this existing step, mark it done, and set the next existing step active.`
+      : `Do not rewrite the goal or plan structure.`,
+    `Ground every "done" in a verifiable fact (a command you ran, a test that passed). Do NOT mark a step done to satisfy the gate.`,
+    ...worldStateLines,
+    ...budgetLines,
+  ].join("\n")
+}
+
+// ---------------------------------------------------------------------------------------------------
+// makeTaskSubagentRunner — the REAL turn runner (item 4 live wiring). One call = one SessionPrompt
+// turn against a freshly-created child session whose permissions are derived exactly as the `task`
+// tool derives them (§D.6 不越权: the child runs the normal session/tool permission path; the loop
+// never elevates). No recursion hazard: the loop drives ONE turn and returns — it does not itself run
+// inside a tool, and it never re-enters the goal loop.
+// ---------------------------------------------------------------------------------------------------
+
+export type TaskSubagentRunnerDeps = {
+  readonly sessions: Session.Interface
+  readonly agents: Agent.Interface
+  readonly sessionPrompt: SessionPrompt.Interface
+  /** The parent session; the child is parented here and inherits its deny rules + directory. */
+  readonly parentSessionID: SessionID
+  /** The model the child runs on (providerID/modelID) — mirrors the task tool inheriting the model. */
+  readonly model: { readonly providerID: string; readonly modelID: string }
+  /**
+   * Whether this caller may honor the subagent's PLAN_WRITE_OWN_GOAL capability. Defaults to false so
+   * generic and panel callers cannot accidentally grant plan writes. Goal start/resume and the cold goal
+   * tick port must opt in explicitly.
+   */
+  readonly allowPlanWriteCapability?: boolean
+  /** Labels the child session by its actual role rather than always calling it a goal-loop turn. */
+  readonly purpose?: "goal-loop" | "panel" | "generic"
+  /**
+   * §16.3 order 3 typed adapter seam: when provided, subagent turns are driven by V2 durable
+   * admission + explicit drain join instead of legacy prompt orchestration — plain-text turns as a
+   * single admission, structured-output turns as a research turn + bounded finalizer attempts with
+   * seam-side schema validation (the V2 runner has no provider-side format yet). Unwired callers keep
+   * both legacy paths unchanged.
+   */
+  readonly v2Session?: SessionV2.Interface
+  readonly v2Only?: boolean
+  /**
+   * §16.3 order 3 revert evidence: when provided alongside `v2Session`, each driven V2 turn captures
+   * a workspace baseline before admission and attaches the turn's file-change patch part to the last
+   * assistant message after the drain settles — on every outcome, since rollbacks fire exactly when
+   * turns fail (the core runner does not persist patch parts). Best-effort: evidence failure never
+   * fails the turn and is logged. The V2 user/assistant messages the core runner persists are
+   * mirrored into the V1 message/part store by the same evidence pass, so `updatePart` and
+   * SessionRevert can read the turn; without `snapshot` the messages are still mirrored, only the
+   * patch part is skipped.
+   */
+  readonly snapshot?: Snapshot.Interface
+}
+
+/**
+ * Production `SubagentTurnRunner`: create a child session (parent = goal session) with the subagent's
+ * derived permissions, then drive ONE `SessionPrompt.prompt` turn. Extracts the structured output (when
+ * an output schema was requested) or the final text, plus this turn's token/cost accounting. NEVER
+ * throws — any failure (unknown agent, prompt defect) resolves to `ok:false` so the Grader / executor
+ * degrade safely rather than crashing the loop.
+ */
+/**
+ * §16.3 order 3 caller wiring: the spread every `makeTaskSubagentRunner` call site uses to hand the
+ * optional V2 drive seam over — kept in one place so the snapshot-only-with-v2Session gating cannot
+ * drift across the six call sites.
+ */
+export const v2DriveDeps = (
+  v2Session: SessionV2.Interface | undefined,
+  snapshot?: Snapshot.Interface,
+  v2Only = false,
+) =>
+  v2Only || v2Session ? { v2Session, ...(snapshot ? { snapshot } : {}), v2Only } : {}
+
+// LEGACY-EXECUTION-ZERO: the single place every subagent-drive call site resolves the V2 seam. Under
+// the V2-only profile the drive is FORCED on (the experimental flag is irrelevant) and a composition
+// without the V2 session stack refuses at layer build instead of falling back to the legacy path.
+// Outside the profile the experimental flag keeps its existing semantics (flag OFF → legacy, ON but
+// stack absent → legacy).
+export const resolveV2SubagentDrive = Effect.fn("GoalLoopWiring.resolveV2SubagentDrive")(function* () {
+  const flags = yield* RuntimeFlags.Service
+  const v2Only = flags.coreV2Only
+  if (!flags.experimentalV2SubagentDrive && !v2Only)
+    return {
+      v2Only: false,
+      v2Session: undefined as SessionV2.Interface | undefined,
+      snapshot: undefined as Snapshot.Interface | undefined,
+    }
+  const v2Session = Option.getOrUndefined(yield* Effect.serviceOption(SessionV2.Service))
+  const snapshot = v2Session
+    ? Option.getOrUndefined(yield* Effect.serviceOption(Snapshot.Service))
+    : undefined
+  // LEGACY-EXECUTION-ZERO / r0: the refusal moves to TURN time (makeTaskSubagentRunner) — some
+  // layered scopes (e.g. HTTP route groups) assemble before the root stack is provided, so a
+  // build-time orDie here is a composition false positive; the execution-time typed refusal keeps
+  // the fail-closed contract at the point that matters.
+  return { v2Only, v2Session, snapshot }
+})
+
+export const makeTaskSubagentRunner =
+  (deps: TaskSubagentRunnerDeps): SubagentTurnRunner =>
+  (input) =>
+    Effect.gen(function* () {
+      // LEGACY-EXECUTION-ZERO / r0 turn-time gate: the V2-only profile demands the V2 stack at
+      // EXECUTION time (some layered scopes assemble before the root stack is provided).
+      if (deps.v2Only && !deps.v2Session)
+        return failedTurn("V2-only profile requires the SessionV2 stack in the composition root")
+      const next = yield* deps.agents.get(input.agentType)
+      if (!next) return failedTurn(`unknown agent type: ${input.agentType}`)
+      const parent = yield* deps.sessions.get(deps.parentSessionID)
+      const parentAgent = parent.agent
+        ? yield* deps.agents.get(parent.agent).pipe(Effect.orElseSucceed(() => undefined))
+        : undefined
+
+      const child = yield* deps.sessions.create({
+        parentID: deps.parentSessionID,
+        title: `${input.agentType} (${deps.purpose ?? "generic"})`,
+        agent: next.name,
+        // V2 execution resolves the model from the session, so the driver model is frozen at create
+        // time; legacy prompts keep passing the model explicitly, so this is inert for them.
+        ...(deps.v2Session
+          ? { model: { id: ModelV2.ID.make(deps.model.modelID), providerID: ProviderV2.ID.make(deps.model.providerID) } }
+          : {}),
+        // §F2 trace back-half — stamp the correlationID onto the child session's metadata; Observability
+        // .trace reads it back (json_extract) and appends this child as a "session" node, so the trace
+        // joins the child's activity back to the event. Omitted when the caller supplies none (goal-loop
+        // turns belong to the goal session's own trace).
+        ...(input.correlationID || deps.purpose === "goal-loop"
+          ? {
+              metadata: {
+                ...(input.correlationID ? { correlationID: input.correlationID } : {}),
+                ...(deps.purpose === "goal-loop" ? { goalID: input.goalId } : {}),
+              },
+            }
+          : {}),
+        permission: deriveSubagentSessionPermission({
+          parentSessionPermission: parent.permission ?? [],
+          parentAgent,
+          subagent: next,
+          // §E/§F.3: capability-bearing agents receive plan-write only when this runner's caller explicitly
+          // opts in. Goal start/resume and cold goal ticks pass true; panel/generic callers default false.
+          allowPlanWriteCapability: deps.allowPlanWriteCapability ?? false,
+        }),
+      })
+
+      // §D/§E F3: seed the child session BEFORE the turn (the goal-worker executor uses this to bind
+      // the child's plan-state to the goal plan doc). Best-effort — a defect here must not fail the turn.
+      if (input.prepareSession) {
+        try {
+          input.prepareSession(child.id)
+        } catch {
+          /* best-effort seed; the turn still runs */
+        }
+      }
+
+      const model = {
+        providerID: ProviderV2.ID.make(deps.model.providerID),
+        modelID: ModelV2.ID.make(deps.model.modelID),
+      }
+      const structuredOutput = { receipt: undefined as StructuredOutputReceipt | undefined }
+      // The V2 seam drives structured turns too: one research admission plus bounded finalizer
+      // attempts on the same child session; the legacy structured-finalizer stays for unwired callers.
+      const structuredV2 =
+        input.outputSchema && deps.v2Session
+          ? yield* driveStructuredTurnV2({
+              sessions: deps.sessions,
+              session: deps.v2Session,
+              sessionID: child.id,
+              parentSessionID: deps.parentSessionID,
+              agentName: next.name,
+              agentMode: next.mode,
+              model: deps.model,
+              ...(deps.snapshot ? { snapshot: deps.snapshot } : {}),
+              outputSchema: input.outputSchema,
+              // Template resolution is pure text shaping; non-text parts drop at the V2 boundary.
+              text: (yield* deps.sessionPrompt.resolvePromptParts(input.prompt))
+                .filter((part) => part.type === "text")
+                .map((part) => part.text)
+                .join("\n"),
+            })
+          : undefined
+      if (structuredV2) structuredOutput.receipt = structuredV2.receipt
+      const text = structuredV2
+        ? structuredV2.text
+        : input.outputSchema
+          ? yield* runSubagentPrompt({
+              ops: {
+                cancel: (sessionID) => deps.sessionPrompt.cancel(sessionID),
+                resolvePromptParts: (template) => deps.sessionPrompt.resolvePromptParts(template),
+                prompt: (promptInput) => deps.sessionPrompt.prompt(promptInput),
+              },
+              prompt: input.prompt,
+              sessionID: child.id,
+              model,
+              variant: undefined,
+              agent: next.name,
+              agentModeOverride: undefined,
+              outputSchema: input.outputSchema,
+              allowTextFallback: true,
+              runID: `${deps.purpose ?? "generic"}:${child.id}`,
+              onFinalized: (_messageID, receipt) =>
+                Effect.sync(() => {
+                  structuredOutput.receipt = receipt
+                }),
+              tools: {},
+              worktreeInfo: undefined,
+            })
+          : deps.v2Session
+            ? yield* drivePlainTurnV2({
+                sessions: deps.sessions,
+                session: deps.v2Session,
+                sessionID: child.id,
+                parentSessionID: deps.parentSessionID,
+                agentName: next.name,
+                agentMode: next.mode,
+                model: deps.model,
+                ...(deps.snapshot ? { snapshot: deps.snapshot } : {}),
+                // Template resolution is pure text shaping (not orchestration); non-text attachments are
+                // not part of the plain subagent turn contract and are dropped at the V2 boundary.
+                text: (yield* deps.sessionPrompt.resolvePromptParts(input.prompt))
+                  .filter((part) => part.type === "text")
+                  .map((part) => part.text)
+                  .join("\n"),
+              })
+            : yield* Effect.gen(function* () {
+              const result = yield* deps.sessionPrompt.prompt({
+                messageID: MessageID.ascending(),
+                sessionID: child.id,
+                model,
+                agent: next.name,
+                metadata: deps.purpose === "goal-loop" ? { deepagent: { goal_id: input.goalId } } : undefined,
+                parts: yield* deps.sessionPrompt.resolvePromptParts(input.prompt),
+              })
+              return result.parts.findLast((part) => part.type === "text")?.text ?? ""
+            })
+      const assistants = (yield* deps.sessions.messages({ sessionID: child.id })).filter(
+        (message): message is SessionV1.WithParts & { info: SessionV1.Assistant } => message.info.role === "assistant",
+      )
+      const decoded = input.outputSchema
+        ? Option.getOrUndefined(Schema.decodeUnknownOption(Schema.UnknownFromJsonString)(text))
+        : undefined
+      const structured = structuredOutput.receipt?.transport === "degraded_text" ? undefined : decoded
+      // GROSS throughput (input+output+reasoning) — the pre-V4.0.1 figure, always populated.
+      const tokens = assistants.reduce(
+        (total, message) =>
+          total + Math.max(0, message.info.tokens.input + message.info.tokens.output + message.info.tokens.reasoning),
+        0,
+      )
+      // V4.0.1 P2 §4.4 — the granular breakdown for the goal's NET-token ledger (used only under
+      // budgetTokenScope "net"). `info.tokens.input` is already the cache-ADJUSTED (non-cached) input in
+      // this codebase (session.ts:437 subtracts cache.read/write from the SDK's folded inputTokens), and
+      // `cache.read + cache.write` is the provider-reported CACHED prefix — the best cheaply-available
+      // stable-prefix figure for carriedPrefixTokens. The net ledger then accrues
+      // `output(+reasoning) + max(0, (input+cachedPrefix) − cachedPrefix)`, i.e. it charges only the
+      // non-cached input delta above the repeated stable prefix. `inputTokens` is reported as the FULL
+      // billed input (non-cached input + cached prefix) so the core subtraction is symmetric; on a cache
+      // miss (cache.read=0) carriedPrefixTokens is 0 and the full input counts (correct + monotonic).
+      const inputFull = assistants.reduce(
+        (total, message) =>
+          total +
+          Math.max(0, message.info.tokens.input + message.info.tokens.cache.read + message.info.tokens.cache.write),
+        0,
+      )
+      const outputNet = assistants.reduce(
+        (total, message) => total + Math.max(0, message.info.tokens.output + message.info.tokens.reasoning),
+        0,
+      )
+      const carriedPrefix = assistants.reduce(
+        (total, message) => total + Math.max(0, message.info.tokens.cache.read + message.info.tokens.cache.write),
+        0,
+      )
+      const cost = assistants.reduce(
+        (total, message) => total + (Number.isFinite(message.info.cost) ? message.info.cost : 0),
+        0,
+      )
+      return {
+        ok: true,
+        structured,
+        structuredOutput: structuredOutput.receipt,
+        text,
+        tokensUsed: tokens,
+        inputTokens: inputFull,
+        outputTokens: outputNet,
+        carriedPrefixTokens: carriedPrefix,
+        cost,
+        sessionID: child.id,
+      } satisfies SubagentTurnResult
+    }).pipe(Effect.catchCause(() => Effect.succeed(failedTurn("subagent turn failed"))))
+
+/**
+ * §16.3 order 3 typed adapter: one plain-text turn = one durable V2 admission plus one explicit drain
+ * join. Every driven turn is a fresh admission (new message ID), matching the legacy ascending-ID
+ * behavior — there is no idempotent replay identity at this seam. The final assistant text is read
+ * from the V2 message projection (ascending) after the drain settles. Known deltas versus the legacy
+ * path while the port completes: non-text template parts (file/agent references) are dropped at this
+ * boundary, and the per-prompt `deepagent.goal_id` attribution is not projected (the child session
+ * still carries the goalID metadata for traces).
+ */
+const drivePlainTurnV2 = Effect.fn("drivePlainTurnV2")(function* (input: {
+  readonly sessions: Session.Interface
+  readonly session: SessionV2.Interface
+  readonly sessionID: SessionID
+  readonly parentSessionID: SessionID
+  readonly agentName: string
+  readonly agentMode: string
+  readonly model: { readonly providerID: string; readonly modelID: string }
+  readonly text: string
+  readonly snapshot?: Snapshot.Interface
+}) {
+  // Revert evidence baseline: the core runner does not persist patch parts, so the seam captures the
+  // workspace state before admission and records the turn's aggregate patch part itself; without it,
+  // SessionRevert would silently miss file changes made by V2-driven turns. A capture failure must
+  // never fail the turn — the turn simply runs without revert evidence.
+  const baseline = input.snapshot
+    ? yield* input.snapshot
+        .track({ sessionId: input.sessionID })
+        .pipe(Effect.catchCause(() => Effect.succeed(undefined)))
+    : undefined
+  const turn = Effect.gen(function* () {
+    // Turn-delimited text read: structured turns drive several admissions on the SAME child session
+    // (research + finalizer attempts), and an attempt that produced no text must not inherit the
+    // previous turn's text — capture the projection frontier before admission and only read what
+    // this admission produced. Fresh single-turn sessions see an empty frontier (no behavior change).
+    const lastKnownID = (yield* input.session.messages({ sessionID: input.sessionID, order: "asc" })).at(-1)?.id
+    yield* input.session.prompt({
+      sessionID: input.sessionID,
+      prompt: new Prompt({ text: input.text }),
+      resume: false,
+    })
+    // Waiting on the drain does not interrupt it: if this turn fails or is interrupted, interrupt the
+    // child session best-effort so the orphaned drain cannot keep spending tokens/side effects after
+    // the loop already recorded the turn as failed. Idle interruption is a no-op per the V2 contract.
+    const interruptChild = input.session.interrupt(input.sessionID).pipe(Effect.ignore)
+    yield* input.session
+      .resume(input.sessionID)
+      .pipe(Effect.onError(() => interruptChild), Effect.onInterrupt(() => interruptChild))
+    const messages = yield* input.session.messages({ sessionID: input.sessionID, order: "asc" })
+    // Ascending IDs make the frontier comparison lexicographic.
+    const fresh = lastKnownID === undefined ? messages : messages.filter((message) => message.id > lastKnownID)
+    return (
+      fresh
+        .filter((message): message is SessionMessage.Assistant => message.type === "assistant")
+        .flatMap((message) => message.content)
+        .filter((part): part is SessionMessage.AssistantText => part.type === "text")
+        .at(-1)?.text ?? ""
+    )
+  })
+  // Rollbacks fire exactly when turns fail, and a failed/interrupted drain may already have produced
+  // partial file side effects — so evidence is attempted on every outcome, mirroring the legacy
+  // `ensuring(cleanup)` contract. Best-effort: failure is logged and never fails the turn. Mirroring
+  // runs even without a snapshot; the patch part needs both the baseline and the snapshot.
+  return yield* turn.pipe(
+    Effect.ensuring(
+      recordTurnEvidence({
+        sessions: input.sessions,
+        session: input.session,
+        sessionID: input.sessionID,
+        parentSessionID: input.parentSessionID,
+        agentName: input.agentName,
+        agentMode: input.agentMode,
+        model: input.model,
+        ...(baseline && input.snapshot ? { snapshot: input.snapshot, baseline } : {}),
+      }).pipe(
+        // Full-cause swallow: evidence is best-effort by contract — even a defect here must never
+        // fail the turn (typed errors and defects alike are logged).
+        Effect.ignoreCause({ log: "Warn", message: "v2 subagent turn evidence unavailable" }),
+      ),
+    ),
+  )
+})
+
+// Structured-output turn on V2 admissions. The V2 runner has no provider-side JSON-schema format
+// yet (core runner TODO), so enforcement moves to this seam while preserving the legacy contract:
+// one research turn, then up to two bounded finalizer attempts with correction feedback and
+// text-fallback extraction, degrading to a receipt-stamped raw dump when the final attempt fails.
+// Known deltas versus the legacy structured-finalizer: receipt transport is never "structured" (no
+// provider-enforced JSON), the provider-side retryCount repair is absent, wall-time budgeting rides
+// the V2 drain instead of an outer timeout, and the research result is the LAST assistant text part
+// only (legacy joins every non-synthetic part of the research message) — the reverse skew fails
+// closed, so the delta is recorded rather than closed here.
+const driveStructuredTurnV2 = Effect.fn("driveStructuredTurnV2")(function* (input: {
+  readonly sessions: Session.Interface
+  readonly session: SessionV2.Interface
+  readonly sessionID: SessionID
+  readonly parentSessionID: SessionID
+  readonly agentName: string
+  readonly agentMode: string
+  readonly model: { readonly providerID: string; readonly modelID: string }
+  readonly text: string
+  readonly outputSchema: Record<string, unknown>
+  readonly snapshot?: Snapshot.Interface
+}) {
+  const drive = (text: string) =>
+    drivePlainTurnV2({
+      sessions: input.sessions,
+      session: input.session,
+      sessionID: input.sessionID,
+      parentSessionID: input.parentSessionID,
+      agentName: input.agentName,
+      agentMode: input.agentMode,
+      model: input.model,
+      ...(input.snapshot ? { snapshot: input.snapshot } : {}),
+      text,
+    })
+  const research = yield* drive(input.text)
+  // Nothing to finalize without research text — mirrors the legacy research_output_missing failure
+  // instead of feeding an empty result into the finalizer loop.
+  if (!research.trim()) return yield* Effect.fail(new Error("research completed without a textual result"))
+  const boundedRaw = boundDegradedRawResult(research)
+  let correction: string | undefined
+  // Two bounded attempts (legacy FINALIZER_ATTEMPTS); the schema rides the prompt text on BOTH
+  // attempts because V2 has no provider-side format to carry it.
+  for (const attempt of [1, 2] as const) {
+    const finalizerText = [
+      attempt === 1
+        ? "Convert the persisted research result below into the requested StructuredOutput schema."
+        : "Return exactly one JSON value matching the output schema below. Do not use Markdown or explanatory prose.",
+      "Do not continue research and do not add facts that are absent from the result.",
+      "Preserve exact evidence identifiers, literals, paths, and values when the research result says they must appear in a schema field.",
+      ...(correction ? [`Previous validation error: ${correction}`] : []),
+      `<output_schema>${JSON.stringify(input.outputSchema)}</output_schema>`,
+      "<research_result>",
+      boundedRaw,
+      "</research_result>",
+    ].join("\n")
+    const candidate = extractStructuredText(yield* drive(finalizerText))
+    if (candidate !== undefined) {
+      const validationError = validateStructuredOutput(input.outputSchema, candidate)
+      if (!validationError)
+        return { text: JSON.stringify(candidate), receipt: { attempt, transport: "text_fallback" } as const }
+      correction = validationError.slice(0, 1_000)
+    } else correction = "Model did not return a JSON value."
+    if (attempt === 1) continue
+    const receipt = {
+      attempt,
+      transport: "degraded_text",
+      reason: candidate === undefined ? "structured_output_missing" : "structured_output_invalid",
+    } as const
+    return { text: makeDegradedStructuredOutput(boundedRaw, receipt), receipt }
+  }
+  return yield* Effect.die(new Error("unreachable: structured finalizer exhausted without settlement"))
+})
+
+// V2 turn evidence moved to v2-turn-evidence.ts (recordTurnEvidence) — shared by the subagent
+// drive and the r0 interactive path. See that module for the mirror contract.
+const failedTurn = (_reason: string): SubagentTurnResult => ({
+  ok: false,
+  structured: undefined,
+  text: "",
+  tokensUsed: 0,
+  cost: 0,
+})
+
+// ---------------------------------------------------------------------------------------------------
+// makeGoalLoopWiring — the flag-gated factory. Returns a full `ControllerDeps` a caller feeds to
+// `makeGoalLoop(deps)`, or `null` when `experimentalGoalLoop` is OFF (§F.3: flag off ⇒ the wiring is
+// never constructed and the goal loop is unavailable; base behaviour is untouched, and this module's
+// existence does not couple wiki/panel — the three flags are independent).
+// ---------------------------------------------------------------------------------------------------
+
+export type GoalLoopWiringInput = {
+  /** The core DocumentStore holding the goal's plan + persisted loop state + audit docs. */
+  readonly store: DocumentStore
+  /** The goal (parent) session id. */
+  readonly parentSessionID: string
+  /** Working directory the validation commands run in. */
+  readonly cwd: string
+  /** The real subagent turn runner (production: makeTaskSubagentRunner; tests: a stub). */
+  readonly runTurn: SubagentTurnRunner
+  /** Builds the Expert Panel question convened at a decision point (§D.7). */
+  readonly panelQuestion: () => PanelQuestionInput
+  /** Live LSP diagnostics accessor (production: LSP.Service.diagnostics). */
+  readonly diagnostics: () => Effect.Effect<{
+    readonly diagnostics: Record<string, readonly LSPClient.Diagnostic[]>
+    readonly checked: boolean
+  }>
+  /** Best-effort rollback (production: SessionRevert). */
+  readonly rollback: RollbackPort
+  /**
+   * §D/§E F3 — the AgentMode used to seed a goal-worker child session's state row when bridging the
+   * plan. Defaults to "general". Only affects the child's budget defaults; the plan itself is copied
+   * verbatim from the goal plan doc.
+   */
+  readonly agentMode?: string
+  readonly now?: () => number
+  /**
+   * V4.1 §S1.3 — the goal-steer RELAY shared with the driver's `runToCompletion`. When set, the step
+   * executor threads staged goal-directed steering into each tick's step prompt. The GoalManager creates
+   * ONE relay per goal run and passes the SAME instance here and to `runToCompletion`. Omitted ⇒ the goal
+   * loop runs with no goal-tick steering (unchanged behaviour).
+   */
+  readonly steerRelay?: GoalSteerRelay
+}
+
+/**
+ * Assemble `ControllerDeps` when `experimentalGoalLoop` is enabled; otherwise `null`. Reads the flag
+ * from the RuntimeFlags service so the gate is honoured at construction time.
+ */
+export const makeGoalLoopWiring = (
+  input: GoalLoopWiringInput,
+): Effect.Effect<ControllerDeps | null, never, RuntimeFlags.Service> =>
+  Effect.gen(function* () {
+    const flags = yield* RuntimeFlags.Service
+    if (!flags.experimentalGoalLoop) return null
+
+    const ports = buildGraderPorts({
+      runValidation: (commands) =>
+        Effect.promise(() => runValidationCommands(commands, input.cwd)).pipe(
+          Effect.map((results) => ({ pass: AgentGateway.DeepAgentValidation.allPassed(results), results })),
+        ),
+      diagnostics: () =>
+        input
+          .diagnostics()
+          .pipe(Effect.map((d) => ({ maxSeverity: highestDiagnosticSeverity(d.diagnostics), checked: d.checked }))),
+      runTurn: input.runTurn,
+      panelQuestion: input.panelQuestion,
+      parentSessionID: input.parentSessionID,
+      // §F.3: the panel is independently gated — pass its own flag through so panel_approves fail-closes
+      // to needs_human when the Expert Panel is disabled, instead of coupling to experimentalGoalLoop.
+      expertPanelEnabled: flags.experimentalExpertPanel,
+    })
+
+    // §D/§E F3: bind a PlanBridge to each tick's goal plan doc so the isolated worker's plan edits are
+    // mirrored into the graded plan doc (and seeded from it). Shares the SAME store the Controller reads.
+    const planBridgeFor = (planDocId: string): PlanBridge =>
+      makePlanBridge({ store: input.store, planDocId, agentMode: input.agentMode ?? "general" })
+
+    // P1 §3.3 + P3(d): the per-tick World State provider, gated by worldStateReinjection. It collects the
+    // cheap volatile facts (git + env) + the live LSP diagnostics summary, snapshot-diffs them into the
+    // project's World State doc, and renders the tail block. This is the GATE-FREE goal-worker recall path
+    // (P3(d)): it reaches the goal-worker via the step-prompt tail regardless of shouldLoadBridge's general
+    // short-circuit, WITHOUT flipping bridge.ts:117 (which would leak the handoff to all general subagents).
+    // Undefined when the flag is OFF ⇒ the executor threads no World State (byte-for-byte pre-V4.0.1).
+    const worldStateProvider: WorldStateProvider | undefined = flags.worldStateReinjection
+      ? () =>
+          Effect.gen(function* () {
+            const facts = yield* collectVolatileFacts(input.cwd)
+            const diag = yield* input
+              .diagnostics()
+              .pipe(Effect.catchCause(() => Effect.succeed({ diagnostics: {}, checked: false })))
+            const diagText = diag.checked ? renderDiagnosticsSlot(diag.diagnostics) : undefined
+            return yield* refreshWorldState({
+              workspacePath: input.cwd,
+              facts: { ...facts, ...(diagText != null ? { diagnostics: diagText } : {}) },
+            })
+          })
+      : undefined
+
+    return {
+      store: input.store,
+      ports,
+      // §S1.3: thread the shared goal-steer relay so each tick's step prompt carries staged user guidance.
+      // P2 §4.4: pass goalBudgetSoftNotify so the executor threads a tiered cost soft-notice into the tail.
+      // P1 §3.3: pass the World State provider so each tick re-injects the latest volatile facts (tail).
+      executor: buildStepExecutor(
+        input.runTurn,
+        planBridgeFor,
+        input.steerRelay,
+        flags.goalBudgetSoftNotify,
+        worldStateProvider,
+      ),
+      rollback: input.rollback,
+      now: input.now ?? (() => Date.now()),
+      // P2 §4.5: stamp the goal's token-accounting convention from goalNetTokenBudget at creation (start()
+      // reads this once; tick() thereafter obeys the persisted budgetTokenScope marker, never the flag).
+      netTokenBudget: flags.goalNetTokenBudget,
+    } satisfies ControllerDeps
+  })
+
+/**
+ * The production LSP-backed diagnostics accessor. Kept separate so `makeGoalLoopWiring` stays
+ * service-agnostic (testable with an injected diagnostics fn) while production reads live LSP.
+ */
+export const liveDiagnostics = (): Effect.Effect<
+  { readonly diagnostics: Record<string, readonly LSPClient.Diagnostic[]>; readonly checked: boolean },
+  never,
+  LSP.Service
+> =>
+  Effect.gen(function* () {
+    const lsp = yield* LSP.Service
+    // An LSP crash/timeout is UNKNOWN, not clean — surface checked:false so no_diagnostics does not
+    // vacuously pass on a broken LSP (the fail-open this replaced). A genuine (possibly empty) result is
+    // checked:true. NOTE: an empty map from a healthy LSP that simply has no client for the changed
+    // files still reports checked:true → "clean"; hardening that (assert a client covered the edited
+    // files) is a follow-up, but the defect path — the unconditional fail-open — is now closed.
+    return yield* lsp.diagnostics().pipe(
+      Effect.map((diagnostics) => ({ diagnostics, checked: true })),
+      Effect.catchCause(() =>
+        Effect.succeed({ diagnostics: {} as Record<string, LSPClient.Diagnostic[]>, checked: false }),
+      ),
+    )
+  })
+
+/** The production rollback port backed by SessionRevert (best-effort, never fatal). */
+export const liveRollback =
+  (
+    revert: SessionRevert.Interface,
+    latestMessageID: (sessionID: string) => Effect.Effect<string | null>,
+  ): RollbackPort =>
+  (rbInput) =>
+    Effect.gen(function* () {
+      const messageID = yield* latestMessageID(rbInput.sessionId).pipe(Effect.catchCause(() => Effect.succeed(null)))
+      if (messageID == null) return
+      yield* revert
+        .revert({ sessionID: SessionID.make(rbInput.sessionId), messageID: MessageID.make(messageID) })
+        .pipe(Effect.ignore)
+    }).pipe(Effect.catchCause(() => Effect.void))
+
+
+export * as GoalLoopWiring from "./goal-loop-wiring"

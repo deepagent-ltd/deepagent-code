@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:prompt:build-the-scrubbing-stage",
+  "type": "methodology",
+  "title": "Build the input scrubbing stage",
+  "description": "Construct normalization, length-bounding, control-stripping, and PII-redaction passes that run before assembly.",
+  "body": "Steps: 1. Normalize encoding and whitespace on incoming input. 2. Bound length and reject or truncate oversized input. 3. Strip or escape control characters and instruction-like delimiters. 4. Run PII detection and redact or tokenize matches, keeping the map outside the prompt. 5. Label the cleaned output as data. Rollback point: before relaxing any redaction rule. Validation: seeded PII is redacted, oversized input is bounded, and delimiter-laden input cannot break out of the data block, all checked before assembly.",
+  "domain": "prompt_pipeline",
+  "scope_hint": "code.prompt-pipeline:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.prompt-pipeline",
+  "pack_id": "code.prompt-pipeline"
+}

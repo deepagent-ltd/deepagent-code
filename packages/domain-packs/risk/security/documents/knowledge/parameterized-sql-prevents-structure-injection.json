@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:security:parameterized-sql-prevents-structure-injection",
+  "type": "knowledge",
+  "title": "Parameterized SQL separates data from query structure",
+  "description": "Parameterized statements protect only when user values remain bound parameters and are not used to build identifiers or clauses.",
+  "body": "Use when reviewing SQL or query-builder code that includes user-controlled input. Do not apply blindly to dynamic table names, column names, order clauses, or raw fragments. Actions: verify values are bound parameters, restrict dynamic identifiers to allowlists, and add payload tests for quotes, comments, and stacked statements. Validation signals include query logs or tests showing payloads treated as values. Risk boundary: raw query construction in a privileged path requires human review. Use when Security Risk Controls work touches trust boundaries, authorization decisions, dangerous sinks, secrets, and dependency execution. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: use the fact to constrain the change and test plan; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include negative security tests, server-side checks, sink payload tests, and secret scans. Risk boundary: escalate or stop when the task involves client-only controls, injection, credential leakage, permissive fallback, and unsafe dependency changes, missing owner evidence, or live external state.",
+  "domain": "injection",
+  "scope_hint": "risk.security:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.security",
+  "pack_id": "risk.security"
+}

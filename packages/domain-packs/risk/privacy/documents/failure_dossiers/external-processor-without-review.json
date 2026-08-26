@@ -1,0 +1,12 @@
+{
+  "ref_id": "failure_dossier:privacy:external-processor-without-review",
+  "type": "failure_dossier",
+  "title": "External processor without review",
+  "description": "Personal data is sent to a new third-party API, analytics tool, model provider, or support system without review.",
+  "body": "Failure mode: integration work adds outbound payloads or SDKs that receive personal data but treats the change like normal technical plumbing. Detection signals include new domains, SDK event calls, webhooks, or model API payloads containing identifiers. Remediation is minimization, config gate, and accountable review. Human gate is mandatory for external personal-data destinations. Use when a proposed approach skips personal-data classes, sinks, retention, consent, logs, prompts, and exports or claims success without domain evidence. Do not use this dossier as a positive implementation strategy; it is a do-not-use signal. Actions: block the shortcut, name the missing evidence, and switch to a safer methodology or ask for human approval. Validation signals include absence or contradiction in data inventory, redaction tests, retention checks, export/delete tests, and approval evidence. Risk boundary: treat repeated recurrence as a blocker when it can cause PII disclosure, consent bypass, retention drift, and unapproved processor expansion.",
+  "domain": "privacy",
+  "scope_hint": "risk.privacy:failure_dossiers",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.privacy",
+  "pack_id": "risk.privacy"
+}

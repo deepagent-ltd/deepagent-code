@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:elixir:blocking-genserver-loop",
+  "type": "failure_dossier",
+  "description": "A GenServer runs slow work inside handle_call, so its serial loop backs up and callers time out under load.",
+  "body": "Failure mode: a GenServer performs a slow external call, query, or CPU-heavy computation directly in handle_call/handle_cast, but the process handles messages one at a time, so the mailbox grows, every caller waits behind the slow one, and GenServer.call timeouts cascade across the system. Detection signals: Process.info shows a large message_queue_len; GenServer.call timeouts under load; latency scales with concurrency though the work is independent. Do not run slow work on the GenServer loop. Safer fallback: offload the work to a Task (Task.Supervisor) and reply asynchronously, use handle_continue for setup, or split the responsibility across processes/a pool, and load-test that the mailbox stays bounded.",
+  "domain": "elixir",
+  "scope_hint": "code.elixir:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.elixir:human_authored",
+  "pack_id": "code.elixir"
+}

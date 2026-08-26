@@ -1,0 +1,436 @@
+[
+  {
+    "ref_id": "strategy:aws:iam-least-privilege-conditions",
+    "type": "strategy",
+    "title": "Constrain IAM policies with explicit resources and condition keys",
+    "summary": "Scope every statement to named resource ARNs and add condition keys (aws:SourceArn, aws:PrincipalTag, StringEquals) instead of granting Action or Resource wildcards.",
+    "domains": [
+      "aws",
+      "iam",
+      "lambda_aws",
+      "ecs",
+      "cloudwatch"
+    ],
+    "triggers": [
+      "iam policy",
+      "least privilege",
+      "policy condition"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud.aws"
+  },
+  {
+    "ref_id": "strategy:aws:lambda-concurrency-coldstart",
+    "type": "strategy",
+    "title": "Tune Lambda concurrency and cold starts before scaling out",
+    "summary": "Use reserved concurrency to cap blast radius and provisioned concurrency to kill cold starts; trim VPC ENI and package weight before raising limits.",
+    "domains": [
+      "aws",
+      "iam",
+      "lambda_aws",
+      "ecs",
+      "cloudwatch"
+    ],
+    "triggers": [
+      "aws lambda",
+      "cold start",
+      "concurrency"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud.aws"
+  },
+  {
+    "ref_id": "strategy:aws:s3-bucket-policy-encryption",
+    "type": "strategy",
+    "title": "Lock S3 with Block Public Access, bucket policy, and default encryption",
+    "summary": "Keep account and bucket-level Block Public Access on, deny non-TLS and unencrypted PutObject in the bucket policy, and set SSE-KMS default encryption.",
+    "domains": [
+      "aws",
+      "iam",
+      "lambda_aws",
+      "ecs",
+      "cloudwatch"
+    ],
+    "triggers": [
+      "s3 bucket",
+      "bucket policy",
+      "encryption"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud.aws"
+  },
+  {
+    "ref_id": "strategy:aws:ecs-fargate-task-sizing",
+    "type": "strategy",
+    "title": "Right-size ECS Fargate tasks and protect placement",
+    "summary": "Match task cpu/memory to the supported Fargate combinations, reserve subnet IP headroom, and use health checks plus minimumHealthyPercent for safe rollouts.",
+    "domains": [
+      "aws",
+      "iam",
+      "lambda_aws",
+      "ecs",
+      "cloudwatch"
+    ],
+    "triggers": [
+      "ecs",
+      "fargate",
+      "task definition"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud.aws"
+  },
+  {
+    "ref_id": "strategy:aws:cloudwatch-alarms-metrics",
+    "type": "strategy",
+    "title": "Alarm on CloudWatch metrics with the right statistic and period",
+    "summary": "Choose statistic, period, and treatMissingData deliberately, use metric math for ratios, and emit structured EMF logs instead of scraping log text.",
+    "domains": [
+      "aws",
+      "iam",
+      "lambda_aws",
+      "ecs",
+      "cloudwatch"
+    ],
+    "triggers": [
+      "cloudwatch",
+      "alarm",
+      "metric"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud.aws"
+  },
+  {
+    "ref_id": "strategy:aws:cost-guardrails-region",
+    "type": "strategy",
+    "title": "Put cost guardrails on data transfer, NAT, and region choice",
+    "summary": "Budget the silent cost drivers (NAT data processing, cross-AZ/cross-region transfer, idle provisioned capacity) and pin region/AZ topology to cut egress.",
+    "domains": [
+      "aws",
+      "iam",
+      "lambda_aws",
+      "ecs",
+      "cloudwatch"
+    ],
+    "triggers": [
+      "cost guardrail",
+      "data transfer",
+      "region az"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud.aws"
+  },
+  {
+    "ref_id": "methodology:aws:iam-access-denied-triage",
+    "type": "methodology",
+    "title": "Triage an IAM AccessDenied from CloudTrail to the precise gap",
+    "summary": "Walk evaluation logic from explicit deny, to SCP/permission boundary, to identity vs resource policy, to condition-key mismatch before touching any grant.",
+    "domains": [
+      "aws",
+      "iam",
+      "lambda_aws",
+      "ecs",
+      "cloudwatch"
+    ],
+    "triggers": [
+      "access denied",
+      "iam triage",
+      "cloudtrail"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud.aws"
+  },
+  {
+    "ref_id": "methodology:aws:lambda-coldstart-investigation",
+    "type": "methodology",
+    "title": "Decompose Lambda latency into init, ENI, and execution",
+    "summary": "Separate Init Duration, VPC ENI attach, and handler time using X-Ray and Duration metrics before reaching for provisioned concurrency.",
+    "domains": [
+      "aws",
+      "iam",
+      "lambda_aws",
+      "ecs",
+      "cloudwatch"
+    ],
+    "triggers": [
+      "lambda latency",
+      "cold start triage",
+      "x-ray"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud.aws"
+  },
+  {
+    "ref_id": "methodology:aws:multi-az-failover-design",
+    "type": "methodology",
+    "title": "Design and verify multi-AZ failover for AWS workloads",
+    "summary": "Map each component to AZ-redundant equivalents, then prove failover by draining an AZ rather than assuming redundancy.",
+    "domains": [
+      "aws",
+      "iam",
+      "lambda_aws",
+      "ecs",
+      "cloudwatch"
+    ],
+    "triggers": [
+      "multi-az",
+      "failover",
+      "availability zone"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud.aws"
+  },
+  {
+    "ref_id": "methodology:aws:cost-anomaly-triage",
+    "type": "methodology",
+    "title": "Trace an AWS cost anomaly to a usage type",
+    "summary": "Drive from the bill down to a specific usage type and resource using Cost Explorer grouping and CUR before changing architecture.",
+    "domains": [
+      "aws",
+      "iam",
+      "lambda_aws",
+      "ecs",
+      "cloudwatch"
+    ],
+    "triggers": [
+      "cost anomaly",
+      "cost explorer",
+      "bill spike"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud.aws"
+  },
+  {
+    "ref_id": "knowledge:aws:iam-policy-evaluation-logic",
+    "type": "knowledge",
+    "title": "How IAM evaluates a request: deny, boundary, allow",
+    "summary": "Explains the order of explicit deny, SCPs, permission boundaries, session policies, and identity vs resource policies, and why an Allow can still be denied.",
+    "domains": [
+      "aws",
+      "iam",
+      "lambda_aws",
+      "ecs",
+      "cloudwatch"
+    ],
+    "triggers": [
+      "iam evaluation",
+      "explicit deny",
+      "permission boundary"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud.aws"
+  },
+  {
+    "ref_id": "knowledge:aws:lambda-execution-model",
+    "type": "knowledge",
+    "title": "Lambda execution environments, concurrency, and limits",
+    "summary": "Covers the warm execution environment lifecycle, reserved vs provisioned concurrency, burst limits, and how throttling surfaces as 429/TooManyRequests.",
+    "domains": [
+      "aws",
+      "iam",
+      "lambda_aws",
+      "ecs",
+      "cloudwatch"
+    ],
+    "triggers": [
+      "lambda concurrency",
+      "reserved concurrency",
+      "throttle"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud.aws"
+  },
+  {
+    "ref_id": "knowledge:aws:s3-consistency-storage-classes",
+    "type": "knowledge",
+    "title": "S3 consistency, storage classes, and lifecycle economics",
+    "summary": "Explains strong read-after-write consistency, storage-class tradeoffs (Standard/IA/Glacier), retrieval latency, and lifecycle transition costs.",
+    "domains": [
+      "aws",
+      "iam",
+      "lambda_aws",
+      "ecs",
+      "cloudwatch"
+    ],
+    "triggers": [
+      "s3 storage class",
+      "lifecycle",
+      "glacier"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud.aws"
+  },
+  {
+    "ref_id": "knowledge:aws:cloudwatch-metric-model",
+    "type": "knowledge",
+    "title": "CloudWatch metric resolution, dimensions, and math",
+    "summary": "Covers standard vs high-resolution metrics, dimension cardinality, percentile (extended) statistics, and metric-math expressions.",
+    "domains": [
+      "aws",
+      "iam",
+      "lambda_aws",
+      "ecs",
+      "cloudwatch"
+    ],
+    "triggers": [
+      "cloudwatch metric",
+      "high resolution",
+      "metric math"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud.aws"
+  },
+  {
+    "ref_id": "skill:aws:write-scoped-iam-policy",
+    "type": "skill",
+    "title": "Author a least-privilege IAM policy document",
+    "summary": "Produce a JSON policy scoped to exact actions, resource ARNs, and condition keys, then validate it with the policy simulator.",
+    "domains": [
+      "aws",
+      "iam",
+      "lambda_aws",
+      "ecs",
+      "cloudwatch"
+    ],
+    "triggers": [
+      "write iam policy",
+      "policy json",
+      "scoped permissions"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud.aws"
+  },
+  {
+    "ref_id": "skill:aws:configure-cloudwatch-alarm",
+    "type": "skill",
+    "title": "Configure a CloudWatch alarm that survives missing data",
+    "summary": "Create an alarm with the correct statistic, period, evaluation/datapoints-to-alarm, and treatMissingData, wired to an action.",
+    "domains": [
+      "aws",
+      "iam",
+      "lambda_aws",
+      "ecs",
+      "cloudwatch"
+    ],
+    "triggers": [
+      "create cloudwatch alarm",
+      "treat missing data",
+      "alarm action"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cloud.aws"
+  }
+]

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:finetune:adapter-base-mismatch",
+  "type": "failure_dossier",
+  "description": "An adapter is loaded or merged onto a different base revision or tokenizer than it was trained on.",
+  "body": "Failure mode: a LoRA adapter trained on one base revision and tokenizer is loaded onto a newer base or a re-tokenized model, so the low-rank updates misalign with the frozen weights and outputs degrade subtly. Detection signals: output quality below the training-time reference with no code change, and adapter metadata whose base id/revision or tokenizer hash does not match the serving model. Do not assume close revisions are interchangeable. Safer fallback: record the exact base revision and tokenizer hash in adapter metadata, validate compatibility before any load or merge, and run a parity check against a reference prompt set, denying the merge on mismatch.",
+  "domain": "fine_tuning",
+  "scope_hint": "code.fine-tuning:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.fine-tuning:human_authored",
+  "pack_id": "code.fine-tuning"
+}

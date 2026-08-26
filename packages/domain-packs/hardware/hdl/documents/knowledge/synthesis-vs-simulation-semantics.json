@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:hdl:synthesis-vs-simulation-semantics",
+  "type": "knowledge",
+  "title": "Synthesis vs simulation semantics",
+  "description": "Simulation models timing and X-values; synthesis maps to gates and ignores delays/initial blocks, so the two can legitimately disagree.",
+  "body": "Use when results differ between sim and hardware. Simulation honors #delays, initial blocks, and four-state (0/1/X/Z) logic; synthesis ignores delays/initial, infers hardware from supported constructs, and real gates have no X. Sources of mismatch: incomplete sensitivity lists, sim-only constructs, and X-pessimism. Do not trust a passing RTL sim as proof the gates work. Actions: use always_comb/always_ff, run gate-level sim or formal equivalence, and check reset X-handling. Validation signals include gate-level sim and equivalence-check pass. Risk boundary: deploying on RTL sim alone risks a silicon-only bug; require gate-level or formal sign-off.",
+  "domain": "hdl",
+  "scope_hint": "hardware.hdl:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.hdl",
+  "pack_id": "hardware.hdl"
+}

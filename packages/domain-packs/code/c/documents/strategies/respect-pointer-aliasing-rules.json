@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:c:respect-pointer-aliasing-rules",
+  "type": "strategy",
+  "title": "Respect strict aliasing and pointer provenance",
+  "description": "Avoid reinterpreting memory through incompatible pointer types; use memcpy or unions so the optimizer's aliasing assumptions stay valid.",
+  "body": "Use when reinterpreting bytes, casting between pointer types, or hand-optimizing a loop. Do not type-pun by casting a float* to int* and dereferencing, and do not lie with the restrict qualifier on pointers that actually alias. Actions: copy bytes with memcpy (the compiler folds it) or use a union for punning, mark genuinely non-aliasing pointers restrict to enable vectorization, and compile with -Wstrict-aliasing -fno-strict-aliasing only as a temporary diagnostic. Validation signals include identical results at -O0 and -O2 and a clean -fsanitize=undefined run. Risk boundary: a strict-aliasing violation is UB that only misbehaves at high optimization; if results differ between -O0 and -O2, treat it as a real defect and escalate rather than pinning -O0.",
+  "domain": "c",
+  "scope_hint": "code.c:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.c",
+  "pack_id": "code.c"
+}

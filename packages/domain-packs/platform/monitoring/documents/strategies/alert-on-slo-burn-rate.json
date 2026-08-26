@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:mon:alert-on-slo-burn-rate",
+  "type": "strategy",
+  "title": "Alert on SLO burn rate",
+  "description": "Page on multi-window error-budget burn rate rather than a raw threshold so alerts track real risk.",
+  "body": "Use when alerting on reliability against an SLO. Do not page on a single static error-rate threshold — it fires on harmless blips and misses slow burns. Actions: define the SLI, set the SLO target and error budget, and alert on burn rate over multiple windows (fast burn on a short window, slow burn on a long one) so both acute and gradual exhaustion page appropriately. Validation signals include the alert firing for genuine budget-threatening burn and staying quiet for tolerable noise. Risk boundary: a misconfigured burn-rate alert that never fires hides budget exhaustion — verify it against a simulated burn before trusting it.",
+  "domain": "monitoring",
+  "scope_hint": "platform.monitoring:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.monitoring",
+  "pack_id": "platform.monitoring"
+}

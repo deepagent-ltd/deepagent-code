@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:android:fix-state-loss-on-rotation",
+  "type": "methodology",
+  "title": "Fix UI state lost on rotation",
+  "description": "Trace state that disappears on configuration change and relocate it into a ViewModel or saved state.",
+  "body": "Steps: 1. Reproduce: rotate the device (or change locale/dark mode) and observe which state resets. 2. Find where that state lives — if it's in the Activity/Fragment or a plain composable var, it dies on recreation. 3. Move durable UI state into a ViewModel (survives configuration changes) exposed as StateFlow. 4. For state that must survive process death too, use SavedStateHandle or rememberSaveable. 5. Re-test rotation and a process-death simulation. Rollback point: before moving state ownership (changes lifecycle/scoping). Validation: rotating preserves state with no reload and a simulated process death restores it; state kept in the Activity that resets on rotation is the defect this resolves.",
+  "domain": "android",
+  "scope_hint": "code.mobile.android:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mobile.android",
+  "pack_id": "code.mobile.android"
+}

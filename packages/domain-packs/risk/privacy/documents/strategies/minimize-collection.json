@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:privacy:minimize-collection",
+  "type": "strategy",
+  "title": "Minimize collection",
+  "description": "Collect, persist, and transmit only personal data that is necessary for the stated product or operational purpose.",
+  "body": "Use when adding fields, analytics events, logs, support payloads, request bodies, database columns, or model context. Do not use to remove data that a documented project contract requires without human product review. Actions: challenge optional fields, prefer derived non-identifying signals, avoid broad object serialization, and keep personal data out of prompts or artifacts unless explicitly required. Validation signals include schema or event diffs with removed fields, redacted snapshots, and tests showing feature behavior still works. Risk boundary: collecting PHI, PCI, government IDs, precise location, or children data requires human approval.",
+  "domain": "data_minimization",
+  "scope_hint": "risk.privacy:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.privacy",
+  "pack_id": "risk.privacy"
+}

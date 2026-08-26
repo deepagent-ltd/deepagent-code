@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:mongo:embed-data-that-is-read-together",
+  "type": "strategy",
+  "title": "Embed data that is read and written together",
+  "description": "Model one-to-few relationships by embedding so a single document read serves the whole view without a join.",
+  "body": "Use when designing a document whose related data is almost always fetched together and bounded in size. Do not normalize into separate collections out of relational habit when the child data is small, bounded, and read with the parent; MongoDB has no cheap server-side join, so a reference forces an extra round trip or a $lookup. Actions: embed one-to-few related data, keep the parent under the 16MB BSON limit, and verify the common read is a single findOne. Validation signals include the hot read returning the full view in one query and explain showing one IXSCAN. Risk boundary: embedding an unbounded or independently-updated collection causes document growth and contention, so reference instead when the child set is large or written on its own.",
+  "domain": "mongodb",
+  "scope_hint": "code.database.mongodb:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.mongodb",
+  "pack_id": "code.database.mongodb"
+}

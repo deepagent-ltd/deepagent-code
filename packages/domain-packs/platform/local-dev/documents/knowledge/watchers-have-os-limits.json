@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:local_dev:watchers-have-os-limits",
+  "type": "knowledge",
+  "title": "File watchers hit OS descriptor and inotify limits",
+  "description": "Hot-reload watchers consume per-process file handles or inotify watches; pointing them at node_modules or build output exhausts the limit and breaks reloading.",
+  "body": "Use when a dev server crashes or stops reloading with descriptor or 'no space left'/inotify errors. Watchers register an OS-level watch per file or directory, and the OS caps these per process/user; watching huge trees like node_modules or dist quickly exhausts the cap and the watcher fails or silently misses changes. Do not watch dependency or build directories, and do not 'fix' it by blindly raising limits without scoping. Actions: scope watch globs to source, exclude generated/dependency paths, and only then adjust OS limits if needed. Validation signals include the watcher staying within limits and reliably catching source edits. Risk boundary: an unscoped watcher can destabilize the whole machine; narrow the scope rather than indefinitely raising system limits.",
+  "domain": "platform",
+  "scope_hint": "platform.local-dev:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.local-dev",
+  "pack_id": "platform.local-dev"
+}

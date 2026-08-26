@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:eval:offline-vs-online-evaluation",
+  "type": "knowledge",
+  "title": "Offline vs online evaluation",
+  "description": "Offline eval on a fixed dataset is reproducible but may not reflect production; online eval measures real impact but is noisy and risky.",
+  "body": "Use when deciding how to measure a change. Offline evaluation scores a system on a frozen dataset: it is fast, reproducible, and safe but only as representative as the data. Online evaluation (A/B, canary) measures real user impact but is noisy, slow, and exposes users to a possibly worse system. Do not ship on offline gains alone for a high-impact change, and avoid online tests with no offline gate first. Actions: gate with offline eval, then confirm with a controlled online test. Validation signals include an offline regression suite plus an online metric with a guardrail. Risk boundary: a large change validated only offline can regress production; require an online confirmation with a rollback for high-impact changes.",
+  "domain": "eval",
+  "scope_hint": "code.eval:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.eval",
+  "pack_id": "code.eval"
+}

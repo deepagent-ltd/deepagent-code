@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:mlops:silent-train-serve-skew",
+  "type": "failure_dossier",
+  "description": "Offline metrics look strong but production accuracy collapses due to train/serve preprocessing skew.",
+  "body": "Failure mode: a model that excelled offline performs far worse in production because serving applies different preprocessing than training (a feature computed one way at train time, another at inference). Detection signals: a wide gap between offline eval and live outcome metrics, and feature value distributions that differ between the training log and serving log for the same inputs. Do not respond by retraining on more data — that does not fix the transform mismatch and burns compute. Safer fallback: freeze a shared transform artifact used by both training and serving, replay a sample through both paths to confirm identical features, then re-evaluate before any retrain.",
+  "domain": "mlops",
+  "scope_hint": "code.mlops:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mlops:human_authored",
+  "pack_id": "code.mlops"
+}

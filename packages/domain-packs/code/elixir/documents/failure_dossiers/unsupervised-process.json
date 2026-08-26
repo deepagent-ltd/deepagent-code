@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:elixir:unsupervised-process",
+  "type": "failure_dossier",
+  "description": "A stateful process is spawned outside any supervisor, so when it crashes it is never restarted and its work is lost.",
+  "body": "Failure mode: code calls spawn or starts a GenServer without linking it into a supervision tree, so a crash leaves no process behind, in-flight work is dropped, and nothing restores a clean state. Detection signals: spawn/GenServer.start without a supervisor child_spec; functionality silently stops after an error with no restart; orphaned pids. Do not run stateful long-lived processes unsupervised. Safer fallback: define a child_spec and place the process under a supervisor with an appropriate restart strategy, use start_supervised! in tests, and verify that killing it triggers a restart to the init state.",
+  "domain": "elixir",
+  "scope_hint": "code.elixir:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.elixir:human_authored",
+  "pack_id": "code.elixir"
+}

@@ -1,0 +1,514 @@
+[
+  {
+    "ref_id": "strategy:agent:cap-and-terminate-the-loop",
+    "type": "strategy",
+    "title": "Cap and terminate the agent loop",
+    "summary": "Every agent loop has an explicit step cap, a terminal-state check, and a defined behavior when the cap is hit.",
+    "domains": [
+      "agent",
+      "agent_loop",
+      "tool_registry",
+      "memory",
+      "mcp"
+    ],
+    "triggers": [
+      "loop",
+      "cap",
+      "terminate",
+      "step",
+      "halt",
+      "limit"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.agent"
+  },
+  {
+    "ref_id": "strategy:agent:guard-against-no-progress",
+    "type": "strategy",
+    "title": "Guard against no-progress loops",
+    "summary": "Detect when iterations stop changing state (repeated actions, identical results) and halt rather than burning steps.",
+    "domains": [
+      "agent",
+      "agent_loop",
+      "tool_registry",
+      "memory",
+      "mcp"
+    ],
+    "triggers": [
+      "progress",
+      "stall",
+      "repeat",
+      "guard",
+      "loop",
+      "detect"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.agent"
+  },
+  {
+    "ref_id": "strategy:agent:trust-runner-not-narration",
+    "type": "strategy",
+    "title": "Trust the runner, not the model's narration",
+    "summary": "Tool results and observed state are ground truth; the model's claim that it 'completed' a step is not.",
+    "domains": [
+      "agent",
+      "agent_loop",
+      "tool_registry",
+      "memory",
+      "mcp"
+    ],
+    "triggers": [
+      "runner",
+      "narration",
+      "truth",
+      "result",
+      "claim",
+      "observe"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.agent"
+  },
+  {
+    "ref_id": "strategy:agent:permission-gate-the-tool-registry",
+    "type": "strategy",
+    "title": "Permission-gate the tool registry",
+    "summary": "Tools are registered with explicit capability and permission metadata, and the loop checks permission before any invocation.",
+    "domains": [
+      "agent",
+      "agent_loop",
+      "tool_registry",
+      "memory",
+      "mcp"
+    ],
+    "triggers": [
+      "registry",
+      "permission",
+      "tool",
+      "gate",
+      "capability",
+      "deny"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.agent"
+  },
+  {
+    "ref_id": "strategy:agent:budget-the-context-window",
+    "type": "strategy",
+    "title": "Budget the context window each turn",
+    "summary": "Conversation history, tool results, and instructions are pruned or summarized to fit a token budget before each model call.",
+    "domains": [
+      "agent",
+      "agent_loop",
+      "tool_registry",
+      "memory",
+      "mcp"
+    ],
+    "triggers": [
+      "context",
+      "budget",
+      "window",
+      "prune",
+      "summarize",
+      "history"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.agent"
+  },
+  {
+    "ref_id": "strategy:agent:make-memory-writes-deliberate",
+    "type": "strategy",
+    "title": "Make memory writes deliberate",
+    "summary": "Durable memory stores only validated, scoped facts with eviction, not an append-everything log of raw model output.",
+    "domains": [
+      "agent",
+      "agent_loop",
+      "tool_registry",
+      "memory",
+      "mcp"
+    ],
+    "triggers": [
+      "memory",
+      "state",
+      "write",
+      "evict",
+      "scope",
+      "durable"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.agent"
+  },
+  {
+    "ref_id": "strategy:agent:isolate-mcp-server-capabilities",
+    "type": "strategy",
+    "title": "Isolate MCP server capabilities",
+    "summary": "MCP servers are integrated with their advertised capabilities enforced; the client never assumes a capability the server did not declare.",
+    "domains": [
+      "agent",
+      "agent_loop",
+      "tool_registry",
+      "memory",
+      "mcp"
+    ],
+    "triggers": [
+      "mcp",
+      "server",
+      "capability",
+      "client",
+      "isolate",
+      "declare"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.agent"
+  },
+  {
+    "ref_id": "methodology:agent:design-the-control-loop",
+    "type": "methodology",
+    "title": "Design the agent control loop",
+    "summary": "Define the perceive-decide-act cycle, its terminal conditions, step cap, and no-progress guard before adding tools.",
+    "domains": [
+      "agent",
+      "agent_loop",
+      "tool_registry",
+      "memory",
+      "mcp"
+    ],
+    "triggers": [
+      "control",
+      "loop",
+      "design",
+      "terminal",
+      "cap",
+      "cycle"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.agent"
+  },
+  {
+    "ref_id": "methodology:agent:build-the-tool-registry",
+    "type": "methodology",
+    "title": "Build the tool registry",
+    "summary": "Register tools with typed schemas, side-effect class, and required permission, then enforce the gate at dispatch.",
+    "domains": [
+      "agent",
+      "agent_loop",
+      "tool_registry",
+      "memory",
+      "mcp"
+    ],
+    "triggers": [
+      "registry",
+      "tool",
+      "permission",
+      "schema",
+      "dispatch",
+      "build"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.agent"
+  },
+  {
+    "ref_id": "methodology:agent:reconcile-claim-with-result",
+    "type": "methodology",
+    "title": "Reconcile model claims with runner results",
+    "summary": "Compare what the model says it did against what the runner observed, and resolve completion from observed evidence.",
+    "domains": [
+      "agent",
+      "agent_loop",
+      "tool_registry",
+      "memory",
+      "mcp"
+    ],
+    "triggers": [
+      "reconcile",
+      "claim",
+      "result",
+      "completion",
+      "evidence",
+      "diverge"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.agent"
+  },
+  {
+    "ref_id": "methodology:agent:budget-and-prune-context",
+    "type": "methodology",
+    "title": "Budget and prune context",
+    "summary": "Establish a token budget and a deterministic pruning/summarization policy that preserves instructions and recent state.",
+    "domains": [
+      "agent",
+      "agent_loop",
+      "tool_registry",
+      "memory",
+      "mcp"
+    ],
+    "triggers": [
+      "budget",
+      "prune",
+      "context",
+      "summarize",
+      "token",
+      "policy"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.agent"
+  },
+  {
+    "ref_id": "knowledge:agent:agent-loop-anatomy",
+    "type": "knowledge",
+    "title": "Anatomy of an agent loop",
+    "summary": "An agent loop iterates observe-decide-act, accumulating context and tool results until a terminal condition stops it.",
+    "domains": [
+      "agent",
+      "agent_loop",
+      "tool_registry",
+      "memory",
+      "mcp"
+    ],
+    "triggers": [
+      "loop",
+      "observe",
+      "decide",
+      "act",
+      "anatomy",
+      "iterate"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.agent"
+  },
+  {
+    "ref_id": "knowledge:agent:react-vs-plan-execute",
+    "type": "knowledge",
+    "title": "ReAct vs plan-and-execute agents",
+    "summary": "ReAct interleaves reasoning and acting step by step; plan-and-execute drafts a full plan first then runs it. They fail differently.",
+    "domains": [
+      "agent",
+      "agent_loop",
+      "tool_registry",
+      "memory",
+      "mcp"
+    ],
+    "triggers": [
+      "react",
+      "plan",
+      "execute",
+      "interleave",
+      "pattern",
+      "strategy"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.agent"
+  },
+  {
+    "ref_id": "knowledge:agent:tool-permissioning-models",
+    "type": "knowledge",
+    "title": "Tool permissioning models",
+    "summary": "Agents gate tools by allowlist, capability class, or per-call human approval, trading autonomy against blast radius.",
+    "domains": [
+      "agent",
+      "agent_loop",
+      "tool_registry",
+      "memory",
+      "mcp"
+    ],
+    "triggers": [
+      "permission",
+      "tool",
+      "allowlist",
+      "capability",
+      "approval",
+      "model"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.agent"
+  },
+  {
+    "ref_id": "knowledge:agent:mcp-client-server-model",
+    "type": "knowledge",
+    "title": "The MCP client/server model",
+    "summary": "MCP standardizes how a host connects to servers that expose tools, resources, and prompts under declared capabilities.",
+    "domains": [
+      "agent",
+      "agent_loop",
+      "tool_registry",
+      "memory",
+      "mcp"
+    ],
+    "triggers": [
+      "mcp",
+      "client",
+      "server",
+      "capability",
+      "resource",
+      "protocol"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.agent"
+  },
+  {
+    "ref_id": "skill:agent:review-loop-termination",
+    "type": "skill",
+    "title": "Review loop termination and guards",
+    "summary": "Read an agent loop and report whether it has a step cap, terminal check, no-progress guard, and observed-evidence completion.",
+    "domains": [
+      "agent",
+      "agent_loop",
+      "tool_registry",
+      "memory",
+      "mcp"
+    ],
+    "triggers": [
+      "review",
+      "loop",
+      "termination",
+      "guard",
+      "audit",
+      "inspect"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.agent"
+  },
+  {
+    "ref_id": "skill:agent:audit-tool-registry-permissions",
+    "type": "skill",
+    "title": "Audit tool registry permissions",
+    "summary": "Execute or scaffold tests that confirm unregistered tools are denied and side-effecting tools require an explicit grant.",
+    "domains": [
+      "agent",
+      "agent_loop",
+      "tool_registry",
+      "memory",
+      "mcp"
+    ],
+    "triggers": [
+      "audit",
+      "registry",
+      "permission",
+      "tool",
+      "test",
+      "deny"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.agent"
+  }
+]

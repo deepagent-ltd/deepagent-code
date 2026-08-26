@@ -1,0 +1,11 @@
+{
+  "ref_id": "methodology:java_jvm:language-gate-loop",
+  "type": "methodology",
+  "description": "In Java/JVM, run the package-local gate, fix the first owned diagnostic, rerun, then broaden.",
+  "body": "In Java/JVM, the fastest path through errors is to let javac at the configured --release with -Xlint warnings and SpotBugs, Error Prone, and Checkstyle reports drive one fix at a time rather than guessing. Use when the Maven/Gradle module task (mvn -pl / gradle :module:test) with the right JDK toolchain or the analyzers report multiple diagnostics. Do not batch speculative edits across files, and avoid suppressing diagnostics to move on. Actions: inspect the package, run the gate, fix only the first javac error or the root-cause stack-trace frame in your package, rerun the module's JUnit suite on the affected classpath, then widen to the Maven/Gradle module task (mvn -pl / gradle :module:test) with the right JDK toolchain for the whole package. Validation signals include a shrinking diagnostic count, a passing focused test, and a clean package-wide gate. Risk boundary: if a diagnostic implies a design or API change, stop and escalate instead of forcing the gate green.",
+  "domain": "java_jvm",
+  "scope_hint": "code.java-jvm:methodologies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.java-jvm:skill_survey",
+  "pack_id": "code.java-jvm"
+}

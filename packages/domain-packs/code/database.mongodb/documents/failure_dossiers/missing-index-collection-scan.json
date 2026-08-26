@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:mongo:missing-index-collection-scan",
+  "type": "failure_dossier",
+  "description": "A query with no supporting index scans the whole collection and degrades as data grows.",
+  "body": "Failure mode: a find or aggregation $match on an unindexed field performs a COLLSCAN, reading every document, so latency grows linearly with collection size and the working set is evicted from cache. Detection signals: explain reports a COLLSCAN winning plan, totalDocsExamined hugely exceeds nReturned, and the slow-query log captures the operation. Do not ship a hot-path query without an index for its predicate. Safer fallback: add a compound index ordered by the ESR rule for the query, confirm explain flips to IXSCAN, and drop unused indexes flagged by $indexStats to keep write cost down.",
+  "domain": "mongodb",
+  "scope_hint": "code.database.mongodb:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.mongodb:human_authored",
+  "pack_id": "code.database.mongodb"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:apidesign:design-a-resource-contract",
+  "type": "skill",
+  "title": "Design a resource and its operations",
+  "description": "Model a new resource with consistent naming, standard methods, a paging contract for collections, and a defined error envelope.",
+  "body": "Use when adding a resource to an API. Do not improvise field names or error shapes per resource. Actions: name the resource and its fields to match existing conventions; map create, read, update, delete, and list to standard methods; define the collection's paging contract; reuse the shared error envelope; capture it in the spec. Validation signals include a consumer predicting the shape from convention and the spec validating. Risk boundary: an inconsistent or unpaged resource is costly to change after clients adopt it, so align it with the surface before publishing.",
+  "domain": "api_design",
+  "scope_hint": "code.api-design:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.api-design",
+  "pack_id": "code.api-design"
+}

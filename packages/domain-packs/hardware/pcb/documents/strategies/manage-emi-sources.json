@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:pcb:manage-emi-sources",
+  "type": "strategy",
+  "title": "Contain EMI at the source during layout",
+  "description": "Minimize loop areas, control edge rates, and guard noisy nets so the board passes emissions without late shielding.",
+  "body": "Use when the board carries fast clocks or switching regulators likely to radiate. Do not defer EMI to a shield-it-later phase, because loop area and routing choices set the emission floor. Actions: minimize current-loop areas, keep clocks away from board edges and connectors, and add guard traces or ground pours around noisy nets. Validation signals include low radiated emissions at clock harmonics in a pre-scan and noisy nets routed with tight return paths. Risk boundary: an emissions failure can block certification, so escalate marginal layouts to a pre-compliance scan before fabrication.",
+  "domain": "pcb",
+  "scope_hint": "hardware.pcb:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.pcb",
+  "pack_id": "hardware.pcb"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "knowledge:debugging:reproduction-defines-scope",
+  "type": "knowledge",
+  "description": "A reliable reproduction defines the debugging scope and prevents unrelated rewrites.",
+  "body": "Use this fact when deciding whether to patch, instrument, or ask for more evidence. A reproduction can be a failing test, deterministic command, request trace, log timeline, or user-provided steps with enough state to observe the failure. Without reproduction, the strongest honest output is a hypothesis and a request for the missing signal. Do not widen scope to unrelated modules just because the failure is confusing. Verification signals are stable failure signature, exact command or scenario, captured inputs, and before/after behavior after the fix. Risk boundary: non-deterministic failures may still proceed, but only with repeated observations and uncertainty stated. Use when Code Debugging work touches reproduction steps, stack traces, logs, state transitions, and controlled hypotheses. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: use the fact to constrain the change and test plan; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include minimal repro, before/after trace, regression test, and command output. Risk boundary: escalate or stop when the task involves blind retries, wrapper fixes, broad rewrites, and unproven root cause, missing owner evidence, or live external state.",
+  "domain": "debugging",
+  "scope_hint": "code.debugging:knowledge",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.debugging:human_authored",
+  "pack_id": "code.debugging"
+}

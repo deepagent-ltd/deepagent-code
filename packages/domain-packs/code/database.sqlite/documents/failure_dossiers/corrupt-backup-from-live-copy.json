@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:sqlite:corrupt-backup-from-live-copy",
+  "type": "failure_dossier",
+  "description": "Copying a live .db file (especially in WAL mode) produces a backup that is inconsistent or missing recent commits.",
+  "body": "Failure mode: a backup job runs cp/rsync on the database file while connections are open; in WAL mode committed data sits in the -wal file not yet checkpointed, so the copied main file is stale or torn and may fail to open. Detection signals: restored backups fail integrity_check or are missing recent writes; backup is a plain file copy; -wal/-shm not included. Do not copy a live database file. Safer fallback: use VACUUM INTO or the online backup API for a consistent single-file copy and verify every backup with PRAGMA integrity_check.",
+  "domain": "sqlite",
+  "scope_hint": "code.database.sqlite:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.sqlite:human_authored",
+  "pack_id": "code.database.sqlite"
+}

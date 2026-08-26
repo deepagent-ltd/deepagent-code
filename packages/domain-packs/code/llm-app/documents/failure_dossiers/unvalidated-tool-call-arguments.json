@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:llm:unvalidated-tool-call-arguments",
+  "type": "failure_dossier",
+  "description": "Arguments the model emits for a tool are passed straight into execution without schema validation or permission gating.",
+  "body": "Failure mode: a tool-calling loop takes the model's proposed JSON arguments and invokes the tool directly, so an out-of-range id, an unexpected path, or an injected value reaches a side effect. Detection signals: no validator between the model's arguments and the tool call; side-effecting tools lack a permission gate; no test feeds malformed arguments. Do not trust model-produced arguments or assume the schema constrains them at runtime. Safer fallback: validate every returned argument against the tool schema, reject or repair out-of-range values, and gate write/delete/external tools behind an explicit permission check with a negative test.",
+  "domain": "llm_app",
+  "scope_hint": "code.llm-app:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.llm-app:human_authored",
+  "pack_id": "code.llm-app"
+}

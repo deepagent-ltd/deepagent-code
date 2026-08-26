@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:dq:handle-nulls-and-dupes-deliberately",
+  "type": "strategy",
+  "title": "Handle nulls and duplicates deliberately",
+  "description": "Decide and enforce explicit policies for missing values and duplicate keys rather than letting them flow through unexamined.",
+  "body": "Use when modeling or loading data with keys and nullable fields. Do not let nulls silently propagate into joins/aggregates (they drop rows or skew sums) or let duplicate keys inflate counts. Actions: assert uniqueness on primary/business keys, set explicit null policy per column (reject, default, or impute with documentation), and dedup deterministically when at-least-once delivery is possible. Validation signals include a uniqueness check passing and null rates within threshold per column. Risk boundary: unexamined nulls and dupes corrupt aggregates in ways that look plausible; treat a uniqueness failure on a key as blocking, not a warning.",
+  "domain": "data_quality",
+  "scope_hint": "code.data-quality:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-quality",
+  "pack_id": "code.data-quality"
+}

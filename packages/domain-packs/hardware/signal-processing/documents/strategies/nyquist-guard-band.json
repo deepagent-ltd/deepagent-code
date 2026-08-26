@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:sigproc:nyquist-guard-band",
+  "type": "strategy",
+  "title": "Set sample rate against Nyquist with a guard band",
+  "description": "Choose a sample rate above twice the highest frequency of interest plus a margin so the anti-alias filter has a realizable transition band.",
+  "body": "Use when specifying the ADC clock or resampling ratio for a new acquisition path. Do not set the sample rate at exactly twice the maximum frequency, since no real filter rolls off instantly. Actions: identify the highest band of interest, add a transition guard band, and verify the anti-alias filter reaches full attenuation before the Nyquist edge. Validation signals include a swept-tone test showing no folded energy above Nyquist and a filter response that meets stopband attenuation at the fold frequency. Risk boundary: undersampling corrupts data irreversibly, so treat a missing anti-alias stage as a blocking defect and roll back the capture.",
+  "domain": "signal_processing",
+  "scope_hint": "hardware.signal-processing:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.signal-processing",
+  "pack_id": "hardware.signal-processing"
+}

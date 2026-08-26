@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:asm:write-an-asm-function-callable-from-c",
+  "type": "methodology",
+  "title": "Write an assembly function callable from C",
+  "description": "Implement a hand-asm routine that interoperates with C by matching the ABI, frame, and register discipline, validated against a C reference.",
+  "body": "Steps: 1. Write the C signature and look up how the ABI passes each argument and returns the result. 2. Write the prologue: save callee-saved registers you use, set up and align the frame. 3. Implement the body using scratch registers, respecting operand widths and addressing modes. 4. Write the epilogue: restore saved registers and the stack, return per the ABI. 5. Test by calling it from C against a reference implementation across many inputs, including edge cases. Rollback point: keep the C reference as the fallback. Validation: results match the C reference across the input range and the disassembly shows balanced save/restore and correct argument registers; passing one input proves nothing about register discipline.",
+  "domain": "assembly",
+  "scope_hint": "code.assembly:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.assembly",
+  "pack_id": "code.assembly"
+}

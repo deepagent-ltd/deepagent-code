@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:dist:diagnose-data-divergence",
+  "type": "methodology",
+  "title": "Diagnose replica data divergence",
+  "description": "When two replicas disagree on a committed value, isolate the cause among non-deterministic apply, lost writes, and conflicting concurrent updates.",
+  "body": "Steps: 1. Pin the diverging key and capture the value plus version metadata (vector clock / log index) on each replica. 2. Compare committed log indices: equal index with different values means non-deterministic apply; different indices mean a replication gap. 3. For gaps, replay the missing log entries and check quorum acks at write time. 4. For true concurrent writes, surface siblings and apply the documented conflict resolution. 5. Run anti-entropy to reconcile. Rollback point: before deleting any sibling version. Validation: replicas converge to one agreed value and a re-run finds no new divergence; never resolve by blindly picking the highest wall-clock timestamp, which can drop a causally-later write.",
+  "domain": "distributed",
+  "scope_hint": "code.distributed:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.distributed",
+  "pack_id": "code.distributed"
+}

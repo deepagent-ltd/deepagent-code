@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:shell:cd-without-error-check",
+  "type": "failure_dossier",
+  "description": "Running commands after a `cd` that may have failed, so subsequent operations execute in the wrong directory.",
+  "body": "Failure mode: a script does `cd /some/dir` then `rm -rf ./build`, but if the cd failed (missing dir, typo) it stays in the original directory and the rm targets the wrong tree. Detection signals: files deleted or created in an unexpected location; 'No such file or directory' from cd ignored; operations affect the repo root instead of a subdir. Do not chain destructive commands after an unchecked cd. Safer fallback: use `cd /some/dir || exit 1` (or `cd ... && cmd`), prefer absolute paths, and guard recursive deletes with an explicit, verified path; confirm the working directory with pwd before destructive steps.",
+  "domain": "shell",
+  "scope_hint": "code.shell:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.shell:human_authored",
+  "pack_id": "code.shell"
+}

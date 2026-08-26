@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:php:guard-against-eloquent-n-plus-one",
+  "type": "strategy",
+  "title": "Guard against N+1 in Eloquent/Doctrine relations",
+  "description": "Eager-load related models so a list view issues a bounded number of queries, not one per row.",
+  "body": "Use when iterating models that access a relation inside the loop. Do not access a lazy relation per row in a list. Actions: eager-load with Eloquent's with()/load() (or Doctrine fetch joins / fetch=EAGER where justified), select only needed columns, and consider chunking large result sets. Validation signals include a query-count assertion in a test (Laravel's assertQueryCount / DB query log) showing a constant number of queries regardless of row count. Risk boundary: an unbounded N+1 degrades linearly with data and can take down a database under load; verify the query count, not just that the page renders.",
+  "domain": "php",
+  "scope_hint": "code.php:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.php",
+  "pack_id": "code.php"
+}

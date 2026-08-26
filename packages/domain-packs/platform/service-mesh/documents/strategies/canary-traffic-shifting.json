@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:mesh:canary-traffic-shifting",
+  "type": "strategy",
+  "title": "Shift canary traffic by weight with metric gates",
+  "description": "Progressively move VirtualService weights to a new subset while watching golden signals, ready to revert by resetting weights.",
+  "body": "Use when releasing a new version behind the mesh. Do not jump straight to 100% or shift weights without watching the canary's signals. Actions: deploy the new version as a subset, start with a small VirtualService weight (e.g. 5%), compare canary vs stable golden signals (latency, error rate), step the weight up on healthy metrics, and revert by resetting weights to stable if signals regress. Validation signals include per-subset metrics confirming the split ratio and the canary's error/latency tracking the stable baseline. Risk boundary: each weight increase on production traffic is a release step and the cutover to 100% is human-gated.",
+  "domain": "service_mesh",
+  "scope_hint": "platform.service-mesh:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.service-mesh",
+  "pack_id": "platform.service-mesh"
+}

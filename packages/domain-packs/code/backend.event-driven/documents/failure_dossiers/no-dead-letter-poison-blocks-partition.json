@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:evt:no-dead-letter-poison-blocks-partition",
+  "type": "failure_dossier",
+  "description": "A poison event redelivers forever on an ordered partition, halting every later event behind it.",
+  "body": "Failure mode: an unprocessable event keeps failing and is retried in place; because the partition is consumed in order, no later event can advance, and lag grows without bound. Detection signals: one event id recurring in error logs; partition lag climbing while throughput drops to zero; no attempt cap or dead-letter topic. Do not retry poison events indefinitely. Safer fallback: bound attempts, publish the failed event with error context to a dead-letter topic, commit the offset, alert, and continue; add a test that later events still progress.",
+  "domain": "event_driven",
+  "scope_hint": "code.backend.event-driven:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.event-driven:human_authored",
+  "pack_id": "code.backend.event-driven"
+}

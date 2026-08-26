@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:cpp:iterator-invalidation-on-modify",
+  "type": "failure_dossier",
+  "description": "Mutating a container (push_back/erase) while iterating it, invalidating the iterator, pointer, or reference in use.",
+  "body": "Failure mode: a loop holds an iterator or reference into a std::vector/map and then inserts or erases, reallocating or removing the node so the iterator dangles and the next dereference is UB. Detection signals: ASan heap-use-after-free inside the loop; crashes only past a capacity threshold (vector reallocation); corrupted values after erase. Do not modify a container while iterating with a stale iterator. Safer fallback: use the return value of erase (it = v.erase(it)), reserve capacity before bulk insert, or collect changes and apply after the loop, then verify with ASan across a growth boundary.",
+  "domain": "cpp",
+  "scope_hint": "code.cpp:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.cpp:human_authored",
+  "pack_id": "code.cpp"
+}

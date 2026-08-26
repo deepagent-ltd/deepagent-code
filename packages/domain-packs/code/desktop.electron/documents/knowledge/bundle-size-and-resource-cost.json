@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:electron:bundle-size-and-resource-cost",
+  "type": "knowledge",
+  "title": "Electron's resource and size cost",
+  "description": "Each app bundles a full Chromium and Node runtime, so binaries are large and every window carries a renderer process's memory overhead.",
+  "body": "Use when reasoning about app footprint and performance. Because Electron embeds Chromium and Node, installers are tens of megabytes minimum and each window spawns a renderer process with its own memory; many windows or heavy pages multiply RAM use. Do not expect a native-app-sized footprint. Actions: minimize windows, reuse renderers where sensible, prune dependencies and assets, and lazy-load heavy features. Validation signals include measured per-window memory and a justified bundle size. Risk boundary: spawning many heavyweight renderers can exhaust memory on modest machines — budget process count and memory deliberately rather than opening windows freely.",
+  "domain": "electron",
+  "scope_hint": "code.desktop.electron:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.desktop.electron",
+  "pack_id": "code.desktop.electron"
+}

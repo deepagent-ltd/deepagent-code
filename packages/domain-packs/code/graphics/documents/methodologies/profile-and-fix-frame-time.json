@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:gfx:profile-and-fix-frame-time",
+  "type": "methodology",
+  "title": "Profile and fix a frame-time spike",
+  "description": "Determine whether the frame is CPU- or GPU-bound and which stage dominates before optimizing.",
+  "body": "Steps: 1. Measure CPU submission time and GPU frame time separately. 2. If CPU-bound, look at draw-call count and state changes; if GPU-bound, capture GPU timestamps per pass. 3. Find the dominant stage: vertex throughput, fragment/overdraw, bandwidth, or sync stalls. 4. Apply the matching fix (batching, LOD, reduce overdraw, lower-bandwidth formats, fix barriers causing stalls). 5. Re-measure against the frame budget. Rollback point: before changing render-target formats or resolution. Validation: the GPU timeline shows the targeted stage reduced and total frame time within budget; never optimize a stage that the profiler did not identify as the bottleneck.",
+  "domain": "graphics",
+  "scope_hint": "code.graphics:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.graphics",
+  "pack_id": "code.graphics"
+}

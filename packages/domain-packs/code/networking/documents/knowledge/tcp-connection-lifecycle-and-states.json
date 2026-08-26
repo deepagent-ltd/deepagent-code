@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:net:tcp-connection-lifecycle-and-states",
+  "type": "knowledge",
+  "title": "TCP lifecycle, TIME_WAIT, and CLOSE_WAIT",
+  "description": "TCP connections progress through handshake, established, and teardown states; CLOSE_WAIT signals the app forgot to close, TIME_WAIT is normal churn.",
+  "body": "Use when interpreting socket state during a network problem. A TCP connection opens with a three-way handshake, serves data while ESTABLISHED, and tears down with FIN/ACK exchange. CLOSE_WAIT on the local side means the peer closed and the application has not yet called close, so many CLOSE_WAIT sockets indicate a leak in the app's close path. TIME_WAIT is the normal state after an active close, held briefly to absorb stray packets; a flood of it indicates high connection churn (no keep-alive). Do not raise FD limits to mask a CLOSE_WAIT leak. Actions: read socket states with ss/netstat and map them to app behavior. Validation signals include CLOSE_WAIT count near zero and connection reuse limiting TIME_WAIT. Risk boundary: a CLOSE_WAIT leak will exhaust descriptors and take down the process; fix the close path.",
+  "domain": "networking",
+  "scope_hint": "code.networking:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.networking",
+  "pack_id": "code.networking"
+}

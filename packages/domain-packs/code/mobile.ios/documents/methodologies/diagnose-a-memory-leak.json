@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:ios:diagnose-a-memory-leak",
+  "type": "methodology",
+  "title": "Diagnose an iOS memory leak",
+  "description": "Use Instruments to find leaked objects, trace the retain cycle, and break it with a weak/unowned capture.",
+  "body": "Steps: 1. Reproduce growth: push and pop a screen repeatedly and watch memory climb. 2. Run the Leaks/Allocations instrument and confirm view controllers or objects are not deallocating. 3. Inspect the retain graph to find the cycle (often a closure, timer, delegate, or Combine subscription holding self strongly). 4. Break it: [weak self] in the escaping closure, weak delegate, or cancel the subscription. 5. Re-run and confirm the objects deallocate on dismiss. Rollback point: before changing capture semantics broadly (unowned can crash if wrong). Validation: Instruments shows the controller deallocating and steady memory across navigation; a leak that 'goes away' only because you stopped testing is not fixed.",
+  "domain": "ios",
+  "scope_hint": "code.mobile.ios:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mobile.ios",
+  "pack_id": "code.mobile.ios"
+}

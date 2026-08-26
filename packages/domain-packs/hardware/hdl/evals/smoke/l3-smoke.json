@@ -1,0 +1,70 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "hardware.hdl",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "hdl",
+      "verilog",
+      "rtl"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for hardware.hdl: SystemVerilog RTL, always_ff/always_comb, clock domain crossing, FSM design, self-checking testbench, and FPGA timing closure"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "refactor a Python data pipeline and add unit tests"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "verilog systemverilog RTL always_ff always_comb clock domain crossing metastability FSM self-checking testbench assertion synthesis timing closure",
+  "expected_pack_id": "hardware.hdl",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "hardware.hdl L3 validation smoke",
+    "signals": [
+      "self-checking testbench scoreboard pass",
+      "SystemVerilog assertion (SVA) results",
+      "synthesis lint clean (no inferred latch/multi-driver)",
+      "CDC report reviewed",
+      "gate-level vs RTL equivalence"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "hardware.hdl diagnosis smoke",
+    "signals": [
+      "blocking assignment in sequential logic",
+      "inferred latch from incomplete always_comb",
+      "unconstrained clock-domain crossing",
+      "testbench with no assertions/scoreboard",
+      "reliance on initial block for reset"
+    ]
+  },
+  "source_refs": [
+    "source:ieee-1800-systemverilog:paraphrased",
+    "source:fpga-timing-closure-practice:paraphrased"
+  ]
+}

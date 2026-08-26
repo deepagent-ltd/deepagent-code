@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:agent:trust-runner-not-narration",
+  "type": "strategy",
+  "title": "Trust the runner, not the model's narration",
+  "description": "Tool results and observed state are ground truth; the model's claim that it 'completed' a step is not.",
+  "body": "Use when the agent reports progress or success. Do not mark a step done because the model's text says it finished, and avoid feeding the model's self-report back as confirmed fact. Actions: derive completion from actual tool results and state changes the runner observed, reconcile the model's claim against those results, and surface any divergence. Validation signals include a test where the model claims success but the tool failed and the runner records failure, not success. Risk boundary: acting on a false success claim (e.g. reporting a deploy done that never ran) is a blocking finding; gate completion on observed evidence.",
+  "domain": "agent",
+  "scope_hint": "code.agent:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.agent",
+  "pack_id": "code.agent"
+}

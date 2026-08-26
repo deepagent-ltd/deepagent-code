@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:ecom:idempotency-in-payments",
+  "type": "knowledge",
+  "title": "Idempotency in payments",
+  "description": "An idempotency key lets a payment be retried safely so network failures do not double-charge.",
+  "body": "Use when a payment request may be retried after an ambiguous failure. An idempotency key identifies one logical attempt: the processor (and your own records) return the original outcome on a repeat key instead of charging again. Do not retry a charge without one — a timeout that actually succeeded then charges twice. Actions: persist the key before calling the processor and dedupe on it. Validation signals include a repeated request yielding one charge. Risk boundary: payment execution is advisory and defers to business.finance with a human gate.",
+  "domain": "ecommerce",
+  "scope_hint": "business.ecommerce:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:business.ecommerce",
+  "pack_id": "business.ecommerce"
+}

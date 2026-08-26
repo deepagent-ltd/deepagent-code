@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:cpp:idiom-preserving-change",
+  "type": "strategy",
+  "description": "In C++, prefer established idioms (RAII, rule-of-five, move semantics, and span/string_view over raw pointers) over generic rewrites.",
+  "body": "In C++, the ecosystem has settled idioms — RAII, rule-of-five, move semantics, and span/string_view over raw pointers — and changes that ignore them add risk and review friction. Use when adding or modifying C++ code near existing patterns. Do not impose a foreign style or rewrite working code into a generic shape, and avoid abandoning nearby conventions. Actions: read the surrounding code, follow its RAII, rule-of-five, move semantics, and span/string_view over raw pointers, keep the change minimal, then run clang-tidy, include-what-you-use, and -Wpedantic diagnostics and the ctest suite plus a sanitized build of the touched target to confirm fit. Validation signals include a small diff consistent with neighbors, a clean lint pass, and passing tests. Risk boundary: a broad idiom migration is its own reviewed task; escalate rather than bundling it into an unrelated change.",
+  "domain": "cpp",
+  "scope_hint": "code.cpp:strategies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.cpp:skill_survey",
+  "pack_id": "code.cpp"
+}

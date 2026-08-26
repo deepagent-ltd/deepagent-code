@@ -1,0 +1,26 @@
+{
+  "name": "@deepagent-code/function",
+  "version": "1.0.0-beta",
+  "$schema": "https://json.schemastore.org/package.json",
+  "private": true,
+  "type": "module",
+  "license": "AGPL-3.0-or-later",
+  "scripts": {
+    "dev": "bun run src/server.ts",
+    "start": "bun run src/server.ts"
+  },
+  "devDependencies": {
+    "@tsconfig/node22": "22.0.2",
+    "@types/node": "catalog:",
+    "@types/ws": "8.18.1",
+    "typescript": "catalog:"
+  },
+  "dependencies": {
+    "@hono/node-server": "2.0.8",
+    "@octokit/auth-app": "8.0.1",
+    "@octokit/rest": "catalog:",
+    "hono": "catalog:",
+    "jose": "6.0.11",
+    "ws": "8.21.0"
+  }
+}

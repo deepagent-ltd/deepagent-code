@@ -1,0 +1,65 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.fine-tuning",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "fine_tuning",
+      "lora",
+      "qlora",
+      "peft",
+      "quantization",
+      "distillation"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "write a Go service with context cancellation and error wrapping"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "lora qlora peft adapter quantization int4 bfloat16 distillation catastrophic forgetting rlhf evaluate base",
+  "expected_pack_id": "code.fine-tuning",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "code.fine-tuning L3 validation smoke",
+    "signals": [
+      "the fine-tuned model beats the base on the task eval without regressing a capability holdout",
+      "a quantized checkpoint stays within an accepted quality delta of the full-precision model",
+      "an adapter loads onto the exact base version and tokenizer it was trained against"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "code.fine-tuning diagnosis smoke",
+    "signals": [
+      "the fine-tuned model gains task accuracy but loses general capabilities (catastrophic forgetting)",
+      "a merged adapter degrades because it was merged into a different base than it was trained on"
+    ]
+  },
+  "source_refs": [
+    "domain_pack:code.fine-tuning"
+  ]
+}

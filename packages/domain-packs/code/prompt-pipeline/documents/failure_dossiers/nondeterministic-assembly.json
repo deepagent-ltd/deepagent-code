@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:prompt:nondeterministic-assembly",
+  "type": "failure_dossier",
+  "description": "Prompt assembly varies across runs for identical inputs because of timestamps, random ordering, or unstable iteration.",
+  "body": "Failure mode: the assembled prompt differs run to run for the same inputs because a timestamp, random id, or map-iteration order leaks into it, so evaluation is unreproducible and regressions hide in the noise. Detection signals: clock or random values interpolated; unsorted map/set iteration in assembly; snapshot tests flaky or absent. Do not let nondeterministic values into assembly. Safer fallback: sort keys and lists deterministically, isolate genuinely dynamic values behind explicit parameters, freeze the template, and add a snapshot test that identical inputs produce a byte-identical prompt.",
+  "domain": "prompt_pipeline",
+  "scope_hint": "code.prompt-pipeline:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.prompt-pipeline:human_authored",
+  "pack_id": "code.prompt-pipeline"
+}

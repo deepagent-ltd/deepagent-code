@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:apidesign:model-resources-around-nouns",
+  "type": "strategy",
+  "title": "Model resources around stable nouns",
+  "description": "Shape the API around the domain's persistent entities and their relationships, not around the actions a particular screen needs today.",
+  "body": "Use when defining a new API surface or extending one. Do not invent RPC-style verbs that mirror a single UI flow. Actions: identify the domain entities and their relationships; expose them as resources with consistent identifiers; map operations to standard methods on those resources. Validation signals include a consumer navigating the model from resource names alone and new clients reusing the same resources. Risk boundary: action-shaped endpoints fragment the model and are hard to evolve, so anchor the design on durable nouns and review additions for consistency.",
+  "domain": "api_design",
+  "scope_hint": "code.api-design:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.api-design",
+  "pack_id": "code.api-design"
+}

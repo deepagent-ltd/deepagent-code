@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:android:raw-thread-background-work-dies",
+  "type": "failure_dossier",
+  "description": "Running guaranteed background work on a raw thread or one-off coroutine that the OS discards when it kills the process.",
+  "body": "Failure mode: deferrable, must-complete work (sync, upload) is started on a bare thread or an unscoped coroutine tied to the process, so when Android kills the backgrounded app the work is silently dropped and never resumes. Detection signals: background sync/upload that fails to complete when the app is backgrounded or the device sleeps; tasks lost after a reboot; no durable scheduler in use. Do not rely on the process surviving for guaranteed work. Safer fallback: enqueue the work in WorkManager with constraints and a backoff policy, make it idempotent and resumable, and verify it completes after the app is killed and across a reboot.",
+  "domain": "android",
+  "scope_hint": "code.mobile.android:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mobile.android:human_authored",
+  "pack_id": "code.mobile.android"
+}

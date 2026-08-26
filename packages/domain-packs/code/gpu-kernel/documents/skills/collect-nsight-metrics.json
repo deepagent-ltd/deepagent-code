@@ -1,0 +1,11 @@
+{
+  "ref_id": "skill:gpu:collect-nsight-metrics",
+  "type": "skill",
+  "description": "Collect occupancy, memory-throughput and bank-conflict counters from a profiler to ground optimization decisions in evidence.",
+  "body": "Use when a kernel is correct and you need to decide where the bottleneck is before optimizing. Procedure: run the kernel under Nsight Compute (CUDA) or rocprof (ROCm), capture achieved occupancy, DRAM/L2 throughput, shared-memory bank-conflict count, and warp-stall reasons. Report which metric is the limiter and the measured value, not a guess. Do not propose an optimization (vectorized loads, padding, more shared memory) without a profiler metric that the change targets. This skill exposes capability only and must not run device profiling tools without runtime permission. Risk boundary: if the profiler is unavailable, mark the bottleneck as unverified rather than assuming it.",
+  "domain": "gpu_kernel",
+  "scope_hint": "gpu_kernel:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:gpu_kernel:human_authored",
+  "pack_id": "code.gpu-kernel"
+}

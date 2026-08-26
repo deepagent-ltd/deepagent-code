@@ -1,0 +1,452 @@
+[
+  {
+    "ref_id": "strategy:rlang:vectorize-over-loops",
+    "type": "strategy",
+    "title": "Vectorize instead of looping row by row",
+    "summary": "Express element-wise work as whole-vector operations rather than explicit for loops over rows.",
+    "domains": [
+      "r_lang",
+      "rstats",
+      "tidyverse",
+      "r_packages"
+    ],
+    "triggers": [
+      "vectorize",
+      "loop",
+      "for",
+      "apply",
+      "performance"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.r"
+  },
+  {
+    "ref_id": "strategy:rlang:preallocate-when-iterating",
+    "type": "strategy",
+    "title": "Preallocate before iterating",
+    "summary": "Size a result vector up front instead of growing it with c() or append inside a loop.",
+    "domains": [
+      "r_lang",
+      "rstats",
+      "tidyverse",
+      "r_packages"
+    ],
+    "triggers": [
+      "preallocate",
+      "grow",
+      "append",
+      "loop",
+      "quadratic"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.r"
+  },
+  {
+    "ref_id": "strategy:rlang:pipe-readable-dplyr",
+    "type": "strategy",
+    "title": "Compose dplyr pipelines for readable transforms",
+    "summary": "Chain verbs with the pipe so each step is a named, inspectable transformation of the data.",
+    "domains": [
+      "r_lang",
+      "rstats",
+      "tidyverse",
+      "r_packages"
+    ],
+    "triggers": [
+      "dplyr",
+      "pipe",
+      "mutate",
+      "filter",
+      "pipeline"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.r"
+  },
+  {
+    "ref_id": "strategy:rlang:handle-na-explicitly",
+    "type": "strategy",
+    "title": "Handle NA explicitly at every aggregate",
+    "summary": "Decide and state how missing values are treated rather than relying on silent defaults.",
+    "domains": [
+      "r_lang",
+      "rstats",
+      "tidyverse",
+      "r_packages"
+    ],
+    "triggers": [
+      "na",
+      "missing",
+      "na.rm",
+      "aggregate",
+      "explicit"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.r"
+  },
+  {
+    "ref_id": "strategy:rlang:control-factor-coercion",
+    "type": "strategy",
+    "title": "Control factor coercion",
+    "summary": "Read character data as strings and convert to factors deliberately, with explicit levels.",
+    "domains": [
+      "r_lang",
+      "rstats",
+      "tidyverse",
+      "r_packages"
+    ],
+    "triggers": [
+      "factor",
+      "stringsAsFactors",
+      "coercion",
+      "levels",
+      "character"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.r"
+  },
+  {
+    "ref_id": "strategy:rlang:pin-dependencies-with-renv",
+    "type": "strategy",
+    "title": "Pin dependencies with renv",
+    "summary": "Lock every package version in a project library so an analysis reproduces on another machine.",
+    "domains": [
+      "r_lang",
+      "rstats",
+      "tidyverse",
+      "r_packages"
+    ],
+    "triggers": [
+      "renv",
+      "cran",
+      "lockfile",
+      "reproducible",
+      "dependency"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.r"
+  },
+  {
+    "ref_id": "methodology:rlang:translate-loop-to-vectorized",
+    "type": "methodology",
+    "title": "Translate a loop to vectorized form",
+    "summary": "Convert a slow row-wise loop into vectorized or apply-family code while preserving results.",
+    "domains": [
+      "r_lang",
+      "rstats",
+      "tidyverse",
+      "r_packages"
+    ],
+    "triggers": [
+      "vectorize",
+      "loop",
+      "translate",
+      "apply",
+      "benchmark"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.r"
+  },
+  {
+    "ref_id": "methodology:rlang:build-tidy-pipeline",
+    "type": "methodology",
+    "title": "Build a tidy data pipeline",
+    "summary": "Reshape data to tidy form and compose dplyr verbs into an inspectable transformation chain.",
+    "domains": [
+      "r_lang",
+      "rstats",
+      "tidyverse",
+      "r_packages"
+    ],
+    "triggers": [
+      "tidy",
+      "pivot",
+      "dplyr",
+      "pipeline",
+      "reshape"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.r"
+  },
+  {
+    "ref_id": "methodology:rlang:make-analysis-reproducible",
+    "type": "methodology",
+    "title": "Make an analysis reproducible",
+    "summary": "Combine renv pinning, a seeded R Markdown render, and a clean-session check.",
+    "domains": [
+      "r_lang",
+      "rstats",
+      "tidyverse",
+      "r_packages"
+    ],
+    "triggers": [
+      "reproducible",
+      "rmarkdown",
+      "renv",
+      "seed",
+      "render"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.r"
+  },
+  {
+    "ref_id": "methodology:rlang:diagnose-non-reproducible-result",
+    "type": "methodology",
+    "title": "Diagnose a non-reproducible result",
+    "summary": "Isolate whether a changed result comes from package versions, unset seed, or hidden state.",
+    "domains": [
+      "r_lang",
+      "rstats",
+      "tidyverse",
+      "r_packages"
+    ],
+    "triggers": [
+      "reproducible",
+      "diagnose",
+      "seed",
+      "version",
+      "state"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.r"
+  },
+  {
+    "ref_id": "knowledge:rlang:copy-on-modify-semantics",
+    "type": "knowledge",
+    "title": "Copy-on-modify semantics",
+    "summary": "R vectors are copied when modified through a name with multiple bindings, which drives loop cost.",
+    "domains": [
+      "r_lang",
+      "rstats",
+      "tidyverse",
+      "r_packages"
+    ],
+    "triggers": [
+      "copy-on-modify",
+      "vector",
+      "binding",
+      "memory",
+      "performance"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.r"
+  },
+  {
+    "ref_id": "knowledge:rlang:tibble-vs-dataframe",
+    "type": "knowledge",
+    "title": "Tibble versus data.frame",
+    "summary": "Tibbles differ from data.frames in subsetting, printing, and never coercing strings to factors.",
+    "domains": [
+      "r_lang",
+      "rstats",
+      "tidyverse",
+      "r_packages"
+    ],
+    "triggers": [
+      "tibble",
+      "data.frame",
+      "subset",
+      "factor",
+      "drop"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.r"
+  },
+  {
+    "ref_id": "knowledge:rlang:na-propagation-rules",
+    "type": "knowledge",
+    "title": "NA propagation rules",
+    "summary": "NA is contagious: most operations involving NA return NA unless missingness is removed explicitly.",
+    "domains": [
+      "r_lang",
+      "rstats",
+      "tidyverse",
+      "r_packages"
+    ],
+    "triggers": [
+      "na",
+      "propagation",
+      "na.rm",
+      "missing",
+      "aggregate"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.r"
+  },
+  {
+    "ref_id": "knowledge:rlang:apply-family-semantics",
+    "type": "knowledge",
+    "title": "Apply family semantics",
+    "summary": "lapply, sapply, vapply, and purrr::map differ in return-type guarantees and simplification.",
+    "domains": [
+      "r_lang",
+      "rstats",
+      "tidyverse",
+      "r_packages"
+    ],
+    "triggers": [
+      "apply",
+      "lapply",
+      "sapply",
+      "vapply",
+      "map"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.r"
+  },
+  {
+    "ref_id": "skill:rlang:inspect-frame-structure",
+    "type": "skill",
+    "title": "Inspect data frame structure",
+    "summary": "Report dimensions, column classes, factor levels, and NA counts to ground data decisions.",
+    "domains": [
+      "r_lang",
+      "rstats",
+      "tidyverse",
+      "r_packages"
+    ],
+    "triggers": [
+      "str",
+      "glimpse",
+      "classes",
+      "na",
+      "inspect"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.r"
+  },
+  {
+    "ref_id": "skill:rlang:check-package-pins",
+    "type": "skill",
+    "title": "Check package version pins",
+    "summary": "Compare renv.lock against installed versions to surface reproducibility drift.",
+    "domains": [
+      "r_lang",
+      "rstats",
+      "tidyverse",
+      "r_packages"
+    ],
+    "triggers": [
+      "renv",
+      "lockfile",
+      "version",
+      "drift",
+      "check"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.r"
+  }
+]

@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:swift:idiom-preserving-change",
+  "type": "strategy",
+  "description": "In Swift, prefer established idioms (optionals with guard/if-let, value types, protocol-oriented design, and async/await) over generic rewrites.",
+  "body": "In Swift, the ecosystem has settled idioms — optionals with guard/if-let, value types, protocol-oriented design, and async/await — and changes that ignore them add risk and review friction. Use when adding or modifying Swift code near existing patterns. Do not impose a foreign style or rewrite working code into a generic shape, and avoid abandoning nearby conventions. Actions: read the surrounding code, follow its optionals with guard/if-let, value types, protocol-oriented design, and async/await, keep the change minimal, then run swift build -warnings-as-errors and the Xcode static analyzer and swift test (XCTest/swift-testing) on the affected target to confirm fit. Validation signals include a small diff consistent with neighbors, a clean lint pass, and passing tests. Risk boundary: a broad idiom migration is its own reviewed task; escalate rather than bundling it into an unrelated change.",
+  "domain": "swift",
+  "scope_hint": "code.swift:strategies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.swift:skill_survey",
+  "pack_id": "code.swift"
+}

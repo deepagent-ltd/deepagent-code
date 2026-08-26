@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:rlang:hidden-global-state",
+  "type": "failure_dossier",
+  "description": "A script relies on objects left in the global environment, so it fails or differs in a clean session.",
+  "body": "Failure mode: a script depends on variables or loaded data lingering in the global environment from an earlier interactive session, so it breaks or produces different output when run fresh. Detection signals: code that works interactively but fails on a clean render; object not found errors only in batch; results that change after restarting R. Do not rely on interactive session state. Safer fallback: render in a fresh session, set a seed for stochastic steps, and load every dependency explicitly within the script.",
+  "domain": "r_lang",
+  "scope_hint": "code.r:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.r:human_authored",
+  "pack_id": "code.r"
+}

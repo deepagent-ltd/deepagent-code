@@ -1,0 +1,71 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.cli",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "cli",
+      "command_line",
+      "tty",
+      "terminal"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.cli: argument and flag parsing, subcommands, exit codes, stdin/stdout/stderr separation, TTY-vs-pipe detection, and signal handling for a composable command-line tool"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "build a React dashboard page with charts and a date picker"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "cli command line argument flag parsing subcommand exit code stdin stdout stderr tty pipe signal help composability",
+  "expected_pack_id": "code.cli",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "code.cli L3 validation smoke",
+    "signals": [
+      "exit code is 0 on success and non-zero on each documented failure",
+      "data goes to stdout and diagnostics to stderr (verified via redirection)",
+      "output adapts to TTY vs pipe (no color/prompt when piped)",
+      "SIGINT leaves no partial output or orphaned children",
+      "--help and usage exit cleanly with code 0"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "code.cli diagnosis smoke",
+    "signals": [
+      "errors or progress printed to stdout, polluting piped data",
+      "color codes or prompts emitted when output is piped",
+      "exit code 0 returned despite a failure",
+      "tool hangs waiting on stdin with no TTY check",
+      "Ctrl-C leaves a half-written file or zombie child"
+    ]
+  },
+  "source_refs": [
+    "source:posix-utility-conventions:paraphrased",
+    "source:cli-design-guidelines-practice:paraphrased"
+  ]
+}

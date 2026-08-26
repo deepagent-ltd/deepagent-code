@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:aws:iam-least-privilege-conditions",
+  "type": "strategy",
+  "title": "Constrain IAM policies with explicit resources and condition keys",
+  "description": "Scope every statement to named resource ARNs and add condition keys (aws:SourceArn, aws:PrincipalTag, StringEquals) instead of granting Action or Resource wildcards.",
+  "body": "Use when authoring or reviewing an IAM identity/resource policy or trust relationship. Do not ship Action:* or Resource:* to make a call succeed, and avoid wildcard service prefixes like s3:* when only GetObject is needed. Actions: enumerate the exact API actions the workload calls, pin Resource to specific ARNs, add condition keys (aws:SourceArn for service principals, StringEquals on aws:PrincipalTag, IpAddress on aws:SourceIp) and use iam simulate-principal-policy to confirm out-of-scope actions are denied. Validation signals include the policy simulator returning Deny for unlisted actions and CloudTrail showing no AccessDenied for the intended path. Risk boundary: any statement that widens a principal's reach or adds a wildcard is human-gated; escalate rather than broaden.",
+  "domain": "aws",
+  "scope_hint": "platform.cloud.aws:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.aws",
+  "pack_id": "platform.cloud.aws"
+}

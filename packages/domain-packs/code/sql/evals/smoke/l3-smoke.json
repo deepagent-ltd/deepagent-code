@@ -1,0 +1,73 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.sql",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "sql",
+      "database"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.sql: migrations, transactions, indexes, constraints, locks, query plans, rollback, and data backfills"
+    ],
+    "round_signals": [
+      "l3_validation_smoke"
+    ],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "round_signals": [],
+    "user_overrides": [],
+    "repo_signals": [
+      "fix a React useEffect cleanup and dependency array bug"
+    ]
+  },
+  "retrieval_query": "SQL window function CTE query plan deadlock upsert on conflict non-sargable index",
+  "expected_pack_id": "code.sql",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "database persistence behavior L3 validation smoke",
+    "signals": [
+      "migration dry-run",
+      "rollback rehearsal",
+      "EXPLAIN plan",
+      "constraint tests",
+      "transaction failure tests",
+      "and fixture data comparison"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "database persistence behavior diagnosis smoke",
+    "signals": [
+      "separate schema drift",
+      "lock contention",
+      "missing index",
+      "non-atomic write",
+      "backfill volume",
+      "and rollback impossibility"
+    ]
+  },
+  "source_refs": [
+    "source:postgresql-docs:paraphrased",
+    "source:sqlite-docs:paraphrased"
+  ]
+}

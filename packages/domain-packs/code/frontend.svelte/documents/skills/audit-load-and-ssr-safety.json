@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:svelte:audit-load-and-ssr-safety",
+  "type": "skill",
+  "title": "Audit load and SSR safety",
+  "description": "Check load functions for browser-only calls, non-serializable returns, and secret leakage across the SSR boundary.",
+  "body": "Use when validating a SvelteKit data path. Procedure: read each +page/+layout load, determine whether it is universal or server-only, and flag browser-API calls in universal loads, non-serializable return values, and any secret or server-only resource accessed where the result reaches the client. Report which loads are SSR-safe and which leak or crash. This skill exposes findings only and must not move logic between server and client without runtime permission. Validation signals include confirming the client payload contains no secret and SSR renders without a serialization error. Risk boundary: a secret read in a universal load is a blocking leak and must be moved to +page.server.js.",
+  "domain": "svelte",
+  "scope_hint": "code.frontend.svelte:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.svelte",
+  "pack_id": "code.frontend.svelte"
+}

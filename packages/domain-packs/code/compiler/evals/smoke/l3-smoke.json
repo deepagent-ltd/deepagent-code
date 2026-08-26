@@ -1,0 +1,70 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.compiler",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "compiler",
+      "parser",
+      "ir"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.compiler: lexer and recursive-descent parser building an AST, intermediate representation, type checker, optimization pass preserving semantics, and code generation with a symbol table"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "set up a CI pipeline to deploy a static website to a CDN"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "compiler lexer parser abstract syntax tree ast intermediate representation ir type checker optimization pass code generation symbol table semantics error recovery llvm",
+  "expected_pack_id": "code.compiler",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "code.compiler L3 validation smoke",
+    "signals": [
+      "differential test: optimized vs unoptimized output match on a program corpus",
+      "round-trip parse/print is idempotent",
+      "type checker accepts well-typed and rejects ill-typed programs in the test suite",
+      "optimization pass verified semantics-preserving (IR verifier / equivalence checks)",
+      "error-recovery produces a useful diagnostic and continues parsing"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "code.compiler diagnosis smoke",
+    "signals": [
+      "optimization pass that changes observable behavior (miscompilation)",
+      "parser that aborts on the first error instead of recovering",
+      "type rule that accepts an ill-typed program (unsoundness)",
+      "IR transformation violating an invariant the verifier should catch",
+      "symbol resolution ignoring scope or shadowing rules"
+    ]
+  },
+  "source_refs": [
+    "source:dragon-book-compiler-design:paraphrased",
+    "source:llvm-pass-and-ir-practice:paraphrased"
+  ]
+}

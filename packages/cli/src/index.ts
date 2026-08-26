@@ -1,0 +1,41 @@
+#!/usr/bin/env bun
+
+import * as NodeRuntime from "@effect/platform-node/NodeRuntime"
+import * as NodeServices from "@effect/platform-node/NodeServices"
+import * as Effect from "effect/Effect"
+import { Commands } from "./commands/commands"
+import { Runtime } from "./framework/runtime"
+import { Connection } from "./services/connection"
+import { Daemon } from "./services/daemon"
+import { ServerMode } from "./services/server-mode"
+
+const Handlers = Runtime.handlers(Commands, {
+  $: () => import("./commands/handlers/default"),
+  debug: {
+    agents: () => import("./commands/handlers/debug/agents"),
+  },
+  login: () => import("./commands/handlers/login"),
+  logout: () => import("./commands/handlers/logout"),
+  workspace: {
+    list: () => import("./commands/handlers/workspace/list"),
+    use: () => import("./commands/handlers/workspace/use"),
+  },
+  migrate: () => import("./commands/handlers/migrate"),
+  service: {
+    start: () => import("./commands/handlers/service/start"),
+    restart: () => import("./commands/handlers/service/restart"),
+    status: () => import("./commands/handlers/service/status"),
+    stop: () => import("./commands/handlers/service/stop"),
+    password: () => import("./commands/handlers/service/password"),
+  },
+  serve: () => import("./commands/handlers/serve"),
+})
+
+Runtime.run(Commands, Handlers, { version: "local" }).pipe(
+  Effect.provide(Connection.defaultLayer),
+  Effect.provide(ServerMode.defaultLayer),
+  Effect.provide(Daemon.defaultLayer),
+  Effect.provide(NodeServices.layer),
+  Effect.scoped,
+  NodeRuntime.runMain,
+)

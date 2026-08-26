@@ -1,0 +1,468 @@
+[
+  {
+    "ref_id": "strategy:orch:idempotent-tasks-by-date",
+    "type": "strategy",
+    "title": "Make every task idempotent per execution date",
+    "summary": "Parameterize tasks by the run's logical date and write so that rerunning the same date overwrites rather than duplicates.",
+    "domains": [
+      "orchestration",
+      "workflow_dag",
+      "airflow",
+      "dagster",
+      "prefect",
+      "task_retry"
+    ],
+    "triggers": [
+      "idempotent",
+      "task_retry",
+      "backfill schedule",
+      "workflow dag"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.data-pipeline-orchestration"
+  },
+  {
+    "ref_id": "strategy:orch:depend-on-data-not-time",
+    "type": "strategy",
+    "title": "Gate tasks on data readiness, not a timer",
+    "summary": "Trigger downstream work from the actual arrival of upstream data via sensors or task dependencies instead of a fixed schedule offset.",
+    "domains": [
+      "orchestration",
+      "workflow_dag",
+      "airflow",
+      "dagster",
+      "prefect",
+      "task_retry"
+    ],
+    "triggers": [
+      "sensor task",
+      "task dependency",
+      "workflow dag",
+      "dependency"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.data-pipeline-orchestration"
+  },
+  {
+    "ref_id": "strategy:orch:bounded-retries-with-alerts",
+    "type": "strategy",
+    "title": "Bound retries and alert on exhaustion",
+    "summary": "Configure finite retries with backoff for transient faults and route final failures to a notification so they are not lost.",
+    "domains": [
+      "orchestration",
+      "workflow_dag",
+      "airflow",
+      "dagster",
+      "prefect",
+      "task_retry"
+    ],
+    "triggers": [
+      "task_retry",
+      "retry",
+      "alerting",
+      "failure"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.data-pipeline-orchestration"
+  },
+  {
+    "ref_id": "strategy:orch:keep-dags-deterministic",
+    "type": "strategy",
+    "title": "Keep DAG structure deterministic and parse-light",
+    "summary": "Build dynamic DAGs from stable inputs and keep top-level parse code cheap so the scheduler stays fast and reproducible.",
+    "domains": [
+      "orchestration",
+      "workflow_dag",
+      "airflow",
+      "dagster",
+      "prefect",
+      "task_retry"
+    ],
+    "triggers": [
+      "dynamic dag",
+      "workflow dag",
+      "scheduler",
+      "airflow"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.data-pipeline-orchestration"
+  },
+  {
+    "ref_id": "strategy:orch:monitor-slas-explicitly",
+    "type": "strategy",
+    "title": "Define and monitor pipeline SLAs",
+    "summary": "Attach explicit completion-time SLAs to critical tasks so a late pipeline pages someone instead of silently slipping.",
+    "domains": [
+      "orchestration",
+      "workflow_dag",
+      "airflow",
+      "dagster",
+      "prefect",
+      "task_retry"
+    ],
+    "triggers": [
+      "sla",
+      "monitoring",
+      "alerting",
+      "workflow dag"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.data-pipeline-orchestration"
+  },
+  {
+    "ref_id": "strategy:orch:scope-backfills-carefully",
+    "type": "strategy",
+    "title": "Scope and rate-limit backfills",
+    "summary": "Run backfills over explicit date ranges with bounded concurrency so they reproduce history without overwhelming shared resources.",
+    "domains": [
+      "orchestration",
+      "workflow_dag",
+      "airflow",
+      "dagster",
+      "prefect",
+      "task_retry"
+    ],
+    "triggers": [
+      "backfill schedule",
+      "concurrency",
+      "idempotent",
+      "workflow dag"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.data-pipeline-orchestration"
+  },
+  {
+    "ref_id": "methodology:orch:design-a-dag",
+    "type": "methodology",
+    "title": "Design a DAG from dependencies and grain",
+    "summary": "Lay out tasks by their true data dependencies with idempotent, date-parameterized units before wiring schedules.",
+    "domains": [
+      "orchestration",
+      "workflow_dag",
+      "airflow",
+      "dagster",
+      "prefect",
+      "task_retry"
+    ],
+    "triggers": [
+      "workflow dag",
+      "task dependency",
+      "idempotent",
+      "design"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.data-pipeline-orchestration"
+  },
+  {
+    "ref_id": "methodology:orch:wire-sensors-safely",
+    "type": "methodology",
+    "title": "Wire sensors with timeouts and reschedule mode",
+    "summary": "Use sensors to wait for external readiness without exhausting worker slots, with explicit timeouts and failure handling.",
+    "domains": [
+      "orchestration",
+      "workflow_dag",
+      "airflow",
+      "dagster",
+      "prefect",
+      "task_retry"
+    ],
+    "triggers": [
+      "sensor task",
+      "task dependency",
+      "timeout",
+      "airflow"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.data-pipeline-orchestration"
+  },
+  {
+    "ref_id": "methodology:orch:run-a-safe-backfill",
+    "type": "methodology",
+    "title": "Run a safe, reconciled backfill",
+    "summary": "Reprocess a historical range with idempotent tasks, bounded concurrency, and a reconciliation check against the original output.",
+    "domains": [
+      "orchestration",
+      "workflow_dag",
+      "airflow",
+      "dagster",
+      "prefect",
+      "task_retry"
+    ],
+    "triggers": [
+      "backfill schedule",
+      "idempotent",
+      "reconciliation",
+      "concurrency"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.data-pipeline-orchestration"
+  },
+  {
+    "ref_id": "methodology:orch:operate-failure-notifications",
+    "type": "methodology",
+    "title": "Operate task failure and SLA notifications",
+    "summary": "Route task failures and SLA misses to actionable alerts with run context so incidents are caught, not buried in logs.",
+    "domains": [
+      "orchestration",
+      "workflow_dag",
+      "airflow",
+      "dagster",
+      "prefect",
+      "task_retry"
+    ],
+    "triggers": [
+      "alerting",
+      "sla",
+      "failure",
+      "task_retry"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.data-pipeline-orchestration"
+  },
+  {
+    "ref_id": "knowledge:orch:dag-scheduling-model",
+    "type": "knowledge",
+    "title": "How DAG scheduling and execution dates work",
+    "summary": "Why orchestrators run a logical/execution date per interval and how that date parameterizes idempotent tasks.",
+    "domains": [
+      "orchestration",
+      "workflow_dag",
+      "airflow",
+      "dagster",
+      "prefect",
+      "task_retry"
+    ],
+    "triggers": [
+      "dag scheduling",
+      "execution date",
+      "workflow dag",
+      "airflow"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.data-pipeline-orchestration"
+  },
+  {
+    "ref_id": "knowledge:orch:idempotency-and-retries",
+    "type": "knowledge",
+    "title": "Idempotency as the basis for safe retries",
+    "summary": "Why retries and backfills are only safe when a task's effect for a given date is the same no matter how many times it runs.",
+    "domains": [
+      "orchestration",
+      "workflow_dag",
+      "airflow",
+      "dagster",
+      "prefect",
+      "task_retry"
+    ],
+    "triggers": [
+      "idempotent",
+      "task_retry",
+      "retry",
+      "backfill schedule"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.data-pipeline-orchestration"
+  },
+  {
+    "ref_id": "knowledge:orch:orchestrator-comparison",
+    "type": "knowledge",
+    "title": "Airflow, Dagster, and Prefect models",
+    "summary": "How a task-centric scheduler, an asset/software-defined model, and a flexible Pythonic flow model differ in abstraction.",
+    "domains": [
+      "orchestration",
+      "workflow_dag",
+      "airflow",
+      "dagster",
+      "prefect",
+      "task_retry"
+    ],
+    "triggers": [
+      "airflow",
+      "dagster",
+      "prefect",
+      "workflow dag"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.data-pipeline-orchestration"
+  },
+  {
+    "ref_id": "knowledge:orch:orchestration-vs-streaming",
+    "type": "knowledge",
+    "title": "Batch orchestration versus stream processing",
+    "summary": "When scheduled DAGs over bounded intervals fit versus when continuous stream processing is the right tool.",
+    "domains": [
+      "orchestration",
+      "workflow_dag",
+      "airflow",
+      "dagster",
+      "prefect",
+      "task_retry"
+    ],
+    "triggers": [
+      "workflow dag",
+      "dag scheduling",
+      "pipeline orchestration",
+      "batch"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.data-pipeline-orchestration"
+  },
+  {
+    "ref_id": "skill:orch:make-task-idempotent",
+    "type": "skill",
+    "title": "Make a pipeline task idempotent",
+    "summary": "Steps to convert an append-mode task into a date-partitioned overwrite so retries and backfills are safe.",
+    "domains": [
+      "orchestration",
+      "workflow_dag",
+      "airflow",
+      "dagster",
+      "prefect",
+      "task_retry"
+    ],
+    "triggers": [
+      "idempotent",
+      "task_retry",
+      "backfill schedule",
+      "partition"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.data-pipeline-orchestration"
+  },
+  {
+    "ref_id": "skill:orch:add-failure-callback",
+    "type": "skill",
+    "title": "Add a failure and SLA notification callback",
+    "summary": "Steps to wire on-failure and SLA-miss callbacks that alert with run context while suppressing transient-retry noise.",
+    "domains": [
+      "orchestration",
+      "workflow_dag",
+      "airflow",
+      "dagster",
+      "prefect",
+      "task_retry"
+    ],
+    "triggers": [
+      "alerting",
+      "sla",
+      "failure",
+      "task_retry"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.data-pipeline-orchestration"
+  }
+]

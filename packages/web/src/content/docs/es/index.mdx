@@ -1,0 +1,345 @@
+---
+title: Introducción
+description: Comience a usar DeepAgent Code.
+---
+
+import { Tabs, TabItem } from "@astrojs/starlight/components"
+import config from "../../../../config.mjs"
+export const console = config.console
+
+[**DeepAgent Code**](/) es un agente de codigo de IA de código abierto. Está disponible como interfaz basada en terminal, aplicación de escritorio o extensión IDE.
+
+![DeepAgent Code TUI con el tema deepagent-code](../../../assets/lander/screenshot.png)
+
+Comencemos.
+
+---
+
+#### Requisitos previos
+
+Para usar DeepAgent Code en la terminal, necesitará:
+
+1. Un emulador de terminal moderno como:
+   - [WezTerm](https://wezterm.org), multiplataforma
+   - [Alacritty](https://alacritty.org), multiplataforma
+   - [Ghostty](https://ghostty.org), Linux y macOS
+   - [Kitty](https://sw.kovidgoyal.net/kitty/), Linux y macOS
+
+2. Claves de API de los proveedores de LLM que quiera usar.
+
+---
+
+## Instalar
+
+La forma más sencilla de instalar DeepAgent Code es mediante el script de instalación.
+
+```bash
+curl -fsSL https://deepagent-code.ai/install | bash
+```
+
+También puedes instalarlo con alguno de los siguientes métodos:
+
+- **Usando Node.js**
+
+        <Tabs>
+
+      <TabItem label="npm">
+      ```bash
+      npm install -g deepagent-code
+      ```
+
+          </TabItem>
+
+        <TabItem label="Bun">
+        ```bash
+        bun install -g deepagent-code
+        ```
+
+          </TabItem>
+
+        <TabItem label="pnpm">
+        ```bash
+        pnpm install -g deepagent-code
+        ```
+
+          </TabItem>
+
+        <TabItem label="Yarn">
+        ```bash
+        yarn global add deepagent-code
+        ```
+
+      </TabItem>
+
+  </Tabs>
+
+- **Usando Homebrew en macOS y Linux**
+
+  ```bash
+  brew install anomalyco/tap/deepagent-code
+  ```
+
+  > Recomendamos utilizar el tap DeepAgent Code para las versiones más actualizadas. La fórmula oficial `brew install deepagent-code` la mantiene el equipo Homebrew y se actualiza con menos frecuencia.
+
+- **Usando Paru en Arch Linux**
+
+  ```bash
+  sudo pacman -S deepagent-code           # Arch Linux (Stable)
+  paru -S deepagent-code-bin              # Arch Linux (Latest from AUR)
+  ```
+
+#### Windows
+
+:::tip[Recomendado: Usar WSL]
+Para obtener la mejor experiencia en Windows, recomendamos utilizar [Windows Subsystem for Linux (WSL)](/docs/windows-wsl). Ofrece mejor rendimiento y compatibilidad total con las funciones de DeepAgent Code.
+:::
+
+- **Usando Chocolatey**
+
+  ```bash
+  choco install deepagent-code
+  ```
+
+- **Usando Scoop**
+
+  ```bash
+  scoop install deepagent-code
+  ```
+
+- **Usando NPM**
+
+  ```bash
+  npm install -g deepagent-code
+  ```
+
+- **Usando Mise**
+
+  ```bash
+  mise use -g github:lessweb/deepagent-code
+  ```
+
+- **Usando Docker**
+
+  ```bash
+  docker run -it --rm ghcr.io/lessweb/deepagent-code
+  ```
+
+El soporte para instalar DeepAgent Code en Windows usando Bun todavía está en desarrollo.
+
+También puede obtener el binario desde [Versiones](https://github.com/lessweb/deepagent-code/releases).
+
+---
+
+## Configuración
+
+Con DeepAgent Code, puede usar cualquier proveedor de LLM configurando sus claves de API.
+
+Si es nuevo en el uso de proveedores de LLM, le recomendamos usar [DeepAgent Code Zen](/docs/zen).
+Es una selección de modelos probados y verificados por el equipo de DeepAgent Code.
+
+1. Ejecute el comando `/connect` en la TUI, seleccione deepagent-code y diríjase a [deepagent-code.ai/auth](https://deepagent-code.ai/auth).
+
+   ```txt
+   /connect
+   ```
+
+2. Inicie sesión, agregue sus datos de facturación y copie su clave de API.
+
+3. Pega tu clave de API.
+
+   ```txt
+   ┌ API key
+   │
+   │
+   └ enter
+   ```
+
+También puede seleccionar otro proveedor. [Más información](/docs/providers#directory).
+
+---
+
+## Inicializar
+
+Ahora que ya configuró un proveedor, vaya al proyecto en el que quiera trabajar.
+
+```bash
+cd /path/to/project
+```
+
+Luego, ejecute DeepAgent Code.
+
+```bash
+deepagent-code
+```
+
+A continuación, inicialice DeepAgent Code para el proyecto con el siguiente comando:
+
+```bash frame="none"
+/init
+```
+
+DeepAgent Code analizará su proyecto y creará un archivo AGENTS.md en la raíz.
+
+:::tip
+Asegúrese de versionar en Git el archivo AGENTS.md de su proyecto.
+:::
+
+Esto ayuda a DeepAgent Code a comprender la estructura del proyecto y los patrones de código que se usan en él.
+
+---
+
+## Usar
+
+Ahora ya está listo para usar DeepAgent Code en su proyecto. Puede pedirle desde explicaciones del código hasta cambios concretos.
+
+Si es la primera vez que usa un agente de codigo con IA, estos ejemplos pueden servirle como punto de partida.
+
+---
+
+### Hacer preguntas
+
+Puede pedirle a DeepAgent Code que le explique el código base.
+
+:::tip
+Utilice la tecla `@` para realizar una búsqueda aproximada de archivos dentro del proyecto.
+:::
+
+```txt frame="none" "@packages/functions/src/api/index.ts"
+¿Cómo se maneja la autenticación en @packages/functions/src/api/index.ts
+```
+
+Esto resulta útil cuando hay una parte del código base en la que usted no ha trabajado.
+
+---
+
+### Agregar funcionalidades
+
+Puede pedirle a DeepAgent Code que agregue nuevas funcionalidades a su proyecto. Aun así, primero recomendamos pedirle que cree un plan.
+
+1. **Crear un plan**
+
+   DeepAgent Code tiene un modo Plan que desactiva temporalmente su capacidad de hacer cambios y, en su lugar, propone _cómo_ implementará la funcionalidad.
+
+   Cambie a este modo con la tecla **Tab.** Verá un indicador en la esquina inferior derecha.
+
+   ```bash frame="none" title="Switch to Plan mode"
+   <TAB>
+   ```
+
+   Ahora describa lo que quiere que haga.
+
+   ```txt frame="none"
+   Cuando un usuario elimine una nota, queremos marcarla como eliminada en la base de datos.
+   Luego, cree una pantalla que muestre todas las notas eliminadas recientemente.
+   Desde esa pantalla, el usuario podrá restaurar una nota o eliminarla de forma permanente.
+   ```
+
+   Procure darle a DeepAgent Code suficiente contexto para que entienda exactamente lo que necesita. Ayuda hablarle como si estuviera hablando con un desarrollador junior de su equipo.
+
+   :::tip
+   Déle a DeepAgent Code todo el contexto y los ejemplos que pueda para ayudarle a comprender lo que desea.
+   :::
+
+2. **Iterar sobre el plan**
+
+   Una vez que DeepAgent Code le proponga un plan, puede darle comentarios o agregar más detalles.
+
+   ```txt frame="none"
+   Queremos diseñar esta nueva pantalla usando un diseño que ya hemos usado antes.
+   [Imagen #1] Revise esta imagen y úsela como referencia.
+   ```
+
+   :::tip
+   Arrastre y suelte imágenes en la terminal para agregarlas al mensaje.
+   :::
+
+   DeepAgent Code puede analizar cualquier imagen que usted le proporcione y añadirla al contexto del mensaje. Puede hacerlo arrastrando y soltando una imagen en la terminal.
+
+3. **Implementar la funcionalidad**
+
+   Cuando esté conforme con el plan, vuelva al modo _Build_ presionando de nuevo la tecla Tab.
+
+   ```bash frame="none"
+   <TAB>
+   ```
+
+   Luego, pídale que haga los cambios.
+
+   ```bash frame="none"
+   Perfecto. Continúe y realice los cambios.
+   ```
+
+---
+
+### Realizar cambios
+
+Para cambios más sencillos, puede pedirle a DeepAgent Code que los implemente directamente, sin revisar antes un plan.
+
+```txt frame="none" "@packages/functions/src/settings.ts" "@packages/functions/src/notes.ts"
+Necesitamos agregar autenticación a la ruta /settings. Revise cómo se maneja esto
+en la ruta /notes en @packages/functions/src/notes.ts e implemente
+la misma lógica en @packages/functions/src/settings.ts.
+```
+
+Procure dar suficientes detalles para que DeepAgent Code pueda tomar las decisiones correctas al hacer los cambios
+
+---
+
+### Deshacer cambios
+
+Supongamos que le pide a DeepAgent Code que haga algunos cambios.
+
+```txt frame="none" "@packages/functions/src/api/index.ts"
+¿Puede refactorizar la función en @packages/functions/src/api/index.ts?
+```
+
+Pero luego se da cuenta de que no era lo que quería. Puede **deshacer** los cambios usando el comando `/undo`.
+
+```bash frame="none"
+/undo
+```
+
+DeepAgent Code revertirá los cambios que hizo y volverá a mostrar su mensaje original.
+
+```txt frame="none" "@packages/functions/src/api/index.ts"
+¿Puede refactorizar la función en @packages/functions/src/api/index.ts?
+```
+
+Desde ahí, puede modificar el mensaje y pedirle a DeepAgent Code que lo intente de nuevo.
+
+:::tip
+Puede ejecutar `/undo` varias veces para deshacer varios cambios.
+:::
+
+También puede rehacer los cambios usando el comando `/redo.`
+
+```bash frame="none"
+/redo
+```
+
+---
+
+## Compartir
+
+Las conversaciones que tenga con DeepAgent Code pueden [compartirse con su
+equipo](/docs/share).
+
+```bash frame="none"
+/share
+```
+
+Esto creará un enlace a la conversación actual y lo copiará en su portapapeles.
+
+:::note
+Las conversaciones no se comparten de forma predeterminada.
+:::
+
+Aquí tiene una [conversación de ejemplo](https://deepagent-code.ai/s/4XP1fce5) con DeepAgent Code.
+
+---
+
+## Personalizar
+
+Y eso es todo. Ya conoce lo básico para empezar a usar DeepAgent Code.
+
+Para personalizarlo, recomendamos [elegir un tema](/docs/themes), [personalizar las combinaciones de teclas](/docs/keybinds), [configurar formateadores de código](/docs/formatters), [crear comandos personalizados](/docs/commands) o explorar la [configuración DeepAgent Code](/docs/config).

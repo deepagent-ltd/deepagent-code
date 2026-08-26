@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:ng:di-hierarchy-and-provider-scope",
+  "type": "knowledge",
+  "title": "The DI hierarchy and provider scope",
+  "description": "Angular resolves a dependency up a tree of injectors, so where a service is provided determines its instance count and lifetime.",
+  "body": "Use when wiring services or debugging shared/split state. Angular has a hierarchical injector: a request resolves from the element injector of the requesting component up through its ancestors to the root (and the module/environment injector). providedIn: 'root' yields a single app-wide instance; a component- or route-level provider creates a new instance scoped to that subtree's lifetime. Multiple providers for the same token at different levels create multiple instances. Do not assume a service is a singleton just because it has one class. Actions: choose the level that matches the intended sharing and lifetime. Validation signals include a test asserting the expected instance count. Risk boundary: an accidental extra instance silently splits state, so writes in one component are invisible to another.",
+  "domain": "angular",
+  "scope_hint": "code.frontend.angular:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.angular",
+  "pack_id": "code.frontend.angular"
+}

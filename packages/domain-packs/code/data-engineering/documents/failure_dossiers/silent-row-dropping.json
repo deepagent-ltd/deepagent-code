@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:dataeng:silent-row-dropping",
+  "type": "failure_dossier",
+  "description": "Catch-all error handling that discards unparseable rows, so the pipeline succeeds while quietly losing data.",
+  "body": "Failure mode: parsing or validation is wrapped in a broad try/except that drops bad records, so the run is green while a growing fraction of data disappears unnoticed for weeks. Detection signals: input and output counts diverge with no error; a known-bad record produces no log or metric; reconciliation was never set up. Do not swallow record-level errors silently. Safer fallback: route rejected rows to a dead-letter table with the error, emit reject-rate metrics, alert on threshold, and reconcile input vs output+rejected.",
+  "domain": "data_engineering",
+  "scope_hint": "code.data-engineering:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-engineering:human_authored",
+  "pack_id": "code.data-engineering"
+}

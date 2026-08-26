@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:wasm:keep-modules-debuggable",
+  "type": "strategy",
+  "title": "Keep WASM builds debuggable",
+  "description": "Ship DWARF/source maps in dev and keep panic/trap messages so a WASM fault maps back to source.",
+  "body": "Use when setting up the WASM build and toolchain. Do not strip all debug info and disable panic messages in development, because a bare WASM trap (unreachable, out-of-bounds) gives a meaningless stack with no source location. Actions: build dev with debug symbols/DWARF and keep panic hooks (e.g. console_error_panic_hook) so panics print a real message and stack; for release, strip and optimize but keep a way to symbolize a crash from a saved map. Validation signals include a deliberately triggered panic/trap showing a source-level location and message in dev tools. Risk boundary: shipping a release build whose only crash signal is 'unreachable' makes incidents undiagnosable; retain symbolication for the deployed artifact.",
+  "domain": "wasm",
+  "scope_hint": "code.wasm:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.wasm",
+  "pack_id": "code.wasm"
+}

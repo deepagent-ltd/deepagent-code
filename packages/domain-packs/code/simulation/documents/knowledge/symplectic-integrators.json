@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:sim:symplectic-integrators",
+  "type": "knowledge",
+  "title": "Symplectic integrators for conservative systems",
+  "description": "Symplectic integrators preserve a system's energy structure over long times, unlike generic methods that drift.",
+  "body": "Use when simulating a conservative physical system over long durations. Do not use a generic high-order method expecting energy conservation, since most integrators add or remove energy over time. Actions: identify whether the system is conservative, choose a symplectic integrator like leapfrog for it, and verify energy stays bounded over a long run. Validation signals include energy oscillating around a constant rather than drifting and bounded long-term behavior. Risk boundary: a non-symplectic method on a conservative system produces qualitatively wrong long-term dynamics, so flag steady energy drift as a method-choice defect.",
+  "domain": "simulation",
+  "scope_hint": "code.simulation:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.simulation",
+  "pack_id": "code.simulation"
+}

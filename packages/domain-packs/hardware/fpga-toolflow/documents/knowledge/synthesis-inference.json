@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:fpgatf:synthesis-inference",
+  "type": "knowledge",
+  "title": "How synthesis infers hardware from RTL",
+  "description": "Synthesis maps RTL constructs onto LUTs, flip-flops, block RAM, and DSP slices, and coding style steers that mapping.",
+  "body": "Use when reasoning about why synthesis produced unexpected resources. Do not assume RTL maps one-to-one to intent, since coding style decides whether a memory becomes block RAM or distributed logic. Actions: review the synthesis report for inferred primitives, compare against intent, and adjust coding style or attributes to steer the mapping. Validation signals include inferred resources matching the design intent and utilization within the device budget. Risk boundary: an unintended mapping can blow the resource budget or timing, so flag a large divergence between expected and inferred primitives.",
+  "domain": "fpga_toolflow",
+  "scope_hint": "hardware.fpga-toolflow:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.fpga-toolflow",
+  "pack_id": "hardware.fpga-toolflow"
+}

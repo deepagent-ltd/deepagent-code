@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:mt:make-caches-tenant-aware",
+  "type": "strategy",
+  "title": "Make every cache key tenant-aware",
+  "description": "Include the tenant in cache keys so a cached value computed for one tenant is never served to another.",
+  "body": "Use when adding caching to any tenant-scoped data or response. Do not cache by a key that omits the tenant. Actions: prefix or compose cache keys with the tenant id; verify shared caches cannot collide across tenants; invalidate per tenant. Validation signals include a test where tenant A's cached response is never returned to tenant B for the same logical key. Risk boundary: a tenant-blind cache key leaks one tenant's data to another and is easy to introduce accidentally, so make tenant part of the key and treat a miss of this rule as a leak.",
+  "domain": "multi_tenant",
+  "scope_hint": "code.backend.multi-tenant:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.multi-tenant",
+  "pack_id": "code.backend.multi-tenant"
+}

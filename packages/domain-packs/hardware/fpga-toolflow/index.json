@@ -1,0 +1,450 @@
+[
+  {
+    "ref_id": "strategy:fpgatf:constrain-clocks-first",
+    "type": "strategy",
+    "title": "Define every clock before reading timing",
+    "summary": "Create primary and generated clock constraints for all clocks first so static timing analysis has a valid reference.",
+    "domains": [
+      "fpga_toolflow",
+      "synthesis",
+      "place_route",
+      "timing_constraint",
+      "bitstream"
+    ],
+    "triggers": [
+      "create_clock",
+      "clock definition",
+      "xdc",
+      "generated clock"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.fpga-toolflow"
+  },
+  {
+    "ref_id": "strategy:fpgatf:close-setup-timing",
+    "type": "strategy",
+    "title": "Close setup timing by attacking critical paths",
+    "summary": "Reduce logic depth on the worst negative-slack paths through pipelining or restructuring before relaxing the clock.",
+    "domains": [
+      "fpga_toolflow",
+      "synthesis",
+      "place_route",
+      "timing_constraint",
+      "bitstream"
+    ],
+    "triggers": [
+      "setup slack",
+      "critical path",
+      "pipelining",
+      "logic depth"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.fpga-toolflow"
+  },
+  {
+    "ref_id": "strategy:fpgatf:fix-hold-violations",
+    "type": "strategy",
+    "title": "Resolve hold violations with skew and buffering",
+    "summary": "Address negative hold slack on short paths through clock-skew constraints or delay insertion, not by slowing the clock.",
+    "domains": [
+      "fpga_toolflow",
+      "synthesis",
+      "place_route",
+      "timing_constraint",
+      "bitstream"
+    ],
+    "triggers": [
+      "hold slack",
+      "clock skew",
+      "short path",
+      "delay insertion"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.fpga-toolflow"
+  },
+  {
+    "ref_id": "strategy:fpgatf:apply-timing-exceptions",
+    "type": "strategy",
+    "title": "Apply false and multicycle path exceptions carefully",
+    "summary": "Declare false and multicycle paths only where the design semantics truly allow, scoping each exception narrowly.",
+    "domains": [
+      "fpga_toolflow",
+      "synthesis",
+      "place_route",
+      "timing_constraint",
+      "bitstream"
+    ],
+    "triggers": [
+      "false path",
+      "multicycle path",
+      "timing exception",
+      "set_false_path"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.fpga-toolflow"
+  },
+  {
+    "ref_id": "strategy:fpgatf:constrain-cdc",
+    "type": "strategy",
+    "title": "Constrain and synchronize clock-domain crossings",
+    "summary": "Declare asynchronous crossings and ensure each is covered by a proper synchronizer rather than left for STA to time.",
+    "domains": [
+      "fpga_toolflow",
+      "synthesis",
+      "place_route",
+      "timing_constraint",
+      "bitstream"
+    ],
+    "triggers": [
+      "clock domain crossing",
+      "cdc",
+      "synchronizer",
+      "set_max_delay"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.fpga-toolflow"
+  },
+  {
+    "ref_id": "strategy:fpgatf:manage-incremental-compile",
+    "type": "strategy",
+    "title": "Use incremental compile to preserve closure",
+    "summary": "Lock down timing-closed regions and recompile only changed logic to keep results stable across iterations.",
+    "domains": [
+      "fpga_toolflow",
+      "synthesis",
+      "place_route",
+      "timing_constraint",
+      "bitstream"
+    ],
+    "triggers": [
+      "incremental compile",
+      "partition",
+      "design preservation",
+      "runtime"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.fpga-toolflow"
+  },
+  {
+    "ref_id": "methodology:fpgatf:run-synthesis-to-bitstream",
+    "type": "methodology",
+    "title": "Run the synthesis-to-bitstream flow with checkpoints",
+    "summary": "Execute synthesis, place-and-route, STA, and bitstream as gated stages, validating each before proceeding.",
+    "domains": [
+      "fpga_toolflow",
+      "synthesis",
+      "place_route",
+      "timing_constraint",
+      "bitstream"
+    ],
+    "triggers": [
+      "synthesis",
+      "place and route",
+      "bitstream",
+      "flow"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.fpga-toolflow"
+  },
+  {
+    "ref_id": "methodology:fpgatf:analyze-timing-reports",
+    "type": "methodology",
+    "title": "Read static timing reports systematically",
+    "summary": "Work from the worst-slack paths through clock relationships and exceptions to find the true cause of a violation.",
+    "domains": [
+      "fpga_toolflow",
+      "synthesis",
+      "place_route",
+      "timing_constraint",
+      "bitstream"
+    ],
+    "triggers": [
+      "timing report",
+      "worst slack",
+      "clock relationship",
+      "root cause"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.fpga-toolflow"
+  },
+  {
+    "ref_id": "methodology:fpgatf:floorplan-congested-design",
+    "type": "methodology",
+    "title": "Floorplan a congested or timing-stressed design",
+    "summary": "Guide placement of critical blocks into regions when the router struggles or timing depends on locality.",
+    "domains": [
+      "fpga_toolflow",
+      "synthesis",
+      "place_route",
+      "timing_constraint",
+      "bitstream"
+    ],
+    "triggers": [
+      "floorplan",
+      "placement region",
+      "congestion",
+      "locality"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.fpga-toolflow"
+  },
+  {
+    "ref_id": "methodology:fpgatf:audit-constraint-coverage",
+    "type": "methodology",
+    "title": "Audit constraint coverage before sign-off",
+    "summary": "Confirm every clock, I/O, and exception is intentional and complete using the tool's coverage reports.",
+    "domains": [
+      "fpga_toolflow",
+      "synthesis",
+      "place_route",
+      "timing_constraint",
+      "bitstream"
+    ],
+    "triggers": [
+      "constraint coverage",
+      "check_timing",
+      "unconstrained",
+      "sign-off"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.fpga-toolflow"
+  },
+  {
+    "ref_id": "knowledge:fpgatf:setup-hold-fundamentals",
+    "type": "knowledge",
+    "title": "Setup and hold slack fundamentals",
+    "summary": "Setup slack depends on the clock period and path delay while hold slack depends on minimum delay and clock skew.",
+    "domains": [
+      "fpga_toolflow",
+      "synthesis",
+      "place_route",
+      "timing_constraint",
+      "bitstream"
+    ],
+    "triggers": [
+      "setup slack",
+      "hold slack",
+      "clock period",
+      "clock skew"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.fpga-toolflow"
+  },
+  {
+    "ref_id": "knowledge:fpgatf:xdc-sdc-constraint-model",
+    "type": "knowledge",
+    "title": "How XDC and SDC constraints model timing",
+    "summary": "Constraint languages declare clocks, input and output delays, and exceptions that define the timing problem STA solves.",
+    "domains": [
+      "fpga_toolflow",
+      "synthesis",
+      "place_route",
+      "timing_constraint",
+      "bitstream"
+    ],
+    "triggers": [
+      "xdc",
+      "sdc",
+      "input delay",
+      "timing constraint"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.fpga-toolflow"
+  },
+  {
+    "ref_id": "knowledge:fpgatf:synthesis-inference",
+    "type": "knowledge",
+    "title": "How synthesis infers hardware from RTL",
+    "summary": "Synthesis maps RTL constructs onto LUTs, flip-flops, block RAM, and DSP slices, and coding style steers that mapping.",
+    "domains": [
+      "fpga_toolflow",
+      "synthesis",
+      "place_route",
+      "timing_constraint",
+      "bitstream"
+    ],
+    "triggers": [
+      "synthesis",
+      "inference",
+      "block ram",
+      "dsp slice"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.fpga-toolflow"
+  },
+  {
+    "ref_id": "knowledge:fpgatf:metastability-cdc-risk",
+    "type": "knowledge",
+    "title": "Metastability and clock-domain-crossing risk",
+    "summary": "A flip-flop sampled near a clock edge can go metastable, so asynchronous crossings need synchronizers to bound the failure rate.",
+    "domains": [
+      "fpga_toolflow",
+      "synthesis",
+      "place_route",
+      "timing_constraint",
+      "bitstream"
+    ],
+    "triggers": [
+      "metastability",
+      "cdc",
+      "synchronizer",
+      "asynchronous crossing"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.fpga-toolflow"
+  },
+  {
+    "ref_id": "skill:fpgatf:write-create-clock",
+    "type": "skill",
+    "title": "Write a create_clock constraint",
+    "summary": "Specify a clock's period and waveform on the correct source port so STA derives the right timing window.",
+    "domains": [
+      "fpga_toolflow",
+      "synthesis",
+      "place_route",
+      "timing_constraint",
+      "bitstream"
+    ],
+    "triggers": [
+      "create_clock",
+      "clock constraint",
+      "period"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.fpga-toolflow"
+  },
+  {
+    "ref_id": "skill:fpgatf:scope-set-false-path",
+    "type": "skill",
+    "title": "Scope a set_false_path exception narrowly",
+    "summary": "Restrict a false-path exception with specific from and to points so it cannot accidentally untimed real logic.",
+    "domains": [
+      "fpga_toolflow",
+      "synthesis",
+      "place_route",
+      "timing_constraint",
+      "bitstream"
+    ],
+    "triggers": [
+      "set_false_path",
+      "timing exception",
+      "from to scope"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.fpga-toolflow"
+  }
+]

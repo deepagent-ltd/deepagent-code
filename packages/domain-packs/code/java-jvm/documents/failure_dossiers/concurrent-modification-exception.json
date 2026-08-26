@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:java_jvm:concurrent-modification-exception",
+  "type": "failure_dossier",
+  "description": "Modifying a collection while iterating it with a fail-fast iterator, throwing ConcurrentModificationException.",
+  "body": "Failure mode: code calls list.remove/add inside an enhanced-for loop over the same collection, so the fail-fast iterator detects the structural change and throws ConcurrentModificationException (or worse, silently corrupts under concurrency). Detection signals: ConcurrentModificationException stack trace pointing at the iterator's next(); the bug appears only when an element is removed; intermittent under multiple threads. Do not structurally modify a collection during its own iteration. Safer fallback: use Iterator.remove(), collect-then-remove with removeIf, iterate a copy, or use a concurrent collection (CopyOnWriteArrayList / ConcurrentHashMap) for multi-threaded access; verify with a test that removes a matching element.",
+  "domain": "java",
+  "scope_hint": "code.java-jvm:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.java-jvm:human_authored",
+  "pack_id": "code.java-jvm"
+}

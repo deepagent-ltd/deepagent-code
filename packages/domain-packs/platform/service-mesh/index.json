@@ -1,0 +1,436 @@
+[
+  {
+    "ref_id": "strategy:mesh:sidecar-injection-scope",
+    "type": "strategy",
+    "title": "Control sidecar injection scope explicitly",
+    "summary": "Opt namespaces into automatic injection with the right label and use pod annotations to exclude jobs/init traffic, verifying the proxy actually attached.",
+    "domains": [
+      "service_mesh",
+      "istio",
+      "linkerd",
+      "traffic_policy",
+      "sidecar"
+    ],
+    "triggers": [
+      "sidecar injection",
+      "namespace label",
+      "proxy attached"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.service-mesh"
+  },
+  {
+    "ref_id": "strategy:mesh:virtualservice-destinationrule-routing",
+    "type": "strategy",
+    "title": "Pair VirtualService routing with DestinationRule subsets",
+    "summary": "Define subsets and traffic policy in a DestinationRule, then route to them by match conditions in a VirtualService, keeping hosts and ports aligned.",
+    "domains": [
+      "service_mesh",
+      "istio",
+      "linkerd",
+      "traffic_policy",
+      "sidecar"
+    ],
+    "triggers": [
+      "virtualservice",
+      "destinationrule",
+      "subset routing"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.service-mesh"
+  },
+  {
+    "ref_id": "strategy:mesh:mtls-strict-migration",
+    "type": "strategy",
+    "title": "Migrate to STRICT mTLS through PERMISSIVE first",
+    "summary": "Roll mTLS out with PERMISSIVE mode to accept both plaintext and mTLS, verify all callers use mTLS, then flip to STRICT.",
+    "domains": [
+      "service_mesh",
+      "istio",
+      "linkerd",
+      "traffic_policy",
+      "sidecar"
+    ],
+    "triggers": [
+      "mtls",
+      "peerauthentication",
+      "strict mode"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.service-mesh"
+  },
+  {
+    "ref_id": "strategy:mesh:retries-timeouts-budget",
+    "type": "strategy",
+    "title": "Bound mesh retries with timeouts and a retry budget",
+    "summary": "Set per-try timeouts inside an overall request timeout and limit retry attempts/budget so retries don't amplify load during an outage.",
+    "domains": [
+      "service_mesh",
+      "istio",
+      "linkerd",
+      "traffic_policy",
+      "sidecar"
+    ],
+    "triggers": [
+      "retry",
+      "timeout",
+      "retry budget"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.service-mesh"
+  },
+  {
+    "ref_id": "strategy:mesh:circuit-breaking-outlier-ejection",
+    "type": "strategy",
+    "title": "Protect upstreams with connection pools and outlier ejection",
+    "summary": "Use DestinationRule connectionPool limits and outlierDetection so unhealthy hosts are ejected and overloaded upstreams shed load.",
+    "domains": [
+      "service_mesh",
+      "istio",
+      "linkerd",
+      "traffic_policy",
+      "sidecar"
+    ],
+    "triggers": [
+      "circuit breaker",
+      "outlier detection",
+      "connection pool"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.service-mesh"
+  },
+  {
+    "ref_id": "strategy:mesh:canary-traffic-shifting",
+    "type": "strategy",
+    "title": "Shift canary traffic by weight with metric gates",
+    "summary": "Progressively move VirtualService weights to a new subset while watching golden signals, ready to revert by resetting weights.",
+    "domains": [
+      "service_mesh",
+      "istio",
+      "linkerd",
+      "traffic_policy",
+      "sidecar"
+    ],
+    "triggers": [
+      "canary",
+      "traffic shift",
+      "progressive delivery"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.service-mesh"
+  },
+  {
+    "ref_id": "methodology:mesh:routing-not-matching-triage",
+    "type": "methodology",
+    "title": "Diagnose a VirtualService route that never matches",
+    "summary": "Inspect the proxy's effective config to see why a route isn't selected before editing the manifest blindly.",
+    "domains": [
+      "service_mesh",
+      "istio",
+      "linkerd",
+      "traffic_policy",
+      "sidecar"
+    ],
+    "triggers": [
+      "route not matching",
+      "proxy config",
+      "istioctl"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.service-mesh"
+  },
+  {
+    "ref_id": "methodology:mesh:mtls-failure-triage",
+    "type": "methodology",
+    "title": "Triage mTLS handshake and certificate failures",
+    "summary": "Correlate PeerAuthentication mode, DestinationRule TLS mode, and certificate issuance to find the mismatch causing connection resets.",
+    "domains": [
+      "service_mesh",
+      "istio",
+      "linkerd",
+      "traffic_policy",
+      "sidecar"
+    ],
+    "triggers": [
+      "mtls failure",
+      "handshake",
+      "certificate"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.service-mesh"
+  },
+  {
+    "ref_id": "methodology:mesh:proxy-overhead-investigation",
+    "type": "methodology",
+    "title": "Attribute latency to the mesh proxy vs the application",
+    "summary": "Use mesh telemetry and per-hop spans to separate sidecar overhead and telemetry cost from real application latency.",
+    "domains": [
+      "service_mesh",
+      "istio",
+      "linkerd",
+      "traffic_policy",
+      "sidecar"
+    ],
+    "triggers": [
+      "proxy overhead",
+      "latency attribution",
+      "sidecar cost"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.service-mesh"
+  },
+  {
+    "ref_id": "knowledge:mesh:data-plane-control-plane",
+    "type": "knowledge",
+    "title": "Mesh data plane vs control plane responsibilities",
+    "summary": "Explains how the control plane (e.g. istiod) configures sidecar proxies and how the data plane (Envoy) carries traffic and enforces policy.",
+    "domains": [
+      "service_mesh",
+      "istio",
+      "linkerd",
+      "traffic_policy",
+      "sidecar"
+    ],
+    "triggers": [
+      "data plane",
+      "control plane",
+      "istiod"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.service-mesh"
+  },
+  {
+    "ref_id": "knowledge:mesh:identity-spiffe-certs",
+    "type": "knowledge",
+    "title": "Workload identity and SPIFFE certificates in the mesh",
+    "summary": "Covers how the mesh issues SPIFFE/SVID certificates per workload identity (service account) and rotates them for mTLS and authorization.",
+    "domains": [
+      "service_mesh",
+      "istio",
+      "linkerd",
+      "traffic_policy",
+      "sidecar"
+    ],
+    "triggers": [
+      "spiffe",
+      "workload identity",
+      "certificate rotation"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.service-mesh"
+  },
+  {
+    "ref_id": "knowledge:mesh:golden-signals-telemetry",
+    "type": "knowledge",
+    "title": "Golden-signal telemetry the mesh emits for free",
+    "summary": "Explains the request-level metrics (latency, traffic, errors, saturation) the proxies emit and how to use them without app instrumentation.",
+    "domains": [
+      "service_mesh",
+      "istio",
+      "linkerd",
+      "traffic_policy",
+      "sidecar"
+    ],
+    "triggers": [
+      "golden signals",
+      "mesh telemetry",
+      "request metrics"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.service-mesh"
+  },
+  {
+    "ref_id": "methodology:mesh:istio-vs-linkerd-tradeoffs",
+    "type": "methodology",
+    "title": "Choose between Istio and Linkerd by feature and footprint",
+    "summary": "Weigh Istio's Envoy-based feature breadth against Linkerd's lighter Rust micro-proxy and simpler operations for the workload's needs.",
+    "domains": [
+      "service_mesh",
+      "istio",
+      "linkerd",
+      "traffic_policy",
+      "sidecar"
+    ],
+    "triggers": [
+      "istio vs linkerd",
+      "mesh selection",
+      "proxy footprint"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.service-mesh"
+  },
+  {
+    "ref_id": "knowledge:mesh:ingress-egress-gateways",
+    "type": "knowledge",
+    "title": "Mesh ingress and egress gateways at the boundary",
+    "summary": "Explains how dedicated gateway proxies admit external traffic into the mesh and control egress to external services with policy.",
+    "domains": [
+      "service_mesh",
+      "istio",
+      "linkerd",
+      "traffic_policy",
+      "sidecar"
+    ],
+    "triggers": [
+      "ingress gateway",
+      "egress gateway",
+      "mesh boundary"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.service-mesh"
+  },
+  {
+    "ref_id": "skill:mesh:author-canary-routing",
+    "type": "skill",
+    "title": "Author a weighted canary route with subsets",
+    "summary": "Write the DestinationRule subsets and VirtualService weighted routes for a canary, then verify the split with per-subset metrics.",
+    "domains": [
+      "service_mesh",
+      "istio",
+      "linkerd",
+      "traffic_policy",
+      "sidecar"
+    ],
+    "triggers": [
+      "write canary route",
+      "weighted virtualservice",
+      "subset config"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.service-mesh"
+  },
+  {
+    "ref_id": "skill:mesh:configure-circuit-breaker",
+    "type": "skill",
+    "title": "Configure a DestinationRule circuit breaker",
+    "summary": "Set connectionPool limits and outlierDetection on a DestinationRule so unhealthy upstream hosts eject and concurrency is capped.",
+    "domains": [
+      "service_mesh",
+      "istio",
+      "linkerd",
+      "traffic_policy",
+      "sidecar"
+    ],
+    "triggers": [
+      "configure circuit breaker",
+      "connection pool",
+      "outlier ejection"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.service-mesh"
+  }
+]

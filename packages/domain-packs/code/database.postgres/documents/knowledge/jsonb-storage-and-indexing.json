@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:pg:jsonb-storage-and-indexing",
+  "type": "knowledge",
+  "title": "JSONB storage, operators, and indexing",
+  "description": "JSONB stores parsed binary, supports containment operators, and is indexed with gin or expression indexes.",
+  "body": "Use when querying or indexing JSONB. JSONB stores a decomposed binary form (fast to read, no duplicate keys, no whitespace) and supports operators like @> (contains), ->/->> (extract), and jsonpath. A gin index accelerates containment/existence queries; jsonb_path_ops makes a smaller gin index supporting @> specifically; an expression index on a frequently-extracted scalar (e.g. ((data->>'status'))) speeds equality on that field. Do not expect a btree on the whole jsonb column to help containment. Actions: index by the actual operator used and confirm with EXPLAIN. Validation signals include the gin/expression index appearing in the plan. Risk boundary: large JSONB documents that are toasted and rewritten on every update cause write amplification and bloat.",
+  "domain": "postgres",
+  "scope_hint": "code.database.postgres:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.postgres",
+  "pack_id": "code.database.postgres"
+}

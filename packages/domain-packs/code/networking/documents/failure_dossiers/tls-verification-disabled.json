@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:net:tls-verification-disabled",
+  "type": "failure_dossier",
+  "description": "Certificate or hostname verification is turned off to bypass a handshake error, exposing traffic to interception.",
+  "body": "Failure mode: to get past an expired cert, missing intermediate, or hostname mismatch, the client is configured to skip certificate verification or trust all certs, so any party that can intercept the connection presents their own certificate and reads or alters the traffic undetected. Detection signals: InsecureSkipVerify/verify=False/trust-all flags in client config; the workaround was added to silence a handshake error; connections succeed against a server with a wrong cert. Do not disable verification on real traffic. Safer fallback: diagnose the actual handshake failure (cert expiry, chain, SNI, clock), fix the certificate or CA bundle, keep verification on, and verify a wrong/expired cert is rejected.",
+  "domain": "networking",
+  "scope_hint": "code.networking:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.networking:human_authored",
+  "pack_id": "code.networking"
+}

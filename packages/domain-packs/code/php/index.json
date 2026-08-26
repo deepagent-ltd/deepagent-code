@@ -1,0 +1,452 @@
+[
+  {
+    "ref_id": "strategy:php:autoload-via-psr4-not-require",
+    "type": "strategy",
+    "title": "Load classes via PSR-4 autoload, never manual require",
+    "summary": "Map namespaces to directories in composer.json so classes load on demand instead of hand-written require chains.",
+    "domains": [
+      "php",
+      "composer",
+      "laravel"
+    ],
+    "triggers": [
+      "psr-4",
+      "autoload",
+      "require",
+      "namespace",
+      "composer",
+      "dump-autoload"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.php"
+  },
+  {
+    "ref_id": "strategy:php:commit-and-respect-composer-lock",
+    "type": "strategy",
+    "title": "Commit composer.lock and install from it",
+    "summary": "Pin the exact dependency graph in composer.lock so every environment resolves identical versions.",
+    "domains": [
+      "php",
+      "composer",
+      "laravel"
+    ],
+    "triggers": [
+      "composer",
+      "lock",
+      "install",
+      "update",
+      "pin",
+      "reproducible"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.php"
+  },
+  {
+    "ref_id": "strategy:php:enable-strict-types-at-boundaries",
+    "type": "strategy",
+    "title": "Enable strict_types where contracts matter",
+    "summary": "Declare strict_types and type hints so PHP rejects silent scalar coercion at call boundaries.",
+    "domains": [
+      "php",
+      "composer",
+      "laravel"
+    ],
+    "triggers": [
+      "strict_types",
+      "declare",
+      "coercion",
+      "typehint",
+      "scalar",
+      "types"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.php"
+  },
+  {
+    "ref_id": "strategy:php:surface-errors-as-exceptions",
+    "type": "strategy",
+    "title": "Surface errors as exceptions, never suppress them",
+    "summary": "Throw and catch typed exceptions rather than relying on warnings, false returns, or the @ operator.",
+    "domains": [
+      "php",
+      "composer",
+      "laravel"
+    ],
+    "triggers": [
+      "exception",
+      "error",
+      "suppress",
+      "throw",
+      "catch",
+      "warning"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.php"
+  },
+  {
+    "ref_id": "strategy:php:use-the-framework-seam-not-the-bypass",
+    "type": "strategy",
+    "title": "Use the framework's documented seam, not a bypass",
+    "summary": "Reach framework behavior through the service container, events, and middleware rather than static back doors.",
+    "domains": [
+      "php",
+      "composer",
+      "laravel"
+    ],
+    "triggers": [
+      "laravel",
+      "symfony",
+      "container",
+      "facade",
+      "middleware",
+      "seam"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.php"
+  },
+  {
+    "ref_id": "strategy:php:guard-against-eloquent-n-plus-one",
+    "type": "strategy",
+    "title": "Guard against N+1 in Eloquent/Doctrine relations",
+    "summary": "Eager-load related models so a list view issues a bounded number of queries, not one per row.",
+    "domains": [
+      "php",
+      "composer",
+      "laravel"
+    ],
+    "triggers": [
+      "eloquent",
+      "n+1",
+      "eager",
+      "with",
+      "lazy",
+      "relation"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.php"
+  },
+  {
+    "ref_id": "methodology:php:manage-a-composer-dependency-change",
+    "type": "methodology",
+    "title": "Manage a Composer dependency change",
+    "summary": "Add or upgrade a dependency deliberately, regenerating the lock and verifying constraints and platform requirements.",
+    "domains": [
+      "php",
+      "composer",
+      "laravel"
+    ],
+    "triggers": [
+      "composer",
+      "dependency",
+      "require",
+      "update",
+      "constraint",
+      "platform"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.php"
+  },
+  {
+    "ref_id": "methodology:php:write-and-run-phpunit-tests",
+    "type": "methodology",
+    "title": "Write and run PHPUnit tests",
+    "summary": "Structure tests with PHPUnit, isolate framework dependencies, and run them through the project's configured command.",
+    "domains": [
+      "php",
+      "composer",
+      "laravel"
+    ],
+    "triggers": [
+      "phpunit",
+      "test",
+      "mock",
+      "fixture",
+      "assert",
+      "coverage"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.php"
+  },
+  {
+    "ref_id": "methodology:php:trace-a-type-coercion-bug",
+    "type": "methodology",
+    "title": "Trace a scalar type-coercion bug",
+    "summary": "Find where a value was silently coerced by following it from input to the wrong-typed comparison or store.",
+    "domains": [
+      "php",
+      "composer",
+      "laravel"
+    ],
+    "triggers": [
+      "coercion",
+      "type",
+      "trace",
+      "strict_types",
+      "comparison",
+      "bug"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.php"
+  },
+  {
+    "ref_id": "methodology:php:integrate-a-laravel-feature",
+    "type": "methodology",
+    "title": "Integrate a feature behind Laravel/Symfony seams",
+    "summary": "Add a feature using container bindings, migrations, and events so it stays testable and framework-idiomatic.",
+    "domains": [
+      "php",
+      "composer",
+      "laravel"
+    ],
+    "triggers": [
+      "laravel",
+      "symfony",
+      "feature",
+      "migration",
+      "binding",
+      "event"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.php"
+  },
+  {
+    "ref_id": "knowledge:php:type-system-and-coercion",
+    "type": "knowledge",
+    "title": "PHP's gradual type system and coercion modes",
+    "summary": "PHP types are optional and, by default, coercive; strict_types makes scalar type hints reject mismatches per calling file.",
+    "domains": [
+      "php",
+      "composer",
+      "laravel"
+    ],
+    "triggers": [
+      "types",
+      "coercion",
+      "strict_types",
+      "weak",
+      "union",
+      "nullable"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.php"
+  },
+  {
+    "ref_id": "knowledge:php:composer-autoload-and-versioning",
+    "type": "knowledge",
+    "title": "Composer autoloading and version resolution",
+    "summary": "Composer resolves a version graph into composer.lock and generates a PSR-4 autoloader; apps pin the lock, libraries do not.",
+    "domains": [
+      "php",
+      "composer",
+      "laravel"
+    ],
+    "triggers": [
+      "composer",
+      "autoload",
+      "lock",
+      "semver",
+      "psr-4",
+      "version"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.php"
+  },
+  {
+    "ref_id": "knowledge:php:laravel-vs-symfony-conventions",
+    "type": "knowledge",
+    "title": "Laravel vs Symfony conventions",
+    "summary": "Laravel favors convention, facades, and Eloquent active-record; Symfony favors explicit configuration, services, and Doctrine data-mapper.",
+    "domains": [
+      "php",
+      "composer",
+      "laravel"
+    ],
+    "triggers": [
+      "laravel",
+      "symfony",
+      "eloquent",
+      "doctrine",
+      "facade",
+      "convention"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.php"
+  },
+  {
+    "ref_id": "knowledge:php:request-lifecycle-and-statelessness",
+    "type": "knowledge",
+    "title": "The PHP request lifecycle and statelessness",
+    "summary": "Classic PHP boots, handles one request, and tears down, so in-process state does not persist between requests.",
+    "domains": [
+      "php",
+      "composer",
+      "laravel"
+    ],
+    "triggers": [
+      "lifecycle",
+      "request",
+      "stateless",
+      "shared-nothing",
+      "fpm",
+      "static"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.php"
+  },
+  {
+    "ref_id": "skill:php:audit-dependency-and-autoload-health",
+    "type": "skill",
+    "title": "Audit dependency and autoload health",
+    "summary": "Read composer.json/lock and report missing locks, loose constraints, and classes loaded outside PSR-4.",
+    "domains": [
+      "php",
+      "composer",
+      "laravel"
+    ],
+    "triggers": [
+      "audit",
+      "composer",
+      "autoload",
+      "lock",
+      "dependency",
+      "psr-4"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.php"
+  },
+  {
+    "ref_id": "skill:php:review-error-and-type-handling",
+    "type": "skill",
+    "title": "Review error and type handling",
+    "summary": "Scan PHP code for suppressed errors, empty catches, loose comparisons, and missing strict_types.",
+    "domains": [
+      "php",
+      "composer",
+      "laravel"
+    ],
+    "triggers": [
+      "review",
+      "error",
+      "exception",
+      "strict_types",
+      "comparison",
+      "suppress"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.php"
+  }
+]

@@ -1,0 +1,12 @@
+{
+  "ref_id": "failure_dossier:privacy:consent-bypass-for-analytics",
+  "type": "failure_dossier",
+  "title": "Consent bypass for analytics",
+  "description": "Analytics or tracking continues for opted-out, withdrawn, or region-restricted users.",
+  "body": "Failure mode: a new event path does not check preference state or a refactor moves emission before the opt-out gate. Detection signals include analytics calls outside preference-aware modules, tests only for opted-in users, and default true tracking flags. Remediation is central preference enforcement and negative tests for opt-out users. Human gate is required when consent semantics are ambiguous. Use when a proposed approach skips personal-data classes, sinks, retention, consent, logs, prompts, and exports or claims success without domain evidence. Do not use this dossier as a positive implementation strategy; it is a do-not-use signal. Actions: block the shortcut, name the missing evidence, and switch to a safer methodology or ask for human approval. Validation signals include absence or contradiction in data inventory, redaction tests, retention checks, export/delete tests, and approval evidence. Risk boundary: treat repeated recurrence as a blocker when it can cause PII disclosure, consent bypass, retention drift, and unapproved processor expansion.",
+  "domain": "privacy",
+  "scope_hint": "risk.privacy:failure_dossiers",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:risk.privacy",
+  "pack_id": "risk.privacy"
+}

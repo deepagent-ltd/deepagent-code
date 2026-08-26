@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:hdl:run-rtl-simulation",
+  "type": "skill",
+  "title": "Run RTL simulation with the testbench",
+  "description": "Compile and run the design plus self-checking testbench in a simulator and report assertion/scoreboard results.",
+  "body": "Use when validating an RTL change. Actions: detect the simulator (Verilator, Icarus, ModelSim/Questa) from the project; compile the design and testbench; run the regression and inspect assertion failures and scoreboard mismatches. Report the exact command, pass/fail counts, and first failing assertion with its time. Do not declare correctness from a waveform alone. This skill exposes capability only and must not run vendor tools without runtime permission. Validation signals include a zero-mismatch scoreboard and zero assertion failures. Risk boundary: if no self-checking exists, report that the result is unverified rather than 'passing'.",
+  "domain": "hdl",
+  "scope_hint": "hardware.hdl:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.hdl",
+  "pack_id": "hardware.hdl"
+}

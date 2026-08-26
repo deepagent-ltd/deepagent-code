@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:scala:debug-an-implicit-resolution",
+  "type": "methodology",
+  "title": "Debug an implicit/given resolution",
+  "description": "Find which instance the compiler selected and why, then fix ambiguity or a missing instance.",
+  "body": "Steps: 1. Reproduce the error (ambiguous implicit, could not find implicit, or wrong behavior). 2. Use the compiler's implicit-search trace (-Vimplicits / -Xlog-implicits) or summon[T]/implicitly[T] to see what resolves. 3. Identify the candidate scopes: local, imported, and companion objects. 4. For ambiguity, remove a competing import or move the canonical instance to the companion; for missing, provide the instance in scope. 5. Recompile and confirm the intended instance is chosen. Rollback point: before reorganizing instance locations. Validation: a clean compile with no ambiguity and a test asserting the selected instance's behavior (e.g. the right Ordering).",
+  "domain": "scala",
+  "scope_hint": "code.scala:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.scala",
+  "pack_id": "code.scala"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:svc:dead-letter-after-bounded-attempts",
+  "type": "strategy",
+  "title": "Dead-letter after bounded attempts",
+  "description": "A message that keeps failing is routed to a dead-letter queue after a max-attempt count instead of redelivering forever.",
+  "body": "Use when consuming from a queue where a single bad message could fail repeatedly. Do not let an unprocessable (poison) message redeliver indefinitely and block the consumer. Actions: track delivery/attempt count, after the cap move the message to a dead-letter queue with the error and context, alert, and continue with the next message. Validation signals include a test that a permanently failing message lands in the DLQ after N attempts and does not stall the queue. Risk boundary: no DLQ means one poison message can halt all processing; treat as a blocking design gap.",
+  "domain": "backend_service",
+  "scope_hint": "code.backend.service:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.service",
+  "pack_id": "code.backend.service"
+}

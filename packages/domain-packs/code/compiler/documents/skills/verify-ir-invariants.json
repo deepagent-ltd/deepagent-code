@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:comp:verify-ir-invariants",
+  "type": "skill",
+  "title": "Verify IR invariants after a pass",
+  "description": "Run the IR verifier (or implement invariant checks) after a transformation and report any malformed IR with the offending construct.",
+  "body": "Use when checking that a pass left the IR well-formed. Actions: run the IR verifier after the transformation (or check invariants: single definitions in SSA, well-formed phi nodes, dominance, typed values, valid CFG edges) and report each violation with the function and instruction involved. Do not assume a pass preserved invariants because the compiler did not crash. This skill exposes capability only and reports findings; it must not alter passes without runtime permission. Validation signals include a clean verifier report after every transform. Risk boundary: a broken IR invariant left by one pass will miscompile in a later pass; treat any verifier violation as blocking and trace it to the producing pass.",
+  "domain": "compiler",
+  "scope_hint": "code.compiler:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.compiler",
+  "pack_id": "code.compiler"
+}

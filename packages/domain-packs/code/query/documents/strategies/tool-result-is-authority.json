@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:query:tool-result-is-authority",
+  "type": "strategy",
+  "description": "For deterministic query tasks, facts come from tool or runner results; model text remains a claim until tied to evidence.",
+  "body": "Use this when the task asks to query, count, list, read, inspect, or report current state. Treat tool, runner, filesystem, git, SQL, log, or config output as the authority. The model may explain the result and choose the next read-only source, but it must not invent counts, statuses, file lists, or configuration values from memory. If the needed result is unavailable, answer as unverified rather than guessing. This strategy does not apply to implementation or repair tasks where the model is expected to edit code. Use when a read-only query, count, list, status, diff, or inspection request must be answered from repository or tool evidence. Do not use when the user asks to edit, fix, deploy, migrate, delete, insert, update, or alter state. Actions: identify the exact scope, run read-only search or inspection tools, cite the source artifact, and preserve the command or file evidence used for the answer. Validation signals include matching counts against tool output, source references, scope labels, and no modified working-tree files. Risk boundary: stop or ask for confirmation if the task changes from query to mutation, if evidence is stale, or if the answer would expose secrets or excessive output.",
+  "domain": "query",
+  "scope_hint": "code.query:deterministic-facts",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.query",
+  "pack_id": "code.query"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:ng:nested-subscribe-race",
+  "type": "failure_dossier",
+  "description": "An inner subscribe nested inside an outer one loses cancellation, so a stale response overwrites a newer one.",
+  "body": "Failure mode: code subscribes to a source stream and, inside that callback, subscribes to a dependent request, so rapid source emissions fire overlapping inner requests with no cancellation and a slow older response lands after a newer one. Detection signals: search/typeahead shows results for a previous query; out-of-order responses; a .subscribe inside another .subscribe instead of a flattening operator. Do not nest subscribes for dependent async work. Safer fallback: pipe the source through switchMap (to cancel stale inner streams), concatMap (to preserve order), or exhaustMap (to ignore while busy), and prove cancellation with a marble test.",
+  "domain": "angular",
+  "scope_hint": "code.frontend.angular:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.angular:human_authored",
+  "pack_id": "code.frontend.angular"
+}

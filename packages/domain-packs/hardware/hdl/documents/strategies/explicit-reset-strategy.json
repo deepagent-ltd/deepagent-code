@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:hdl:explicit-reset-strategy",
+  "type": "strategy",
+  "title": "Choose one explicit reset strategy",
+  "description": "Decide synchronous vs asynchronous reset deliberately and apply it consistently to every state element in the clock domain.",
+  "body": "Use when adding registers or bringing up a new module. Do not leave some flops reset and others relying on power-up state, and do not mix sync and async reset arbitrarily in one domain. Actions: pick sync or async reset per the target (FPGA often sync, ASIC often async-assert/sync-deassert), apply it to all stateful elements, and verify reset release timing. Validation signals include a reset-sequence test asserting known state after reset and no X propagation past deassert. Risk boundary: relying on initial-block values for reset works in sim but not on ASIC; flag it.",
+  "domain": "hdl",
+  "scope_hint": "hardware.hdl:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.hdl",
+  "pack_id": "hardware.hdl"
+}

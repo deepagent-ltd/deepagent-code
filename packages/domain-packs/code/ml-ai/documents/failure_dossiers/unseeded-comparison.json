@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:mlai:unseeded-comparison",
+  "type": "failure_dossier",
+  "description": "Concluding a change helped from a single unseeded run when the effect is within run-to-run variance.",
+  "body": "Failure mode: a config change is declared an improvement based on one run, but initialization and shuffling variance is as large as the claimed gain, so the conclusion is noise. Detection signals: no seed is set; re-running the baseline gives a different number than reported; the improvement is smaller than the spread across seeds. Do not compare single runs without controlling randomness. Safer fallback: fix seeds, run each config across several seeds, and require the mean difference to exceed the seed-to-seed standard deviation before claiming a win.",
+  "domain": "ml",
+  "scope_hint": "code.ml-ai:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.ml-ai:human_authored",
+  "pack_id": "code.ml-ai"
+}

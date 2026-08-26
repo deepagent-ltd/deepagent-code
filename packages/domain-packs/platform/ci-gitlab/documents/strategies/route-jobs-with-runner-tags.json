@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:glci:route-jobs-with-runner-tags",
+  "type": "strategy",
+  "title": "Route jobs to runners with explicit tags",
+  "description": "Match each job to a runner via tags so untrusted MR builds never land on a privileged or production-adjacent runner.",
+  "body": "Use when configuring which runner executes a job, especially with both shared and dedicated runners. Do not run untrusted merge-request code on a privileged (docker-in-docker, host-mounted, or deploy-credentialed) runner, and do not leave critical jobs untagged so they fall onto any available runner. Actions: tag jobs explicitly, reserve privileged runners for protected branches/tags, and give fork-MR pipelines only minimal isolated runners. Validation signals include MR pipelines from forks executing on isolated runners and deploy jobs only on protected-branch runners. Risk boundary: an untrusted job on a privileged runner can escape into the host or deploy creds; isolate it and escalate.",
+  "domain": "ci_gitlab",
+  "scope_hint": "platform.ci-gitlab:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.ci-gitlab",
+  "pack_id": "platform.ci-gitlab"
+}

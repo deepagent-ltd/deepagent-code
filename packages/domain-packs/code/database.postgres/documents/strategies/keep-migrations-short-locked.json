@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:pg:keep-migrations-short-locked",
+  "type": "strategy",
+  "title": "Keep migration locks short and weak",
+  "description": "Schema changes avoid long-held ACCESS EXCLUSIVE locks by splitting steps and setting lock_timeout.",
+  "body": "Use when running ALTER TABLE or other DDL on a populated table. Do not run a rewriting or validating ALTER that holds ACCESS EXCLUSIVE while a queue of queries piles up behind it. Actions: prefer non-rewriting forms (add a nullable column or one with a constant default on modern PG is fast; adding NOT NULL or a CHECK can be done as NOT VALID then VALIDATE separately, which takes a weaker lock); set a short lock_timeout so a blocked DDL fails fast instead of freezing the table. Validation signals include the migration acquiring its lock quickly and releasing it without a backlog. Risk boundary: a long ACCESS EXCLUSIVE lock on a hot table stalls all traffic; escalate any unavoidable full-table rewrite.",
+  "domain": "postgres",
+  "scope_hint": "code.database.postgres:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.postgres",
+  "pack_id": "code.database.postgres"
+}

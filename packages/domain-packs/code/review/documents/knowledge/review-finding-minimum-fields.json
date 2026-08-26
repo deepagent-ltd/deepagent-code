@@ -1,0 +1,11 @@
+{
+  "ref_id": "knowledge:review:finding-minimum-fields",
+  "type": "knowledge",
+  "description": "A useful review finding needs evidence location, failing condition, consequence, and remediation direction.",
+  "body": "Use this fact when preparing a review report or rejecting a vague finding. A finding without location cannot be acted on; a finding without failure condition cannot be reproduced; a finding without consequence cannot be prioritized. The minimum useful shape is file/line or symbol evidence, trigger condition, affected behavior, severity, and a concise remediation direction. Do not require a full patch in review mode, because this pack is read-only. Verification signals are clickable source locations, changed test expectations, runner output, or contract diffs. The risk boundary is that over-specific fix instructions can distract from the defect when the right implementation belongs to the author. Use when Code Review work touches diff hunks, line evidence, tests, contracts, and blast radius. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: use the fact to constrain the change and test plan; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include file/line citations, failing or missing tests, reproduced behavior, and residual-risk notes. Risk boundary: escalate or stop when the task involves unsupported findings, severity inflation, hidden fixes, and ignoring user constraints, missing owner evidence, or live external state.",
+  "domain": "review",
+  "scope_hint": "code.review:knowledge",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.review:human_authored",
+  "pack_id": "code.review"
+}

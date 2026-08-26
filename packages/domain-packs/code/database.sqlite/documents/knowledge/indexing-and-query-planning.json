@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:sqlite:indexing-and-query-planning",
+  "type": "knowledge",
+  "title": "Indexing and the query planner",
+  "description": "SQLite uses btree indexes and a cost-based planner; covering indexes and ANALYZE statistics drive plan quality.",
+  "body": "Use when an SQLite query is slow. SQLite indexes are btrees; the planner picks a plan from available indexes and (when present) statistics gathered by ANALYZE stored in sqlite_stat tables. A covering index that includes every column the query needs lets SQLite answer from the index without touching the table. Do not assume an index is used — wrapping a column in a function or a leading-wildcard LIKE defeats it, and stale or missing stats can mislead the planner. Actions: run EXPLAIN QUERY PLAN to see whether a SCAN or SEARCH using an index is chosen, add covering or composite indexes for hot queries, and run ANALYZE so the planner has statistics. Validation signals include EXPLAIN QUERY PLAN switching from SCAN TABLE to SEARCH using the index. Risk boundary: over-indexing slows writes and grows the file; index only the predicates you actually query.",
+  "domain": "sqlite",
+  "scope_hint": "code.database.sqlite:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.sqlite",
+  "pack_id": "code.database.sqlite"
+}

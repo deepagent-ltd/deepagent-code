@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:android:add-a-runtime-permission-flow",
+  "type": "methodology",
+  "title": "Add a runtime permission flow",
+  "description": "Wire a dangerous permission from manifest declaration through request, rationale, grant, and graceful denial.",
+  "body": "Steps: 1. Declare the permission in AndroidManifest. 2. At point of use, check whether it's already granted. 3. If not, decide whether to show a rationale (shouldRationale), then launch the request via the permissions API. 4. Handle the result: proceed on grant, degrade gracefully on denial, and detect permanent denial (route to settings). 5. Test grant, deny-once, and deny-permanently paths on a real OS version. Rollback point: before shipping a feature gated on a new permission (Play policy review). Validation: the feature works after grant and never crashes on any denial path; calling the protected API assuming it's granted is the SecurityException-causing bug this flow prevents.",
+  "domain": "android",
+  "scope_hint": "code.mobile.android:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mobile.android",
+  "pack_id": "code.mobile.android"
+}

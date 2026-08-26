@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:fpgatf:unconstrained-clock",
+  "type": "failure_dossier",
+  "description": "Timing appears to pass but the design fails on hardware because a clock was never constrained and STA ignored its paths.",
+  "body": "Failure mode: a clock lacks a create_clock or generated-clock statement, so STA does not analyze the paths it launches and reports no violations for them. Detection signals: the timing summary listing an unconstrained clock, suspiciously easy closure, and functional failure on hardware at the target rate. Do not sign off timing while any clock is unconstrained. Safer fallback: add the missing clock definition, rerun STA, and address whatever violations the now-timed paths reveal.",
+  "domain": "fpga_toolflow",
+  "scope_hint": "hardware.fpga-toolflow:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.fpga-toolflow:human_authored",
+  "pack_id": "hardware.fpga-toolflow"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:rag:abstain-when-retrieval-is-empty",
+  "type": "strategy",
+  "title": "Abstain when retrieval finds nothing relevant",
+  "description": "When retrieval returns no sufficiently relevant passages, the system says it does not know rather than answering from parametric memory.",
+  "body": "Use when the retriever may return weak or empty results. Do not fall back to the model's own knowledge silently, and avoid answering when the top passages are below a relevance threshold. Actions: set a relevance/score threshold, detect empty or low-confidence retrieval, and return an explicit 'no grounded answer' instead of guessing. Validation signals include a test that a query with no relevant corpus content yields abstention, not a fabricated answer. Risk boundary: answering from parametric memory while implying it came from the corpus is a trust violation; abstain and surface the gap.",
+  "domain": "rag",
+  "scope_hint": "code.rag:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.rag",
+  "pack_id": "code.rag"
+}

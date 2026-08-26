@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:scala:implicit-resolution-model",
+  "type": "knowledge",
+  "title": "How implicit/given resolution works",
+  "description": "The compiler searches lexical scope then implicit scope (companion objects) for a unique matching instance, failing on ambiguity.",
+  "body": "Use when reasoning about contextual abstraction. To fill an implicit/using parameter the compiler searches the local lexical scope (including imports) first, then the implicit scope: the companion objects of the types involved. It requires exactly one most-specific match; zero is a 'no implicit found' error and more than one equally-specific is an ambiguity error. Scala 3 renames implicit to given/using and makes imports of givens explicit. Do not rely on an instance being globally visible without an import unless it lives in a relevant companion. Actions: place canonical type-class instances in companions, import extras locally. Validation signals include summon/implicitly resolving the intended instance. Risk boundary: an instance silently picked from an unexpected scope changes program behavior (a different Encoder or Ordering) without any visible call-site change.",
+  "domain": "scala",
+  "scope_hint": "code.scala:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.scala",
+  "pack_id": "code.scala"
+}

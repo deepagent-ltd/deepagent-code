@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:mesh:routing-not-matching-triage",
+  "type": "methodology",
+  "title": "Diagnose a VirtualService route that never matches",
+  "description": "Inspect the proxy's effective config to see why a route isn't selected before editing the manifest blindly.",
+  "body": "Use when traffic ignores a VirtualService rule. Do not keep editing the manifest by guesswork. Actions: dump the proxy's effective routes/clusters (istioctl proxy-config routes/clusters or the Envoy config dump), confirm the VirtualService host matches the service FQDN and the gateway/port line up, check that the referenced subset exists in a DestinationRule, and verify rule ordering (first match wins). Validation signals include the proxy config showing the expected route and a test request hitting the intended subset. Risk boundary: none for inspection; applying route changes to production still goes through the traffic gate.",
+  "domain": "service_mesh",
+  "scope_hint": "platform.service-mesh:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.service-mesh",
+  "pack_id": "platform.service-mesh"
+}

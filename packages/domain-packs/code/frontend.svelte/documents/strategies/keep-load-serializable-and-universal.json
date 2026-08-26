@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:svelte:keep-load-serializable-and-universal",
+  "type": "strategy",
+  "title": "Keep load output serializable and universal-safe",
+  "description": "A SvelteKit load function's return must serialize across the SSR boundary and must not touch browser-only APIs.",
+  "body": "Use when writing or editing a +page.js/+page.server.js load. Do not return class instances, functions, or browser objects from a universal load, and do not call window/document/localStorage there. Actions: return plain serializable data, use the load's injected fetch for relayed requests, and move browser-only work into onMount or a client-only load path. Validation signals include the page rendering server-side with the data present in the initial HTML and no serialization error in the dev console. Risk boundary: a browser API in a universal load crashes SSR; secret-bearing work belongs only in +page.server.js, never in a universal load that ships to the client.",
+  "domain": "svelte",
+  "scope_hint": "code.frontend.svelte:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.svelte",
+  "pack_id": "code.frontend.svelte"
+}

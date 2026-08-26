@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:mesh:ingress-egress-gateways",
+  "type": "knowledge",
+  "title": "Mesh ingress and egress gateways at the boundary",
+  "description": "Explains how dedicated gateway proxies admit external traffic into the mesh and control egress to external services with policy.",
+  "body": "Use when traffic crosses the mesh boundary. Do not treat a mesh gateway as an ordinary Kubernetes Ingress. Actions: know an ingress gateway is a standalone proxy at the edge that terminates external traffic and applies mesh routing/mTLS inward, while an egress gateway funnels outbound traffic to external services through a controlled point for policy and observability; bind them with Gateway plus VirtualService resources. Inspect the gateway proxy config. Validation signals include external requests entering via the gateway with mesh telemetry and egress traffic flowing through the egress proxy. Risk boundary: gateway config governs the security boundary and changes warrant review.",
+  "domain": "service_mesh",
+  "scope_hint": "platform.service-mesh:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.service-mesh",
+  "pack_id": "platform.service-mesh"
+}

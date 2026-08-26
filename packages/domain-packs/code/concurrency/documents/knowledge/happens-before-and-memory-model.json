@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:conc:happens-before-and-memory-model",
+  "type": "knowledge",
+  "title": "Happens-before and the memory model",
+  "description": "Visibility of one thread's writes to another is governed by happens-before edges from synchronization, not by wall-clock order.",
+  "body": "Use when reasoning about whether one thread sees another's writes. Compilers and CPUs reorder memory operations; a thread is only guaranteed to observe another's stores if a happens-before edge connects them, established by synchronization (lock release/acquire on the same lock, a release store paired with an acquire load, thread start/join). Without such an edge, a read may see a stale value even though it happened later in real time. Do not reason about concurrency using wall-clock or source order. Actions: identify the synchronization that creates the needed happens-before edge for each cross-thread read. Validation signals include a detector run and an explicit edge for every shared read. Risk boundary: a cross-thread read with no happens-before edge is a data race even if it usually returns the right value.",
+  "domain": "concurrency",
+  "scope_hint": "code.concurrency:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.concurrency",
+  "pack_id": "code.concurrency"
+}

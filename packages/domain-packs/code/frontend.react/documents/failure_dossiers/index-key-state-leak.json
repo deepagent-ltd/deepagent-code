@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:frontend_react:index-key-state-leak",
+  "type": "failure_dossier",
+  "description": "Index keys in mutable lists can attach state to the wrong item.",
+  "body": "Use stable IDs for dynamic lists. Use when a proposed approach skips component ownership, hook dependencies, render paths, hydration output, router state, and browser smoke evidence or claims success without domain evidence. Do not use this dossier as a positive implementation strategy; it is a do-not-use signal. Actions: block the shortcut, name the missing evidence, and switch to a safer methodology or ask for human approval. Validation signals include absence or contradiction in component tests, React Testing Library assertions, Playwright smoke, console logs, hydration warnings, and viewport checks. Risk boundary: treat repeated recurrence as a blocker when it can cause state identity leaks, stale closures, inaccessible controls, hydration mismatch, and user-visible regressions.",
+  "domain": "react",
+  "scope_hint": "code.frontend.react:failure",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.frontend.react:skill_survey",
+  "pack_id": "code.frontend.react"
+}

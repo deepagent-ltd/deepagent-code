@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:benchmarking:pin-the-environment",
+  "type": "strategy",
+  "title": "Pin and record the benchmark environment",
+  "description": "Fix and capture hardware, runtime, flags, and load so a result is reproducible and comparisons are apples-to-apples.",
+  "body": "Use when a benchmark result must be trusted or compared across runs. Do not compare numbers gathered on different machines, runtimes, power profiles, or under different background load. Actions: pin CPU frequency/governor where possible, disable turbo/thermal variability, record runtime version, compiler/JIT flags, and machine specs alongside the result, and run baseline and candidate on the same host back-to-back. Validation signals include a recorded environment manifest attached to each result. Risk boundary: an unpinned, unrecorded environment makes a regression indistinguishable from noise; treat results without environment metadata as unverified.",
+  "domain": "code",
+  "scope_hint": "code.benchmarking:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.benchmarking",
+  "pack_id": "code.benchmarking"
+}

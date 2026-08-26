@@ -1,0 +1,71 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.migration",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "migrate",
+    "code_domains": [
+      "code",
+      "migration"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.migration: code, migration"
+    ],
+    "round_signals": [
+      "l3_validation_smoke"
+    ],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "round_signals": [],
+    "user_overrides": [],
+    "repo_signals": [
+      "render a fragment shader for the lighting pass"
+    ]
+  },
+  "retrieval_query": "schema migration expand contract dual write window rollback codemod backfill batching",
+  "expected_pack_id": "code.migration",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "Code Migration L3 validation smoke",
+    "signals": [
+      "package-local checks",
+      "focused tests",
+      "build output",
+      "smoke runs",
+      "command logs",
+      "and reviewer-readable evidence"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "Code Migration diagnosis smoke",
+    "signals": [
+      "compare expected and observed behavior",
+      "inspect the owning files",
+      "isolate the failing boundary",
+      "and record residual risk"
+    ]
+  },
+  "source_refs": [
+    "source:official-tooling-docs:paraphrased",
+    "source:engineering-practice:paraphrased"
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:healthcare:minimize-phi-collection",
+  "type": "strategy",
+  "title": "Collect and retain the minimum PHI necessary",
+  "description": "Gather only the protected health information a feature genuinely needs, for only as long as needed, rather than capturing whole records by default.",
+  "body": "Use when designing a feature, log, or export that touches patient data. Do not capture full clinical records when a feature needs one field, and avoid indefinite retention of identifiable data. Actions: list the exact PHI fields the feature requires, justify each, set a retention/expiry, and exclude the rest from collection and downstream stores; inspect schemas and logs to confirm only the needed fields are present. Validation signals include a data-flow review showing each stored PHI field has a stated purpose and a retention policy enforced in the schema. Risk boundary: this is advisory engineering guidance, not legal/clinical advice; expanding PHI collection or retention must go through a human privacy review and never be widened silently.",
+  "domain": "healthcare",
+  "scope_hint": "business.healthcare:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:business.healthcare",
+  "pack_id": "business.healthcare"
+}

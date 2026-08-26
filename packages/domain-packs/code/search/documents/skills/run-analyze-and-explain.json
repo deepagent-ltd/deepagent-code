@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:search:run-analyze-and-explain",
+  "type": "skill",
+  "title": "Run analyze and explain to diagnose a query",
+  "description": "Use the analyze and explain APIs against the index and report token alignment and per-term scoring for a query.",
+  "body": "Use when a query returns wrong or zero results. Actions: run the analyze API on the field and the query string and report whether their tokens align, then run the explain API on a target document and report which terms and fields contributed to (or were missing from) the score. Compare index vs query analysis to localize the issue. Do not declare the data wrong before checking analysis. This skill exposes capability only and must not modify a production cluster without runtime permission. Validation signals include aligned analyze tokens and an explain trace. Risk boundary: if analysis mismatch or mapping type is the cause, recommend a reindex rather than a query patch.",
+  "domain": "search",
+  "scope_hint": "code.search:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.search",
+  "pack_id": "code.search"
+}

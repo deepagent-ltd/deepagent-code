@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:ansible:dry-run-with-check-mode",
+  "type": "strategy",
+  "title": "Dry-run with check mode and diff",
+  "description": "Preview changes with --check and --diff before applying, especially against shared hosts.",
+  "body": "Use when a playbook will touch hosts you cannot freely break. Do not apply a play blind — run it with --check and --diff first to see which tasks would change and how. Actions: run check mode, read the diff for each would-change task, confirm the set matches intent, then apply; ensure tasks support check mode so the preview is accurate. Validation signals include the diff showing only the intended changes and no surprise tasks reporting would-change. Risk boundary: some modules cannot honor check mode and may understate impact — for production inventory, require a human gate before the real apply.",
+  "domain": "ansible",
+  "scope_hint": "platform.ansible:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.ansible",
+  "pack_id": "platform.ansible"
+}

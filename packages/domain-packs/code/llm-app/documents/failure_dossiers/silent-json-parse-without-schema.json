@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:llm:silent-json-parse-without-schema",
+  "type": "failure_dossier",
+  "description": "Model output is JSON.parsed and consumed directly, so malformed, truncated, or wrong-typed structure flows into downstream code.",
+  "body": "Failure mode: the code calls JSON.parse on the response and uses the result without validating it against a schema, so a truncated payload, a prose-wrapped object, or a wrong-typed field is consumed silently. Detection signals: parse with no schema validation; no check of the length finish-reason; coercion or field drops to force a parse; no conformance run. Do not regex-extract JSON and coerce it to fit. Safer fallback: validate every response against a strict schema, detect truncation via the finish-reason, run a bounded repair loop, and return a typed error that blocks the downstream action when repair fails.",
+  "domain": "llm_app",
+  "scope_hint": "code.llm-app:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.llm-app:human_authored",
+  "pack_id": "code.llm-app"
+}

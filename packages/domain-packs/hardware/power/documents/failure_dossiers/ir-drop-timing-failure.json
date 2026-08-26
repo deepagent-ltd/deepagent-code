@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:hwpwr:ir-drop-timing-failure",
+  "type": "failure_dossier",
+  "description": "A block fails timing only under load because IR drop starves it of voltage through an undersized power grid.",
+  "body": "Failure mode: peak switching current through a thin power grid causes local supply droop, lowering the voltage at a critical block so its logic slows below the required speed. Detection signals: timing failures that appear only under high activity, IR-drop analysis flagging a high-droop region, and improvement when the supply is raised on the bench. Do not raise the global supply to mask localized droop. Safer fallback: reinforce the power grid with additional straps and vias in the high-droop region and re-run IR-drop and timing analysis.",
+  "domain": "power_design",
+  "scope_hint": "hardware.power:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.power:human_authored",
+  "pack_id": "hardware.power"
+}

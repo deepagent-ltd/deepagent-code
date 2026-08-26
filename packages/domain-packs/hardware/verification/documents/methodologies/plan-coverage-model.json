@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:hwverif:plan-coverage-model",
+  "type": "methodology",
+  "title": "Plan a coverage model from the spec",
+  "description": "Derive covergroups and cross coverage from the specification so coverage measures real features, not incidental toggles.",
+  "body": "Use when starting verification planning for a new design. Do not auto-generate coverage from signal toggles alone, since that measures activity rather than meaningful behavior. Actions: extract the spec's features and corner cases, define covergroups and crosses for them, and verify the model maps to the verification plan. Validation signals include every spec feature traced to a coverpoint and crosses capturing interacting conditions. Risk boundary: a coverage model missing a spec feature leaves it unverified, so escalate gaps to the verification plan owner before closure.",
+  "domain": "hw_verification",
+  "scope_hint": "hardware.verification:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.verification",
+  "pack_id": "hardware.verification"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:finetune:corrupted-merge",
+  "type": "failure_dossier",
+  "description": "Merging an adapter into base weights at the wrong scale silently corrupts the served model.",
+  "body": "Failure mode: a LoRA adapter is merged into the base at a different scaling factor than it was trained with, or onto the wrong base, producing a merged checkpoint whose outputs drift from the runtime adapter-on-base behavior. Detection signals: a parity check showing material divergence between the merged model and the adapter-on-base reference, and quality regressions appearing only after the merge step. Do not deploy the merged artifact on the assumption that merge is lossless. Safer fallback: merge at the exact trained scaling against the recorded base, run a parity check on a reference set, and if parity fails, deny the merged checkpoint and serve the adapter at runtime while escalating.",
+  "domain": "fine_tuning",
+  "scope_hint": "code.fine-tuning:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.fine-tuning:human_authored",
+  "pack_id": "code.fine-tuning"
+}

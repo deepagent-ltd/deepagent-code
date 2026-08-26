@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:search:evaluate-relevance-on-judgments",
+  "type": "skill",
+  "title": "Evaluate relevance against a judgment set",
+  "description": "Run a set of judged queries and report nDCG/precision@k/recall before and after a ranking change.",
+  "body": "Use when assessing or comparing ranking configurations. Actions: load the judgment set (queries with graded-relevant documents), execute each query against the index, and compute nDCG, precision@k, and recall, reporting the aggregate and per-query deltas against the baseline. Compare before/after for any proposed change. Do not approve a ranking change from a single-query impression. This skill exposes capability only and does not deploy ranking changes without permission. Validation signals include an aggregate relevance metric across the judgment set. Risk boundary: a change that improves one query but regresses the aggregate must not ship; report the regression rather than the anecdote.",
+  "domain": "search",
+  "scope_hint": "code.search:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.search",
+  "pack_id": "code.search"
+}

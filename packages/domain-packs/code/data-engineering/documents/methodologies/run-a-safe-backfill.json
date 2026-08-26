@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:dataeng:run-a-safe-backfill",
+  "type": "methodology",
+  "title": "Run a safe backfill",
+  "description": "Reprocess historical partitions in bounded, idempotent batches with verification, without disrupting the live forward pipeline.",
+  "body": "Steps: 1. Confirm the transform is idempotent and partition-scoped before backfilling anything. 2. Backfill a single representative partition and compare it to a known-good forward run. 3. Batch the remaining partitions with throttling so the backfill does not starve the live pipeline or warehouse. 4. Verify counts and key metrics per partition as you go. 5. Keep the forward pipeline running on current partitions throughout. Rollback point: a backfilled partition can be re-overwritten since it is partition-scoped. Validation: each backfilled partition matches the forward-run shape and totals; an unthrottled full-history backfill that overwhelms the warehouse or overwrites partial data is unsafe.",
+  "domain": "data_engineering",
+  "scope_hint": "code.data-engineering:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-engineering",
+  "pack_id": "code.data-engineering"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:swift:retain-cycle-strong-self-in-closure",
+  "type": "failure_dossier",
+  "description": "Capturing self strongly in an escaping closure stored on the object, creating a retain cycle that leaks the object.",
+  "body": "Failure mode: an object stores an escaping closure (completion handler, Combine sink, timer) that captures self strongly, so self and the closure keep each other alive and deinit never runs. Detection signals: Instruments Leaks/Allocations shows the object's count never dropping; deinit logging never fires; memory grows as screens are revisited. Do not capture self strongly in a closure the object itself retains. Safer fallback: use [weak self] (guard let self = self else { return }) or [unowned self] only when lifetime is guaranteed, break the cycle, and verify deinit runs and Leaks is clean.",
+  "domain": "swift",
+  "scope_hint": "code.swift:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.swift:human_authored",
+  "pack_id": "code.swift"
+}

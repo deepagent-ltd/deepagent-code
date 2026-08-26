@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:sqlite:respect-the-single-writer-model",
+  "type": "strategy",
+  "title": "Design around the single-writer model",
+  "description": "Serialize writes through one path and keep write transactions short, since SQLite allows only one writer at a time.",
+  "body": "Use when the app has multiple threads or processes writing. Do not architect as if SQLite supports concurrent writers — it does not; only one write transaction holds the lock at a time. Actions: funnel writes through a single connection/thread or a queue, keep each write transaction small and fast, batch many inserts into one transaction rather than one-per-row, and use WAL plus busy_timeout to smooth contention. Validation signals include a throughput test showing batched writes vastly outperform per-row autocommit and that contended writers complete without errors. Risk boundary: a workload that genuinely needs many concurrent writers has outgrown SQLite; recommend a client-server database rather than fighting the lock.",
+  "domain": "sqlite",
+  "scope_hint": "code.database.sqlite:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.sqlite",
+  "pack_id": "code.database.sqlite"
+}

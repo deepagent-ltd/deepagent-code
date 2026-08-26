@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:vsearch:dense-sparse-late-interaction",
+  "type": "knowledge",
+  "title": "Dense, sparse, and late-interaction embeddings",
+  "description": "How single-vector dense, learned-sparse, and multi-vector late-interaction representations differ in recall behavior.",
+  "body": "Use when choosing a representation for retrieval. Dense single-vector embeddings capture semantics compactly but blur exact terms; learned-sparse representations (e.g. SPLADE) keep term-level signal and suit lexical-heavy queries; late-interaction models (e.g. ColBERT) embed per token and match finely at higher cost. Do not assume dense is always best — exact-match-heavy domains favor sparse or hybrid. Actions: match representation to query type and benchmark recall. Validation signals include a recall comparison across representations and a chosen approach justified by the eval. Risk boundary: late-interaction storage and latency are heavy; if its cost exceeds budget, escalate the tradeoff rather than silently degrading.",
+  "domain": "vector_search",
+  "scope_hint": "code.vector-search:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.vector-search",
+  "pack_id": "code.vector-search"
+}

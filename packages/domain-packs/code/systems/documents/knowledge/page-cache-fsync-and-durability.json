@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:sys:page-cache-fsync-and-durability",
+  "type": "knowledge",
+  "title": "Page cache, fsync, and durability ordering",
+  "description": "write() only updates the page cache; data is durable only after fsync, and a rename's durability needs the directory fsynced too.",
+  "body": "Use when reasoning about what survives a crash. A successful write() returns once data is in the kernel page cache, not on stable storage; the OS flushes lazily, so a crash before flush loses the data. fsync(fd) forces that file's data (and with it metadata as needed) to the device. A rename is atomic for the file contents, but the directory entry change is itself buffered, so the rename can be lost on crash unless you fsync the containing directory. Do not equate a returned write with durability. Actions: order writes as write-temp, fsync temp, rename, fsync dir. Validation signals include a crash-consistency test passing at every step. Risk boundary: skipping fsync on a path that must not lose data is a silent data-loss defect that only manifests on power loss.",
+  "domain": "systems",
+  "scope_hint": "code.systems:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.systems",
+  "pack_id": "code.systems"
+}

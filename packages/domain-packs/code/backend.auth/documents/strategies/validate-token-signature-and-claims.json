@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:auth:validate-token-signature-and-claims",
+  "type": "strategy",
+  "title": "Validate token signature and claims",
+  "description": "JWTs are verified for signature, issuer, audience, and expiry before any claim is trusted; alg is pinned.",
+  "body": "Use when consuming a JWT or any signed token. Do not decode-without-verify or accept the token's own alg header (alg:none / confusion). Actions: verify signature against the expected key, pin the algorithm, check iss/aud/exp/nbf, and only then read claims. Validation signals include tests for tampered signature, wrong issuer/audience, expired token, and alg:none all rejected. Risk boundary: trusting an unverified claim (especially role/scope) is a critical finding.",
+  "domain": "backend_auth",
+  "scope_hint": "code.backend.auth:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.auth",
+  "pack_id": "code.backend.auth"
+}

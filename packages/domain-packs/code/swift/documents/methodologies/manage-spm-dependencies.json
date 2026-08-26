@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:swift:manage-spm-dependencies",
+  "type": "methodology",
+  "title": "Manage dependencies and targets with Swift Package Manager",
+  "description": "Define products, targets, and version-pinned dependencies in Package.swift and resolve a committed Package.resolved for reproducible builds.",
+  "body": "Steps: 1. Declare dependencies in Package.swift with explicit version rules (.upToNextMajor(from:) or an exact range), not a floating branch. 2. Split code into targets with clear dependsOn edges and a matching test target. 3. Run `swift package resolve` and commit Package.resolved so every machine builds the same revisions. 4. Build and test with `swift build` / `swift test`. 5. Update intentionally with `swift package update` and review the resolved diff. Rollback point: before changing a dependency's major-version rule. Validation: Package.resolved is byte-stable across machines and swift build succeeds from a clean checkout. Risk boundary: pinning to a branch instead of a version makes builds non-reproducible and can pull breaking changes silently; record the version rule and escalate before depending on an unreleased branch.",
+  "domain": "swift",
+  "scope_hint": "code.swift:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.swift",
+  "pack_id": "code.swift"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:python:diagnostic-first",
+  "type": "strategy",
+  "description": "In Python, read the last frame of the traceback owned by your code before making speculative edits.",
+  "body": "In Python, the toolchain already points at the real problem, so the last frame of the traceback owned by your code should guide the edit rather than a guess. Use when import-time evaluation plus python -m py_compile on changed modules or mypy/pyright type checks, ruff/flake8 lint, and DeprecationWarnings reports an error or warning. Do not start editing before reading the diagnostic, and avoid changing code you have not confirmed is implicated. Actions: read the first actionable diagnostic and the owned frame, inspect that location, make the smallest fix, then rerun pytest on the changed package inside the project venv. Validation signals include the resolved diagnostic, a passing focused test, and no new warnings from mypy/pyright type checks, ruff/flake8 lint, and DeprecationWarnings. Risk boundary: if the diagnostic exposes a deeper design fault, escalate rather than papering over it.",
+  "domain": "python",
+  "scope_hint": "code.python:strategies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.python:skill_survey",
+  "pack_id": "code.python"
+}

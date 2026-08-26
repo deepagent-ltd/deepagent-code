@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:mcp:transport-stdio-vs-sse",
+  "type": "knowledge",
+  "title": "stdio vs SSE/HTTP transports trade off coupling and reach",
+  "description": "stdio binds a server to one local host process lifecycle; SSE/HTTP transports allow remote, multi-client servers but add auth, network, and connection-lifetime concerns.",
+  "body": "Use when choosing or debugging how a host talks to an MCP server. stdio runs the server as a child process communicating over standard streams: simple, locally sandboxed, and tied to the parent's lifetime, but single-client and not remotable. SSE/HTTP transports let a server run as a network service for multiple/remote clients but require authentication, TLS, connection keep-alive, and reconnect handling. Do not expose an stdio-only tool over the network without an auth boundary. Actions: pick stdio for local single-host integrations and SSE/HTTP only with auth and transport security. Validation signals include a transport-specific connection test and, for SSE/HTTP, an auth-required check. Risk boundary: a network-reachable MCP server with no authentication is an exposure; flag missing auth before deploying remotely.",
+  "domain": "code",
+  "scope_hint": "code.mcp:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mcp",
+  "pack_id": "code.mcp"
+}

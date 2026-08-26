@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:helm:template-helpers-named-templates",
+  "type": "strategy",
+  "title": "Factor shared template logic into _helpers named templates",
+  "description": "Define reusable labels, names, and selectors in _helpers.tpl with define/include and proper nindent so manifests stay DRY and valid.",
+  "body": "Use when chart templates repeat label blocks, names, or selectors. Do not copy-paste label maps across manifests or use template instead of include where indentation matters. Actions: define named templates in _helpers.tpl (e.g. fullname, common labels, selectorLabels), reference them with include (which is pipeable) plus nindent for correct indentation, and keep selector labels immutable across releases. Validation signals include helm template producing consistent labels everywhere and selectorLabels matching between Deployment and Service. Risk boundary: changing selectorLabels on an existing release breaks the immutable selector and forces a recreate, which is human-gated for production.",
+  "domain": "helm",
+  "scope_hint": "platform.helm:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.helm",
+  "pack_id": "platform.helm"
+}

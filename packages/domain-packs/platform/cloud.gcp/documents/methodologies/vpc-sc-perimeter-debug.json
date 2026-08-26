@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:gcp:vpc-sc-perimeter-debug",
+  "type": "methodology",
+  "title": "Debug a request blocked by a VPC Service Controls perimeter",
+  "description": "Read the unique violation reason from the audit log and adjust ingress/egress rules or access levels rather than removing the perimeter.",
+  "body": "Use when a call to a GCP API fails with a VPC-SC violation. Do not delete the perimeter to unblock. Actions: read the audit log's uniqueId and violation reason, determine whether it's an ingress or egress boundary crossing, and add a scoped ingress/egress rule or access level for the specific identity, project, and service. Validation signals include the dry-run mode showing the rule would permit the call, then the live call succeeding while other crossings stay blocked. Risk boundary: any change to a VPC-SC perimeter is a security boundary change and is human-gated.",
+  "domain": "gcp",
+  "scope_hint": "platform.cloud.gcp:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.gcp",
+  "pack_id": "platform.cloud.gcp"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:rag:context-stuffing-and-lost-in-the-middle",
+  "type": "knowledge",
+  "title": "Context stuffing and lost-in-the-middle",
+  "description": "Packing many passages into the window wastes tokens and buries relevant ones in the middle where models attend least.",
+  "body": "Use when deciding how many passages to include. Adding more passages is not strictly better: it costs tokens, risks truncation, and models tend to use information at the start and end of a long context more than the middle, so a relevant passage buried mid-context can be ignored. Do not concatenate every candidate, and avoid placing the best passage in the middle of a long block. Actions: rerank, trim to the most relevant few, deduplicate, and order so key passages are not buried. Validation signals include a test that adding low-relevance passages does not improve and may hurt answer quality. Risk boundary: stuffing that truncates a cited passage breaks grounding; treat it as a failure.",
+  "domain": "rag",
+  "scope_hint": "code.rag:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.rag",
+  "pack_id": "code.rag"
+}

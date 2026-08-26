@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:flutter:set-up-pub-and-widget-tests",
+  "type": "methodology",
+  "title": "Set up pub dependencies and widget tests",
+  "description": "Manage dependencies via pubspec and the lockfile, and test UI with flutter_test's pumpWidget.",
+  "body": "Steps: 1. Declare dependencies and SDK constraints in pubspec.yaml, run flutter pub get to resolve and write pubspec.lock. 2. Commit pubspec.lock for an application so resolution is reproducible. 3. Write widget tests under test/ using testWidgets, pumpWidget to mount, and pump/pumpAndSettle to advance frames. 4. Drive interactions with the WidgetTester (tap/enterText) and assert with find + matchers. 5. Run flutter test (and flutter analyze) as the gate. Rollback point: before changing SDK constraints in pubspec. Validation: a fresh flutter pub get + flutter test runs green and a widget test asserts the UI after a state change.",
+  "domain": "dart",
+  "scope_hint": "code.dart-flutter:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.dart-flutter",
+  "pack_id": "code.dart-flutter"
+}

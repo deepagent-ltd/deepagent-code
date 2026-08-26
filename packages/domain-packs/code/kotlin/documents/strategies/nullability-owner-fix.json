@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:lang_kotlin:nullability-owner-fix",
+  "type": "strategy",
+  "description": "Fix Kotlin nullable contracts at the producer or boundary rather than scattering !! assertions.",
+  "body": "Use when diagnostics mention nullable receivers, smart casts, platform types, or Java interop. Do not silence with !! unless an invariant is already proven and covered by tests. Inspect the data source, Java annotations, and call contract, then narrow, default, or change the owner type. Verify with compileKotlin and a negative test when data can be absent. Risk boundary includes NullPointerException from platform types and changed API contracts. Use when Kotlin Engineering work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: choose the smallest direction that preserves the domain contract; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "kotlin",
+  "scope_hint": "code.kotlin:strategys",
+  "evidence_strength": "medium",
+  "provenance_tag": "code.kotlin:seed:kotlin_gradle_coroutines_docs:paraphrased",
+  "pack_id": "code.kotlin"
+}

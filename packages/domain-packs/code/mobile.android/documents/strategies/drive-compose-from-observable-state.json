@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:android:drive-compose-from-observable-state",
+  "type": "strategy",
+  "title": "Drive Compose from observable state",
+  "description": "Back composables with State/StateFlow so changing the value triggers recomposition, rather than mutating views imperatively.",
+  "body": "Use when building Jetpack Compose UI. Do not store changing UI data in a plain var and expect the screen to update, and do not try to imperatively mutate composables. Actions: hold transient UI state in remember { mutableStateOf(...) }, collect ViewModel StateFlow with collectAsStateWithLifecycle, and let Compose recompose when the observed state changes; hoist state to the lowest common owner. Validation signals include the UI updating automatically on a state change and no manual refresh calls. Risk boundary: mutating a non-State variable leaves the UI stale with no error, while reading state in the wrong scope causes missed or excessive recomposition — the observability of the state is what makes Compose update at all.",
+  "domain": "android",
+  "scope_hint": "code.mobile.android:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mobile.android",
+  "pack_id": "code.mobile.android"
+}

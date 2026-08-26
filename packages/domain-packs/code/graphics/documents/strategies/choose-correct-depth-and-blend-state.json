@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:gfx:choose-correct-depth-and-blend-state",
+  "type": "strategy",
+  "title": "Set depth and blend state deliberately",
+  "description": "Pick depth test/write and blend equations to match opaque vs transparent geometry, and draw transparency in the right order.",
+  "body": "Use when mixing opaque and transparent objects or debugging occlusion/transparency. Do not leave depth write enabled for blended transparency, and avoid drawing transparent geometry in arbitrary order. Actions: render opaque geometry first with depth test and write on, then transparent geometry back-to-front (or with order-independent transparency) with depth write off and the correct blend equation. Validation signals include correct occlusion of hidden surfaces and transparency that matches a reference image. Risk boundary: wrong depth/blend state produces order-dependent artifacts that change with camera angle; verify across multiple viewpoints, not a single frame.",
+  "domain": "graphics",
+  "scope_hint": "code.graphics:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.graphics",
+  "pack_id": "code.graphics"
+}

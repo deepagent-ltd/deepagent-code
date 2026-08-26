@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:query:read-only-first",
+  "type": "strategy",
+  "description": "A query, count, list, inspect, or status request defaults to read-only tools and must not drift into edits or mutations.",
+  "body": "Use read-only actions first for deterministic information requests: read files, search text, inspect git status or diff, run read-only SQL, or read logs/config. Do not edit files, write data, apply migrations, delete records, deploy, or mutate external state unless the user explicitly asks for mutation and the relevant risk package is active. This preserves user intent and prevents a query task from becoming a production change. Validation signal is the read-only command or tool result, not the model's confidence. Use when a read-only query, count, list, status, diff, or inspection request must be answered from repository or tool evidence. Do not use when the user asks to edit, fix, deploy, migrate, delete, insert, update, or alter state. Actions: identify the exact scope, run read-only search or inspection tools, cite the source artifact, and preserve the command or file evidence used for the answer. Validation signals include matching counts against tool output, source references, scope labels, and no modified working-tree files. Risk boundary: stop or ask for confirmation if the task changes from query to mutation, if evidence is stale, or if the answer would expose secrets or excessive output.",
+  "domain": "query",
+  "scope_hint": "code.query:read-only-default",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.query",
+  "pack_id": "code.query"
+}

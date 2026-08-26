@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:hdl:avoid-inferred-latches",
+  "type": "strategy",
+  "title": "Assign every output on every path",
+  "description": "In always_comb, assign all outputs on all branches so synthesis infers pure combinational logic instead of an unintended latch.",
+  "body": "Use when writing combinational logic with if/case. Do not leave an output unassigned on some branch, and do not use incomplete case without a default. Actions: give every output a default assignment at the top of always_comb, or assign it in every branch; inspect synthesis output for inferred-latch warnings. Validation signals include a lint/synthesis pass with zero inferred latches and matching pre/post-synth simulation. Risk boundary: an inferred latch silently holds stale data and breaks timing; treat any latch-inference warning on a combinational block as a defect.",
+  "domain": "hdl",
+  "scope_hint": "hardware.hdl:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.hdl",
+  "pack_id": "hardware.hdl"
+}

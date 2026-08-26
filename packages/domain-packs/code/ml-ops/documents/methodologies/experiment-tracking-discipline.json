@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:mlops:experiment-tracking-discipline",
+  "type": "methodology",
+  "title": "Enforce experiment-tracking discipline",
+  "description": "Log every training run with params, metrics, artifacts, and environment so experiments are comparable and the best run is recoverable.",
+  "body": "Use when running many training experiments to find a deployable model. Do not track results in ad-hoc notebooks or spreadsheets — runs become uncomparable and the winning config gets lost. Actions: log params, metrics, artifacts, code commit, and dependency versions to a tracking server per run; verify the leaderboard can rank runs and re-open any run's artifacts. Validation signals include a tracking dashboard comparing runs on a shared metric and a recovered best-run config. Risk boundary: an untracked best model cannot be reproduced or audited; if a promoted model lacks a tracked run, deny promotion and escalate.",
+  "domain": "mlops",
+  "scope_hint": "code.mlops:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mlops",
+  "pack_id": "code.mlops"
+}

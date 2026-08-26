@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:orch:add-failure-callback",
+  "type": "skill",
+  "title": "Add a failure and SLA notification callback",
+  "description": "Steps to wire on-failure and SLA-miss callbacks that alert with run context while suppressing transient-retry noise.",
+  "body": "Use when a pipeline's failures currently go unnoticed. Do not alert on every retry attempt — engineers tune out a noisy channel. Actions: attach an on-failure callback that fires only on final failure (after retries) with the DAG, task, execution date, and log link, add an SLA-miss callback for the critical task, and route both to an actionable channel. Validation signals include a final-failure alert with full context and no page for a transient retry that later succeeded. Risk boundary: missing alerts let bad data flow downstream while no one is paged; if a critical task has no notification, treat it as an operational gap and escalate to wire one before depending on the pipeline.",
+  "domain": "orchestration",
+  "scope_hint": "code.data-pipeline-orchestration:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-pipeline-orchestration",
+  "pack_id": "code.data-pipeline-orchestration"
+}

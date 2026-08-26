@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:refactor:bound-the-blast-radius",
+  "type": "strategy",
+  "title": "Bound the blast radius of a refactor",
+  "description": "Scope each refactor so its reach is known and reviewable, splitting wide-impact changes from behavior changes and from each other.",
+  "body": "Use when a rename, signature change, or extraction touches many call sites. Do not mix a mechanical wide-reaching change with a behavioral change in one commit, and do not let scope expand mid-refactor. Actions: measure how many call sites and modules are affected, isolate the pure structural change into its own reviewable step, and keep any behavior change as a separate follow-up. Validation signals include a diff that is mechanical and a green test run between steps. Risk boundary: a wide structural change bundled with logic edits is hard to review and bisect; if the blast radius is large, stage it and get review before merging the next layer.",
+  "domain": "code",
+  "scope_hint": "code.refactor:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.refactor",
+  "pack_id": "code.refactor"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:docs:detect-doc-code-drift",
+  "type": "methodology",
+  "title": "Detect and reconcile doc-code drift",
+  "description": "Cross-check documented signatures, flags, defaults, and outputs against the current code and fix or flag every mismatch.",
+  "body": "Steps: 1. List the concrete claims in the doc (function signatures, CLI flags, config keys, defaults, sample output). 2. Compare each against the current source, schema, or help output. 3. Mark every mismatch as drift. 4. Fix the doc to match code, or fix code if the doc captured the intended contract. 5. Re-run any embedded examples. Rollback point: before changing code to match docs. Validation: each documented claim resolves to current code and embedded examples run clean; a doc that compiles in prose but contradicts the code is still wrong. Record the reconciled claims as evidence.",
+  "domain": "code",
+  "scope_hint": "code.docs:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.docs",
+  "pack_id": "code.docs"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:pcb:preserve-return-path",
+  "type": "strategy",
+  "title": "Preserve a continuous return path",
+  "description": "Keep an unbroken reference plane under every high-speed net and add stitching vias at layer transitions.",
+  "body": "Use when routing any fast signal that changes layers or crosses a plane split. Do not let a signal run over a gap or slot in its reference plane, because the return current is forced into a long loop. Actions: route over solid plane, place stitching vias near layer-change vias, and inspect for plane splits beneath fast nets. Validation signals include a continuous plane under each net on a plane-by-plane review and stitching vias accompanying every layer transition. Risk boundary: a broken return path radiates and couples noise, so treat a signal crossing a plane gap as an EMI defect requiring rework.",
+  "domain": "pcb",
+  "scope_hint": "hardware.pcb:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.pcb",
+  "pack_id": "hardware.pcb"
+}

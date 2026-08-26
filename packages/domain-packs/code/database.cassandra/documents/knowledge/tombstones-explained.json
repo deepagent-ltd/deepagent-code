@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:cass:tombstones-explained",
+  "type": "knowledge",
+  "title": "Why deletes create tombstones",
+  "description": "A delete writes a tombstone marker rather than removing data, and reads must skip tombstones until compaction reclaims them.",
+  "body": "Reference for understanding delete cost. Because Cassandra is a distributed log-structured store, a delete cannot erase data on every replica immediately; it writes a tombstone that masks the old value and survives until gc_grace_seconds passes and compaction removes it. Use when a workload deletes or overwrites rows. Do not treat deletes as free or instantaneous; a read across many tombstones is slow and can hit a failure threshold. Validation signals include tracing showing tombstones scanned per read and that count growing with delete volume. Risk boundary: tombstones must survive at least gc_grace_seconds to prevent data resurrection, so do not shorten that window to hide a tombstone problem; redesign the access pattern instead.",
+  "domain": "cassandra",
+  "scope_hint": "code.database.cassandra:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.cassandra",
+  "pack_id": "code.database.cassandra"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "knowledge:typescript:structural-typing-contract",
+  "type": "knowledge",
+  "description": "TypeScript compatibility is structural, so extra-compatible shapes can still drift semantically.",
+  "body": "Matching property shapes does not prove semantic compatibility. Public APIs still need tests for meaning, defaults, and runtime behavior.\n\nEvidence boundary: apply only when current task, repository, or validation evidence matches this pack boundary. Do not override a more specific pack or explicit project contract. Use when TypeScript / JavaScript work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: use the fact to constrain the change and test plan; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "javascript",
+  "scope_hint": "code.typescript:knowledge",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.typescript",
+  "pack_id": "code.typescript"
+}

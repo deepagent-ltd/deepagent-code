@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:redis:unbounded-keyspace-oom",
+  "type": "failure_dossier",
+  "description": "Keys are created without TTL under a noeviction policy, so memory grows until writes fail or Redis is killed.",
+  "body": "Failure mode: session or cache keys accumulate with no expiry and maxmemory is unset or the policy is noeviction, so the dataset grows unbounded until Redis rejects writes with OOM or the OS kills it. Detection signals: used_memory climbs steadily; keys with no TTL dominate; noeviction set on a cache role. Do not run a growing cache without bounds. Safer fallback: set maxmemory and an allkeys-lru/lfu eviction policy, give cache entries TTLs, and isolate any must-keep keys on a separate instance so eviction can't drop them.",
+  "domain": "redis",
+  "scope_hint": "code.database.redis:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.redis:human_authored",
+  "pack_id": "code.database.redis"
+}

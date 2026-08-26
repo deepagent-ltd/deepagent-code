@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:agent:trusting-model-narration",
+  "type": "failure_dossier",
+  "description": "The agent marks a step complete because the model's text claims success, even when the underlying tool failed.",
+  "body": "Failure mode: completion is derived from the model's narration ('I deployed the service') rather than the runner's observed result, so a failed or never-executed tool is recorded as success. Detection signals: status comes from parsing model text, not tool results; no reconciliation between claim and observed state; a test where the tool fails but the model claims success is missing. Do not treat the model's self-report as evidence. Safer fallback: derive completion from observed tool results and state changes, reconcile the model's claim against them, surface divergence, and test the claim-success-but-tool-failed case.",
+  "domain": "agent",
+  "scope_hint": "code.agent:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.agent:human_authored",
+  "pack_id": "code.agent"
+}

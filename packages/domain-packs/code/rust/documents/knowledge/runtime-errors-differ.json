@@ -1,0 +1,11 @@
+{
+  "ref_id": "knowledge:rust:runtime-errors-differ",
+  "type": "knowledge",
+  "description": "In Rust, a clean build does not prevent undefined behavior inside unsafe blocks, plus panics from unwrap/index out of bounds.",
+  "body": "In Rust, passing cargo check, where the borrow checker and trait resolution must pass says nothing about runtime: undefined behavior inside unsafe blocks, plus panics from unwrap/index out of bounds surface only when the code actually runs. Use when a change touches control flow, IO, concurrency, or data shapes that the build cannot prove safe. Do not use a green compile as evidence that behavior is correct, and avoid shipping without exercising the path. Actions: run cargo test on the affected crate with the relevant features, reproduce the runtime path, and where relevant run Miri for UB in unsafe blocks and the sanitizer toolchains to catch latent defects. Validation signals include the test/trace logs, a clean Miri for UB in unsafe blocks and the sanitizer toolchains run, and observed correct output on representative input. Risk boundary: escalate or hold the change when the failure mode is data loss or memory corruption you cannot reproduce locally.",
+  "domain": "rust",
+  "scope_hint": "code.rust:knowledge",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.rust:skill_survey",
+  "pack_id": "code.rust"
+}

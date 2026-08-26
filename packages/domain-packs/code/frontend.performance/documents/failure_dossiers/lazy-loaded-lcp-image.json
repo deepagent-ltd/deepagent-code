@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:frontend_performance:lazy-loaded-lcp-image",
+  "type": "failure_dossier",
+  "description": "Lazy-loading the largest contentful paint image, delaying its fetch and pushing LCP past budget.",
+  "body": "Failure mode: the hero/LCP image is given loading=lazy, so the browser defers its request and the largest paint lands late, worsening LCP. Detection signals: a trace shows the LCP element fetched after first paint; the hero image has loading=lazy; LCP regresses while total bytes look fine. Do not lazy-load the element responsible for LCP. Safer fallback: eager-load and preload the LCP image with reserved dimensions, lazy-load only offscreen media, and confirm LCP returns within budget in a fresh trace.",
+  "domain": "frontend",
+  "scope_hint": "code.frontend.performance:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.performance:human_authored",
+  "pack_id": "code.frontend.performance"
+}

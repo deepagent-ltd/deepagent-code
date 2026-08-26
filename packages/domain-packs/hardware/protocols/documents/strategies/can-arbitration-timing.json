@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:hwprot:can-arbitration-timing",
+  "type": "strategy",
+  "title": "Configure CAN bit timing and respect arbitration",
+  "description": "Set the sample point and bit-timing segments consistently across all nodes so arbitration and acknowledgement work.",
+  "body": "Use when bringing up a CAN bus or diagnosing error frames. Do not let nodes run mismatched bit timing, because even small sample-point differences cause sporadic errors. Actions: compute the segments for the target bitrate, set the same sample point on every node, and verify acknowledgement bits appear on a capture. Validation signals include a clean transmission with a received ACK slot and an error counter that does not climb under load. Risk boundary: a node that loses arbitration repeatedly can go bus-off and drop a safety-critical link, so escalate timing mismatches before deployment.",
+  "domain": "hw_protocols",
+  "scope_hint": "hardware.protocols:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.protocols",
+  "pack_id": "hardware.protocols"
+}

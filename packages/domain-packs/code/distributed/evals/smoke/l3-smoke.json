@@ -1,0 +1,71 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.distributed",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "distributed",
+      "consensus",
+      "replication",
+      "consistency"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.distributed: Raft leader election and log replication, quorum reads/writes, linearizable vs eventual consistency, split-brain prevention, vector clocks for causality"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "add a sorting helper and unit tests to a single-process CLI utility"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "raft paxos consensus leader election log replication quorum linearizable eventual consistency cap theorem partition tolerance vector clock split-brain clock skew",
+  "expected_pack_id": "code.distributed",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "code.distributed L3 validation smoke",
+    "signals": [
+      "linearizability checker (Jepsen/Knossos) reports no violations",
+      "quorum intersection proven for chosen N/R/W",
+      "leader election converges to single leader under partition heal",
+      "replicated log matches across all nodes at committed index",
+      "causal ordering preserved per vector-clock comparison"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "code.distributed diagnosis smoke",
+    "signals": [
+      "two nodes both believe they are leader (split-brain)",
+      "read returns stale value after acknowledged write (read-your-writes broken)",
+      "quorum R+W <= N allows stale reads",
+      "ordering decisions based on wall-clock timestamps across nodes",
+      "committed log entry diverges between replicas"
+    ]
+  },
+  "source_refs": [
+    "source:raft-extended-paper:paraphrased",
+    "source:cap-and-consistency-models:paraphrased"
+  ]
+}

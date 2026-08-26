@@ -1,0 +1,70 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.embedded",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "embedded",
+      "firmware",
+      "rtos"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.embedded: FreeRTOS task priorities, interrupt service routine latency, memory-mapped peripheral register access, watchdog timer, low-power sleep modes, and hard real-time deadlines on an MCU"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "build a React dashboard with CSS animations and a REST API"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "embedded firmware rtos freertos microcontroller mcu bare metal interrupt isr register map watchdog low power real-time deadline flash ram constraint",
+  "expected_pack_id": "code.embedded",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "code.embedded L3 validation smoke",
+    "signals": [
+      "worst-case ISR latency measured under load (logic analyzer / GPIO toggle)",
+      "RTOS task deadlines met under stress (no priority inversion / missed deadline trace)",
+      "stack high-water mark leaves headroom on every task",
+      "flash/RAM map fits with margin (linker map report)",
+      "watchdog kicks verified and recovery path tested"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "code.embedded diagnosis smoke",
+    "signals": [
+      "long or blocking work inside an ISR",
+      "heap allocation on a real-time path",
+      "shared variable accessed from ISR and task without volatile/critical section",
+      "watchdog disabled or its period widened to mask a hang",
+      "register written without reading the datasheet's required sequence"
+    ]
+  },
+  "source_refs": [
+    "source:arm-cortex-m-programming-manual:paraphrased",
+    "source:freertos-real-time-practice:paraphrased"
+  ]
+}

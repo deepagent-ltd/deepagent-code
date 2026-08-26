@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:frontend_accessibility:keyboard-trap",
+  "type": "failure_dossier",
+  "description": "A modal or widget that captures focus but provides no keyboard way out, trapping keyboard and screen-reader users.",
+  "body": "Failure mode: a dialog or custom widget moves focus inward but offers no Escape, no reachable close control, and no focus return, so keyboard users are stranded. Detection signals: Tab cycles forever inside the widget; Escape does nothing; focus never returns to the trigger on close; manual keyboard test cannot exit. Do not build focus capture without a deliberate exit and restore path. Safer fallback: trap focus within the open dialog but wire Escape and a focusable close button, restore focus to the invoking element on close, and verify the full open/close cycle by keyboard.",
+  "domain": "frontend",
+  "scope_hint": "code.frontend.accessibility:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.accessibility:human_authored",
+  "pack_id": "code.frontend.accessibility"
+}

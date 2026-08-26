@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:auth:review-oauth-callback-flow",
+  "type": "methodology",
+  "title": "Review an OAuth/OIDC callback flow",
+  "description": "Verify state, PKCE, redirect-uri allowlisting, and token handling on the callback before trusting the session.",
+  "body": "Steps: 1. Confirm the authorization request includes and later verifies a state value (CSRF) and PKCE for public clients. 2. Check redirect_uri is matched against an exact allowlist. 3. Verify the code-for-token exchange happens server-side and the id_token is validated (signature/iss/aud/nonce). 4. Confirm the session is established only after validation. Rollback point: before changing redirect handling. Validation: tampered state, open-redirect attempt, and replayed code are all rejected.",
+  "domain": "backend_auth",
+  "scope_hint": "code.backend.auth:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.auth",
+  "pack_id": "code.backend.auth"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:risk.privacy:pii-data-flow-audit",
+  "type": "skill",
+  "title": "PII Data Flow Audit",
+  "description": "Trace personal data through source, transformation, stores, logs, exports, deletion, and external processors.",
+  "body": "Inputs: route names, schema diffs, log samples, event names, and storage locations. Use for implementation, review, or migration touching personal data. Do not use to inspect real customer records unless explicitly authorized. Procedure: build a field-level flow map, mark unknown stores, identify derived copies, and list required tests or manual checks. Output: data-flow map, gaps, and safe next actions. Human gate: unknown regulated data class, external processor, or deletion gap. Use when Privacy Risk Controls work touches personal-data classes, sinks, retention, consent, logs, prompts, and exports. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: run the documented inspection and validation workflow; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include data inventory, redaction tests, retention checks, export/delete tests, and approval evidence. Risk boundary: escalate or stop when the task involves PII disclosure, consent bypass, retention drift, and unapproved processor expansion, missing owner evidence, or live external state.",
+  "domain": "pii",
+  "scope_hint": "risk.privacy:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.privacy",
+  "pack_id": "risk.privacy"
+}

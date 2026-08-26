@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:elixir:keep-the-liveview-process-snappy",
+  "type": "strategy",
+  "title": "Keep the LiveView process snappy",
+  "description": "A LiveView is a process per connection, so blocking it freezes that user's UI; offload slow work and stream large data.",
+  "body": "Use when building Phoenix LiveView event handlers or mounts. Do not run slow queries or external calls synchronously inside handle_event/mount, since each blocks that connection's process and its UI. Actions: do heavy work in a Task and send the result back to the LiveView to assign, use temporary assigns / streams for large collections to avoid holding everything in socket state, and keep mount fast (use connected?/2 to defer work to the connected mount). Validation signals include a Phoenix.LiveViewTest exercising mount and events without the process stalling. Risk boundary: a blocked LiveView process makes one user's page unresponsive and, repeated across users, exhausts schedulers; never put secrets in socket assigns sent to the client.",
+  "domain": "elixir",
+  "scope_hint": "code.elixir:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.elixir",
+  "pack_id": "code.elixir"
+}

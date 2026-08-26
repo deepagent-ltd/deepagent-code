@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:auth:enforce-authorization-server-side",
+  "type": "strategy",
+  "title": "Enforce authorization server-side",
+  "description": "Every access decision is made on the server from the authenticated principal, never from a client-supplied role, id, or hidden field.",
+  "body": "Use when adding or changing any endpoint, mutation, or resource fetch that should be restricted. Do not use client-visible flags, request-body role fields, or UI gating as the enforcement point — those are presentation only. Actions: locate the server authorization check on the path; assert the decision uses the session/token principal and the resource owner, not request input; add the check at the resource boundary, not only the route. Validation signals include a negative test that calls the endpoint as a non-owner/low-privilege principal and asserts 403/empty. Risk boundary: if no server-side check exists, treat it as a vulnerability and escalate, do not just add UI gating.",
+  "domain": "backend_auth",
+  "scope_hint": "code.backend.auth:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.auth",
+  "pack_id": "code.backend.auth"
+}

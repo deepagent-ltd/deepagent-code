@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:electron:harden-renderer-security",
+  "type": "methodology",
+  "title": "Harden renderer security",
+  "description": "Run an Electron app through the security checklist: isolation, preload surface, IPC validation, navigation, and CSP.",
+  "body": "Steps: 1. Confirm every renderer has contextIsolation:true, nodeIntegration:false, sandbox:true. 2. Audit the preload bridge: only named, minimal functions exposed, no raw ipcRenderer/require. 3. Review each ipcMain handler for sender and payload validation and path constraints. 4. Lock down navigation (will-navigate, setWindowOpenHandler) and set a strict CSP. 5. Verify remote content is never loaded into a privileged renderer. Rollback point: before relaxing any setting (document why). Validation: an audit passes all checklist items and a page cannot reach Node or call unintended handlers; any single relaxed setting (nodeIntegration on, broad preload, unvalidated IPC) is a finding to fix before release.",
+  "domain": "electron",
+  "scope_hint": "code.desktop.electron:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.desktop.electron",
+  "pack_id": "code.desktop.electron"
+}

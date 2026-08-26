@@ -1,0 +1,72 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.mcp",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "code",
+      "mcp",
+      "tooling"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.mcp: code, mcp, tooling"
+    ],
+    "round_signals": [
+      "l3_validation_smoke"
+    ],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "round_signals": [],
+    "user_overrides": [],
+    "repo_signals": [
+      "add a database index and review the EXPLAIN plan"
+    ]
+  },
+  "retrieval_query": "MCP tool schema capability negotiation tool call result contract host permission transport lifecycle",
+  "expected_pack_id": "code.mcp",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "MCP Integration L3 validation smoke",
+    "signals": [
+      "package-local checks",
+      "focused tests",
+      "build output",
+      "smoke runs",
+      "command logs",
+      "and reviewer-readable evidence"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "MCP Integration diagnosis smoke",
+    "signals": [
+      "compare expected and observed behavior",
+      "inspect the owning files",
+      "isolate the failing boundary",
+      "and record residual risk"
+    ]
+  },
+  "source_refs": [
+    "source:official-tooling-docs:paraphrased",
+    "source:engineering-practice:paraphrased"
+  ]
+}

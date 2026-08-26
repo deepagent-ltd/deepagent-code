@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:svelte:runes-vs-legacy-reactivity",
+  "type": "knowledge",
+  "title": "Runes vs legacy reactivity",
+  "description": "Svelte 5 runes ($state/$derived/$effect) make reactivity explicit and deep, replacing implicit $: labels and assignment tracking.",
+  "body": "Use when reading or migrating Svelte reactive code. Legacy Svelte tracks top-level assignments and uses $: labels for computed values and reactive statements, but cannot see in-place mutation of arrays/objects. Runes make it explicit: $state creates a deeply reactive proxy (so mutation works), $derived declares lazily recomputed values, and $effect runs side effects with cleanup. Do not mix the two models carelessly in one component or assume $: works inside runes mode. Actions: identify which mode a file is in and follow its rules; convert per component when migrating. Validation signals include tests proving updates fire under the chosen model. Risk boundary: mixed-mode reactivity produces subtle stale-UI bugs; treat a half-migrated component as a defect to finish or revert.",
+  "domain": "svelte",
+  "scope_hint": "code.frontend.svelte:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.svelte",
+  "pack_id": "code.frontend.svelte"
+}

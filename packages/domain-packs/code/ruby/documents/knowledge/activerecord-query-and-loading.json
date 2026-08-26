@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:ruby:activerecord-query-and-loading",
+  "type": "knowledge",
+  "title": "ActiveRecord lazy queries and loading strategies",
+  "description": "Relations are lazy and chainable; includes/preload/eager_load batch associations differently to avoid N+1.",
+  "body": "Use when composing or optimizing queries. An ActiveRecord relation is lazy: chaining where/order/limit builds SQL that runs only when enumerated, so chaining is cheap but accidental enumeration (calling .to_a, .count, or iterating early) triggers it. For associations, preload loads them in a separate query, eager_load uses a LEFT JOIN (needed when filtering on the association), and includes picks one of those automatically. Do not access an association per row without one of these. Actions: choose preload vs eager_load by whether you filter on the association. Validation signals include a query-count spec confirming the batching. Risk boundary: an N+1 from a missing include degrades linearly with data, while an unbounded eager_load join can itself blow up memory; measure both.",
+  "domain": "ruby",
+  "scope_hint": "code.ruby:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.ruby",
+  "pack_id": "code.ruby"
+}

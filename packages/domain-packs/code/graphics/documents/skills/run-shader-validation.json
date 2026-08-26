@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:gfx:run-shader-validation",
+  "type": "skill",
+  "title": "Validate and reflect shaders offline",
+  "description": "Compile shaders through the validation/SPIR-V toolchain and report errors, interface mismatches, and binding layouts.",
+  "body": "Use when checking shaders before they reach a driver. Actions: run the offline toolchain (glslang/glslangValidator, naga, or DXC) to compile each stage, run the validation layer where available, and use reflection to dump descriptor bindings, vertex input locations, and uniform offsets. Report compile errors, stage-interface mismatches, and any binding that disagrees with the pipeline layout. Do not rely on a permissive driver accepting code the validator rejects. This skill exposes capability only and must not deploy compiled shaders without runtime permission. Validation signals include a clean validation pass and matching reflected bindings. Risk boundary: validation errors are portability defects; recommend fixing them rather than shipping driver-dependent shaders.",
+  "domain": "graphics",
+  "scope_hint": "code.graphics:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.graphics",
+  "pack_id": "code.graphics"
+}

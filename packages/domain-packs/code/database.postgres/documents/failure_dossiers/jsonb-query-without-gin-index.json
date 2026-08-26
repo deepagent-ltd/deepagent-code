@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:pg:jsonb-query-without-gin-index",
+  "type": "failure_dossier",
+  "description": "A JSONB containment or existence query runs without a gin index, forcing a full scan that worsens as data grows.",
+  "body": "Failure mode: a query filters on data @> '{...}' or data->>'key' = $1 but the only index is a btree on the whole jsonb column (or none), so Postgres scans every row and parses each document. Detection signals: EXPLAIN shows Seq Scan with a jsonb filter; latency climbs with table size; no gin or expression index exists for the operator used. Do not rely on a btree over the jsonb column for containment. Safer fallback: add a gin index (jsonb_path_ops for @>) or an expression index on the extracted scalar field, and confirm EXPLAIN now uses it.",
+  "domain": "postgres",
+  "scope_hint": "code.database.postgres:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.postgres:human_authored",
+  "pack_id": "code.database.postgres"
+}

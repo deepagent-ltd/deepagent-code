@@ -1,0 +1,71 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "hardware.fpga-toolflow",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "fpga_toolflow",
+      "synthesis",
+      "place_route",
+      "timing_constraint",
+      "bitstream"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for hardware.fpga-toolflow: synthesis to place-and-route to STA, XDC and SDC constraints, clock definitions, false and multicycle paths, floorplanning, bitstream, incremental compile"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "write unit tests for a Python data parsing function"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "vivado quartus synthesis place and route static timing analysis xdc sdc constraint clock definition false path multicycle path floorplan bitstream incremental compile",
+  "expected_pack_id": "hardware.fpga-toolflow",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "hardware.fpga-toolflow L3 validation smoke",
+    "signals": [
+      "static timing analysis reports positive setup and hold slack across all clock domains",
+      "every clock and generated clock is explicitly defined in the constraint file before optimization",
+      "asynchronous clock crossings are declared and covered by synchronizers rather than left unconstrained",
+      "the generated bitstream programs the device and the design meets timing at the target frequency on hardware"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "hardware.fpga-toolflow diagnosis smoke",
+    "signals": [
+      "negative setup slack on a long combinational path points to logic that needs pipelining or a relaxed clock",
+      "hold violations on short paths suggest missing clock skew constraints or a too-aggressive clock",
+      "a path reported as failing that is actually multicycle indicates a missing timing exception",
+      "a clock shown as unconstrained in the timing summary means a create_clock statement is missing",
+      "wildly optimistic slack that fails on hardware hints at an over-broad false-path exception hiding a real path"
+    ]
+  },
+  "source_refs": [
+    "source:xilinx-ug903-constraints:paraphrased",
+    "source:intel-quartus-timing:paraphrased"
+  ]
+}

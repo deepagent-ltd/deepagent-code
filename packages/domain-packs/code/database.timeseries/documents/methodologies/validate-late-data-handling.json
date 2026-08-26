@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:tsdb:validate-late-data-handling",
+  "type": "methodology",
+  "title": "Validate late-arriving data handling",
+  "description": "Confirm out-of-order and delayed points land in the right chunk and trigger aggregate refresh.",
+  "body": "Steps: 1. Identify the expected lateness window for the source. 2. Inject a delayed point and confirm it routes to the correct time chunk. 3. Verify the continuous aggregate refresh policy covers that lateness. 4. Check the point is not silently dropped or placed in compression. 5. Document the supported lateness bound. Rollback point: before tightening refresh windows. Validation: a late point appears in both raw and rollup after refresh.",
+  "domain": "timeseries_db",
+  "scope_hint": "code.database.timeseries:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.timeseries",
+  "pack_id": "code.database.timeseries"
+}

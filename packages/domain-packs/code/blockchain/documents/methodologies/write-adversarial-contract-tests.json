@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:chain:write-adversarial-contract-tests",
+  "type": "methodology",
+  "title": "Write adversarial smart-contract tests",
+  "description": "Test not just the happy path but attacker behavior: reentrancy, overflow, access bypass, and malicious external contracts.",
+  "body": "Steps: 1. Cover the happy path, then write attacker scenarios. 2. Add a malicious contract that re-enters on receiving value and assert it fails. 3. Attempt privileged calls from a non-owner and assert reverts. 4. Fuzz numeric inputs for overflow/underflow and boundary conditions. 5. Add invariant tests (e.g. total supply equals sum of balances) run under random sequences. Rollback point: before changing a value-moving function's logic. Validation: every attack test fails to exploit the contract and invariants hold under fuzzing; happy-path-only tests passing is not evidence of safety. Use a framework like Foundry for fuzzing and invariants.",
+  "domain": "blockchain",
+  "scope_hint": "code.blockchain:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.blockchain",
+  "pack_id": "code.blockchain"
+}

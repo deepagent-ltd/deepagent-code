@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:rag:build-the-retrieval-pipeline",
+  "type": "methodology",
+  "title": "Build the two-stage retrieval pipeline",
+  "description": "Assemble embed, first-stage retrieve, rerank, and context-assembly stages, measuring recall and precision at each.",
+  "body": "Steps: 1. Embed the query with the same model used for documents. 2. Retrieve a wide candidate set for recall. 3. Rerank candidates for precision and select top-k. 4. Deduplicate and assemble context within the window with citations. 5. Measure first-stage recall and final top-k precision on a labeled set. Rollback point: before changing the embedding or index. Validation: recall at stage one and precision after rerank are both reported and the relevant passage survives into context.",
+  "domain": "rag",
+  "scope_hint": "code.rag:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.rag",
+  "pack_id": "code.rag"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:analytics:materialization-strategies",
+  "type": "knowledge",
+  "title": "dbt materialization strategies",
+  "description": "When view, table, incremental, and ephemeral materializations each fit a model's freshness and cost profile.",
+  "body": "Use when choosing how a dbt model persists. A view recomputes on every read (cheap to build, costly to query repeatedly); a table fully rebuilds each run (simple, correct, costly at scale); incremental appends or merges only new/changed rows (fast but needs late-data handling); ephemeral inlines as a CTE without persisting. Do not make a huge model a plain table if rebuild cost is prohibitive, nor incremental without idempotent merge logic. Actions: match materialization to size, freshness, and query frequency. Validation signals include build cost matching the chosen strategy and an incremental model reconciling to a full refresh. Risk boundary: a misused incremental drifts silently; if late data is common, escalate to reconciliation before trusting it.",
+  "domain": "analytics",
+  "scope_hint": "code.analytics:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.analytics",
+  "pack_id": "code.analytics"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:mon:validate-alert-rules",
+  "type": "skill",
+  "title": "Validate alert rules",
+  "description": "Check alert expressions, for-durations, and labels against test data to catch flapping or dead alerts.",
+  "body": "Use when reviewing alerting rules for correctness. Actions: read each rule's expression, 'for' duration, and routing labels, and evaluate it against sample or historical data to report whether it would fire appropriately, flap, or never fire. Do not approve an alert rule without confirming it triggers on a real condition and stays quiet otherwise. This skill is read-only and must not modify rules without permission. Validation signals include a per-rule firing assessment against test data. Risk boundary: a rule that never fires gives false confidence — flag dead alerts as a reliability gap.",
+  "domain": "monitoring",
+  "scope_hint": "platform.monitoring:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.monitoring",
+  "pack_id": "platform.monitoring"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:analytics:fan-out-double-count",
+  "type": "failure_dossier",
+  "description": "A join to a finer-grained table multiplies fact rows and silently double-counts measures.",
+  "body": "Failure mode: a fact table is joined to a dimension or bridge table at a finer grain than expected, so each fact row fans out into several and additive measures are summed multiple times, inflating totals. Detection signals: a measure total that exceeds an independent source, and a row count after the join larger than the fact table alone. Do not wrap the result in DISTINCT to hide the inflation. Safer fallback: re-establish the intended grain, aggregate the finer table to the fact grain before joining or use a properly modeled bridge, and verify the post-join row count and measure totals match the single-grain fact table.",
+  "domain": "analytics",
+  "scope_hint": "code.analytics:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.analytics:human_authored",
+  "pack_id": "code.analytics"
+}

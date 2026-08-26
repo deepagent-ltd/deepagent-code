@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:helm:built-in-objects-capabilities",
+  "type": "knowledge",
+  "title": "Helm built-in objects and .Capabilities gating",
+  "description": "Explains the built-in objects (.Release, .Chart, .Files, .Capabilities) and using .Capabilities.APIVersions to render version-appropriate manifests.",
+  "body": "Use when a chart must adapt to the cluster or read packaged files. Do not hardcode an apiVersion that may not exist on the target cluster. Actions: use .Release for name/namespace/revision, .Chart for chart metadata, .Files.Get to embed packaged files, and .Capabilities.APIVersions.Has to gate a manifest on whether the cluster supports an API. Inspect with helm template --debug. Validation signals include the chart rendering the correct apiVersion for the target's Capabilities and embedded files appearing in the output. Risk boundary: none for rendering; mismatched capabilities just produce inapplicable manifests caught at apply.",
+  "domain": "helm",
+  "scope_hint": "platform.helm:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.helm",
+  "pack_id": "platform.helm"
+}

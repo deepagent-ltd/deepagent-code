@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:mt:enforce-isolation-at-the-data-layer",
+  "type": "strategy",
+  "title": "Enforce isolation at the data layer, not just the app",
+  "description": "Back application-level scoping with row-level security or equivalent so a missed filter in code cannot expose another tenant's data.",
+  "body": "Use when the database supports policy-based access and the data is sensitive. Do not rely on every query author remembering the tenant filter. Actions: enable row-level security with a policy keyed on the session's tenant context; set the tenant context from the authenticated principal per request; keep app-level scoping too as defense in depth. Validation signals include the database rejecting a query whose tenant context does not match the row. Risk boundary: app-only scoping fails the moment one query forgets the predicate, so add a data-layer guard and escalate any path that bypasses it.",
+  "domain": "multi_tenant",
+  "scope_hint": "code.backend.multi-tenant:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.multi-tenant",
+  "pack_id": "code.backend.multi-tenant"
+}

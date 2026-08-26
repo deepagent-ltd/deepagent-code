@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:rt:heartbeat-to-detect-dead-connections",
+  "type": "strategy",
+  "title": "Heartbeat to detect dead connections",
+  "description": "Ping/pong or keepalive with a timeout reaps half-open connections so resources are not leaked by silent drops.",
+  "body": "Use when connections can drop without a clean close (mobile networks, NAT timeouts, crashed clients). Do not rely on TCP alone to notice a dead peer, which can leave half-open connections for minutes. Actions: send periodic pings (or SSE comments), expect a pong/activity within a timeout, and close and clean up connections that miss it; on the client, treat missed heartbeats as a trigger to reconnect. Validation signals include a test that simulates a silent drop and asserts the server closes and frees the connection within the timeout. Risk boundary: no heartbeat lets dead connections accumulate until file-descriptor or memory limits are hit, causing a slow outage.",
+  "domain": "realtime",
+  "scope_hint": "code.backend.realtime:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.realtime",
+  "pack_id": "code.backend.realtime"
+}

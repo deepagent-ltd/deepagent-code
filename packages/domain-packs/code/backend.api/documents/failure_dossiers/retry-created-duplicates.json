@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:backend_api:retry-created-duplicates",
+  "type": "failure_dossier",
+  "description": "Client retry or duplicate submit created multiple resources or repeated side effects.",
+  "body": "Failure mode: a mutating API has no idempotency key, uniqueness check, or duplicate outcome contract, so timeouts, refreshes, mobile retries, or webhook redelivery repeat side effects. Diagnostic trigger: implementation tests only the first success path and never repeats the same request. Do-not-use signal: do not describe a mutator as retry-safe without duplicate-path evidence. Recovery: add idempotency semantics, stable duplicate responses, or documented conflict errors; test repeated requests in safe local data. Risk boundary: downstream emails, payments, external webhooks, and background jobs may need their own dedupe evidence beyond the route handler.",
+  "domain": "api",
+  "scope_hint": "code.backend.api:failure_dossiers",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.api:idempotency_failure",
+  "pack_id": "code.backend.api"
+}

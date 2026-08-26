@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:ng:audit-subscription-lifecycle",
+  "type": "skill",
+  "title": "Audit subscription lifecycle",
+  "description": "Read a component and report every subscription's teardown status and any nested-subscribe race risk.",
+  "body": "Use when asked whether a component leaks or races. Actions: inspect every observable usage, classify each as async-pipe (managed), takeUntilDestroyed/destroy-Subject (managed), or bare subscribe (leaking), and flag any subscribe nested inside another subscribe as a cancellation/ordering risk. Do not assume RxJS unsubscribes for you on long-lived streams. Report and record each leaking subscription and nested-subscribe with its file and line, and the operator that should flatten it. This skill is read-only and must not refactor streams without runtime permission. Validation signals include confirming no emission fires after destroy. Risk boundary: flag a long-lived bare subscribe as a memory-leak defect and a nested subscribe as a race-condition risk.",
+  "domain": "angular",
+  "scope_hint": "code.frontend.angular:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.angular",
+  "pack_id": "code.frontend.angular"
+}

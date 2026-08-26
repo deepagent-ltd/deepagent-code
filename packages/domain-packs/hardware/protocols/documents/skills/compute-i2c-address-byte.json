@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:hwprot:compute-i2c-address-byte",
+  "type": "skill",
+  "title": "Compute the I2C address byte with R/W bit",
+  "description": "Combine a seven-bit device address with the read or write bit to form the byte actually placed on the bus.",
+  "body": "Use when a datasheet lists a seven-bit address but the controller expects the full byte. Do not pass the seven-bit value where the eight-bit framed byte is required, since that misaddresses the device. Actions: shift the seven-bit address left by one, set the low bit for a read or clear it for a write, and verify the resulting byte against a bus capture. Validation signals include the addressed slave driving ACK and a capture whose address byte matches the computed value. Risk boundary: an off-by-one address can hit an unrelated device, so flag any address that responds unexpectedly before writing.",
+  "domain": "hw_protocols",
+  "scope_hint": "hardware.protocols:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.protocols",
+  "pack_id": "hardware.protocols"
+}

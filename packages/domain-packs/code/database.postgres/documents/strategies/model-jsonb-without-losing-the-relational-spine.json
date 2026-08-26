@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:pg:model-jsonb-without-losing-the-relational-spine",
+  "type": "strategy",
+  "title": "Use JSONB without losing the relational spine",
+  "description": "Keep queried, constrained, and joined fields as columns; reserve JSONB for genuinely variable or sparse data.",
+  "body": "Use when tempted to store a whole entity as one JSONB blob. Do not push fields you filter, join, or constrain on into JSONB just to avoid migrations. Actions: keep identifiers, foreign keys, and frequently-filtered fields as typed columns with constraints; use JSONB for sparse/variable attributes; index JSONB containment queries with a gin index (jsonb_path_ops for @> ) or expression indexes on extracted fields. Validation signals include EXPLAIN showing a gin/expression index used for the JSONB predicate instead of a full scan. Risk boundary: putting foreign keys or money fields inside JSONB forfeits constraints and type safety; flag it as a data-integrity risk.",
+  "domain": "postgres",
+  "scope_hint": "code.database.postgres:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.postgres",
+  "pack_id": "code.database.postgres"
+}

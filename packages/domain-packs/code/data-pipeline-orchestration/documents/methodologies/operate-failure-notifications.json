@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:orch:operate-failure-notifications",
+  "type": "methodology",
+  "title": "Operate task failure and SLA notifications",
+  "description": "Route task failures and SLA misses to actionable alerts with run context so incidents are caught, not buried in logs.",
+  "body": "Use when a pipeline's failures must be noticed and acted on. Do not depend on engineers scanning the UI — failures buried among many runs go unseen for hours. Actions: configure on-failure and on-SLA-miss callbacks to send alerts including the DAG, task, execution date, and log link; suppress noise from expected retries so only final failures page. Validation signals include an alert delivered on a seeded final failure with full context and no alert on a transient retry that later succeeded. Risk boundary: missed failure alerts let stale or wrong data flow downstream; if a critical task lacks failure notification, treat it as an operational gap and escalate to wire it before relying on the pipeline.",
+  "domain": "orchestration",
+  "scope_hint": "code.data-pipeline-orchestration:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-pipeline-orchestration",
+  "pack_id": "code.data-pipeline-orchestration"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:svelte:structure-sveltekit-routing",
+  "type": "methodology",
+  "title": "Structure SvelteKit routing and data loading",
+  "description": "Decide per route which data is server-only vs universal and place load logic accordingly.",
+  "body": "Steps: 1. Map the route tree (+page, +layout) and identify shared vs page-specific data. 2. For data needing secrets or a database, use +page.server.js/+layout.server.js. 3. For data safe on both sides, use +page.js with the injected fetch. 4. Hoist data shared by children into a +layout load and let pages read it. 5. Confirm each load returns serializable data and handles the error/redirect helpers. Rollback point: before moving logic between server and universal loads. Validation: the page renders server-side with its data and no secret appears in the client payload.",
+  "domain": "svelte",
+  "scope_hint": "code.frontend.svelte:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.svelte",
+  "pack_id": "code.frontend.svelte"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:mon:rate-counters-over-adequate-windows",
+  "type": "strategy",
+  "title": "Rate counters over adequate windows",
+  "description": "Apply rate()/increase() to counters across a window covering several scrape intervals.",
+  "body": "Use when turning a monotonically increasing counter into a per-second rate. Do not use a rate window near or below the scrape interval — with too few samples rate() returns gaps or noisy spikes, and applying it to a gauge is meaningless. Actions: choose a window covering at least four scrape intervals, use rate() for per-second and increase() for totals, and confirm the metric is a counter. Validation signals include a stable rate across the window and no gaps from sparse samples. Risk boundary: a rate that silently returns empty makes a dashboard or alert blind — verify the window against the scrape interval before relying on it.",
+  "domain": "monitoring",
+  "scope_hint": "platform.monitoring:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.monitoring",
+  "pack_id": "platform.monitoring"
+}

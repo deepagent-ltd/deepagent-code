@@ -1,0 +1,468 @@
+[
+  {
+    "ref_id": "strategy:crypto:default-to-aead",
+    "type": "strategy",
+    "title": "Default to authenticated encryption (AEAD)",
+    "summary": "Encrypt with an AEAD construction so confidentiality and integrity come together, instead of composing a cipher and a MAC by hand.",
+    "domains": [
+      "cryptography",
+      "encryption",
+      "hashing",
+      "key_management"
+    ],
+    "triggers": [
+      "aead",
+      "aes-gcm",
+      "chacha20-poly1305",
+      "authenticated",
+      "encrypt",
+      "integrity"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.cryptography"
+  },
+  {
+    "ref_id": "strategy:crypto:never-reuse-a-nonce",
+    "type": "strategy",
+    "title": "Never reuse a nonce under one key",
+    "summary": "Guarantee each (key, nonce) pair is used once, because nonce reuse with AEAD/stream ciphers is catastrophic for confidentiality and integrity.",
+    "domains": [
+      "cryptography",
+      "encryption",
+      "hashing",
+      "key_management"
+    ],
+    "triggers": [
+      "nonce",
+      "iv",
+      "reuse",
+      "counter",
+      "unique",
+      "stream"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.cryptography"
+  },
+  {
+    "ref_id": "strategy:crypto:hash-passwords-with-a-memory-hard-kdf",
+    "type": "strategy",
+    "title": "Hash passwords with a slow, memory-hard KDF",
+    "summary": "Store password verifiers with Argon2/scrypt/bcrypt and a per-user salt, never with a fast or unsalted hash.",
+    "domains": [
+      "cryptography",
+      "encryption",
+      "hashing",
+      "key_management"
+    ],
+    "triggers": [
+      "password",
+      "argon2",
+      "bcrypt",
+      "scrypt",
+      "salt",
+      "kdf"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.cryptography"
+  },
+  {
+    "ref_id": "strategy:crypto:derive-keys-with-a-kdf",
+    "type": "strategy",
+    "title": "Derive purpose-specific keys with a KDF",
+    "summary": "Use HKDF or a context-bound KDF to expand or separate keys per purpose, rather than reusing one key everywhere or hashing it ad hoc.",
+    "domains": [
+      "cryptography",
+      "encryption",
+      "hashing",
+      "key_management"
+    ],
+    "triggers": [
+      "kdf",
+      "hkdf",
+      "key derivation",
+      "context",
+      "purpose",
+      "separation"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.cryptography"
+  },
+  {
+    "ref_id": "strategy:crypto:source-randomness-from-a-csprng",
+    "type": "strategy",
+    "title": "Source all secrets from a CSPRNG",
+    "summary": "Generate keys, salts, nonces, and tokens from a cryptographically secure RNG, never from a general-purpose PRNG.",
+    "domains": [
+      "cryptography",
+      "encryption",
+      "hashing",
+      "key_management"
+    ],
+    "triggers": [
+      "csprng",
+      "random",
+      "entropy",
+      "prng",
+      "token",
+      "seed"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.cryptography"
+  },
+  {
+    "ref_id": "strategy:crypto:compare-secrets-in-constant-time",
+    "type": "strategy",
+    "title": "Compare secrets in constant time",
+    "summary": "Use a constant-time comparison for MACs, tokens, and other secrets so an attacker cannot recover them via timing.",
+    "domains": [
+      "cryptography",
+      "encryption",
+      "hashing",
+      "key_management"
+    ],
+    "triggers": [
+      "constant-time",
+      "timing",
+      "comparison",
+      "mac",
+      "token",
+      "equality"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.cryptography"
+  },
+  {
+    "ref_id": "methodology:crypto:choose-a-primitive-for-a-goal",
+    "type": "methodology",
+    "title": "Map a security goal to the right primitive",
+    "summary": "Translate a requirement (confidentiality, integrity, authenticity, password storage) into a specific named construction before writing code.",
+    "domains": [
+      "cryptography",
+      "encryption",
+      "hashing",
+      "key_management"
+    ],
+    "triggers": [
+      "primitive",
+      "goal",
+      "confidentiality",
+      "integrity",
+      "authenticity",
+      "select"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.cryptography"
+  },
+  {
+    "ref_id": "methodology:crypto:manage-key-lifecycle",
+    "type": "methodology",
+    "title": "Manage the key lifecycle and rotation",
+    "summary": "Generate, store, rotate, and retire keys with a key-management system so a compromised or aged key has bounded impact.",
+    "domains": [
+      "cryptography",
+      "encryption",
+      "hashing",
+      "key_management"
+    ],
+    "triggers": [
+      "key management",
+      "rotation",
+      "kms",
+      "lifecycle",
+      "retire",
+      "envelope"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.cryptography"
+  },
+  {
+    "ref_id": "methodology:crypto:configure-tls-safely",
+    "type": "methodology",
+    "title": "Configure TLS with safe defaults",
+    "summary": "Set protocol versions, cipher suites, and certificate validation so transport security is not silently downgraded.",
+    "domains": [
+      "cryptography",
+      "encryption",
+      "hashing",
+      "key_management"
+    ],
+    "triggers": [
+      "tls",
+      "cipher suite",
+      "certificate",
+      "validation",
+      "downgrade",
+      "https"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.cryptography"
+  },
+  {
+    "ref_id": "methodology:crypto:review-code-for-crypto-misuse",
+    "type": "methodology",
+    "title": "Review code for cryptographic misuse",
+    "summary": "Audit a change for the common misuse patterns: weak modes, nonce reuse, bad hashes, custom crypto, and timing leaks.",
+    "domains": [
+      "cryptography",
+      "encryption",
+      "hashing",
+      "key_management"
+    ],
+    "triggers": [
+      "review",
+      "audit",
+      "misuse",
+      "checklist",
+      "primitive",
+      "secret"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.cryptography"
+  },
+  {
+    "ref_id": "knowledge:crypto:why-not-roll-your-own",
+    "type": "knowledge",
+    "title": "Why you must not roll your own crypto",
+    "summary": "Security depends on resistance to adaptive attackers, not on whether your test vectors decrypt; novel schemes fail in ways unit tests cannot reveal.",
+    "domains": [
+      "cryptography",
+      "encryption",
+      "hashing",
+      "key_management"
+    ],
+    "triggers": [
+      "roll your own",
+      "novel",
+      "review",
+      "attacker",
+      "standard",
+      "audited"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.cryptography"
+  },
+  {
+    "ref_id": "knowledge:crypto:symmetric-vs-asymmetric",
+    "type": "knowledge",
+    "title": "Symmetric vs asymmetric cryptography",
+    "summary": "Symmetric crypto is fast and uses one shared key; asymmetric enables key exchange and signatures with a public/private pair; real systems combine them.",
+    "domains": [
+      "cryptography",
+      "encryption",
+      "hashing",
+      "key_management"
+    ],
+    "triggers": [
+      "symmetric",
+      "asymmetric",
+      "public key",
+      "private key",
+      "exchange",
+      "hybrid"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.cryptography"
+  },
+  {
+    "ref_id": "knowledge:crypto:hashes-macs-and-signatures",
+    "type": "knowledge",
+    "title": "Hashes, MACs, and signatures differ",
+    "summary": "A hash gives integrity only, a MAC adds authenticity with a shared key, and a signature adds non-repudiable authenticity with a public key.",
+    "domains": [
+      "cryptography",
+      "encryption",
+      "hashing",
+      "key_management"
+    ],
+    "triggers": [
+      "hash",
+      "mac",
+      "hmac",
+      "signature",
+      "integrity",
+      "authenticity"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.cryptography"
+  },
+  {
+    "ref_id": "knowledge:crypto:randomness-and-entropy",
+    "type": "knowledge",
+    "title": "Randomness, entropy, and the CSPRNG",
+    "summary": "Security requires unpredictable values from a CSPRNG seeded by OS entropy; statistical randomness from a PRNG is not the same as unpredictability.",
+    "domains": [
+      "cryptography",
+      "encryption",
+      "hashing",
+      "key_management"
+    ],
+    "triggers": [
+      "entropy",
+      "csprng",
+      "prng",
+      "unpredictable",
+      "seed",
+      "randomness"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.cryptography"
+  },
+  {
+    "ref_id": "skill:crypto:audit-crypto-usage",
+    "type": "skill",
+    "title": "Audit a codebase for crypto usage",
+    "summary": "Locate all cryptographic calls and report the construction, parameters, and any misuse pattern with file locations.",
+    "domains": [
+      "cryptography",
+      "encryption",
+      "hashing",
+      "key_management"
+    ],
+    "triggers": [
+      "audit",
+      "scan",
+      "crypto usage",
+      "inventory",
+      "misuse",
+      "report"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.cryptography"
+  },
+  {
+    "ref_id": "skill:crypto:run-crypto-tests",
+    "type": "skill",
+    "title": "Run crypto correctness and tamper tests",
+    "summary": "Execute the project's cryptographic tests and report round-trip, tamper-rejection, and parameter checks.",
+    "domains": [
+      "cryptography",
+      "encryption",
+      "hashing",
+      "key_management"
+    ],
+    "triggers": [
+      "test",
+      "tamper",
+      "round-trip",
+      "kat",
+      "vector",
+      "run"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.cryptography"
+  }
+]

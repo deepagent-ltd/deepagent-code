@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:crypto:symmetric-vs-asymmetric",
+  "type": "knowledge",
+  "title": "Symmetric vs asymmetric cryptography",
+  "description": "Symmetric crypto is fast and uses one shared key; asymmetric enables key exchange and signatures with a public/private pair; real systems combine them.",
+  "body": "Use when deciding how parties share keys or verify each other. Symmetric primitives (AES, ChaCha20) are fast but require both sides to already share a secret key; asymmetric primitives (RSA, X25519, Ed25519) let parties agree on a key or verify signatures without a shared secret but are slower. Real systems use hybrid encryption: asymmetric to exchange or wrap a symmetric data key, symmetric to encrypt the bulk data. Do not encrypt large data directly with RSA, and avoid sharing one symmetric key across many parties. Actions: use ECDH/X25519 for agreement, then AEAD for data. Validation signals include a hybrid scheme where asymmetric ops touch only key-sized data. Risk boundary: misusing asymmetric crypto for bulk data is slow and error-prone; verify the split between key-exchange and data encryption.",
+  "domain": "cryptography",
+  "scope_hint": "code.cryptography:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.cryptography",
+  "pack_id": "code.cryptography"
+}

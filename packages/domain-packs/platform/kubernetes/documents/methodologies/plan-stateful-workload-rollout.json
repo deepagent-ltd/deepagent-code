@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:k8s:plan-stateful-workload-rollout",
+  "type": "methodology",
+  "title": "Plan a StatefulSet rollout with storage in mind",
+  "description": "Account for ordered/parallel pod management, PVC retention, and partitioned updates before changing a StatefulSet.",
+  "body": "Steps: 1. Determine podManagementPolicy (OrderedReady vs Parallel) and whether ordering matters for the app. 2. Check volumeClaimTemplates and PVC retention policy so an update does not orphan or delete data. 3. For risky changes use updateStrategy.rollingUpdate.partition to canary the highest-ordinal pods first. 4. Verify each updated pod passes readiness before the next. 5. Confirm headless Service DNS stays stable. Rollback point: lower the partition or undo before it reaches ordinal 0. Validation: data persists across the update and each replica rejoins with stable identity and storage.",
+  "domain": "kubernetes",
+  "scope_hint": "platform.kubernetes:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.kubernetes",
+  "pack_id": "platform.kubernetes"
+}

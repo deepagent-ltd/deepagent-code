@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:sigproc:undersample-aliasing",
+  "type": "failure_dossier",
+  "description": "A captured signal shows a phantom low-frequency tone that does not exist in the source because the input was undersampled.",
+  "body": "Failure mode: content above half the sample rate folds into the baseband and appears as a believable but false tone. Detection signals: a tone whose frequency moves when the sample rate changes, energy that vanishes when the analog bandwidth is reduced, and a spectrum inconsistent with the known source. Do not trust the captured data while an out-of-band path exists. Safer fallback: raise the sample rate above twice the maximum content or insert an analog anti-alias filter before the converter.",
+  "domain": "signal_processing",
+  "scope_hint": "hardware.signal-processing:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.signal-processing:human_authored",
+  "pack_id": "hardware.signal-processing"
+}

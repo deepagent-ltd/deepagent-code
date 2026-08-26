@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:robot:inspect-ros-graph-and-topics",
+  "type": "skill",
+  "title": "Inspect the ROS graph and topic health",
+  "description": "Enumerate nodes, topics, rates, and QoS and report disconnects, rate drops, or QoS mismatches on critical paths.",
+  "body": "Use when diagnosing communication or liveness problems in a running ROS system. Actions: list nodes and topics, check publish rates against expected rates, inspect QoS profiles for mismatches, and verify that critical control topics have live publishers and matched reliability/deadline settings. Report any silent publisher, rate drop, or QoS mismatch with the affected node and topic. Do not send commands to actuators while inspecting. This skill exposes capability only and must not command hardware without runtime permission. Validation signals include expected rates met and matched QoS on control paths. Risk boundary: a silent or mismatched control topic is a safety concern; report it as blocking and recommend the safe-degrade response rather than ignoring it.",
+  "domain": "robotics",
+  "scope_hint": "code.robotics:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.robotics",
+  "pack_id": "code.robotics"
+}

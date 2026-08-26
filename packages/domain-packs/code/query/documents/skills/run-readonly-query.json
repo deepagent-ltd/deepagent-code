@@ -1,0 +1,11 @@
+{
+  "ref_id": "skill:query:run-readonly-query",
+  "type": "skill",
+  "description": "Use read-only tools for status, count, list, inspect, SELECT, log, config, and file queries without mutating state.",
+  "body": "Inputs: user query, available tools, and known workspace scope. Procedure: classify whether the request is read-only; choose the narrowest tool such as file read, search, git status/diff, log read, config read, or SQL SELECT/SHOW/EXPLAIN; run only the read-only action; capture command/query/scope; summarize the result. Failure handling: if the request requires edit, deploy, migration, write, delete, update, alter, or drop, stop and route to the relevant risk-controlled task. Output: result summary with verified/unverified status. Use when a read-only query, count, list, status, diff, or inspection request must be answered from repository or tool evidence. Do not use when the user asks to edit, fix, deploy, migrate, delete, insert, update, or alter state. Actions: identify the exact scope, run read-only search or inspection tools, cite the source artifact, and preserve the command or file evidence used for the answer. Validation signals include matching counts against tool output, source references, scope labels, and no modified working-tree files. Risk boundary: stop or ask for confirmation if the task changes from query to mutation, if evidence is stale, or if the answer would expose secrets or excessive output.",
+  "domain": "query",
+  "scope_hint": "code.query:skill",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.query",
+  "pack_id": "code.query"
+}

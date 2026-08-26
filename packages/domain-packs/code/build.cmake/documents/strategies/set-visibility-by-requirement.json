@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:cmake:set-visibility-by-requirement",
+  "type": "strategy",
+  "title": "Choose PUBLIC, PRIVATE, or INTERFACE by who needs it",
+  "description": "Mark a usage requirement PRIVATE when only the target itself needs it, INTERFACE when only consumers do, and PUBLIC when both do.",
+  "body": "Use when adding includes, definitions, or link dependencies to a target. Do not mark everything PUBLIC to silence missing-symbol errors. Actions: ask whether a requirement is needed to build this target, to use it, or both; pick PRIVATE, INTERFACE, or PUBLIC accordingly; verify a consumer links cleanly without restating the dependency. Validation signals include a header-only dependency exposed as INTERFACE and an implementation detail kept PRIVATE. Risk boundary: over-broad PUBLIC visibility leaks implementation dependencies into the public interface and is hard to walk back once consumers rely on it.",
+  "domain": "cmake",
+  "scope_hint": "code.build.cmake:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.build.cmake",
+  "pack_id": "code.build.cmake"
+}

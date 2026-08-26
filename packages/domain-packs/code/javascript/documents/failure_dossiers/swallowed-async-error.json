@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:javascript:swallowed-async-error",
+  "type": "failure_dossier",
+  "description": "Swallowed async error after broad catch",
+  "body": "A catch block that logs nothing, returns undefined, or converts every rejection into success can hide regressions. Treat broad catch-only fixes as do-not-use unless caller contract requires recovery and tests cover the negative path.\n\nUse only as a diagnostic do-not-use signal; do not expose this as positive strategy, methodology, knowledge, skill, or memory.",
+  "domain": "javascript",
+  "scope_hint": "code.javascript:failure_dossiers",
+  "evidence_strength": "medium",
+  "provenance_tag": "code.javascript:failure_seed:paraphrased_common_failures",
+  "pack_id": "code.javascript"
+}

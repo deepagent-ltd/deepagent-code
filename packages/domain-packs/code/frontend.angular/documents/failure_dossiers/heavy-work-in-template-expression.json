@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:ng:heavy-work-in-template-expression",
+  "type": "failure_dossier",
+  "description": "A template calls a method or filters a list inline, so the work re-runs on every change-detection cycle and the UI janks.",
+  "body": "Failure mode: a template binds to a component method, getter, or inline array filter/sort, and because change detection re-evaluates template expressions every cycle, the expensive work runs repeatedly even when its inputs did not change. Detection signals: the profiler shows the expression recomputed each tick; scrolling or typing causes jank; a {{ compute() }} or *ngFor over an inline-filtered array appears in the template. Do not put expensive computation in template expressions or getters. Safer fallback: move it to a pure pipe cached by its inputs, a memoized signal/derived value, or precompute on input change, and confirm with the DevTools profiler that it no longer recomputes per cycle.",
+  "domain": "angular",
+  "scope_hint": "code.frontend.angular:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.angular:human_authored",
+  "pack_id": "code.frontend.angular"
+}

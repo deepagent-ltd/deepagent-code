@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:hwpwr:estimate-power-budget",
+  "type": "methodology",
+  "title": "Estimate the power budget from activity and leakage",
+  "description": "Combine dynamic power from switching activity with static leakage to project total power against the budget.",
+  "body": "Use when planning whether a design fits its thermal and battery budget. Do not estimate from gate count alone, since activity and leakage dominate real power. Actions: gather switching activity from simulation, compute dynamic power from activity and capacitance, and add leakage from the cell mix. Validation signals include a projected power within the budget and a breakdown attributing dynamic versus static contributions. Risk boundary: an underestimate leads to a thermal failure late, so escalate to architectural power cuts when the projection exceeds the budget.",
+  "domain": "power_design",
+  "scope_hint": "hardware.power:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.power",
+  "pack_id": "hardware.power"
+}

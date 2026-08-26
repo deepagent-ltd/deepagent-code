@@ -1,0 +1,11 @@
+{
+  "ref_id": "methodology:javascript:module-format-triage",
+  "type": "methodology",
+  "description": "Triage ESM/CJS failures from error text, package scope, and loader path.",
+  "body": "Use when Node reports ERR_REQUIRE_ESM, require is not defined, named export mismatch, or package exports resolution failures. Avoid blindly renaming files or flipping package type. Steps: identify executing file, nearest package.json type, extension, exports/imports map, transpiler or bundler layer, then patch the boundary owner. Verify by rerunning the loader path that failed. Risk boundary is breaking downstream consumers that rely on the other module format. Use when JavaScript Runtime and Tooling work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: follow the ordered review, edit, and validation sequence; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "javascript",
+  "scope_hint": "code.javascript:methodologys",
+  "evidence_strength": "medium",
+  "provenance_tag": "code.javascript:seed:official_docs_and_common_tooling_behavior:paraphrased",
+  "pack_id": "code.javascript"
+}

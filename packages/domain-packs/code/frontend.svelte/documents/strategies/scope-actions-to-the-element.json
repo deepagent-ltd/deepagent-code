@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:svelte:scope-actions-to-the-element",
+  "type": "strategy",
+  "title": "Scope use: actions to element lifecycle",
+  "description": "A use: action owns setup and teardown for one element and must return a destroy to release what it created.",
+  "body": "Use when attaching imperative DOM behavior (tooltip, click-outside, intersection observer) via a use: action. Do not set up listeners or observers without a matching teardown. Actions: in the action, set up on the passed node, return an object with update (when params change) and destroy (to remove listeners/observers); keep the action focused on one element's behavior. Validation signals include a test that removing the element calls destroy and detaches the listener. Risk boundary: an action without destroy leaks observers/listeners as elements churn in lists; keep secret or global state out of per-element actions.",
+  "domain": "svelte",
+  "scope_hint": "code.frontend.svelte:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.svelte",
+  "pack_id": "code.frontend.svelte"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:finetune:distillation-objectives",
+  "type": "knowledge",
+  "title": "Distillation objectives: soft labels and rationales",
+  "description": "How matching teacher logits, intermediate states, or generated rationales transfers capability to a smaller student.",
+  "body": "Use when planning what signal a student should learn from a teacher. Distillation can match the teacher's soft-label distribution (temperature-scaled logits), align intermediate representations, or train on teacher-generated rationales and answers. Do not assume hard-label imitation captures reasoning — soft targets and rationales transfer more of the teacher's behavior. Actions: pick the objective the student capacity can absorb, train, and measure the task gap to the teacher. Validation signals include a student-teacher benchmark and an objective ablation showing the chosen signal helps. Risk boundary: a student too small cannot absorb the teacher; if the gap stays large, escalate to a bigger student rather than ship.",
+  "domain": "fine_tuning",
+  "scope_hint": "code.fine-tuning:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.fine-tuning",
+  "pack_id": "code.fine-tuning"
+}

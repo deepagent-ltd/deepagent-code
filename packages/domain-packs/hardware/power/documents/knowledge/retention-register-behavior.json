@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:hwpwr:retention-register-behavior",
+  "type": "knowledge",
+  "title": "How retention registers preserve state",
+  "description": "Retention registers keep a shadow copy of state on an always-on supply so the main supply can be gated off.",
+  "body": "Use when explaining how a domain keeps state through power-down. Do not assume ordinary registers survive power-down, since only retention cells hold value on the always-on rail. Actions: identify state that must persist, map it to retention cells, and verify the save and restore controls drive correctly. Validation signals include retained state restoring after a power cycle and the shadow supply staying on through power-down. Risk boundary: non-retention state is lost on power-down, so flag any persistent state mapped to ordinary registers as a corruption risk.",
+  "domain": "power_design",
+  "scope_hint": "hardware.power:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.power",
+  "pack_id": "hardware.power"
+}

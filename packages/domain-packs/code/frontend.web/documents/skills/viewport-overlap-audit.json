@@ -1,0 +1,11 @@
+{
+  "ref_id": "skill:frontend_web:viewport-overlap-audit",
+  "type": "skill",
+  "description": "Audit changed UI for clipping, overlapping text, unstable boxes, and unreachable controls across viewports.",
+  "body": "Inputs: affected selectors or route, responsive breakpoints, longest expected labels, and dynamic states. Procedure: inspect mobile and desktop screenshots; check bounding boxes for critical text and controls; exercise hover, focus, expanded, loading, and empty states; use computed style and layout tooling to identify overflow, transforms, z-index, and fixed dimensions causing overlap. This skill does not choose product copy or redesign information architecture. Outputs: viewport matrix, specific overlapping elements, likely CSS or DOM cause, and a minimal fix target. Validation signals are no critical text clipped, no control hidden behind another layer, no hover/focus layout jump, and no horizontal page overflow unless intentional. Failure handling: if content cannot fit within the existing design, escalate the exact constraint instead of hiding content. Use when Frontend Web work touches visible UI behavior, browser console output, DOM state, assets, viewport behavior, and interaction evidence. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: run the documented inspection and validation workflow; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include browser smoke, component tests, viewport screenshots, console/network checks, and accessibility assertions. Risk boundary: escalate or stop when the task involves visual regressions, inaccessible interaction, hydration mismatch, and browser-only failures, missing owner evidence, or live external state.",
+  "domain": "web",
+  "scope_hint": "code.frontend.web:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.web:layout_audit_skill",
+  "pack_id": "code.frontend.web"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:svelte:prefer-derived-over-effect",
+  "type": "strategy",
+  "title": "Prefer $derived over $effect for computed values",
+  "description": "Computed state should be declared as derived, reserving effects for genuine side effects to avoid feedback loops.",
+  "body": "Use when a value is a pure function of other state. Do not write a $effect that reads state and then writes other state to 'compute' it. Actions: declare computed values with $derived (or legacy $: assignment) so they recompute lazily and cannot self-trigger; reserve $effect for true side effects like DOM measurement or external sync. Validation signals include a test confirming the computed value updates with its inputs and that no effect re-runs unboundedly. Risk boundary: a $effect that writes the state it depends on creates an infinite update loop; if computation needs an effect, gate it and never feed its output back into its own dependencies.",
+  "domain": "svelte",
+  "scope_hint": "code.frontend.svelte:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.svelte",
+  "pack_id": "code.frontend.svelte"
+}

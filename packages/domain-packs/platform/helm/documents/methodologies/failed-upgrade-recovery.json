@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:helm:failed-upgrade-recovery",
+  "type": "methodology",
+  "title": "Recover a release stuck in pending-upgrade",
+  "description": "Diagnose a wedged release from helm history and hook state, then roll back or repair rather than force-deleting the release.",
+  "body": "Use when helm shows a release in pending-upgrade or failed state. Do not delete the release secret/configmap to force it. Actions: run helm history to see the last deployed vs pending revision, check whether a pre/post hook job is stuck or failed, inspect events on the hook and workload pods, then helm rollback to the last deployed revision (or helm upgrade with a fix if the hook can complete). Validation signals include helm history returning to a clean deployed revision and the hook job completing or being removed. Risk boundary: production recovery is change-controlled; capture the failing revision and reason.",
+  "domain": "helm",
+  "scope_hint": "platform.helm:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.helm",
+  "pack_id": "platform.helm"
+}

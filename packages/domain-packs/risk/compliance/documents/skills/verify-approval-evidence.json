@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:comp:verify-approval-evidence",
+  "type": "skill",
+  "title": "Verify approval evidence for a deploy",
+  "description": "Confirm a pending change carries independent, change-bound approval and a linked authorized request.",
+  "body": "Use when validating that a deploy may proceed under change control. Procedure: locate the approval record for the exact artifact, confirm the approver differs from the author, confirm the approval references this artifact and not an earlier one, and confirm a linked authorized change request predates the change. Report which conditions hold and which fail. This skill exposes findings only; it must never itself approve or trigger a production deploy, which is denied and routed to a human. Validation signals include a recorded decision with the approval, author, and request ids. Risk boundary: a self-approved, mismatched, or unlinked deploy is blocking and must not be reported as ready.",
+  "domain": "compliance",
+  "scope_hint": "risk.compliance:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.compliance",
+  "pack_id": "risk.compliance"
+}

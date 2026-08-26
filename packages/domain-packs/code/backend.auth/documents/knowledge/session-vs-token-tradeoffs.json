@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:auth:session-vs-token-tradeoffs",
+  "type": "knowledge",
+  "title": "Session cookies vs bearer tokens",
+  "description": "Server sessions are easy to revoke but need shared state; stateless JWTs scale but are hard to revoke before expiry.",
+  "body": "Use when choosing or changing how sessions are represented. Server-side sessions store state and reference it by an opaque cookie: revocation is immediate but needs shared session storage. Stateless bearer tokens (JWT) carry claims verified by signature: they scale without shared state but cannot be revoked before expiry unless you add a revocation list or short TTL + refresh. Do not assume JWT is 'more secure' — it shifts the revocation problem. Actions: pick based on revocation needs and threat model; add CSRF defenses for cookies, secure storage for tokens. Validation signals include tests that a revoked session and an expired token are both rejected. Risk boundary: removing revocation capability is a permission-expansion change needing a human gate.",
+  "domain": "backend_auth",
+  "scope_hint": "code.backend.auth:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.auth",
+  "pack_id": "code.backend.auth"
+}

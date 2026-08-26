@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:cli:diagnostics-leak-into-stdout",
+  "type": "failure_dossier",
+  "description": "Printing progress, warnings, or errors to stdout so they contaminate the data consumed by the next command in a pipe.",
+  "body": "Failure mode: a tool writes status messages, progress bars, or error text to stdout alongside its real output, so `tool | parser` feeds the parser garbage interleaved with data. Detection signals: piping the tool breaks the downstream parser; `tool > file` produces a file with log lines mixed into data; errors disappear when stdout is redirected. Do not send diagnostics to stdout. Safer fallback: route only the result payload to stdout and all status/warnings/errors to stderr, then verify with redirection that stdout holds clean data only.",
+  "domain": "cli",
+  "scope_hint": "code.cli:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.cli:human_authored",
+  "pack_id": "code.cli"
+}

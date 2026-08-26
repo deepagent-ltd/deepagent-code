@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:mt:per-tenant-configuration",
+  "type": "knowledge",
+  "title": "Per-tenant configuration and feature variation",
+  "description": "Tenants often need different settings, limits, or features, which must be resolved from the tenant context rather than global flags.",
+  "body": "Use when behavior must vary by tenant. Do not hardcode a single global configuration in a multi-tenant system. Per-tenant config such as feature toggles, limits, branding, and integrations is looked up by the resolved tenant; a global default applies only when no override exists. Inspect how config is keyed and resolved. Validation signals include two tenants receiving their distinct configured behavior in the same deployment. Risk boundary: reading config without the tenant key can apply one tenant's settings to another, so resolve configuration by the authenticated tenant and verify isolation of overrides.",
+  "domain": "multi_tenant",
+  "scope_hint": "code.backend.multi-tenant:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.multi-tenant",
+  "pack_id": "code.backend.multi-tenant"
+}

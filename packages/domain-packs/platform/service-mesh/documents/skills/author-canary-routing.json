@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:mesh:author-canary-routing",
+  "type": "skill",
+  "title": "Author a weighted canary route with subsets",
+  "description": "Write the DestinationRule subsets and VirtualService weighted routes for a canary, then verify the split with per-subset metrics.",
+  "body": "Use when you must split traffic between a stable and canary version. Do not route to a subset before its DestinationRule defines it. Actions: define stable and canary subsets in a DestinationRule keyed on the version label, write a VirtualService with two route destinations carrying the desired weights, keep the host as the service FQDN, and apply with a small initial canary weight. Validation signals include per-subset request metrics matching the configured ratio and a header-based match (if used) reaching the canary. Risk boundary: increasing canary weight on production traffic is a release step; cutover to full traffic is human-gated.",
+  "domain": "service_mesh",
+  "scope_hint": "platform.service-mesh:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.service-mesh",
+  "pack_id": "platform.service-mesh"
+}

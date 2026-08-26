@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:comp:design-ir-for-analysis",
+  "type": "strategy",
+  "title": "Design the IR for analysis and rewriting",
+  "description": "Choose an IR (often SSA) whose invariants make data-flow analysis and transformation simple and verifiable, and enforce them.",
+  "body": "Use when designing or extending the intermediate representation. Do not pick a representation that makes def-use chains or control flow ambiguous, and do not let passes leave the IR in a malformed state. Actions: prefer SSA so each value has a single definition, make control flow explicit as a CFG, define the IR invariants (typed values, dominance, well-formed phi nodes), and run an IR verifier after every pass. Validation signals include the verifier accepting the IR after each transform and analyses producing stable results. Risk boundary: an IR invariant silently broken by one pass causes a later pass to miscompile; treat verifier failures as blocking and require every new pass to leave the IR valid.",
+  "domain": "compiler",
+  "scope_hint": "code.compiler:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.compiler",
+  "pack_id": "code.compiler"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:swift:isolate-shared-state-with-actors",
+  "type": "strategy",
+  "title": "Protect shared mutable state with actors",
+  "description": "Move mutable state that multiple tasks touch into an actor so the compiler serializes access instead of relying on manual locks.",
+  "body": "Use when shared mutable state is accessed from concurrent Swift tasks. Do not guard it with ad-hoc DispatchQueue locks when an actor expresses the invariant, and do not capture non-Sendable state into a @Sendable closure. Actions: declare the state-owning type as `actor`, access its members with await from outside, keep synchronous invariants inside actor methods, and mark cross-task value types Sendable. Validation signals include the compiler's strict-concurrency checking (-strict-concurrency=complete) reporting no data-race warnings and Thread Sanitizer staying clean. Risk boundary: actor reentrancy means state can change across an await inside an actor method; re-check invariants after each await and escalate if a lock-step guarantee is actually required rather than assuming serialization implies atomic spans.",
+  "domain": "swift",
+  "scope_hint": "code.swift:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.swift",
+  "pack_id": "code.swift"
+}

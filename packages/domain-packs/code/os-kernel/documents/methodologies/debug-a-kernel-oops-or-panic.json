@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:kernel:debug-a-kernel-oops-or-panic",
+  "type": "methodology",
+  "title": "Debug a kernel oops or panic",
+  "description": "Turn a crash into a fix by decoding the stack trace, identifying the faulting access, and reproducing under sanitizers in a VM.",
+  "body": "Steps: 1. Capture the oops/panic log and decode the call trace and faulting address (addr2line / decode_stacktrace). 2. Classify it: NULL/bad-pointer deref, use-after-free, deadlock, or BUG assertion. 3. Reproduce in a VM with KASAN/lockdep/kmemleak enabled to pinpoint the access. 4. Trace back to the missing check, race, or unbalanced free. 5. Fix the root cause and re-run the sanitized stress test. Rollback point: keep the change in a VM you can crash, not on hardware you depend on. Validation: the sanitizer pinpoints a clean root cause and the crash no longer reproduces under stress; silencing a BUG/WARN without understanding the access only hides the fault.",
+  "domain": "kernel",
+  "scope_hint": "code.os-kernel:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.os-kernel",
+  "pack_id": "code.os-kernel"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:elixir:hold-state-in-processes-not-globals",
+  "type": "strategy",
+  "title": "Hold shared state in processes, not globals",
+  "description": "Model mutable state as a process addressed by messages or an ETS table, never the process dictionary or module attributes.",
+  "body": "Use when several processes need shared or mutable state. Do not stash state in the process dictionary, abuse module attributes (compile-time constants) as variables, or reach for a global mutable singleton. Actions: own the state in a GenServer/Agent and mutate it via messages, or use an ETS table for high-read concurrent shared data with clear ownership. Validation signals include a test that concurrent updates are serialized correctly and no update is lost. Risk boundary: faking shared state with the process dictionary or globals breaks isolation and produces race conditions the BEAM's per-process model was meant to prevent; data that must survive a process crash belongs in ETS/DB, not in volatile process state alone.",
+  "domain": "elixir",
+  "scope_hint": "code.elixir:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.elixir",
+  "pack_id": "code.elixir"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:redis:lock-as-sole-correctness-guard",
+  "type": "failure_dossier",
+  "description": "A Redis lock is the only thing preventing double-processing, so a GC pause, failover, or TTL expiry causes corruption.",
+  "body": "Failure mode: a SET NX lock (or Redlock) guards a critical operation with no other protection; a process pause past the TTL, a failover that loses the key, or clock skew lets two workers run the operation concurrently and corrupt the resource. Detection signals: rare double-charges/double-processing under load or after restarts; the protected write is not idempotent; release does not check ownership. Do not treat a Redis lock as a correctness guarantee. Safer fallback: make the protected operation idempotent or use a fencing token validated at the source of truth, and release the lock only via compare-and-delete.",
+  "domain": "redis",
+  "scope_hint": "code.database.redis:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.redis:human_authored",
+  "pack_id": "code.database.redis"
+}

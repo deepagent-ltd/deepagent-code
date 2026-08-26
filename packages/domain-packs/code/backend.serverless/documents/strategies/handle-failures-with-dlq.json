@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:sls:handle-failures-with-dlq",
+  "type": "strategy",
+  "title": "Route unprocessable events to a dead-letter queue",
+  "description": "Configure DLQs/retry policies so poison events do not retry forever or vanish, and can be inspected and replayed.",
+  "body": "Use when a function consumes async events (queue, stream, async invoke). Do not let a failing event retry infinitely (blocking the source) or silently disappear after exhausting retries. Actions: set a bounded retry/maximum-receive count, attach a dead-letter or on-failure destination, and build a redrive path to inspect and replay DLQ messages after a fix. Validation signals include a poison-event test landing in the DLQ and not blocking the stream. Risk boundary: a poison message on an ordered stream can stall all processing behind it; ensure failures move aside (DLQ) rather than blocking, and alert on DLQ depth.",
+  "domain": "serverless",
+  "scope_hint": "code.backend.serverless:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.serverless",
+  "pack_id": "code.backend.serverless"
+}

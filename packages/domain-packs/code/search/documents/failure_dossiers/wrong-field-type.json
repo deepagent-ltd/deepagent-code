@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:search:wrong-field-type",
+  "type": "failure_dossier",
+  "description": "Typing a field as analyzed text when it needs exact match/sort/facet (or as keyword when it needs full-text), breaking queries.",
+  "body": "Failure mode: a field's mapping type doesn't match its use — an ID or facet typed as text gets tokenized so exact match, sorting, and aggregation break, or prose typed as keyword loses full-text relevance entirely. Detection signals: exact filters or term aggregations return nothing or fragmented buckets on a text field; full-text search misses on a keyword field; sorting behaves oddly. Do not pick field type by content alone. Safer fallback: map by query intent (text for search, keyword for exact/sort/facet, multi-field for both) and reindex to apply it.",
+  "domain": "search",
+  "scope_hint": "code.search:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.search:human_authored",
+  "pack_id": "code.search"
+}

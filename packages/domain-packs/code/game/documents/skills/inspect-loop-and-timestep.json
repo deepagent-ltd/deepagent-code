@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:game:inspect-loop-and-timestep",
+  "type": "skill",
+  "title": "Inspect the game loop and timestep",
+  "description": "Review the update loop for fixed-vs-variable timestep, spiral-of-death clamping, and frame-rate-dependent movement.",
+  "body": "Use when reviewing or debugging game timing. Actions: read the main loop to determine whether simulation uses a fixed timestep with an accumulator or scales by a variable frame delta, check for a clamp on catch-up steps, and scan movement/physics code for multiplication by raw frame delta. Report frame-rate-dependent behavior and missing clamps with locations. Do not modify the loop. This skill exposes capability only and must not run the game against live services without runtime permission. Validation signals include a confirmed fixed-timestep loop with interpolation and a step clamp. Risk boundary: variable-timestep physics and an unclamped accumulator (spiral of death) are blocking correctness issues; recommend the fixed-timestep pattern rather than patching constants.",
+  "domain": "game",
+  "scope_hint": "code.game:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.game",
+  "pack_id": "code.game"
+}

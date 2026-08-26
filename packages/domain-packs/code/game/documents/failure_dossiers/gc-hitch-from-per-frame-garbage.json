@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:game:gc-hitch-from-per-frame-garbage",
+  "type": "failure_dossier",
+  "description": "Allocating temporary objects every frame so the garbage collector periodically pauses the loop, producing visible stutter.",
+  "body": "Failure mode: hot-path code allocates per frame (temporary vectors, closures, boxed values, string concatenation, LINQ), accumulating garbage that triggers a GC pause exceeding the frame budget. Detection signals: periodic regular stutters even when average frame time is fine; allocation graph climbs each frame then drops at a spike; profiler shows GC time at the hitches. Do not allocate in the hot loop. Safer fallback: pool and reuse objects, pre-size and reuse buffers, remove hidden allocations, and verify a flat allocation graph with no GC spikes during steady play.",
+  "domain": "game",
+  "scope_hint": "code.game:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.game:human_authored",
+  "pack_id": "code.game"
+}

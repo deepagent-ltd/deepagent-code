@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:frontend_vue:ignore-hydration-warning",
+  "type": "failure_dossier",
+  "description": "Ignoring hydration warning",
+  "body": "Hydration mismatch logs in Nuxt/SSR are correctness signals, not cosmetic noise. Safer path: align SSR and first client render, gate browser-only APIs, and verify full reload.\n\nUse only as a diagnostic do-not-use signal; do not expose this as positive strategy, methodology, knowledge, skill, or memory.",
+  "domain": "frontend_vue",
+  "scope_hint": "code.frontend.vue:failure_dossiers",
+  "evidence_strength": "medium",
+  "provenance_tag": "code.frontend.vue:failure_seed:paraphrased_common_failures",
+  "pack_id": "code.frontend.vue"
+}

@@ -1,0 +1,468 @@
+[
+  {
+    "ref_id": "strategy:dq:validate-at-ingestion",
+    "type": "strategy",
+    "title": "Validate data at the ingestion boundary",
+    "summary": "Run quality checks where data first lands, before it propagates, so bad data is caught at the source instead of in every downstream consumer.",
+    "domains": [
+      "data_quality",
+      "validation",
+      "freshness",
+      "lineage"
+    ],
+    "triggers": [
+      "ingestion",
+      "boundary",
+      "validation",
+      "fail fast",
+      "landing",
+      "gate"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.data-quality"
+  },
+  {
+    "ref_id": "strategy:dq:set-thresholds-not-zero-tolerance",
+    "type": "strategy",
+    "title": "Express checks as thresholds, not absolutes",
+    "summary": "Define quality expectations with tolerances calibrated to historical norms so checks catch real regressions without firing on benign variation.",
+    "domains": [
+      "data_quality",
+      "validation",
+      "freshness",
+      "lineage"
+    ],
+    "triggers": [
+      "threshold",
+      "tolerance",
+      "expectation",
+      "false positive",
+      "baseline",
+      "calibrate"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.data-quality"
+  },
+  {
+    "ref_id": "strategy:dq:enforce-data-contracts",
+    "type": "strategy",
+    "title": "Enforce a data contract between producer and consumer",
+    "summary": "Codify the schema, semantics, and SLAs a producer guarantees so a breaking change is rejected at the source, not discovered downstream.",
+    "domains": [
+      "data_quality",
+      "validation",
+      "freshness",
+      "lineage"
+    ],
+    "triggers": [
+      "data contract",
+      "producer",
+      "consumer",
+      "schema",
+      "breaking",
+      "sla"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.data-quality"
+  },
+  {
+    "ref_id": "strategy:dq:check-freshness-explicitly",
+    "type": "strategy",
+    "title": "Check freshness against an explicit SLA",
+    "summary": "Assert that the newest data is within an agreed recency window, because a pipeline can succeed while serving stale data.",
+    "domains": [
+      "data_quality",
+      "validation",
+      "freshness",
+      "lineage"
+    ],
+    "triggers": [
+      "freshness",
+      "staleness",
+      "sla",
+      "latest partition",
+      "recency",
+      "timestamp"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.data-quality"
+  },
+  {
+    "ref_id": "strategy:dq:handle-nulls-and-dupes-deliberately",
+    "type": "strategy",
+    "title": "Handle nulls and duplicates deliberately",
+    "summary": "Decide and enforce explicit policies for missing values and duplicate keys rather than letting them flow through unexamined.",
+    "domains": [
+      "data_quality",
+      "validation",
+      "freshness",
+      "lineage"
+    ],
+    "triggers": [
+      "null",
+      "duplicate",
+      "key",
+      "uniqueness",
+      "missing",
+      "dedup"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.data-quality"
+  },
+  {
+    "ref_id": "strategy:dq:separate-drift-from-bugs",
+    "type": "strategy",
+    "title": "Distinguish data drift from pipeline bugs",
+    "summary": "When a distribution shifts, determine whether the world changed or the pipeline broke before alerting or retraining.",
+    "domains": [
+      "data_quality",
+      "validation",
+      "freshness",
+      "lineage"
+    ],
+    "triggers": [
+      "drift",
+      "distribution",
+      "shift",
+      "root cause",
+      "pipeline bug",
+      "monitoring"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.data-quality"
+  },
+  {
+    "ref_id": "methodology:dq:build-an-expectation-suite",
+    "type": "methodology",
+    "title": "Build an expectation suite",
+    "summary": "Profile a dataset, derive schema/value/freshness expectations, and wire them as a gate with thresholds and quarantine.",
+    "domains": [
+      "data_quality",
+      "validation",
+      "freshness",
+      "lineage"
+    ],
+    "triggers": [
+      "expectation",
+      "great expectations",
+      "suite",
+      "profile",
+      "gate",
+      "quarantine"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.data-quality"
+  },
+  {
+    "ref_id": "methodology:dq:investigate-a-quality-incident",
+    "type": "methodology",
+    "title": "Investigate a data quality incident",
+    "summary": "Trace a quality alert from symptom to root cause across the lineage, then fix the source rather than patching the symptom.",
+    "domains": [
+      "data_quality",
+      "validation",
+      "freshness",
+      "lineage"
+    ],
+    "triggers": [
+      "incident",
+      "root cause",
+      "lineage",
+      "alert",
+      "trace",
+      "investigate"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.data-quality"
+  },
+  {
+    "ref_id": "methodology:dq:detect-and-confirm-drift",
+    "type": "methodology",
+    "title": "Detect and confirm distribution drift",
+    "summary": "Compare current feature distributions to a baseline with a statistical test, then confirm it is real before acting.",
+    "domains": [
+      "data_quality",
+      "validation",
+      "freshness",
+      "lineage"
+    ],
+    "triggers": [
+      "drift",
+      "baseline",
+      "statistical test",
+      "psi",
+      "ks",
+      "confirm"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.data-quality"
+  },
+  {
+    "ref_id": "methodology:dq:add-completeness-checks",
+    "type": "methodology",
+    "title": "Add completeness and reconciliation checks",
+    "summary": "Verify that expected rows arrived by reconciling counts against source and expected cardinality, catching partial loads.",
+    "domains": [
+      "data_quality",
+      "validation",
+      "freshness",
+      "lineage"
+    ],
+    "triggers": [
+      "completeness",
+      "reconciliation",
+      "row count",
+      "partial load",
+      "cardinality",
+      "missing"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.data-quality"
+  },
+  {
+    "ref_id": "knowledge:dq:dimensions-of-data-quality",
+    "type": "knowledge",
+    "title": "The dimensions of data quality",
+    "summary": "Quality spans accuracy, completeness, consistency, timeliness, validity, and uniqueness; a dataset can pass one and fail another.",
+    "domains": [
+      "data_quality",
+      "validation",
+      "freshness",
+      "lineage"
+    ],
+    "triggers": [
+      "dimensions",
+      "accuracy",
+      "completeness",
+      "consistency",
+      "timeliness",
+      "validity"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.data-quality"
+  },
+  {
+    "ref_id": "knowledge:dq:what-a-data-contract-is",
+    "type": "knowledge",
+    "title": "What a data contract guarantees",
+    "summary": "A data contract is an enforced agreement on schema, semantics, nullability, and freshness between a producer and its consumers, versioned and validated.",
+    "domains": [
+      "data_quality",
+      "validation",
+      "freshness",
+      "lineage"
+    ],
+    "triggers": [
+      "data contract",
+      "schema",
+      "semantics",
+      "producer",
+      "consumer",
+      "version"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.data-quality"
+  },
+  {
+    "ref_id": "knowledge:dq:drift-types",
+    "type": "knowledge",
+    "title": "Types of drift and what each means",
+    "summary": "Data drift (input distribution shifts), concept drift (input-output relationship changes), and schema drift (structure changes) need different responses.",
+    "domains": [
+      "data_quality",
+      "validation",
+      "freshness",
+      "lineage"
+    ],
+    "triggers": [
+      "drift",
+      "concept drift",
+      "covariate",
+      "schema drift",
+      "label shift",
+      "monitoring"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.data-quality"
+  },
+  {
+    "ref_id": "knowledge:dq:freshness-vs-completeness",
+    "type": "knowledge",
+    "title": "Freshness and completeness are independent",
+    "summary": "Recent data can still be incomplete (partial load) and complete data can be stale; both must be checked separately, and neither follows from job success.",
+    "domains": [
+      "data_quality",
+      "validation",
+      "freshness",
+      "lineage"
+    ],
+    "triggers": [
+      "freshness",
+      "completeness",
+      "partial load",
+      "staleness",
+      "job success",
+      "independent"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.data-quality"
+  },
+  {
+    "ref_id": "skill:dq:run-expectation-suite",
+    "type": "skill",
+    "title": "Run an expectation suite and report results",
+    "summary": "Execute a validation suite against landed data and report which expectations passed/failed with row-level detail.",
+    "domains": [
+      "data_quality",
+      "validation",
+      "freshness",
+      "lineage"
+    ],
+    "triggers": [
+      "run",
+      "expectation",
+      "validate",
+      "suite",
+      "report",
+      "great expectations"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.data-quality"
+  },
+  {
+    "ref_id": "skill:dq:profile-and-diff-distributions",
+    "type": "skill",
+    "title": "Profile data and diff against a baseline",
+    "summary": "Profile a dataset and compare distributions, null rates, and counts to a baseline, reporting drift and anomalies with magnitudes.",
+    "domains": [
+      "data_quality",
+      "validation",
+      "freshness",
+      "lineage"
+    ],
+    "triggers": [
+      "profile",
+      "diff",
+      "baseline",
+      "drift",
+      "anomaly",
+      "report"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.data-quality"
+  }
+]

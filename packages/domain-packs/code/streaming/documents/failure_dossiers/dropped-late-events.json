@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:stream:dropped-late-events",
+  "type": "failure_dossier",
+  "description": "A too-tight watermark silently discards valid late events, undercounting aggregates.",
+  "body": "Failure mode: the watermark delay and allowed lateness are set tighter than the source's real out-of-order skew, so windows close before stragglers arrive and valid late events are dropped without error. Detection signals: a non-trivial dropped-late-record metric, and aggregates that come in lower than a batch reconciliation over the same period. Do not accept the lower numbers as correct. Safer fallback: measure the actual arrival-vs-event-time distribution, widen the watermark bound and allowed lateness to cover it, route remaining stragglers to a side output for accounting, and re-reconcile against the batch reference.",
+  "domain": "streaming",
+  "scope_hint": "code.streaming:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.streaming:human_authored",
+  "pack_id": "code.streaming"
+}

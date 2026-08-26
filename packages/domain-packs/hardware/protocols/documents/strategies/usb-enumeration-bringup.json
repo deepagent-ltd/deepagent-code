@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:hwprot:usb-enumeration-bringup",
+  "type": "strategy",
+  "title": "Drive USB enumeration step by step",
+  "description": "Walk reset, address assignment, and descriptor requests in order and confirm each before configuring endpoints.",
+  "body": "Use when a USB device fails to appear or repeatedly resets. Do not jump to endpoint data transfers before the device is addressed and configured. Actions: capture the bus reset, verify the default-address control transfer, and inspect the device and configuration descriptors the host requests. Validation signals include a completed Set Address, descriptor reads without retries, and a successful Set Configuration. Risk boundary: a malformed descriptor can hang the host port, so deny shipping firmware whose descriptors fail a compliance check.",
+  "domain": "hw_protocols",
+  "scope_hint": "hardware.protocols:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.protocols",
+  "pack_id": "hardware.protocols"
+}

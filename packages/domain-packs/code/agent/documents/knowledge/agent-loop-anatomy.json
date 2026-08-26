@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:agent:agent-loop-anatomy",
+  "type": "knowledge",
+  "title": "Anatomy of an agent loop",
+  "description": "An agent loop iterates observe-decide-act, accumulating context and tool results until a terminal condition stops it.",
+  "body": "Use when reasoning about how an agent runs. Each iteration gathers observations (state, prior tool results), asks the model to decide a next action, executes it (often a tool call), and records the result into context for the next turn. Without an explicit terminal condition the loop never stops, and without a step cap a wrong decision repeats. Do not rely on the model to volunteer that it is done, and avoid treating the loop as a single call. Actions: define terminal conditions, a step cap, and a no-progress guard; record each step for tracing. Validation signals include a trace showing the terminal check per iteration and a halt at the cap. Risk boundary: an uncapped loop with side effects can run away; cap and gate it.",
+  "domain": "agent",
+  "scope_hint": "code.agent:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.agent",
+  "pack_id": "code.agent"
+}

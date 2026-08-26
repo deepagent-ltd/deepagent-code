@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:ghci:isolate-untrusted-pr-triggers",
+  "type": "strategy",
+  "title": "Isolate untrusted PR code from secrets",
+  "description": "Keep secret-bearing logic out of pull_request_target jobs that build fork code; split trusted and untrusted phases.",
+  "body": "Use when a workflow must label, comment, or deploy previews for PRs from forks. Do not check out and execute the PR head in a pull_request_target job that has secrets in scope, because pull_request_target runs with the base repo's token and secrets against attacker-controlled code. Actions: do untrusted build/test under pull_request (no secrets) and gate privileged follow-up behind workflow_run or an environment with required reviewers; never run fork-supplied scripts with a secret in the env. Validation signals include no secrets referenced in any job that checks out PR head ref. Risk boundary: combining pull_request_target, PR-head checkout, and secrets is a critical exposure requiring a human gate.",
+  "domain": "ci_github",
+  "scope_hint": "platform.ci-github:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.ci-github",
+  "pack_id": "platform.ci-github"
+}

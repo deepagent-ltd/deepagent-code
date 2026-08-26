@@ -1,0 +1,696 @@
+[
+  {
+    "ref_id": "knowledge:javascript:browser-build-can-mask-node-only-imports",
+    "type": "knowledge",
+    "title": "Browser Build Can Mask Node Only Imports",
+    "summary": "fs, path, net, child_process, and some process usages fail or get polyfilled differently in browser bundles.",
+    "domains": [
+      "javascript",
+      "code",
+      "node",
+      "browser",
+      "runtime",
+      "tooling"
+    ],
+    "triggers": [
+      "path",
+      "child",
+      "process",
+      "some",
+      "usages",
+      "fail",
+      "polyfilled"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.javascript"
+  },
+  {
+    "ref_id": "knowledge:javascript:conditional-exports-hide-files",
+    "type": "knowledge",
+    "title": "Conditional Exports Hide Files",
+    "summary": "The exports map can block deep imports even when files exist on disk.",
+    "domains": [
+      "javascript",
+      "code",
+      "node",
+      "browser",
+      "runtime",
+      "tooling"
+    ],
+    "triggers": [
+      "exports",
+      "block",
+      "deep",
+      "imports",
+      "even",
+      "when",
+      "files",
+      "exist"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.javascript"
+  },
+  {
+    "ref_id": "knowledge:javascript:lockfile-is-install-source",
+    "type": "knowledge",
+    "title": "Lockfile Is Install Source",
+    "summary": "Dependency versions used by CI come from the active lockfile and package manager.",
+    "domains": [
+      "javascript",
+      "code",
+      "node",
+      "browser",
+      "runtime",
+      "tooling"
+    ],
+    "triggers": [
+      "dependency",
+      "versions",
+      "used",
+      "come",
+      "from",
+      "active",
+      "lockfile",
+      "package"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.javascript"
+  },
+  {
+    "ref_id": "knowledge:javascript:package-type-controls-js-modules",
+    "type": "knowledge",
+    "title": "Package Type Controls Js Modules",
+    "summary": "Nearest package.json type determines whether .js is ESM or CommonJS in Node.",
+    "domains": [
+      "javascript",
+      "code",
+      "node",
+      "browser",
+      "runtime",
+      "tooling"
+    ],
+    "triggers": [
+      "nearest",
+      "package",
+      "json",
+      "type",
+      "determines",
+      "whether",
+      "commonjs",
+      "node"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.javascript"
+  },
+  {
+    "ref_id": "knowledge:javascript:runner-watch-mode-not-validation",
+    "type": "knowledge",
+    "title": "Runner Watch Mode Not Validation",
+    "summary": "Interactive watch commands are useful for development but unsuitable as final verification evidence.",
+    "domains": [
+      "javascript",
+      "code",
+      "node",
+      "browser",
+      "runtime",
+      "tooling"
+    ],
+    "triggers": [
+      "interactive",
+      "watch",
+      "commands",
+      "useful",
+      "development",
+      "unsuitable",
+      "final",
+      "verification"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.javascript"
+  },
+  {
+    "ref_id": "knowledge:javascript:side-effects-affect-tree-shaking",
+    "type": "knowledge",
+    "title": "Side Effects Affect Tree Shaking",
+    "summary": "Top-level work can run on import and may prevent safe tree shaking.",
+    "domains": [
+      "javascript",
+      "code",
+      "node",
+      "browser",
+      "runtime",
+      "tooling"
+    ],
+    "triggers": [
+      "level",
+      "work",
+      "import",
+      "prevent",
+      "safe",
+      "tree",
+      "shaking",
+      "when"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.javascript"
+  },
+  {
+    "ref_id": "knowledge:javascript:test-environment-changes-globals",
+    "type": "knowledge",
+    "title": "Test Environment Changes Globals",
+    "summary": "Node, jsdom, happy-dom, and browser runners expose different globals and event behavior.",
+    "domains": [
+      "javascript",
+      "code",
+      "node",
+      "browser",
+      "runtime",
+      "tooling"
+    ],
+    "triggers": [
+      "node",
+      "jsdom",
+      "happy",
+      "browser",
+      "runners",
+      "expose",
+      "different",
+      "globals"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.javascript"
+  },
+  {
+    "ref_id": "knowledge:javascript:unhandled-rejection-policy-varies",
+    "type": "knowledge",
+    "title": "Unhandled Rejection Policy Varies",
+    "summary": "Detached promise failures may be warnings, process failures, or swallowed runner noise depending on environment.",
+    "domains": [
+      "javascript",
+      "code",
+      "node",
+      "browser",
+      "runtime",
+      "tooling"
+    ],
+    "triggers": [
+      "detached",
+      "promise",
+      "failures",
+      "warnings",
+      "process",
+      "swallowed",
+      "runner"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.javascript"
+  },
+  {
+    "ref_id": "methodology:javascript:async-regression-lock",
+    "type": "methodology",
+    "title": "Async Regression Lock",
+    "summary": "Add or select tests that fail on missing await, unhandled rejection, or callback ordering.",
+    "domains": [
+      "javascript",
+      "code",
+      "node",
+      "browser",
+      "runtime",
+      "tooling"
+    ],
+    "triggers": [
+      "select",
+      "tests",
+      "that",
+      "fail",
+      "missing",
+      "await",
+      "unhandled",
+      "rejection"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.javascript"
+  },
+  {
+    "ref_id": "methodology:javascript:browser-node-smoke-matrix",
+    "type": "methodology",
+    "title": "Browser Node Smoke Matrix",
+    "summary": "Run the changed behavior in the runtime that will execute it.",
+    "domains": [
+      "javascript",
+      "code",
+      "node",
+      "browser",
+      "runtime",
+      "tooling"
+    ],
+    "triggers": [
+      "changed",
+      "behavior",
+      "runtime",
+      "that",
+      "will",
+      "execute",
+      "when",
+      "code"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.javascript"
+  },
+  {
+    "ref_id": "methodology:javascript:module-format-triage",
+    "type": "methodology",
+    "title": "Module Format Triage",
+    "summary": "Triage ESM/CJS failures from error text, package scope, and loader path.",
+    "domains": [
+      "javascript",
+      "code",
+      "node",
+      "browser",
+      "runtime",
+      "tooling"
+    ],
+    "triggers": [
+      "triage",
+      "failures",
+      "from",
+      "error",
+      "text",
+      "package",
+      "scope",
+      "loader"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.javascript"
+  },
+  {
+    "ref_id": "methodology:javascript:package-manager-detect-run",
+    "type": "methodology",
+    "title": "Package Manager Detect Run",
+    "summary": "Detect the package manager, run the narrow script, then widen only after local evidence.",
+    "domains": [
+      "javascript",
+      "code",
+      "node",
+      "browser",
+      "runtime",
+      "tooling"
+    ],
+    "triggers": [
+      "detect",
+      "package",
+      "manager",
+      "narrow",
+      "script",
+      "then",
+      "widen",
+      "only"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.javascript"
+  },
+  {
+    "ref_id": "skill:javascript:async-error-repro",
+    "type": "skill",
+    "title": "Async Error Repro",
+    "summary": "Create or select a focused test that proves async rejection, cleanup, or ordering behavior.",
+    "domains": [
+      "javascript",
+      "code",
+      "node",
+      "browser",
+      "runtime",
+      "tooling"
+    ],
+    "triggers": [
+      "create",
+      "select",
+      "focused",
+      "test",
+      "that",
+      "proves",
+      "async",
+      "rejection"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.javascript"
+  },
+  {
+    "ref_id": "skill:javascript:run-js-package-script",
+    "type": "skill",
+    "title": "Run Js Package Script",
+    "summary": "Detect manager and execute the narrow package script with reproducible command output.",
+    "domains": [
+      "javascript",
+      "code",
+      "node",
+      "browser",
+      "runtime",
+      "tooling"
+    ],
+    "triggers": [
+      "detect",
+      "manager",
+      "execute",
+      "narrow",
+      "package",
+      "script",
+      "with",
+      "reproducible"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.javascript"
+  },
+  {
+    "ref_id": "skill:javascript:triage-js-module-error",
+    "type": "skill",
+    "title": "Triage Js Module Error",
+    "summary": "Diagnose ESM/CJS and exports-map failures without broad package rewrites.",
+    "domains": [
+      "javascript",
+      "code",
+      "node",
+      "browser",
+      "runtime",
+      "tooling"
+    ],
+    "triggers": [
+      "diagnose",
+      "exports",
+      "failures",
+      "without",
+      "broad",
+      "package",
+      "rewrites",
+      "inputs"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.javascript"
+  },
+  {
+    "ref_id": "strategy:runtime_javascript:async-error-surface",
+    "type": "strategy",
+    "title": "Async Error Surface",
+    "summary": "Make async failures observable at the awaited boundary instead of hidden in callbacks or detached promises.",
+    "domains": [
+      "javascript",
+      "code",
+      "node",
+      "browser",
+      "runtime",
+      "tooling"
+    ],
+    "triggers": [
+      "make",
+      "async",
+      "failures",
+      "observable",
+      "awaited",
+      "boundary",
+      "instead",
+      "hidden"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.javascript"
+  },
+  {
+    "ref_id": "strategy:runtime_javascript:bundle-entry-minimal",
+    "type": "strategy",
+    "title": "Bundle Entry Minimal",
+    "summary": "Change the smallest runtime entry and check bundler resolution before moving shared code.",
+    "domains": [
+      "javascript",
+      "code",
+      "node",
+      "browser",
+      "runtime",
+      "tooling"
+    ],
+    "triggers": [
+      "change",
+      "smallest",
+      "runtime",
+      "entry",
+      "check",
+      "bundler",
+      "resolution",
+      "before"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.javascript"
+  },
+  {
+    "ref_id": "strategy:runtime_javascript:lockfile-manager-alignment",
+    "type": "strategy",
+    "title": "Lockfile Manager Alignment",
+    "summary": "Use the package manager implied by the lockfile and workspace metadata.",
+    "domains": [
+      "javascript",
+      "code",
+      "node",
+      "browser",
+      "runtime",
+      "tooling"
+    ],
+    "triggers": [
+      "package",
+      "manager",
+      "implied",
+      "lockfile",
+      "workspace",
+      "metadata",
+      "when",
+      "installing"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.javascript"
+  },
+  {
+    "ref_id": "strategy:runtime_javascript:module-boundary-first",
+    "type": "strategy",
+    "title": "Module Boundary First",
+    "summary": "Resolve ESM/CJS behavior from package boundaries before changing import syntax.",
+    "domains": [
+      "javascript",
+      "code",
+      "node",
+      "browser",
+      "runtime",
+      "tooling"
+    ],
+    "triggers": [
+      "resolve",
+      "behavior",
+      "from",
+      "package",
+      "boundaries",
+      "before",
+      "changing",
+      "import"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.javascript"
+  },
+  {
+    "ref_id": "strategy:runtime_javascript:runtime-target-split",
+    "type": "strategy",
+    "title": "Runtime Target Split",
+    "summary": "Separate Node, browser, worker, and edge assumptions before using globals or APIs.",
+    "domains": [
+      "javascript",
+      "code",
+      "node",
+      "browser",
+      "runtime",
+      "tooling"
+    ],
+    "triggers": [
+      "separate",
+      "node",
+      "browser",
+      "worker",
+      "edge",
+      "assumptions",
+      "before",
+      "using"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.javascript"
+  },
+  {
+    "ref_id": "strategy:runtime_javascript:script-contract-preserving",
+    "type": "strategy",
+    "title": "Script Contract Preserving",
+    "summary": "Treat package scripts as repository contracts and change them only with caller impact checked.",
+    "domains": [
+      "javascript",
+      "code",
+      "node",
+      "browser",
+      "runtime",
+      "tooling"
+    ],
+    "triggers": [
+      "treat",
+      "package",
+      "scripts",
+      "repository",
+      "contracts",
+      "change",
+      "them",
+      "only"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.javascript"
+  }
+]

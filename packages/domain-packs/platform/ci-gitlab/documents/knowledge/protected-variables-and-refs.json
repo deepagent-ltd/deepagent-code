@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:glci:protected-variables-and-refs",
+  "type": "knowledge",
+  "title": "Protected variables, branches, and exposure rules",
+  "description": "Protected CI/CD variables are exposed only to pipelines on protected branches/tags; unprotected ones reach every branch and fork MR.",
+  "body": "Use when deciding how a secret is stored or why a job cannot see it. A variable marked Protected is injected only into pipelines running on a protected branch or protected tag; an unprotected variable is injected into pipelines on any branch, including feature branches and (depending on settings) fork merge-request pipelines. Masking only scrubs log output; it does not limit which pipelines receive the value. Do not assume masking implies access control or that a feature branch should see production secrets. Actions: protect secrets, protect the branches that deploy, and scope variables to environments. Validation signals include a non-protected branch pipeline failing to read a protected variable. Risk boundary: a production secret left unprotected is readable by any branch and is a blocking exposure.",
+  "domain": "ci_gitlab",
+  "scope_hint": "platform.ci-gitlab:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.ci-gitlab",
+  "pack_id": "platform.ci-gitlab"
+}

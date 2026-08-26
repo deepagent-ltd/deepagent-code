@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:pg:choose-the-right-index-type",
+  "type": "strategy",
+  "title": "Choose the index type that fits the predicate",
+  "description": "Match btree, gin, gist, or brin to the query shape rather than defaulting every index to btree.",
+  "body": "Use when adding an index for a specific access pattern. Do not put a btree on everything. Actions: use btree for equality and range on scalar columns; gin for containment over jsonb, arrays, and full-text (tsvector); gist for geometric/range overlap and nearest-neighbor; brin for huge, naturally-ordered tables (time-series) where a tiny index over block ranges suffices. Verify with EXPLAIN that the planner actually uses it. Validation signals include the intended index appearing in the plan and a measured latency drop on the target query. Risk boundary: a gin index speeds reads but slows writes and bloats; on a write-heavy table, confirm the write cost is acceptable before committing.",
+  "domain": "postgres",
+  "scope_hint": "code.database.postgres:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.postgres",
+  "pack_id": "code.database.postgres"
+}

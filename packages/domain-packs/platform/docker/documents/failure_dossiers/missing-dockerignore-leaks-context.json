@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:docker:missing-dockerignore-leaks-context",
+  "type": "failure_dossier",
+  "description": "Building without a .dockerignore so the build context ships .git, .env, and node_modules into the image or build cache.",
+  "body": "Failure mode: with no .dockerignore, COPY pulls the entire working tree — including .git history, .env files, local credentials, and bulky local dependencies — into the build context and potentially the image, leaking secrets and bloating the build. Detection signals: build context is huge/slow; .env or .git appears in the image; secret scan flags copied credential files. Do not COPY the whole directory without an ignore file. Safer fallback: add a .dockerignore excluding VCS metadata, env/secret files, local deps, and build output; copy only what the image needs and rotate any secret that was included. Risk boundary: escalate and rotate if a secret entered the context rather than assuming the image is private.",
+  "domain": "platform",
+  "scope_hint": "platform.docker:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.docker:human_authored",
+  "pack_id": "platform.docker"
+}

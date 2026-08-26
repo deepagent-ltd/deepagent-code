@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:chain:unbounded-loop-gas-dos",
+  "type": "failure_dossier",
+  "description": "A loop over a user-growable array that eventually exceeds the block gas limit, making the function permanently uncallable.",
+  "body": "Failure mode: a function iterates over an array (recipients, stakers) that attackers can grow, and once iteration costs more than the block gas limit the transaction always reverts out-of-gas, bricking the function for everyone with no way to patch immutable code. Detection signals: a loop length depends on a public array users can extend; gas grows with participant count; a worst-case-size test exceeds the block gas limit. Do not loop over attacker-growable collections. Safer fallback: replace push-to-all logic with a pull-payment pattern where users withdraw individually, cap or paginate loops across transactions, and add a gas test proving the worst case fits under the block gas limit.",
+  "domain": "blockchain",
+  "scope_hint": "code.blockchain:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.blockchain:human_authored",
+  "pack_id": "code.blockchain"
+}

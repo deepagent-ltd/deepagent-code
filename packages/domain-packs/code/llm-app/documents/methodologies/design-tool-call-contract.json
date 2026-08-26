@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:llm:design-tool-call-contract",
+  "type": "methodology",
+  "title": "Design a tool-call contract",
+  "description": "Specify each model-invocable tool's purpose, typed parameters, side effects, and failure shape before wiring it to the model.",
+  "body": "Steps: 1. Enumerate the tools the model may call and mark which have side effects. 2. For each, define typed, constrained parameters (enums, id formats, ranges) and a typed result/error. 3. Decide which tools need a permission gate. 4. Write the validator that checks returned arguments against the schema before execution. 5. Add tests for valid, malformed, and out-of-range arguments. Rollback point: before exposing a new side-effecting tool to the model. Validation: malformed arguments are rejected and a side-effecting call without a gate fails the test.",
+  "domain": "llm_app",
+  "scope_hint": "code.llm-app:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.llm-app",
+  "pack_id": "code.llm-app"
+}

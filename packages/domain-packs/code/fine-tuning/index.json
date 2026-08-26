@@ -1,0 +1,468 @@
+[
+  {
+    "ref_id": "strategy:finetune:prefer-peft-first",
+    "type": "strategy",
+    "title": "Reach for PEFT before full fine-tuning",
+    "summary": "Try parameter-efficient methods like LoRA before updating all weights, since they cost far less and forget less of the base.",
+    "domains": [
+      "fine_tuning",
+      "lora",
+      "qlora",
+      "peft",
+      "quantization",
+      "distillation"
+    ],
+    "triggers": [
+      "lora",
+      "peft",
+      "fine tuning",
+      "adapter"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.fine-tuning"
+  },
+  {
+    "ref_id": "strategy:finetune:evaluate-against-base",
+    "type": "strategy",
+    "title": "Always evaluate the adapted model against its base",
+    "summary": "Compare the fine-tuned model to the base on both the target task and a general-capability holdout to catch regressions.",
+    "domains": [
+      "fine_tuning",
+      "lora",
+      "qlora",
+      "peft",
+      "quantization",
+      "distillation"
+    ],
+    "triggers": [
+      "evaluate",
+      "base model",
+      "catastrophic forgetting",
+      "benchmark"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.fine-tuning"
+  },
+  {
+    "ref_id": "strategy:finetune:guard-catastrophic-forgetting",
+    "type": "strategy",
+    "title": "Guard against catastrophic forgetting",
+    "summary": "Mix in general data, limit update scope, and use low learning rates so task adaptation does not erase pretrained capabilities.",
+    "domains": [
+      "fine_tuning",
+      "lora",
+      "qlora",
+      "peft",
+      "quantization",
+      "distillation"
+    ],
+    "triggers": [
+      "catastrophic forgetting",
+      "fine tuning",
+      "lora",
+      "regularization"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.fine-tuning"
+  },
+  {
+    "ref_id": "strategy:finetune:quantize-with-quality-budget",
+    "type": "strategy",
+    "title": "Quantize against an explicit quality budget",
+    "summary": "Choose a quantization scheme by measuring the accuracy delta against full precision rather than assuming int4 is free.",
+    "domains": [
+      "fine_tuning",
+      "lora",
+      "qlora",
+      "peft",
+      "quantization",
+      "distillation"
+    ],
+    "triggers": [
+      "quantization",
+      "int4",
+      "int8",
+      "bfloat16"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.fine-tuning"
+  },
+  {
+    "ref_id": "strategy:finetune:pin-adapter-to-base",
+    "type": "strategy",
+    "title": "Pin every adapter to its exact base and tokenizer",
+    "summary": "Record the base model version and tokenizer an adapter was trained on so it is only ever loaded or merged onto a compatible base.",
+    "domains": [
+      "fine_tuning",
+      "lora",
+      "qlora",
+      "peft",
+      "quantization",
+      "distillation"
+    ],
+    "triggers": [
+      "adapter",
+      "lora",
+      "merge",
+      "versioning"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.fine-tuning"
+  },
+  {
+    "ref_id": "strategy:finetune:distill-with-teacher-eval",
+    "type": "strategy",
+    "title": "Distill toward a measured teacher gap",
+    "summary": "When distilling to a smaller student, track the student-teacher quality gap on real tasks so size reduction stays principled.",
+    "domains": [
+      "fine_tuning",
+      "lora",
+      "qlora",
+      "peft",
+      "quantization",
+      "distillation"
+    ],
+    "triggers": [
+      "distillation",
+      "knowledge distillation",
+      "student",
+      "teacher"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.fine-tuning"
+  },
+  {
+    "ref_id": "methodology:finetune:select-adaptation-method",
+    "type": "methodology",
+    "title": "Select the right adaptation method for the goal",
+    "summary": "A decision path from prompting through PEFT to full fine-tuning and RLHF based on data, budget, and capability needs.",
+    "domains": [
+      "fine_tuning",
+      "lora",
+      "qlora",
+      "peft",
+      "quantization",
+      "distillation"
+    ],
+    "triggers": [
+      "fine tuning",
+      "peft",
+      "lora",
+      "rlhf"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.fine-tuning"
+  },
+  {
+    "ref_id": "methodology:finetune:build-eval-harness",
+    "type": "methodology",
+    "title": "Build a fine-tuning evaluation harness first",
+    "summary": "Stand up task, capability, and safety evals before training so every checkpoint is judged on fixed, comparable criteria.",
+    "domains": [
+      "fine_tuning",
+      "lora",
+      "qlora",
+      "peft",
+      "quantization",
+      "distillation"
+    ],
+    "triggers": [
+      "evaluate",
+      "benchmark",
+      "harness",
+      "regression"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.fine-tuning"
+  },
+  {
+    "ref_id": "methodology:finetune:qlora-low-resource",
+    "type": "methodology",
+    "title": "Run QLoRA for low-resource fine-tuning",
+    "summary": "Fine-tune a quantized base with low-rank adapters to fit limited GPU memory while preserving quality.",
+    "domains": [
+      "fine_tuning",
+      "lora",
+      "qlora",
+      "peft",
+      "quantization",
+      "distillation"
+    ],
+    "triggers": [
+      "qlora",
+      "lora",
+      "quantization",
+      "bitsandbytes"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.fine-tuning"
+  },
+  {
+    "ref_id": "methodology:finetune:merge-and-verify-adapter",
+    "type": "methodology",
+    "title": "Merge an adapter and verify parity",
+    "summary": "Fold a trained adapter into base weights for serving, then confirm the merged model matches the adapter-on-base reference.",
+    "domains": [
+      "fine_tuning",
+      "lora",
+      "qlora",
+      "peft",
+      "quantization",
+      "distillation"
+    ],
+    "triggers": [
+      "merge",
+      "adapter",
+      "lora",
+      "serving"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.fine-tuning"
+  },
+  {
+    "ref_id": "knowledge:finetune:lora-mechanics",
+    "type": "knowledge",
+    "title": "How LoRA adapters work",
+    "summary": "Why low-rank update matrices on frozen weights make adaptation cheap and composable.",
+    "domains": [
+      "fine_tuning",
+      "lora",
+      "qlora",
+      "peft",
+      "quantization",
+      "distillation"
+    ],
+    "triggers": [
+      "lora",
+      "peft",
+      "adapter",
+      "rank"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.fine-tuning"
+  },
+  {
+    "ref_id": "knowledge:finetune:quantization-formats",
+    "type": "knowledge",
+    "title": "Quantization formats and their tradeoffs",
+    "summary": "How fp16, bf16, int8, and int4 trade memory and speed against numerical precision and quality.",
+    "domains": [
+      "fine_tuning",
+      "lora",
+      "qlora",
+      "peft",
+      "quantization",
+      "distillation"
+    ],
+    "triggers": [
+      "quantization",
+      "int4",
+      "int8",
+      "bfloat16"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.fine-tuning"
+  },
+  {
+    "ref_id": "knowledge:finetune:rlhf-dpo-basics",
+    "type": "knowledge",
+    "title": "RLHF and DPO at a glance",
+    "summary": "How preference optimization aligns a model to human-ranked outputs and where DPO simplifies the RLHF loop.",
+    "domains": [
+      "fine_tuning",
+      "lora",
+      "qlora",
+      "peft",
+      "quantization",
+      "distillation"
+    ],
+    "triggers": [
+      "rlhf",
+      "dpo",
+      "preference",
+      "alignment"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.fine-tuning"
+  },
+  {
+    "ref_id": "knowledge:finetune:distillation-objectives",
+    "type": "knowledge",
+    "title": "Distillation objectives: soft labels and rationales",
+    "summary": "How matching teacher logits, intermediate states, or generated rationales transfers capability to a smaller student.",
+    "domains": [
+      "fine_tuning",
+      "lora",
+      "qlora",
+      "peft",
+      "quantization",
+      "distillation"
+    ],
+    "triggers": [
+      "distillation",
+      "knowledge distillation",
+      "teacher",
+      "student"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.fine-tuning"
+  },
+  {
+    "ref_id": "skill:finetune:run-lora-sweep",
+    "type": "skill",
+    "title": "Run a LoRA hyperparameter sweep",
+    "summary": "Steps to sweep rank, target modules, and learning rate against a frozen eval to find a deployable adapter.",
+    "domains": [
+      "fine_tuning",
+      "lora",
+      "qlora",
+      "peft",
+      "quantization",
+      "distillation"
+    ],
+    "triggers": [
+      "lora",
+      "peft",
+      "sweep",
+      "evaluate"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.fine-tuning"
+  },
+  {
+    "ref_id": "skill:finetune:verify-quantized-checkpoint",
+    "type": "skill",
+    "title": "Verify a quantized checkpoint against budget",
+    "summary": "Steps to benchmark a quantized model versus full precision and accept or reject it on the quality delta.",
+    "domains": [
+      "fine_tuning",
+      "lora",
+      "qlora",
+      "peft",
+      "quantization",
+      "distillation"
+    ],
+    "triggers": [
+      "quantization",
+      "int4",
+      "benchmark",
+      "evaluate"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.fine-tuning"
+  }
+]

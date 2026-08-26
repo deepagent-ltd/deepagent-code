@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:prompt:system-user-data-separation",
+  "type": "knowledge",
+  "title": "Separating system, user, and data regions",
+  "description": "A robust prompt keeps fixed instructions, the user request, and untrusted data in distinct regions so input cannot become instruction.",
+  "body": "Use when structuring a prompt that mixes instructions with variable input. The system region holds fixed behavior, the user region holds the request, and a labeled data region holds untrusted content the model should treat as material to act on, not commands. Collapsing these lets injected text in the data become an instruction. Do not concatenate untrusted input into the system region, and avoid delimiters input can forge or close. Actions: keep regions structurally separate, label the data block, and re-assert constraints after it. Validation signals include an injection test where data-region instructions are ignored. Risk boundary: a structure where input can reach instruction position is a blocking finding requiring redesign.",
+  "domain": "prompt_pipeline",
+  "scope_hint": "code.prompt-pipeline:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.prompt-pipeline",
+  "pack_id": "code.prompt-pipeline"
+}

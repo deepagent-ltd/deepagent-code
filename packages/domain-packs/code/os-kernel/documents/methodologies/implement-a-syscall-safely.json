@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:kernel:implement-a-syscall-safely",
+  "type": "methodology",
+  "title": "Implement a syscall safely",
+  "description": "Add a system call by validating inputs at the boundary, performing the minimal privileged action, and returning proper errno codes.",
+  "body": "Steps: 1. Define the ABI: argument types, sizes, and the stable contract. 2. At entry, copy and validate every argument with the user accessors and bounds-check sizes/indices. 3. Perform the minimal privileged operation, acquiring locks in a fixed order. 4. Unwind cleanly on every error path and return a precise -errno. 5. Test with valid, boundary, and malicious inputs plus fault injection. Rollback point: before changing the ABI, which user programs depend on. Validation: fault-injection and bad-pointer tests return errors without panicking, and the ABI test suite passes; a syscall that works on valid input but panics on a bad pointer is not done.",
+  "domain": "kernel",
+  "scope_hint": "code.os-kernel:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.os-kernel",
+  "pack_id": "code.os-kernel"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:csharp_dotnet:windows-only-command-assumption",
+  "type": "failure_dossier",
+  "description": "Windows-only command assumption",
+  "body": "Using Visual Studio, PowerShell-only paths, or backslash-specific commands as the only validation path reduces portability. Treat as insufficient unless the repo is explicitly Windows-only. Safer path: prefer dotnet CLI and cross-platform paths.\n\nUse only as a diagnostic do-not-use signal; do not expose this as positive strategy, methodology, knowledge, skill, or memory.",
+  "domain": "csharp_dotnet",
+  "scope_hint": "code.csharp-dotnet:failure_dossiers",
+  "evidence_strength": "medium",
+  "provenance_tag": "code.csharp-dotnet:failure_seed:paraphrased_common_failures",
+  "pack_id": "code.csharp-dotnet"
+}

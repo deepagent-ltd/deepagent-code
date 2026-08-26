@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:vdb:ivfflat-lists-and-probes",
+  "type": "knowledge",
+  "title": "How IVFFlat lists and probes govern recall",
+  "description": "IVFFlat partitions vectors into lists at build time; nprobe sets how many lists a query searches, trading recall for speed.",
+  "body": "Reference for tuning IVFFlat. The index clusters vectors into a fixed number of lists (Voronoi cells) at build time, and each query searches the nprobe lists nearest the query vector, so a low nprobe is fast but can miss neighbours in adjacent cells. Use when configuring or tuning an IVFFlat index. Do not treat the list count as a free knob; too few lists make each list huge and slow, too many under-populate lists and hurt recall, with a common starting point near the square root of the row count. Validation signals include recall@k rising as nprobe increases and a balanced list occupancy. Risk boundary: the list count is fixed at build time, so a poor choice needs a full rebuild, whereas nprobe is a per-query tradeoff you can tune live.",
+  "domain": "vector_db",
+  "scope_hint": "code.database.vector:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.vector",
+  "pack_id": "code.database.vector"
+}

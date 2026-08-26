@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:finance:audit-money-arithmetic",
+  "type": "skill",
+  "title": "Audit a change for unsafe money arithmetic",
+  "description": "Inspect a diff for float money types, missing currency, non-idempotent charges, and in-place balance mutation, reporting each with its risk.",
+  "body": "Use when reviewing code that handles monetary values. Actions: scan for float/double money fields, arithmetic that loses precision, money compared or added without a currency, charge paths lacking an idempotency key, and balance columns updated in place rather than via ledger entries; report each finding with location and the safer pattern. Do not approve a money path that mutates balances without an audit trail. This skill exposes capability only and must not alter financial code or data without runtime permission. Validation signals include a findings list mapping each issue to a fix and tests covering precision and idempotency. Risk boundary: advisory only; flag money-movement and balance-mutation risks for human review and never recommend relaxing approval or audit controls to ship faster.",
+  "domain": "finance",
+  "scope_hint": "business.finance:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:business.finance",
+  "pack_id": "business.finance"
+}

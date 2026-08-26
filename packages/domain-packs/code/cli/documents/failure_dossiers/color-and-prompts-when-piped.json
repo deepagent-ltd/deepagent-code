@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:cli:color-and-prompts-when-piped",
+  "type": "failure_dossier",
+  "description": "Emitting ANSI color codes or blocking on an interactive prompt when output is piped or stdin is not a terminal.",
+  "body": "Failure mode: the tool always colors output and always prompts for confirmation, so piped output is full of escape sequences and scripts hang forever waiting on a prompt that no human will answer. Detection signals: escape codes appear in redirected files; a script or CI job hangs at a prompt; output is unparseable downstream. Do not assume an interactive terminal. Safer fallback: detect isatty per stream, disable color/spinners and prompts when not a TTY (honor NO_COLOR and a non-interactive flag), and provide a way to supply answers non-interactively.",
+  "domain": "cli",
+  "scope_hint": "code.cli:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.cli:human_authored",
+  "pack_id": "code.cli"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:wasm:raw-pointer-abi-misdecode",
+  "type": "failure_dossier",
+  "description": "Strings or structs are passed as raw integers and decoded with the wrong length or encoding, reading adjacent memory.",
+  "body": "Failure mode: code hand-passes a value across the boundary as a single integer or a pointer with a mismatched length/encoding, so the receiver reads the wrong number of bytes or interprets UTF-8 as something else, pulling in adjacent linear-memory bytes as data and silently corrupting the result. Detection signals: garbled strings or wrong struct fields after a boundary call; off-by-N byte errors; manual pointer math instead of generated bindings. Do not encode complex values as a bare integer. Safer fallback: use generated bindings (wasm-bindgen) or pass explicit pointer+length with a fixed encoding and an ownership rule, and verify with a round-trip test that the value comes back identical.",
+  "domain": "wasm",
+  "scope_hint": "code.wasm:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.wasm:human_authored",
+  "pack_id": "code.wasm"
+}

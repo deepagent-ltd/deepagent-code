@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:observability:alert-without-runbook",
+  "type": "failure_dossier",
+  "description": "Shipping an alert that fires without a clear owner or runbook, producing pages that on-call cannot act on.",
+  "body": "Failure mode: an alert is created on a raw threshold with no linked runbook or owner, so when it fires the responder has no defined action, leading to ignored pages and alert fatigue that masks real incidents. Detection signals: alerts repeatedly acknowledged with no action; no runbook link; unclear ownership; high false-positive rate. Do not add alerts that page without an action. Safer fallback: tie each alert to an SLO burn condition, a runbook, and an owner; tune thresholds against real traffic and escalate alert fatigue instead of adding more pages.",
+  "domain": "code",
+  "scope_hint": "code.observability:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.observability:human_authored",
+  "pack_id": "code.observability"
+}

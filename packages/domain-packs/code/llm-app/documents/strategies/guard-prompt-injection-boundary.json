@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:llm:guard-prompt-injection-boundary",
+  "type": "strategy",
+  "title": "Hold the prompt-injection boundary",
+  "description": "Content drawn from users, documents, or tool outputs is data inside the prompt and must never be allowed to override system instructions.",
+  "body": "Use when the prompt concatenates user input, retrieved documents, or prior tool output. Do not interpolate untrusted text where the model could read it as a new instruction, and avoid trusting model output that claims the user changed the rules. Actions: keep system instructions separate from data, delimit and label untrusted content, strip or neutralize instruction-like payloads, and re-assert constraints after the data block. Validation signals include an injection test (e.g. content saying 'ignore previous instructions') that fails to change behavior. Risk boundary: if injected content can trigger a privileged tool or data exfiltration, deny the path and escalate.",
+  "domain": "llm_app",
+  "scope_hint": "code.llm-app:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.llm-app",
+  "pack_id": "code.llm-app"
+}

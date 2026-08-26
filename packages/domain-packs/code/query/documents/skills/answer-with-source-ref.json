@@ -1,0 +1,11 @@
+{
+  "ref_id": "skill:query:answer-with-source-ref",
+  "type": "skill",
+  "description": "When answering deterministic facts, cite the result source or say the answer is unverified if no source exists.",
+  "body": "Inputs: deterministic result summary, user question, and any source ref. Procedure: answer the user's exact question using only result-backed facts; include the source scope in natural language; do not overstate completeness; if no source ref exists, state that the answer is unverified and identify the read-only query needed. Failure handling: if the model's draft contradicts the tool result, tool result wins. Output: concise answer with verified/unverified status and source scope. Use when a read-only query, count, list, status, diff, or inspection request must be answered from repository or tool evidence. Do not use when the user asks to edit, fix, deploy, migrate, delete, insert, update, or alter state. Actions: identify the exact scope, run read-only search or inspection tools, cite the source artifact, and preserve the command or file evidence used for the answer. Validation signals include matching counts against tool output, source references, scope labels, and no modified working-tree files. Risk boundary: stop or ask for confirmation if the task changes from query to mutation, if evidence is stale, or if the answer would expose secrets or excessive output.",
+  "domain": "query",
+  "scope_hint": "code.query:skill",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.query",
+  "pack_id": "code.query"
+}

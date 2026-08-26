@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:mon:diagnose-cardinality-blowup",
+  "type": "methodology",
+  "title": "Diagnose a cardinality blowup",
+  "description": "Find the label driving series growth and bound it before the Prometheus server degrades.",
+  "body": "Steps: 1. Query top series counts per metric (count by __name__). 2. Identify the metric and label whose distinct values are unbounded. 3. Confirm it carries a high-cardinality identifier. 4. Drop or aggregate that label via metric_relabel_configs at scrape. 5. Re-measure active series and memory. Rollback point: before changing scrape relabeling on a live target. Validation: active series flattens and server memory stabilizes.",
+  "domain": "monitoring",
+  "scope_hint": "platform.monitoring:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.monitoring",
+  "pack_id": "platform.monitoring"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:edge:cache-control-directive-semantics",
+  "type": "knowledge",
+  "title": "Cache-control directive semantics",
+  "description": "s-maxage governs shared (CDN) caches, max-age governs browsers, and private/no-store control whether the edge may cache at all.",
+  "body": "Use when setting caching headers. max-age applies to private (browser) caches; s-maxage overrides it for shared CDN caches; private forbids shared caching; no-store forbids all caching; stale-while-revalidate/stale-if-error extend serving past expiry. Do not conflate max-age with s-maxage — a CDN honors s-maxage for shared TTL. Actions: set s-maxage for edge TTL, private/no-store for per-user data, and stale directives for resilience. Validation signals include the edge caching public content and never caching private. Risk boundary: omitting private on authenticated responses risks public caching of user data.",
+  "domain": "cdn",
+  "scope_hint": "platform.cdn-edge:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cdn-edge",
+  "pack_id": "platform.cdn-edge"
+}

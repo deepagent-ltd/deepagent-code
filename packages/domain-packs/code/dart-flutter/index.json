@@ -1,0 +1,452 @@
+[
+  {
+    "ref_id": "strategy:flutter:keep-build-pure-and-cheap",
+    "type": "strategy",
+    "title": "Keep the build method pure and cheap",
+    "summary": "build() can run many times per second, so it must only describe UI from current state and do no side effects or heavy work.",
+    "domains": [
+      "dart",
+      "flutter",
+      "mobile"
+    ],
+    "triggers": [
+      "build",
+      "pure",
+      "rebuild",
+      "side-effect",
+      "widget",
+      "performance"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.dart-flutter"
+  },
+  {
+    "ref_id": "strategy:flutter:treat-state-as-immutable",
+    "type": "strategy",
+    "title": "Treat state as immutable and rebuild from it",
+    "summary": "Change UI by producing new state and letting the framework rebuild, not by mutating widgets in place.",
+    "domains": [
+      "dart",
+      "flutter",
+      "mobile"
+    ],
+    "triggers": [
+      "state",
+      "immutable",
+      "setState",
+      "rebuild",
+      "management",
+      "flow"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.dart-flutter"
+  },
+  {
+    "ref_id": "strategy:flutter:dispose-widget-owned-resources",
+    "type": "strategy",
+    "title": "Dispose resources a State object owns",
+    "summary": "Controllers, stream subscriptions, animations, and timers created by a State must be released in dispose().",
+    "domains": [
+      "dart",
+      "flutter",
+      "mobile"
+    ],
+    "triggers": [
+      "dispose",
+      "controller",
+      "subscription",
+      "leak",
+      "lifecycle",
+      "state"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.dart-flutter"
+  },
+  {
+    "ref_id": "strategy:flutter:move-heavy-work-off-the-ui-isolate",
+    "type": "strategy",
+    "title": "Move heavy work off the UI isolate",
+    "summary": "Dart is single-threaded per isolate, so CPU-heavy work blocks rendering; offload it to a background isolate.",
+    "domains": [
+      "dart",
+      "flutter",
+      "mobile"
+    ],
+    "triggers": [
+      "isolate",
+      "compute",
+      "jank",
+      "blocking",
+      "async",
+      "background"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.dart-flutter"
+  },
+  {
+    "ref_id": "strategy:flutter:guard-platform-channel-calls",
+    "type": "strategy",
+    "title": "Guard platform-channel calls per platform",
+    "summary": "A MethodChannel only works if the native side implements it, so check platform support and handle the missing case.",
+    "domains": [
+      "dart",
+      "flutter",
+      "mobile"
+    ],
+    "triggers": [
+      "platform",
+      "channel",
+      "methodchannel",
+      "native",
+      "ios",
+      "android"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.dart-flutter"
+  },
+  {
+    "ref_id": "strategy:flutter:scope-rebuilds-with-const-and-placement",
+    "type": "strategy",
+    "title": "Scope rebuilds with const widgets and state placement",
+    "summary": "Place state as low as possible and mark static subtrees const so a change rebuilds only what depends on it.",
+    "domains": [
+      "dart",
+      "flutter",
+      "mobile"
+    ],
+    "triggers": [
+      "const",
+      "rebuild",
+      "scope",
+      "performance",
+      "placement",
+      "selector"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.dart-flutter"
+  },
+  {
+    "ref_id": "methodology:flutter:set-up-pub-and-widget-tests",
+    "type": "methodology",
+    "title": "Set up pub dependencies and widget tests",
+    "summary": "Manage dependencies via pubspec and the lockfile, and test UI with flutter_test's pumpWidget.",
+    "domains": [
+      "dart",
+      "flutter",
+      "mobile"
+    ],
+    "triggers": [
+      "pub",
+      "pubspec",
+      "test",
+      "pumpwidget",
+      "lock",
+      "setup"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.dart-flutter"
+  },
+  {
+    "ref_id": "methodology:flutter:debug-jank-with-devtools",
+    "type": "methodology",
+    "title": "Debug jank with the performance profiler",
+    "summary": "Find dropped frames by profiling and trace them to heavy build work or blocking on the UI isolate.",
+    "domains": [
+      "dart",
+      "flutter",
+      "mobile"
+    ],
+    "triggers": [
+      "jank",
+      "performance",
+      "devtools",
+      "frame",
+      "profile",
+      "diagnose"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.dart-flutter"
+  },
+  {
+    "ref_id": "methodology:flutter:wire-a-platform-channel",
+    "type": "methodology",
+    "title": "Wire a platform channel to native code",
+    "summary": "Define a MethodChannel contract, implement both native sides, and handle errors and missing platforms.",
+    "domains": [
+      "dart",
+      "flutter",
+      "mobile"
+    ],
+    "triggers": [
+      "platform",
+      "channel",
+      "methodchannel",
+      "native",
+      "wire",
+      "kotlin"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.dart-flutter"
+  },
+  {
+    "ref_id": "methodology:flutter:trace-a-state-not-updating",
+    "type": "methodology",
+    "title": "Trace a UI that will not update",
+    "summary": "Follow a stale widget back to mutation outside the update path or state placed where it cannot trigger a rebuild.",
+    "domains": [
+      "dart",
+      "flutter",
+      "mobile"
+    ],
+    "triggers": [
+      "state",
+      "stale",
+      "setState",
+      "rebuild",
+      "trace",
+      "update"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.dart-flutter"
+  },
+  {
+    "ref_id": "knowledge:flutter:widget-element-render-trees",
+    "type": "knowledge",
+    "title": "Widget, element, and render trees",
+    "summary": "Widgets are immutable configuration; the framework keeps a mutable element tree that maps them to render objects and reuses elements across rebuilds.",
+    "domains": [
+      "dart",
+      "flutter",
+      "mobile"
+    ],
+    "triggers": [
+      "widget",
+      "element",
+      "render",
+      "tree",
+      "immutable",
+      "key"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.dart-flutter"
+  },
+  {
+    "ref_id": "knowledge:flutter:dart-async-model",
+    "type": "knowledge",
+    "title": "Dart's async model: event loop, Futures, Streams, isolates",
+    "summary": "Each isolate is single-threaded with an event loop; async/await yields without parallelism, and only isolates run code in parallel.",
+    "domains": [
+      "dart",
+      "flutter",
+      "mobile"
+    ],
+    "triggers": [
+      "async",
+      "future",
+      "stream",
+      "isolate",
+      "event-loop",
+      "await"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.dart-flutter"
+  },
+  {
+    "ref_id": "knowledge:flutter:hot-reload-vs-restart",
+    "type": "knowledge",
+    "title": "Hot reload vs hot restart and state",
+    "summary": "Hot reload injects changed source and rebuilds the tree while keeping state; hot restart resets state, and neither reflects native or main() changes fully.",
+    "domains": [
+      "dart",
+      "flutter",
+      "mobile"
+    ],
+    "triggers": [
+      "hot-reload",
+      "hot-restart",
+      "state",
+      "development",
+      "rebuild",
+      "main"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.dart-flutter"
+  },
+  {
+    "ref_id": "knowledge:flutter:pub-resolution-and-constraints",
+    "type": "knowledge",
+    "title": "Pub dependency resolution and constraints",
+    "summary": "Pub resolves version constraints into pubspec.lock; apps commit the lock while packages do not, and SDK constraints gate compatibility.",
+    "domains": [
+      "dart",
+      "flutter",
+      "mobile"
+    ],
+    "triggers": [
+      "pub",
+      "pubspec",
+      "lock",
+      "constraint",
+      "sdk",
+      "version"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.dart-flutter"
+  },
+  {
+    "ref_id": "skill:flutter:review-widget-lifecycle-and-disposal",
+    "type": "skill",
+    "title": "Review widget lifecycle and disposal",
+    "summary": "Read Flutter widgets and report side effects in build, undisposed resources, and mutation outside the update path.",
+    "domains": [
+      "dart",
+      "flutter",
+      "mobile"
+    ],
+    "triggers": [
+      "review",
+      "lifecycle",
+      "dispose",
+      "build",
+      "setState",
+      "inspect"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.dart-flutter"
+  },
+  {
+    "ref_id": "skill:flutter:audit-isolate-and-channel-safety",
+    "type": "skill",
+    "title": "Audit isolate and platform-channel safety",
+    "summary": "Check for CPU-heavy work on the UI isolate and platform-channel calls that assume a feature exists everywhere.",
+    "domains": [
+      "dart",
+      "flutter",
+      "mobile"
+    ],
+    "triggers": [
+      "audit",
+      "isolate",
+      "jank",
+      "platform",
+      "channel",
+      "safety"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.dart-flutter"
+  }
+]

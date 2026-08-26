@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:dataeng:make-pipelines-idempotent",
+  "type": "strategy",
+  "title": "Make every pipeline run idempotent",
+  "description": "Design writes so rerunning a task for a given partition produces the same result, never duplicates, regardless of how many times it runs.",
+  "body": "Use when writing any task that loads or transforms data. Do not use blind append/insert into a target — a retry after partial failure then double-counts rows. Actions: scope each run to a partition (e.g. a date) and replace-by-partition or upsert on a key, so rerunning overwrites rather than appends; make the operation a pure function of its inputs. Validation signals include identical output and row counts after running a task twice and reconciled totals against the source. Risk boundary: non-idempotent loads corrupt aggregates silently; if a target cannot be safely overwritten, escalate before enabling retries.",
+  "domain": "data_engineering",
+  "scope_hint": "code.data-engineering:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-engineering",
+  "pack_id": "code.data-engineering"
+}

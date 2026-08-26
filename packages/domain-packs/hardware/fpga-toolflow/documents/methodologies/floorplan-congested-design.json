@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:fpgatf:floorplan-congested-design",
+  "type": "methodology",
+  "title": "Floorplan a congested or timing-stressed design",
+  "description": "Guide placement of critical blocks into regions when the router struggles or timing depends on locality.",
+  "body": "Use when place-and-route reports congestion or critical paths sprawl across the die. Do not let the tool place freely when locality is essential, since spread-out logic adds routing delay. Actions: identify the congested or critical blocks, assign them to placement regions near related logic and I/O, and verify routing utilization drops. Validation signals include reduced congestion in the placement report and improved slack on the previously critical paths. Risk boundary: an overly tight floorplan can itself create congestion, so escalate to relaxing regions when utilization spikes locally.",
+  "domain": "fpga_toolflow",
+  "scope_hint": "hardware.fpga-toolflow:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.fpga-toolflow",
+  "pack_id": "hardware.fpga-toolflow"
+}

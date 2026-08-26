@@ -1,0 +1,544 @@
+[
+  {
+    "ref_id": "strategy:k8s:rolling-update-with-surge-and-budget",
+    "type": "strategy",
+    "title": "Roll out with controlled surge and disruption budget",
+    "summary": "Use maxSurge/maxUnavailable and a PodDisruptionBudget so a rollout never drops capacity below the serving floor.",
+    "domains": [
+      "kubernetes",
+      "k8s",
+      "helm",
+      "rollout",
+      "rbac"
+    ],
+    "triggers": [
+      "rollout",
+      "rolling",
+      "update",
+      "surge",
+      "unavailable",
+      "pdb"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.kubernetes"
+  },
+  {
+    "ref_id": "strategy:k8s:rollback-to-known-revision",
+    "type": "strategy",
+    "title": "Keep rollbacks fast and revision-pinned",
+    "summary": "Preserve revisionHistoryLimit and use kubectl rollout undo / helm rollback to a known-good revision instead of hand-editing live objects.",
+    "domains": [
+      "kubernetes",
+      "k8s",
+      "helm",
+      "rollout",
+      "rbac"
+    ],
+    "triggers": [
+      "rollback",
+      "undo",
+      "revision",
+      "history",
+      "recover",
+      "helm"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.kubernetes"
+  },
+  {
+    "ref_id": "strategy:k8s:probes-gate-traffic-and-restarts",
+    "type": "strategy",
+    "title": "Use readiness, liveness, and startup probes for distinct jobs",
+    "summary": "Readiness gates traffic, liveness restarts a hung container, startup protects slow boots; never reuse one endpoint for all three blindly.",
+    "domains": [
+      "kubernetes",
+      "k8s",
+      "helm",
+      "rollout",
+      "rbac"
+    ],
+    "triggers": [
+      "readiness",
+      "liveness",
+      "startup",
+      "probe",
+      "health",
+      "traffic"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.kubernetes"
+  },
+  {
+    "ref_id": "strategy:k8s:set-requests-and-limits-deliberately",
+    "type": "strategy",
+    "title": "Set resource requests and limits to match real usage",
+    "summary": "Requests drive scheduling and QoS; CPU limits throttle and memory limits OOMKill, so size them from observed usage, not guesses.",
+    "domains": [
+      "kubernetes",
+      "k8s",
+      "helm",
+      "rollout",
+      "rbac"
+    ],
+    "triggers": [
+      "resource",
+      "requests",
+      "limits",
+      "cpu",
+      "memory",
+      "qos"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.kubernetes"
+  },
+  {
+    "ref_id": "strategy:k8s:rbac-least-privilege",
+    "type": "strategy",
+    "title": "Scope RBAC to least privilege per ServiceAccount",
+    "summary": "Grant Roles namespace-scoped with explicit verbs and resources; reserve ClusterRoles and wildcards for genuine cluster-wide need.",
+    "domains": [
+      "kubernetes",
+      "k8s",
+      "helm",
+      "rollout",
+      "rbac"
+    ],
+    "triggers": [
+      "rbac",
+      "role",
+      "clusterrole",
+      "serviceaccount",
+      "verbs",
+      "binding"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.kubernetes"
+  },
+  {
+    "ref_id": "strategy:k8s:isolate-with-namespaces-and-netpol",
+    "type": "strategy",
+    "title": "Isolate workloads by namespace and NetworkPolicy",
+    "summary": "Use namespaces as the unit of RBAC, quota, and naming isolation, and default-deny NetworkPolicy so pods only reach intended peers.",
+    "domains": [
+      "kubernetes",
+      "k8s",
+      "helm",
+      "rollout",
+      "rbac"
+    ],
+    "triggers": [
+      "namespace",
+      "isolation",
+      "networkpolicy",
+      "quota",
+      "tenant",
+      "default-deny"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.kubernetes"
+  },
+  {
+    "ref_id": "strategy:k8s:handle-secrets-without-leaking",
+    "type": "strategy",
+    "title": "Reference Secrets safely, never bake them in",
+    "summary": "Mount Secrets as files or use a secrets manager/CSI driver; avoid plaintext env, committed manifests, and over-broad Secret read access.",
+    "domains": [
+      "kubernetes",
+      "k8s",
+      "helm",
+      "rollout",
+      "rbac"
+    ],
+    "triggers": [
+      "secret",
+      "secrets",
+      "env",
+      "mount",
+      "csi",
+      "encryption"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.kubernetes"
+  },
+  {
+    "ref_id": "methodology:k8s:dry-run-and-diff-before-apply",
+    "type": "methodology",
+    "title": "Validate manifests by dry-run and diff before apply",
+    "summary": "Run server-side dry-run, schema validation, and a diff against live state so an apply has no surprises.",
+    "domains": [
+      "kubernetes",
+      "k8s",
+      "helm",
+      "rollout",
+      "rbac"
+    ],
+    "triggers": [
+      "dry-run",
+      "diff",
+      "validate",
+      "apply",
+      "manifest",
+      "preview"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.kubernetes"
+  },
+  {
+    "ref_id": "methodology:k8s:diagnose-stuck-rollout",
+    "type": "methodology",
+    "title": "Diagnose a stuck or failing rollout",
+    "summary": "Walk from rollout status to pod events to container logs to find why new pods will not become ready.",
+    "domains": [
+      "kubernetes",
+      "k8s",
+      "helm",
+      "rollout",
+      "rbac"
+    ],
+    "triggers": [
+      "stuck",
+      "rollout",
+      "crashloop",
+      "pending",
+      "events",
+      "diagnose"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.kubernetes"
+  },
+  {
+    "ref_id": "methodology:k8s:review-helm-chart-change",
+    "type": "methodology",
+    "title": "Review a Helm chart change end to end",
+    "summary": "Lint, template with the target values, diff against the release, and check hooks and CRD ordering before upgrading.",
+    "domains": [
+      "kubernetes",
+      "k8s",
+      "helm",
+      "rollout",
+      "rbac"
+    ],
+    "triggers": [
+      "helm",
+      "chart",
+      "values",
+      "template",
+      "lint",
+      "upgrade"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.kubernetes"
+  },
+  {
+    "ref_id": "methodology:k8s:audit-rbac-effective-permissions",
+    "type": "methodology",
+    "title": "Audit effective RBAC for a subject",
+    "summary": "Enumerate what a ServiceAccount or user can actually do and compare it to least-privilege intent.",
+    "domains": [
+      "kubernetes",
+      "k8s",
+      "helm",
+      "rollout",
+      "rbac"
+    ],
+    "triggers": [
+      "rbac",
+      "audit",
+      "can-i",
+      "permissions",
+      "serviceaccount",
+      "review"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.kubernetes"
+  },
+  {
+    "ref_id": "methodology:k8s:plan-stateful-workload-rollout",
+    "type": "methodology",
+    "title": "Plan a StatefulSet rollout with storage in mind",
+    "summary": "Account for ordered/parallel pod management, PVC retention, and partitioned updates before changing a StatefulSet.",
+    "domains": [
+      "kubernetes",
+      "k8s",
+      "helm",
+      "rollout",
+      "rbac"
+    ],
+    "triggers": [
+      "statefulset",
+      "pvc",
+      "storage",
+      "partition",
+      "ordered",
+      "rollout"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.kubernetes"
+  },
+  {
+    "ref_id": "knowledge:k8s:requests-limits-and-qos",
+    "type": "knowledge",
+    "title": "Requests, limits, and QoS classes",
+    "summary": "Requests drive scheduling and eviction order; CPU limits throttle while memory limits OOMKill; the pair determines QoS.",
+    "domains": [
+      "kubernetes",
+      "k8s",
+      "helm",
+      "rollout",
+      "rbac"
+    ],
+    "triggers": [
+      "requests",
+      "limits",
+      "qos",
+      "eviction",
+      "oomkill",
+      "throttle"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.kubernetes"
+  },
+  {
+    "ref_id": "knowledge:k8s:readiness-vs-liveness",
+    "type": "knowledge",
+    "title": "Readiness vs liveness vs startup probes",
+    "summary": "Readiness controls traffic, liveness controls restarts, startup defers both for slow boots; misusing them causes outages.",
+    "domains": [
+      "kubernetes",
+      "k8s",
+      "helm",
+      "rollout",
+      "rbac"
+    ],
+    "triggers": [
+      "readiness",
+      "liveness",
+      "startup",
+      "probe",
+      "restart",
+      "traffic"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.kubernetes"
+  },
+  {
+    "ref_id": "knowledge:k8s:rollout-strategies-tradeoffs",
+    "type": "knowledge",
+    "title": "RollingUpdate vs Recreate vs blue-green/canary",
+    "summary": "RollingUpdate keeps availability with version overlap; Recreate avoids overlap but has downtime; canary/blue-green trade infra for safety.",
+    "domains": [
+      "kubernetes",
+      "k8s",
+      "helm",
+      "rollout",
+      "rbac"
+    ],
+    "triggers": [
+      "rollingupdate",
+      "recreate",
+      "canary",
+      "blue-green",
+      "strategy",
+      "overlap"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.kubernetes"
+  },
+  {
+    "ref_id": "knowledge:k8s:rbac-model-roles-and-bindings",
+    "type": "knowledge",
+    "title": "RBAC roles, bindings, and aggregation",
+    "summary": "Roles/ClusterRoles grant verbs on resources; RoleBindings/ClusterRoleBindings attach them to subjects; permissions are additive with no deny.",
+    "domains": [
+      "kubernetes",
+      "k8s",
+      "helm",
+      "rollout",
+      "rbac"
+    ],
+    "triggers": [
+      "rbac",
+      "role",
+      "binding",
+      "aggregation",
+      "subject",
+      "additive"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.kubernetes"
+  },
+  {
+    "ref_id": "skill:k8s:read-manifest-for-safety-gaps",
+    "type": "skill",
+    "title": "Read a manifest for safety gaps",
+    "summary": "Inspect a Deployment/Helm output and report missing probes, unset resources, risky RBAC, and secret exposure.",
+    "domains": [
+      "kubernetes",
+      "k8s",
+      "helm",
+      "rollout",
+      "rbac"
+    ],
+    "triggers": [
+      "read",
+      "manifest",
+      "review",
+      "inspect",
+      "audit",
+      "gaps"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.kubernetes"
+  },
+  {
+    "ref_id": "skill:k8s:run-dry-run-diff",
+    "type": "skill",
+    "title": "Run a dry-run diff against the cluster",
+    "summary": "Execute server-side dry-run and kubectl/helm diff to preview exactly what an apply would change.",
+    "domains": [
+      "kubernetes",
+      "k8s",
+      "helm",
+      "rollout",
+      "rbac"
+    ],
+    "triggers": [
+      "dry-run",
+      "diff",
+      "preview",
+      "kubectl",
+      "helm",
+      "apply"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.kubernetes"
+  }
+]

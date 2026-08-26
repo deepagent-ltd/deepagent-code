@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:game:avoid-per-frame-allocation",
+  "type": "strategy",
+  "title": "Avoid per-frame heap allocation",
+  "description": "Eliminate allocations in the hot loop by pooling and reusing objects so the garbage collector never causes a frame hitch.",
+  "body": "Use in any per-frame code path on a GC'd or allocation-sensitive runtime. Do not allocate temporary objects, closures, or boxed values every frame, and do not let collections resize each frame. Actions: pre-allocate and reuse buffers, pool frequently spawned objects (bullets, particles), avoid hidden allocations (string concatenation, LINQ/iterator closures), and pre-size collections. Validation signals include a flat allocation graph during steady play and no GC spikes in the frame-time profile. Risk boundary: a GC pause triggered by per-frame garbage produces a visible stutter the player feels; in a real-time loop, hot-path allocation is a performance defect to remove, not defer.",
+  "domain": "game",
+  "scope_hint": "code.game:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.game",
+  "pack_id": "code.game"
+}

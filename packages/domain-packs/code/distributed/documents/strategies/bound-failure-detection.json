@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:dist:bound-failure-detection",
+  "type": "strategy",
+  "title": "Treat failure detection as a suspicion, not a fact",
+  "description": "Build failure detectors that report suspicion with timeouts and backoff, accepting that you cannot distinguish a slow node from a dead one.",
+  "body": "Use when nodes must react to peers going down (election triggers, membership changes). Do not treat a single missed heartbeat as proof of death, and do not pick timeouts so tight that a GC pause looks like a crash. Actions: use heartbeats with adaptive timeouts (e.g. phi-accrual), require multiple missed beats before suspecting, and make the protocol safe even when a 'dead' node is actually alive and returns. Validation signals include a slow-node test where the cluster stays correct without falsely evicting it and tunable suspicion thresholds. Risk boundary: aggressive eviction of a slow-but-live primary can trigger split-brain or data loss; escalate before tightening detection timeouts on a stateful service.",
+  "domain": "distributed",
+  "scope_hint": "code.distributed:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.distributed",
+  "pack_id": "code.distributed"
+}

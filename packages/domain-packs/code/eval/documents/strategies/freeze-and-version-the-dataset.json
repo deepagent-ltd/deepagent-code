@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:eval:freeze-and-version-the-dataset",
+  "type": "strategy",
+  "title": "Freeze and version the evaluation dataset",
+  "description": "Golden data is versioned and frozen so scores are comparable over time and the set is not edited to flatter a system.",
+  "body": "Use when an eval set is reused across releases. Do not silently add, remove, or relabel cases between runs, and avoid editing the golden answer to match a model's output. Actions: version the dataset, record which version produced each score, and gate changes to the set through review separate from the system change. Validation signals include a dataset version stamped on every reported score and a diff review for any set change. Risk boundary: editing the golden set alongside the system change makes the comparison meaningless; freeze the set or version-bump it deliberately, not to chase a number.",
+  "domain": "eval",
+  "scope_hint": "code.eval:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.eval",
+  "pack_id": "code.eval"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:mlops:drift-metrics",
+  "type": "knowledge",
+  "title": "Drift metrics: PSI, KS, and outcome drift",
+  "description": "What population stability index, the KS statistic, and delayed-label outcome drift each measure and when each applies.",
+  "body": "Use when choosing how to quantify that production inputs or outcomes have shifted. PSI bins a feature and sums weighted log-ratios between reference and live populations; KS measures the max CDF gap for continuous features; outcome drift compares realized labels once they arrive. Do not rely on input drift alone — inputs can look stable while the input-to-label relation changes (concept drift). Actions: pick PSI/KS for inputs, track prediction drift, and reconcile with delayed-label outcome drift. Validation signals include drift scores with documented thresholds and a benchmark against a known shift. Risk boundary: concept drift hides behind stable inputs; if labels lag badly, escalate to design a proxy rather than declaring no drift.",
+  "domain": "mlops",
+  "scope_hint": "code.mlops:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mlops",
+  "pack_id": "code.mlops"
+}

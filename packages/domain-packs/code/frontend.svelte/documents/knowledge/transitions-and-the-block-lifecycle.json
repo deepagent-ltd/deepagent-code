@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:svelte:transitions-and-the-block-lifecycle",
+  "type": "knowledge",
+  "title": "Transitions and the block lifecycle",
+  "description": "Svelte transitions run when an element enters/leaves a block, driven by keyed each blocks and conditionals, not by data identity alone.",
+  "body": "Use when animating elements in lists or conditional blocks. transition:/in:/out: directives fire when an element is added to or removed from the DOM by an {#if} or {#each}; a keyed {#each ... (id)} controls which DOM nodes are reused vs recreated, which determines whether a transition or animate: runs. Do not expect a transition when you mutate data without changing block membership, and do not omit the key when item identity matters. Actions: key each blocks by stable id and use animate: for reordering. Validation signals include a test or visual check that adding/removing an item triggers the expected enter/leave. Risk boundary: missing keys cause wrong nodes to be reused, producing mismatched state and broken transitions in dynamic lists.",
+  "domain": "svelte",
+  "scope_hint": "code.frontend.svelte:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.svelte",
+  "pack_id": "code.frontend.svelte"
+}

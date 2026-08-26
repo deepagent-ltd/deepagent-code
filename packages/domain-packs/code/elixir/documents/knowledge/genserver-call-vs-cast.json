@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:elixir:genserver-call-vs-cast",
+  "type": "knowledge",
+  "title": "GenServer call vs cast and the serial loop",
+  "description": "call is synchronous with a reply and timeout; cast is fire-and-forget; both run in a single serial message loop.",
+  "body": "Use when choosing how callers talk to a GenServer. GenServer.call sends a message and blocks the caller until handle_call replies, with a default 5s timeout, providing backpressure and a result. GenServer.cast is asynchronous fire-and-forget with no reply or backpressure. Crucially both are handled by one process serially, so a slow handler delays every other message regardless of call vs cast. Do not use cast to 'speed up' work that is actually slow (it just hides the backup) or assume call parallelizes. Actions: use call when you need a result or backpressure, cast for genuine fire-and-forget, and move slow work off the loop entirely. Validation signals include a test that the mailbox stays bounded. Risk boundary: casting unbounded work at a GenServer grows its mailbox until memory is exhausted, a silent failure mode.",
+  "domain": "elixir",
+  "scope_hint": "code.elixir:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.elixir",
+  "pack_id": "code.elixir"
+}

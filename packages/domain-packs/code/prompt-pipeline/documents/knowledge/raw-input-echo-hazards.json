@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:prompt:raw-input-echo-hazards",
+  "type": "knowledge",
+  "title": "Raw-input-echo hazards",
+  "description": "Echoing unsanitized input into the prompt enables injection, delimiter breakout, and accidental PII or secret leakage.",
+  "body": "Use when input flows into prompt construction. Echoing raw input creates several hazards at once: instruction injection if it reaches instruction position, delimiter breakout if it can close the data block, and leakage if it carries PII or secrets straight to the model. Do not interpolate raw input into the template, and avoid trusting that the model will ignore embedded commands. Actions: scrub, bound, and label input as data before assembly, and verify it cannot escape its region. Validation signals include tests for an injection payload, a delimiter-breakout attempt, and a seeded secret all being neutralized. Risk boundary: raw input echoed into instructions or carrying secrets to the model is a blocking finding.",
+  "domain": "prompt_pipeline",
+  "scope_hint": "code.prompt-pipeline:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.prompt-pipeline",
+  "pack_id": "code.prompt-pipeline"
+}

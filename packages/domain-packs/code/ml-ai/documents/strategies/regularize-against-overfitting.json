@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:mlai:regularize-against-overfitting",
+  "type": "strategy",
+  "title": "Treat a train/validation gap as overfitting",
+  "description": "When training loss keeps falling while validation loss rises, add regularization or capacity control rather than training longer.",
+  "body": "Use when validation loss diverges upward from training loss. Do not respond by training more epochs or growing the model — that widens the gap. Actions: introduce or increase regularization (weight decay, dropout, data augmentation), reduce capacity, or add early stopping keyed on validation loss; compare the gap before and after. Validation signals include a narrowing train/val gap and a validation metric that improves or holds. Risk boundary: a model that memorizes training data fails silently on new inputs; if regularization cannot close the gap, the data or labels may be the problem and warrant human review.",
+  "domain": "ml",
+  "scope_hint": "code.ml-ai:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.ml-ai",
+  "pack_id": "code.ml-ai"
+}

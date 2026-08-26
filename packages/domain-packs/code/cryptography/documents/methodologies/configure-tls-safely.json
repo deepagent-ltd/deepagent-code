@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:crypto:configure-tls-safely",
+  "type": "methodology",
+  "title": "Configure TLS with safe defaults",
+  "description": "Set protocol versions, cipher suites, and certificate validation so transport security is not silently downgraded.",
+  "body": "Steps: 1. Require TLS 1.2+ (prefer 1.3) and disable SSLv3/early TLS. 2. Restrict to AEAD cipher suites with forward secrecy (ECDHE). 3. Enable full certificate-chain and hostname verification; never disable it to silence an error. 4. Manage certificates and renewal (e.g. ACME) before expiry. 5. Test with a TLS scanner and verify no downgrade or weak-suite negotiation. Rollback point: before changing the accepted protocol/suite set in production. Validation: a TLS scan shows only strong protocols/suites and verification rejects an invalid certificate; disabling certificate verification to make a client 'work' is a critical defect, not a fix.",
+  "domain": "cryptography",
+  "scope_hint": "code.cryptography:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.cryptography",
+  "pack_id": "code.cryptography"
+}

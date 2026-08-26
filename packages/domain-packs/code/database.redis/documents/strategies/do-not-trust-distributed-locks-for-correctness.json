@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:redis:do-not-trust-distributed-locks-for-correctness",
+  "type": "strategy",
+  "title": "Do not trust distributed locks for correctness",
+  "description": "Treat Redis locks as efficiency hints, not correctness guarantees; guard critical operations with fencing or idempotency.",
+  "body": "Use when reaching for a Redis lock to serialize a critical operation. Do not assume a SET NX lock (or Redlock) guarantees mutual exclusion: GC pauses, clock skew, and failover can let two holders believe they own it, and a TTL that fires mid-operation releases the lock to another worker. Actions: use the lock only to reduce contention, and make the protected operation safe even if two run — via a fencing token checked at the source of truth or an idempotent write. Always set SET key val NX PX <ttl> and delete only if you still own it (compare value via Lua). Validation signals include a test where a lock expiring mid-operation does not corrupt the protected resource because the write is idempotent/fenced. Risk boundary: a Redis lock as the sole guard for money/inventory is unsafe; escalate and require fencing.",
+  "domain": "redis",
+  "scope_hint": "code.database.redis:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.redis",
+  "pack_id": "code.database.redis"
+}

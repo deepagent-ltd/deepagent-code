@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:cmake:debug-generator-expression",
+  "type": "methodology",
+  "title": "Debug a misbehaving generator expression",
+  "description": "A procedure to inspect what a generator expression evaluates to and fix conditions that were written as configure-time strings.",
+  "body": "Use when a target property set with a generator expression produces the wrong flags per configuration. Do not assume genex evaluates at configure time. Steps: remember genex evaluates at generation time, after configure; write the value to a file with file(GENERATE) to observe the result per config; correct conditionals like $<CONFIG:Debug> rather than comparing CMAKE_BUILD_TYPE as a string. Validation signals include the correct flags appearing only in the intended configuration. Risk boundary: confusing configure-time and generate-time logic yields flags that silently apply to the wrong build type, so verify per-config output.",
+  "domain": "cmake",
+  "scope_hint": "code.build.cmake:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.build.cmake",
+  "pack_id": "code.build.cmake"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:svelte:store-contract-and-auto-subscription",
+  "type": "knowledge",
+  "title": "The store contract and auto-subscription",
+  "description": "A Svelte store is any object with a subscribe method; the $store syntax auto-subscribes and auto-unsubscribes in components.",
+  "body": "Use when sharing state across components or integrating external state. A store satisfies a minimal contract: a subscribe(fn) that calls fn with the current value and returns an unsubscribe; writable adds set/update, and derived composes other stores. In a component, prefixing with $ ($count) auto-subscribes and tears down on destroy. Outside components (or with manual subscribe), you own unsubscription. Do not call subscribe manually in a component when $ works, and do not forget teardown when you must. Actions: prefer $store, reserve manual subscribe for non-component code with explicit cleanup. Validation signals include no leaked subscription after the component is destroyed. Risk boundary: leaked manual subscriptions cause duplicated side effects and memory growth across SPA navigations.",
+  "domain": "svelte",
+  "scope_hint": "code.frontend.svelte:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.svelte",
+  "pack_id": "code.frontend.svelte"
+}

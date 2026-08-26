@@ -1,0 +1,11 @@
+{
+  "ref_id": "fail:mesh:strict-mtls-breaks-clients",
+  "type": "failure_dossier",
+  "description": "Flipping to STRICT mTLS severs non-mesh or plaintext clients.",
+  "body": "Failure mode: a namespace is set to PeerAuthentication STRICT while some callers (legacy services, health checkers, non-mesh clients) still send plaintext, so their connections are reset. Detection signals: connection resets from specific clients after the change, telemetry showing plaintext attempts rejected, and the affected callers lack sidecars. Do not enable STRICT before confirming all callers use mTLS. Safer fallback: start in PERMISSIVE, confirm via telemetry that traffic is 100% mTLS, add explicit port-level exceptions for non-mesh clients, then flip STRICT as a human-gated change.",
+  "domain": "service_mesh",
+  "scope_hint": "platform.service-mesh:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.service-mesh:human_authored",
+  "pack_id": "platform.service-mesh"
+}

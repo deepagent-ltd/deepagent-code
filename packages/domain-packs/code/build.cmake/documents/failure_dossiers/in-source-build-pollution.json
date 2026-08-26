@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:cmake:in-source-build-pollution",
+  "type": "failure_dossier",
+  "description": "Running CMake inside the source tree scatters generated files among sources, shadowing clean configures and risking accidental commits.",
+  "body": "Failure mode: cmake is invoked in the source directory, writing CMakeCache.txt, Makefiles, and object files alongside tracked sources. Detection signals: git status shows many generated files; a later out-of-source configure reads a stale in-source cache; the source tree will not configure cleanly elsewhere. Do not configure in the source directory. Safer fallback: always build out-of-source with cmake -S . -B build, gitignore the build dir, and delete any stray in-source artifacts before reconfiguring.",
+  "domain": "cmake",
+  "scope_hint": "code.build.cmake:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.build.cmake:human_authored",
+  "pack_id": "code.build.cmake"
+}

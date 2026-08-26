@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:pg:create-index-blocks-writes",
+  "type": "failure_dossier",
+  "description": "A plain CREATE INDEX on a large production table takes a SHARE lock and blocks all writes until the build finishes.",
+  "body": "Failure mode: CREATE INDEX (without CONCURRENTLY) acquires a lock that allows reads but blocks INSERT/UPDATE/DELETE for the entire build, which on a big table can be minutes of write downtime. Detection signals: writers stall and queue during a deploy; pg_stat_activity shows sessions blocked on the index relation; the migration ran a bare CREATE INDEX. Do not run plain index builds on hot tables. Safer fallback: use CREATE INDEX CONCURRENTLY outside a transaction, clean up any INVALID index if it fails, and reserve plain builds for empty tables or maintenance windows.",
+  "domain": "postgres",
+  "scope_hint": "code.database.postgres:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.postgres:human_authored",
+  "pack_id": "code.database.postgres"
+}

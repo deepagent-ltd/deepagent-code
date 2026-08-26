@@ -1,0 +1,70 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "platform.ansible",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "ansible",
+      "config_management",
+      "playbook",
+      "idempotent_provisioning"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for platform.ansible: idempotent tasks declaring state not commands, role and inventory structure, handlers and notify, ansible-vault for secrets, check mode with diff, fact gathering, error handling with failed_when and changed_when, tags"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "write a unit test for a JSON parser"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "ansible playbook idempotent task module role inventory handlers notify vault check mode diff gather_facts failed_when changed_when tags converge",
+  "expected_pack_id": "platform.ansible",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "platform.ansible L3 validation smoke",
+    "signals": [
+      "second run reports zero changed tasks",
+      "check mode --diff shows the intended changes only",
+      "handlers fire only when their task reports changed",
+      "secrets stay encrypted in ansible-vault not plaintext"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "platform.ansible diagnosis smoke",
+    "signals": [
+      "a task reports changed on every run breaking idempotency",
+      "handler never fires because no task notifies it",
+      "shell/command task used where a module exists",
+      "secret committed in plaintext instead of vault",
+      "play fails mid-run leaving hosts partially converged"
+    ]
+  },
+  "source_refs": [
+    "source:ansible-best-practices:paraphrased",
+    "source:ansible-idempotency-modules:paraphrased"
+  ]
+}

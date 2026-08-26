@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:elixir:dynamic-atom-exhaustion",
+  "type": "failure_dossier",
+  "description": "Atoms are created from unbounded external input, slowly filling the never-collected atom table until the VM crashes.",
+  "body": "Failure mode: code calls String.to_atom on user-controlled data (params, JSON keys, headers), but atoms are never garbage-collected and the atom table is fixed-size, so a stream of distinct inputs fills it and eventually crashes the entire BEAM node. Detection signals: String.to_atom/List.to_atom on request data; a JSON decoder configured to atomize keys; atom-count growth over time toward the limit. Do not mint atoms from untrusted input. Safer fallback: use String.to_existing_atom against a known set, keep dynamic data as strings or string-keyed maps, intern only compile-time atoms you control, and treat any to_atom on input as a blocking DoS finding to remove.",
+  "domain": "elixir",
+  "scope_hint": "code.elixir:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.elixir:human_authored",
+  "pack_id": "code.elixir"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:frontend_performance:inp-reflects-main-thread",
+  "type": "knowledge",
+  "title": "INP reflects main-thread responsiveness",
+  "description": "Interaction to Next Paint is driven by long tasks blocking the main thread between an input and its visual response.",
+  "body": "Use when an interaction feels sluggish despite a fast initial load. INP measures the latency from a user interaction to the next paint; high INP usually means long tasks (heavy JS, large synchronous renders, expensive event handlers) monopolize the main thread so the browser cannot paint. Do not assume a good LCP implies good interactivity. Actions: break up long tasks, yield with scheduling, and defer non-urgent work off the interaction path. Validation signals include a performance trace showing shorter tasks and a lower measured INP. Risk boundary: a single >50ms task on a hot interaction can dominate INP; profile the real handler rather than guessing.",
+  "domain": "frontend",
+  "scope_hint": "code.frontend.performance:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.performance",
+  "pack_id": "code.frontend.performance"
+}

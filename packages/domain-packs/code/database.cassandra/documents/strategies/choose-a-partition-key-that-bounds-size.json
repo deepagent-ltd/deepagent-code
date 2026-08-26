@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:cass:choose-a-partition-key-that-bounds-size",
+  "type": "strategy",
+  "title": "Choose a partition key that bounds partition size",
+  "description": "Pick a partition key with enough cardinality that each partition stays small and traffic spreads across the ring.",
+  "body": "Use when selecting the partition key for a table. Do not use a low-cardinality key (a status, a country, a single tenant) that funnels huge data and traffic into one partition and one set of replicas. Actions: choose a key with high enough cardinality to keep each partition under roughly 100MB and a few hundred thousand rows, and add a bucketing component (e.g. day) when one natural key would grow unbounded. Verify with nodetool tablehistograms that partition sizes stay bounded. Validation signals include the max partition size staying well under the warning threshold and balanced load across nodes. Risk boundary: an unbounded partition eventually destabilises the owning replicas, so model the size up front and escalate any key whose partition can grow without limit.",
+  "domain": "cassandra",
+  "scope_hint": "code.database.cassandra:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.cassandra",
+  "pack_id": "code.database.cassandra"
+}

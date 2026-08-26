@@ -1,0 +1,11 @@
+{
+  "ref_id": "methodology:gpu:progressive-sgemm",
+  "type": "methodology",
+  "description": "Progressive SGEMM for CUDA/GPU kernels: block tile to shared, then vectorized load, then remove bank conflicts; validate each step. 渐进式 SGEMM：先 block tile 搬 shared，再向量化 load，再消除 bank conflict。",
+  "body": "渐进式 SGEMM：先 block tile 搬 shared，再向量化 load，再消除 bank conflict；每步先验证再进下一步。顺序：1) naive baseline + correctness 2) shared mem tiling 3) vectorized load 4) bank-conflict padding。每步单独跑 correctness harness。. Use when GPU kernel correctness and profiling work touches kernel launch parameters, memory-access shape, correctness harnesses, occupancy evidence, and profiler counters. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: follow the ordered review, edit, and validation sequence; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include golden-output comparisons, deterministic benchmark runs, sanitizer output, Nsight or rocprof evidence, and CPU/GPU tolerance checks. Risk boundary: escalate or stop when the task involves benchmark-only changes, silent numerical drift, undefined synchronization, bank conflicts, and hardware-specific regressions, missing owner evidence, or live external state.",
+  "domain": "gpu_kernel",
+  "scope_hint": "gpu_kernel",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:gpu_kernel",
+  "pack_id": "code.gpu-kernel"
+}

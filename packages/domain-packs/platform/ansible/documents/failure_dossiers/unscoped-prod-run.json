@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:ansible:unscoped-prod-run",
+  "type": "failure_dossier",
+  "description": "A play runs against the full inventory including production, applying broad changes with no gate.",
+  "body": "Failure mode: a playbook is run without --limit or environment separation, so a change intended for staging also hits production with maximum blast radius and no approval. Detection signals: production hosts appearing in a run meant for testing; an over-broad --limit pattern matching prod; the same inventory mixing environments. Do not run broadly against mixed inventory. Safer fallback: separate prod and non-prod inventories, scope with --tags and --limit, dry-run with --check first, and gate any production apply on explicit human approval.",
+  "domain": "ansible",
+  "scope_hint": "platform.ansible:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.ansible:human_authored",
+  "pack_id": "platform.ansible"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:dataeng:run-pipeline-and-reconcile",
+  "type": "skill",
+  "title": "Run a pipeline task and reconcile counts",
+  "description": "Execute a pipeline task (or its tests) and report row counts, reconciliation against source, and idempotency of a rerun.",
+  "body": "Use when validating a data pipeline change. Actions: detect the orchestrator/build, run the task or its tests on a sample partition, then run it again and confirm identical output; report source-vs-target row counts and any reject/dead-letter counts. Compare the two runs to prove idempotency. Do not declare success from a green task without checking counts. This skill exposes capability only and must not run production backfills without runtime permission. Validation signals include reconciled counts and identical reruns. Risk boundary: if a rerun changes row counts, report the task as non-idempotent rather than passing.",
+  "domain": "data_engineering",
+  "scope_hint": "code.data-engineering:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-engineering",
+  "pack_id": "code.data-engineering"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:docs:changelog-omits-user-impact",
+  "type": "failure_dossier",
+  "description": "A changelog entry that records an implementation detail but not the user-visible behavior or migration step, leaving upgraders unprepared.",
+  "body": "Failure mode: the changelog says what was changed internally (refactor, rename, dependency bump) but not how it affects callers, so users miss a behavior change or required migration. Detection signals: breaking changes discovered only after upgrade; entries phrased purely as internal work; no migration note for a changed default or removed API. Do not log changes only in implementation terms. Safer fallback: write each entry in terms of user-visible impact and required action, call out breaking changes explicitly, and link the migration path.",
+  "domain": "code",
+  "scope_hint": "code.docs:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.docs:human_authored",
+  "pack_id": "code.docs"
+}

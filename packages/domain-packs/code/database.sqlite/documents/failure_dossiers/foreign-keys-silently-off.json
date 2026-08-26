@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:sqlite:foreign-keys-silently-off",
+  "type": "failure_dossier",
+  "description": "Foreign key constraints are ignored because the foreign_keys pragma is off by default, allowing orphaned rows.",
+  "body": "Failure mode: the schema declares FOREIGN KEY constraints but foreign_keys is not enabled per connection, so SQLite parses but does not enforce them, letting inserts reference missing parents and deletes orphan children. Detection signals: rows referencing nonexistent parents; cascades not firing; foreign_keys pragma never set after open. Do not assume declared constraints are enforced. Safer fallback: set PRAGMA foreign_keys=ON on every connection, run PRAGMA foreign_key_check to find existing violations, and add a startup assertion that the pragma is on.",
+  "domain": "sqlite",
+  "scope_hint": "code.database.sqlite:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.sqlite:human_authored",
+  "pack_id": "code.database.sqlite"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:php:surface-errors-as-exceptions",
+  "type": "strategy",
+  "title": "Surface errors as exceptions, never suppress them",
+  "description": "Throw and catch typed exceptions rather than relying on warnings, false returns, or the @ operator.",
+  "body": "Use when handling failure in any PHP path. Do not use the @ error-suppression operator, ignore a function's false return, or wrap code in an empty catch. Actions: convert recoverable failures into typed exceptions, catch the narrowest exception class you can handle, let unrecoverable ones propagate to a central handler, and configure the runtime to throw on errors where the framework supports it. Validation signals include a test asserting the specific exception type is thrown and that no path swallows it silently. Risk boundary: a suppressed error becomes a silent data-corruption or security bug; an empty catch or @ on a security-relevant call is a blocking finding to remove.",
+  "domain": "php",
+  "scope_hint": "code.php:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.php",
+  "pack_id": "code.php"
+}

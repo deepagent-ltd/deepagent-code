@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:auth:common-token-validation-pitfalls",
+  "type": "knowledge",
+  "title": "Common token-validation pitfalls",
+  "description": "alg:none, algorithm confusion, unverified claims, missing aud/iss checks, and clock-skew handling are recurring JWT bugs.",
+  "body": "Use when consuming or debugging a signed token. Recurring defects: accepting alg:none; algorithm confusion (RS256 public key used as HS256 secret); decoding claims without verifying the signature; skipping issuer/audience checks; ignoring expiry or unbounded clock skew; trusting a role/scope claim the issuer never set. Do not read any claim before signature verification. Actions: pin the expected algorithm, verify with the right key, check iss/aud/exp/nbf with bounded skew, then read claims. Validation signals include tests for tampered-signature, alg:none, wrong-issuer, and expired tokens all rejected. Risk boundary: trusting an unverified role/scope claim is a critical finding.",
+  "domain": "backend_auth",
+  "scope_hint": "code.backend.auth:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.auth",
+  "pack_id": "code.backend.auth"
+}

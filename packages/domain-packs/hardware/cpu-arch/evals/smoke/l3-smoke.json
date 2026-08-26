@@ -1,0 +1,70 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "hardware.cpu-arch",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "cpu_arch",
+      "microarchitecture",
+      "simd"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for hardware.cpu-arch: cache line layout, AVX/NEON SIMD vectorization, branch misprediction, false sharing across cores, NUMA-aware allocation, and memory ordering barriers"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "build a marketing landing page with Tailwind CSS and animated hero section"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "cpu cache line locality branch prediction pipeline hazard simd avx sse neon vectorization memory barrier ordering false sharing numa prefetch ipc cache miss",
+  "expected_pack_id": "hardware.cpu-arch",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "hardware.cpu-arch L3 validation smoke",
+    "signals": [
+      "perf counter shows reduced cache misses (LLC/L1 miss rate)",
+      "branch-mispredict rate decreased under perf stat",
+      "IPC (instructions per cycle) improved on representative input",
+      "emitted assembly confirms vectorized loop body",
+      "false-sharing eliminated (per-core line ownership in cache report)"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "hardware.cpu-arch diagnosis smoke",
+    "signals": [
+      "hot loop with strided/random memory access thrashing cache",
+      "shared counter on one cache line written by multiple threads",
+      "data-dependent branch in inner loop with high mispredict rate",
+      "scalar loop the compiler refused to vectorize",
+      "cross-socket memory access on a NUMA machine"
+    ]
+  },
+  "source_refs": [
+    "source:intel-optimization-manual:paraphrased",
+    "source:agner-fog-microarchitecture:paraphrased"
+  ]
+}

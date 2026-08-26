@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:stream:tune-throughput-latency",
+  "type": "methodology",
+  "title": "Tune parallelism for throughput and latency",
+  "description": "Balance operator parallelism, partitioning, and checkpoint interval so the job meets latency without skew or excessive overhead.",
+  "body": "Use when a job must meet a throughput or end-to-end latency target. Do not raise parallelism blindly — a skewed key or a slow sink leaves added tasks idle while the hot one lags. Actions: measure per-operator backpressure, fix key skew with rebalancing or salting, set parallelism to the bottleneck, and tune the checkpoint interval against its overhead. Validation signals include a flat backpressure profile across tasks and end-to-end latency within target under load. Risk boundary: a too-frequent checkpoint starves processing while too-rare loses more on recovery; if latency and recovery goals conflict, escalate the tradeoff rather than guessing.",
+  "domain": "streaming",
+  "scope_hint": "code.streaming:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.streaming",
+  "pack_id": "code.streaming"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:ansible:handle-failures-gracefully",
+  "type": "methodology",
+  "title": "Handle play failures gracefully",
+  "description": "Define real failure conditions and recovery so a mid-run error does not leave hosts half-converged.",
+  "body": "Steps: 1. Identify tasks whose nonzero exit does not mean real failure and set failed_when accordingly. 2. Wrap risky sequences in block/rescue/always to define recovery. 3. Decide on any_errors_fatal versus per-host continuation for the play. 4. Ensure handlers needed for a safe state can still flush. 5. Test a forced failure mid-play and inspect the resulting host state. Rollback point: before enabling the play against more hosts. Validation: an injected failure leaves each host in a defined, recoverable state, not a partial one.",
+  "domain": "ansible",
+  "scope_hint": "platform.ansible:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.ansible",
+  "pack_id": "platform.ansible"
+}

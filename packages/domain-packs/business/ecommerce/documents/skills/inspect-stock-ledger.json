@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:ecom:inspect-stock-ledger",
+  "type": "skill",
+  "title": "Inspect the stock ledger",
+  "description": "Reconcile on-hand against available, reserved, and sold to surface oversell or leaked holds.",
+  "body": "Use when stock numbers are in doubt for a SKU. Actions: read on-hand, available, reserved, and sold quantities and check the identity on-hand = available + reserved + sold; report any SKU where reserved exceeds what active carts justify or where the identity breaks. Do not adjust stock counts without first reporting the reconciliation. This skill is read-only and exposes capability only; it must not write inventory without runtime permission. Validation signals include a per-SKU reconciliation with the discrepancy quantified. Risk boundary: a negative available or broken identity signals oversell — escalate before more checkouts proceed.",
+  "domain": "ecommerce",
+  "scope_hint": "business.ecommerce:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:business.ecommerce",
+  "pack_id": "business.ecommerce"
+}

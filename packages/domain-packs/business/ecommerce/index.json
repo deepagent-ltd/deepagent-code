@@ -1,0 +1,452 @@
+[
+  {
+    "ref_id": "strategy:ecom:reserve-before-promising",
+    "type": "strategy",
+    "title": "Reserve stock before promising it",
+    "summary": "Atomically decrement available inventory at add-to-cart or checkout so two buyers cannot claim the last unit.",
+    "domains": [
+      "ecommerce",
+      "cart",
+      "inventory",
+      "order_state"
+    ],
+    "triggers": [
+      "reservation",
+      "inventory",
+      "oversell",
+      "stock",
+      "atomic"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "business.ecommerce"
+  },
+  {
+    "ref_id": "strategy:ecom:expire-cart-reservations",
+    "type": "strategy",
+    "title": "Expire cart reservations on a timer",
+    "summary": "Hold reserved stock only for a bounded window so abandoned carts release inventory back to the pool.",
+    "domains": [
+      "ecommerce",
+      "cart",
+      "inventory",
+      "order_state"
+    ],
+    "triggers": [
+      "reservation",
+      "expiry",
+      "abandonment",
+      "release",
+      "ttl"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "business.ecommerce"
+  },
+  {
+    "ref_id": "strategy:ecom:make-payment-idempotent",
+    "type": "strategy",
+    "title": "Make payment submission idempotent",
+    "summary": "Key each payment attempt by an idempotency token so retries and double-clicks charge exactly once.",
+    "domains": [
+      "ecommerce",
+      "cart",
+      "inventory",
+      "order_state"
+    ],
+    "triggers": [
+      "idempotent",
+      "payment",
+      "retry",
+      "double charge",
+      "key"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "business.ecommerce"
+  },
+  {
+    "ref_id": "strategy:ecom:enforce-order-state-graph",
+    "type": "strategy",
+    "title": "Enforce the order state graph",
+    "summary": "Allow only explicit transitions between order states and reject illegal jumps.",
+    "domains": [
+      "ecommerce",
+      "cart",
+      "inventory",
+      "order_state"
+    ],
+    "triggers": [
+      "state machine",
+      "order",
+      "transition",
+      "lifecycle",
+      "guard"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "business.ecommerce"
+  },
+  {
+    "ref_id": "strategy:ecom:settle-cart-totals-server-side",
+    "type": "strategy",
+    "title": "Compute cart totals server-side",
+    "summary": "Recompute price, tax, and discounts on the server at checkout, never trusting client-sent totals.",
+    "domains": [
+      "ecommerce",
+      "cart",
+      "inventory",
+      "order_state"
+    ],
+    "triggers": [
+      "total",
+      "price",
+      "discount",
+      "server-side",
+      "tamper"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "business.ecommerce"
+  },
+  {
+    "ref_id": "strategy:ecom:reverse-refunds-atomically",
+    "type": "strategy",
+    "title": "Reverse refunds atomically with restock",
+    "summary": "Tie a refund's money reversal, order state change, and inventory restock into one consistent operation.",
+    "domains": [
+      "ecommerce",
+      "cart",
+      "inventory",
+      "order_state"
+    ],
+    "triggers": [
+      "refund",
+      "restock",
+      "reversal",
+      "atomic",
+      "cancellation"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "business.ecommerce"
+  },
+  {
+    "ref_id": "methodology:ecom:model-checkout-state-machine",
+    "type": "methodology",
+    "title": "Model the checkout state machine",
+    "summary": "Enumerate cart and checkout states and the guarded transitions before writing handler code.",
+    "domains": [
+      "ecommerce",
+      "cart",
+      "inventory",
+      "order_state"
+    ],
+    "triggers": [
+      "state machine",
+      "checkout",
+      "transition",
+      "model",
+      "guard"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "business.ecommerce"
+  },
+  {
+    "ref_id": "methodology:ecom:diagnose-oversell",
+    "type": "methodology",
+    "title": "Diagnose an oversell",
+    "summary": "Trace concurrent checkouts on a SKU to find the non-atomic check-then-decrement gap.",
+    "domains": [
+      "ecommerce",
+      "cart",
+      "inventory",
+      "order_state"
+    ],
+    "triggers": [
+      "oversell",
+      "concurrency",
+      "diagnose",
+      "race",
+      "stock"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "business.ecommerce"
+  },
+  {
+    "ref_id": "methodology:ecom:reconcile-stuck-orders",
+    "type": "methodology",
+    "title": "Reconcile stuck orders",
+    "summary": "Find orders wedged between paid and fulfilled and drive them to a consistent state.",
+    "domains": [
+      "ecommerce",
+      "cart",
+      "inventory",
+      "order_state"
+    ],
+    "triggers": [
+      "stuck",
+      "reconcile",
+      "paid",
+      "fulfilled",
+      "partial"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "business.ecommerce"
+  },
+  {
+    "ref_id": "methodology:ecom:audit-reservation-leaks",
+    "type": "methodology",
+    "title": "Audit reservation leaks",
+    "summary": "Quantify stock pinned by stale reservations and confirm expiry returns it to the pool.",
+    "domains": [
+      "ecommerce",
+      "cart",
+      "inventory",
+      "order_state"
+    ],
+    "triggers": [
+      "reservation",
+      "leak",
+      "audit",
+      "expiry",
+      "abandonment"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "business.ecommerce"
+  },
+  {
+    "ref_id": "knowledge:ecom:order-lifecycle-model",
+    "type": "knowledge",
+    "title": "Order lifecycle model",
+    "summary": "Orders move through pending, paid, shipped, delivered, and the terminal cancelled or refunded states.",
+    "domains": [
+      "ecommerce",
+      "cart",
+      "inventory",
+      "order_state"
+    ],
+    "triggers": [
+      "lifecycle",
+      "order",
+      "state",
+      "transition",
+      "terminal"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "business.ecommerce"
+  },
+  {
+    "ref_id": "knowledge:ecom:reservation-vs-oversell",
+    "type": "knowledge",
+    "title": "Reservation versus oversell",
+    "summary": "Available stock must be decremented atomically at reservation, or concurrent buyers oversell the same unit.",
+    "domains": [
+      "ecommerce",
+      "cart",
+      "inventory",
+      "order_state"
+    ],
+    "triggers": [
+      "reservation",
+      "oversell",
+      "atomic",
+      "concurrency",
+      "available"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "business.ecommerce"
+  },
+  {
+    "ref_id": "knowledge:ecom:idempotency-in-payments",
+    "type": "knowledge",
+    "title": "Idempotency in payments",
+    "summary": "An idempotency key lets a payment be retried safely so network failures do not double-charge.",
+    "domains": [
+      "ecommerce",
+      "cart",
+      "inventory",
+      "order_state"
+    ],
+    "triggers": [
+      "idempotency",
+      "payment",
+      "retry",
+      "key",
+      "exactly-once"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "business.ecommerce"
+  },
+  {
+    "ref_id": "knowledge:ecom:cart-checkout-state",
+    "type": "knowledge",
+    "title": "Cart and checkout state",
+    "summary": "A cart progresses through mutable, reserved, and paying stages, each with distinct stock and price guarantees.",
+    "domains": [
+      "ecommerce",
+      "cart",
+      "inventory",
+      "order_state"
+    ],
+    "triggers": [
+      "cart",
+      "checkout",
+      "state",
+      "reserved",
+      "paying"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "business.ecommerce"
+  },
+  {
+    "ref_id": "skill:ecom:inspect-stock-ledger",
+    "type": "skill",
+    "title": "Inspect the stock ledger",
+    "summary": "Reconcile on-hand against available, reserved, and sold to surface oversell or leaked holds.",
+    "domains": [
+      "ecommerce",
+      "cart",
+      "inventory",
+      "order_state"
+    ],
+    "triggers": [
+      "stock",
+      "ledger",
+      "reconcile",
+      "reserved",
+      "inspect"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "business.ecommerce"
+  },
+  {
+    "ref_id": "skill:ecom:trace-order-transitions",
+    "type": "skill",
+    "title": "Trace order state transitions",
+    "summary": "Replay an order's recorded transitions to find illegal jumps or a stuck state.",
+    "domains": [
+      "ecommerce",
+      "cart",
+      "inventory",
+      "order_state"
+    ],
+    "triggers": [
+      "order",
+      "transition",
+      "trace",
+      "stuck",
+      "history"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "business.ecommerce"
+  }
+]

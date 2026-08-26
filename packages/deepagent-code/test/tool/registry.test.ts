@@ -1,0 +1,1167 @@
+import { afterEach, describe, expect } from "bun:test"
+import path from "path"
+import fs from "fs/promises"
+import { fileURLToPath, pathToFileURL } from "url"
+import { Effect, Exit, Layer, Result, Schema } from "effect"
+import { CrossSpawnSpawner } from "@deepagent-code/core/cross-spawn-spawner"
+import { Database } from "@deepagent-code/core/database/database"
+import { ToolRegistry } from "@/tool/registry"
+import { Tool } from "@/tool/tool"
+import { disposeAllInstances, TestInstance } from "../fixture/fixture"
+import { testEffect } from "../lib/effect"
+import { TestConfig } from "../fixture/config"
+import { FSUtil } from "@deepagent-code/core/fs-util"
+import { Plugin } from "@/plugin"
+import { Question } from "@/question"
+import { Todo } from "@/session/todo"
+import { Skill } from "@/skill"
+import { Agent } from "@/agent/agent"
+import { BackgroundJob } from "@/background/job"
+import { Session } from "@/session/session"
+import { SessionStatus } from "@/session/status"
+import { Provider } from "@/provider/provider"
+import { Git } from "@/git"
+import { LSP } from "@/lsp/lsp"
+import { Instruction } from "@/session/instruction"
+import { EventV2Bridge } from "@/event-v2-bridge"
+import { FetchHttpClient } from "effect/unstable/http"
+import { Format } from "@/format"
+import { Search } from "@deepagent-code/core/filesystem/search"
+import * as Truncate from "@/tool/truncate"
+import { InstanceState } from "@/effect/instance-state"
+import { Reference } from "@/reference/reference"
+import { RepositoryCache } from "@/reference/repository-cache"
+
+import { ToolJsonSchema } from "@/tool/json-schema"
+import { MessageID, SessionID } from "@/session/schema"
+import { RuntimeFlags } from "@/effect/runtime-flags"
+import { ProviderV2 } from "@deepagent-code/core/provider"
+import { ModelV2 } from "@deepagent-code/core/model"
+import { DebugService } from "@/debug/service"
+import { RuntimeBase } from "@/runtime/base"
+import { Worktree } from "@/worktree"
+import { CodeIntelFacade } from "@/code-intelligence/facade"
+import { ContextQueryFacade } from "@/context-federation/context-query-facade"
+import { ContextFederationReadiness } from "@/context-federation/readiness"
+import { ContextFederationRollout } from "@deepagent-code/core/context-federation/rollout"
+import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
+
+const node = CrossSpawnSpawner.defaultLayer
+const configLayer = TestConfig.layer({
+  directories: () => InstanceState.directory.pipe(Effect.map((dir) => [path.join(dir, ".deepagent-code")])),
+})
+
+type RegistryLayerOptions = {
+  flags?: Partial<RuntimeFlags.Info>
+  plugin?: Layer.Layer<Plugin.Service>
+  readiness?: ContextFederationRollout.DerivedContextDataReadiness
+}
+
+const registryLayer = (opts: RegistryLayerOptions = {}) =>
+  ToolRegistry.layer
+    .pipe(
+      // V3.5: debug/profile tools route through DebugService (D1) + RuntimeBase (R0).
+      // Provided closest to the base so the merged EventV2Bridge below (applied last)
+      // satisfies DebugService's requirement, mirroring ToolRegistry.defaultLayer.
+      Layer.provide(DebugService.layer),
+      Layer.provide(RuntimeBase.layer),
+      Layer.provide(Worktree.defaultLayer),
+      Layer.provide(
+        Layer.mergeAll(
+          configLayer,
+          opts.plugin ?? Plugin.defaultLayer,
+          Question.defaultLayer,
+          Todo.defaultLayer,
+          Skill.defaultLayer,
+          Agent.defaultLayer,
+          Session.defaultLayer,
+          SessionStatus.defaultLayer,
+          BackgroundJob.defaultLayer,
+          Provider.defaultLayer,
+          Git.defaultLayer,
+          EffectFlock.defaultLayer,
+          RepositoryCache.defaultLayer,
+          Reference.defaultLayer,
+          LSP.defaultLayer,
+          Instruction.defaultLayer,
+          FSUtil.defaultLayer,
+          EventV2Bridge.defaultLayer,
+          FetchHttpClient.layer,
+          Format.defaultLayer,
+          node,
+          Database.defaultLayer,
+          Search.defaultLayer,
+          Truncate.defaultLayer,
+          Layer.succeed(CodeIntelFacade.Service, CodeIntelFacade.Service.of({ execute: () => Effect.die("unused") })),
+          Layer.succeed(
+            ContextQueryFacade.Service,
+            ContextQueryFacade.Service.of({ execute: () => Effect.die("unused") }),
+          ),
+          Layer.succeed(
+            ContextFederationReadiness.Service,
+            ContextFederationReadiness.Service.of({
+              snapshot: () => Effect.succeed(opts.readiness ?? ContextFederationRollout.READINESS_READY_STUB),
+            }),
+          ),
+        ),
+      ),
+    )
+    .pipe(Layer.provide(RuntimeFlags.layer(opts.flags ?? {})))
+
+// Fake Plugin.Service that returns a single plugin whose `tool` map contains
+// one definition with `args: undefined`. Used to exercise the plugin entry
+// point of `fromPlugin` for the #27451 / #27630 regression.
+const brokenPluginLayer = Layer.succeed(
+  Plugin.Service,
+  Plugin.Service.of({
+    init: () => Effect.void,
+    trigger: ((_name: unknown, _input: unknown, output: unknown) =>
+      Effect.succeed(output)) as Plugin.Interface["trigger"],
+    list: () =>
+      Effect.succeed([
+        {
+          tool: {
+            broken_plugin_tool: {
+              description: "plugin tool with missing args",
+              args: undefined as unknown as Record<string, never>,
+              execute: async () => "ok",
+            },
+          },
+        },
+      ]),
+  }),
+)
+
+const it = testEffect(Layer.mergeAll(registryLayer(), node, Agent.defaultLayer))
+// U5: a registry with background subagents explicitly disabled, to assert the task schema hides the
+// background param in that mode (the default is now ON).
+const itNoBackground = testEffect(
+  Layer.mergeAll(registryLayer({ flags: { experimentalBackgroundSubagents: false } }), node, Agent.defaultLayer),
+)
+const withBrokenPlugin = testEffect(
+  Layer.mergeAll(registryLayer({ plugin: brokenPluginLayer }), node, Agent.defaultLayer),
+)
+// L6: a registry with code_intel explicitly disabled, to assert grep survives and code_intel is gone.
+const itNoCodeIntel = testEffect(
+  Layer.mergeAll(registryLayer({ flags: { codeIntelTool: false } }), node, Agent.defaultLayer),
+)
+// FEAT-011 T4: the activity facade tools are staged behind DEEPAGENT_CODE_ACTIVITY_FACADE.
+const itActivityFacade = testEffect(
+  Layer.mergeAll(registryLayer({ flags: { activityFacade: true } }), node, Agent.defaultLayer),
+)
+const itContextToolsV2 = testEffect(
+  Layer.mergeAll(
+    registryLayer({
+      flags: {
+        contextFederationShadow: true,
+        locationIndexesV2Shadow: true,
+        contextProjectionV2: true,
+        contextQueryToolsV2: true,
+      },
+    }),
+    node,
+    Agent.defaultLayer,
+  ),
+)
+const itContextToolsV2Internal = testEffect(
+  Layer.mergeAll(
+    registryLayer({
+      flags: {
+        contextFederationShadow: true,
+        locationIndexesV2Shadow: true,
+        contextProjectionV2: true,
+        contextQueryToolsV2: true,
+        contextFederationRolloutStage: "internal",
+        contextFederationInternalProjects: ["project_scope_internal"],
+      },
+    }),
+    node,
+    Agent.defaultLayer,
+  ),
+)
+const itContextToolsV2Killed = testEffect(
+  Layer.mergeAll(
+    registryLayer({
+      flags: {
+        contextFederationShadow: true,
+        locationIndexesV2Shadow: true,
+        contextProjectionV2: true,
+        contextQueryToolsV2: true,
+        contextFederationKillSwitch: true,
+      },
+    }),
+    node,
+    Agent.defaultLayer,
+  ),
+)
+const itContextToolsV2Degraded = testEffect(
+  Layer.mergeAll(
+    registryLayer({
+      flags: {
+        contextFederationShadow: true,
+        locationIndexesV2Shadow: true,
+        contextProjectionV2: true,
+        contextQueryToolsV2: true,
+      },
+      readiness: {
+        ...ContextFederationRollout.READINESS_READY_STUB,
+        state: "degraded",
+        identityBound: true,
+        indexAvailable: false,
+        storageHealthy: true,
+        observedAt: Date.now(),
+        expiresAt: Number.MAX_SAFE_INTEGER,
+      },
+    }),
+    node,
+    Agent.defaultLayer,
+  ),
+)
+
+afterEach(async () => {
+  await disposeAllInstances()
+})
+
+describe("tool.registry", () => {
+  it.instance("exposes pr_finalize only to primary agents", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const agents = yield* Agent.Service
+      const build = yield* agents.get("build")
+      const reviewer = yield* agents.get("reviewer")
+
+      expect(
+        (yield* registry.tools({
+          providerID: ProviderV2.ID.make("deepagent-code"),
+          modelID: ModelV2.ID.make("test"),
+          agent: build,
+        })).map((tool) => tool.id),
+      ).toContain("pr_finalize")
+      expect(
+        (yield* registry.tools({
+          providerID: ProviderV2.ID.make("deepagent-code"),
+          modelID: ModelV2.ID.make("test"),
+          agent: reviewer,
+        })).map((tool) => tool.id),
+      ).not.toContain("pr_finalize")
+    }),
+  )
+
+  // FEAT-011 T4 — flag-gated visibility. The facade flag defaults OFF (staged), so the default
+  // registry output must carry ZERO activity_* tools (byte-identical visibility to pre-facade).
+  it.instance("hides all activity facade tools while DEEPAGENT_CODE_ACTIVITY_FACADE stays staged off", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const agents = yield* Agent.Service
+      const build = yield* agents.get("build")
+
+      const ids = yield* registry.ids()
+      expect(ids).not.toContain("activity_start")
+      expect(ids).not.toContain("activity_status")
+      expect(ids).not.toContain("activity_result")
+      expect(ids).not.toContain("activity_control")
+
+      const projected = (yield* registry.tools({
+        providerID: ProviderV2.ID.make("deepagent-code"),
+        modelID: ModelV2.ID.make("test"),
+        agent: build,
+      })).map((tool) => tool.id)
+      expect(projected.filter((id) => id.startsWith("activity_"))).toHaveLength(0)
+    }),
+    30_000,
+  )
+
+  itActivityFacade.instance("exposes activity facade tools to primary agents only when the flag is on", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const agents = yield* Agent.Service
+      const build = yield* agents.get("build")
+      const reviewer = yield* agents.get("reviewer")
+
+      const primary = (yield* registry.tools({
+        providerID: ProviderV2.ID.make("deepagent-code"),
+        modelID: ModelV2.ID.make("test"),
+        agent: build,
+      })).map((tool) => tool.id)
+      expect(primary).toContain("activity_start")
+      expect(primary).toContain("activity_status")
+      expect(primary).toContain("activity_result")
+      expect(primary).toContain("activity_control")
+
+      // Non-primary agents never see the facade (mirrors the pr_finalize projection fence).
+      const subagent = (yield* registry.tools({
+        providerID: ProviderV2.ID.make("deepagent-code"),
+        modelID: ModelV2.ID.make("test"),
+        agent: reviewer,
+      })).map((tool) => tool.id)
+      expect(subagent.filter((id) => id.startsWith("activity_"))).toHaveLength(0)
+    }),
+    30_000,
+  )
+
+  itActivityFacade.instance("activity facade tool schemas stay bounded (T6)", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const all = yield* registry.all()
+      const status = all.find((tool) => tool.id === "activity_status")
+      const start = all.find((tool) => tool.id === "activity_start")
+      if (!status || !start) throw new Error("activity facade tools missing from registry")
+
+      // status limit: hard ceiling 20.
+      expect(Result.isSuccess(Schema.decodeUnknownResult(status.parameters)({ limit: 20 }))).toBe(true)
+      expect(Result.isSuccess(Schema.decodeUnknownResult(status.parameters)({ limit: 21 }))).toBe(false)
+      expect(Result.isSuccess(Schema.decodeUnknownResult(status.parameters)({ limit: 0 }))).toBe(false)
+
+      // start: subkind is a closed enum, objective is required.
+      expect(Result.isSuccess(Schema.decodeUnknownResult(start.parameters)({ subkind: "task", objective: "x" }))).toBe(
+        true,
+      )
+      expect(Result.isSuccess(Schema.decodeUnknownResult(start.parameters)({ subkind: "other", objective: "x" }))).toBe(
+        false,
+      )
+      expect(Result.isSuccess(Schema.decodeUnknownResult(start.parameters)({ subkind: "goal" }))).toBe(false)
+
+      // budget fields must be positive integers when supplied.
+      expect(
+        Result.isSuccess(
+          Schema.decodeUnknownResult(start.parameters)({ subkind: "goal", objective: "x", budget: { maxTicks: 5 } }),
+        ),
+      ).toBe(true)
+      expect(
+        Result.isSuccess(
+          Schema.decodeUnknownResult(start.parameters)({ subkind: "goal", objective: "x", budget: { maxTicks: -1 } }),
+        ),
+      ).toBe(false)
+    }),
+  )
+
+  it.instance("exposes task status, close, and explicit recovery controls", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const ids = yield* registry.ids()
+
+      expect(ids).toContain("task_status")
+      expect(ids).toContain("task_close")
+      expect(ids).toContain("task_recovery")
+    }),
+  )
+
+  it.instance("exposes dismiss_validation (v4.0.5 PR-4: validation dismissal closure)", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const ids = yield* registry.ids()
+
+      expect(ids).toContain("dismiss_validation_failure")
+    }),
+  )
+
+  it.instance("exposes the task background parameter by default (U5: stable local capability)", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const agent = yield* Agent.Service
+      const build = yield* agent.get("build")
+      if (!build) throw new Error("build agent not found")
+      const task = (yield* registry.tools({
+        providerID: ProviderV2.ID.make("deepagent-code"),
+        modelID: ModelV2.ID.make("test"),
+        agent: build,
+      })).find((tool) => tool.id === "task")
+
+      // background subagents are on by default now; the param is part of the live schema (jsonSchema
+      // override is undefined so the full Parameters schema — including background — is used).
+      expect(task).toBeDefined()
+      expect(task?.jsonSchema).toBeUndefined()
+    }),
+  )
+
+  itNoBackground.instance("hides task background parameter when background subagents are explicitly disabled", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const agent = yield* Agent.Service
+      const build = yield* agent.get("build")
+      if (!build) throw new Error("build agent not found")
+      const task = (yield* registry.tools({
+        providerID: ProviderV2.ID.make("deepagent-code"),
+        modelID: ModelV2.ID.make("test"),
+        agent: build,
+      })).find((tool) => tool.id === "task")
+
+      expect(task?.jsonSchema).toBeDefined()
+      expect((task?.jsonSchema?.properties as Record<string, unknown> | undefined)?.background).toBeUndefined()
+    }),
+  )
+
+  // L1 (v3.8.0 §L1): describeTask auto-wires every mode!=="primary" agent whose `task` permission is
+  // not denied into the task tool's description — this is what makes researcher/reviewer visible and
+  // selectable by the primary agent. No registry change was needed; assert both surface.
+  it.instance("task tool description surfaces the researcher and reviewer subagents to the primary agent", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const agent = yield* Agent.Service
+      const build = yield* agent.get("build")
+      if (!build) throw new Error("build agent not found")
+      const task = (yield* registry.tools({
+        providerID: ProviderV2.ID.make("deepagent-code"),
+        modelID: ModelV2.ID.make("test"),
+        agent: build,
+      })).find((tool) => tool.id === "task")
+
+      expect(task).toBeDefined()
+      const description = task!.description ?? ""
+      // describeTask lists subagents as "- <name>: <description>"
+      expect(description).toContain("researcher:")
+      expect(description).toContain("reviewer:")
+      // and it must not list primary agents (build/plan)
+      expect(description).not.toContain("build:")
+    }),
+  )
+
+  it.instance("loads tools from .deepagent-code/tool (singular)", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const configDir = path.join(test.directory, ".deepagent-code")
+      const tool = path.join(configDir, "tool")
+      yield* Effect.promise(() => fs.mkdir(tool, { recursive: true }))
+      yield* Effect.promise(() =>
+        Bun.write(
+          path.join(tool, "hello.ts"),
+          [
+            "export default {",
+            "  description: 'hello tool',",
+            "  args: {},",
+            "  execute: async () => {",
+            "    return 'hello world'",
+            "  },",
+            "}",
+            "",
+          ].join("\n"),
+        ),
+      )
+      const registry = yield* ToolRegistry.Service
+      const ids = yield* registry.ids()
+      expect(ids).toContain("hello")
+    }),
+  )
+
+  it.instance("ignores non-tool exports in .deepagent-code/tool files", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const tool = path.join(test.directory, ".deepagent-code", "tool")
+      yield* Effect.promise(() => fs.mkdir(tool, { recursive: true }))
+      yield* Effect.promise(() =>
+        Bun.write(
+          path.join(tool, "mixed.ts"),
+          [
+            "export const helper = 'not a tool'",
+            "export default {",
+            "  description: 'mixed tool',",
+            "  args: {},",
+            "  execute: async () => 'ok',",
+            "}",
+            "",
+          ].join("\n"),
+        ),
+      )
+
+      const registry = yield* ToolRegistry.Service
+      const ids = yield* registry.ids()
+      expect(ids).toContain("mixed")
+      expect(ids).not.toContain("mixed_helper")
+    }),
+  )
+
+  // Regression: a single broken custom-tool file (unresolvable import, syntax error)
+  // must NOT crash registry initialization / the prompt. Before, the dynamic import
+  // rejection became a Die defect inside prompt_async -> silent no-reply (notably in the
+  // Electron/Node sidecar, where a `.js` specifier that only resolves under Bun fails).
+  // The bad file is logged and skipped; valid sibling tools still load.
+  it.instance("skips a broken custom tool file and still loads valid ones", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const tool = path.join(test.directory, ".deepagent-code", "tool")
+      yield* Effect.promise(() => fs.mkdir(tool, { recursive: true }))
+      yield* Effect.promise(() =>
+        Bun.write(path.join(tool, "broken.ts"), 'import { nope } from "@this/does-not-exist"\nexport default nope\n'),
+      )
+      yield* Effect.promise(() =>
+        Bun.write(
+          path.join(tool, "ok.ts"),
+          [
+            "export default {",
+            "  description: 'ok tool',",
+            "  args: {},",
+            "  execute: async () => 'ok',",
+            "}",
+            "",
+          ].join("\n"),
+        ),
+      )
+
+      const registry = yield* ToolRegistry.Service
+      const ids = yield* registry.ids()
+      expect(ids).toContain("ok")
+      expect(ids).not.toContain("broken")
+    }),
+  )
+
+  // Regression for #27451 / #27630: a custom tool that omits `args` must not
+  // crash registry initialization with
+  // `Object.entries requires that input parameter not be null or undefined`.
+  // Pre-1.14.49 the code path was `z.object(def.args)`, and `z.object(undefined)`
+  // silently produced an empty schema — so the tool registered as no-args.
+  // Preserve that tolerance.
+  it.instance("tolerates a custom tool exporting null/undefined args (no-args fallback)", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const tool = path.join(test.directory, ".deepagent-code", "tool")
+      yield* Effect.promise(() => fs.mkdir(tool, { recursive: true }))
+      yield* Effect.promise(() =>
+        Bun.write(
+          path.join(tool, "noargs.ts"),
+          [
+            "export default {",
+            "  description: 'tool with no args',",
+            "  args: undefined,",
+            "  execute: async () => 'ok',",
+            "}",
+            "",
+          ].join("\n"),
+        ),
+      )
+
+      const registry = yield* ToolRegistry.Service
+      const ids = yield* registry.ids()
+      // Built-in tools must still load — a single malformed custom tool must
+      // not poison the whole registry.
+      expect(ids).toContain("read")
+      const loaded = (yield* registry.all()).find((t) => t.id === "noargs")
+      if (!loaded) throw new Error("noargs tool was not loaded")
+      expect(loaded.jsonSchema).toMatchObject({ type: "object", properties: {} })
+    }),
+  )
+
+  // Same regression, plugin entry point. The original reports (#27451, #27630)
+  // came in through `plugin.list()` — `oh-my-deepagent-code` was registering a tool
+  // with `args: undefined` and crashing every message submit. The file-scan
+  // and plugin-list loops both funnel through `fromPlugin`, but covering both
+  // entry points means a future refactor that splits them won't silently lose
+  // protection.
+  withBrokenPlugin.instance("tolerates a plugin tool registered with null/undefined args", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const ids = yield* registry.ids()
+      expect(ids).toContain("read")
+      expect(ids).toContain("broken_plugin_tool")
+    }),
+  )
+
+  it.instance("loads tools from .deepagent-code/tools (plural)", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const configDir = path.join(test.directory, ".deepagent-code")
+      const tools = path.join(configDir, "tools")
+      yield* Effect.promise(() => fs.mkdir(tools, { recursive: true }))
+      yield* Effect.promise(() =>
+        Bun.write(
+          path.join(tools, "hello.ts"),
+          [
+            "export default {",
+            "  description: 'hello tool',",
+            "  args: {},",
+            "  execute: async () => {",
+            "    return 'hello world'",
+            "  },",
+            "}",
+            "",
+          ].join("\n"),
+        ),
+      )
+      const registry = yield* ToolRegistry.Service
+      const ids = yield* registry.ids()
+      expect(ids).toContain("hello")
+    }),
+  )
+
+  it.instance("loads Zod-schema custom tools with JSON Schema and validation", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const customTools = path.join(test.directory, ".deepagent-code", "tools")
+      const pluginTool = pathToFileURL(path.resolve(import.meta.dir, "../../../plugin/src/tool.ts")).href
+      yield* Effect.promise(() => fs.mkdir(customTools, { recursive: true }))
+      yield* Effect.promise(() =>
+        Bun.write(
+          path.join(customTools, "sql.ts"),
+          [
+            `import { tool } from ${JSON.stringify(pluginTool)}`,
+            "export default tool({",
+            "  description: 'query database',",
+            "  args: { query: tool.schema.string().describe('SQL query to execute') },",
+            "  execute: async ({ query }) => query,",
+            "})",
+            "",
+          ].join("\n"),
+        ),
+      )
+
+      const registry = yield* ToolRegistry.Service
+      const loaded = (yield* registry.all()).find((tool) => tool.id === "sql")
+      if (!loaded) throw new Error("custom sql tool was not loaded")
+      expect(loaded?.jsonSchema).toMatchObject({
+        type: "object",
+        properties: {
+          query: { type: "string", description: "SQL query to execute" },
+        },
+        required: ["query"],
+      })
+      expect(Result.isSuccess(Schema.decodeUnknownResult(loaded.parameters)({ query: "select 1" }))).toBe(true)
+      expect(Result.isSuccess(Schema.decodeUnknownResult(loaded.parameters)({}))).toBe(false)
+
+      const agents = yield* Agent.Service
+      const promptTools = yield* registry.tools({
+        providerID: ProviderV2.ID.make("deepagent-code"),
+        modelID: ModelV2.ID.make("test"),
+        agent: yield* agents.defaultInfo(),
+      })
+      const promptTool = promptTools.find((tool) => tool.id === "sql")
+      if (!promptTool) throw new Error("custom sql tool was not returned for prompts")
+      expect(ToolJsonSchema.fromTool(promptTool)).toMatchObject({
+        properties: {
+          query: { type: "string", description: "SQL query to execute" },
+        },
+        required: ["query"],
+      })
+    }),
+  )
+
+  it.instance(
+    "preserves Zod arg descriptions from older config-scoped plugin packages",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const configDir = path.join(test.directory, ".deepagent-code")
+        const customTools = path.join(configDir, "tools")
+        const plugin = path.join(configDir, "node_modules", "@deepagent-code", "plugin")
+        yield* Effect.promise(() => fs.mkdir(path.join(plugin, "dist"), { recursive: true }))
+        yield* Effect.promise(() => fs.mkdir(customTools, { recursive: true }))
+        yield* Effect.promise(() =>
+          fs.cp(path.dirname(fileURLToPath(import.meta.resolve("zod"))), path.join(configDir, "node_modules", "zod"), {
+            dereference: true,
+            recursive: true,
+          }),
+        )
+        yield* Effect.promise(() =>
+          Bun.write(
+            path.join(plugin, "package.json"),
+            JSON.stringify({ name: "@deepagent-code/plugin", type: "module", exports: { ".": "./dist/index.js" } }),
+          ),
+        )
+        yield* Effect.promise(() =>
+          Bun.write(
+            path.join(plugin, "dist", "index.js"),
+            [
+              "import { z } from 'zod'",
+              "export function tool(input) {",
+              "  return input",
+              "}",
+              "tool.schema = z",
+              "",
+            ].join("\n"),
+          ),
+        )
+        yield* Effect.promise(() =>
+          Bun.write(
+            path.join(customTools, "addition.ts"),
+            [
+              'import { tool } from "@deepagent-code/plugin"',
+              "export default tool({",
+              "  description: 'Use this tool to add two numbers and return their sum.',",
+              "  args: {",
+              "    left: tool.schema.number().describe('The first number to add'),",
+              "    right: tool.schema.number().describe('The second number to add'),",
+              "  },",
+              "  execute: async (args) => `${args.left} + ${args.right} = ${args.left + args.right}`,",
+              "})",
+              "",
+            ].join("\n"),
+          ),
+        )
+
+        const registry = yield* ToolRegistry.Service
+        const loaded = (yield* registry.all()).find((tool) => tool.id === "addition")
+        if (!loaded) throw new Error("custom addition tool was not loaded")
+
+        expect(ToolJsonSchema.fromTool(loaded)).toMatchObject({
+          properties: {
+            left: { type: "number", description: "The first number to add" },
+            right: { type: "number", description: "The second number to add" },
+          },
+        })
+      }),
+    20_000,
+  )
+
+  it.instance("preserves attachments from structured custom tool results", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const customTools = path.join(test.directory, ".deepagent-code", "tools")
+      const pluginTool = pathToFileURL(path.resolve(import.meta.dir, "../../../plugin/src/tool.ts")).href
+      yield* Effect.promise(() => fs.mkdir(customTools, { recursive: true }))
+      yield* Effect.promise(() =>
+        Bun.write(
+          path.join(customTools, "image.ts"),
+          [
+            `import { tool } from ${JSON.stringify(pluginTool)}`,
+            "export default tool({",
+            "  description: 'image tool',",
+            "  args: {},",
+            "  execute: async () => ({",
+            "    output: 'here is an image',",
+            "    attachments: [{ type: 'file', mime: 'image/png', filename: 'picture.png', url: 'data:image/png;base64,AAAA' }],",
+            "  }),",
+            "})",
+            "",
+          ].join("\n"),
+        ),
+      )
+
+      const registry = yield* ToolRegistry.Service
+      const loaded = (yield* registry.all()).find((tool) => tool.id === "image")
+      if (!loaded) throw new Error("custom image tool was not loaded")
+      const agents = yield* Agent.Service
+      const result = yield* loaded.execute({}, {
+        sessionID: SessionID.make("ses_test"),
+        messageID: MessageID.make("msg_test"),
+        agent: (yield* agents.defaultInfo()).name,
+        abort: new AbortController().signal,
+        messages: [],
+        metadata: () => Effect.void,
+        ask: () => Effect.void,
+      } satisfies Tool.Context)
+
+      expect(result.output).toBe("here is an image")
+      expect(result.attachments).toEqual([
+        { type: "file", mime: "image/png", filename: "picture.png", url: "data:image/png;base64,AAAA" },
+      ])
+    }),
+  )
+
+  it.instance("loads legacy JSON-schema-shaped custom tools with wire schema", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const tools = path.join(test.directory, ".deepagent-code", "tools")
+      yield* Effect.promise(() => fs.mkdir(tools, { recursive: true }))
+      yield* Effect.promise(() =>
+        Bun.write(
+          path.join(tools, "legacy.ts"),
+          [
+            "export default {",
+            "  description: 'legacy schema tool',",
+            "  args: { text: { type: 'string', description: 'Text to render' } },",
+            "  execute: async ({ text }) => text,",
+            "}",
+            "",
+          ].join("\n"),
+        ),
+      )
+
+      const registry = yield* ToolRegistry.Service
+      const loaded = (yield* registry.all()).find((tool) => tool.id === "legacy")
+      if (!loaded) throw new Error("legacy custom tool was not loaded")
+      expect(ToolJsonSchema.fromTool(loaded)).toMatchObject({
+        type: "object",
+        properties: {
+          text: { type: "string", description: "Text to render" },
+        },
+        required: ["text"],
+      })
+    }),
+  )
+
+  it.instance("host admits an exact custom tool call before code without its own ask can run", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const customTools = path.join(test.directory, ".deepagent-code", "tools")
+      const marker = path.join(test.directory, "custom-side-effect.txt")
+      yield* Effect.promise(() => fs.mkdir(customTools, { recursive: true }))
+      yield* Effect.promise(() =>
+        Bun.write(
+          path.join(customTools, "host_guarded.ts"),
+          [
+            "export default {",
+            "  description: 'host guarded custom tool',",
+            "  args: { value: { type: 'string' } },",
+            `  execute: async ({ value }) => { await Bun.write(${JSON.stringify(marker)}, value); return value },`,
+            "}",
+            "",
+          ].join("\n"),
+        ),
+      )
+      const registry = yield* ToolRegistry.Service
+      const loaded = (yield* registry.all()).find((tool) => tool.id === "host_guarded")
+      if (!loaded) throw new Error("host guarded custom tool was not loaded")
+      const agents = yield* Agent.Service
+      const requests: Array<{
+        sessionID: string
+        messageID: string
+        callID: string | undefined
+        permission: string
+        patterns: readonly string[]
+        metadata: Record<string, unknown>
+        always: readonly string[]
+      }> = []
+      const identity = {
+        sessionID: SessionID.make("ses_custom_host_guard"),
+        messageID: MessageID.make("msg_custom_host_guard"),
+        callID: "call-custom-host-guard",
+      }
+      const context = {
+        ...identity,
+        agent: (yield* agents.defaultInfo()).name,
+        abort: new AbortController().signal,
+        messages: [],
+        metadata: () => Effect.void,
+        ask: (request) =>
+          Effect.sync(() => {
+            requests.push({
+              sessionID: context.sessionID,
+              messageID: context.messageID,
+              callID: context.callID,
+              ...request,
+            })
+            throw new Error("permission rejected")
+          }),
+      } satisfies Tool.Context
+
+      const denied = yield* loaded.execute({ value: "must-not-run" }, context).pipe(Effect.exit)
+      expect(Exit.isFailure(denied)).toBe(true)
+      expect(yield* Effect.promise(() => Bun.file(marker).exists())).toBe(false)
+      expect(requests).toEqual([
+        {
+          sessionID: identity.sessionID,
+          messageID: identity.messageID,
+          callID: "call-custom-host-guard",
+          permission: "host_guarded",
+          patterns: ["*"],
+          metadata: { args: { value: "must-not-run" } },
+          always: ["*"],
+        },
+      ])
+    }),
+  )
+
+  it.instance("plugin code can add its own permission after the host custom-tool admission", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const customTools = path.join(test.directory, ".deepagent-code", "tools")
+      yield* Effect.promise(() => fs.mkdir(customTools, { recursive: true }))
+      yield* Effect.promise(() =>
+        Bun.write(
+          path.join(customTools, "double_guarded.ts"),
+          [
+            "export default {",
+            "  description: 'custom tool with an internal permission',",
+            "  args: { value: { type: 'string' } },",
+            "  execute: async ({ value }, context) => {",
+            "    await context.ask({ permission: 'plugin_network', patterns: [value], metadata: { value }, always: [value] })",
+            "    return value",
+            "  },",
+            "}",
+            "",
+          ].join("\n"),
+        ),
+      )
+      const registry = yield* ToolRegistry.Service
+      const loaded = (yield* registry.all()).find((tool) => tool.id === "double_guarded")
+      if (!loaded) throw new Error("double guarded custom tool was not loaded")
+      const agents = yield* Agent.Service
+      const requests: Array<{
+        permission: string
+        patterns: readonly string[]
+        metadata: Record<string, unknown>
+        always: readonly string[]
+      }> = []
+      const result = yield* loaded.execute({ value: "https://example.test" }, {
+        sessionID: SessionID.make("ses_custom_double_guard"),
+        messageID: MessageID.make("msg_custom_double_guard"),
+        callID: "call-custom-double-guard",
+        agent: (yield* agents.defaultInfo()).name,
+        abort: new AbortController().signal,
+        messages: [],
+        metadata: () => Effect.void,
+        ask: (request) =>
+          Effect.sync(() => {
+            requests.push(request)
+          }),
+      } satisfies Tool.Context)
+
+      expect(result.output).toBe("https://example.test")
+      expect(requests).toEqual([
+        {
+          permission: "double_guarded",
+          patterns: ["*"],
+          metadata: { args: { value: "https://example.test" } },
+          always: ["*"],
+        },
+        {
+          permission: "plugin_network",
+          patterns: ["https://example.test"],
+          metadata: { value: "https://example.test" },
+          always: ["https://example.test"],
+        },
+      ])
+    }),
+  )
+
+  // M2 (S1-v3.4) acceptance (e): the `tools()` projection must carry provenance
+  // through. It previously returned only {id,description,parameters,jsonSchema,execute,
+  // formatValidationError}, dropping provenance and forcing request.ts to guess.
+  it.instance("tools() projection carries builtin provenance through", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const agents = yield* Agent.Service
+      const projected = yield* registry.tools({
+        providerID: ProviderV2.ID.make("deepagent-code"),
+        modelID: ModelV2.ID.make("test"),
+        agent: yield* agents.defaultInfo(),
+      })
+      const read = projected.find((t) => t.id === "read")
+      if (!read) throw new Error("read tool missing from projection")
+      expect(read.provenance).toEqual({ source: "builtin" })
+    }),
+  )
+
+  it.instance("tools() projection marks custom tools as custom provenance", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const tool = path.join(test.directory, ".deepagent-code", "tool")
+      yield* Effect.promise(() => fs.mkdir(tool, { recursive: true }))
+      yield* Effect.promise(() =>
+        Bun.write(
+          path.join(tool, "customprov.ts"),
+          [
+            "export default {",
+            "  description: 'custom prov tool',",
+            "  args: {},",
+            "  execute: async () => 'ok',",
+            "}",
+            "",
+          ].join("\n"),
+        ),
+      )
+      const registry = yield* ToolRegistry.Service
+      const agents = yield* Agent.Service
+      const projected = yield* registry.tools({
+        providerID: ProviderV2.ID.make("deepagent-code"),
+        modelID: ModelV2.ID.make("test"),
+        agent: yield* agents.defaultInfo(),
+      })
+      const custom = projected.find((t) => t.id === "customprov")
+      if (!custom) throw new Error("custom tool missing from projection")
+      expect(custom.provenance).toEqual({ source: "custom" })
+    }),
+  )
+
+  // L6 (S1-v3.4): code_intel is promoted out of the experimental gate and is visible by default;
+  // grep is never disabled. `codeIntelTool=false` removes code_intel but leaves grep intact.
+  it.instance("L6: code_intel is visible by default and grep is always present", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const ids = yield* registry.ids()
+      expect(ids).toContain("code_intel")
+      expect(ids).toContain("grep")
+    }),
+  )
+
+  itNoCodeIntel.instance("L6: codeIntelTool=false hides code_intel but keeps grep", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const ids = yield* registry.ids()
+      expect(ids).not.toContain("code_intel")
+      expect(ids).toContain("grep")
+    }),
+  )
+
+  itContextToolsV2.instance("registers exactly the two public context tools at the v2 rollout stage", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const ids = yield* registry.ids()
+      expect(ids.filter((id) => id === "code_intel")).toHaveLength(1)
+      expect(ids.filter((id) => id === "context_query")).toHaveLength(1)
+      expect(ids).not.toContain("code_graph")
+      expect(ids).not.toContain("knowledge_graph")
+      expect(ids).not.toContain("memory_graph")
+      expect(ids).not.toContain("document_graph")
+    }),
+  )
+
+  itContextToolsV2Internal.instance("scopes v2 context tools to the selected Project cohort", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const agents = yield* Agent.Service
+      const agent = yield* agents.defaultInfo()
+      const internal = yield* registry.tools({
+        providerID: ProviderV2.ID.make("deepagent-code"),
+        modelID: ModelV2.ID.make("test"),
+        agent,
+        projectScopeKey: "project_scope_internal",
+      })
+      const external = yield* registry.tools({
+        providerID: ProviderV2.ID.make("deepagent-code"),
+        modelID: ModelV2.ID.make("test"),
+        agent,
+        projectScopeKey: "project_scope_external",
+      })
+
+      expect(internal.map((tool) => tool.id)).toContain("context_query")
+      expect(external.map((tool) => tool.id)).not.toContain("context_query")
+      expect(external.filter((tool) => tool.id === "code_intel")).toHaveLength(1)
+    }),
+  )
+
+  itContextToolsV2Killed.instance("removes active context tools immediately under the kill switch", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const agents = yield* Agent.Service
+      const tools = yield* registry.tools({
+        providerID: ProviderV2.ID.make("deepagent-code"),
+        modelID: ModelV2.ID.make("test"),
+        agent: yield* agents.defaultInfo(),
+        projectScopeKey: "project_scope_internal",
+      })
+
+      expect(tools.map((tool) => tool.id)).not.toContain("context_query")
+      expect(tools.filter((tool) => tool.id === "code_intel")).toHaveLength(1)
+    }),
+  )
+
+  itContextToolsV2Degraded.instance("keeps v1 code_intel when v2 context data is degraded", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const agents = yield* Agent.Service
+      const tools = yield* registry.tools({
+        providerID: ProviderV2.ID.make("deepagent-code"),
+        modelID: ModelV2.ID.make("test"),
+        agent: yield* agents.defaultInfo(),
+        projectScopeKey: "project_scope_internal",
+      })
+
+      expect(tools.map((tool) => tool.id)).not.toContain("context_query")
+      expect(tools.filter((tool) => tool.id === "code_intel")).toHaveLength(1)
+    }),
+  )
+
+  itContextToolsV2.instance("uses the provider turn activation decision instead of resampling readiness", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const agents = yield* Agent.Service
+      const eligibility = ContextFederationRollout.resolveProject(
+        ContextFederationRollout.resolve(
+          {
+            contextFederationShadow: true,
+            locationIndexesV2Shadow: true,
+            contextProjectionV2: true,
+            contextQueryToolsV2: true,
+            coreV2ExecutionOwner: false,
+          },
+          { coreV2ParityVerified: false },
+        ),
+        "project_scope_internal",
+        { stage: "all", percentage: 100, internalProjectScopeKeys: [], killSwitch: false },
+      )
+      const tools = yield* registry.tools({
+        providerID: ProviderV2.ID.make("deepagent-code"),
+        modelID: ModelV2.ID.make("test"),
+        agent: yield* agents.defaultInfo(),
+        projectScopeKey: "project_scope_internal",
+        contextFederationRollout: ContextFederationRollout.activate(eligibility, {
+          ...ContextFederationRollout.READINESS_READY_STUB,
+          state: "degraded",
+          identityBound: true,
+          indexAvailable: false,
+          storageHealthy: true,
+          observedAt: Date.now(),
+          expiresAt: Number.MAX_SAFE_INTEGER,
+        }),
+      })
+
+      expect(tools.map((tool) => tool.id)).not.toContain("context_query")
+      expect(tools.filter((tool) => tool.id === "code_intel")).toHaveLength(1)
+    }),
+  )
+
+  it.instance("loads tools with external dependencies without crashing", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const configDir = path.join(test.directory, ".deepagent-code")
+      const tools = path.join(configDir, "tools")
+      yield* Effect.promise(() => fs.mkdir(tools, { recursive: true }))
+      yield* Effect.promise(() =>
+        Bun.write(
+          path.join(configDir, "package.json"),
+          JSON.stringify({
+            name: "custom-tools",
+            dependencies: {
+              "@deepagent-code/plugin": "^0.0.0",
+              cowsay: "^1.6.0",
+            },
+          }),
+        ),
+      )
+      yield* Effect.promise(() =>
+        Bun.write(
+          path.join(configDir, "package-lock.json"),
+          JSON.stringify({
+            name: "custom-tools",
+            lockfileVersion: 3,
+            packages: {
+              "": {
+                dependencies: {
+                  "@deepagent-code/plugin": "^0.0.0",
+                  cowsay: "^1.6.0",
+                },
+              },
+            },
+          }),
+        ),
+      )
+
+      const cowsay = path.join(configDir, "node_modules", "cowsay")
+      yield* Effect.promise(() => fs.mkdir(cowsay, { recursive: true }))
+      yield* Effect.promise(() =>
+        Bun.write(
+          path.join(cowsay, "package.json"),
+          JSON.stringify({
+            name: "cowsay",
+            type: "module",
+            exports: "./index.js",
+          }),
+        ),
+      )
+      yield* Effect.promise(() =>
+        Bun.write(
+          path.join(cowsay, "index.js"),
+          ["export function say({ text }) {", "  return `moo ${text}`", "}", ""].join("\n"),
+        ),
+      )
+      yield* Effect.promise(() =>
+        Bun.write(
+          path.join(tools, "cowsay.ts"),
+          [
+            "import { say } from 'cowsay'",
+            "export default {",
+            "  description: 'tool that imports cowsay at top level',",
+            "  args: { text: { type: 'string' } },",
+            "  execute: async ({ text }: { text: string }) => {",
+            "    return say({ text })",
+            "  },",
+            "}",
+            "",
+          ].join("\n"),
+        ),
+      )
+      const registry = yield* ToolRegistry.Service
+      const ids = yield* registry.ids()
+      expect(ids).toContain("cowsay")
+    }),
+  )
+})

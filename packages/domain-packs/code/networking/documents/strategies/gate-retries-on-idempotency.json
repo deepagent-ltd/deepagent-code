@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:net:gate-retries-on-idempotency",
+  "type": "strategy",
+  "title": "Retry only what is safe to repeat",
+  "description": "Make retried requests idempotent via idempotency keys or conditional methods so a retry never double-applies an effect.",
+  "body": "Use when a request that mutates state might be retried after a timeout. Do not blindly retry a POST that creates or charges, because the first attempt may have succeeded before the response was lost, so the retry duplicates the effect. Actions: send an idempotency key the server deduplicates on, or use naturally idempotent methods (PUT with a full resource, conditional updates with ETag/If-Match); for non-idempotent operations, retry only after confirming the prior attempt did not apply. Validation signals include a test where a retried mutation with the same key applies the effect exactly once. Risk boundary: retrying a non-idempotent mutation without a dedup key is a correctness hazard; require an idempotency mechanism before enabling retries.",
+  "domain": "networking",
+  "scope_hint": "code.networking:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.networking",
+  "pack_id": "code.networking"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:flutter:review-widget-lifecycle-and-disposal",
+  "type": "skill",
+  "title": "Review widget lifecycle and disposal",
+  "description": "Read Flutter widgets and report side effects in build, undisposed resources, and mutation outside the update path.",
+  "body": "Use when asked whether a Flutter widget is correct. Actions: inspect each build method for side effects, controller creation, or heavy work; check that every controller, subscription, animation, and timer created in a State is released in dispose(); and verify state changes flow through setState or the state-management path rather than in-place mutation. Do not assume the framework disposes resources a State created. Report and record each impure build, undisposed resource, and out-of-band mutation with file and line. This skill is read-only and must not refactor state ownership without runtime permission. Validation signals include identifying a controller created without a matching dispose. Risk boundary: flag an undisposed controller/subscription as a memory-leak and setState-after-dispose risk, and side effects in build as a duplicate-effect defect.",
+  "domain": "dart",
+  "scope_hint": "code.dart-flutter:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.dart-flutter",
+  "pack_id": "code.dart-flutter"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:kernel:respect-kernel-user-separation",
+  "type": "strategy",
+  "title": "Respect kernel/user space separation",
+  "description": "Keep policy and large/variable work in user space and only the privileged mechanism in the kernel, exposing a small, stable, validated interface.",
+  "body": "Use when deciding what belongs in the kernel. Do not push business logic, parsing of complex formats, or policy into the kernel where a bug is a panic or exploit, and do not break the stable user ABI. Actions: keep the kernel to the minimal privileged mechanism, expose a narrow validated syscall/ioctl/sysfs interface, and leave policy to user space. Validation signals include a small reviewed interface surface and ABI-compatibility tests passing for existing user programs. Risk boundary: every line added to the kernel runs with full privilege and widens the attack surface; escalate any proposal to move substantial logic into the kernel for a security and ABI review.",
+  "domain": "kernel",
+  "scope_hint": "code.os-kernel:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.os-kernel",
+  "pack_id": "code.os-kernel"
+}

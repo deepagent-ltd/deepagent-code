@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:ios:ui-update-off-main-thread",
+  "type": "failure_dossier",
+  "description": "Mutating UIKit views or published SwiftUI state from a background thread, causing nondeterministic crashes and UI corruption.",
+  "body": "Failure mode: a network or background-queue completion handler updates a view or observable state directly without hopping to the main thread, so UIKit's main-thread-only contract is violated. Detection signals: the Main Thread Checker logs purple warnings; intermittent crashes or visual glitches that depend on timing; bugs that vanish under the debugger. Do not touch UI off the main thread. Safer fallback: do the work in the background, then dispatch the UI update to the main queue or a @MainActor context, and annotate UI-driving types @MainActor so the compiler enforces it.",
+  "domain": "ios",
+  "scope_hint": "code.mobile.ios:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mobile.ios:human_authored",
+  "pack_id": "code.mobile.ios"
+}

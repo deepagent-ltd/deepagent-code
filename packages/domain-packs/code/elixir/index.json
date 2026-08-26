@@ -1,0 +1,468 @@
+[
+  {
+    "ref_id": "strategy:elixir:structure-a-supervision-tree",
+    "type": "strategy",
+    "title": "Structure work under a supervision tree",
+    "summary": "Place every long-lived process under a supervisor with a restart strategy so crashes recover to a known state.",
+    "domains": [
+      "elixir",
+      "otp",
+      "phoenix",
+      "beam"
+    ],
+    "triggers": [
+      "supervision",
+      "supervisor",
+      "restart",
+      "tree",
+      "child_spec",
+      "otp"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.elixir"
+  },
+  {
+    "ref_id": "strategy:elixir:keep-genservers-responsive",
+    "type": "strategy",
+    "title": "Keep GenServers responsive; never block the loop",
+    "summary": "A GenServer processes one message at a time, so move slow or blocking work out of handle_call/handle_cast.",
+    "domains": [
+      "elixir",
+      "otp",
+      "phoenix",
+      "beam"
+    ],
+    "triggers": [
+      "genserver",
+      "handle_call",
+      "blocking",
+      "mailbox",
+      "timeout",
+      "async"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.elixir"
+  },
+  {
+    "ref_id": "strategy:elixir:hold-state-in-processes-not-globals",
+    "type": "strategy",
+    "title": "Hold shared state in processes, not globals",
+    "summary": "Model mutable state as a process addressed by messages or an ETS table, never the process dictionary or module attributes.",
+    "domains": [
+      "elixir",
+      "otp",
+      "phoenix",
+      "beam"
+    ],
+    "triggers": [
+      "state",
+      "process",
+      "ets",
+      "agent",
+      "global",
+      "shared"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.elixir"
+  },
+  {
+    "ref_id": "strategy:elixir:design-with-pattern-matching",
+    "type": "strategy",
+    "title": "Design control flow with pattern matching",
+    "summary": "Match on message and data shape in function heads, letting unexpected shapes crash rather than coding defensive branches.",
+    "domains": [
+      "elixir",
+      "otp",
+      "phoenix",
+      "beam"
+    ],
+    "triggers": [
+      "pattern",
+      "match",
+      "function-head",
+      "guard",
+      "with",
+      "crash"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.elixir"
+  },
+  {
+    "ref_id": "strategy:elixir:bound-atoms-and-dynamic-input",
+    "type": "strategy",
+    "title": "Never create atoms from unbounded input",
+    "summary": "Atoms are never garbage-collected, so converting arbitrary external strings to atoms can exhaust the atom table and crash the VM.",
+    "domains": [
+      "elixir",
+      "otp",
+      "phoenix",
+      "beam"
+    ],
+    "triggers": [
+      "atom",
+      "string_to_atom",
+      "input",
+      "exhaustion",
+      "memory",
+      "safe"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.elixir"
+  },
+  {
+    "ref_id": "strategy:elixir:keep-the-liveview-process-snappy",
+    "type": "strategy",
+    "title": "Keep the LiveView process snappy",
+    "summary": "A LiveView is a process per connection, so blocking it freezes that user's UI; offload slow work and stream large data.",
+    "domains": [
+      "elixir",
+      "otp",
+      "phoenix",
+      "beam"
+    ],
+    "triggers": [
+      "liveview",
+      "phoenix",
+      "blocking",
+      "assign",
+      "socket",
+      "process"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.elixir"
+  },
+  {
+    "ref_id": "methodology:elixir:set-up-mix-and-exunit",
+    "type": "methodology",
+    "title": "Set up the Mix project and ExUnit",
+    "summary": "Configure mix.exs deps and the application tree, and run tests through ExUnit with isolation.",
+    "domains": [
+      "elixir",
+      "otp",
+      "phoenix",
+      "beam"
+    ],
+    "triggers": [
+      "mix",
+      "exunit",
+      "deps",
+      "application",
+      "test",
+      "setup"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.elixir"
+  },
+  {
+    "ref_id": "methodology:elixir:design-a-genserver-api",
+    "type": "methodology",
+    "title": "Design a GenServer's API and state",
+    "summary": "Separate the public client API from the server callbacks and keep the loop fast and crash-safe.",
+    "domains": [
+      "elixir",
+      "otp",
+      "phoenix",
+      "beam"
+    ],
+    "triggers": [
+      "genserver",
+      "api",
+      "callback",
+      "handle_call",
+      "state",
+      "design"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.elixir"
+  },
+  {
+    "ref_id": "methodology:elixir:diagnose-a-mailbox-backup",
+    "type": "methodology",
+    "title": "Diagnose a GenServer mailbox backup",
+    "summary": "Trace timeouts and growing memory to a process whose serial loop is blocked on slow work.",
+    "domains": [
+      "elixir",
+      "otp",
+      "phoenix",
+      "beam"
+    ],
+    "triggers": [
+      "mailbox",
+      "backup",
+      "timeout",
+      "diagnose",
+      "blocking",
+      "queue"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.elixir"
+  },
+  {
+    "ref_id": "methodology:elixir:verify-supervision-recovery",
+    "type": "methodology",
+    "title": "Verify supervision and crash recovery",
+    "summary": "Confirm a crashing process is restarted to a known state and that the restart strategy matches dependencies.",
+    "domains": [
+      "elixir",
+      "otp",
+      "phoenix",
+      "beam"
+    ],
+    "triggers": [
+      "supervision",
+      "recovery",
+      "restart",
+      "crash",
+      "strategy",
+      "verify"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.elixir"
+  },
+  {
+    "ref_id": "knowledge:elixir:process-and-actor-model",
+    "type": "knowledge",
+    "title": "The BEAM process and actor model",
+    "summary": "BEAM processes are cheap, isolated, and share nothing; they communicate only by asynchronous message passing.",
+    "domains": [
+      "elixir",
+      "otp",
+      "phoenix",
+      "beam"
+    ],
+    "triggers": [
+      "process",
+      "actor",
+      "message",
+      "isolation",
+      "mailbox",
+      "beam"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.elixir"
+  },
+  {
+    "ref_id": "knowledge:elixir:let-it-crash-philosophy",
+    "type": "knowledge",
+    "title": "Let it crash and supervision",
+    "summary": "OTP favors letting a process fail fast on unexpected state and relying on a supervisor to restart it to a known good state.",
+    "domains": [
+      "elixir",
+      "otp",
+      "phoenix",
+      "beam"
+    ],
+    "triggers": [
+      "let-it-crash",
+      "supervision",
+      "fault",
+      "restart",
+      "isolation",
+      "recover"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.elixir"
+  },
+  {
+    "ref_id": "knowledge:elixir:genserver-call-vs-cast",
+    "type": "knowledge",
+    "title": "GenServer call vs cast and the serial loop",
+    "summary": "call is synchronous with a reply and timeout; cast is fire-and-forget; both run in a single serial message loop.",
+    "domains": [
+      "elixir",
+      "otp",
+      "phoenix",
+      "beam"
+    ],
+    "triggers": [
+      "genserver",
+      "call",
+      "cast",
+      "synchronous",
+      "timeout",
+      "serial"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.elixir"
+  },
+  {
+    "ref_id": "knowledge:elixir:phoenix-liveview-lifecycle",
+    "type": "knowledge",
+    "title": "The Phoenix LiveView process lifecycle",
+    "summary": "A LiveView mounts twice (static then connected), runs as a stateful process per socket, and re-renders from assigns.",
+    "domains": [
+      "elixir",
+      "otp",
+      "phoenix",
+      "beam"
+    ],
+    "triggers": [
+      "liveview",
+      "phoenix",
+      "mount",
+      "socket",
+      "assign",
+      "lifecycle"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.elixir"
+  },
+  {
+    "ref_id": "skill:elixir:review-process-and-supervision-design",
+    "type": "skill",
+    "title": "Review process and supervision design",
+    "summary": "Read Elixir code and report unsupervised processes, blocking GenServer loops, and faked shared state.",
+    "domains": [
+      "elixir",
+      "otp",
+      "phoenix",
+      "beam"
+    ],
+    "triggers": [
+      "review",
+      "process",
+      "supervision",
+      "genserver",
+      "blocking",
+      "inspect"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.elixir"
+  },
+  {
+    "ref_id": "skill:elixir:audit-input-safety-and-deps",
+    "type": "skill",
+    "title": "Audit atom safety and Mix dependencies",
+    "summary": "Scan for unsafe atom creation from input and check Mix dependency pinning and lock state.",
+    "domains": [
+      "elixir",
+      "otp",
+      "phoenix",
+      "beam"
+    ],
+    "triggers": [
+      "audit",
+      "atom",
+      "input",
+      "mix",
+      "deps",
+      "lock"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.elixir"
+  }
+]

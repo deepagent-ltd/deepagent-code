@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:robot:why-real-time-matters",
+  "type": "knowledge",
+  "title": "Why real-time determinism matters",
+  "description": "Control stability depends on meeting deadlines consistently; in real-time systems a late-but-correct result is a failure, unlike ordinary software.",
+  "body": "Use when reasoning about timing requirements for control. A feedback controller is tuned for a fixed sample period; if the loop runs late or with high jitter, the control math no longer matches reality and the system can oscillate or go unstable. Unlike typical software where slower is just slower, a real-time miss is a correctness and safety failure, so worst-case execution time (WCET), not average, is what matters. Do not optimize for average latency while ignoring tail spikes. Actions: bound WCET, use real-time scheduling, and remove nondeterministic work from the loop. Validation signals include a WCET measurement under load below the period. Risk boundary: relying on average timing hides rare deadline misses that destabilize control; treat tail jitter as the metric that gates hardware use.",
+  "domain": "robotics",
+  "scope_hint": "code.robotics:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.robotics",
+  "pack_id": "code.robotics"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:sys:bound-memory-against-oom",
+  "type": "strategy",
+  "title": "Bound memory growth to avoid the OOM killer",
+  "description": "Cap buffers and in-flight work and stream large inputs so the process cannot grow until the kernel kills it.",
+  "body": "Use when processing inputs of unknown size or accumulating state. Do not read an entire large file/response into memory or grow an unbounded cache, because under load resident memory climbs until the kernel OOM-killer terminates the process (often the largest, not the guilty one). Actions: stream large inputs in fixed chunks, bound caches and queues with eviction, and size against the worst-case input and the host/cgroup memory limit. Validation signals include flat RSS under large inputs and no OOM kills in a sustained load test. Risk boundary: unbounded buffering is a crash-under-load hazard; if a fix changes what is dropped or evicted, confirm it cannot lose committed data and escalate if it does.",
+  "domain": "systems",
+  "scope_hint": "code.systems:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.systems",
+  "pack_id": "code.systems"
+}

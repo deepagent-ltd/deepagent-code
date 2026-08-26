@@ -1,0 +1,607 @@
+[
+  {
+    "ref_id": "knowledge:review:finding-minimum-fields",
+    "type": "knowledge",
+    "title": "Finding Minimum Fields",
+    "summary": "A useful review finding needs evidence location, failing condition, consequence, and remediation direction.",
+    "domains": [
+      "review",
+      "code"
+    ],
+    "triggers": [
+      "useful",
+      "review",
+      "finding",
+      "needs",
+      "evidence",
+      "location",
+      "failing",
+      "condition"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.review"
+  },
+  {
+    "ref_id": "knowledge:review:line-evidence-makes-actionable",
+    "type": "knowledge",
+    "title": "Line Evidence Makes Actionable",
+    "summary": "A finding needs a precise location and a behavior claim.",
+    "domains": [
+      "review",
+      "code"
+    ],
+    "triggers": [
+      "finding",
+      "needs",
+      "precise",
+      "location",
+      "behavior",
+      "claim",
+      "file",
+      "line"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.review"
+  },
+  {
+    "ref_id": "knowledge:review:missing-negative-tests-are-risk",
+    "type": "knowledge",
+    "title": "Missing Negative Tests Are Risk",
+    "summary": "Missing negative-path tests are residual risk, not always a confirmed bug.",
+    "domains": [
+      "review",
+      "code"
+    ],
+    "triggers": [
+      "missing",
+      "negative",
+      "path",
+      "tests",
+      "residual",
+      "risk",
+      "always",
+      "confirmed"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.review"
+  },
+  {
+    "ref_id": "knowledge:review:negative-path-evidence",
+    "type": "knowledge",
+    "title": "Negative Path Evidence",
+    "summary": "Review risk often lives in rejection, boundary, empty, retry, and permission paths rather than the happy path.",
+    "domains": [
+      "review",
+      "code"
+    ],
+    "triggers": [
+      "review",
+      "risk",
+      "often",
+      "lives",
+      "rejection",
+      "boundary",
+      "empty",
+      "retry"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.review"
+  },
+  {
+    "ref_id": "knowledge:review:review-mode-read-only",
+    "type": "knowledge",
+    "title": "Review Mode Read Only",
+    "summary": "A review task preserves evidence by avoiding source changes.",
+    "domains": [
+      "review",
+      "code"
+    ],
+    "triggers": [
+      "review",
+      "task",
+      "preserves",
+      "evidence",
+      "avoiding",
+      "source",
+      "changes"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.review"
+  },
+  {
+    "ref_id": "methodology:review:diff-callers-tests",
+    "type": "methodology",
+    "title": "Diff Callers Tests",
+    "summary": "Read the diff, inspect callers, then inspect tests.",
+    "domains": [
+      "review",
+      "code"
+    ],
+    "triggers": [
+      "read",
+      "diff",
+      "inspect",
+      "callers",
+      "then",
+      "tests",
+      "steps"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.review"
+  },
+  {
+    "ref_id": "methodology:review:finding-construction",
+    "type": "methodology",
+    "title": "Finding Construction",
+    "summary": "Build review findings from evidence to consequence.",
+    "domains": [
+      "review",
+      "code"
+    ],
+    "triggers": [
+      "build",
+      "review",
+      "findings",
+      "from",
+      "evidence",
+      "consequence",
+      "steps",
+      "capture"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.review"
+  },
+  {
+    "ref_id": "methodology:review:methodology",
+    "type": "methodology",
+    "title": "Methodology",
+    "summary": "Independent Review Worker Profile",
+    "domains": [
+      "review",
+      "code"
+    ],
+    "triggers": [
+      "independent",
+      "review",
+      "worker",
+      "profile",
+      "separate",
+      "pass",
+      "assess"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.review"
+  },
+  {
+    "ref_id": "methodology:review:no-findings-audit",
+    "type": "methodology",
+    "title": "No Findings Audit",
+    "summary": "When no defects are found, state residual risk explicitly.",
+    "domains": [
+      "review",
+      "code"
+    ],
+    "triggers": [
+      "when",
+      "defects",
+      "found",
+      "state",
+      "residual",
+      "risk",
+      "explicitly",
+      "steps"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.review"
+  },
+  {
+    "ref_id": "methodology:review:severity-ladder",
+    "type": "methodology",
+    "title": "Severity Ladder",
+    "summary": "Construct review severity from impact, likelihood, reachability, and recoverability before writing findings.",
+    "domains": [
+      "review",
+      "code"
+    ],
+    "triggers": [
+      "construct",
+      "review",
+      "severity",
+      "from",
+      "impact",
+      "likelihood",
+      "reachability",
+      "recoverability"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.review"
+  },
+  {
+    "ref_id": "skill:review:assemble-report",
+    "type": "skill",
+    "title": "Assemble Report",
+    "summary": "Assemble a findings-first review report with severity order, open questions, and residual risk.",
+    "domains": [
+      "review",
+      "code"
+    ],
+    "triggers": [
+      "assemble",
+      "findings",
+      "first",
+      "review",
+      "report",
+      "with",
+      "severity",
+      "order"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.review"
+  },
+  {
+    "ref_id": "skill:review:extract-line-evidence",
+    "type": "skill",
+    "title": "Extract Line Evidence",
+    "summary": "Collect precise source locations and surrounding behavior evidence for review findings.",
+    "domains": [
+      "review",
+      "code"
+    ],
+    "triggers": [
+      "collect",
+      "precise",
+      "source",
+      "locations",
+      "surrounding",
+      "behavior",
+      "evidence",
+      "review"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.review"
+  },
+  {
+    "ref_id": "skill:review:skill",
+    "type": "skill",
+    "title": "Skill",
+    "summary": "Produce Blocker Summary",
+    "domains": [
+      "review",
+      "code"
+    ],
+    "triggers": [
+      "produce",
+      "blocker",
+      "summary",
+      "release",
+      "tied"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.review"
+  },
+  {
+    "ref_id": "strategy:review:blocking-vs-residual-risk",
+    "type": "strategy",
+    "title": "Blocking Vs Residual Risk",
+    "summary": "Separate release-blocking defects from residual risks that need disclosure but not necessarily rejection.",
+    "domains": [
+      "review",
+      "code"
+    ],
+    "triggers": [
+      "separate",
+      "release",
+      "blocking",
+      "defects",
+      "from",
+      "residual",
+      "risks",
+      "that"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.review"
+  },
+  {
+    "ref_id": "strategy:review:contract-drift-check",
+    "type": "strategy",
+    "title": "Contract Drift Check",
+    "summary": "Look for behavior changes at exported boundaries.",
+    "domains": [
+      "review",
+      "code"
+    ],
+    "triggers": [
+      "look",
+      "behavior",
+      "changes",
+      "exported",
+      "boundaries",
+      "when",
+      "change",
+      "touches"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.review"
+  },
+  {
+    "ref_id": "strategy:review:findings-first",
+    "type": "strategy",
+    "title": "Findings First",
+    "summary": "Lead with verified defects, not summaries.",
+    "domains": [
+      "review",
+      "code"
+    ],
+    "triggers": [
+      "lead",
+      "with",
+      "verified",
+      "defects",
+      "summaries",
+      "review",
+      "should",
+      "confirmed"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.review"
+  },
+  {
+    "ref_id": "strategy:review:negative-path-audit",
+    "type": "strategy",
+    "title": "Negative Path Audit",
+    "summary": "Inspect rejection and boundary paths.",
+    "domains": [
+      "review",
+      "code"
+    ],
+    "triggers": [
+      "inspect",
+      "rejection",
+      "boundary",
+      "paths",
+      "check",
+      "invalid",
+      "input",
+      "empty"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.review"
+  },
+  {
+    "ref_id": "strategy:review:read-only-ground-truth",
+    "type": "strategy",
+    "title": "Read Only Ground Truth",
+    "summary": "Keep review work read-only and derive conclusions from diff, callers, tests, and runtime artifacts.",
+    "domains": [
+      "review",
+      "code"
+    ],
+    "triggers": [
+      "keep",
+      "review",
+      "work",
+      "read",
+      "only",
+      "derive",
+      "conclusions",
+      "from"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.review"
+  },
+  {
+    "ref_id": "strategy:review:severity-by-blast-radius",
+    "type": "strategy",
+    "title": "Severity By Blast Radius",
+    "summary": "Rank defects by impact, likelihood, and recoverability.",
+    "domains": [
+      "review",
+      "code"
+    ],
+    "triggers": [
+      "rank",
+      "defects",
+      "impact",
+      "likelihood",
+      "recoverability",
+      "rare",
+      "typo",
+      "equivalent"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.review"
+  },
+  {
+    "ref_id": "strategy:review:strategy",
+    "type": "strategy",
+    "title": "Strategy",
+    "summary": "Evidence Completeness Review",
+    "domains": [
+      "review",
+      "code"
+    ],
+    "triggers": [
+      "evidence",
+      "completeness",
+      "review",
+      "whether",
+      "claims",
+      "have",
+      "commands"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.review"
+  },
+  {
+    "ref_id": "strategy:review:test-claim-reconciliation",
+    "type": "strategy",
+    "title": "Test Claim Reconciliation",
+    "summary": "Verify whether claimed tests actually cover changed behavior.",
+    "domains": [
+      "review",
+      "code"
+    ],
+    "triggers": [
+      "verify",
+      "whether",
+      "claimed",
+      "tests",
+      "actually",
+      "cover",
+      "changed",
+      "behavior"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.review"
+  }
+]

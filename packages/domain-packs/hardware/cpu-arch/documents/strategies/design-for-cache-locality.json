@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:cpuarch:design-for-cache-locality",
+  "type": "strategy",
+  "title": "Design data layout for cache locality",
+  "description": "Lay out hot data so accesses are sequential and dense, maximizing cache-line and prefetcher utilization before touching SIMD or threads.",
+  "body": "Use when a hot loop is memory-bound and profiling shows high cache-miss rates. Do not jump to SIMD or threading before the access pattern is linear and dense. Actions: convert array-of-structs to struct-of-arrays when only some fields are hot, pad/align hot structures to cache-line boundaries, and inspect the stride so the hardware prefetcher can track it; verify with perf the L1/LLC miss rate drops. Validation signals include a measured reduction in cache misses and improved IPC on representative input, not just a faster microbenchmark. Risk boundary: layout changes ripple through every reader/writer; if the data is shared across modules, escalate and benchmark the whole workload before committing.",
+  "domain": "cpu_arch",
+  "scope_hint": "hardware.cpu-arch:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.cpu-arch",
+  "pack_id": "hardware.cpu-arch"
+}

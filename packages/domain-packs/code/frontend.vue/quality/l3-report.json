@@ -1,0 +1,35 @@
+{
+  "schema_version": "domain_pack_quality.v1",
+  "pack_id": "code.frontend.vue",
+  "maturity": "L3",
+  "counts": {
+    "strategy": 8,
+    "methodology": 5,
+    "knowledge": 8,
+    "skill": 4,
+    "memory": 0,
+    "failure_dossier": 5
+  },
+  "quality": {
+    "duplicate_ref": 0,
+    "weak_evidence": 0,
+    "failure_indexed": 0,
+    "thin_docs": 0
+  },
+  "l3_evidence": {
+    "activation_smoke": "evals/smoke/l3-smoke.json",
+    "retrieval_smoke": "pack-scoped activePackIds retrieval",
+    "validation_smoke": "Vue UI behavior L3 validation smoke",
+    "diagnosis_smoke": "Vue UI behavior diagnosis smoke"
+  },
+  "source_refs": [
+    "source:mdn-web-docs:paraphrased",
+    "source:web.dev:paraphrased"
+  ],
+  "structure_l3": true,
+  "validated_l3": true,
+  "activation_precision_checked": true,
+  "cross_pack_negative_checked": true,
+  "scaffold_ratio": 0,
+  "ablation_checked": false
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "knowledge:query:query-results-need-scope",
+  "type": "knowledge",
+  "description": "A deterministic result is only valid for the path, query, command, filters, branch, and time at which it was collected.",
+  "body": "Query results are scoped observations, not universal truths. A git diff is tied to a repository and working tree; a SQL result is tied to a database, transaction state, query, and permissions; a log finding is tied to a time range and file/source; a file search is tied to path and pattern. Answers should preserve this scope so users can judge whether the result applies. This reduces false certainty without adding model calls or heavy schema requirements. Use when a read-only query, count, list, status, diff, or inspection request must be answered from repository or tool evidence. Do not use when the user asks to edit, fix, deploy, migrate, delete, insert, update, or alter state. Actions: identify the exact scope, run read-only search or inspection tools, cite the source artifact, and preserve the command or file evidence used for the answer. Validation signals include matching counts against tool output, source references, scope labels, and no modified working-tree files. Risk boundary: stop or ask for confirmation if the task changes from query to mutation, if evidence is stale, or if the answer would expose secrets or excessive output.",
+  "domain": "query",
+  "scope_hint": "code.query:result-scope",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.query",
+  "pack_id": "code.query"
+}

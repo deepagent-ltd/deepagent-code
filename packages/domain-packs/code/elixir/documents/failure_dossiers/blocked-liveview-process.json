@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:elixir:blocked-liveview-process",
+  "type": "failure_dossier",
+  "description": "A LiveView event handler runs slow work synchronously, freezing that connection's process and the user's UI.",
+  "body": "Failure mode: a Phoenix LiveView handle_event or connected mount performs a slow query or external call inline, and since each LiveView is a process per socket, that process blocks, the diff-based re-render stalls, and the user's page becomes unresponsive; at scale blocked processes occupy schedulers. Detection signals: UI freezes during an action; slow synchronous calls in handle_event/mount; scheduler utilization spikes under many users. Do not block the LiveView process. Safer fallback: offload heavy work to a Task and send the result back to assign, defer work to the connected mount via connected?/2, use streams/temporary assigns for large data, and test mount and events with Phoenix.LiveViewTest.",
+  "domain": "elixir",
+  "scope_hint": "code.elixir:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.elixir:human_authored",
+  "pack_id": "code.elixir"
+}

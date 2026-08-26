@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:electron:sign-and-secure-auto-update",
+  "type": "strategy",
+  "title": "Code-sign and secure auto-update",
+  "description": "Distribute signed builds and serve updates over HTTPS with signature verification so the update channel cannot be hijacked.",
+  "body": "Use when shipping an app with auto-update. Do not ship unsigned binaries or fetch updates over plain HTTP, and do not skip notarization on macOS. Actions: code-sign (and notarize on macOS) every build, serve update feeds and artifacts over HTTPS, let the updater verify signatures before applying, and pin the update host. Validation signals include the OS accepting the signed app without warnings and the updater rejecting a tampered artifact. Risk boundary: an unsigned or HTTP update channel lets an attacker push malicious code to every user as a 'legitimate' update — the update path is high-value and must be signed and integrity-checked end to end.",
+  "domain": "electron",
+  "scope_hint": "code.desktop.electron:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.desktop.electron",
+  "pack_id": "code.desktop.electron"
+}

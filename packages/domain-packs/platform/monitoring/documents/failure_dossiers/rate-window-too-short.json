@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:mon:rate-window-too-short",
+  "type": "failure_dossier",
+  "description": "rate() is applied over a window near the scrape interval, returning gaps or noise that blind alerts.",
+  "body": "Failure mode: a rate() or increase() query uses a window at or below the scrape interval, so too few samples fall in range and the result is empty or wildly noisy, silently blinding any dashboard or alert built on it. Detection signals: a rate panel showing gaps or zero where traffic exists; alerts that never fire because their query returns empty; noise that scales with sparse scrapes. Do not rate over a sub-interval window. Safer fallback: use a window spanning at least four scrape intervals and confirm the result is stable and gap-free.",
+  "domain": "monitoring",
+  "scope_hint": "platform.monitoring:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.monitoring:human_authored",
+  "pack_id": "platform.monitoring"
+}

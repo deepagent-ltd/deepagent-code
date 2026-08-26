@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:bazel:declare-narrow-explicit-deps",
+  "type": "strategy",
+  "title": "Declare narrow, explicit dependencies",
+  "description": "List exactly the targets a rule needs in deps so the action graph is precise and incremental rebuilds stay small.",
+  "body": "Use when adding a target or fixing missing-dependency errors. Do not depend on a broad umbrella target to pull in everything. Actions: add only the specific libraries the target compiles or links against; remove deps that are no longer used; let transitive deps come through the targets that own them. Validation signals include a small rebuild after a localized change and bazel query showing only intended edges. Risk boundary: an over-broad dependency forces large rebuilds and hides real coupling, so keep the graph tight and verify edges with query.",
+  "domain": "bazel",
+  "scope_hint": "code.build.bazel:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.build.bazel",
+  "pack_id": "code.build.bazel"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:cmake:choose-find-package-vs-fetchcontent",
+  "type": "methodology",
+  "title": "Decide between find_package and FetchContent",
+  "description": "A decision procedure for whether a dependency should be discovered from the system or fetched and built as part of the project.",
+  "body": "Use when adding a third-party dependency and choosing how to obtain it. Do not mix both approaches for the same dependency without a fallback order. Steps: prefer find_package when the dependency is reliably installed and versioned on target systems; choose FetchContent to vendor and build a specific pinned version for hermeticity; consider find_package with a FetchContent fallback for portability. Validation signals include a build that succeeds on a clean machine with the intended version. Risk boundary: FetchContent pins a version, so update deliberately and review for supply-chain trust before fetching.",
+  "domain": "cmake",
+  "scope_hint": "code.build.cmake:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.build.cmake",
+  "pack_id": "code.build.cmake"
+}

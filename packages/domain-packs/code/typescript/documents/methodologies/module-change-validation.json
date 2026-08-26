@@ -1,0 +1,11 @@
+{
+  "ref_id": "methodology:typescript:module-change-validation",
+  "type": "methodology",
+  "description": "Validate both compiler and runtime behavior after module changes.",
+  "body": "Steps: inspect tsconfig/package exports; typecheck; run import path tests or build; check generated declarations if published.\n\nEvidence boundary: apply only when current task, repository, or validation evidence matches this pack boundary. Do not override a more specific pack or explicit project contract. Use when TypeScript / JavaScript work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: follow the ordered review, edit, and validation sequence; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "javascript",
+  "scope_hint": "code.typescript:methodologies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.typescript",
+  "pack_id": "code.typescript"
+}

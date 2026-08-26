@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:prompt:locale-assumption-pitfalls",
+  "type": "knowledge",
+  "title": "Locale assumption pitfalls",
+  "description": "Hardcoded language, date, number, and currency formats silently mis-serve other regions and break when the input locale differs.",
+  "body": "Use when a prompt or its output is locale-sensitive. Common pitfalls: hardcoding English instructions, assuming MM/DD dates or period decimal separators, fixing one currency, or assuming the output language matches the system language rather than the user's. These produce confidently wrong, mislocalized output for other regions. Do not bake one locale into the template, and avoid inferring locale from the model. Actions: pass locale explicitly, select localized fragments, and format per locale. Validation signals include tests across locales that formatting and output language follow the injected locale. Risk boundary: a hardcoded locale mis-serving users is a quality defect; treat locale as an explicit input.",
+  "domain": "prompt_pipeline",
+  "scope_hint": "code.prompt-pipeline:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.prompt-pipeline",
+  "pack_id": "code.prompt-pipeline"
+}

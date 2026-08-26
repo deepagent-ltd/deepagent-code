@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:vsearch:match-query-and-index-embedder",
+  "type": "strategy",
+  "title": "Embed queries with the exact index model",
+  "description": "Use the identical embedding model and version for queries that built the index, since mismatched encoders place vectors in incomparable spaces.",
+  "body": "Use when issuing queries against a vector index. Do not embed the query with a different model, version, or pooling than the one that encoded the corpus — the two live in different spaces and similarity becomes meaningless. Actions: pin the embedding model id and version, route query and indexing through the same encoder, and verify a known query retrieves its known match. Validation signals include a query/index model-version match recorded in config and a smoke query returning its expected neighbor. Risk boundary: a silent encoder mismatch collapses recall with no error; if the index model version is unknown, deny querying and escalate to re-embed against a confirmed model.",
+  "domain": "vector_search",
+  "scope_hint": "code.vector-search:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.vector-search",
+  "pack_id": "code.vector-search"
+}

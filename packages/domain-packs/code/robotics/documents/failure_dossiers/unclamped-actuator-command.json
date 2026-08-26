@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:robot:unclamped-actuator-command",
+  "type": "failure_dossier",
+  "description": "Sending an actuator command that exceeds position, velocity, or torque limits because no final-stage clamp guards the hardware.",
+  "body": "Failure mode: an upstream controller or planner produces a command beyond the actuator's safe envelope and it reaches the hardware interface without a final limit check, driving the joint past its range or applying damaging torque. Detection signals: telemetry shows commands outside the rated envelope; sustained actuator saturation; an injected out-of-range command reaches the hardware unmodified. Do not trust upstream stages to respect limits. Safer fallback: define per-actuator position/velocity/acceleration/torque limits, clamp every command at the last stage before the hardware interface, treat sustained saturation as a fault, and test that an injected out-of-range command is clamped and flagged.",
+  "domain": "robotics",
+  "scope_hint": "code.robotics:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.robotics:human_authored",
+  "pack_id": "code.robotics"
+}

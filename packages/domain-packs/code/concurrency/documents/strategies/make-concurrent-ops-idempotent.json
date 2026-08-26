@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:conc:make-concurrent-ops-idempotent",
+  "type": "strategy",
+  "title": "Make concurrently-reachable operations idempotent",
+  "description": "Design operations so a duplicate or retried concurrent execution produces the same end state, not a double effect.",
+  "body": "Use when an operation can be triggered more than once concurrently (retries, at-least-once delivery, double-submit). Do not assume a check-then-act sequence runs alone; two callers can both pass the check. Actions: use a unique operation key with an atomic insert-if-absent, a conditional/compare-and-set update, or a dedupe table so a repeat is a no-op; make the effect derive from the key, not from call count. Validation signals include a concurrent test firing the same operation many times in parallel and the final state being applied exactly once. Risk boundary: a non-idempotent side effect (charge, increment, send) reachable concurrently is a correctness hazard; gate it behind a uniqueness guard and prove it under load.",
+  "domain": "concurrency",
+  "scope_hint": "code.concurrency:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.concurrency",
+  "pack_id": "code.concurrency"
+}

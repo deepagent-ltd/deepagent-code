@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:cache:stale-after-write",
+  "type": "failure_dossier",
+  "description": "A write updates the store but readers keep the old cached value, or a write-behind entry is lost on crash.",
+  "body": "Failure mode: with write-behind or a missed invalidation, a write updates the store while readers keep getting the old cached value, or an unflushed write-behind entry is lost on crash. Detection signals: users see their own update missing on reload; reconciliation finds cache and store disagree; lost writes after a restart. Do not use write-behind for data that must survive a crash. Safer fallback: invalidate or update the key synchronously on write, add a backstop TTL, and use write-through where durability matters.",
+  "domain": "caching",
+  "scope_hint": "code.caching:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.caching:human_authored",
+  "pack_id": "code.caching"
+}

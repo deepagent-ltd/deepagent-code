@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:crypto:nonce-iv-reuse",
+  "type": "failure_dossier",
+  "description": "Reusing a nonce or IV across two messages under the same key, collapsing the confidentiality and integrity of the cipher.",
+  "body": "Failure mode: a fixed, zero, or restart-reset nonce/IV is used for more than one message under one key, so for stream/GCM ciphers an attacker can XOR ciphertexts to recover plaintext and may forge authentication tags. Detection signals: the nonce source is constant or derived from low-entropy data; a counter resets on process restart; two ciphertexts share a nonce. Do not let any (key, nonce) pair repeat. Safer fallback: use a persisted increasing counter or sufficiently wide random nonce, rotate the key before nonce exhaustion, or adopt a misuse-resistant mode (AES-GCM-SIV), and test that no nonce repeats across restarts.",
+  "domain": "cryptography",
+  "scope_hint": "code.cryptography:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.cryptography:human_authored",
+  "pack_id": "code.cryptography"
+}

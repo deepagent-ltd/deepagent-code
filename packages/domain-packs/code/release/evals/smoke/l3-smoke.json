@@ -1,0 +1,74 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.release",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "operate",
+    "code_domains": [
+      "code",
+      "release",
+      "delivery"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.release: deployments, production-impacting code, feature flags, traffic shift, rollback, artifacts, versioning, and incidents"
+    ],
+    "round_signals": [
+      "l3_validation_smoke"
+    ],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "round_signals": [],
+    "user_overrides": [],
+    "repo_signals": [
+      "fix CSS layout shift and improve Largest Contentful Paint"
+    ]
+  },
+  "retrieval_query": "semver changelog release artifact provenance staged canary rollout rollback tag build",
+  "expected_pack_id": "code.release",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "release and production change safety L3 validation smoke",
+    "signals": [
+      "dry-run output",
+      "artifact checks",
+      "rollout/rollback plan",
+      "observability baseline",
+      "changelog/version checks",
+      "and owner approval"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "release and production change safety diagnosis smoke",
+    "signals": [
+      "separate build artifact",
+      "config",
+      "traffic",
+      "external state",
+      "monitoring",
+      "and rollback failures"
+    ]
+  },
+  "source_refs": [
+    "source:kubernetes-docs:paraphrased",
+    "source:github-actions-docs:paraphrased"
+  ]
+}

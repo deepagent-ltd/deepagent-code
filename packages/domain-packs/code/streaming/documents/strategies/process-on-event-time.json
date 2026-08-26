@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:stream:process-on-event-time",
+  "type": "strategy",
+  "title": "Compute on event time, not processing time",
+  "description": "Window and aggregate by the event's own timestamp so results are deterministic regardless of when records arrive or are reprocessed.",
+  "body": "Use when aggregations must be correct under delays and replays. Do not window on processing time when events can arrive late or out of order — the same input produces different results on replay and during catch-up. Actions: extract the event timestamp, assign watermarks, and key windows on event time so a backfill reproduces live results. Validation signals include identical aggregates between a live run and a replay of the same events, and windows whose contents match the event timestamps. Risk boundary: processing-time windows make a reprocessed pipeline disagree with the original; if event time is unavailable, escalate to source the timestamp before building time-based logic.",
+  "domain": "streaming",
+  "scope_hint": "code.streaming:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.streaming",
+  "pack_id": "code.streaming"
+}

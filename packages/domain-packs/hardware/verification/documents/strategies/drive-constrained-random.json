@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:hwverif:drive-constrained-random",
+  "type": "strategy",
+  "title": "Drive stimulus with constrained-random sequences",
+  "description": "Randomize transactions within legal constraints to explore the state space faster than directed tests alone.",
+  "body": "Use when the input space is too large for hand-written directed tests. Do not rely solely on directed cases, since they only hit the scenarios you already imagined. Actions: define legal constraints on transaction fields, randomize sequences across many seeds, and verify coverage rises as runs accumulate. Validation signals include functional coverage climbing across the regression and constraints rejecting illegal stimulus. Risk boundary: over-constraining the randomization can hide bugs in untouched corners, so escalate to constraint review when coverage plateaus below target.",
+  "domain": "hw_verification",
+  "scope_hint": "hardware.verification:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.verification",
+  "pack_id": "hardware.verification"
+}

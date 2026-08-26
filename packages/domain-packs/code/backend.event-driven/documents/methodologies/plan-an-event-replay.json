@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:evt:plan-an-event-replay",
+  "type": "methodology",
+  "title": "Plan an event replay",
+  "description": "Re-process historical events safely by relying on consumer idempotency, isolating side effects, and bounding scope.",
+  "body": "Steps: 1. Confirm target consumers are idempotent so reprocessing does not double-apply. 2. Identify side effects that must NOT re-fire on replay (emails, charges) and gate or disable them. 3. Choose the replay window (offset/timestamp range) and run against a rebuilt read model or a shadow target first. 4. Compare rebuilt state to current before cutover. 5. Re-enable live consumption. Rollback point: replay into a shadow store, not production state. Validation: replayed state matches expected, no external side effect re-fired, confirmed by a dry-run diff.",
+  "domain": "event_driven",
+  "scope_hint": "code.backend.event-driven:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.event-driven",
+  "pack_id": "code.backend.event-driven"
+}

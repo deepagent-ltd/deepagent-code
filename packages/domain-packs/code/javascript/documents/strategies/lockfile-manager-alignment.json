@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:runtime_javascript:lockfile-manager-alignment",
+  "type": "strategy",
+  "description": "Use the package manager implied by the lockfile and workspace metadata.",
+  "body": "Use when installing, testing, or updating dependencies in JavaScript repositories. Do not mix package managers or regenerate lockfiles from a different tool unless the task explicitly migrates managers. Detect lockfile and packageManager fields, run package-local commands with the same manager, and leave unrelated lockfile churn out. Verify changed dependency graph with the manager-specific install or test command. Risk is non-reproducible installs and CI cache misses. Use when JavaScript Runtime and Tooling work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: choose the smallest direction that preserves the domain contract; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "javascript",
+  "scope_hint": "code.javascript:strategys",
+  "evidence_strength": "medium",
+  "provenance_tag": "code.javascript:seed:official_docs_and_common_tooling_behavior:paraphrased",
+  "pack_id": "code.javascript"
+}

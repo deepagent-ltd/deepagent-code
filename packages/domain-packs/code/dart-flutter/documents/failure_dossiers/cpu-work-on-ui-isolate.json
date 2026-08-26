@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:flutter:cpu-work-on-ui-isolate",
+  "type": "failure_dossier",
+  "description": "CPU-heavy work runs on the UI isolate, blocking the event loop and dropping frames even though it is in an async function.",
+  "body": "Failure mode: a large JSON parse, image transform, or crypto loop runs synchronously on the UI isolate, and because async/await does not parallelize CPU work, the event loop is blocked, frames are missed, and the app janks or freezes during the operation. Detection signals: DevTools shows long UI-isolate stalls and frames over budget; the work is heavy and synchronous despite being awaited; the UI freezes during the action. Do not run CPU-bound work on the UI isolate. Safer fallback: offload it to a background isolate with compute() or Isolate.run, stream results back to update state, design isolate message payloads to limit copying, and re-profile to confirm frames return under budget.",
+  "domain": "dart",
+  "scope_hint": "code.dart-flutter:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.dart-flutter:human_authored",
+  "pack_id": "code.dart-flutter"
+}

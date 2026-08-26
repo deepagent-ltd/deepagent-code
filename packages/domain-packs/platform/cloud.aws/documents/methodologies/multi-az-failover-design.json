@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:aws:multi-az-failover-design",
+  "type": "methodology",
+  "title": "Design and verify multi-AZ failover for AWS workloads",
+  "description": "Map each component to AZ-redundant equivalents, then prove failover by draining an AZ rather than assuming redundancy.",
+  "body": "Use when a workload must survive an AZ impairment. Do not assume a single-AZ RDS or one-subnet ASG is highly available. Actions: inventory every stateful component (RDS Multi-AZ, ElastiCache, EFS) and stateless tier (ASG/ECS across >=2 AZs behind an ALB), confirm subnets span AZs, and run a game-day that cordons one AZ's targets to observe failover. Validation signals include the ALB shifting traffic to healthy AZs, RDS completing a Multi-AZ failover within its window, and SLO error budget holding during the drill. Risk boundary: executing an AZ-drain game day against production is human-gated and scheduled.",
+  "domain": "aws",
+  "scope_hint": "platform.cloud.aws:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.aws",
+  "pack_id": "platform.cloud.aws"
+}

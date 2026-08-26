@@ -1,0 +1,675 @@
+[
+  {
+    "ref_id": "knowledge:kotlin:data-class-copy-is-shallow",
+    "type": "knowledge",
+    "title": "Data Class Copy Is Shallow",
+    "summary": "copy duplicates the data class instance but keeps nested mutable references shared.",
+    "domains": [
+      "kotlin",
+      "code",
+      "jvm",
+      "gradle",
+      "android"
+    ],
+    "triggers": [
+      "copy",
+      "duplicates",
+      "data",
+      "class",
+      "instance",
+      "keeps",
+      "nested",
+      "mutable"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.kotlin"
+  },
+  {
+    "ref_id": "knowledge:kotlin:gradle-kotlin-dsl-is-compiled",
+    "type": "knowledge",
+    "title": "Gradle Kotlin Dsl Is Compiled",
+    "summary": "build.gradle.kts is Kotlin code compiled during Gradle configuration and fails with type-safe accessor or plugin errors.",
+    "domains": [
+      "kotlin",
+      "code",
+      "jvm",
+      "gradle",
+      "android"
+    ],
+    "triggers": [
+      "build",
+      "gradle",
+      "kotlin",
+      "code",
+      "compiled",
+      "during",
+      "configuration"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.kotlin"
+  },
+  {
+    "ref_id": "knowledge:kotlin:inline-reified-limits",
+    "type": "knowledge",
+    "title": "Inline Reified Limits",
+    "summary": "reified type parameters require inline functions and affect call sites and public API shape.",
+    "domains": [
+      "kotlin",
+      "code",
+      "jvm",
+      "gradle",
+      "android"
+    ],
+    "triggers": [
+      "reified",
+      "type",
+      "parameters",
+      "require",
+      "inline",
+      "functions",
+      "affect",
+      "call"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.kotlin"
+  },
+  {
+    "ref_id": "knowledge:kotlin:kotlin-classes-final-by-default",
+    "type": "knowledge",
+    "title": "Kotlin Classes Final By Default",
+    "summary": "Kotlin classes and methods are final unless opened by modifier or compiler plugin.",
+    "domains": [
+      "kotlin",
+      "code",
+      "jvm",
+      "gradle",
+      "android"
+    ],
+    "triggers": [
+      "kotlin",
+      "classes",
+      "methods",
+      "final",
+      "unless",
+      "opened",
+      "modifier",
+      "compiler"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.kotlin"
+  },
+  {
+    "ref_id": "knowledge:kotlin:launch-errors-need-scope-handling",
+    "type": "knowledge",
+    "title": "Launch Errors Need Scope Handling",
+    "summary": "Exceptions in launch propagate through the coroutine scope, while async stores failures until await.",
+    "domains": [
+      "kotlin",
+      "code",
+      "jvm",
+      "gradle",
+      "android"
+    ],
+    "triggers": [
+      "exceptions",
+      "launch",
+      "propagate",
+      "through",
+      "coroutine",
+      "scope",
+      "while",
+      "async"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.kotlin"
+  },
+  {
+    "ref_id": "knowledge:kotlin:platform-types-are-uncertain",
+    "type": "knowledge",
+    "title": "Platform Types Are Uncertain",
+    "summary": "Kotlin platform types from Java can behave as nullable or non-null and need explicit boundary handling.",
+    "domains": [
+      "kotlin",
+      "code",
+      "jvm",
+      "gradle",
+      "android"
+    ],
+    "triggers": [
+      "kotlin",
+      "platform",
+      "types",
+      "from",
+      "java",
+      "behave",
+      "nullable",
+      "null"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.kotlin"
+  },
+  {
+    "ref_id": "knowledge:kotlin:source-sets-define-visibility",
+    "type": "knowledge",
+    "title": "Source Sets Define Visibility",
+    "summary": "Kotlin source sets determine which APIs and dependencies are visible to production, test, Android, or common code.",
+    "domains": [
+      "kotlin",
+      "code",
+      "jvm",
+      "gradle",
+      "android"
+    ],
+    "triggers": [
+      "kotlin",
+      "source",
+      "sets",
+      "determine",
+      "which",
+      "apis",
+      "dependencies",
+      "visible"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.kotlin"
+  },
+  {
+    "ref_id": "knowledge:kotlin:suspend-does-not-choose-thread",
+    "type": "knowledge",
+    "title": "Suspend Does Not Choose Thread",
+    "summary": "A suspend function can suspend without implying IO, background execution, or a dispatcher switch.",
+    "domains": [
+      "kotlin",
+      "code",
+      "jvm",
+      "gradle",
+      "android"
+    ],
+    "triggers": [
+      "suspend",
+      "function",
+      "without",
+      "implying",
+      "background",
+      "execution",
+      "dispatcher"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.kotlin"
+  },
+  {
+    "ref_id": "methodology:kotlin:coroutine-failure-trace",
+    "type": "methodology",
+    "title": "Coroutine Failure Trace",
+    "summary": "Trace coroutine failures through scope, dispatcher, exception handler, and cancellation.",
+    "domains": [
+      "kotlin",
+      "code",
+      "jvm",
+      "gradle",
+      "android"
+    ],
+    "triggers": [
+      "trace",
+      "coroutine",
+      "failures",
+      "through",
+      "scope",
+      "dispatcher",
+      "exception",
+      "handler"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.kotlin"
+  },
+  {
+    "ref_id": "methodology:kotlin:gradle-dsl-change-check",
+    "type": "methodology",
+    "title": "Gradle Dsl Change Check",
+    "summary": "Validate build script edits through configuration and the affected task, not syntax reading alone.",
+    "domains": [
+      "kotlin",
+      "code",
+      "jvm",
+      "gradle",
+      "android"
+    ],
+    "triggers": [
+      "validate",
+      "build",
+      "script",
+      "edits",
+      "through",
+      "configuration",
+      "affected",
+      "task"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.kotlin"
+  },
+  {
+    "ref_id": "methodology:kotlin:kotlin-gradle-validation-loop",
+    "type": "methodology",
+    "title": "Kotlin Gradle Validation Loop",
+    "summary": "Map changed files to Gradle source sets and run compile/test tasks in widening order.",
+    "domains": [
+      "kotlin",
+      "code",
+      "jvm",
+      "gradle",
+      "android"
+    ],
+    "triggers": [
+      "changed",
+      "files",
+      "gradle",
+      "source",
+      "sets",
+      "compile",
+      "test",
+      "tasks"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.kotlin"
+  },
+  {
+    "ref_id": "methodology:kotlin:nullability-interop-audit",
+    "type": "methodology",
+    "title": "Nullability Interop Audit",
+    "summary": "Audit nullable values crossing Java, JSON, database, or Android bundle boundaries.",
+    "domains": [
+      "kotlin",
+      "code",
+      "jvm",
+      "gradle",
+      "android"
+    ],
+    "triggers": [
+      "audit",
+      "nullable",
+      "values",
+      "crossing",
+      "java",
+      "json",
+      "database",
+      "android"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.kotlin"
+  },
+  {
+    "ref_id": "skill:kotlin:debug-coroutine-lifecycle",
+    "type": "skill",
+    "title": "Debug Coroutine Lifecycle",
+    "summary": "Trace coroutine scope, dispatcher, cancellation, and exception propagation for hangs or missing work.",
+    "domains": [
+      "kotlin",
+      "code",
+      "jvm",
+      "gradle",
+      "android"
+    ],
+    "triggers": [
+      "trace",
+      "coroutine",
+      "scope",
+      "dispatcher",
+      "cancellation",
+      "exception",
+      "propagation",
+      "hangs"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.kotlin"
+  },
+  {
+    "ref_id": "skill:kotlin:run-kotlin-gradle-gate",
+    "type": "skill",
+    "title": "Run Kotlin Gradle Gate",
+    "summary": "Map Kotlin changes to Gradle module tasks and run compile/test gates.",
+    "domains": [
+      "kotlin",
+      "code",
+      "jvm",
+      "gradle",
+      "android"
+    ],
+    "triggers": [
+      "kotlin",
+      "changes",
+      "gradle",
+      "module",
+      "tasks",
+      "compile",
+      "test",
+      "gates"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.kotlin"
+  },
+  {
+    "ref_id": "skill:kotlin:triage-kotlin-nullability",
+    "type": "skill",
+    "title": "Triage Kotlin Nullability",
+    "summary": "Find the nullable boundary owner and replace assertion fixes with contract-aware handling.",
+    "domains": [
+      "kotlin",
+      "code",
+      "jvm",
+      "gradle",
+      "android"
+    ],
+    "triggers": [
+      "find",
+      "nullable",
+      "boundary",
+      "owner",
+      "replace",
+      "assertion",
+      "fixes",
+      "with"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.kotlin"
+  },
+  {
+    "ref_id": "strategy:lang_kotlin:android-jvm-boundary-check",
+    "type": "strategy",
+    "title": "Android Jvm Boundary Check",
+    "summary": "Distinguish pure JVM Kotlin from Android source sets and lifecycle constraints.",
+    "domains": [
+      "kotlin",
+      "code",
+      "jvm",
+      "gradle",
+      "android"
+    ],
+    "triggers": [
+      "distinguish",
+      "pure",
+      "kotlin",
+      "from",
+      "android",
+      "source",
+      "sets",
+      "lifecycle"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.kotlin"
+  },
+  {
+    "ref_id": "strategy:lang_kotlin:coroutine-structured-concurrency",
+    "type": "strategy",
+    "title": "Coroutine Structured Concurrency",
+    "summary": "Keep coroutine lifetime tied to an explicit scope and cancellation boundary.",
+    "domains": [
+      "kotlin",
+      "code",
+      "jvm",
+      "gradle",
+      "android"
+    ],
+    "triggers": [
+      "keep",
+      "coroutine",
+      "lifetime",
+      "tied",
+      "explicit",
+      "scope",
+      "cancellation",
+      "boundary"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.kotlin"
+  },
+  {
+    "ref_id": "strategy:lang_kotlin:dsl-version-catalog-preserve",
+    "type": "strategy",
+    "title": "Dsl Version Catalog Preserve",
+    "summary": "Follow existing build.gradle.kts and libs.versions.toml patterns when changing dependencies or plugins.",
+    "domains": [
+      "kotlin",
+      "code",
+      "jvm",
+      "gradle",
+      "android"
+    ],
+    "triggers": [
+      "follow",
+      "existing",
+      "build",
+      "gradle",
+      "libs",
+      "versions",
+      "toml",
+      "patterns"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.kotlin"
+  },
+  {
+    "ref_id": "strategy:lang_kotlin:gradle-task-locality",
+    "type": "strategy",
+    "title": "Gradle Task Locality",
+    "summary": "Run the narrow Gradle task for the owning module before broad workspace gates.",
+    "domains": [
+      "kotlin",
+      "code",
+      "jvm",
+      "gradle",
+      "android"
+    ],
+    "triggers": [
+      "narrow",
+      "gradle",
+      "task",
+      "owning",
+      "module",
+      "before",
+      "broad",
+      "workspace"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.kotlin"
+  },
+  {
+    "ref_id": "strategy:lang_kotlin:java-interop-explicit-boundary",
+    "type": "strategy",
+    "title": "Java Interop Explicit Boundary",
+    "summary": "Treat Java calls as nullable and exception-bearing until Kotlin annotations and tests prove otherwise.",
+    "domains": [
+      "kotlin",
+      "code",
+      "jvm",
+      "gradle",
+      "android"
+    ],
+    "triggers": [
+      "treat",
+      "java",
+      "calls",
+      "nullable",
+      "exception",
+      "bearing",
+      "until",
+      "kotlin"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.kotlin"
+  },
+  {
+    "ref_id": "strategy:lang_kotlin:nullability-owner-fix",
+    "type": "strategy",
+    "title": "Nullability Owner Fix",
+    "summary": "Fix Kotlin nullable contracts at the producer or boundary rather than scattering !! assertions.",
+    "domains": [
+      "kotlin",
+      "code",
+      "jvm",
+      "gradle",
+      "android"
+    ],
+    "triggers": [
+      "kotlin",
+      "nullable",
+      "contracts",
+      "producer",
+      "boundary",
+      "rather",
+      "than",
+      "scattering"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.kotlin"
+  }
+]

@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:embed:power-and-clock-domains",
+  "type": "knowledge",
+  "title": "Power modes and clock domains",
+  "description": "Sleep modes trade wake latency and retention against current; gating clocks saves power but disables peripherals that depend on them.",
+  "body": "Use when managing power on a constrained device. Deeper sleep modes cut current dramatically but increase wake latency and may not retain RAM or peripheral state; gating a peripheral's clock stops it (and its register accesses) entirely. Do not enter a sleep mode without confirming which clocks, RAM, and wake sources survive it. Actions: map each peripheral to its clock and power domain, choose the deepest mode that keeps the needed wake sources and retention, and account for wake latency in the timing budget. Validation signals include measured current per mode and correct, timely wake from each. Risk boundary: a sleep mode that drops a needed clock or wake source can hang the device unattended; verify retention and wake behavior on hardware before deploying a power policy.",
+  "domain": "embedded",
+  "scope_hint": "code.embedded:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.embedded",
+  "pack_id": "code.embedded"
+}

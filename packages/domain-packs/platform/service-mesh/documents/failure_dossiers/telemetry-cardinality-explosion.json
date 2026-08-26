@@ -1,0 +1,11 @@
+{
+  "ref_id": "fail:mesh:telemetry-cardinality-explosion",
+  "type": "failure_dossier",
+  "description": "Mesh telemetry with high-cardinality labels overwhelms the metrics backend.",
+  "body": "Failure mode: custom dimensions (request paths, user IDs, unbounded headers) are added to mesh metrics, multiplying time series until the metrics backend is overwhelmed and dashboards slow or drop data. Detection signals: metric series count exploding, the backend rejecting samples or OOMing, and high-cardinality labels on request metrics. Do not add unbounded labels to per-request mesh metrics. Safer fallback: keep mesh metric labels to bounded dimensions (workload, namespace, response code/flag), drop or aggregate high-cardinality labels in the telemetry config, and reduce sampling for traces.",
+  "domain": "service_mesh",
+  "scope_hint": "platform.service-mesh:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.service-mesh:human_authored",
+  "pack_id": "platform.service-mesh"
+}

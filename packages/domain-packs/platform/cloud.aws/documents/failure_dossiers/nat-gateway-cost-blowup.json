@@ -1,0 +1,11 @@
+{
+  "ref_id": "fail:aws:nat-gateway-cost-blowup",
+  "type": "failure_dossier",
+  "description": "A bill spike from routing all private egress and AWS-service traffic through a NAT Gateway.",
+  "body": "Failure mode: every private subnet routes through one NAT Gateway, so high-volume traffic to S3/DynamoDB/ECR incurs NAT data-processing and cross-AZ charges, spiking the bill. Detection signals: Cost Explorer NatGateway-Bytes and DataProcessing dominating, traffic to AWS services flowing over NAT, single-AZ NAT serving cross-AZ subnets. Do not just accept the cost or delete the NAT that other traffic needs. Safer fallback: add VPC Gateway endpoints for S3/DynamoDB and Interface endpoints for ECR/other services, deploy a NAT per AZ to avoid cross-AZ data charges, and set a budget alarm.",
+  "domain": "aws",
+  "scope_hint": "platform.cloud.aws:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.aws:human_authored",
+  "pack_id": "platform.cloud.aws"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:rust:holding-mutex-guard-across-await",
+  "type": "failure_dossier",
+  "description": "Holding a std::sync::Mutex guard across an .await point in async code, risking deadlock and breaking Send.",
+  "body": "Failure mode: code locks a std Mutex and then awaits while holding the guard, so the future is no longer Send (won't spawn on a multi-thread runtime) or the same task re-enters and deadlocks. Detection signals: compiler error 'future cannot be sent between threads safely' mentioning MutexGuard; tasks hang under tokio's multi-thread scheduler; clippy await_holding_lock fires. Do not hold a std::sync lock across .await. Safer fallback: drop the guard before awaiting (scope it in a block), or use an async-aware tokio::sync::Mutex when the lock must span an await, then confirm the future is Send and the hang is gone.",
+  "domain": "rust",
+  "scope_hint": "code.rust:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.rust:human_authored",
+  "pack_id": "code.rust"
+}

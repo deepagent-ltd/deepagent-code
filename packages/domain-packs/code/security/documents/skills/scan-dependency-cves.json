@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:security:scan-dependency-cves",
+  "type": "skill",
+  "title": "Scan dependencies for known CVEs",
+  "description": "Run the ecosystem audit tool and report each advisory with severity, affected package, fixed version, and direct-vs-transitive status.",
+  "body": "Use when assessing the dependency tree's known-vulnerability exposure. Actions: detect the ecosystem (npm/pnpm/yarn, pip, cargo, go) and run its audit/SCA command (e.g. npm audit, pip-audit, cargo audit); parse output into advisory id, severity, package, installed vs fixed version, and reachability hint. Report counts by severity and the minimal upgrade path. Do not present a clean exit code as proof of safety if the tool was scoped to dev-only or skipped lockfile resolution. This skill exposes capability only and must not auto-apply upgrades without runtime permission. Validation signals include a parsed advisory list and the scanner's resolved count after a proposed fix. Risk boundary: flag reachable critical/high advisories for human review rather than auto-bumping across majors.",
+  "domain": "security",
+  "scope_hint": "code.security:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.security",
+  "pack_id": "code.security"
+}

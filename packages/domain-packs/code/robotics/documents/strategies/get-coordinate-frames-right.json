@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:robot:get-coordinate-frames-right",
+  "type": "strategy",
+  "title": "Be explicit and consistent about frames",
+  "description": "Tag every pose and measurement with its coordinate frame and timestamp, and transform through tf2 rather than assuming a common frame.",
+  "body": "Use whenever combining poses, sensor readings, or commands that live in different frames. Do not assume two measurements share a frame, and avoid transforming with a transform from a different time than the data. Actions: stamp every message with frame_id and time, look up the transform between frames at the data's timestamp via tf2, and keep the transform tree fully connected with a single root. Validation signals include a connected tf tree with no missing links and a test that transformed poses match a known ground-truth pose. Risk boundary: combining data across mismatched frames or times sends the robot to the wrong place; treat a frame or timestamp mismatch on a motion path as a correctness-and-safety defect.",
+  "domain": "robotics",
+  "scope_hint": "code.robotics:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.robotics",
+  "pack_id": "code.robotics"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:android:audit-main-thread-and-permissions",
+  "type": "skill",
+  "title": "Audit main-thread work and permissions",
+  "description": "Inspect for blocking calls on the UI thread and for dangerous-API use lacking a runtime permission request.",
+  "body": "Use when reviewing responsiveness and permission hygiene. Actions: scan for synchronous network/disk/database/heavy work on the main thread (calls not dispatched to a background coroutine) and for dangerous-permission APIs invoked without a manifest declaration and runtime request/denial handling. Report each main-thread block and unguarded permission use with location. Do not modify code. This skill exposes capability only and must not access protected data without runtime permission. Validation signals include all I/O off-main and a request flow guarding every dangerous API. Risk boundary: main-thread I/O (ANR risk) and unguarded dangerous-API calls (SecurityException) are blocking findings; recommend coroutine offloading and an in-context permission flow rather than shipping them.",
+  "domain": "android",
+  "scope_hint": "code.mobile.android:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mobile.android",
+  "pack_id": "code.mobile.android"
+}

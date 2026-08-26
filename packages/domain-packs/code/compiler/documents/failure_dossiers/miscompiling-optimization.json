@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:comp:miscompiling-optimization",
+  "type": "failure_dossier",
+  "description": "An optimization pass that changes a program's observable behavior, silently producing wrong code for every program it transforms.",
+  "body": "Failure mode: a pass applies a rewrite without fully checking its legality precondition (ignoring overflow, aliasing, undefined behavior, or side-effect order), so it 'optimizes' code in a way that changes results; the symptom appears as a mysterious application bug only at higher optimization levels. Detection signals: output differs between optimization levels; the bug disappears when the pass is disabled; differential testing finds a divergent program. Do not ship a pass not shown to be semantics-preserving. Safer fallback: gate the rewrite on a verified legality condition, validate with differential testing across a corpus including edge cases, add the failing case as a regression test, and disable the pass until it is proven.",
+  "domain": "compiler",
+  "scope_hint": "code.compiler:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.compiler:human_authored",
+  "pack_id": "code.compiler"
+}

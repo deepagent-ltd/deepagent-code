@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:mcp:capability-assumed-not-negotiated",
+  "type": "failure_dossier",
+  "description": "Calling an MCP method or feature the peer never advertised during initialization, causing protocol errors or silent failures.",
+  "body": "Failure mode: a host or server invokes a resource, prompt, or sampling feature without checking the capabilities exchanged at initialize, so the peer rejects the call or behaves undefined across versions. Detection signals: 'method not found'/'capability not supported' errors; the initialize trace shows the feature was never advertised; behavior differs by peer version. Do not assume feature parity across MCP implementations or versions. Safer fallback: complete capability negotiation, gate each feature call on the advertised capability, and provide a graceful unsupported path; escalate version mismatches rather than guessing. Risk boundary: deny calls to unnegotiated privileged features instead of attempting them.",
+  "domain": "code",
+  "scope_hint": "code.mcp:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mcp:human_authored",
+  "pack_id": "code.mcp"
+}

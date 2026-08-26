@@ -1,0 +1,72 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "risk.license",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "license",
+      "oss_license",
+      "attribution",
+      "spdx"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [
+      "legal"
+    ],
+    "repo_signals": [
+      "L3 smoke for risk.license: dependency license inventory, SPDX identifiers, copyleft vs permissive classification, NOTICE attribution file, and redistribution obligations"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "plain prose note with no repository or domain signal"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "open source license inventory SPDX copyleft permissive attribution NOTICE file redistribution obligation incompatible license GPL Apache MIT",
+  "expected_pack_id": "risk.license",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "risk.license L3 validation smoke",
+    "signals": [
+      "every distributed dependency mapped to a resolved SPDX identifier",
+      "NOTICE/attribution file regenerated and matches the lockfile",
+      "no copyleft-incompatible pair in the linked artifact",
+      "license scan reproduces the manifest with zero unknowns"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "risk.license diagnosis smoke",
+    "signals": [
+      "dependency with unknown or unresolved license",
+      "GPL/AGPL code linked into a permissively distributed binary",
+      "missing or stale NOTICE/attribution file",
+      "license declared in metadata contradicts the LICENSE file in the package",
+      "SPDX expression with an unparseable or deprecated identifier"
+    ]
+  },
+  "source_refs": [
+    "source:spdx-license-list:paraphrased",
+    "source:reuse-spec:paraphrased"
+  ]
+}

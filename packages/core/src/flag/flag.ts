@@ -1,0 +1,92 @@
+import { Config } from "effect"
+import { InstallationCommit } from "../installation/version"
+
+export function truthy(key: string) {
+  const value = process.env[key]?.toLowerCase()
+  return value === "true" || value === "1"
+}
+
+const copy = process.env["DEEPAGENT_CODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT"]
+
+function enabledByExperimental(key: string) {
+  return process.env[key] === undefined ? truthy("DEEPAGENT_CODE_EXPERIMENTAL") : truthy(key)
+}
+
+export const Flag = {
+  OTEL_EXPORTER_OTLP_ENDPOINT: process.env["OTEL_EXPORTER_OTLP_ENDPOINT"],
+  OTEL_EXPORTER_OTLP_HEADERS: process.env["OTEL_EXPORTER_OTLP_HEADERS"],
+
+  DEEPAGENT_CODE_AUTO_HEAP_SNAPSHOT: truthy("DEEPAGENT_CODE_AUTO_HEAP_SNAPSHOT"),
+  DEEPAGENT_CODE_GIT_BASH_PATH: process.env["DEEPAGENT_CODE_GIT_BASH_PATH"],
+  DEEPAGENT_CODE_CONFIG: process.env["DEEPAGENT_CODE_CONFIG"],
+  DEEPAGENT_CODE_CONFIG_CONTENT: process.env["DEEPAGENT_CODE_CONFIG_CONTENT"],
+  DEEPAGENT_CODE_DISABLE_AUTOUPDATE: truthy("DEEPAGENT_CODE_DISABLE_AUTOUPDATE"),
+  DEEPAGENT_CODE_ALWAYS_NOTIFY_UPDATE: truthy("DEEPAGENT_CODE_ALWAYS_NOTIFY_UPDATE"),
+  DEEPAGENT_CODE_DISABLE_PRUNE: truthy("DEEPAGENT_CODE_DISABLE_PRUNE"),
+  DEEPAGENT_CODE_DISABLE_TERMINAL_TITLE: truthy("DEEPAGENT_CODE_DISABLE_TERMINAL_TITLE"),
+  DEEPAGENT_CODE_SHOW_TTFD: truthy("DEEPAGENT_CODE_SHOW_TTFD"),
+  DEEPAGENT_CODE_DISABLE_AUTOCOMPACT: truthy("DEEPAGENT_CODE_DISABLE_AUTOCOMPACT"),
+  DEEPAGENT_CODE_DISABLE_MODELS_FETCH: truthy("DEEPAGENT_CODE_DISABLE_MODELS_FETCH"),
+  DEEPAGENT_CODE_DISABLE_MOUSE: truthy("DEEPAGENT_CODE_DISABLE_MOUSE"),
+  DEEPAGENT_CODE_FAKE_VCS: process.env["DEEPAGENT_CODE_FAKE_VCS"],
+  DEEPAGENT_CODE_SERVER_PASSWORD: process.env["DEEPAGENT_CODE_SERVER_PASSWORD"],
+  DEEPAGENT_CODE_SERVER_USERNAME: process.env["DEEPAGENT_CODE_SERVER_USERNAME"],
+  // Server Edition: CI injects the deepagent-code commit into workspace images so
+  // the gateway can report/version-check the data plane (server-v1 §13.3).
+  DEEPAGENT_CODE_COMMIT: InstallationCommit ?? process.env["DEEPAGENT_CODE_COMMIT"],
+  // Server Edition: when running inside a gateway-managed workspace container,
+  // provider keys are injected via env and must not persist to the volume (§20.4).
+  // Getter so tests can toggle it per-case (matches the experimental-flag pattern).
+  get DEEPAGENT_SERVER_MODE() {
+    return truthy("DEEPAGENT_SERVER_MODE")
+  },
+
+  // Experimental
+  DEEPAGENT_CODE_EXPERIMENTAL_FILEWATCHER: Config.boolean("DEEPAGENT_CODE_EXPERIMENTAL_FILEWATCHER").pipe(
+    Config.withDefault(false),
+  ),
+  DEEPAGENT_CODE_EXPERIMENTAL_DISABLE_FILEWATCHER: Config.boolean(
+    "DEEPAGENT_CODE_EXPERIMENTAL_DISABLE_FILEWATCHER",
+  ).pipe(Config.withDefault(false)),
+  DEEPAGENT_CODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT:
+    copy === undefined ? process.platform === "win32" : truthy("DEEPAGENT_CODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT"),
+  DEEPAGENT_CODE_MODELS_URL: process.env["DEEPAGENT_CODE_MODELS_URL"],
+  DEEPAGENT_CODE_MODELS_PATH: process.env["DEEPAGENT_CODE_MODELS_PATH"],
+  DEEPAGENT_CODE_DB: process.env["DEEPAGENT_CODE_DB"],
+
+  DEEPAGENT_CODE_WORKSPACE_ID: process.env["DEEPAGENT_CODE_WORKSPACE_ID"],
+  DEEPAGENT_CODE_EXPERIMENTAL_WORKSPACES: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_WORKSPACES"),
+  DEEPAGENT_CODE_EXPERIMENTAL_SESSION_SWITCHER: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_SESSION_SWITCHER"),
+  // V3.9 §C/§D — mirror the server RuntimeFlags so the TUI can gate the /panel and /goal slash
+  // commands (evaluated at access time so the CLI/tests can set the env at runtime).
+  get DEEPAGENT_CODE_EXPERIMENTAL_EXPERT_PANEL() {
+    return enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_EXPERT_PANEL")
+  },
+  get DEEPAGENT_CODE_EXPERIMENTAL_GOAL_LOOP() {
+    return enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_GOAL_LOOP")
+  },
+
+  // Evaluated at access time (not module load) because tests, the CLI, and
+  // external tooling set these env vars at runtime.
+  get DEEPAGENT_CODE_DISABLE_PROJECT_CONFIG() {
+    return truthy("DEEPAGENT_CODE_DISABLE_PROJECT_CONFIG")
+  },
+  get DEEPAGENT_CODE_EXPERIMENTAL_REFERENCES() {
+    return enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_REFERENCES")
+  },
+  get DEEPAGENT_CODE_TUI_CONFIG() {
+    return process.env["DEEPAGENT_CODE_TUI_CONFIG"]
+  },
+  get DEEPAGENT_CODE_PURE() {
+    return truthy("DEEPAGENT_CODE_PURE")
+  },
+  get DEEPAGENT_CODE_PERMISSION() {
+    return process.env["DEEPAGENT_CODE_PERMISSION"]
+  },
+  get DEEPAGENT_CODE_PLUGIN_META_FILE() {
+    return process.env["DEEPAGENT_CODE_PLUGIN_META_FILE"]
+  },
+  get DEEPAGENT_CODE_CLIENT() {
+    return process.env["DEEPAGENT_CODE_CLIENT"] ?? "cli"
+  },
+}

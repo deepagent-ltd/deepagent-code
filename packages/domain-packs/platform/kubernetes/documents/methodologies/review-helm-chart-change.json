@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:k8s:review-helm-chart-change",
+  "type": "methodology",
+  "title": "Review a Helm chart change end to end",
+  "description": "Lint, template with the target values, diff against the release, and check hooks and CRD ordering before upgrading.",
+  "body": "Steps: 1. helm lint the chart and check values schema. 2. helm template with the environment's values to render concrete manifests. 3. Inspect rendered RBAC, resources, probes, and image tags. 4. helm diff upgrade against the live release to see actual changes. 5. Verify hook weights and any CRD install ordering so upgrade does not race. Rollback point: helm rollback to the prior revision. Validation: the rendered diff matches intent and helm history shows a clean superseded->deployed transition after upgrade.",
+  "domain": "kubernetes",
+  "scope_hint": "platform.kubernetes:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.kubernetes",
+  "pack_id": "platform.kubernetes"
+}

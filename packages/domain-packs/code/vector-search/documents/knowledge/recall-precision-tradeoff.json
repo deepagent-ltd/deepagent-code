@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:vsearch:recall-precision-tradeoff",
+  "type": "knowledge",
+  "title": "Recall and precision in retrieval",
+  "description": "What recall@k and precision@k measure and why first-stage retrieval optimizes recall while re-ranking optimizes precision.",
+  "body": "Use when reasoning about which retrieval metric to optimize at each stage. Recall@k is the share of relevant documents found in the top-k; precision@k is the share of the top-k that are relevant. Do not optimize precision in first-stage retrieval — if a relevant document is not retrieved, no reranker can recover it. Actions: tune first-stage retrieval for recall with a generous k, then tune re-ranking for precision on that shortlist. Validation signals include a recall floor at the first stage and a precision gain after re-ranking. Risk boundary: a high-precision but low-recall first stage permanently loses answers; if recall is the bottleneck, escalate the retrieval budget rather than tightening the reranker.",
+  "domain": "vector_search",
+  "scope_hint": "code.vector-search:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.vector-search",
+  "pack_id": "code.vector-search"
+}

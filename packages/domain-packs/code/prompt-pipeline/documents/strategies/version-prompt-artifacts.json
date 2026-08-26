@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:prompt:version-prompt-artifacts",
+  "type": "strategy",
+  "title": "Version prompt artifacts",
+  "description": "Templates and prompt configuration are versioned and diffable so a prompt change is reviewable and tied to its eval result.",
+  "body": "Use when a prompt template or its parameters change. Do not edit a prompt string inline with no record, and avoid shipping prompt changes that cannot be diffed or rolled back. Actions: store templates as versioned artifacts, record the prompt version with each evaluation and each production response, and review prompt diffs like code. Validation signals include a prompt version stamped on stored responses and a diff that shows exactly what changed between versions. Risk boundary: an untracked prompt change can silently regress quality with no way to attribute or roll back; require versioning before a prompt change ships.",
+  "domain": "prompt_pipeline",
+  "scope_hint": "code.prompt-pipeline:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.prompt-pipeline",
+  "pack_id": "code.prompt-pipeline"
+}

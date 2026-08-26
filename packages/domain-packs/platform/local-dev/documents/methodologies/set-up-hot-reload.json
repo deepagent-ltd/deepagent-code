@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:local_dev:set-up-hot-reload",
+  "type": "methodology",
+  "title": "Set up hot reload without masking real errors",
+  "description": "Wire a file watcher to rebuild/restart the dev process on change while ensuring compile and runtime errors stay visible, not swallowed.",
+  "body": "Steps: 1. Choose the watcher/dev server for the stack and scope it to source paths, excluding build output and dependencies. 2. Configure it to rebuild or restart on change and to surface compile/type errors prominently rather than silently keeping the last good build. 3. Confirm a code change reflects without a manual restart. 4. Verify that introducing a syntax/type error shows the error instead of stale output. 5. Bound the watched set to avoid CPU thrash and watcher limits. Rollback point: before broadening watched paths. Validation: an edit hot-reloads, an injected error is visible in the dev output/log, and the watcher does not hit file-descriptor limits. Risk boundary: a reloader that hides errors and serves stale code is worse than none; flag it rather than trusting a silent green screen.",
+  "domain": "platform",
+  "scope_hint": "platform.local-dev:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.local-dev",
+  "pack_id": "platform.local-dev"
+}

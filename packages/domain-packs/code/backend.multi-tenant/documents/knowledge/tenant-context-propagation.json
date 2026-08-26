@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:mt:tenant-context-propagation",
+  "type": "knowledge",
+  "title": "How tenant context propagates through a request",
+  "description": "The trusted tenant resolved at authentication must flow through every layer so async work and downstream calls stay scoped to the same tenant.",
+  "body": "Use when reasoning about why a deep call or background task lost its tenant scope. Do not assume tenant context is implicitly available everywhere. The tenant resolved from the principal at the edge must be threaded through service calls, queue messages, and job payloads, or downstream code defaults to none or the wrong tenant. Inspect where context is set and where it is read. Validation signals include async jobs and downstream calls operating under the originating tenant. Risk boundary: a dropped tenant context can cause a job to process or expose the wrong tenant's data, so propagate it explicitly and verify across async boundaries.",
+  "domain": "multi_tenant",
+  "scope_hint": "code.backend.multi-tenant:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.multi-tenant",
+  "pack_id": "code.backend.multi-tenant"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:mesh:mtls-strict-migration",
+  "type": "strategy",
+  "title": "Migrate to STRICT mTLS through PERMISSIVE first",
+  "description": "Roll mTLS out with PERMISSIVE mode to accept both plaintext and mTLS, verify all callers use mTLS, then flip to STRICT.",
+  "body": "Use when enforcing mutual TLS between meshed services. Do not flip a namespace to STRICT before every client sends mTLS (you will break plaintext callers). Actions: set PeerAuthentication to PERMISSIVE, confirm via telemetry that connections are mTLS (not plaintext), ensure DestinationRule trafficPolicy.tls mode is ISTIO_MUTUAL where needed, then set STRICT; handle non-mesh clients via explicit exceptions. Validation signals include telemetry showing 100% mTLS before cutover, STRICT rejecting plaintext, and mesh calls succeeding with workload certs. Risk boundary: setting STRICT on a production namespace can sever non-mesh clients and is human-gated.",
+  "domain": "service_mesh",
+  "scope_hint": "platform.service-mesh:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.service-mesh",
+  "pack_id": "platform.service-mesh"
+}

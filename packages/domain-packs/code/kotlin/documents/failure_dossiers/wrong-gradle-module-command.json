@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:kotlin:wrong-gradle-module-command",
+  "type": "failure_dossier",
+  "description": "Wrong Gradle module command",
+  "body": "Running only a root or unrelated Gradle task can miss the changed source set and produce false confidence. Safer path: map changed files to module/source set and run that compile/test task first.\n\nUse only as a diagnostic do-not-use signal; do not expose this as positive strategy, methodology, knowledge, skill, or memory.",
+  "domain": "kotlin",
+  "scope_hint": "code.kotlin:failure_dossiers",
+  "evidence_strength": "medium",
+  "provenance_tag": "code.kotlin:failure_seed:paraphrased_common_failures",
+  "pack_id": "code.kotlin"
+}

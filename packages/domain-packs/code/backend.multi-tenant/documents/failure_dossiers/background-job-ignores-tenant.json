@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:mt:background-job-ignores-tenant",
+  "type": "failure_dossier",
+  "description": "A background job or export that scans all rows without scoping to a tenant processes or exposes data across tenant boundaries.",
+  "body": "Failure mode: a batch job, report, or export iterates records globally because tenant context was not propagated into the async work. Detection signals: a job processes rows from multiple tenants in one run; an export contains another tenant's records; the job payload carries no tenant. Do not run tenant-scoped work without a tenant context. Safer fallback: propagate the originating tenant into job payloads and messages, scope every async query by tenant, add negative tests for jobs and exports, and treat any cross-tenant processing as a leak to escalate.",
+  "domain": "multi_tenant",
+  "scope_hint": "code.backend.multi-tenant:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.multi-tenant:human_authored",
+  "pack_id": "code.backend.multi-tenant"
+}

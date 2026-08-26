@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:elixir:faked-shared-state",
+  "type": "failure_dossier",
+  "description": "Mutable shared state is stashed in the process dictionary or a global instead of a process, causing races and lost updates.",
+  "body": "Failure mode: code uses Process.put/get, abuses module attributes as if they were variables, or relies on a global to share mutable state across processes, breaking the BEAM's share-nothing isolation and producing race conditions and lost updates under concurrency. Detection signals: Process.put/get holding business state; module attributes mutated at runtime expectations; concurrent updates clobbering each other. Do not fake shared mutable state outside a process. Safer fallback: own the state in a GenServer/Agent mutated via messages, or use an ETS table with clear ownership for high-read shared data, and test that concurrent updates serialize without loss.",
+  "domain": "elixir",
+  "scope_hint": "code.elixir:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.elixir:human_authored",
+  "pack_id": "code.elixir"
+}

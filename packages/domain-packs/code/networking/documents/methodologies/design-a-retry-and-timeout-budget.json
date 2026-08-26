@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:net:design-a-retry-and-timeout-budget",
+  "type": "methodology",
+  "title": "Design a coherent retry and timeout budget",
+  "description": "Compose per-attempt timeouts, retry counts, and backoff so the total stays within the caller's deadline without amplifying load.",
+  "body": "Steps: 1. Fix the overall deadline the caller can tolerate. 2. Choose a per-attempt timeout and a retry count whose worst-case sum (including backoff) stays under that deadline. 3. Add full jitter to backoff and respect Retry-After. 4. Ensure nested calls do not multiply retries (a retry-of-a-retry storm); propagate a deadline downstream. 5. Pair with a circuit breaker so a failing dependency stops the retries. Rollback point: the policy is config, revert by reverting it. Validation: a worst-case run stays within the deadline and load tests show no retry amplification when the dependency degrades.",
+  "domain": "networking",
+  "scope_hint": "code.networking:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.networking",
+  "pack_id": "code.networking"
+}

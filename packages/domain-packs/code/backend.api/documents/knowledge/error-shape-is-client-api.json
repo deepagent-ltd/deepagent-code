@@ -1,0 +1,11 @@
+{
+  "ref_id": "knowledge:backend_api:error-shape-is-client-api",
+  "type": "knowledge",
+  "description": "Error codes, messages, details, and correlation fields are part of the API contract.",
+  "body": "Use this when mapping exceptions, validation failures, domain conflicts, GraphQL errors, or RPC error envelopes. Clients often branch on machine-readable error codes and request IDs, not only status. This does not require leaking internal exception names or sensitive details. Execution impact: preserve stable machine fields, separate user-safe messages from logs, map known domain failures away from generic 500s, and keep correlation IDs available. Validation signals include documented error code, expected status or protocol code, safe detail fields, no stack trace in response, and logs that can connect the response to server diagnostics. Risk boundary: changing error shape can break SDKs and automated clients; treat it as a contract diff. Use when Backend API work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: use the fact to constrain the change and test plan; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "api",
+  "scope_hint": "code.backend.api:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.api:error_contract_practice",
+  "pack_id": "code.backend.api"
+}

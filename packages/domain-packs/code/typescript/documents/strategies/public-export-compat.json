@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:typescript:public-export-compat",
+  "type": "strategy",
+  "description": "Preserve public export compatibility unless the task explicitly accepts a breaking TypeScript API change.",
+  "body": "Use when changing barrels, package exports, declaration output, SDK entrypoints, or exported types. The action is to identify which imports downstream consumers use, preserve old entrypoints when practical, and add compatibility exports or migration notes before removing public names. Do not treat a private file move as safe when the moved symbol is re-exported through an index or package exports map. Verification signals include declaration diff, package-local typecheck, consumer compile checks, and runtime import smoke for exported paths. Risk boundary: compatibility belongs to TypeScript/package surface here; framework or business API semantics belong to more specific packs. Use when TypeScript / JavaScript work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: choose the smallest direction that preserves the domain contract; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "typescript",
+  "scope_hint": "code.typescript:strategies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.typescript:human_authored",
+  "pack_id": "code.typescript"
+}

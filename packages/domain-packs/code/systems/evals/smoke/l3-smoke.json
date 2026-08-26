@@ -1,0 +1,73 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.systems",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "systems",
+      "os",
+      "filesystem",
+      "process",
+      "resource_limits"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [
+      "performance"
+    ],
+    "repo_signals": [
+      "L3 smoke for code.systems: filesystem fsync and atomic rename durability, signal handler and process fork, file descriptor and ulimit limits, oom and memory, syscall error handling, and resource cleanup"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "plain prose note with no repository or domain signal"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "systems os filesystem fsync atomic rename file descriptor ulimit signal handler syscall errno oom mmap process fork resource cleanup durability",
+  "expected_pack_id": "code.systems",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "code.systems L3 validation smoke",
+    "signals": [
+      "durable writes use write-temp then fsync then atomic rename then fsync the directory",
+      "every fd, lock, mapping, and child process has a deterministic close/release path",
+      "syscall return values and errno are checked, with EINTR retried where required",
+      "resource limits (ulimit/RLIMIT) are sized for peak fd and memory use"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "code.systems diagnosis smoke",
+    "signals": [
+      "data loss after crash because writes were not fsynced or rename not atomic",
+      "file-descriptor leak hitting the ulimit and failing new opens",
+      "signal handler doing unsafe non-async-signal-safe work or losing signals",
+      "unchecked syscall or ignored errno masking a real failure",
+      "process killed by the OOM killer due to unbounded memory growth"
+    ]
+  },
+  "source_refs": [
+    "source:posix-spec:paraphrased",
+    "source:linux-man-pages:paraphrased"
+  ]
+}

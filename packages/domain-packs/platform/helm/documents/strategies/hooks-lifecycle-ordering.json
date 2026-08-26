@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:helm:hooks-lifecycle-ordering",
+  "type": "strategy",
+  "title": "Use Helm hooks for lifecycle tasks with weights and deletion policy",
+  "description": "Annotate jobs as pre/post-install/upgrade hooks with hook-weight ordering and hook-delete-policy so migrations run reliably and clean up.",
+  "body": "Use when a release needs a migration, backup, or readiness gate around install/upgrade. Do not run migrations as a regular Deployment or omit a delete policy (leaving orphaned hook jobs). Actions: annotate a Job with helm.sh/hook (pre-upgrade, post-install), set hook-weight to order multiple hooks, and set hook-delete-policy (before-hook-creation, hook-succeeded) so old jobs are cleaned; ensure the hook job actually completes or the release blocks. Validation signals include hooks running in weight order, the hook job reaching Complete, and stale hook jobs being removed. Risk boundary: a hook that mutates production data (schema migration) is human-gated.",
+  "domain": "helm",
+  "scope_hint": "platform.helm:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.helm",
+  "pack_id": "platform.helm"
+}

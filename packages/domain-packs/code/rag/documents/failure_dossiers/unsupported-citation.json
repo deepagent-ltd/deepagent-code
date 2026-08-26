@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:rag:unsupported-citation",
+  "type": "failure_dossier",
+  "description": "The answer attaches a citation to a passage that does not actually contain the claim, fabricating a veneer of trust.",
+  "body": "Failure mode: the generation cites a document or passage for a claim the passage does not support, so a user who trusts the citation is misled, which is worse than an uncited guess. Detection signals: citations are bare titles; the cited passage text does not contain the claim; no test resolves citations to their passages; citations point outside the retrieved set. Do not emit a citation without verifying it supports the claim. Safer fallback: attach a stable passage locator, ensure the cited passage was retrieved, verify it supports the specific claim, and test that each citation resolves to supporting text.",
+  "domain": "rag",
+  "scope_hint": "code.rag:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.rag:human_authored",
+  "pack_id": "code.rag"
+}

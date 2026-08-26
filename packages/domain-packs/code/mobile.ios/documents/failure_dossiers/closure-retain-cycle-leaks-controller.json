@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:ios:closure-retain-cycle-leaks-controller",
+  "type": "failure_dossier",
+  "description": "An escaping closure capturing self strongly so a view controller and its view hierarchy never deallocate.",
+  "body": "Failure mode: a stored escaping closure, timer, delegate, or Combine subscription captures self strongly while self also retains it, forming a cycle ARC can never free, so the whole view controller leaks each time the screen is shown. Detection signals: memory climbs as the user navigates in and out of a screen; Instruments shows view controllers not deallocating; object counts grow unbounded. Do not strongly capture self in self-owned escaping closures. Safer fallback: capture [weak self] and guard (or unowned when lifetime is guaranteed), use weak delegates, cancel Combine subscriptions, and confirm deallocation in Instruments.",
+  "domain": "ios",
+  "scope_hint": "code.mobile.ios:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mobile.ios:human_authored",
+  "pack_id": "code.mobile.ios"
+}

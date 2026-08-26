@@ -1,0 +1,11 @@
+{
+  "ref_id": "skill:frontend_web:browser-smoke-with-diagnostics",
+  "type": "skill",
+  "description": "Open the changed route, interact with it, and collect browser console plus network evidence.",
+  "body": "Inputs: affected route or local URL, expected visible state, changed controls, and any known fixture data. Procedure: start or reuse the local dev server through the project-approved command; open the route in a browser automation tool; wait for app idle or a stable selector; exercise the changed interaction; collect console errors, page errors, and failed required requests; capture a screenshot or DOM assertion for the changed surface. Do not use this skill to hit production systems or authenticated user data without explicit approval. Outputs: route, viewport, interactions performed, visible result, console/network findings, and residual uncertainty. Failure handling: if the route cannot load, report whether the blocker is build, server, routing, asset, or API related instead of claiming visual validation passed. Use when Frontend Web work touches visible UI behavior, browser console output, DOM state, assets, viewport behavior, and interaction evidence. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: run the documented inspection and validation workflow; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include browser smoke, component tests, viewport screenshots, console/network checks, and accessibility assertions. Risk boundary: escalate or stop when the task involves visual regressions, inaccessible interaction, hydration mismatch, and browser-only failures, missing owner evidence, or live external state.",
+  "domain": "web",
+  "scope_hint": "code.frontend.web:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.web:browser_smoke_skill",
+  "pack_id": "code.frontend.web"
+}

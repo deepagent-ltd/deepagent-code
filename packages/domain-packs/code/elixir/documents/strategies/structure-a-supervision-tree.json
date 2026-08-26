@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:elixir:structure-a-supervision-tree",
+  "type": "strategy",
+  "title": "Structure work under a supervision tree",
+  "description": "Place every long-lived process under a supervisor with a restart strategy so crashes recover to a known state.",
+  "body": "Use when adding any long-lived process (GenServer, Task, Agent, registry). Do not spawn a stateful process unsupervised or catch every error to keep a broken process alive. Actions: define the process's child_spec, add it to a supervisor with the right strategy (one_for_one for independent children, rest_for_one/one_for_all when children depend on each other), and let it crash and restart to a clean initial state rather than defensively rescuing. Validation signals include a test that killing the process triggers a restart and the system returns to a known state. Risk boundary: an unsupervised stateful process leaks or dies silently with no recovery; wrapping everything in try/rescue to avoid crashes defeats OTP's recovery model and hides corrupt state instead of resetting it.",
+  "domain": "elixir",
+  "scope_hint": "code.elixir:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.elixir",
+  "pack_id": "code.elixir"
+}

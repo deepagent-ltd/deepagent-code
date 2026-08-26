@@ -1,0 +1,24 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none"
+     xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="t d">
+  <title id="t">DeepAgent Code icon</title>
+  <desc id="d">Centered square D mark: fixed left vertical, gradient right three-side stroke, aligned outer edges, slim proportions</desc>
+  <defs>
+    <!-- Gradient spans the visible left cap through the right-side center. -->
+    <linearGradient id="dg" x1="216" y1="0" x2="336" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0"    stop-color="#BAE6FD"/>
+      <stop offset="0.5"  stop-color="#60A5FA"/>
+      <stop offset="1"    stop-color="#2563EB"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="512" height="512" rx="112" fill="#0F172A"/>
+
+  <!-- The 204px-wide D outline is centered in the 512px icon. -->
+  <line x1="176" y1="120" x2="176" y2="392"
+        stroke="#38BDF8" stroke-width="44" stroke-linecap="butt"/>
+
+  <!-- Square caps make the open horizontal ends land 18px from the left stroke. -->
+  <path d="M238 142 H336 V370 H238"
+        stroke="url(#dg)" stroke-width="44"
+        stroke-linecap="square" stroke-linejoin="miter" fill="none"/>
+</svg>

@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:game:implement-fixed-timestep-loop",
+  "type": "methodology",
+  "title": "Implement a fixed-timestep loop with interpolation",
+  "description": "Build the accumulator loop that steps simulation at fixed dt and interpolates rendering, with a clamp against the spiral of death.",
+  "body": "Steps: 1. Each frame, measure real elapsed time and add it to an accumulator. 2. While accumulator >= dt, run one fixed simulation step and subtract dt. 3. Clamp the number of steps per frame (or cap accumulated time) so a slow frame cannot trigger runaway catch-up (the spiral of death). 4. Compute alpha = accumulator/dt and interpolate render state between previous and current sim states. 5. Render using the interpolated state. Rollback point: before swapping a variable-delta loop (it changes timing behavior). Validation: movement is identical across frame rates and rendering is smooth without judder; a loop that scales movement by raw frame delta has not met the fixed-timestep requirement.",
+  "domain": "game",
+  "scope_hint": "code.game:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.game",
+  "pack_id": "code.game"
+}

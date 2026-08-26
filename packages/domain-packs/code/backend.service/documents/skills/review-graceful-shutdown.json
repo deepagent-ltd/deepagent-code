@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:svc:review-graceful-shutdown",
+  "type": "skill",
+  "title": "Review graceful shutdown handling",
+  "description": "Trace signal handling and draining to report whether in-flight work survives a deploy or scale-down.",
+  "body": "Use when validating deploy safety. Actions: inspect signal handling for SIGTERM, verify the service stops accepting new work first, waits for in-flight handlers within a deadline shorter than the orchestrator grace, and re-queues unfinished work; verify readiness flips so traffic stops routing before drain. Do not treat process exit alone as safe shutdown. Report the drain path and deadline, and record whether any code path can exit while work is mid-flight. This skill is read-only. Validation signals include a SIGTERM-under-load test with zero dropped jobs. Risk boundary: missing drain logic on a worker that performs side effects is a reliability defect to flag.",
+  "domain": "backend_service",
+  "scope_hint": "code.backend.service:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.service",
+  "pack_id": "code.backend.service"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:vdb:build-ivfflat-after-loading-data",
+  "type": "strategy",
+  "title": "Build IVFFlat indexes after bulk loading data",
+  "description": "IVFFlat partitions vectors into lists from the data present at build time, so it must be built on a populated table.",
+  "body": "Use when creating an IVFFlat index during initial data load. Do not build an IVFFlat index on an empty or nearly-empty table and then bulk insert; the lists are seeded from whatever data exists at build time, so an early build leaves poorly-distributed clusters and recall collapses. Actions: load the bulk of the data first, then create the IVFFlat index with a list count near the square root of the row count, and verify recall against ground truth. Validation signals include lists holding a balanced share of vectors and recall@k meeting target. Risk boundary: an under-trained IVFFlat index looks healthy but returns wrong neighbours, so re-create the index after any large data change and confirm recall rather than assuming it persists.",
+  "domain": "vector_db",
+  "scope_hint": "code.database.vector:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.vector",
+  "pack_id": "code.database.vector"
+}

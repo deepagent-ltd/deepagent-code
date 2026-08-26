@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:conc:relaxed-ordering-assumed-too-strong",
+  "type": "failure_dossier",
+  "description": "Lock-free code uses relaxed atomics but relies on ordering the memory model does not guarantee, producing rare stale reads.",
+  "body": "Failure mode: code uses relaxed (or mismatched acquire/release) atomics for performance and assumes a flag set by one thread makes prior writes visible to another, but no happens-before edge exists, so a reader occasionally observes the flag without the data, causing rare corruption or stale reads that vanish under a debugger. Detection signals: a heisenbug that disappears with logging; failures only on weakly-ordered hardware; a detector or careful review showing a read with no ordering edge. Do not weaken ordering without proving the edges hold. Safer fallback: use sequentially-consistent atomics or pair a release store with an acquire load on the same location, document the happens-before argument, and require a stress test plus detector evidence before relaxing.",
+  "domain": "concurrency",
+  "scope_hint": "code.concurrency:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.concurrency:human_authored",
+  "pack_id": "code.concurrency"
+}

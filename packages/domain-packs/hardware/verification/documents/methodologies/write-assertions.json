@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:hwverif:write-assertions",
+  "type": "methodology",
+  "title": "Write assertions that capture design rules",
+  "description": "Express protocol, timing, and invariant rules as assertions so violations are caught the moment they occur.",
+  "body": "Use when a design has rules that must always hold, such as a handshake never dropping mid-transaction. Do not bury rule checks in scattered procedural code, since assertions document intent and fire precisely at violation. Actions: identify the invariants, write each as a concurrent assertion, and verify the assertion fires on a deliberately injected violation. Validation signals include each assertion catching its injected fault and no spurious firings under legal stimulus. Risk boundary: an assertion that never fires may be vacuously true, so escalate to a fault-injection check confirming each assertion can actually trigger.",
+  "domain": "hw_verification",
+  "scope_hint": "hardware.verification:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.verification",
+  "pack_id": "hardware.verification"
+}

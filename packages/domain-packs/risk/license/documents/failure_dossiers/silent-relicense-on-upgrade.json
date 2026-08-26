@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:lic:silent-relicense-on-upgrade",
+  "type": "failure_dossier",
+  "description": "A dependency relicenses to a source-available license between versions and the upgrade passes CI because licenses are never re-diffed.",
+  "body": "Failure mode: a routine version bump pulls a release that moved from Apache/MPL to BSL, SSPL, or Elastic License, but the change merges because the pipeline never compares the new license against the prior inventory. Detection signals: the resolved license of an upgraded component differs from the committed baseline; no CI gate diffs licenses on lockfile change; a source-available identifier now sits in an OSS allowlist. Do not assume a package keeps its license across versions. Safer fallback: on every lockfile change diff each component's resolved license against the baseline, fail CI on any unreviewed delta, and require human approval for a move to a source-available or non-OSI license.",
+  "domain": "license",
+  "scope_hint": "risk.license:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.license:human_authored",
+  "pack_id": "risk.license"
+}

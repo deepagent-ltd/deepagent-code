@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:mlops:drift-monitoring-loop",
+  "type": "methodology",
+  "title": "Operate the drift monitoring and response loop",
+  "description": "Continuously measure input, prediction, and outcome drift, then route breaches to retrain or investigate.",
+  "body": "Use when a model is live and its inputs can shift over time. Avoid monitoring only system latency — accuracy can rot while infra looks healthy. Actions: compute feature drift, prediction drift, and delayed-label outcome drift on a schedule, compare against baselines, and route a breach to either an automatic retrain or a human investigation. Validation signals include a drift report with baseline deltas and an alert that fired on a seeded distribution shift. Risk boundary: silent accuracy decay misleads every downstream decision; if outcome labels are unavailable, escalate to design a proxy before declaring the model healthy.",
+  "domain": "mlops",
+  "scope_hint": "code.mlops:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mlops",
+  "pack_id": "code.mlops"
+}

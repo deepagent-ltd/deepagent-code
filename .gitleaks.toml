@@ -1,0 +1,20 @@
+# .gitleaks.toml — deepagent-code
+# Reviewed 2026-06-30. Path allowlist covers build-artifact directories that
+# are NOT committed to git (confirmed via `git ls-files`). Specific source-file
+# false-positives are handled in .gitleaksignore.
+
+title = "deepagent-code gitleaks config"
+
+[allowlist]
+description = "Build artifact directories and generated/vendored code"
+paths = [
+  # Build outputs — never committed to git
+  '''packages/.*/dist/''',
+  '''packages/desktop/out/''',
+  '''packages/web/dist/''',
+  # Node module trees (safety net for --no-git scans)
+  '''node_modules/''',
+  '''packages/.*/node_modules/''',
+  # Bun/pnpm cache
+  '''.bun/''',
+]

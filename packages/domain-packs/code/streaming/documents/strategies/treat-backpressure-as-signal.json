@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:stream:treat-backpressure-as-signal",
+  "type": "strategy",
+  "title": "Surface backpressure as a first-class signal",
+  "description": "Monitor and bound buffering so a slow downstream applies measurable backpressure instead of silently growing latency or OOMing.",
+  "body": "Use when a stream operator can outpace its downstream. Do not let buffers grow unboundedly to hide a slow sink — latency creeps up and the job eventually OOMs with no clear cause. Actions: enable the engine's backpressure mechanism, expose a backpressure/busy metric, set bounded buffers, and alert when sustained backpressure appears. Validation signals include a backpressure metric that rises under a seeded slow sink and bounded buffer sizes under load. Risk boundary: hidden backpressure turns into a sudden outage; if backpressure is sustained, escalate to scale the bottleneck operator rather than enlarging buffers to mask it.",
+  "domain": "streaming",
+  "scope_hint": "code.streaming:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.streaming",
+  "pack_id": "code.streaming"
+}

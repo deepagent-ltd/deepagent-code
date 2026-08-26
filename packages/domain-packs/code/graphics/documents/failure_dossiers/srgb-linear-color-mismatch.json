@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:gfx:srgb-linear-color-mismatch",
+  "type": "failure_dossier",
+  "description": "Sampling an sRGB texture as linear (or writing linear data to an sRGB target) so all colors are gamma-shifted.",
+  "body": "Failure mode: lighting math runs on sRGB-encoded texture values as if they were linear, or linear results are written to an sRGB framebuffer without the conversion, so the entire image is too dark or too bright with shifted hues. Detection signals: output is uniformly darker/brighter than the reference; midtones look wrong while pure black/white look fine; the texture format and the shader's color-space assumption disagree. Do not assume texture values are already linear. Safer fallback: use sRGB formats for color textures and targets so the hardware converts on read/write, keep lighting math in linear space, and verify the color pipeline against a known reference.",
+  "domain": "graphics",
+  "scope_hint": "code.graphics:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.graphics:human_authored",
+  "pack_id": "code.graphics"
+}

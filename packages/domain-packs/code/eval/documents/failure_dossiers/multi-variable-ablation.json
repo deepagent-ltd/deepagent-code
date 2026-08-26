@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:eval:multi-variable-ablation",
+  "type": "failure_dossier",
+  "description": "An ablation changes prompt, model, and retrieval together, so the score delta cannot be attributed to any single factor.",
+  "body": "Failure mode: several factors change in one comparison and a gain is credited to the intended change, but a confound (or an offsetting regression) is hidden inside the bundle, making the result uninterpretable. Detection signals: more than one variable differs between arms; dataset, metric, or judge version also changed; no recorded config diff. Do not bundle factors and credit one. Safer fallback: change exactly one factor per arm, hold dataset, metric, and judge fixed, record the config diff per arm, and label any multi-variable comparison inconclusive until isolated.",
+  "domain": "eval",
+  "scope_hint": "code.eval:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.eval:human_authored",
+  "pack_id": "code.eval"
+}

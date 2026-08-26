@@ -1,0 +1,11 @@
+{
+  "ref_id": "skill:database:transaction-rollback-probe",
+  "type": "skill",
+  "description": "Inject or simulate failure in a multi-write path and verify all database changes roll back correctly.",
+  "body": "Inputs: code path with multiple writes, local test database, failure injection point or invalid downstream operation, and expected invariant. Procedure: run the success path to establish expected rows; trigger a failure after an early write but before completion; query affected tables; verify no partial rows, orphan records, or advanced state remain; inspect error propagation and logs. This skill does not design distributed transactions or external side-effect compensation by itself. Outputs: failure point, rows checked, rollback result, leaked side effects, and recommended fix. Validation signals include unchanged counts, absent partial records, preserved constraints, and deterministic error reporting. Failure handling: if the code cannot be failure-injected, recommend adding a test seam before changing transaction boundaries. Use when Database Engineering work touches schema deltas, query shape, transaction ownership, constraints, locks, and data volume. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: run the documented inspection and validation workflow; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include migration dry-runs, rollback checks, EXPLAIN output, constraint tests, and fixture data comparisons. Risk boundary: escalate or stop when the task involves data loss, long locks, non-rollbackable writes, silent query-plan regressions, and unsafe backfills, missing owner evidence, or live external state.",
+  "domain": "sql",
+  "scope_hint": "code.database:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database:rollback_probe_skill",
+  "pack_id": "code.database"
+}

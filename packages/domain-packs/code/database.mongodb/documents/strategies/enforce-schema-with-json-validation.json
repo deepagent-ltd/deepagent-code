@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:mongo:enforce-schema-with-json-validation",
+  "type": "strategy",
+  "title": "Enforce structure with JSON Schema validation",
+  "description": "Attach a $jsonSchema validator so a flexible document model still guarantees required fields and types.",
+  "body": "Use when a collection needs guarantees on shape without giving up document flexibility. Do not rely solely on application code to enforce required fields and types; a second writer or a manual mongosh insert bypasses it. Actions: attach a $jsonSchema validator with validationLevel strict and validationAction error so non-conforming writes are rejected at the server, and verify by attempting an invalid insert. Validation signals include a bad document raising a DocumentValidationFailure and conforming writes passing unchanged. Risk boundary: turning on strict validation against a collection with legacy non-conforming documents blocks updates to them, so audit existing data and use validationLevel moderate during migration.",
+  "domain": "mongodb",
+  "scope_hint": "code.database.mongodb:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.mongodb",
+  "pack_id": "code.database.mongodb"
+}

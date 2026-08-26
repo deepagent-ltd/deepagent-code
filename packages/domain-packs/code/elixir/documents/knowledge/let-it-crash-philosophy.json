@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:elixir:let-it-crash-philosophy",
+  "type": "knowledge",
+  "title": "Let it crash and supervision",
+  "description": "OTP favors letting a process fail fast on unexpected state and relying on a supervisor to restart it to a known good state.",
+  "body": "Use when deciding how to handle errors. The let-it-crash philosophy says a process should handle the cases it understands and otherwise crash, because a supervisor will restart it from a clean initial state, and process isolation contains the failure. This trades defensive error-handling sprawl for a simple recovery contract. Do not wrap everything in try/rescue to keep a process limping along with corrupt state, and do not apply let-it-crash to validating untrusted input (that is normal expected error handling). Actions: crash on bugs/unexpected state, handle expected errors explicitly, and define supervision so recovery is automatic. Validation signals include a restart test returning the system to a known state. Risk boundary: rescuing everything hides corruption, while crashing on user input turns a validation error into an availability problem; distinguish the two.",
+  "domain": "elixir",
+  "scope_hint": "code.elixir:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.elixir",
+  "pack_id": "code.elixir"
+}

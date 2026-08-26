@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:embed:unprotected-isr-task-shared-data",
+  "type": "failure_dossier",
+  "description": "Sharing a multi-byte variable or buffer between an ISR and a task without volatile or a critical section, causing torn reads and lost updates.",
+  "body": "Failure mode: an ISR writes a 32-bit value or a buffer that a task reads without synchronization on an 8/16-bit core where the access is not atomic; the task occasionally reads a half-updated value, or a missing volatile lets the compiler cache a stale copy. Detection signals: rare, non-reproducible corruption tied to interrupt timing; bug vanishes when interrupts are slowed or optimization is lowered; works in debug, fails in release. Do not share ISR/task data without protection. Safer fallback: mark shared variables volatile, guard multi-byte access with a short critical section or a lock-free ring buffer, keep the protected region minimal, and stress the interrupt to confirm no torn reads.",
+  "domain": "embedded",
+  "scope_hint": "code.embedded:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.embedded:human_authored",
+  "pack_id": "code.embedded"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "skill:frontend_vue:nuxt-ssr-hydration-check",
+  "type": "skill",
+  "description": "Verify full reload SSR hydration after Nuxt page/plugin/composable changes.",
+  "body": "Inputs: Nuxt route and repo scripts. Actions: run build/dev command, open direct URL reload, inspect server terminal and browser console for hydration mismatch, check data payload and client-only boundaries. Do not hit production deployments. Verification is clean hydration and expected route content. Risk boundary: server-only runtime config and auth/session data. Use when Vue Frontend Engineering work touches visible UI behavior, browser console output, DOM state, assets, viewport behavior, and interaction evidence. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: run the documented inspection and validation workflow; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include browser smoke, component tests, viewport screenshots, console/network checks, and accessibility assertions. Risk boundary: escalate or stop when the task involves visual regressions, inaccessible interaction, hydration mismatch, and browser-only failures, missing owner evidence, or live external state.",
+  "domain": "frontend_vue",
+  "scope_hint": "code.frontend.vue:skills",
+  "evidence_strength": "medium",
+  "provenance_tag": "code.frontend.vue:seed:vue_nuxt_pinia_vite_docs:paraphrased",
+  "pack_id": "code.frontend.vue"
+}

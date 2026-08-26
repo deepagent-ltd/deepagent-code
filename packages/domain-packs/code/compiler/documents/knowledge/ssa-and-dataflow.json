@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:comp:ssa-and-dataflow",
+  "type": "knowledge",
+  "title": "SSA form and data-flow analysis",
+  "description": "Static single assignment gives each value one definition, making def-use chains explicit and data-flow analyses (liveness, constant propagation) precise and fast.",
+  "body": "Use when implementing analyses or optimizations on the IR. In SSA each variable is assigned once and phi nodes merge values at control-flow joins, so def-use chains are explicit and analyses like constant propagation, dead-code elimination, and liveness become simpler and more precise; correctness depends on dominance and well-formed phis. Do not hand-edit SSA in ways that create multiple defs or break dominance. Actions: maintain SSA invariants across transforms and rebuild/verify them when control flow changes. Validation signals include an SSA verifier passing and analyses giving stable, sound results. Risk boundary: broken SSA invariants make a later analysis draw false conclusions and miscompile; treat verifier failures as blocking.",
+  "domain": "compiler",
+  "scope_hint": "code.compiler:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.compiler",
+  "pack_id": "code.compiler"
+}

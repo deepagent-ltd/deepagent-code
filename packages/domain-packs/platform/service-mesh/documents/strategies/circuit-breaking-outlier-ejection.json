@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:mesh:circuit-breaking-outlier-ejection",
+  "type": "strategy",
+  "title": "Protect upstreams with connection pools and outlier ejection",
+  "description": "Use DestinationRule connectionPool limits and outlierDetection so unhealthy hosts are ejected and overloaded upstreams shed load.",
+  "body": "Use when an upstream can be overwhelmed or has flaky instances. Do not leave connection pools unbounded or rely only on retries. Actions: set connectionPool tcp/http limits (max connections, pending requests, requests per connection) to cap concurrency, configure outlierDetection (consecutive5xx, interval, baseEjectionTime, maxEjectionPercent) to eject bad hosts, and tune so a slow instance is removed without ejecting the whole fleet. Validation signals include an injected error stream ejecting the bad host and the breaker tripping when the pool is saturated. Risk boundary: tightening pools/breakers on a production service can shed real traffic and is human-gated.",
+  "domain": "service_mesh",
+  "scope_hint": "platform.service-mesh:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.service-mesh",
+  "pack_id": "platform.service-mesh"
+}

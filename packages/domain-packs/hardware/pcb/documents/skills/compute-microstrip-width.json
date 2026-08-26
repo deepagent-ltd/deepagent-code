@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:pcb:compute-microstrip-width",
+  "type": "skill",
+  "title": "Estimate microstrip width for a target impedance",
+  "description": "Use the stackup dielectric height and constant to estimate the trace width that yields the target single-ended impedance.",
+  "body": "Use when you need a starting trace width for a controlled-impedance microstrip. Do not finalize width without the fab's confirmed dielectric, since the estimate shifts with the real stackup. Actions: take the dielectric height and constant from the stackup, estimate the width for the target impedance, and verify against a field-solver or fab report. Validation signals include an estimated width whose calculated impedance lands within tolerance and agreement with the fab report. Risk boundary: an estimate based on a guessed stackup can be off by a fab tolerance, so flag the width as provisional until the dielectric is confirmed.",
+  "domain": "pcb",
+  "scope_hint": "hardware.pcb:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.pcb",
+  "pack_id": "hardware.pcb"
+}

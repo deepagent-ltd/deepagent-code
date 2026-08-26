@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:rlang:control-factor-coercion",
+  "type": "strategy",
+  "title": "Control factor coercion",
+  "description": "Read character data as strings and convert to factors deliberately, with explicit levels.",
+  "body": "Use when reading or constructing data with categorical columns. Do not let columns become factors implicitly or compare factors as if they were their labels — a factor's underlying integer codes can corrupt joins, ordering, and numeric conversion. Actions: keep text as character on import, convert to factor only where you need fixed levels, and set the levels explicitly. Validation signals include column classes matching intent and as.numeric on a factor going through as.character first. Risk boundary: as.numeric on a factor returns the level codes not the values — verify the conversion path before trusting the numbers.",
+  "domain": "r_lang",
+  "scope_hint": "code.r:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.r",
+  "pack_id": "code.r"
+}

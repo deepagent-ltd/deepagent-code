@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:mt:diagnose-noisy-neighbor",
+  "type": "methodology",
+  "title": "Diagnose a noisy-neighbor incident",
+  "description": "A procedure to attribute degraded shared-pool performance to a specific tenant and contain it.",
+  "body": "Use when latency degrades for many tenants at once in a shared pool. Do not scale blindly before finding the source. Steps: break down resource usage by tenant from per-tenant metrics; identify the tenant whose queries, connections, or jobs dominate; apply a temporary per-tenant limit; plan a durable fix such as a quota or dedicated resource. Validation signals include per-tenant metrics pinpointing the culprit and latency recovering after the limit. Risk boundary: throttling a tenant affects their service, so communicate and, for a persistent offender, escalate a move to dedicated capacity rather than silently degrading them.",
+  "domain": "multi_tenant",
+  "scope_hint": "code.backend.multi-tenant:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.multi-tenant",
+  "pack_id": "code.backend.multi-tenant"
+}

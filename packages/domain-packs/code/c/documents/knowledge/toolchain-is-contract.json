@@ -1,0 +1,11 @@
+{
+  "ref_id": "knowledge:c:toolchain-is-contract",
+  "type": "knowledge",
+  "description": "In C, the toolchain triple, libc version, and compiler version are part of the contract and changing them changes behavior.",
+  "body": "In C, the toolchain triple, libc version, and compiler version define how code compiles, lints, and resolves dependencies; bumping any of them can change diagnostics and emitted output. Use when you touch the toolchain triple, libc version, and compiler version or when a build behaves differently than the pinned environment. Do not silently upgrade the toolchain or override the pinned version to make an error disappear. Actions: read the pinned config, match the project's the toolchain triple, libc version, and compiler version, then run clang-tidy, cppcheck, and -fanalyzer warnings and make / Makefile targets (and the exact CC, CFLAGS, and -I/-L flags) to compare against the baseline. Validation signals include identical clang-tidy, cppcheck, and -fanalyzer warnings output, a reproducible build, and unchanged lockfile resolution. Risk boundary: a toolchain bump is a deliberate, reviewed change; escalate rather than upgrading to unblock yourself.",
+  "domain": "c",
+  "scope_hint": "code.c:knowledge",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.c:skill_survey",
+  "pack_id": "code.c"
+}

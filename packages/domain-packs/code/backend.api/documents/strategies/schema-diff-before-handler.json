@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:backend_api:schema-diff-before-handler",
+  "type": "strategy",
+  "description": "Compare API schema or generated contract before treating a handler edit as safe.",
+  "body": "Apply this when changing routes, GraphQL schema, RPC procedures, request validators, response serializers, generated clients, or OpenAPI files. The handler implementation can look correct while the public contract silently changes. This does not cover database schema migration internals; use the database pack for storage shape changes. Execution actions include locating the authoritative contract source, generating or reading before/after schema output, classifying additions versus breaking removals or type changes, and updating tests or compatibility adapters. Validation signals include stable required fields, compatible enum changes, explicit versioning for breaking changes, and generated client diffs that match intent. Risk boundary: if external clients consume the API and no compatibility window exists, escalate before removing fields, tightening validation, or changing status/error semantics. Use when Backend API work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: choose the smallest direction that preserves the domain contract; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "api",
+  "scope_hint": "code.backend.api:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.api:contract_diff_practice",
+  "pack_id": "code.backend.api"
+}

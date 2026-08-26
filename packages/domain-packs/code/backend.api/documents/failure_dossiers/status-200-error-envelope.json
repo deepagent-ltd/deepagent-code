@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:backend_api:status-200-error-envelope",
+  "type": "failure_dossier",
+  "description": "Known failures were returned as HTTP 200 or success envelopes without a stable error contract.",
+  "body": "Failure mode: a route reports validation, conflict, or domain failure inside a success response, causing clients, retries, and monitoring to treat it as success. Diagnostic trigger: tests assert only body text or handler return value, not status and error shape. Do-not-use signal: do not accept a route smoke result that omits status/protocol code for negative paths. Recovery: map known failures to documented status or protocol error codes, preserve machine-readable error fields, and add negative-path tests. Risk boundary: GraphQL may legitimately return 200 with errors, but the errors array, nullability, and client contract still need explicit validation.",
+  "domain": "api",
+  "scope_hint": "code.backend.api:failure_dossiers",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.api:error_status_failure",
+  "pack_id": "code.backend.api"
+}

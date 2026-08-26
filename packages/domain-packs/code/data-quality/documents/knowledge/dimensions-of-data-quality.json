@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:dq:dimensions-of-data-quality",
+  "type": "knowledge",
+  "title": "The dimensions of data quality",
+  "description": "Quality spans accuracy, completeness, consistency, timeliness, validity, and uniqueness; a dataset can pass one and fail another.",
+  "body": "Use when deciding what to measure. Quality is multi-dimensional: accuracy (matches reality), completeness (no missing rows/fields), consistency (agrees across tables), timeliness/freshness (recent enough), validity (conforms to schema/rules), and uniqueness (no unintended dupes). A table can be perfectly fresh and valid yet incomplete, or unique yet inaccurate. Do not equate 'schema passes' with 'data is good'. Actions: pick checks across the dimensions that matter for the use case. Validation signals include explicit checks mapped to each relevant dimension. Risk boundary: measuring only one dimension leaves blind spots that surface as wrong downstream results; cover the dimensions the decision depends on.",
+  "domain": "data_quality",
+  "scope_hint": "code.data-quality:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-quality",
+  "pack_id": "code.data-quality"
+}

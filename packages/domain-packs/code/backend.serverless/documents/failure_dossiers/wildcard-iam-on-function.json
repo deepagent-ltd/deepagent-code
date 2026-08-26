@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:sls:wildcard-iam-on-function",
+  "type": "failure_dossier",
+  "description": "Granting a function a broad or wildcard IAM role, turning a single compromised function into a wide blast radius.",
+  "body": "Failure mode: a function is attached a shared admin or wildcard (action:*, resource:*) role for convenience, so if its code or a dependency is compromised the attacker inherits broad cloud access. Detection signals: the execution policy contains wildcards or permissions the handler never uses; one role is reused across many functions. Do not over-permission functions. Safer fallback: give each function its own role scoped to the exact actions and resource ARNs it uses, deny by default, and re-test that the function still works with the tightened policy.",
+  "domain": "serverless",
+  "scope_hint": "code.backend.serverless:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.serverless:human_authored",
+  "pack_id": "code.backend.serverless"
+}

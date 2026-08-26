@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:privacy:retention-explicit",
+  "type": "strategy",
+  "title": "Make retention explicit",
+  "description": "Personal data changes need a retention period, deletion trigger, backup/archive behavior, and audit evidence.",
+  "body": "Use when adding new storage, queues, caches, analytics events, uploaded files, derived features, or support records. Do not invent a retention policy without project owner approval. Actions: require a named retention owner or config, avoid indefinite storage, include cache and backup notes, and add deletion or expiry tests when local fixtures support it. Validation signals include TTL settings, cleanup jobs, deletion propagation tests, or documented human signoff. Risk boundary: indefinite retention, regulated data, or legal hold ambiguity requires human gate. Use when Privacy Risk Controls work touches personal-data classes, sinks, retention, consent, logs, prompts, and exports. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: choose the smallest direction that preserves the domain contract; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include data inventory, redaction tests, retention checks, export/delete tests, and approval evidence. Risk boundary: escalate or stop when the task involves PII disclosure, consent bypass, retention drift, and unapproved processor expansion, missing owner evidence, or live external state.",
+  "domain": "privacy",
+  "scope_hint": "risk.privacy:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.privacy",
+  "pack_id": "risk.privacy"
+}

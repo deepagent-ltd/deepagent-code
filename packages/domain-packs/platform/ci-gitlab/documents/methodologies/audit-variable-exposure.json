@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:glci:audit-variable-exposure",
+  "type": "methodology",
+  "title": "Audit CI/CD variable exposure",
+  "description": "Enumerate every variable, its protected/masked flags, and the pipelines that can read it, then tighten over-exposed ones.",
+  "body": "Steps: 1. List project, group, and instance CI/CD variables in scope. 2. For each, record whether it is Protected, Masked, and environment-scoped. 3. Determine which pipelines can read it (protected variables only on protected refs; unprotected on any branch and fork MRs). 4. Flag any secret that is unprotected, unmasked, or readable by fork MR pipelines. 5. Tighten flags and re-check that feature-branch pipelines no longer see it. Rollback point: variable settings are reversible in project settings. Validation: the audit is the gate; a secret readable outside protected refs is unverified until fixed.",
+  "domain": "ci_gitlab",
+  "scope_hint": "platform.ci-gitlab:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.ci-gitlab",
+  "pack_id": "platform.ci-gitlab"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:robot:isolate-nodes-and-fail-safely",
+  "type": "strategy",
+  "title": "Isolate nodes so a failure degrades safely",
+  "description": "Structure the ROS graph so one node crashing or stalling triggers a safe response instead of silent loss of control.",
+  "body": "Use when designing the ROS/ROS2 node and topic graph. Do not put unrelated critical functions in one node, and avoid assuming a publisher is alive just because a subscriber exists. Actions: split responsibilities into focused nodes, set QoS (reliability/deadline) appropriate to each topic, add liveliness/heartbeat monitoring, and define what the system does when a critical node goes silent (stop, hold, or safe degrade). Validation signals include a test where killing a critical node triggers the defined safe response within its deadline. Risk boundary: a stalled node that silently stops publishing commands can leave actuators in their last state and cause harm; treat missing liveness handling on a control-critical topic as a safety defect.",
+  "domain": "robotics",
+  "scope_hint": "code.robotics:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.robotics",
+  "pack_id": "code.robotics"
+}

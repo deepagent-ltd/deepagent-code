@@ -1,0 +1,11 @@
+{
+  "ref_id": "knowledge:frontend_web:viewport-units-and-safe-areas-vary",
+  "type": "knowledge",
+  "description": "Viewport units, browser chrome, and safe areas vary across devices and can break fixed layouts.",
+  "body": "Use this when implementing full-height panels, bottom docks, sticky headers, mobile drawers, virtual keyboard interactions, or full-bleed media. Mobile browser chrome, dynamic viewport units, safe-area insets, and scrollbars can make a layout that passes desktop inspection overlap or clip on a phone. This is not a mobile-native rule; it applies to browser layout only. Execution actions include testing narrow height as well as narrow width, checking fixed and sticky elements during scroll, and verifying content remains reachable when browser UI changes available space. Validation signals include no obscured primary action, no body scroll lock leaks, no clipped bottom content, and stable header/footer position. Risk boundary: global height rules such as 100vh on root containers can regress unrelated routes; scope fixes to the affected shell when possible. Use when Frontend Web work touches visible UI behavior, browser console output, DOM state, assets, viewport behavior, and interaction evidence. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: use the fact to constrain the change and test plan; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include browser smoke, component tests, viewport screenshots, console/network checks, and accessibility assertions. Risk boundary: escalate or stop when the task involves visual regressions, inaccessible interaction, hydration mismatch, and browser-only failures, missing owner evidence, or live external state.",
+  "domain": "web",
+  "scope_hint": "code.frontend.web:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.web:responsive_css_practice",
+  "pack_id": "code.frontend.web"
+}

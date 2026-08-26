@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:glci:artifacts-unbounded-and-over-broad",
+  "type": "failure_dossier",
+  "description": "Artifacts use over-broad paths with no expire_in, capturing secrets and exhausting storage.",
+  "body": "Failure mode: a job sets artifacts:paths too broadly (e.g. the whole workspace) with no expire_in, so it uploads generated secret files, .env, or caches as durable artifacts that any downstream job or user can download, while storage grows without bound. Detection signals: artifacts containing credential or .env files; no expire_in set; storage usage climbing; downstream jobs receiving unexpected files. Do not upload broad artifact paths without expiry. Safer fallback: list artifacts:paths to only the required outputs, set expire_in, exclude secret files, and verify the artifact contents contain no credentials before relying on the job.",
+  "domain": "ci_gitlab",
+  "scope_hint": "platform.ci-gitlab:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.ci-gitlab:human_authored",
+  "pack_id": "platform.ci-gitlab"
+}

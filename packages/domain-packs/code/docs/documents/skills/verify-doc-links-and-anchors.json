@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:docs:verify-doc-links-and-anchors",
+  "type": "skill",
+  "title": "Verify documentation links and anchors",
+  "description": "Check internal and external links, anchors, and referenced file paths in changed docs and report every broken or stale target.",
+  "body": "Use when validating changed documentation before publishing. Actions: collect every link, anchor, and referenced path in the changed docs, resolve internal targets against the repo and anchors against headings, check external URLs, and report each broken or redirected target with its location. Do not assume links still resolve after a restructure. This skill exposes capability only and must not crawl external hosts without runtime permission. Validation signals include a link-check report with zero unresolved internal targets. Risk boundary: if external links cannot be checked, report them as unverified rather than asserting they work.",
+  "domain": "code",
+  "scope_hint": "code.docs:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.docs",
+  "pack_id": "code.docs"
+}

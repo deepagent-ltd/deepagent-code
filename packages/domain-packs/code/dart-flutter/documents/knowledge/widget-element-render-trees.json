@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:flutter:widget-element-render-trees",
+  "type": "knowledge",
+  "title": "Widget, element, and render trees",
+  "description": "Widgets are immutable configuration; the framework keeps a mutable element tree that maps them to render objects and reuses elements across rebuilds.",
+  "body": "Use when reasoning about why a rebuild is cheap or why state attaches to the wrong widget. Widgets are immutable descriptions created fresh on each build; the framework maintains a persistent element tree that holds State and decides, by widget runtimeType and key, whether to reuse an element or create a new one, and a render tree that does layout/paint. So rebuilding many widgets is cheap because elements and render objects are reused when the configuration matches. Do not assume creating a new widget recreates its State, and use keys when reordering or swapping widgets of the same type to keep state attached correctly. Actions: rely on element reuse for cheap rebuilds and add keys where identity matters. Validation signals include a test that reordered list items keep their state. Risk boundary: missing keys cause state to bind to the wrong item when lists reorder, a subtle data-mixing bug.",
+  "domain": "dart",
+  "scope_hint": "code.dart-flutter:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.dart-flutter",
+  "pack_id": "code.dart-flutter"
+}

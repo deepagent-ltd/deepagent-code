@@ -1,0 +1,70 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.r",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "r_lang",
+      "rstats",
+      "tidyverse",
+      "r_packages"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.r: tidyverse and dplyr pipelines, data.frame versus tibble, vectorization over loops, renv and CRAN package management, R Markdown reproducibility, NA handling, factor pitfalls, the apply family"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "deploy a Kubernetes service with helm"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "r language tidyverse dplyr pipeline tibble data frame vectorization apply family na handling factor renv cran rmarkdown reproducible",
+  "expected_pack_id": "code.r",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "code.r L3 validation smoke",
+    "signals": [
+      "pipeline output column types match expectations",
+      "no row-wise loop where a vectorized op exists",
+      "NA cases handled explicitly not silently dropped",
+      "renv.lock pins every package version"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "code.r diagnosis smoke",
+    "signals": [
+      "accidental data.frame factor coercion changing values",
+      "growing a vector in a loop causing quadratic slowdown",
+      "NA silently propagating into an aggregate result",
+      "non-reproducible run from an unpinned package version",
+      "tibble vs data.frame subsetting returning a different shape"
+    ]
+  },
+  "source_refs": [
+    "source:r-for-data-science:paraphrased",
+    "source:advanced-r-vectorization:paraphrased"
+  ]
+}

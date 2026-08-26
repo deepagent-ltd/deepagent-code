@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:docs:version-mismatch-served",
+  "type": "failure_dossier",
+  "description": "Serving latest documentation to users on an older release, so documented behavior and examples do not match their version.",
+  "body": "Failure mode: docs are unversioned and always reflect the newest release, so a user pinned to an older version follows steps and sees flags or defaults that do not exist for them. Detection signals: support reports of 'option not found'; examples requiring features absent in the user's version; no version label on pages. Do not present one doc set as correct for all versions. Safer fallback: version docs per release, label the version, provide migration guides, and ensure each page states which version it describes before publishing.",
+  "domain": "code",
+  "scope_hint": "code.docs:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.docs:human_authored",
+  "pack_id": "code.docs"
+}

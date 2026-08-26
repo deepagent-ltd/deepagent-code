@@ -1,0 +1,420 @@
+[
+  {
+    "ref_id": "strategy:mt:choose-isolation-model",
+    "type": "strategy",
+    "title": "Choose an isolation model deliberately",
+    "summary": "Pick silo, pool, or bridge isolation per workload from the security, cost, and noisy-neighbor trade-offs rather than defaulting to shared everything.",
+    "domains": [
+      "multi_tenant",
+      "tenant_isolation",
+      "scoped_query",
+      "tenant_routing"
+    ],
+    "triggers": [
+      "isolation model",
+      "silo pool bridge",
+      "tenant isolation"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.multi-tenant"
+  },
+  {
+    "ref_id": "strategy:mt:scope-every-query-by-tenant",
+    "type": "strategy",
+    "title": "Carry the tenant id on every data access",
+    "summary": "Include the authenticated tenant in the filter of every query, read and write, so no operation can ever touch another tenant's rows.",
+    "domains": [
+      "multi_tenant",
+      "tenant_isolation",
+      "scoped_query",
+      "tenant_routing"
+    ],
+    "triggers": [
+      "scoped query",
+      "tenant id",
+      "tenant predicate"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.multi-tenant"
+  },
+  {
+    "ref_id": "strategy:mt:enforce-isolation-at-the-data-layer",
+    "type": "strategy",
+    "title": "Enforce isolation at the data layer, not just the app",
+    "summary": "Back application-level scoping with row-level security or equivalent so a missed filter in code cannot expose another tenant's data.",
+    "domains": [
+      "multi_tenant",
+      "tenant_isolation",
+      "scoped_query",
+      "tenant_routing"
+    ],
+    "triggers": [
+      "row-level security",
+      "rls",
+      "data layer isolation"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.multi-tenant"
+  },
+  {
+    "ref_id": "strategy:mt:derive-tenant-from-authenticated-principal",
+    "type": "strategy",
+    "title": "Derive tenant context from the authenticated principal",
+    "summary": "Resolve the active tenant from the verified session or token, never from a client-supplied id, header, or body field.",
+    "domains": [
+      "multi_tenant",
+      "tenant_isolation",
+      "scoped_query",
+      "tenant_routing"
+    ],
+    "triggers": [
+      "tenant context",
+      "authenticated principal",
+      "tenant claim"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.multi-tenant"
+  },
+  {
+    "ref_id": "strategy:mt:make-caches-tenant-aware",
+    "type": "strategy",
+    "title": "Make every cache key tenant-aware",
+    "summary": "Include the tenant in cache keys so a cached value computed for one tenant is never served to another.",
+    "domains": [
+      "multi_tenant",
+      "tenant_isolation",
+      "scoped_query",
+      "tenant_routing"
+    ],
+    "triggers": [
+      "tenant-aware cache",
+      "cache key",
+      "per-tenant cache"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.multi-tenant"
+  },
+  {
+    "ref_id": "strategy:mt:contain-noisy-neighbors",
+    "type": "strategy",
+    "title": "Contain noisy neighbors with per-tenant limits",
+    "summary": "Apply per-tenant quotas and fairness so one tenant's heavy load cannot starve the others sharing the pool.",
+    "domains": [
+      "multi_tenant",
+      "tenant_isolation",
+      "scoped_query",
+      "tenant_routing"
+    ],
+    "triggers": [
+      "noisy neighbor",
+      "per-tenant quota",
+      "fairness"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.multi-tenant"
+  },
+  {
+    "ref_id": "methodology:mt:audit-cross-tenant-leaks",
+    "type": "methodology",
+    "title": "Audit data paths for cross-tenant leaks",
+    "summary": "A procedure to systematically check every read, write, cache, and job for a tenant scope and to add negative tests.",
+    "domains": [
+      "multi_tenant",
+      "tenant_isolation",
+      "scoped_query",
+      "tenant_routing"
+    ],
+    "triggers": [
+      "cross-tenant audit",
+      "leak check",
+      "negative test"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.multi-tenant"
+  },
+  {
+    "ref_id": "methodology:mt:add-row-level-security",
+    "type": "methodology",
+    "title": "Introduce row-level security to an existing schema",
+    "summary": "A procedure to add database-enforced tenant isolation incrementally without breaking existing access.",
+    "domains": [
+      "multi_tenant",
+      "tenant_isolation",
+      "scoped_query",
+      "tenant_routing"
+    ],
+    "triggers": [
+      "row-level security",
+      "rls rollout",
+      "tenant column"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.multi-tenant"
+  },
+  {
+    "ref_id": "methodology:mt:diagnose-noisy-neighbor",
+    "type": "methodology",
+    "title": "Diagnose a noisy-neighbor incident",
+    "summary": "A procedure to attribute degraded shared-pool performance to a specific tenant and contain it.",
+    "domains": [
+      "multi_tenant",
+      "tenant_isolation",
+      "scoped_query",
+      "tenant_routing"
+    ],
+    "triggers": [
+      "noisy neighbor diagnosis",
+      "per-tenant metrics",
+      "throttle"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.multi-tenant"
+  },
+  {
+    "ref_id": "methodology:mt:propagate-tenant-across-async-boundaries",
+    "type": "methodology",
+    "title": "Propagate tenant context across async boundaries",
+    "summary": "A procedure to thread the authenticated tenant through queues, jobs, and downstream calls so scope is never lost.",
+    "domains": [
+      "multi_tenant",
+      "tenant_isolation",
+      "scoped_query",
+      "tenant_routing"
+    ],
+    "triggers": [
+      "context propagation",
+      "async boundary",
+      "job payload tenant"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.multi-tenant"
+  },
+  {
+    "ref_id": "knowledge:mt:silo-pool-bridge-tradeoffs",
+    "type": "knowledge",
+    "title": "Silo, pool, and bridge isolation trade-offs",
+    "summary": "Silo gives each tenant dedicated resources for strong isolation at higher cost, pool shares them for density, and bridge mixes the two.",
+    "domains": [
+      "multi_tenant",
+      "tenant_isolation",
+      "scoped_query",
+      "tenant_routing"
+    ],
+    "triggers": [
+      "silo pool bridge",
+      "isolation tradeoff",
+      "blast radius"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.multi-tenant"
+  },
+  {
+    "ref_id": "knowledge:mt:how-cross-tenant-leaks-happen",
+    "type": "knowledge",
+    "title": "How cross-tenant leaks happen",
+    "summary": "Leaks arise when a path fetches data without the tenant predicate, trusts a client-supplied tenant, or shares a cache key across tenants.",
+    "domains": [
+      "multi_tenant",
+      "tenant_isolation",
+      "scoped_query",
+      "tenant_routing"
+    ],
+    "triggers": [
+      "cross-tenant leak",
+      "leak causes",
+      "blind spot"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.multi-tenant"
+  },
+  {
+    "ref_id": "knowledge:mt:tenant-context-propagation",
+    "type": "knowledge",
+    "title": "How tenant context propagates through a request",
+    "summary": "The trusted tenant resolved at authentication must flow through every layer so async work and downstream calls stay scoped to the same tenant.",
+    "domains": [
+      "multi_tenant",
+      "tenant_isolation",
+      "scoped_query",
+      "tenant_routing"
+    ],
+    "triggers": [
+      "context propagation",
+      "async tenant",
+      "downstream scope"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.multi-tenant"
+  },
+  {
+    "ref_id": "knowledge:mt:per-tenant-configuration",
+    "type": "knowledge",
+    "title": "Per-tenant configuration and feature variation",
+    "summary": "Tenants often need different settings, limits, or features, which must be resolved from the tenant context rather than global flags.",
+    "domains": [
+      "multi_tenant",
+      "tenant_isolation",
+      "scoped_query",
+      "tenant_routing"
+    ],
+    "triggers": [
+      "per-tenant config",
+      "feature variation",
+      "tenant settings"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.multi-tenant"
+  },
+  {
+    "ref_id": "skill:mt:add-tenant-scoping-to-a-query",
+    "type": "skill",
+    "title": "Add tenant scoping to a data-access path",
+    "summary": "Take an unscoped query and bind it to the authenticated tenant, then prove isolation with a negative cross-tenant test.",
+    "domains": [
+      "multi_tenant",
+      "tenant_isolation",
+      "scoped_query",
+      "tenant_routing"
+    ],
+    "triggers": [
+      "tenant scoping",
+      "scoped query",
+      "negative test"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.multi-tenant"
+  },
+  {
+    "ref_id": "skill:mt:make-a-cache-tenant-safe",
+    "type": "skill",
+    "title": "Make a cache tenant-safe",
+    "summary": "Rework a cache so keys and invalidation include the tenant, preventing one tenant from receiving another's cached data.",
+    "domains": [
+      "multi_tenant",
+      "tenant_isolation",
+      "scoped_query",
+      "tenant_routing"
+    ],
+    "triggers": [
+      "tenant-safe cache",
+      "cache key",
+      "invalidation"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.multi-tenant"
+  }
+]

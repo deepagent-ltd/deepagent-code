@@ -1,0 +1,80 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "risk.privacy",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "pii",
+      "phi",
+      "pci",
+      "data_minimization"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [
+      "pii",
+      "personal_data"
+    ],
+    "risk_markers": [
+      "privacy"
+    ],
+    "repo_signals": [
+      "L3 smoke for risk.privacy: PII/PHI/PCI, consent, retention, redaction, exports, deletion paths, audit logs, and external processors"
+    ],
+    "round_signals": [
+      "l3_validation_smoke"
+    ],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "plain prose note with no repository or domain signal"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "privacy engineering PII/PHI/PCI, consent, retention, redaction, exports, deletion paths, audit logs, and external processors validation smoke diagnosis",
+  "expected_pack_id": "risk.privacy",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "privacy engineering L3 validation smoke",
+    "signals": [
+      "data inventory",
+      "redaction tests",
+      "retention checks",
+      "export/delete tests",
+      "access-control evidence",
+      "and human approval where regulated"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "privacy engineering diagnosis smoke",
+    "signals": [
+      "separate data discovery",
+      "storage",
+      "logging",
+      "prompt/artifact",
+      "processor",
+      "and user-rights paths"
+    ]
+  },
+  "source_refs": [
+    "source:official-tooling-docs:paraphrased",
+    "source:engineering-practice:paraphrased"
+  ]
+}

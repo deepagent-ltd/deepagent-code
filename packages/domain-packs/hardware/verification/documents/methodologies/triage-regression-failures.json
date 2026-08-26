@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:hwverif:triage-regression-failures",
+  "type": "methodology",
+  "title": "Triage constrained-random regression failures",
+  "description": "Reproduce each failure from its recorded seed, then classify it as a design bug, testbench bug, or constraint issue.",
+  "body": "Use when a nightly random regression returns failures. Do not patch the testbench to silence a failure before understanding it, since that can mask a real design bug. Actions: rerun the failing seed to reproduce deterministically, inspect the waveform and scoreboard mismatch, and classify the root cause. Validation signals include a deterministic reproduction from the seed and a clear classification of design versus testbench cause. Risk boundary: misclassifying a design bug as a testbench issue ships a defect, so escalate ambiguous failures to design review rather than waiving them.",
+  "domain": "hw_verification",
+  "scope_hint": "hardware.verification:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.verification",
+  "pack_id": "hardware.verification"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:tsdb:continuous-aggregate-semantics",
+  "type": "knowledge",
+  "title": "Continuous aggregate semantics",
+  "description": "Continuous aggregates incrementally materialize rollups over a refresh window; data outside the refreshed range is not yet reflected.",
+  "body": "Use when relying on downsampled views for dashboards or retention. A continuous aggregate stores precomputed buckets and refreshes incrementally over a configured window; very recent or very old data may not be materialized until the next refresh. Do not assume the aggregate is instantly consistent with raw inserts. Actions: configure the refresh window to cover both recent lag and expected lateness, and read recent data from raw if real-time accuracy is needed. Validation signals include aggregate buckets matching raw counts after refresh. Risk boundary: enabling raw retention before the aggregate covers the window loses history permanently.",
+  "domain": "timeseries_db",
+  "scope_hint": "code.database.timeseries:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.timeseries",
+  "pack_id": "code.database.timeseries"
+}

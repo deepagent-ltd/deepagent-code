@@ -1,0 +1,171 @@
+[
+  {
+    "ref_id": "skill:gpu:run-correctness-harness",
+    "type": "skill",
+    "title": "Run Correctness Harness",
+    "summary": "Run a CPU-reference correctness comparison against kernel output before trusting any benchmark number.",
+    "domains": [
+      "gpu_kernel",
+      "cuda",
+      "rocm"
+    ],
+    "triggers": [
+      "correctness",
+      "reference",
+      "tolerance",
+      "harness",
+      "compare",
+      "kernel",
+      "output"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.gpu-kernel"
+  },
+  {
+    "ref_id": "skill:gpu:collect-nsight-metrics",
+    "type": "skill",
+    "title": "Collect Nsight Metrics",
+    "summary": "Collect occupancy, memory throughput and bank-conflict counters from a profiler to ground optimization in evidence.",
+    "domains": [
+      "gpu_kernel",
+      "cuda",
+      "rocm"
+    ],
+    "triggers": [
+      "nsight",
+      "rocprof",
+      "occupancy",
+      "throughput",
+      "bank",
+      "conflict",
+      "profiler"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.gpu-kernel"
+  },
+  {
+    "ref_id": "methodology:gpu:progressive-sgemm",
+    "type": "methodology",
+    "title": "Progressive Sgemm",
+    "summary": "Progressive SGEMM for CUDA/GPU kernels: block tile to shared, then vectorized load, then remove bank conflicts; validate each step. 渐进式 SGEMM：先 block tile 搬 shared，再向量化 load，再消除 bank conflict。",
+    "domains": [
+      "gpu_kernel",
+      "cuda",
+      "rocm"
+    ],
+    "triggers": [
+      "sgemm",
+      "block",
+      "tile",
+      "shared",
+      "load",
+      "bank",
+      "conflict"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.gpu-kernel"
+  },
+  {
+    "ref_id": "strategy:gpu:float4-vectorized-load",
+    "type": "strategy",
+    "title": "Float4 Vectorized Load",
+    "summary": "Use float4 vectorized loads to improve global-to-shared memory bandwidth in CUDA/GPU kernels. 用 float4 向量化 load 提升 global→shared 搬运的带宽利用率。",
+    "domains": [
+      "gpu_kernel",
+      "cuda",
+      "rocm"
+    ],
+    "triggers": [
+      "float4",
+      "load",
+      "global",
+      "shared"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.gpu-kernel"
+  },
+  {
+    "ref_id": "strategy:gpu:pad-shared-avoid-bank-conflict",
+    "type": "strategy",
+    "title": "Pad Shared Avoid Bank Conflict",
+    "summary": "Pad shared memory tiles to avoid bank conflicts in CUDA/GPU kernels and prevent throughput loss. 给 shared memory tile 加 padding 规避 bank conflict，避免吞吐下降。",
+    "domains": [
+      "gpu_kernel",
+      "cuda",
+      "rocm"
+    ],
+    "triggers": [
+      "shared",
+      "memory",
+      "tile",
+      "padding",
+      "bank",
+      "conflict"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.gpu-kernel"
+  },
+  {
+    "ref_id": "strategy:gpu:stage-global-to-shared",
+    "type": "strategy",
+    "title": "Stage Global To Shared",
+    "summary": "Stage global data into shared memory before computing in CUDA/GPU kernels to cut repeated global loads when global-bandwidth bound. 分阶段把 global 数据搬到 shared memory 再计算，减少重复 global load。",
+    "domains": [
+      "gpu_kernel",
+      "cuda",
+      "rocm"
+    ],
+    "triggers": [
+      "global",
+      "shared",
+      "memory",
+      "load"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.gpu-kernel"
+  }
+]

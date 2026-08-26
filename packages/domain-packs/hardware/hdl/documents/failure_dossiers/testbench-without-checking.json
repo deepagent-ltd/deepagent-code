@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:hdl:testbench-without-checking",
+  "type": "failure_dossier",
+  "description": "A testbench that drives stimulus but has no assertions or scoreboard, so it passes even when the DUT is broken.",
+  "body": "Failure mode: the testbench applies inputs and prints/plots outputs but never compares against expected values, so injected bugs still 'pass'. Detection signals: no scoreboard or assertions in the bench; tests pass after deliberately breaking the DUT; verification relies on manual waveform review. Do not treat a stimulus-only bench as verification. Safer fallback: add a reference model and a scoreboard or SVA that fails on mismatch, verify it catches an injected fault, and track functional coverage.",
+  "domain": "hdl",
+  "scope_hint": "hardware.hdl:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.hdl:human_authored",
+  "pack_id": "hardware.hdl"
+}

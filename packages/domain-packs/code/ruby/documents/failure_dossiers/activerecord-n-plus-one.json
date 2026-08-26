@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:ruby:activerecord-n-plus-one",
+  "type": "failure_dossier",
+  "description": "An association is read inside a loop without eager loading, issuing one query per row and overloading the database.",
+  "body": "Failure mode: a view or service iterates a collection and accesses record.association per item without .includes, so an N-row page fires N+1 queries, fine with seed data and crippling in production. Detection signals: the log shows the same query repeated per row; the bullet gem warns of N+1; list endpoints slow as data grows. Do not access associations per row without preloading. Safer fallback: add .includes(:assoc) (or eager_load when filtering on the association) at the feeding query, batch large sets with find_each, and add a query-count spec asserting a constant count regardless of rows.",
+  "domain": "ruby",
+  "scope_hint": "code.ruby:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.ruby:human_authored",
+  "pack_id": "code.ruby"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:production:no-production-shortcuts",
+  "type": "strategy",
+  "title": "No production shortcuts",
+  "description": "Do not disable monitoring, tests, approvals, backups, migrations, rate limits, or safety checks to make a production change succeed.",
+  "body": "Use when deployment friction tempts bypassing gates, increasing privileges, skipping tests, disabling alarms, or applying manual hotfixes. Do not block local-only diagnostics that cannot reach production and are clearly reverted. Actions: diagnose the failing gate, narrow scope, propose safe alternatives, and escalate if the gate must change. Validation signals include the safety check still active and the underlying issue addressed. Risk boundary: persistent production-facing bypass is rejected unless a human explicitly approves an incident exception. Use when Production Change Risk Controls work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: choose the smallest direction that preserves the domain contract; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "production",
+  "scope_hint": "risk.production:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.production",
+  "pack_id": "risk.production"
+}

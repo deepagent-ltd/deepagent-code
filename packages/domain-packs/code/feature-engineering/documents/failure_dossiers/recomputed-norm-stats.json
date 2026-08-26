@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:feat:recomputed-norm-stats",
+  "type": "failure_dossier",
+  "description": "Serving recomputes normalization statistics from live data instead of using the pinned training-time stats.",
+  "body": "Failure mode: the serving path standardizes features using means and scales computed from recent live traffic rather than the statistics fit during training, so the transform silently differs and the model sees shifted inputs. Detection signals: scaled feature values that differ between offline and online for identical raw inputs, and a production metric below the offline expectation with no architecture change. Do not chalk it up to drift. Safer fallback: persist the training-fit normalization statistics as a versioned artifact bound to the model, make serving read the pinned stats unchanged, and verify offline/online scaled values match before release.",
+  "domain": "feature_engineering",
+  "scope_hint": "code.feature-engineering:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.feature-engineering:human_authored",
+  "pack_id": "code.feature-engineering"
+}

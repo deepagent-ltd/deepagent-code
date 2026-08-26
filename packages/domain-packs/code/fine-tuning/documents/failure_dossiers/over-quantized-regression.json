@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:finetune:over-quantized-regression",
+  "type": "failure_dossier",
+  "description": "An int4 export passes a perplexity check but fails on hard reasoning and long-context inputs.",
+  "body": "Failure mode: a model is quantized to int4 and accepted on a small perplexity delta, but task accuracy and long-context behavior degrade because low-bit quantization hurts hard cases unevenly. Detection signals: a near-flat perplexity delta alongside a real drop on the task and long-context evals, and user reports of degraded answers on difficult prompts. Do not accept quantization on perplexity alone. Safer fallback: evaluate every precision against full precision on the task and capability evals, set an explicit quality budget, choose the smallest scheme inside it (preferring calibrated/QLoRA-style for low bits), and escalate if none qualifies.",
+  "domain": "fine_tuning",
+  "scope_hint": "code.fine-tuning:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.fine-tuning:human_authored",
+  "pack_id": "code.fine-tuning"
+}

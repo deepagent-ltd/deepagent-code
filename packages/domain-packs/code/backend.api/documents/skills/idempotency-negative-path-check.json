@@ -1,0 +1,11 @@
+{
+  "ref_id": "skill:backend_api:idempotency-negative-path-check",
+  "type": "skill",
+  "description": "Verify duplicate, retry, timeout-adjacent, and conflict behavior for mutating API operations.",
+  "body": "Inputs: mutating endpoint or procedure, idempotency key or natural uniqueness expectation, representative payload, and side effect to observe safely. Procedure: send the same request twice, send a duplicate with the same idempotency key when supported, send a conflicting payload for the same resource, and inspect response status/error shape and safe side-effect evidence. This skill does not inspect database locking internals unless paired with the database pack. Outputs: duplicate behavior, conflict behavior, response stability, and any side effect duplication risk. Validation signals include stable repeated response or documented conflict, no double-created resource in safe test data, and clear machine-readable error for rejected duplicates. Failure handling: if the operation cannot be safely repeated in local data, document the missing harness and recommend adding one before claiming retry safety. Use when Backend API work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: run the documented inspection and validation workflow; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "api",
+  "scope_hint": "code.backend.api:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.api:idempotency_check_skill",
+  "pack_id": "code.backend.api"
+}

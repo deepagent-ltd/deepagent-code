@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:wasm:port-code-to-a-wasm-target",
+  "type": "methodology",
+  "title": "Port existing code to a WASM target",
+  "description": "Identify host dependencies that do not exist in WASM and replace them with imports or runtime-appropriate shims.",
+  "body": "Steps: 1. Inventory the code's host dependencies: filesystem, threads, sockets, time, randomness, environment. 2. Determine which the target runtime provides (WASI offers a capability-scoped subset; the browser provides none of these directly). 3. Replace unavailable calls with imported JS functions (browser) or WASI APIs, or feature-gate them out. 4. Handle threading explicitly (WASM threads need shared memory and cross-origin isolation; many builds are single-threaded). 5. Build, instantiate, and exercise the ported paths. Rollback point: the port is on a branch. Validation: the module instantiates with all imports satisfied and the ported paths behave correctly in the target runtime.",
+  "domain": "wasm",
+  "scope_hint": "code.wasm:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.wasm",
+  "pack_id": "code.wasm"
+}

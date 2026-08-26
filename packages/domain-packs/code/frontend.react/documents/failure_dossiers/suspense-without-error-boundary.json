@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:frontend_react:suspense-without-error-boundary",
+  "type": "failure_dossier",
+  "description": "Wrapping async UI in Suspense but no error boundary, so a rejected resource throws and unmounts a large part of the tree.",
+  "body": "Failure mode: a lazy or data-fetching subtree has a Suspense fallback but no error boundary, so when the resource rejects the error propagates upward and blanks the page instead of showing recovery UI. Detection signals: a single failed fetch white-screens a route; uncaught errors in the console; no error boundary in the component tree above the async leaf. Do not rely on Suspense alone to handle failures; it handles pending, not errors. Safer fallback: add an error boundary at the same or finer granularity as the Suspense boundary, render a retry/fallback UI, and verify with a forced rejection.",
+  "domain": "react",
+  "scope_hint": "code.frontend.react:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.react:human_authored",
+  "pack_id": "code.frontend.react"
+}

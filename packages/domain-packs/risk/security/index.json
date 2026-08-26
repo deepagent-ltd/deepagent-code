@@ -1,0 +1,1096 @@
+[
+  {
+    "ref_id": "knowledge:security:authentication-not-authorization",
+    "type": "knowledge",
+    "title": "Authentication Not Authorization",
+    "summary": "Knowing who a caller is does not prove what object, action, tenant, or state they may access.",
+    "domains": [
+      "authz",
+      "security",
+      "injection",
+      "secrets",
+      "supply_chain"
+    ],
+    "triggers": [
+      "knowing",
+      "caller",
+      "does",
+      "prove",
+      "what",
+      "object",
+      "action",
+      "tenant"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.security"
+  },
+  {
+    "ref_id": "knowledge:security:client-state-is-untrusted",
+    "type": "knowledge",
+    "title": "Client State Is Untrusted",
+    "summary": "Hidden form fields, route guards, local storage, mobile flags, and disabled UI controls are attacker-controlled signals.",
+    "domains": [
+      "security",
+      "authz",
+      "injection",
+      "secrets",
+      "supply_chain"
+    ],
+    "triggers": [
+      "hidden",
+      "form",
+      "fields",
+      "route",
+      "guards",
+      "local",
+      "storage",
+      "mobile"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.security"
+  },
+  {
+    "ref_id": "knowledge:security:csrf-protects-state-change",
+    "type": "knowledge",
+    "title": "Csrf Protects State Change",
+    "summary": "Cookie-authenticated state-changing requests need CSRF or equivalent same-origin protections unless another proven mechanism applies.",
+    "domains": [
+      "security",
+      "authz",
+      "injection",
+      "secrets",
+      "supply_chain"
+    ],
+    "triggers": [
+      "cookie",
+      "authenticated",
+      "state",
+      "changing",
+      "requests",
+      "need",
+      "csrf",
+      "equivalent"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.security"
+  },
+  {
+    "ref_id": "knowledge:security:dangerous-sinks-need-structured-input",
+    "type": "knowledge",
+    "title": "Dangerous Sinks Need Structured Input",
+    "summary": "Interpreters and external effect sinks should receive structured, constrained data instead of concatenated strings.",
+    "domains": [
+      "injection",
+      "security",
+      "authz",
+      "secrets",
+      "supply_chain"
+    ],
+    "triggers": [
+      "interpreters",
+      "external",
+      "effect",
+      "sinks",
+      "should",
+      "receive",
+      "structured",
+      "constrained"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.security"
+  },
+  {
+    "ref_id": "knowledge:security:deny-by-default-is-safer-than-allow-on-error",
+    "type": "knowledge",
+    "title": "Deny By Default Is Safer Than Allow On Error",
+    "summary": "Parsing, policy lookup, network, cache, or configuration errors should not grant access to protected operations.",
+    "domains": [
+      "authz",
+      "security",
+      "injection",
+      "secrets",
+      "supply_chain"
+    ],
+    "triggers": [
+      "parsing",
+      "policy",
+      "lookup",
+      "network",
+      "cache",
+      "configuration",
+      "errors",
+      "should"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.security"
+  },
+  {
+    "ref_id": "knowledge:security:install-scripts-are-code-execution",
+    "type": "knowledge",
+    "title": "Install Scripts Are Code Execution",
+    "summary": "Package install hooks, build scripts, binary downloads, and generated code can execute before application tests begin.",
+    "domains": [
+      "supply_chain",
+      "security",
+      "authz",
+      "injection",
+      "secrets"
+    ],
+    "triggers": [
+      "package",
+      "install",
+      "hooks",
+      "build",
+      "scripts",
+      "binary",
+      "downloads",
+      "generated"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.security"
+  },
+  {
+    "ref_id": "knowledge:security:negative-tests-cover-bypass-not-just-errors",
+    "type": "knowledge",
+    "title": "Negative Tests Cover Bypass Not Just Errors",
+    "summary": "A useful security negative test proves a bypass is denied, not merely that malformed input returns any error.",
+    "domains": [
+      "security",
+      "authz",
+      "injection",
+      "secrets",
+      "supply_chain"
+    ],
+    "triggers": [
+      "useful",
+      "security",
+      "negative",
+      "test",
+      "proves",
+      "bypass",
+      "denied",
+      "merely"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.security"
+  },
+  {
+    "ref_id": "knowledge:security:output-encoding-is-contextual",
+    "type": "knowledge",
+    "title": "Output Encoding Is Contextual",
+    "summary": "HTML, attribute, URL, JavaScript, CSS, Markdown, shell, and SQL contexts need different escaping or structured APIs.",
+    "domains": [
+      "injection",
+      "security",
+      "authz",
+      "secrets",
+      "supply_chain"
+    ],
+    "triggers": [
+      "html",
+      "attribute",
+      "javascript",
+      "markdown",
+      "shell",
+      "contexts",
+      "need",
+      "different"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.security"
+  },
+  {
+    "ref_id": "knowledge:security:parameterized-sql-prevents-structure-injection",
+    "type": "knowledge",
+    "title": "Parameterized Sql Prevents Structure Injection",
+    "summary": "Parameterized statements protect only when user values remain bound parameters and are not used to build identifiers or clauses.",
+    "domains": [
+      "injection",
+      "security",
+      "authz",
+      "secrets",
+      "supply_chain"
+    ],
+    "triggers": [
+      "parameterized",
+      "statements",
+      "protect",
+      "only",
+      "when",
+      "user",
+      "values",
+      "remain"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.security"
+  },
+  {
+    "ref_id": "knowledge:security:secrets-in-logs-are-exposure",
+    "type": "knowledge",
+    "title": "Secrets In Logs Are Exposure",
+    "summary": "A secret printed to logs, errors, traces, crash dumps, prompts, or artifacts should be treated as exposed even if the primary code path is fixed later.",
+    "domains": [
+      "secrets",
+      "security",
+      "authz",
+      "injection",
+      "supply_chain"
+    ],
+    "triggers": [
+      "secret",
+      "printed",
+      "logs",
+      "errors",
+      "traces",
+      "crash",
+      "dumps",
+      "prompts"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.security"
+  },
+  {
+    "ref_id": "knowledge:security:security-controls-require-regression-lock",
+    "type": "knowledge",
+    "title": "Security Controls Require Regression Lock",
+    "summary": "A security control without a focused regression test or reviewable evidence is likely to regress during later refactors.",
+    "domains": [
+      "security",
+      "authz",
+      "injection",
+      "secrets",
+      "supply_chain"
+    ],
+    "triggers": [
+      "security",
+      "control",
+      "without",
+      "focused",
+      "regression",
+      "test",
+      "reviewable",
+      "evidence"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.security"
+  },
+  {
+    "ref_id": "knowledge:security:tokens-are-bearer-capabilities",
+    "type": "knowledge",
+    "title": "Tokens Are Bearer Capabilities",
+    "summary": "Many tokens grant access to whoever holds them; masking display is not enough if storage, transport, or logs leak the raw value.",
+    "domains": [
+      "secrets",
+      "security",
+      "authz",
+      "injection",
+      "supply_chain"
+    ],
+    "triggers": [
+      "many",
+      "tokens",
+      "grant",
+      "access",
+      "whoever",
+      "holds",
+      "them",
+      "masking"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.security"
+  },
+  {
+    "ref_id": "methodology:security:authz-matrix-test",
+    "type": "methodology",
+    "title": "Authz Matrix Test",
+    "summary": "Build a role, owner, tenant, and state matrix before declaring access-control behavior correct.",
+    "domains": [
+      "authz",
+      "security",
+      "injection",
+      "secrets",
+      "supply_chain"
+    ],
+    "triggers": [
+      "build",
+      "role",
+      "owner",
+      "tenant",
+      "state",
+      "matrix",
+      "before",
+      "declaring"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.security"
+  },
+  {
+    "ref_id": "methodology:security:dependency-risk-pass",
+    "type": "methodology",
+    "title": "Dependency Risk Pass",
+    "summary": "Review dependency changes for provenance, permissions, scripts, lockfile deltas, advisories, and runtime reachability.",
+    "domains": [
+      "supply_chain",
+      "security",
+      "authz",
+      "injection",
+      "secrets"
+    ],
+    "triggers": [
+      "review",
+      "dependency",
+      "changes",
+      "provenance",
+      "permissions",
+      "scripts",
+      "lockfile",
+      "deltas"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.security"
+  },
+  {
+    "ref_id": "methodology:security:human-gate-for-security-risk",
+    "type": "methodology",
+    "title": "Human Gate For Security Risk",
+    "summary": "Escalate any change that broadens access, exposes data, weakens a control, or changes incident posture.",
+    "domains": [
+      "security",
+      "authz",
+      "injection",
+      "secrets",
+      "supply_chain"
+    ],
+    "triggers": [
+      "escalate",
+      "change",
+      "that",
+      "broadens",
+      "access",
+      "exposes",
+      "data",
+      "weakens"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.security"
+  },
+  {
+    "ref_id": "methodology:security:injection-sink-review",
+    "type": "methodology",
+    "title": "Injection Sink Review",
+    "summary": "Trace untrusted input into each interpreter and prove a sink-specific safe API is used.",
+    "domains": [
+      "injection",
+      "security",
+      "authz",
+      "secrets",
+      "supply_chain"
+    ],
+    "triggers": [
+      "trace",
+      "untrusted",
+      "input",
+      "into",
+      "each",
+      "interpreter",
+      "prove",
+      "sink"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.security"
+  },
+  {
+    "ref_id": "methodology:security:secret-exposure-check",
+    "type": "methodology",
+    "title": "Secret Exposure Check",
+    "summary": "Check source, config, logs, errors, telemetry, artifacts, and rotation path when secrets may be touched.",
+    "domains": [
+      "secrets",
+      "security",
+      "authz",
+      "injection",
+      "supply_chain"
+    ],
+    "triggers": [
+      "check",
+      "source",
+      "config",
+      "logs",
+      "errors",
+      "telemetry",
+      "artifacts",
+      "rotation"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.security"
+  },
+  {
+    "ref_id": "methodology:security:security-review-flow",
+    "type": "methodology",
+    "title": "Security Review Flow",
+    "summary": "Review input, identity, authorization, sink, output, logs, and audit evidence in that order.",
+    "domains": [
+      "security",
+      "authz",
+      "injection",
+      "secrets",
+      "supply_chain"
+    ],
+    "triggers": [
+      "review",
+      "input",
+      "identity",
+      "authorization",
+      "sink",
+      "output",
+      "logs",
+      "audit"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.security"
+  },
+  {
+    "ref_id": "skill:risk.security:authz-negative-test-plan",
+    "type": "skill",
+    "title": "Authz Negative Test Plan",
+    "summary": "Design focused deny tests for role, owner, tenant, unauthenticated, expired, and malformed access paths.",
+    "domains": [
+      "authz",
+      "security",
+      "injection",
+      "secrets",
+      "supply_chain"
+    ],
+    "triggers": [
+      "design",
+      "focused",
+      "deny",
+      "tests",
+      "role",
+      "owner",
+      "tenant",
+      "unauthenticated"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.security"
+  },
+  {
+    "ref_id": "skill:risk.security:dangerous-sink-review",
+    "type": "skill",
+    "title": "Dangerous Sink Review",
+    "summary": "Trace untrusted input into interpreters, network, filesystem, renderers, and dynamic loading sinks.",
+    "domains": [
+      "injection",
+      "security",
+      "authz",
+      "secrets",
+      "supply_chain"
+    ],
+    "triggers": [
+      "trace",
+      "untrusted",
+      "input",
+      "into",
+      "interpreters",
+      "network",
+      "filesystem",
+      "renderers"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.security"
+  },
+  {
+    "ref_id": "skill:risk.security:dependency-security-delta-review",
+    "type": "skill",
+    "title": "Dependency Security Delta Review",
+    "summary": "Review package and lockfile changes for executable supply-chain risk before accepting them.",
+    "domains": [
+      "supply_chain",
+      "security",
+      "authz",
+      "injection",
+      "secrets"
+    ],
+    "triggers": [
+      "review",
+      "package",
+      "lockfile",
+      "changes",
+      "executable",
+      "supply",
+      "chain",
+      "risk"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.security"
+  },
+  {
+    "ref_id": "skill:risk.security:secret-leak-review",
+    "type": "skill",
+    "title": "Secret Leak Review",
+    "summary": "Inspect changed source, logs, errors, telemetry, and artifacts for raw or recoverable secrets.",
+    "domains": [
+      "secrets",
+      "security",
+      "authz",
+      "injection",
+      "supply_chain"
+    ],
+    "triggers": [
+      "inspect",
+      "changed",
+      "source",
+      "logs",
+      "errors",
+      "telemetry",
+      "artifacts",
+      "recoverable"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.security"
+  },
+  {
+    "ref_id": "skill:risk.security:security-human-gate-escalation",
+    "type": "skill",
+    "title": "Security Human Gate Escalation",
+    "summary": "Prepare a concise escalation when automation cannot prove a security-sensitive change is conservative.",
+    "domains": [
+      "security",
+      "authz",
+      "injection",
+      "secrets",
+      "supply_chain"
+    ],
+    "triggers": [
+      "prepare",
+      "concise",
+      "escalation",
+      "when",
+      "automation",
+      "cannot",
+      "prove",
+      "security"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.security"
+  },
+  {
+    "ref_id": "skill:risk.security:security-risk-triage",
+    "type": "skill",
+    "title": "Security Risk Triage",
+    "summary": "Classify a change by asset, actor, trust boundary, sink, data sensitivity, and required human gate.",
+    "domains": [
+      "security",
+      "authz",
+      "injection",
+      "secrets",
+      "supply_chain"
+    ],
+    "triggers": [
+      "classify",
+      "change",
+      "asset",
+      "actor",
+      "trust",
+      "boundary",
+      "sink",
+      "data"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.security"
+  },
+  {
+    "ref_id": "strategy:security:audit-evidence-before-closure",
+    "type": "strategy",
+    "title": "Audit Evidence Before Closure",
+    "summary": "Security-sensitive work is not closed until the decision, validation, and residual risk are recorded in reviewable evidence.",
+    "domains": [
+      "security",
+      "authz",
+      "injection",
+      "secrets",
+      "supply_chain"
+    ],
+    "triggers": [
+      "security",
+      "sensitive",
+      "work",
+      "closed",
+      "until",
+      "decision",
+      "validation",
+      "residual"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.security"
+  },
+  {
+    "ref_id": "strategy:security:dangerous-sink-inventory",
+    "type": "strategy",
+    "title": "Dangerous Sink Inventory",
+    "summary": "Treat command execution, SQL, template rendering, deserialization, file paths, redirects, SSRF-capable fetches, and dynamic code as sink-specific risks.",
+    "domains": [
+      "injection",
+      "security",
+      "authz",
+      "secrets",
+      "supply_chain"
+    ],
+    "triggers": [
+      "treat",
+      "command",
+      "execution",
+      "template",
+      "rendering",
+      "deserialization",
+      "file",
+      "paths"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.security"
+  },
+  {
+    "ref_id": "strategy:security:deny-unsafe-shortcuts",
+    "type": "strategy",
+    "title": "Deny Unsafe Shortcuts",
+    "summary": "Do not recommend disabling validation, weakening policy, broadening secrets, or suppressing warnings to make a security task pass.",
+    "domains": [
+      "security",
+      "authz",
+      "injection",
+      "secrets",
+      "supply_chain"
+    ],
+    "triggers": [
+      "recommend",
+      "disabling",
+      "validation",
+      "weakening",
+      "policy",
+      "broadening",
+      "secrets",
+      "suppressing"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.security"
+  },
+  {
+    "ref_id": "strategy:security:fail-closed-authz",
+    "type": "strategy",
+    "title": "Fail Closed Authz",
+    "summary": "Authorization decisions should deny when identity, ownership, tenant, scope, or policy evidence is missing.",
+    "domains": [
+      "authz",
+      "security",
+      "injection",
+      "secrets",
+      "supply_chain"
+    ],
+    "triggers": [
+      "authorization",
+      "decisions",
+      "should",
+      "deny",
+      "when",
+      "identity",
+      "ownership",
+      "tenant"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.security"
+  },
+  {
+    "ref_id": "strategy:security:least-privilege-delta",
+    "type": "strategy",
+    "title": "Least Privilege Delta",
+    "summary": "Permission expansions should be scoped, justified, reviewed, and paired with a rollback or removal path.",
+    "domains": [
+      "security",
+      "authz",
+      "injection",
+      "secrets",
+      "supply_chain"
+    ],
+    "triggers": [
+      "permission",
+      "expansions",
+      "should",
+      "scoped",
+      "justified",
+      "reviewed",
+      "paired",
+      "with"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.security"
+  },
+  {
+    "ref_id": "strategy:security:secret-minimum-exposure",
+    "type": "strategy",
+    "title": "Secret Minimum Exposure",
+    "summary": "Keep credentials, tokens, keys, and signing material out of source, logs, errors, telemetry, prompts, generated artifacts, and broad process environments.",
+    "domains": [
+      "secrets",
+      "security",
+      "authz",
+      "injection",
+      "supply_chain"
+    ],
+    "triggers": [
+      "keep",
+      "credentials",
+      "tokens",
+      "keys",
+      "signing",
+      "material",
+      "source",
+      "logs"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.security"
+  },
+  {
+    "ref_id": "strategy:security:security-negative-tests",
+    "type": "strategy",
+    "title": "Security Negative Tests",
+    "summary": "Security fixes need tests for denied, malformed, cross-scope, replay, and bypass attempts, not only happy-path success.",
+    "domains": [
+      "security",
+      "authz",
+      "injection",
+      "secrets",
+      "supply_chain"
+    ],
+    "triggers": [
+      "security",
+      "fixes",
+      "need",
+      "tests",
+      "denied",
+      "malformed",
+      "cross",
+      "scope"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.security"
+  },
+  {
+    "ref_id": "strategy:security:server-side-enforcement",
+    "type": "strategy",
+    "title": "Server Side Enforcement",
+    "summary": "Client checks can guide UX, but security decisions must be enforced on the trusted side of the boundary.",
+    "domains": [
+      "authz",
+      "security",
+      "injection",
+      "secrets",
+      "supply_chain"
+    ],
+    "triggers": [
+      "client",
+      "checks",
+      "guide",
+      "security",
+      "decisions",
+      "must",
+      "enforced",
+      "trusted"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.security"
+  },
+  {
+    "ref_id": "strategy:security:supply-chain-pin-review",
+    "type": "strategy",
+    "title": "Supply Chain Pin Review",
+    "summary": "Dependency and lockfile changes are executable risk and require provenance, maintainer, install-script, and transitive-delta review.",
+    "domains": [
+      "supply_chain",
+      "security",
+      "authz",
+      "injection",
+      "secrets"
+    ],
+    "triggers": [
+      "dependency",
+      "lockfile",
+      "changes",
+      "executable",
+      "risk",
+      "require",
+      "provenance",
+      "maintainer"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.security"
+  },
+  {
+    "ref_id": "strategy:security:trust-boundary-first",
+    "type": "strategy",
+    "title": "Trust Boundary First",
+    "summary": "Identify assets, actors, trust boundaries, and attacker-controlled inputs before proposing a security-sensitive change.",
+    "domains": [
+      "security",
+      "authz",
+      "injection",
+      "secrets",
+      "supply_chain"
+    ],
+    "triggers": [
+      "identify",
+      "assets",
+      "actors",
+      "trust",
+      "boundaries",
+      "attacker",
+      "controlled",
+      "inputs"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.security"
+  }
+]

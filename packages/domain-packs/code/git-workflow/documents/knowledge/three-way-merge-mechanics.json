@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:git:three-way-merge-mechanics",
+  "type": "knowledge",
+  "title": "How a three-way merge computes the result",
+  "description": "A merge combines two tips relative to their common ancestor, and a conflict arises only when both sides changed the same region differently.",
+  "body": "Use when reasoning about why a merge conflicted or produced a given result. Do not assume conflicts come from any overlapping edit. Git compares each side to the merge base: a region changed on only one side applies cleanly, while the same region changed differently on both sides becomes a conflict. Inspect the base with git merge-base to understand a confusing conflict. Validation signals include a merge result that matches a manual three-way reading of base, ours, and theirs. Risk boundary: rename and move detection can mislabel hunks, so verify the merged file rather than trusting auto-resolution on heavily moved code.",
+  "domain": "git_workflow",
+  "scope_hint": "code.git-workflow:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.git-workflow",
+  "pack_id": "code.git-workflow"
+}

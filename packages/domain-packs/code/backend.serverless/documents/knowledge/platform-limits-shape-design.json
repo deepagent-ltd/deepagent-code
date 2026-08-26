@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:sls:platform-limits-shape-design",
+  "type": "knowledge",
+  "title": "Platform limits shape the design",
+  "description": "Timeout, memory, payload size, /tmp size, and account concurrency are hard ceilings that force architectural choices, not tunables to ignore.",
+  "body": "Use when a function fails under scale or large input. FaaS platforms impose hard limits: max execution time, max memory, max request/response payload, ephemeral storage size, and account/function concurrency. Exceeding them causes throttling, truncation, or termination, not graceful degradation. Do not treat limits as advisory. Actions: offload large payloads to object storage and pass references, split long work into steps/state machines, and reserve concurrency to protect downstreams. Validation signals include load tests staying within limits and no throttle/timeout errors. Risk boundary: hitting a concurrency ceiling can throttle an entire account's functions — model burst behavior before deploying high-fan-out workloads.",
+  "domain": "serverless",
+  "scope_hint": "code.backend.serverless:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.serverless",
+  "pack_id": "code.backend.serverless"
+}

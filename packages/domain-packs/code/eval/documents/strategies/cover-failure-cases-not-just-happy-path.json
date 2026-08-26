@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:eval:cover-failure-cases-not-just-happy-path",
+  "type": "strategy",
+  "title": "Cover failure cases, not just the happy path",
+  "description": "The golden set deliberately includes hard, adversarial, and edge cases so the score reflects real-world robustness.",
+  "body": "Use when assembling or auditing an eval set. Do not fill the set with easy, representative-only cases, and avoid a high average score that hides failures on the cases that matter. Actions: include known failure modes, adversarial inputs, rare-but-critical cases, and edge inputs; segment scores by case type rather than reporting one average. Validation signals include per-segment scores that expose weak categories rather than a single blended number. Risk boundary: an easy-only set produces a misleadingly high score that ships a fragile system; require failure-case coverage before trusting an aggregate.",
+  "domain": "eval",
+  "scope_hint": "code.eval:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.eval",
+  "pack_id": "code.eval"
+}

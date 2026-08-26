@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:feat:offline-only-feature",
+  "type": "failure_dossier",
+  "description": "A feature works in training backfills but is missing or differently computed at serving time.",
+  "body": "Failure mode: a feature is materialized only in the offline store or computed by serving-side code that differs from training, so the model receives nulls or mismatched values in production. Detection signals: serving logs showing null or default feature values, and an offline/online replay diff that is non-zero for the same entity and timestamp. Do not paper over it by imputing a default at serving — that hides the skew and biases predictions. Safer fallback: define the feature once in the store, materialize both offline and online from that definition, replay an entity through both paths to confirm equality, then re-evaluate the model before serving.",
+  "domain": "feature_engineering",
+  "scope_hint": "code.feature-engineering:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.feature-engineering:human_authored",
+  "pack_id": "code.feature-engineering"
+}

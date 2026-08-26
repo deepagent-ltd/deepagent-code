@@ -1,0 +1,452 @@
+[
+  {
+    "ref_id": "strategy:edge:make-cache-control-the-contract",
+    "type": "strategy",
+    "title": "Make cache-control the caching contract",
+    "summary": "Set explicit Cache-Control and surrogate headers on every response so edge caching is deterministic, not accidental.",
+    "domains": [
+      "cdn",
+      "edge_compute",
+      "edge_cache",
+      "edge_function"
+    ],
+    "triggers": [
+      "cache-control",
+      "surrogate",
+      "header",
+      "max-age",
+      "contract"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cdn-edge"
+  },
+  {
+    "ref_id": "strategy:edge:keep-functions-within-runtime-limits",
+    "type": "strategy",
+    "title": "Keep edge functions within runtime limits",
+    "summary": "Design edge functions for tight CPU/memory budgets and no persistent filesystem, unlike origin servers.",
+    "domains": [
+      "cdn",
+      "edge_compute",
+      "edge_cache",
+      "edge_function"
+    ],
+    "triggers": [
+      "edge function",
+      "worker",
+      "cpu",
+      "memory",
+      "limit"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cdn-edge"
+  },
+  {
+    "ref_id": "strategy:edge:split-edge-vs-origin-logic",
+    "type": "strategy",
+    "title": "Split edge-vs-origin logic deliberately",
+    "summary": "Put only fast, stateless, request-shaping logic at the edge; keep stateful and heavy work at the origin.",
+    "domains": [
+      "cdn",
+      "edge_compute",
+      "edge_cache",
+      "edge_function"
+    ],
+    "triggers": [
+      "edge",
+      "origin",
+      "split",
+      "stateless",
+      "placement"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cdn-edge"
+  },
+  {
+    "ref_id": "strategy:edge:shield-the-origin",
+    "type": "strategy",
+    "title": "Shield the origin from cache misses",
+    "summary": "Use origin shielding and request coalescing so a cold or purged cache does not stampede the origin.",
+    "domains": [
+      "cdn",
+      "edge_compute",
+      "edge_cache",
+      "edge_function"
+    ],
+    "triggers": [
+      "origin shield",
+      "stampede",
+      "coalesce",
+      "miss",
+      "tiered"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cdn-edge"
+  },
+  {
+    "ref_id": "strategy:edge:prefer-stale-while-revalidate",
+    "type": "strategy",
+    "title": "Serve stale-while-revalidate for resilience",
+    "summary": "Use stale-while-revalidate and stale-if-error so users get fast cached responses while refresh happens in the background.",
+    "domains": [
+      "cdn",
+      "edge_compute",
+      "edge_cache",
+      "edge_function"
+    ],
+    "triggers": [
+      "stale-while-revalidate",
+      "stale-if-error",
+      "background",
+      "refresh",
+      "resilience"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cdn-edge"
+  },
+  {
+    "ref_id": "strategy:edge:normalize-cache-keys",
+    "type": "strategy",
+    "title": "Normalize cache keys to maximize hit ratio",
+    "summary": "Strip irrelevant query params, headers, and cookies from the cache key so equivalent requests share a cached object.",
+    "domains": [
+      "cdn",
+      "edge_compute",
+      "edge_cache",
+      "edge_function"
+    ],
+    "triggers": [
+      "cache key",
+      "normalize",
+      "vary",
+      "query param",
+      "hit ratio"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cdn-edge"
+  },
+  {
+    "ref_id": "methodology:edge:design-cache-key-and-ttl",
+    "type": "methodology",
+    "title": "Design the cache key and TTL",
+    "summary": "Define what varies the response, build the minimal cache key, and set TTLs with jitter per content class.",
+    "domains": [
+      "cdn",
+      "edge_compute",
+      "edge_cache",
+      "edge_function"
+    ],
+    "triggers": [
+      "cache key",
+      "ttl",
+      "jitter",
+      "vary",
+      "design"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cdn-edge"
+  },
+  {
+    "ref_id": "methodology:edge:roll-out-an-edge-function",
+    "type": "methodology",
+    "title": "Roll out an edge function safely",
+    "summary": "Measure runtime budget, test cold start, and stage the function to a fraction of traffic before global deploy.",
+    "domains": [
+      "cdn",
+      "edge_compute",
+      "edge_cache",
+      "edge_function"
+    ],
+    "triggers": [
+      "edge function",
+      "rollout",
+      "cold start",
+      "budget",
+      "stage"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cdn-edge"
+  },
+  {
+    "ref_id": "methodology:edge:handle-cache-invalidation",
+    "type": "methodology",
+    "title": "Handle cache invalidation and purge",
+    "summary": "Choose surrogate-key purge over broad purge, measure propagation, and protect the origin during mass invalidation.",
+    "domains": [
+      "cdn",
+      "edge_compute",
+      "edge_cache",
+      "edge_function"
+    ],
+    "triggers": [
+      "invalidation",
+      "purge",
+      "surrogate key",
+      "propagation",
+      "soft purge"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cdn-edge"
+  },
+  {
+    "ref_id": "methodology:edge:diagnose-low-hit-ratio",
+    "type": "methodology",
+    "title": "Diagnose a low edge hit ratio",
+    "summary": "Trace why responses miss: missing cache-control, key fragmentation, or uncacheable per-user content.",
+    "domains": [
+      "cdn",
+      "edge_compute",
+      "edge_cache",
+      "edge_function"
+    ],
+    "triggers": [
+      "hit ratio",
+      "miss",
+      "diagnose",
+      "fragment",
+      "cacheable"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cdn-edge"
+  },
+  {
+    "ref_id": "knowledge:edge:cdn-is-eventually-consistent",
+    "type": "knowledge",
+    "title": "A CDN is an eventually-consistent cache",
+    "summary": "Edge PoPs cache independently; a purge propagates over time, so global consistency after a change is not instant.",
+    "domains": [
+      "cdn",
+      "edge_compute",
+      "edge_cache",
+      "edge_function"
+    ],
+    "triggers": [
+      "eventually consistent",
+      "propagation",
+      "pop",
+      "purge",
+      "consistency"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cdn-edge"
+  },
+  {
+    "ref_id": "knowledge:edge:edge-runtime-constraints",
+    "type": "knowledge",
+    "title": "Edge runtime constraints",
+    "summary": "Edge function runtimes cap CPU time and memory, forbid persistent filesystem, and limit bundle size — unlike origin servers.",
+    "domains": [
+      "cdn",
+      "edge_compute",
+      "edge_cache",
+      "edge_function"
+    ],
+    "triggers": [
+      "runtime",
+      "cpu",
+      "memory",
+      "filesystem",
+      "bundle"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cdn-edge"
+  },
+  {
+    "ref_id": "knowledge:edge:cache-control-directive-semantics",
+    "type": "knowledge",
+    "title": "Cache-control directive semantics",
+    "summary": "s-maxage governs shared (CDN) caches, max-age governs browsers, and private/no-store control whether the edge may cache at all.",
+    "domains": [
+      "cdn",
+      "edge_compute",
+      "edge_cache",
+      "edge_function"
+    ],
+    "triggers": [
+      "cache-control",
+      "s-maxage",
+      "max-age",
+      "private",
+      "no-store"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cdn-edge"
+  },
+  {
+    "ref_id": "knowledge:edge:origin-shield-and-coalescing",
+    "type": "knowledge",
+    "title": "Origin shield and request coalescing",
+    "summary": "A shield tier and request coalescing collapse many concurrent edge misses into a single origin fetch per key.",
+    "domains": [
+      "cdn",
+      "edge_compute",
+      "edge_cache",
+      "edge_function"
+    ],
+    "triggers": [
+      "origin shield",
+      "coalesce",
+      "tiered",
+      "stampede",
+      "fetch"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cdn-edge"
+  },
+  {
+    "ref_id": "skill:edge:inspect-cache-headers-and-status",
+    "type": "skill",
+    "title": "Inspect cache headers and edge status",
+    "summary": "Read response Cache-Control/surrogate headers and the CDN HIT/MISS status to explain caching behavior.",
+    "domains": [
+      "cdn",
+      "edge_compute",
+      "edge_cache",
+      "edge_function"
+    ],
+    "triggers": [
+      "inspect",
+      "header",
+      "hit",
+      "miss",
+      "cache-status"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cdn-edge"
+  },
+  {
+    "ref_id": "skill:edge:measure-edge-function-budget",
+    "type": "skill",
+    "title": "Measure edge function runtime budget",
+    "summary": "Report an edge function's CPU-ms, memory, and bundle size against the platform's limits before deploy.",
+    "domains": [
+      "cdn",
+      "edge_compute",
+      "edge_cache",
+      "edge_function"
+    ],
+    "triggers": [
+      "measure",
+      "cpu",
+      "memory",
+      "bundle",
+      "budget"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.cdn-edge"
+  }
+]

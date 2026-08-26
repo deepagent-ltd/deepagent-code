@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:mobile:budget-battery-and-network",
+  "type": "strategy",
+  "title": "Budget battery and network for background work",
+  "description": "Batch network and wake-ups, respect OS background limits, and avoid polling so the app does not drain battery or data.",
+  "body": "Use when adding background sync, location tracking, polling, or frequent network calls on mobile. Do not hold wake locks, poll on a tight timer, or fetch on every foreground without coalescing. Actions: batch requests, use OS-scheduled jobs (WorkManager/BackgroundTasks) that honor Doze/App Standby, back off on metered networks, and measure energy and data impact. Validation signals include a battery/energy profiler trace and a network log showing batched, throttled traffic. Risk boundary: excessive background activity gets the app throttled or killed by the OS and reviewed poorly by users; escalate before adding any always-on background loop.",
+  "domain": "mobile",
+  "scope_hint": "code.mobile:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mobile",
+  "pack_id": "code.mobile"
+}

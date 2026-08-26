@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:cpuarch:false-sharing-from-adjacent-counters",
+  "type": "failure_dossier",
+  "description": "Placing per-thread counters or state adjacently in one struct, so cores ping-pong the shared cache line and parallel code does not scale.",
+  "body": "Failure mode: an array of per-thread counters (or a struct of hot fields written by different cores) lands within a single 64-byte line, so every write invalidates the line in other cores' caches; coherence traffic dominates and adding threads slows the program. Detection signals: throughput flat or falling as threads increase; perf c2c shows HITM / cache-line bouncing on those addresses; each thread's data is logically independent. Do not pack independently-written hot variables into one cache line. Safer fallback: pad each per-thread datum to its own cache line (alignas(64) or spacing) or keep state thread-local and aggregate at the end, then re-measure scaling and HITM events.",
+  "domain": "cpu_arch",
+  "scope_hint": "hardware.cpu-arch:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.cpu-arch:human_authored",
+  "pack_id": "hardware.cpu-arch"
+}

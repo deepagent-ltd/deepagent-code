@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:feat:target-encoded-leak",
+  "type": "failure_dossier",
+  "description": "A target-encoded categorical feature was fit on the full dataset, leaking the label into training.",
+  "body": "Failure mode: a high-cardinality categorical is target-encoded using statistics computed over all rows including validation, so each encoded value carries information about its own label and the model memorizes it. Detection signals: a single encoded feature dominating importance with near-perfect signal, and a metric that collapses when the encoding is recomputed out-of-fold. Do not keep the feature because it looks strong. Safer fallback: recompute target encoding strictly out-of-fold (or with held-out folds), re-benchmark against alternative encodings, and discard any encoding whose lift disappears under out-of-fold computation.",
+  "domain": "feature_engineering",
+  "scope_hint": "code.feature-engineering:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.feature-engineering:human_authored",
+  "pack_id": "code.feature-engineering"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:cache:cache-negatives-against-penetration",
+  "type": "strategy",
+  "title": "Cache negative results against penetration",
+  "description": "Store not-found answers briefly so repeated absent-key lookups do not penetrate to the datastore.",
+  "body": "Use when lookups for nonexistent keys repeatedly reach an expensive origin. Do not leave misses uncached when a hot path or attacker can request many absent keys — each one penetrates straight through to the datastore. Actions: cache the negative result (null/404) with a short TTL, or front lookups with a Bloom filter that cheaply rejects impossible keys. Validation signals include origin miss traffic dropping for known-absent keys. Risk boundary: a too-long negative TTL hides a key that is later created — keep negative TTLs short and invalidate them on write.",
+  "domain": "caching",
+  "scope_hint": "code.caching:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.caching",
+  "pack_id": "code.caching"
+}

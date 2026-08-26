@@ -1,0 +1,156 @@
+---
+title: ACP Desteği
+description: deepagent-code'u ACP uyumlu herhangi bir editörde kullanın.
+---
+
+deepagent-code, [Agent Client Protocol](https://agentclientprotocol.com) veya (ACP) dosyalarını destekleyerek onu doğrudan uyumlu editörlerde ve IDE'lerde kullanmanızı sağlar.
+
+:::tip
+ACP'yi destekleyen editörlerin ve araçların listesi için [ACP progress report](https://zed.dev/blog/acp-progress-report#available-now)'e bakın.
+:::
+
+ACP, kod editörleri ile AI kodlama ajanları arasındaki iletişimi standartlaştıran açık bir protokoldür.
+
+---
+
+## Yapılandırma
+
+deepagent-code'u ACP aracılığıyla kullanmak için düzenleyicinizi `deepagent-code acp` komutunu çalıştıracak şekilde yapılandırın.
+
+Komut, deepagent-code'u, editörünüzle stdio aracılığıyla JSON-RPC üzerinden iletişim kuran ACP uyumlu bir alt süreç olarak başlatır.
+
+Aşağıda ACP'yi destekleyen popüler düzenleyicilere ilişkin örnekler verilmiştir.
+
+---
+
+### Zed
+
+[Zed](https://zed.dev) yapılandırmanıza (`~/.config/zed/settings.json`) ekleyin:
+
+```json title="~/.config/zed/settings.json"
+{
+  "agent_servers": {
+    "DeepAgent Code": {
+      "command": "deepagent-code",
+      "args": ["acp"]
+    }
+  }
+}
+```
+
+Açmak için **Komut Paleti**'ndeki `agent: new thread` eylemini kullanın.
+
+`keymap.json` dosyanızı düzenleyerek de bir klavye kısayolunu bağlayabilirsiniz:
+
+```json title="keymap.json"
+[
+  {
+    "bindings": {
+      "cmd-alt-o": [
+        "agent::NewExternalAgentThread",
+        {
+          "agent": {
+            "custom": {
+              "name": "DeepAgent Code",
+              "command": {
+                "command": "deepagent-code",
+                "args": ["acp"]
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+]
+```
+
+---
+
+### JetBrains IDEs
+
+[documentation](https://www.jetbrains.com/help/ai-assistant/acp.html) uyarınca [JetBrains IDE](https://www.jetbrains.com/) acp.json dosyanıza ekleyin:
+
+```json title="acp.json"
+{
+  "agent_servers": {
+    "DeepAgent Code": {
+      "command": "/absolute/path/bin/deepagent-code",
+      "args": ["acp"]
+    }
+  }
+}
+```
+
+Açmak için AI Chat agent seçicisindeki yeni 'DeepAgent Code' ajanını kullanın.
+
+---
+
+### Avante.nvim
+
+[Avante.nvim](https://github.com/yetone/avante.nvim) yapılandırmanıza ekleyin:
+
+```lua
+{
+  acp_providers = {
+    ["deepagent-code"] = {
+      command = "deepagent-code",
+      args = { "acp" }
+    }
+  }
+}
+```
+
+Ortam değişkenlerini iletmeniz gerekiyor:
+
+```lua {6-8}
+{
+  acp_providers = {
+    ["deepagent-code"] = {
+      command = "deepagent-code",
+      args = { "acp" },
+      env = {
+        DEEPAGENT_CODE_API_KEY = os.getenv("DEEPAGENT_CODE_API_KEY")
+      }
+    }
+  }
+}
+```
+
+---
+
+### CodeCompanion.nvim
+
+deepagent-code'u [CodeCompanion.nvim](https://github.com/olimorris/codecompanion.nvim)'de ACP ajanı olarak kullanmak için Neovim yapılandırmanıza aşağıdakileri ekleyin:
+
+```lua
+require("codecompanion").setup({
+  interactions = {
+    chat = {
+      adapter = {
+        name = "deepagent-code",
+        model = "claude-sonnet-4",
+      },
+    },
+  },
+})
+```
+
+Bu yapılandırma, CodeCompanion'ı deepagent-code'u sohbet için ACP ajanı olarak kullanacak şekilde ayarlar.
+
+Ortam değişkenlerini (`DEEPAGENT_CODE_API_KEY` gibi) iletmeniz gerekiyorsa, tüm ayrıntılar için CodeCompanion.nvim belgelerindeki [Configuring Adapters: Environment Variables](https://codecompanion.olimorris.dev/getting-started#setting-an-api-key)'ye bakın.
+
+## Destek
+
+deepagent-code, terminalde olduğu gibi ACP aracılığıyla aynı şekilde çalışır. Tüm özellikler desteklenir:
+
+:::note
+`/undo` ve `/redo` gibi bazı yerleşik slash komutları şu anda desteklenmemektedir.
+:::
+
+- Yerleşik araçlar (dosya işlemleri, terminal komutları vb.)
+- Özel araçlar ve slash komutları
+- deepagent-code yapılandırmanızda yapılandırılmış MCP sunucuları
+- `AGENTS.md`'dan projeye özel kurallar
+- Özel biçimlendiriciler ve linter'lar
+- Aracılar ve izin sistemi

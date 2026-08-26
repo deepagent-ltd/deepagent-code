@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:ghci:key-caches-deterministically",
+  "type": "strategy",
+  "title": "Key caches on lockfile hash with safe fallback",
+  "description": "Build cache keys from a hash of the lockfile so they bust on dependency change, and use restore-keys for partial hits.",
+  "body": "Use when adding actions/cache to speed up dependency installs or build outputs. Do not use a static cache key (it serves stale dependencies forever) and do not cache across untrusted boundaries where a fork could poison the cache. Actions: set key to a prefix plus hashFiles of the lockfile, add restore-keys for a degraded-but-valid partial restore, and scope the path to the real dependency directory. Validation signals include the cache missing and rebuilding when the lockfile changes, and a clean install matching the lockfile. Risk boundary: a cache shared with untrusted PR builds can inject code into trusted jobs; isolate or disable it and escalate if unsure.",
+  "domain": "ci_github",
+  "scope_hint": "platform.ci-github:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.ci-github",
+  "pack_id": "platform.ci-github"
+}

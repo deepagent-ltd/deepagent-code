@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:dist:wall-clock-last-write-wins",
+  "type": "failure_dossier",
+  "description": "Resolving concurrent writes by comparing wall-clock timestamps drops a causally-later write whenever clocks are skewed.",
+  "body": "Failure mode: conflict resolution keeps the write with the larger wall-clock timestamp, but NTP skew or a backward clock jump makes an older write appear newer, so a causally-later update is silently discarded. Detection signals: writes vanish without error under clock skew; a node with a fast clock always wins conflicts; vector-clock comparison shows the dropped write was concurrent or later. Do not use physical timestamps as cross-node version numbers. Safer fallback: track causality with vector clocks, surface true concurrent siblings for application-level merge (or a CRDT), and reserve timestamps for tie-breaking only with explicit uncertainty handling.",
+  "domain": "distributed",
+  "scope_hint": "code.distributed:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.distributed:human_authored",
+  "pack_id": "code.distributed"
+}

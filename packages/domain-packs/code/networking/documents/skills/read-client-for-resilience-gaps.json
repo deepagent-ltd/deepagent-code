@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:net:read-client-for-resilience-gaps",
+  "type": "skill",
+  "title": "Read a network client for resilience gaps",
+  "description": "Inspect client code and report missing timeouts, unsafe retries, missing backpressure, pool leaks, and TLS weakening.",
+  "body": "Use when asked whether a network client is production-resilient. Actions: read the client code and verify each call sets connect/read/overall timeouts, retries are bounded with backoff+jitter and limited to idempotent operations, concurrency/queues are bounded for backpressure, connections are pooled and bodies always closed, and TLS verification is intact. Do not assume library defaults are safe (defaults are often infinite timeout and per-call connections). Record each gap with the file/line and classify as availability (timeout), correctness (unsafe retry), resource (pool leak/backpressure), or security (TLS). This skill is read-only and must not change client behavior or hit production without runtime permission. Validation signals include a concrete list of call sites and their resilience posture. Risk boundary: report any missing timeout, non-idempotent retry, or disabled TLS verification as a blocking finding and recommend escalation.",
+  "domain": "networking",
+  "scope_hint": "code.networking:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.networking",
+  "pack_id": "code.networking"
+}

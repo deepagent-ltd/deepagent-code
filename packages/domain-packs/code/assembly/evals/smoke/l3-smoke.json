@@ -1,0 +1,70 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.assembly",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "assembly",
+      "asm",
+      "x86"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.assembly: x86-64 and AArch64 calling convention, callee-saved registers, stack frame alignment, inline asm clobber constraints, addressing modes, and reading disassembly in a debugger"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "write a blog post and publish it with a static site generator"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "assembly x86-64 arm64 aarch64 calling convention abi stack frame register callee-saved caller-saved inline asm clobber addressing mode disassembly alignment",
+  "expected_pack_id": "code.assembly",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "code.assembly L3 validation smoke",
+    "signals": [
+      "callee-saved registers saved/restored across the function (verified in disassembly)",
+      "stack pointer 16-byte aligned at call sites per ABI",
+      "inline-asm clobber/constraint list matches the actual register/memory effects",
+      "function result matches a C reference implementation across inputs",
+      "debugger single-step shows expected register/stack state at each instruction"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "code.assembly diagnosis smoke",
+    "signals": [
+      "callee-saved register clobbered without save/restore",
+      "stack misaligned at a call (crash in SSE/ABI-sensitive callee)",
+      "inline asm missing a clobber, letting the compiler reuse a trashed register",
+      "arguments passed in the wrong registers for the ABI",
+      "addressing mode or operand width mismatch reading/writing memory"
+    ]
+  },
+  "source_refs": [
+    "source:system-v-amd64-abi:paraphrased",
+    "source:arm64-aapcs-procedure-call-standard:paraphrased"
+  ]
+}

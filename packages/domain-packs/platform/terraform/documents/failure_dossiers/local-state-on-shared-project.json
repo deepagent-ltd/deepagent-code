@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:tf:local-state-on-shared-project",
+  "type": "failure_dossier",
+  "description": "Keeping Terraform state in a local file (or committed to git) on a project multiple people or pipelines run, causing corruption and divergence.",
+  "body": "Failure mode: state lives in a local terraform.tfstate (or is committed to the repo) while several people and CI apply against the same resources, so concurrent runs overwrite each other and state diverges from reality. Detection signals: tfstate appears in git; two applies clobber each other's changes; resources exist that state does not know about. Do not use local state for shared infrastructure. Safer fallback: move to a remote backend with locking (S3+DynamoDB, GCS, Terraform Cloud), remove state from git, and confirm a lock is taken during runs.",
+  "domain": "terraform",
+  "scope_hint": "platform.terraform:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.terraform:human_authored",
+  "pack_id": "platform.terraform"
+}

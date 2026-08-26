@@ -1,0 +1,2265 @@
+import { PermissionV1 } from "@deepagent-code/core/v1/permission"
+import { DeepAgentActivityAuthority } from "@deepagent-code/core/deepagent/index"
+import { Hash } from "@deepagent-code/core/util/hash"
+import { Image } from "@/image/image"
+import { SessionV1 } from "@deepagent-code/core/v1/session"
+import { Cause, Deferred, Effect, Exit, Layer, Context, Scope, Schema, Data } from "effect"
+import * as Stream from "effect/Stream"
+import { Agent } from "@/agent/agent"
+import { Config } from "@/config/config"
+import { Permission } from "@/permission"
+import { Plugin } from "@/plugin"
+import { Snapshot } from "@/snapshot"
+import { Session } from "./session"
+import { LLM } from "./llm"
+import { LLMRequestPrep } from "./llm/request"
+import { MessageV2 } from "./message-v2"
+import { isOverflow } from "./overflow"
+import { PartID } from "./schema"
+import type { SessionID } from "./schema"
+import { SessionRetry } from "./retry"
+import { SessionStatus } from "./status"
+import { SessionSummary } from "./summary"
+import type { Provider } from "@/provider/provider"
+import { Question } from "@/question"
+import { errorMessage } from "@/util/error"
+import { Log } from "@deepagent-code/core/util/log"
+import { isRecord } from "@/util/record"
+import { EventV2Bridge } from "@/event-v2-bridge"
+import { Database } from "@deepagent-code/core/database/database"
+import { SessionEvent } from "@deepagent-code/core/session/event"
+import { SessionMessage } from "@deepagent-code/core/session/message"
+import { ModelV2 } from "@deepagent-code/core/model"
+import { ProviderV2 } from "@deepagent-code/core/provider"
+import * as DateTime from "effect/DateTime"
+import { RuntimeFlags } from "@/effect/runtime-flags"
+import { toolFileSourceFromUri, Usage, type LLMEvent } from "@deepagent-code/llm"
+import { ToolOutput } from "@deepagent-code/core/tool-output"
+import { AgentGateway } from "@deepagent-code/core/agent-gateway"
+import { InvalidToolInputError } from "ai"
+import { SessionPromptIntent } from "./prompt-intent"
+
+const DOOM_LOOP_THRESHOLD = 3
+const DOOM_LOOP_SEQUENCE_WINDOW = 12
+const DOOM_LOOP_MIN_REPEATS = 3
+const DOOM_LOOP_MAX_PERIOD = 4
+const log = Log.create({ service: "session.processor" })
+
+// ---------------------------------------------------------------------------
+// BUG-006: typed summary protocol violation
+// ---------------------------------------------------------------------------
+
+/**
+ * Produced when a summary Provider turn returns a tool event, non-text output,
+ * or an empty text.  The compaction controller consumes this typed error and
+ * decides whether to retry (within the max-2-dispatch budget) or fail closed.
+ * It must NOT be converted to a generic UnknownError or assistant.error string.
+ */
+export class SummaryProtocolViolation extends Data.TaggedError("SummaryProtocolViolation")<{
+  readonly kind: "tool_event" | "non_text_output" | "empty_summary"
+  readonly providerID?: string
+  readonly modelID?: string
+  readonly eventType?: string
+  readonly attemptedToolName?: string
+  readonly attempt?: number
+}> {}
+
+// ---------------------------------------------------------------------------
+// F1: Activity-level tool-call sequence tracker
+// ---------------------------------------------------------------------------
+
+/**
+ * Produce a canonical JSON string for any value.  Object keys are sorted
+ * recursively so that `{"b":1,"a":2}` and `{"a":2,"b":1}` produce the same
+ * fingerprint.  Array order is preserved.  `undefined` is serialised as
+ * `null` to match JSON semantics.
+ */
+function canonicalJson(value: unknown): string {
+  if (value === null || value === undefined) return "null"
+  if (typeof value !== "object") return JSON.stringify(value) ?? "null"
+  if (Array.isArray(value)) return "[" + value.map(canonicalJson).join(",") + "]"
+  const obj = value as Record<string, unknown>
+  const pairs = Object.keys(obj)
+    .sort()
+    .map((k) => JSON.stringify(k) + ":" + canonicalJson(obj[k]))
+  return "{" + pairs.join(",") + "}"
+}
+
+/** Build the stable fingerprint for one tool invocation. */
+function toolFingerprint(toolName: string, input: unknown): string {
+  return toolName + ":" + canonicalJson(input)
+}
+
+/**
+ * Activity-level sequence tracker.  One instance is created per durable
+ * user activity and shared across all processor instances (provider steps)
+ * within that activity.
+ *
+ * Lifecycle guarantees (enforced by the caller in prompt.ts):
+ *   - Created fresh at the start of every runLoop call.
+ *   - NOT process-global; NOT persisted across the whole session.
+ *   - Steer events that are merged into the current activity do NOT reset it.
+ */
+export class ToolSequenceTracker {
+  private readonly calls: { fingerprint: string; done: boolean }[] = []
+  private readonly callIdToIndex = new Map<string, number>()
+  private readonly triggeredSequences = new Set<string>()
+  private fingerprintResolver: ((toolName: string, input: unknown) => unknown) | undefined
+  private resultFingerprintResolver: ((toolName: string, result: unknown) => unknown) | undefined
+  private previousResultSignature: string | undefined
+  private previousProgressSignature: string | undefined
+  private equivalentResultCount = 0
+
+  setFingerprintResolver(resolver: (toolName: string, input: unknown) => unknown): void {
+    this.fingerprintResolver = resolver
+  }
+
+  setResultFingerprintResolver(resolver: (toolName: string, result: unknown) => unknown): void {
+    this.resultFingerprintResolver = resolver
+  }
+
+  resultFingerprint(toolName: string, result: unknown): string | undefined {
+    const resolved = this.resultFingerprintResolver?.(toolName, result)
+    return resolved === undefined ? undefined : Hash.sha256(canonicalJson(resolved))
+  }
+
+  fingerprint(toolName: string, input: unknown): string {
+    return toolFingerprint(toolName, this.fingerprintResolver ? this.fingerprintResolver(toolName, input) : input)
+  }
+
+  /** Record a newly started (running) tool call. */
+  push(callId: string, fingerprint: string): void {
+    this.calls.push({ fingerprint, done: false })
+    this.callIdToIndex.set(callId, this.calls.length - 1)
+    if (this.calls.length > DOOM_LOOP_SEQUENCE_WINDOW) {
+      this.calls.shift()
+      // Adjust stored indices after the shift (oldest entry was removed).
+      for (const [id, idx] of this.callIdToIndex) {
+        const next = idx - 1
+        if (next < 0) this.callIdToIndex.delete(id)
+        else this.callIdToIndex.set(id, next)
+      }
+    }
+  }
+
+  /**
+   * Mark a call as done (completed or failed).  Must be called from
+   * settleToolCall so that the "prior calls must be done" invariant holds
+   * before the next tool starts.
+   */
+  markDone(
+    callId: string,
+    toolName?: string,
+    result?: unknown,
+    progress?: { snapshot: string | undefined; plan: unknown },
+  ): { count: number } | undefined {
+    const idx = this.callIdToIndex.get(callId)
+    if (idx !== undefined && idx >= 0 && idx < this.calls.length) {
+      this.calls[idx].done = true
+    }
+    this.callIdToIndex.delete(callId)
+    const resolved = toolName && this.resultFingerprintResolver?.(toolName, result)
+    if (idx === undefined || resolved === undefined) {
+      this.previousResultSignature = undefined
+      this.previousProgressSignature = undefined
+      this.equivalentResultCount = 0
+      return undefined
+    }
+    const resultSignature = `${this.calls[idx].fingerprint}:${canonicalJson(resolved)}`
+    const progressSignature = canonicalJson(progress)
+    this.equivalentResultCount =
+      resultSignature === this.previousResultSignature && progressSignature === this.previousProgressSignature
+        ? this.equivalentResultCount + 1
+        : 1
+    this.previousResultSignature = resultSignature
+    this.previousProgressSignature = progressSignature
+    return { count: this.equivalentResultCount }
+  }
+
+  /**
+   * Detect a repeating sequence in the current window.
+   *
+   * Rules:
+   *   - The last call may be running (done = false) — it is the current call.
+   *   - All prior calls in the detection window must have left the pending
+   *     state (done = true).
+   *   - Period 1–4; at least DOOM_LOOP_MIN_REPEATS complete repetitions.
+   *
+   * Returns period/count/sequenceKey on detection, null otherwise.
+   */
+  detect(): { period: number; count: number; sequenceKey: string } | null {
+    if (this.calls.length === 0) return null
+    const fps = this.calls.map((c) => c.fingerprint)
+
+    for (let period = 1; period <= DOOM_LOOP_MAX_PERIOD; period++) {
+      const needed = period * DOOM_LOOP_MIN_REPEATS
+      if (fps.length < needed) continue
+
+      const windowCalls = this.calls.slice(-needed)
+      const windowFps = fps.slice(-needed)
+
+      // All calls except the last (which may still be running) must be done.
+      let priorAllDone = true
+      for (let i = 0; i < windowCalls.length - 1; i++) {
+        if (!windowCalls[i].done) {
+          priorAllDone = false
+          break
+        }
+      }
+      if (!priorAllDone) continue
+
+      const pattern = windowFps.slice(0, period)
+      let matches = true
+      for (let i = period; i < needed; i++) {
+        if (windowFps[i] !== pattern[i % period]) {
+          matches = false
+          break
+        }
+      }
+      if (matches) {
+        // Use NUL as separator — fingerprints contain ":" and tool output
+        // JSON but never raw NUL bytes.
+        return { period, count: DOOM_LOOP_MIN_REPEATS, sequenceKey: pattern.join("\x00") }
+      }
+    }
+    return null
+  }
+
+  /** True if this exact sequence has already raised a permission request. */
+  hasTriggered(sequenceKey: string): boolean {
+    return this.triggeredSequences.has(sequenceKey)
+  }
+
+  /** Record that a permission request was raised for this sequence. */
+  setTriggered(sequenceKey: string): void {
+    this.triggeredSequences.add(sequenceKey)
+  }
+}
+
+export type PlanProtocolOutcome = "success" | "progress" | "no_progress" | "invalid" | "conflict" | "schema"
+
+type PlanProtocolHistoryMessage = {
+  readonly info: {
+    readonly id: string
+    readonly role: string
+    readonly parentID?: string
+    readonly metadata?: unknown
+    readonly time?: unknown
+  }
+  readonly parts: readonly {
+    readonly id: string
+    readonly type: string
+    readonly tool?: string
+    readonly callID?: string
+    readonly state?: {
+      readonly status: string
+      readonly metadata?: unknown
+      readonly time?: unknown
+    }
+  }[]
+}
+
+export const planProtocolActivityID = (metadata: unknown): string | undefined => {
+  if (!isRecord(metadata) || !isRecord(metadata.deepagent)) return undefined
+  const activityID = metadata.deepagent.planProtocolActivityID
+  return typeof activityID === "string" && activityID.trim() !== "" ? activityID : undefined
+}
+
+export const withPlanProtocolActivity = (metadata: unknown, activityID: string) => ({
+  ...(isRecord(metadata) ? metadata : {}),
+  deepagent: {
+    ...(isRecord(metadata) && isRecord(metadata.deepagent) ? metadata.deepagent : {}),
+    planProtocolActivityID: activityID,
+  },
+})
+
+// Rebuild the activity-scoped counter from durable tool parts. Every root prompt gets a fresh
+// activity ID; steers and compaction continuations retain it. This keeps recovery independent of
+// filtered provider history and prevents a process restart from silently restoring the full budget.
+export const restorePlanProtocolFailures = (messages: readonly PlanProtocolHistoryMessage[]): number => {
+  const numericTime = (value: unknown, key: string) => {
+    if (!isRecord(value) || typeof value[key] !== "number") return 0
+    return value[key] as number
+  }
+  const declaredActivityIDs = new Set(
+    messages
+      .filter((message) => message.info.role === "user")
+      .map((message) => planProtocolActivityID(message.info.metadata))
+      .filter((activityID): activityID is string => activityID !== undefined),
+  )
+  const users = messages
+    .filter((message) => message.info.role === "user")
+    .map((message) => ({
+      messageID: message.info.id,
+      activityID:
+        planProtocolActivityID(message.info.metadata) ??
+        (declaredActivityIDs.has(message.info.id) ? message.info.id : undefined),
+      created: numericTime(message.info.time, "created"),
+    }))
+  const latest = users
+    .toSorted((left, right) => left.created - right.created || left.messageID.localeCompare(right.messageID))
+    .at(-1)
+  if (latest?.activityID === undefined) return 0
+  const activities = new Map(
+    users
+      .filter((user): user is typeof user & { activityID: string } => user.activityID !== undefined)
+      .map((user) => [user.messageID, user.activityID] as const),
+  )
+  const attempts = messages
+    .filter(
+      (message) =>
+        message.info.role === "assistant" &&
+        message.info.parentID !== undefined &&
+        activities.get(message.info.parentID) === latest.activityID,
+    )
+    .flatMap((message) =>
+      message.parts
+        .filter(
+          (part) =>
+            part.type === "tool" &&
+            part.tool === "plan" &&
+            (part.state?.status === "completed" || part.state?.status === "error"),
+        )
+        .map((part) => ({
+          messageID: message.info.id,
+          messageCreated: numericTime(message.info.time, "created"),
+          settled: numericTime(part.state?.time, "end") || numericTime(message.info.time, "created"),
+          part,
+        })),
+    )
+    .toSorted(
+      (left, right) =>
+        left.settled - right.settled ||
+        left.messageCreated - right.messageCreated ||
+        left.messageID.localeCompare(right.messageID) ||
+        left.part.id.localeCompare(right.part.id),
+    )
+  const uniqueAttempts = [
+    ...new Map(
+      attempts.map(
+        (attempt) => [attempt.messageID + "\x00" + (attempt.part.callID ?? attempt.part.id), attempt] as const,
+      ),
+    ).values(),
+  ]
+  return uniqueAttempts.reduce((consecutive, item) => {
+    const metadata = item.part.state && isRecord(item.part.state.metadata) ? item.part.state.metadata : undefined
+    const protocol = metadata?.plan_protocol
+    if (protocol === "success" || protocol === "progress") return 0
+    if (!(protocol === "invalid" || protocol === "conflict" || protocol === "schema" || protocol === "no_progress"))
+      return consecutive
+    const ordinal = metadata?.plan_attempt_ordinal
+    return typeof ordinal === "number" && Number.isSafeInteger(ordinal) && ordinal > 0
+      ? Math.max(consecutive + 1, ordinal)
+      : consecutive + 1
+  }, 0)
+}
+
+/**
+ * Activity-scoped Plan Protocol budget. A malformed or stale model plan is
+ * recoverable once; the second consecutive violation terminates the activity
+ * with a typed, non-retryable error. The tracker is intentionally independent
+ * of provider turns and processor instances.
+ */
+export class PlanProtocolTracker {
+  private readonly pending = new Set<string>()
+  private readonly settled = new Set<string>()
+  private consecutiveViolations: number
+
+  constructor(consecutiveViolations = 0) {
+    this.consecutiveViolations = Math.max(0, Math.floor(consecutiveViolations))
+  }
+
+  start(callID: string, toolName: string): void {
+    if (toolName === "plan") this.pending.add(callID)
+  }
+
+  preview(callID: string, outcome: PlanProtocolOutcome): { consecutive: number; terminal: boolean } | undefined {
+    if (!this.pending.has(callID) || this.settled.has(callID)) return undefined
+    if (outcome === "success" || outcome === "progress") return { consecutive: 0, terminal: false }
+    const consecutive = this.consecutiveViolations + 1
+    return { consecutive, terminal: consecutive >= 2 }
+  }
+
+  settle(callID: string, outcome: PlanProtocolOutcome): { consecutive: number; terminal: boolean } | undefined {
+    if (!this.pending.has(callID) || this.settled.has(callID)) return undefined
+    this.pending.delete(callID)
+    this.settled.add(callID)
+    if (outcome === "success" || outcome === "progress") {
+      this.consecutiveViolations = 0
+      return { consecutive: 0, terminal: false }
+    }
+    this.consecutiveViolations += 1
+    return { consecutive: this.consecutiveViolations, terminal: this.consecutiveViolations >= 2 }
+  }
+}
+
+// PR-2: N-gram sliding-window degeneration detector for reasoning streams.
+// Detects repetitive/stuck output before it grows unbounded; configurable via
+// RuntimeFlags.degenerationDetectorMode ("off" | "shadow" | "enforce").
+const DEGENERATION_DETECTOR_VERSION = "1.0"
+const DEGENERATION_ENABLE_THRESHOLD = 20_000 // chars before detection starts
+const DEGENERATION_WINDOW_SIZE = 4_000 // sliding window width in chars
+const DEGENERATION_SAMPLE_INTERVAL = 500 // chars between samples
+const DEGENERATION_N = 4 // N-gram size
+const DEGENERATION_RATIO_THRESHOLD = 0.7 // repeated N-gram fraction
+const DEGENERATION_SIMILARITY_THRESHOLD = 0.85 // Jaccard threshold between windows
+const DEGENERATION_K = 3 // consecutive samples required
+
+class DegenerationDetector {
+  private totalChars = 0
+  private windowText = ""
+  private charsSinceLastSample = 0
+  private prevNgramSet: Set<string> | undefined
+  private consecutiveHits = 0
+
+  constructor(private readonly mode: string) {}
+
+  private computeNgrams(text: string): Map<string, number> {
+    const counts = new Map<string, number>()
+    for (let i = 0; i <= text.length - DEGENERATION_N; i++) {
+      const ng = text.slice(i, i + DEGENERATION_N)
+      counts.set(ng, (counts.get(ng) ?? 0) + 1)
+    }
+    return counts
+  }
+
+  private repetitionRatio(ngrams: Map<string, number>): number {
+    let total = 0
+    let repeated = 0
+    for (const count of ngrams.values()) {
+      total += count
+      if (count > 1) repeated += count - 1
+    }
+    return total === 0 ? 0 : repeated / total
+  }
+
+  private jaccard(a: Set<string>, b: Set<string>): number {
+    if (a.size === 0 && b.size === 0) return 0
+    let intersection = 0
+    for (const item of a) if (b.has(item)) intersection++
+    const union = a.size + b.size - intersection
+    return union === 0 ? 0 : intersection / union
+  }
+
+  /** Feed a reasoning delta; returns the chars and ratio if degeneration is confirmed. */
+  feed(delta: string): { triggered: boolean; chars?: number; ratio?: number } {
+    if (this.mode === "off") return { triggered: false }
+
+    this.totalChars += delta.length
+    this.charsSinceLastSample += delta.length
+
+    // Maintain sliding window: keep only the last WINDOW_SIZE chars
+    const combined = this.windowText + delta
+    this.windowText =
+      combined.length > DEGENERATION_WINDOW_SIZE ? combined.slice(combined.length - DEGENERATION_WINDOW_SIZE) : combined
+
+    if (this.totalChars < DEGENERATION_ENABLE_THRESHOLD) return { triggered: false }
+    if (this.charsSinceLastSample < DEGENERATION_SAMPLE_INTERVAL) return { triggered: false }
+
+    this.charsSinceLastSample = 0
+
+    const ngrams = this.computeNgrams(this.windowText)
+    const ratio = this.repetitionRatio(ngrams)
+    const currentSet = new Set(ngrams.keys())
+    const sim = this.prevNgramSet ? this.jaccard(this.prevNgramSet, currentSet) : 0
+    this.prevNgramSet = currentSet
+
+    const hit = ratio > DEGENERATION_RATIO_THRESHOLD && sim > DEGENERATION_SIMILARITY_THRESHOLD
+    this.consecutiveHits = hit ? this.consecutiveHits + 1 : 0
+
+    if (this.consecutiveHits >= DEGENERATION_K) {
+      return { triggered: true, chars: this.totalChars, ratio }
+    }
+    return { triggered: false }
+  }
+}
+
+export type ProcessorStopReason =
+  | { readonly code: "user_rejected_question"; readonly callID: string }
+  | { readonly code: "user_rejected_permission"; readonly callID: string }
+  | { readonly code: "task_no_progress_budget_exhausted"; readonly limit: number; readonly used: number }
+  | { readonly code: "assistant_error"; readonly errorName: string }
+
+export type ProcessorDecision =
+  | { readonly action: "compact" }
+  | { readonly action: "stop"; readonly reason: ProcessorStopReason }
+  | { readonly action: "continue" }
+
+export interface Handle {
+  readonly message: SessionV1.Assistant
+  // provider lifecycle gap C: outcome of the pre-stream snapshot capture, so the turn
+  // boundary layer can persist `snapshot_finished` / `snapshot_degraded` evidence.
+  readonly snapshotOutcome: Snapshot.TrackOutcome
+  readonly updateToolCall: (
+    toolCallID: string,
+    update: (part: SessionV1.ToolPart) => SessionV1.ToolPart,
+  ) => Effect.Effect<SessionV1.ToolPart | undefined>
+  readonly completeToolCall: (
+    toolCallID: string,
+    output: {
+      title: string
+      metadata: Record<string, any>
+      output: string
+      attachments?: SessionV1.FilePart[]
+    },
+  ) => Effect.Effect<void, unknown>
+  readonly process: (
+    streamInput: LLM.StreamInput,
+    providerAttempt?: {
+      readonly attemptId: string
+      readonly dispatching: Effect.Effect<void>
+      readonly streaming: Effect.Effect<void>
+      readonly settled: Effect.Effect<void>
+      readonly failed: (error: unknown) => Effect.Effect<void>
+    },
+  ) => Effect.Effect<ProcessorDecision>
+  readonly processSummary: (
+    streamInput: LLM.StreamInput,
+    providerAttempt: {
+      readonly attemptId: string
+      readonly dispatching: Effect.Effect<void>
+      readonly streaming: Effect.Effect<void>
+      readonly settled: Effect.Effect<void>
+      readonly failed: (error: unknown) => Effect.Effect<void>
+    },
+  ) => Effect.Effect<ProcessorDecision, SummaryProtocolViolation>
+}
+
+type Input = {
+  assistantMessage: SessionV1.Assistant
+  sessionID: SessionID
+  model: Provider.Model
+  /**
+   * Shared sequence tracker for the current durable user activity.
+   * Created once in prompt.ts runLoop and passed to every processor.create
+   * call within the same activity so cross-message loops are detectable.
+   * Absent only in legacy callers that have not been updated yet.
+   */
+  sequenceTracker?: ToolSequenceTracker
+  planTracker?: PlanProtocolTracker
+  /**
+   * provider lifecycle gap C: legacy activity identity for snapshot budget attribution.
+   * Absent when the caller has no activity binding (legacy paths).
+   */
+  activityID?: string
+  loopPolicy?: "ask" | "error"
+  noProgressLimit?: number
+}
+
+export interface Interface {
+  readonly create: (input: Input) => Effect.Effect<Handle>
+}
+
+type ToolCall = {
+  assistantMessageID?: SessionMessage.ID
+  partID: SessionV1.ToolPart["id"]
+  messageID: SessionV1.ToolPart["messageID"]
+  sessionID: SessionV1.ToolPart["sessionID"]
+  done: Deferred.Deferred<void>
+  inputEnded: boolean
+  raw: string
+}
+
+interface ProcessorContext extends Input {
+  toolcalls: Record<string, ToolCall>
+  shouldBreak: boolean
+  snapshot: string | undefined
+  stopReason: ProcessorStopReason | undefined
+  needsCompaction: boolean
+  currentText: SessionV1.TextPart | undefined
+  currentTextID: string | undefined
+  reasoningMap: Record<string, SessionV1.ReasoningPart>
+  degenerationDetectors: Record<string, DegenerationDetector>
+  v2AssistantMessageID: SessionMessage.ID | undefined
+  summaryText: string
+  requestReceipt: LLM.StreamInput["requestReceipt"] | undefined
+  processorDecodedOrdinal: number
+  processorReceiptCallIDs: Set<string>
+  processorSchemaInvalidCallIDs: Set<string>
+  activityEvidence: Map<string, { fingerprint: string; kind: string }>
+  activityEffectReceipts: Map<string, { receiptID: string; fingerprint: string }>
+  activityToolNames: Set<string>
+  activityWorkspaceRevision: string | undefined
+  activityValidationFingerprint: string | undefined
+}
+
+type StreamEvent = LLMEvent
+
+export class Service extends Context.Service<Service, Interface>()("@deepagent-code/SessionProcessor") {}
+
+export const layer = Layer.effect(
+  Service,
+  Effect.gen(function* () {
+    const session = yield* Session.Service
+    const config = yield* Config.Service
+    const snapshot = yield* Snapshot.Service
+    const agents = yield* Agent.Service
+    const llm = yield* LLM.Service
+    const permission = yield* Permission.Service
+    const plugin = yield* Plugin.Service
+    const summary = yield* SessionSummary.Service
+    const scope = yield* Scope.Scope
+    const status = yield* SessionStatus.Service
+    const image = yield* Image.Service
+    const events = yield* EventV2Bridge.Service
+    const flags = yield* RuntimeFlags.Service
+    const database = yield* Database.Service
+
+    const create = Effect.fn("SessionProcessor.create")(function* (input: Input) {
+      // Pre-capture snapshot before the LLM stream starts. The AI SDK
+      // may execute tools internally before emitting start-step events,
+      // so capturing inside the event handler can be too late.
+      const snapshotOutcome = yield* snapshot.trackOutcome({
+        sessionId: input.sessionID,
+        ...(input.activityID ? { activityId: input.activityID } : {}),
+      })
+      const initialSnapshot = snapshotOutcome.hash
+      const ctx: ProcessorContext = {
+        assistantMessage: input.assistantMessage,
+        sessionID: input.sessionID,
+        model: input.model,
+        sequenceTracker: input.sequenceTracker,
+        planTracker: input.planTracker,
+        loopPolicy: input.loopPolicy,
+        noProgressLimit: input.noProgressLimit,
+        toolcalls: {},
+        shouldBreak: false,
+        snapshot: initialSnapshot,
+        stopReason: undefined,
+        needsCompaction: false,
+        currentText: undefined,
+        currentTextID: undefined,
+        reasoningMap: {},
+        degenerationDetectors: {},
+        v2AssistantMessageID: undefined,
+        summaryText: "",
+        requestReceipt: undefined,
+        processorDecodedOrdinal: 0,
+        processorReceiptCallIDs: new Set(),
+        processorSchemaInvalidCallIDs: new Set(),
+        activityEvidence: new Map(),
+        activityEffectReceipts: new Map(),
+        activityToolNames: new Set(),
+        activityWorkspaceRevision: initialSnapshot,
+        activityValidationFingerprint: undefined,
+      }
+      const mirrorAssistant = flags.experimentalEventSystem && !input.assistantMessage.summary
+      let aborted = false
+      const slog = log.clone().tag("session.id", input.sessionID).tag("messageID", input.assistantMessage.id)
+
+      const parse = (e: unknown) =>
+        MessageV2.fromError(e, {
+          providerID: input.model.providerID,
+          aborted,
+        })
+
+      // Provider tool-call ids are not guaranteed to be unique across turns. The durable assistant
+      // message id scopes them to one physical dispatch while preserving duplicate-event idempotency.
+      const planTrackerCallID = (toolCallID: string) => `${ctx.assistantMessage.id}\x00${toolCallID}`
+
+      const settleToolCall = Effect.fn("SessionProcessor.settleToolCall")(function* (
+        toolCallID: string,
+        toolName?: string,
+        result?: unknown,
+        progress?: { snapshot: string | undefined; plan: unknown },
+      ) {
+        // Notify the activity-level tracker that this call has finished so it
+        // satisfies the "prior calls must be done" precondition for detection.
+        const noProgress = ctx.sequenceTracker?.markDone(toolCallID, toolName, result, progress)
+        const done = ctx.toolcalls[toolCallID]?.done
+        delete ctx.toolcalls[toolCallID]
+        if (done) yield* Deferred.succeed(done, undefined).pipe(Effect.ignore)
+        return noProgress
+      })
+
+      const settlePlanProtocol = (
+        toolCallID: string,
+        toolName: string,
+        outcome: PlanProtocolOutcome,
+        code?: string,
+      ) => {
+        const result = ctx.planTracker?.settle(planTrackerCallID(toolCallID), outcome)
+        if (!result?.terminal) return Effect.void
+        return Effect.fail(
+          new SessionV1.PlanProtocolViolationError({
+            message: "Plan protocol violation budget exhausted after two consecutive model plan failures.",
+            sessionID: ctx.sessionID,
+            attemptOrdinal: result.consecutive,
+            code: code ?? outcome,
+          }),
+        )
+      }
+
+      const observeDurableTurn = Effect.fn("SessionProcessor.observeDurableTurn")(function* () {
+        if (
+          ctx.loopPolicy !== "ask" ||
+          ctx.assistantMessage.summary ||
+          ctx.activityToolNames.size === 0
+        )
+          return
+        const activity = yield* SessionPromptIntent.activeActivityForSession(ctx.sessionID).pipe(
+          Effect.provideService(Database.Service, database),
+        )
+        if (!activity) {
+          // The durable authority governs ADMITTED legacy activities. A turn driven without an
+          // admitted activity (direct legacy loop entry, recovery edge windows, seeded history)
+          // keeps legacy semantics: policy evaluation still applies, but there is no durable
+          // objective/progress/no-progress governance to observe. Skipping here must not defect —
+          // dying would crash every un-admitted turn the moment any tool settles.
+          slog.warn("durable observation skipped: no active legacy activity for session", {
+            activityToolCount: ctx.activityToolNames.size,
+          })
+          return
+        }
+        const current = yield* DeepAgentActivityAuthority.reconstruct({
+          activityKind: "legacy",
+          activityID: activity.activityID,
+        }).pipe(Effect.provideService(Database.Service, database))
+        const configured =
+          current.objective.enforcementState === "monitoring"
+            ? current.objective
+            : yield* Effect.gen(function* () {
+                const messages = yield* session.messages({ sessionID: ctx.sessionID })
+                const trigger = messages.find((message) => message.info.id === activity.messageID)
+                const objectiveText =
+                  trigger?.parts
+                    .filter((part): part is SessionV1.TextPart => part.type === "text" && !part.synthetic)
+                    .map((part) => part.text.trim())
+                    .filter(Boolean)
+                    .join("\n") || `Complete legacy activity ${activity.activityID}`
+                return yield* DeepAgentActivityAuthority.configure({
+                  activityKind: "legacy",
+                  activityID: activity.activityID,
+                  expectedVersion: current.objective.version,
+                  objectiveText,
+                  completionCriteria: [{ kind: "plan_complete" }],
+                  enforcementState: "monitoring",
+                  stallThreshold: DOOM_LOOP_MIN_REPEATS - 1,
+                }).pipe(Effect.provideService(Database.Service, database))
+              })
+        const plan = AgentGateway.DeepAgentSessionState.getPlan(ctx.sessionID)
+          ? AgentGateway.DeepAgentPlanStore.planDocRef(ctx.sessionID)
+          : null
+        const observed = yield* DeepAgentActivityAuthority.observe({
+          activityKind: "legacy",
+          activityID: activity.activityID,
+          idempotencyKey: `provider-turn:${ctx.assistantMessage.id}`,
+          expectedVersion: configured.version,
+          ...(ctx.activityWorkspaceRevision ? { workspaceRevision: ctx.activityWorkspaceRevision } : {}),
+          ...(plan ? { planVersion: plan.version } : {}),
+          ...(ctx.activityValidationFingerprint ? { validationFingerprint: ctx.activityValidationFingerprint } : {}),
+          evidence: [...ctx.activityEvidence.values()],
+          effectReceipts: [...ctx.activityEffectReceipts.values()],
+        }).pipe(Effect.provideService(Database.Service, database))
+        if (observed.objective.state !== "needs_human") return
+        const agent = yield* agents.get(ctx.assistantMessage.agent)
+        const patterns = [...ctx.activityToolNames].toSorted()
+        yield* permission.ask({
+          id: PermissionV1.ID.make(
+            `per_${Hash.sha256(`no-progress:${activity.activityID}:${observed.observation.revision}`).slice(0, 48)}`,
+          ),
+          permission: "doom_loop",
+          patterns,
+          sessionID: ctx.sessionID,
+          metadata: {
+            activity_id: activity.activityID,
+            observation_revision: observed.observation.revision,
+            no_progress_count: observed.observation.noProgressCount,
+            vector_hash: observed.observation.vectorHash,
+          },
+          always: patterns,
+          ruleset: agent.permission,
+        })
+      })
+
+      const persistMissingPlanToolCall = Effect.fn("SessionProcessor.persistMissingPlanToolCall")(function* (
+        toolCallID: string,
+        protocol: { readonly consecutive: number } | undefined,
+        error: string,
+      ) {
+        if (protocol === undefined) return
+        const now = Date.now()
+        yield* session.updatePart({
+          id: PartID.ascending(),
+          messageID: ctx.assistantMessage.id,
+          sessionID: ctx.sessionID,
+          type: "tool",
+          tool: "plan",
+          callID: toolCallID,
+          state: {
+            status: "error",
+            input: {},
+            error,
+            metadata: {
+              plan_protocol: "schema",
+              plan_attempt_ordinal: protocol.consecutive,
+            },
+            time: { start: now, end: now },
+          },
+        } satisfies SessionV1.ToolPart)
+      })
+
+      const recordProcessorInput = (
+        toolCallID: string,
+        toolName: string,
+        eventType: string,
+        validationOutcome: "schema_valid" | "schema_invalid",
+        decoded?: Record<string, unknown>,
+      ) => {
+        if (ctx.processorReceiptCallIDs.has(toolCallID)) return Effect.void
+        ctx.processorReceiptCallIDs.add(toolCallID)
+        return (
+          ctx.requestReceipt?.processorDecoded({
+            ordinal: ctx.processorDecodedOrdinal++,
+            eventType,
+            callID: toolCallID,
+            toolName,
+            validationOutcome,
+            ...(decoded
+              ? LLM.boundedReceiptPayload(decoded)
+              : {
+                  payloadHash: undefined,
+                  payloadLength: undefined,
+                  payloadKeys: [],
+                  unavailableReason: "tool_input_not_decoded",
+                }),
+          }) ?? Effect.void
+        )
+      }
+
+      const recordProcessorValidation = (
+        toolCallID: string,
+        validationOutcome: "schema_invalid" | "semantic_valid" | "semantic_invalid" | "conflict" | "no_progress",
+      ) => ctx.requestReceipt?.processorValidation({ callID: toolCallID, validationOutcome }) ?? Effect.void
+
+      const ensureV2AssistantMessage = Effect.fn("SessionProcessor.ensureV2AssistantMessage")(function* () {
+        if (ctx.v2AssistantMessageID) return ctx.v2AssistantMessageID
+        ctx.v2AssistantMessageID = SessionMessage.ID.create()
+        yield* events.publish(SessionEvent.Step.Started, {
+          sessionID: ctx.sessionID,
+          assistantMessageID: ctx.v2AssistantMessageID,
+          agent: input.assistantMessage.agent,
+          model: {
+            id: ModelV2.ID.make(ctx.model.id),
+            providerID: ProviderV2.ID.make(ctx.model.providerID),
+            variant: ModelV2.VariantID.make(input.assistantMessage.variant ?? "default"),
+          },
+          snapshot: ctx.snapshot,
+          timestamp: DateTime.makeUnsafe(Date.now()),
+        })
+        return ctx.v2AssistantMessageID
+      })
+
+      const requireV2AssistantMessage = (toolCall?: ToolCall) =>
+        toolCall?.assistantMessageID === undefined
+          ? Effect.die("V2 tool settlement has no owning assistant message")
+          : Effect.succeed(toolCall.assistantMessageID)
+
+      const currentV2AssistantMessage = () =>
+        ctx.v2AssistantMessageID === undefined
+          ? Effect.die("V2 step settlement has no owning assistant message")
+          : Effect.succeed(ctx.v2AssistantMessageID)
+
+      const readToolCall = Effect.fn("SessionProcessor.readToolCall")(function* (toolCallID: string) {
+        const call = ctx.toolcalls[toolCallID]
+        if (!call) return undefined
+        const part = yield* session.getPart({
+          partID: call.partID,
+          messageID: call.messageID,
+          sessionID: call.sessionID,
+        })
+        if (!part || part.type !== "tool") {
+          delete ctx.toolcalls[toolCallID]
+          return undefined
+        }
+        return { call, part }
+      })
+
+      const updateToolCall = Effect.fn("SessionProcessor.updateToolCall")(function* (
+        toolCallID: string,
+        update: (part: SessionV1.ToolPart) => SessionV1.ToolPart,
+      ) {
+        const match = yield* readToolCall(toolCallID)
+        if (!match) return undefined
+        const part = yield* session.updatePart(update(match.part))
+        ctx.toolcalls[toolCallID] = {
+          ...match.call,
+          partID: part.id,
+          messageID: part.messageID,
+          sessionID: part.sessionID,
+        }
+        return part
+      })
+
+      const completeToolCall = Effect.fn("SessionProcessor.completeToolCall")(function* (
+        toolCallID: string,
+        output: {
+          title: string
+          metadata: Record<string, any>
+          output: string
+          attachments?: SessionV1.FilePart[]
+        },
+      ) {
+        const match = yield* readToolCall(toolCallID)
+        if (!match || match.part.state.status !== "running") return
+        const protocol =
+          match.part.tool === "plan"
+            ? (() => {
+                const raw = isRecord(output.metadata) ? output.metadata.plan_protocol : undefined
+                const outcome: PlanProtocolOutcome =
+                  raw === "invalid" || raw === "conflict" || raw === "schema"
+                    ? raw
+                    : raw === "no_progress" || output.metadata.plan_progress === false
+                      ? "no_progress"
+                      : "success"
+                return {
+                  outcome,
+                  code:
+                    typeof output.metadata.plan_error_code === "string" ? output.metadata.plan_error_code : undefined,
+                  attempt: ctx.planTracker?.preview(planTrackerCallID(toolCallID), outcome),
+                }
+              })()
+            : undefined
+        const metadata =
+          protocol?.attempt === undefined
+            ? output.metadata
+            : { ...output.metadata, plan_attempt_ordinal: protocol.attempt.consecutive }
+        // BUG-010: Include attempt ordinal in the tool result text when plan validation/conflict fails,
+        // so the model knows which attempt this is (§7.5 contract: first error is correctable, second
+        // terminates). The ordinal is 1-indexed from the tracker (consecutive count of this outcome).
+        const outputText =
+          protocol?.attempt !== undefined && protocol.attempt.consecutive > 0
+            ? `${output.output}\n\n[Plan attempt ${protocol.attempt.consecutive} of 2]`
+            : output.output
+        if (protocol) {
+          yield* recordProcessorValidation(
+            toolCallID,
+            protocol.outcome === "invalid"
+              ? "semantic_invalid"
+              : protocol.outcome === "schema"
+                ? "schema_invalid"
+                : protocol.outcome === "conflict"
+                  ? "conflict"
+                  : protocol.outcome === "no_progress"
+                    ? "no_progress"
+                    : "semantic_valid",
+          )
+        }
+        yield* session.updatePart({
+          ...match.part,
+          state: {
+            status: "completed",
+            input: match.part.state.input,
+            output: outputText,
+            metadata,
+            title: output.title,
+            time: { start: match.part.state.time.start, end: Date.now() },
+            attachments: output.attachments,
+          },
+        })
+        if (ctx.loopPolicy === "ask") {
+          const workspaceRevision = yield* snapshot.track()
+          const resultFingerprint =
+            match.part.tool && ctx.sequenceTracker
+              ? ctx.sequenceTracker.resultFingerprint(match.part.tool, output)
+              : undefined
+          const evidenceFingerprint =
+            resultFingerprint ?? Hash.sha256(canonicalJson({ tool: match.part.tool, input: match.part.state.input }))
+          const receiptID = `${ctx.assistantMessage.id}:${toolCallID}`
+          ctx.activityEvidence.set(evidenceFingerprint, {
+            fingerprint: evidenceFingerprint,
+            kind: resultFingerprint ? "tool_result" : "tool_invocation",
+          })
+          if (workspaceRevision !== ctx.activityWorkspaceRevision)
+            ctx.activityEffectReceipts.set(receiptID, {
+              receiptID,
+              fingerprint: Hash.sha256(
+                canonicalJson({
+                  tool: match.part.tool,
+                  input: match.part.state.input,
+                  workspaceRevision: workspaceRevision ?? null,
+                }),
+              ),
+            })
+          ctx.activityWorkspaceRevision = workspaceRevision
+          ctx.activityToolNames.add(match.part.tool)
+          if (protocol)
+            ctx.activityValidationFingerprint = Hash.sha256(
+              canonicalJson({ outcome: protocol.outcome, code: protocol.code ?? null }),
+            )
+        }
+        const noProgress = yield* settleToolCall(
+          toolCallID,
+          match.part.tool,
+          output,
+          input.noProgressLimit
+            ? {
+                snapshot: yield* snapshot.track(),
+                plan: AgentGateway.DeepAgentSessionState.getPlan(ctx.sessionID),
+              }
+            : undefined,
+        )
+        if (protocol) {
+          yield* settlePlanProtocol(toolCallID, match.part.tool, protocol.outcome, protocol.code)
+        }
+        if (input.noProgressLimit && noProgress && noProgress.count >= input.noProgressLimit) {
+          slog.warn("subagent.loop.detected", {
+            fingerprint_kind: "tool_result",
+            period: 1,
+            count: noProgress.count,
+            tool: match.part.tool,
+          })
+          yield* Effect.fail(
+            new SessionV1.TaskBudgetExceededError({
+              message: `Non-interactive activity stopped after ${noProgress.count} equivalent ${match.part.tool} results without observable progress.`,
+              budget: "no_progress",
+              limit: input.noProgressLimit,
+              used: noProgress.count,
+            }),
+          )
+        }
+      })
+
+      const failToolCall = Effect.fn("SessionProcessor.failToolCall")(function* (
+        toolCallID: string,
+        error: unknown,
+        metadata?: Record<string, unknown>,
+      ) {
+        const match = yield* readToolCall(toolCallID)
+        if (!match || match.part.state.status !== "running") return false
+        const rejection =
+          error instanceof Question.RejectedError
+            ? ({ code: "user_rejected_question", callID: toolCallID } as const)
+            : error instanceof PermissionV1.RejectedError
+              ? ({ code: "user_rejected_permission", callID: toolCallID } as const)
+              : undefined
+        yield* session.updatePart({
+          ...match.part,
+          state: {
+            status: "error",
+            input: match.part.state.input,
+            error: errorMessage(error),
+            ...(match.part.state.metadata || metadata || rejection
+              ? {
+                  metadata: {
+                    ...match.part.state.metadata,
+                    ...metadata,
+                    ...(rejection ? { failureCode: rejection.code } : {}),
+                  },
+                }
+              : {}),
+            time: { start: match.part.state.time.start, end: Date.now() },
+          },
+        })
+        if (ctx.loopPolicy === "ask") {
+          const workspaceRevision = yield* snapshot.track()
+          const message = errorMessage(error)
+          const evidenceFingerprint = Hash.sha256(
+            canonicalJson({
+              tool: match.part.tool,
+              input: match.part.state.input,
+              error: message,
+              metadata: metadata ?? null,
+            }),
+          )
+          const receiptID = `${ctx.assistantMessage.id}:${toolCallID}`
+          ctx.activityEvidence.set(evidenceFingerprint, { fingerprint: evidenceFingerprint, kind: "tool_error" })
+          if (workspaceRevision !== ctx.activityWorkspaceRevision)
+            ctx.activityEffectReceipts.set(receiptID, {
+              receiptID,
+              fingerprint: Hash.sha256(
+                canonicalJson({
+                  tool: match.part.tool,
+                  input: match.part.state.input,
+                  error: message,
+                  workspaceRevision: workspaceRevision ?? null,
+                }),
+              ),
+            })
+          ctx.activityWorkspaceRevision = workspaceRevision
+          ctx.activityToolNames.add(match.part.tool)
+          ctx.activityValidationFingerprint = Hash.sha256(
+            canonicalJson({ outcome: "tool_error", error: message, metadata: metadata ?? null }),
+          )
+        }
+        if (rejection && ctx.shouldBreak) ctx.stopReason ??= rejection
+        yield* settleToolCall(toolCallID)
+        return true
+      })
+
+      const finishReasoning = Effect.fn("SessionProcessor.finishReasoning")(function* (reasoningID: string) {
+        if (!(reasoningID in ctx.reasoningMap)) return
+        // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
+        if (mirrorAssistant) {
+          yield* events.publish(SessionEvent.Reasoning.Ended, {
+            sessionID: ctx.sessionID,
+            assistantMessageID: yield* currentV2AssistantMessage(),
+            reasoningID,
+            text: ctx.reasoningMap[reasoningID].text,
+            providerMetadata: ctx.reasoningMap[reasoningID].metadata,
+            timestamp: DateTime.makeUnsafe(Date.now()),
+          })
+        }
+        // oxlint-disable-next-line no-self-assign -- reactivity trigger
+        ctx.reasoningMap[reasoningID].text = ctx.reasoningMap[reasoningID].text
+        ctx.reasoningMap[reasoningID].time = { ...ctx.reasoningMap[reasoningID].time, end: Date.now() }
+        yield* session.updatePart(ctx.reasoningMap[reasoningID])
+        delete ctx.reasoningMap[reasoningID]
+      })
+
+      const flushV2Fragments = Effect.fn("SessionProcessor.flushV2Fragments")(function* () {
+        if (!mirrorAssistant) return
+        if (!ctx.assistantMessage.summary && ctx.currentText && ctx.currentTextID) {
+          yield* events.publish(SessionEvent.Text.Ended, {
+            sessionID: ctx.sessionID,
+            assistantMessageID: yield* currentV2AssistantMessage(),
+            textID: ctx.currentTextID,
+            text: ctx.currentText.text,
+            timestamp: DateTime.makeUnsafe(Date.now()),
+          })
+        }
+        yield* Effect.forEach(Object.entries(ctx.reasoningMap), ([reasoningID, part]) =>
+          currentV2AssistantMessage().pipe(
+            Effect.flatMap((assistantMessageID) =>
+              events.publish(SessionEvent.Reasoning.Ended, {
+                sessionID: ctx.sessionID,
+                assistantMessageID,
+                reasoningID,
+                text: part.text,
+                providerMetadata: part.metadata,
+                timestamp: DateTime.makeUnsafe(Date.now()),
+              }),
+            ),
+          ),
+        )
+      })
+
+      const ensureToolCall = Effect.fn("SessionProcessor.ensureToolCall")(function* (input: {
+        id: string
+        name: string
+        providerExecuted?: boolean
+      }) {
+        const existing = yield* readToolCall(input.id)
+        if (existing) {
+          if (!input.providerExecuted || existing.part.metadata?.providerExecuted) return existing
+          const part = yield* session.updatePart({
+            ...existing.part,
+            metadata: { ...existing.part.metadata, providerExecuted: true },
+          })
+          ctx.toolcalls[input.id] = {
+            ...existing.call,
+            partID: part.id,
+            messageID: part.messageID,
+            sessionID: part.sessionID,
+          }
+          return { call: ctx.toolcalls[input.id], part }
+        }
+        // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
+        const assistantMessageID = mirrorAssistant ? yield* ensureV2AssistantMessage() : undefined
+        if (assistantMessageID) {
+          yield* events.publish(SessionEvent.Tool.Input.Started, {
+            sessionID: ctx.sessionID,
+            assistantMessageID,
+            callID: input.id,
+            name: input.name,
+            timestamp: DateTime.makeUnsafe(Date.now()),
+          })
+        }
+        const part = yield* session.updatePart({
+          id: PartID.ascending(),
+          messageID: ctx.assistantMessage.id,
+          sessionID: ctx.assistantMessage.sessionID,
+          type: "tool",
+          tool: input.name,
+          callID: input.id,
+          state: { status: "pending", input: {}, raw: "" },
+          metadata: input.providerExecuted ? { providerExecuted: true } : undefined,
+        } satisfies SessionV1.ToolPart)
+        ctx.toolcalls[input.id] = {
+          assistantMessageID,
+          done: yield* Deferred.make<void>(),
+          partID: part.id,
+          messageID: part.messageID,
+          sessionID: part.sessionID,
+          inputEnded: false,
+          raw: "",
+        }
+        return { call: ctx.toolcalls[input.id], part }
+      })
+
+      const isFilePart = (value: unknown): value is SessionV1.FilePart => Schema.is(SessionV1.FilePart)(value)
+
+      const toolResultOutput = (
+        value: Extract<StreamEvent, { type: "tool-result" }>,
+      ): { title: string; metadata: Record<string, any>; output: string; attachments?: SessionV1.FilePart[] } => {
+        if (isRecord(value.result.value) && typeof value.result.value.output === "string") {
+          return {
+            title: typeof value.result.value.title === "string" ? value.result.value.title : value.name,
+            metadata: isRecord(value.result.value.metadata) ? value.result.value.metadata : {},
+            output: value.result.value.output,
+            attachments: Array.isArray(value.result.value.attachments)
+              ? value.result.value.attachments.filter(isFilePart)
+              : undefined,
+          }
+        }
+        return {
+          title: value.name,
+          metadata: value.result.type === "json" && isRecord(value.result.value) ? value.result.value : {},
+          output:
+            typeof value.result.value === "string" ? value.result.value : (JSON.stringify(value.result.value) ?? ""),
+        }
+      }
+
+      const rejectSummaryToolEvent = (eventType: string, attemptedToolName: string) =>
+        ctx.assistantMessage.summary
+          ? Effect.fail(
+              new SummaryProtocolViolation({
+                kind: "tool_event",
+                providerID: ctx.model.providerID,
+                modelID: ctx.model.id,
+                eventType,
+                attemptedToolName,
+              }),
+            )
+          : Effect.void
+
+      const handleEvent = Effect.fnUntraced(function* (value: StreamEvent) {
+        switch (value.type) {
+          case "reasoning-start":
+            if (value.id in ctx.reasoningMap) return
+            // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
+            if (mirrorAssistant) {
+              yield* events.publish(SessionEvent.Reasoning.Started, {
+                sessionID: ctx.sessionID,
+                assistantMessageID: yield* ensureV2AssistantMessage(),
+                reasoningID: value.id,
+                providerMetadata: value.providerMetadata,
+                timestamp: DateTime.makeUnsafe(Date.now()),
+              })
+            }
+            ctx.reasoningMap[value.id] = {
+              id: PartID.ascending(),
+              messageID: ctx.assistantMessage.id,
+              sessionID: ctx.assistantMessage.sessionID,
+              type: "reasoning",
+              text: "",
+              time: { start: Date.now() },
+              metadata: value.providerMetadata,
+            }
+            // PR-2: Allocate a degeneration detector per reasoning stream.
+            // Summary (compaction) processors are excluded — they are short-lived
+            // and use a distinct reasoning style that should never be circuit-broken.
+            if (!ctx.assistantMessage.summary) {
+              ctx.degenerationDetectors[value.id] = new DegenerationDetector(flags.degenerationDetectorMode)
+            }
+            yield* session.updatePart(ctx.reasoningMap[value.id])
+            return
+
+          case "reasoning-delta":
+            // Match dev: silently drop orphan deltas (no preceding reasoning-start).
+            if (!(value.id in ctx.reasoningMap)) return
+            ctx.reasoningMap[value.id].text += value.text
+            if (value.providerMetadata) ctx.reasoningMap[value.id].metadata = value.providerMetadata
+            if (mirrorAssistant) {
+              yield* events.publish(SessionEvent.Reasoning.Delta, {
+                sessionID: ctx.sessionID,
+                assistantMessageID: yield* currentV2AssistantMessage(),
+                reasoningID: value.id,
+                delta: value.text,
+                timestamp: DateTime.makeUnsafe(Date.now()),
+              })
+            }
+            yield* session.updatePartDelta({
+              sessionID: ctx.reasoningMap[value.id].sessionID,
+              messageID: ctx.reasoningMap[value.id].messageID,
+              partID: ctx.reasoningMap[value.id].id,
+              field: "text",
+              delta: value.text,
+            })
+            // PR-2: Run the N-gram degeneration check after persisting the delta.
+            {
+              const detector = ctx.degenerationDetectors[value.id]
+              if (detector) {
+                const check = detector.feed(value.text)
+                if (check.triggered) {
+                  const chars = check.chars ?? ctx.reasoningMap[value.id].text.length
+                  const ratio = check.ratio ?? 0
+                  slog.warn("reasoning degeneration detected", {
+                    reasoningID: value.id,
+                    chars,
+                    ratio,
+                    mode: flags.degenerationDetectorMode,
+                  })
+                  if (flags.degenerationDetectorMode === "enforce") {
+                    throw new SessionV1.OutputDegenerationError({
+                      chars,
+                      ratio,
+                      detectorVersion: DEGENERATION_DETECTOR_VERSION,
+                    })
+                  }
+                }
+              }
+            }
+            return
+
+          case "reasoning-end":
+            if (value.providerMetadata && value.id in ctx.reasoningMap) {
+              ctx.reasoningMap[value.id].metadata = value.providerMetadata
+            }
+            yield* finishReasoning(value.id)
+            return
+
+          case "tool-input-start":
+            if (ctx.assistantMessage.summary) {
+              return yield* Effect.fail(
+                new SummaryProtocolViolation({
+                  kind: "tool_event",
+                  providerID: ctx.model.providerID,
+                  modelID: ctx.model.id,
+                  eventType: "tool-input-start",
+                  attemptedToolName: value.name,
+                }),
+              )
+            }
+            ctx.planTracker?.start(planTrackerCallID(value.id), value.name)
+            yield* ensureToolCall(value)
+            return
+
+          case "tool-input-delta":
+            {
+              yield* rejectSummaryToolEvent("tool-input-delta", value.name)
+              const toolCall = yield* ensureToolCall(value)
+              const assistantMessageID = mirrorAssistant ? yield* requireV2AssistantMessage(toolCall.call) : undefined
+              if (assistantMessageID) {
+                yield* events.publish(SessionEvent.Tool.Input.Delta, {
+                  sessionID: ctx.sessionID,
+                  assistantMessageID,
+                  callID: value.id,
+                  delta: value.text,
+                  timestamp: DateTime.makeUnsafe(Date.now()),
+                })
+              }
+              ctx.toolcalls[value.id] = { ...toolCall.call, raw: toolCall.call.raw + value.text }
+            }
+            return
+
+          case "tool-input-end": {
+            yield* rejectSummaryToolEvent("tool-input-end", value.name)
+            const toolCall = yield* ensureToolCall(value)
+            ctx.planTracker?.start(planTrackerCallID(value.id), value.name)
+            // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
+            if (mirrorAssistant) {
+              const assistantMessageID = yield* requireV2AssistantMessage(toolCall.call)
+              yield* events.publish(SessionEvent.Tool.Input.Ended, {
+                sessionID: ctx.sessionID,
+                assistantMessageID,
+                callID: value.id,
+                text: toolCall.call.raw,
+                timestamp: DateTime.makeUnsafe(Date.now()),
+              })
+            }
+            ctx.toolcalls[value.id] = { ...toolCall.call, inputEnded: true }
+            return
+          }
+
+          case "tool-call": {
+            if (ctx.assistantMessage.summary) {
+              return yield* Effect.fail(
+                new SummaryProtocolViolation({
+                  kind: "tool_event",
+                  providerID: ctx.model.providerID,
+                  modelID: ctx.model.id,
+                  eventType: "tool-call",
+                  attemptedToolName: value.name,
+                }),
+              )
+            }
+            ctx.planTracker?.start(planTrackerCallID(value.id), value.name)
+            const toolCall = yield* ensureToolCall(value)
+            const input = isRecord(value.input) ? value.input : { value: value.input }
+            if (value.inputValidation === "schema_invalid") ctx.processorSchemaInvalidCallIDs.add(value.id)
+            yield* recordProcessorInput(
+              value.id,
+              value.name,
+              "tool-call",
+              value.inputValidation ?? "schema_valid",
+              input,
+            )
+            if (!toolCall.call.inputEnded) {
+              // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
+              if (mirrorAssistant) {
+                const assistantMessageID = yield* requireV2AssistantMessage(toolCall.call)
+                yield* events.publish(SessionEvent.Tool.Input.Ended, {
+                  sessionID: ctx.sessionID,
+                  assistantMessageID,
+                  callID: value.id,
+                  text: toolCall.call.raw,
+                  timestamp: DateTime.makeUnsafe(Date.now()),
+                })
+              }
+            }
+            // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
+            if (mirrorAssistant) {
+              const assistantMessageID = yield* requireV2AssistantMessage(toolCall.call)
+              yield* events.publish(SessionEvent.Tool.Called, {
+                sessionID: ctx.sessionID,
+                assistantMessageID,
+                callID: value.id,
+                tool: value.name,
+                input,
+                provider: {
+                  executed: toolCall.part.metadata?.providerExecuted === true,
+                  ...(value.providerMetadata ? { metadata: value.providerMetadata } : {}),
+                },
+                timestamp: DateTime.makeUnsafe(Date.now()),
+              })
+            }
+            yield* updateToolCall(value.id, (match) => ({
+              ...match,
+              tool: value.name,
+              state:
+                match.state.status === "running"
+                  ? { ...match.state, input }
+                  : {
+                      status: "running",
+                      input,
+                      time: { start: Date.now() },
+                    },
+              metadata: match.metadata?.providerExecuted
+                ? { ...value.providerMetadata, providerExecuted: true }
+                : value.providerMetadata,
+            }))
+
+            // ---------------------------------------------------------------
+            // F1: Activity-level cross-message loop detection (primary path)
+            // ---------------------------------------------------------------
+            if (ctx.sequenceTracker) {
+              const fp = ctx.sequenceTracker.fingerprint(value.name, input)
+              ctx.sequenceTracker.push(value.id, fp)
+              const detected = ctx.sequenceTracker.detect()
+              if (detected && !ctx.sequenceTracker.hasTriggered(detected.sequenceKey)) {
+                slog.warn("subagent.loop.detected", {
+                  fingerprint_kind: "tool_input_sequence",
+                  period: detected.period,
+                  count: detected.count,
+                  tool: value.name,
+                })
+                if (ctx.loopPolicy === "error") {
+                  return yield* Effect.fail(
+                    new SessionV1.DoomLoopError({
+                      message: `Non-interactive activity stopped after a repeated ${value.name} tool sequence was detected.`,
+                      tool: value.name,
+                      period: detected.period,
+                      count: detected.count,
+                    }),
+                  )
+                }
+                ctx.sequenceTracker.setTriggered(detected.sequenceKey)
+              }
+              // Tracker handles all detection for this call; skip legacy path.
+              return
+            }
+
+            // ---------------------------------------------------------------
+            // Legacy per-message detection (fallback when no tracker present)
+            // ---------------------------------------------------------------
+            const parts = yield* MessageV2.parts(ctx.assistantMessage.id).pipe(
+              Effect.provideService(Database.Service, database),
+            )
+            const recentParts = parts.slice(-DOOM_LOOP_THRESHOLD)
+
+            const singleRepeat =
+              recentParts.length === DOOM_LOOP_THRESHOLD &&
+              recentParts.every(
+                (part) =>
+                  part.type === "tool" &&
+                  part.tool === value.name &&
+                  part.state.status !== "pending" &&
+                  JSON.stringify(part.state.input) === JSON.stringify(input),
+              )
+
+            const sequenceRepeat =
+              !singleRepeat &&
+              detectRepeatingSequence(
+                parts
+                  .filter((part): part is SessionV1.ToolPart => part.type === "tool" && part.state.status !== "pending")
+                  .map((part) => `${part.tool}:${JSON.stringify(part.state.input)}`),
+              )
+
+            if (!singleRepeat && !sequenceRepeat) return
+
+            if (ctx.loopPolicy === "error") {
+              return yield* Effect.fail(
+                new SessionV1.DoomLoopError({
+                  message: `Non-interactive activity stopped after a repeated ${value.name} tool sequence was detected.`,
+                  tool: value.name,
+                  period: sequenceRepeat ? 2 : 1,
+                  count: DOOM_LOOP_MIN_REPEATS,
+                }),
+              )
+            }
+            // Interactive policies surface the doom loop through the durable no-progress authority
+            // (recorded on the activity), not through a permission prompt.
+            return
+          }
+
+          case "tool-result": {
+            yield* rejectSummaryToolEvent("tool-result", value.name)
+            ctx.planTracker?.start(planTrackerCallID(value.id), value.name)
+            const toolCall = yield* readToolCall(value.id)
+            if (!toolCall) {
+              // A schema/transport failure or impossible success can arrive before the durable
+              // tool-call part exists.  Both belong to the activity-level plan protocol budget;
+              // otherwise a malformed plan response silently escapes the terminal rule.
+              yield* recordProcessorInput(value.id, value.name, "tool-result", "schema_invalid")
+              const protocol =
+                value.name === "plan" ? ctx.planTracker?.settle(planTrackerCallID(value.id), "schema") : undefined
+              if (protocol) {
+                yield* recordProcessorValidation(value.id, "schema_invalid")
+                yield* persistMissingPlanToolCall(
+                  value.id,
+                  protocol,
+                  "Plan result arrived without a durable tool call.",
+                )
+                if (protocol.terminal)
+                  yield* Effect.fail(
+                    new SessionV1.PlanProtocolViolationError({
+                      message: "Plan protocol violation budget exhausted after two consecutive model plan failures.",
+                      sessionID: ctx.sessionID,
+                      attemptOrdinal: protocol.consecutive,
+                      code: "missing_tool_call",
+                    }),
+                  )
+              }
+              return
+            }
+            if (value.result.type === "error") {
+              const protocol =
+                value.name === "plan" ? ctx.planTracker?.settle(planTrackerCallID(value.id), "invalid") : undefined
+              if (protocol) yield* recordProcessorValidation(value.id, "semantic_invalid")
+              // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
+              if (mirrorAssistant) {
+                const assistantMessageID = toolCall
+                  ? yield* requireV2AssistantMessage(toolCall.call)
+                  : yield* ensureV2AssistantMessage()
+                yield* events.publish(SessionEvent.Tool.Failed, {
+                  sessionID: ctx.sessionID,
+                  assistantMessageID,
+                  callID: value.id,
+                  error: { type: "unknown", message: errorMessage(value.result.value) },
+                  result: value.result,
+                  provider: {
+                    executed: value.providerExecuted === true || toolCall?.part.metadata?.providerExecuted === true,
+                    ...(value.providerMetadata ? { metadata: value.providerMetadata } : {}),
+                  },
+                  timestamp: DateTime.makeUnsafe(Date.now()),
+                })
+              }
+              yield* failToolCall(
+                value.id,
+                protocol
+                  ? `${errorMessage(value.result.value)}\n\n[Plan attempt ${protocol.consecutive} of 2]`
+                  : value.result.value,
+                protocol ? { plan_protocol: "invalid", plan_attempt_ordinal: protocol.consecutive } : undefined,
+              )
+              if (protocol?.terminal) {
+                yield* Effect.fail(
+                  new SessionV1.PlanProtocolViolationError({
+                    message: "Plan protocol violation budget exhausted after two consecutive model plan failures.",
+                    sessionID: ctx.sessionID,
+                    attemptOrdinal: protocol.consecutive,
+                    code: "invalid",
+                  }),
+                )
+              }
+              return
+            }
+            const rawOutput = toolResultOutput(value)
+            const normalized = yield* Effect.forEach(rawOutput.attachments ?? [], (attachment) =>
+              attachment.mime.startsWith("image/")
+                ? image.normalize(attachment).pipe(
+                    Effect.catchIf(
+                      (error) => error instanceof Image.ResizerUnavailableError,
+                      () => Effect.succeed(attachment),
+                    ),
+                    Effect.exit,
+                  )
+                : Effect.succeed(Exit.succeed<SessionV1.FilePart>(attachment)),
+            )
+            const omitted = normalized.filter(Exit.isFailure).length
+            const attachments = normalized.filter(Exit.isSuccess).map((item) => item.value)
+            const output = {
+              ...rawOutput,
+              output:
+                omitted === 0
+                  ? rawOutput.output
+                  : `${rawOutput.output}\n\n[${omitted} image${omitted === 1 ? "" : "s"} omitted: could not be resized below the image size limit.]`,
+              attachments: attachments.length ? attachments : undefined,
+            }
+            // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
+            if (mirrorAssistant) {
+              const assistantMessageID = toolCall
+                ? yield* requireV2AssistantMessage(toolCall.call)
+                : yield* ensureV2AssistantMessage()
+              const content = [
+                ToolOutput.text({ type: "text", text: output.output }),
+                ...(output.attachments?.map((item: SessionV1.FilePart) =>
+                  ToolOutput.file({
+                    type: "file",
+                    source: toolFileSourceFromUri(item.url),
+                    mime: item.mime,
+                    name: item.filename,
+                  }),
+                ) ?? []),
+              ]
+              const unsupported = content.find((item) => item.type === "file" && item.source.type !== "data")
+              if (unsupported?.type === "file") {
+                const error = new Error(
+                  `Tool attachment source "${unsupported.source.type}" must be materialized before durable V2 settlement`,
+                )
+                yield* events.publish(SessionEvent.Tool.Failed, {
+                  sessionID: ctx.sessionID,
+                  assistantMessageID,
+                  callID: value.id,
+                  error: {
+                    type: "unknown",
+                    message: error.message,
+                  },
+                  provider: {
+                    executed: value.providerExecuted === true || toolCall?.part.metadata?.providerExecuted === true,
+                    ...(value.providerMetadata ? { metadata: value.providerMetadata } : {}),
+                  },
+                  timestamp: DateTime.makeUnsafe(Date.now()),
+                })
+                yield* failToolCall(value.id, error)
+                return
+              } else
+                yield* events.publish(SessionEvent.Tool.Success, {
+                  sessionID: ctx.sessionID,
+                  assistantMessageID,
+                  callID: value.id,
+                  structured: output.metadata,
+                  content,
+                  result: value.result,
+                  provider: {
+                    executed: value.providerExecuted === true || toolCall?.part.metadata?.providerExecuted === true,
+                    ...(value.providerMetadata ? { metadata: value.providerMetadata } : {}),
+                  },
+                  timestamp: DateTime.makeUnsafe(Date.now()),
+                })
+            }
+            yield* completeToolCall(value.id, output)
+            return
+          }
+
+          case "tool-error": {
+            yield* rejectSummaryToolEvent("tool-error", value.name)
+            const toolCall = yield* readToolCall(value.id)
+            // AI SDK may reduce InvalidToolInputError to a string. A schema-rejected call has no
+            // typed error by this point, so preserve the validation marker from its tool-call event.
+            const schemaInvalid =
+              InvalidToolInputError.isInstance(value.error) || ctx.processorSchemaInvalidCallIDs.has(value.id)
+            const protocolOutcome = schemaInvalid ? "schema" : "invalid"
+            ctx.planTracker?.start(planTrackerCallID(value.id), value.name)
+            yield* recordProcessorInput(
+              value.id,
+              value.name,
+              "tool-error",
+              schemaInvalid ? "schema_invalid" : "schema_valid",
+            )
+            if (schemaInvalid) yield* recordProcessorValidation(value.id, "schema_invalid")
+            const protocol =
+              value.name === "plan" ? ctx.planTracker?.settle(planTrackerCallID(value.id), protocolOutcome) : undefined
+            if (protocol && !schemaInvalid) yield* recordProcessorValidation(value.id, "semantic_invalid")
+            if (protocol)
+              yield* persistMissingPlanToolCall(
+                value.id,
+                toolCall ? undefined : protocol,
+                schemaInvalid
+                  ? "Plan tool input failed schema validation before a durable tool call was written."
+                  : value.message,
+              )
+            // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
+            if (mirrorAssistant) {
+              const assistantMessageID = toolCall
+                ? yield* requireV2AssistantMessage(toolCall.call)
+                : yield* ensureV2AssistantMessage()
+              yield* events.publish(SessionEvent.Tool.Failed, {
+                sessionID: ctx.sessionID,
+                assistantMessageID,
+                callID: value.id,
+                error: {
+                  type: "unknown",
+                  message: value.message,
+                },
+                provider: {
+                  executed: toolCall?.part.metadata?.providerExecuted === true,
+                  ...(value.providerMetadata ? { metadata: value.providerMetadata } : {}),
+                },
+                timestamp: DateTime.makeUnsafe(Date.now()),
+              })
+            }
+            yield* failToolCall(
+              value.id,
+              protocol
+                ? `${value.message}\n\n[Plan attempt ${protocol.consecutive} of 2]`
+                : (value.error ?? new Error(value.message)),
+              protocol ? { plan_protocol: protocolOutcome, plan_attempt_ordinal: protocol.consecutive } : undefined,
+            )
+            if (protocol?.terminal) {
+              yield* Effect.fail(
+                new SessionV1.PlanProtocolViolationError({
+                  message: "Plan protocol violation budget exhausted after two consecutive model plan failures.",
+                  sessionID: ctx.sessionID,
+                  attemptOrdinal: protocol.consecutive,
+                  code: protocolOutcome,
+                }),
+              )
+            }
+            return
+          }
+
+          case "provider-error":
+            throw new Error(value.message)
+
+          case "step-start":
+            if (!ctx.snapshot) ctx.snapshot = yield* snapshot.track()
+            if (!ctx.assistantMessage.summary) {
+              // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
+              if (mirrorAssistant) {
+                yield* ensureV2AssistantMessage()
+              }
+            }
+            yield* session.updatePart({
+              id: PartID.ascending(),
+              messageID: ctx.assistantMessage.id,
+              sessionID: ctx.sessionID,
+              snapshot: ctx.snapshot,
+              type: "step-start",
+            })
+            return
+
+          case "step-finish": {
+            const completedSnapshot = yield* snapshot.track()
+            yield* Effect.forEach(Object.keys(ctx.reasoningMap), finishReasoning)
+            const usage = Session.getUsage({
+              model: ctx.model,
+              usage: value.usage ?? new Usage({}),
+              metadata: value.providerMetadata,
+            })
+            // Compaction summaries use an isolated provider prefix under the same Session ID. They
+            // must not replace the ordinary conversation baseline; the next ordinary request remains
+            // directly comparable with the request before compaction.
+            if (!ctx.assistantMessage.summary) {
+              yield* Effect.sync(() => LLMRequestPrep.recordCacheHitOutcome(ctx.sessionID, usage.tokens)).pipe(
+                Effect.ignore,
+              )
+            }
+            if (!ctx.assistantMessage.summary) {
+              // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
+              if (mirrorAssistant) {
+                yield* events.publish(SessionEvent.Step.Ended, {
+                  sessionID: ctx.sessionID,
+                  assistantMessageID: yield* currentV2AssistantMessage(),
+                  finish: value.reason,
+                  cost: usage.cost,
+                  tokens: usage.tokens,
+                  snapshot: completedSnapshot,
+                  timestamp: DateTime.makeUnsafe(Date.now()),
+                })
+                ctx.v2AssistantMessageID = undefined
+              }
+            }
+            ctx.assistantMessage.finish = value.reason
+            ctx.assistantMessage.cost += usage.cost
+            ctx.assistantMessage.tokens = usage.tokens
+            yield* session.updatePart({
+              id: PartID.ascending(),
+              reason: value.reason,
+              snapshot: completedSnapshot,
+              messageID: ctx.assistantMessage.id,
+              sessionID: ctx.assistantMessage.sessionID,
+              type: "step-finish",
+              tokens: usage.tokens,
+              cost: usage.cost,
+            })
+            yield* session.updateMessage(ctx.assistantMessage)
+            if (ctx.snapshot) {
+              const patch = yield* snapshot.patch(ctx.snapshot)
+              if (patch.files.length) {
+                yield* session.updatePart({
+                  id: PartID.ascending(),
+                  messageID: ctx.assistantMessage.id,
+                  sessionID: ctx.sessionID,
+                  type: "patch",
+                  hash: patch.hash,
+                  files: patch.files,
+                })
+              }
+              ctx.snapshot = undefined
+            }
+            yield* summary
+              .summarize({
+                sessionID: ctx.sessionID,
+                messageID: ctx.assistantMessage.parentID,
+              })
+              .pipe(Effect.ignore, Effect.forkIn(scope))
+            if (
+              !ctx.assistantMessage.summary &&
+              isOverflow({
+                cfg: yield* config.get(),
+                tokens: usage.tokens,
+                model: ctx.model,
+                outputTokenMax: flags.outputTokenMax,
+              })
+            ) {
+              ctx.needsCompaction = true
+            }
+            return
+          }
+
+          case "text-start":
+            if (!ctx.assistantMessage.summary) {
+              // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
+              if (mirrorAssistant) {
+                yield* events.publish(SessionEvent.Text.Started, {
+                  sessionID: ctx.sessionID,
+                  assistantMessageID: yield* ensureV2AssistantMessage(),
+                  timestamp: DateTime.makeUnsafe(Date.now()),
+                  textID: value.id,
+                })
+              }
+            }
+            ctx.currentText = {
+              id: PartID.ascending(),
+              messageID: ctx.assistantMessage.id,
+              sessionID: ctx.assistantMessage.sessionID,
+              type: "text",
+              text: "",
+              time: { start: Date.now() },
+              metadata: value.providerMetadata,
+            }
+            ctx.currentTextID = value.id
+            yield* session.updatePart(ctx.currentText)
+            return
+
+          case "text-delta":
+            if (!ctx.currentText) return
+            ctx.currentText.text += value.text
+            if (ctx.assistantMessage.summary) ctx.summaryText += value.text
+            if (value.providerMetadata) ctx.currentText.metadata = value.providerMetadata
+            if (mirrorAssistant) {
+              yield* events.publish(SessionEvent.Text.Delta, {
+                sessionID: ctx.sessionID,
+                assistantMessageID: yield* currentV2AssistantMessage(),
+                textID: value.id,
+                delta: value.text,
+                timestamp: DateTime.makeUnsafe(Date.now()),
+              })
+            }
+            yield* session.updatePartDelta({
+              sessionID: ctx.currentText.sessionID,
+              messageID: ctx.currentText.messageID,
+              partID: ctx.currentText.id,
+              field: "text",
+              delta: value.text,
+            })
+            return
+
+          case "text-end":
+            if (!ctx.currentText) return
+            // oxlint-disable-next-line no-self-assign -- reactivity trigger
+            ctx.currentText.text = ctx.currentText.text
+            ctx.currentText.text = (yield* plugin.trigger(
+              "experimental.text.complete",
+              {
+                sessionID: ctx.sessionID,
+                messageID: ctx.assistantMessage.id,
+                partID: ctx.currentText.id,
+              },
+              { text: ctx.currentText.text },
+            )).text
+            if (!ctx.assistantMessage.summary) {
+              // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
+              if (mirrorAssistant) {
+                yield* events.publish(SessionEvent.Text.Ended, {
+                  sessionID: ctx.sessionID,
+                  assistantMessageID: yield* currentV2AssistantMessage(),
+                  text: ctx.currentText.text,
+                  timestamp: DateTime.makeUnsafe(Date.now()),
+                  textID: value.id,
+                })
+              }
+            }
+            {
+              const end = Date.now()
+              ctx.currentText.time = { start: ctx.currentText.time?.start ?? end, end }
+            }
+            if (value.providerMetadata) ctx.currentText.metadata = value.providerMetadata
+            yield* session.updatePart(ctx.currentText)
+            ctx.currentText = undefined
+            ctx.currentTextID = undefined
+            return
+
+          case "finish":
+            return
+        }
+      })
+
+      const cleanup = Effect.fn("SessionProcessor.cleanup")(function* () {
+        if (ctx.snapshot) {
+          const patch = yield* snapshot.patch(ctx.snapshot)
+          if (patch.files.length) {
+            yield* session.updatePart({
+              id: PartID.ascending(),
+              messageID: ctx.assistantMessage.id,
+              sessionID: ctx.sessionID,
+              type: "patch",
+              hash: patch.hash,
+              files: patch.files,
+            })
+          }
+          ctx.snapshot = undefined
+        }
+
+        if (ctx.currentText) {
+          const end = Date.now()
+          ctx.currentText.time = { start: ctx.currentText.time?.start ?? end, end }
+          yield* session.updatePart(ctx.currentText)
+          ctx.currentText = undefined
+          ctx.currentTextID = undefined
+        }
+
+        for (const part of Object.values(ctx.reasoningMap)) {
+          const end = Date.now()
+          yield* session.updatePart({
+            ...part,
+            time: { start: part.time.start ?? end, end },
+          })
+        }
+        ctx.reasoningMap = {}
+
+        yield* Effect.forEach(
+          Object.values(ctx.toolcalls),
+          (call) => Deferred.await(call.done).pipe(Effect.timeout("250 millis"), Effect.ignore),
+          { concurrency: "unbounded" },
+        )
+
+        for (const toolCallID of Object.keys(ctx.toolcalls)) {
+          const match = yield* readToolCall(toolCallID)
+          if (!match) continue
+          const part = match.part
+          const incompleteInput = part.state.status === "pending"
+          const toolError = incompleteInput
+            ? "Tool input was incomplete and was not executed"
+            : "Tool execution aborted"
+          if (mirrorAssistant && match.call.assistantMessageID) {
+            yield* events.publish(SessionEvent.Tool.Failed, {
+              sessionID: ctx.sessionID,
+              assistantMessageID: match.call.assistantMessageID,
+              callID: toolCallID,
+              error: { type: "unknown", message: toolError },
+              provider: { executed: part.metadata?.providerExecuted === true },
+              timestamp: DateTime.makeUnsafe(Date.now()),
+            })
+          }
+          const end = Date.now()
+          const metadata = "metadata" in part.state && isRecord(part.state.metadata) ? part.state.metadata : {}
+          yield* session.updatePart({
+            ...part,
+            state: {
+              ...part.state,
+              status: "error",
+              error: toolError,
+              metadata: { ...metadata, interrupted: true, incompleteInput },
+              time: { start: "time" in part.state ? part.state.time.start : end, end },
+            },
+          })
+        }
+        ctx.toolcalls = {}
+        ctx.assistantMessage.time.completed = Date.now()
+        yield* session.updateMessage(ctx.assistantMessage)
+      })
+
+      const halt = Effect.fn("SessionProcessor.halt")(function* (e: unknown) {
+        slog.error("process", { error: errorMessage(e), stack: e instanceof Error ? e.stack : undefined })
+        const error = parse(e)
+        yield* flushV2Fragments()
+        if (SessionV1.ContextOverflowError.isInstance(error)) {
+          if ((yield* config.get()).compaction?.auto === false && !ctx.assistantMessage.summary) {
+            ctx.assistantMessage.error = error
+            ctx.assistantMessage.finish = "error"
+            yield* events.publish(Session.Event.Error, { sessionID: ctx.sessionID, error })
+            yield* status.set(ctx.sessionID, { type: "idle" })
+            return
+          }
+          ctx.needsCompaction = true
+          yield* events.publish(Session.Event.Error, { sessionID: ctx.sessionID, error })
+          return
+        }
+        if (!ctx.assistantMessage.summary) {
+          // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
+          if (mirrorAssistant) {
+            yield* events.publish(SessionEvent.Step.Failed, {
+              sessionID: ctx.sessionID,
+              assistantMessageID: yield* ensureV2AssistantMessage(),
+              error: {
+                type: "unknown",
+                message: errorMessage(e),
+              },
+              timestamp: DateTime.makeUnsafe(Date.now()),
+            })
+          }
+        }
+        ctx.assistantMessage.error = error
+        if (SessionV1.PlanProtocolViolationError.isInstance(error)) ctx.assistantMessage.finish = "error"
+        yield* events.publish(Session.Event.Error, {
+          sessionID: ctx.assistantMessage.sessionID,
+          error: ctx.assistantMessage.error,
+        })
+        yield* status.set(ctx.sessionID, { type: "idle" })
+      })
+
+      const processInternal = Effect.fn("SessionProcessor.processInternal")(function* (
+        streamInput: LLM.StreamInput,
+        providerAttempt?: {
+          readonly attemptId: string
+          readonly dispatching: Effect.Effect<void>
+          readonly streaming: Effect.Effect<void>
+          readonly settled: Effect.Effect<void>
+          readonly failed: (error: unknown) => Effect.Effect<void>
+        },
+        propagateSummaryViolation = false,
+      ) {
+        slog.info("process")
+        ctx.needsCompaction = false
+        ctx.shouldBreak = (yield* config.get()).experimental?.continue_loop_on_deny !== true
+        ctx.requestReceipt = streamInput.requestReceipt
+        ctx.processorDecodedOrdinal = 0
+        ctx.processorReceiptCallIDs.clear()
+        ctx.processorSchemaInvalidCallIDs.clear()
+        ctx.activityEvidence.clear()
+        ctx.activityEffectReceipts.clear()
+        ctx.activityToolNames.clear()
+        ctx.activityWorkspaceRevision = yield* snapshot.track()
+        ctx.activityValidationFingerprint = undefined
+
+        return yield* Effect.gen(function* () {
+          const streamed = Effect.gen(function* () {
+            ctx.currentText = undefined
+            ctx.currentTextID = undefined
+            ctx.reasoningMap = {}
+            ctx.degenerationDetectors = {}
+            ctx.summaryText = ""
+            if (providerAttempt && ctx.assistantMessage.providerAttemptID !== providerAttempt.attemptId) {
+              ctx.assistantMessage.providerAttemptID = providerAttempt.attemptId
+              yield* session.updateMessage(ctx.assistantMessage)
+            }
+            yield* status.set(ctx.sessionID, { type: "busy" })
+            yield* providerAttempt?.dispatching ?? Effect.void
+            const stream = llm.stream(streamInput)
+            let firstEvent = true
+
+            yield* stream.pipe(
+              Stream.tap((event) =>
+                Effect.gen(function* () {
+                  yield* streamInput.requestReceipt?.observed(event) ?? Effect.void
+                  if (firstEvent) {
+                    firstEvent = false
+                    yield* providerAttempt?.streaming ?? Effect.void
+                    yield* streamInput.requestReceipt?.streaming() ?? Effect.void
+                  }
+                  yield* handleEvent(event)
+                }),
+              ),
+              Stream.takeUntil(() => ctx.needsCompaction),
+              Stream.runDrain,
+            )
+          })
+          const dispatched =
+            providerAttempt || streamInput.durableAttempt
+              ? streamed
+              : streamed.pipe(
+                  Effect.retry(
+                    SessionRetry.policy({
+                      provider: input.model.providerID,
+                      parse,
+                      set: (info) => {
+                        // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
+                        const event = mirrorAssistant
+                          ? events.publish(SessionEvent.Retried, {
+                              sessionID: ctx.sessionID,
+                              attempt: info.attempt,
+                              error: {
+                                message: info.message,
+                                isRetryable: true,
+                              },
+                              timestamp: DateTime.makeUnsafe(Date.now()),
+                            })
+                          : Effect.void
+                        return flushV2Fragments().pipe(
+                          Effect.andThen(event),
+                          Effect.andThen(
+                            status.set(ctx.sessionID, {
+                              type: "retry",
+                              attempt: info.attempt,
+                              message: info.message,
+                              action: info.action,
+                              next: info.next,
+                            }),
+                          ),
+                        )
+                      },
+                    }),
+                  ),
+                )
+          const completed = dispatched.pipe(
+            Effect.onInterrupt(() =>
+              Effect.gen(function* () {
+                aborted = true
+                yield* providerAttempt?.failed(new DOMException("Aborted", "AbortError")) ?? Effect.void
+                yield* streamInput.requestReceipt?.failed(new DOMException("Aborted", "AbortError")) ?? Effect.void
+                if (!ctx.assistantMessage.error) {
+                  yield* halt(new DOMException("Aborted", "AbortError"))
+                }
+              }),
+            ),
+            Effect.catchCauseIf(
+              (cause) => !Cause.hasInterruptsOnly(cause),
+              (cause) => Effect.fail(Cause.squash(cause)),
+            ),
+            Effect.andThen(() =>
+              ctx.assistantMessage.summary && !ctx.summaryText.trim()
+                ? Effect.fail(
+                    new SummaryProtocolViolation({
+                      kind: "empty_summary",
+                      providerID: ctx.model.providerID,
+                      modelID: ctx.model.id,
+                    }),
+                  )
+                : Effect.void,
+            ),
+            Effect.tapError((error) =>
+              Effect.all([
+                providerAttempt?.failed(error) ?? Effect.void,
+                streamInput.requestReceipt?.failed(error) ?? Effect.void,
+              ]).pipe(Effect.asVoid),
+            ),
+            Effect.tap(() =>
+              ctx.assistantMessage.error
+                ? Effect.void
+                : Effect.all([
+                    providerAttempt?.settled ?? Effect.void,
+                    streamInput.requestReceipt?.settled() ?? Effect.void,
+                  ]).pipe(Effect.asVoid),
+            ),
+          )
+          const governed = completed.pipe(Effect.andThen(observeDurableTurn))
+          yield* (
+            propagateSummaryViolation
+              ? governed.pipe(
+                  Effect.catch((error) =>
+                    error instanceof SummaryProtocolViolation ? Effect.fail(error) : halt(error),
+                  ),
+                )
+              : governed.pipe(Effect.catch(halt))
+          ).pipe(Effect.ensuring(cleanup()))
+
+          if (ctx.needsCompaction) return { action: "compact" } as const
+          if (ctx.stopReason) return { action: "stop", reason: ctx.stopReason } as const
+          if (
+            ctx.assistantMessage.error?.name === "TaskBudgetExceededError" &&
+            ctx.assistantMessage.error.data.budget === "no_progress"
+          )
+            return {
+              action: "stop",
+              reason: {
+                code: "task_no_progress_budget_exhausted",
+                limit: ctx.assistantMessage.error.data.limit,
+                used: ctx.assistantMessage.error.data.used,
+              },
+            } as const
+          if (ctx.assistantMessage.error)
+            return {
+              action: "stop",
+              reason: {
+                code: "assistant_error",
+                errorName: ctx.assistantMessage.error.name,
+              },
+            } as const
+          return { action: "continue" } as const
+        })
+      })
+
+      const process = Effect.fn("SessionProcessor.process")((streamInput: LLM.StreamInput, providerAttempt) =>
+        processInternal(streamInput, providerAttempt).pipe(
+          Effect.catchTag("SummaryProtocolViolation", (error) =>
+            halt(error).pipe(
+              Effect.as({
+                action: "stop",
+                reason: { code: "assistant_error", errorName: "SummaryProtocolViolation" },
+              } as const),
+            ),
+          ),
+        ),
+      )
+
+      const processSummary = Effect.fn("SessionProcessor.processSummary")(
+        (streamInput: LLM.StreamInput, providerAttempt: Parameters<Handle["processSummary"]>[1]) =>
+          processInternal(streamInput, providerAttempt, true),
+      )
+
+      return {
+        get message() {
+          return ctx.assistantMessage
+        },
+        snapshotOutcome,
+        updateToolCall,
+        completeToolCall,
+        process,
+        processSummary,
+      } satisfies Handle
+    })
+
+    return Service.of({ create })
+  }),
+)
+
+export const defaultLayer = Layer.suspend(() =>
+  layer.pipe(
+    Layer.provide(Session.defaultLayer),
+    Layer.provide(Snapshot.defaultLayer),
+    Layer.provide(Agent.defaultLayer),
+    Layer.provide(LLM.defaultLayer),
+    Layer.provide(Permission.defaultLayer),
+    Layer.provide(Plugin.defaultLayer),
+    Layer.provide(SessionSummary.defaultLayer),
+    Layer.provide(SessionStatus.defaultLayer),
+    Layer.provide(Image.defaultLayer),
+    Layer.provide(Config.defaultLayer),
+    Layer.provide(RuntimeFlags.defaultLayer),
+    Layer.provide(Database.defaultLayer),
+    Layer.provide(EventV2Bridge.defaultLayer),
+  ),
+)
+
+function detectRepeatingSequence(fingerprints: string[]): boolean {
+  const tail = fingerprints.slice(-DOOM_LOOP_SEQUENCE_WINDOW)
+  for (let period = 2; period <= DOOM_LOOP_MAX_PERIOD; period++) {
+    const needed = period * DOOM_LOOP_MIN_REPEATS
+    if (tail.length < needed) continue
+    const window = tail.slice(-needed)
+    const pattern = window.slice(0, period)
+    let matches = true
+    for (let i = period; i < needed; i++) {
+      if (window[i] !== pattern[i % period]) {
+        matches = false
+        break
+      }
+    }
+    if (matches) return true
+  }
+  return false
+}
+
+export * as SessionProcessor from "./processor"

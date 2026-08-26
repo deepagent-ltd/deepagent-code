@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:dataeng:delivery-semantics",
+  "type": "knowledge",
+  "title": "At-least-once, at-most-once, exactly-once",
+  "description": "Most systems deliver at-least-once, so consumers must be idempotent; true exactly-once requires transactional sinks or dedup keys.",
+  "body": "Use when reasoning about duplicates and message processing. At-most-once can lose data on failure; at-least-once (the common default in Kafka and retried batch jobs) can deliver duplicates; exactly-once is achieved not by magic but by idempotent writes, dedup on an event key, or transactional offsets+sink. Do not assume a system gives exactly-once just because it advertises it. Actions: make consumers idempotent regardless, and add dedup keys for streams. Validation signals include stable counts under forced retries. Risk boundary: relying on a sink's exactly-once claim without idempotent logic invites silent duplication on edge cases.",
+  "domain": "data_engineering",
+  "scope_hint": "code.data-engineering:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-engineering",
+  "pack_id": "code.data-engineering"
+}

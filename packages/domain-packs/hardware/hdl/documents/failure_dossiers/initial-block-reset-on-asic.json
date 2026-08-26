@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:hdl:initial-block-reset-on-asic",
+  "type": "failure_dossier",
+  "description": "Relying on initial-block or power-up values for reset, which works in simulation and some FPGAs but not on ASICs.",
+  "body": "Failure mode: registers depend on initial-block values or assumed power-up state for their reset value; this simulates fine and may work on FPGAs that load a bitstream, but ASIC flops power up in an unknown state. Detection signals: no explicit reset on some flops; X-propagation after reset in gate-level sim; design works in sim/FPGA but fails on ASIC. Do not use initial blocks for synthesizable reset. Safer fallback: drive an explicit reset to every state element, verify known state after reset deassert, and check gate-level reset behavior.",
+  "domain": "hdl",
+  "scope_hint": "hardware.hdl:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.hdl:human_authored",
+  "pack_id": "hardware.hdl"
+}

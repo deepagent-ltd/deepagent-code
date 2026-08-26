@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:azure:rbac-scope-hierarchy",
+  "type": "knowledge",
+  "title": "Azure RBAC scopes, inheritance, and role definitions",
+  "description": "Explains the management-group->subscription->resource-group->resource scope chain, downward inheritance, and Actions vs DataActions in role definitions.",
+  "body": "Use when reasoning about effective Azure permissions. Do not conflate management-plane Actions with data-plane DataActions. Actions: remember scopes nest management-group->subscription->resource-group->resource and assignments inherit downward; a role definition lists Actions (control plane) and DataActions (data plane) with NotActions to subtract; effective access is the union of all assignments at and above the scope. Verify with Check Access. Validation signals include Check Access attributing access to a specific assignment and a DataAction gating data-plane calls. Risk boundary: assignments at management-group/subscription scope have wide reach and need review.",
+  "domain": "azure",
+  "scope_hint": "platform.cloud.azure:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.azure",
+  "pack_id": "platform.cloud.azure"
+}

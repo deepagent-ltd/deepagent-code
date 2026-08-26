@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:helm:rollback-release",
+  "type": "skill",
+  "title": "Roll a release back to a known-good revision",
+  "description": "Use helm history to pick the last healthy revision and helm rollback to restore it, then verify workload readiness.",
+  "body": "Use when a release is unhealthy and you must restore service. Do not edit live objects or delete the release to recover. Actions: run helm history <release> to list revisions and statuses, identify the last deployed/healthy revision, run helm rollback <release> <revision> (optionally --wait), and confirm pods reach ready. Validation signals include helm history showing a new deployed revision pointing at the restored manifest and the workload passing readiness. Risk boundary: production rollback is change-controlled; record the revision and reason, and escalate if persistent state cannot revert with the release.",
+  "domain": "helm",
+  "scope_hint": "platform.helm:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.helm",
+  "pack_id": "platform.helm"
+}

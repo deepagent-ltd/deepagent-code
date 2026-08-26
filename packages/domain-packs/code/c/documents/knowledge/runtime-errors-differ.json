@@ -1,0 +1,11 @@
+{
+  "ref_id": "knowledge:c:runtime-errors-differ",
+  "type": "knowledge",
+  "description": "In C, a clean build does not prevent undefined behavior from signed overflow, out-of-bounds access, use-after-free, and strict-aliasing violations.",
+  "body": "In C, passing cc -Wall -Wextra -Werror with the same standard (-std=c11) the build uses says nothing about runtime: undefined behavior from signed overflow, out-of-bounds access, use-after-free, and strict-aliasing violations surface only when the code actually runs. Use when a change touches control flow, IO, concurrency, or data shapes that the build cannot prove safe. Do not use a green compile as evidence that behavior is correct, and avoid shipping without exercising the path. Actions: run the unit binary plus valgrind on the changed translation unit, reproduce the runtime path, and where relevant run valgrind --leak-check=full and AddressSanitizer (-fsanitize=address) to catch latent defects. Validation signals include the test/trace logs, a clean valgrind --leak-check=full and AddressSanitizer (-fsanitize=address) run, and observed correct output on representative input. Risk boundary: escalate or hold the change when the failure mode is data loss or memory corruption you cannot reproduce locally.",
+  "domain": "c",
+  "scope_hint": "code.c:knowledge",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.c:skill_survey",
+  "pack_id": "code.c"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:android:debug-missing-recomposition",
+  "type": "methodology",
+  "title": "Debug missing or excessive recomposition",
+  "description": "Diagnose a Compose UI that won't update (or updates too much) by checking state observability and read scope.",
+  "body": "Steps: 1. Identify the data the composable should react to and how it's stored. 2. Confirm it's observable Compose state (mutableStateOf / collected StateFlow), not a plain var. 3. Verify the composable actually reads the state in its scope so a change invalidates it. 4. For excessive recomposition, check unstable parameters, reading state too high in the tree, and missing remember; use the recomposition counts/layout-inspector. 5. Hoist or stabilize state appropriately. Rollback point: before restructuring state hoisting (changes ownership). Validation: the UI updates on state change and recomposes only the affected scope; a plain var that never triggers recomposition, or whole-screen recomposition on every keystroke, are the two failure modes this targets.",
+  "domain": "android",
+  "scope_hint": "code.mobile.android:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mobile.android",
+  "pack_id": "code.mobile.android"
+}

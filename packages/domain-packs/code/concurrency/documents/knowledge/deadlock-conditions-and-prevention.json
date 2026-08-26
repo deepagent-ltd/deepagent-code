@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:conc:deadlock-conditions-and-prevention",
+  "type": "knowledge",
+  "title": "The four deadlock conditions and prevention",
+  "description": "Deadlock needs mutual exclusion, hold-and-wait, no preemption, and circular wait; breaking any one prevents it.",
+  "body": "Use when designing locking or explaining a hang. Deadlock requires all four of: mutual exclusion (resources are exclusive), hold-and-wait (a thread holds one resource while waiting for another), no preemption (resources are not forcibly taken), and circular wait (a cycle of threads each waiting on the next). Breaking any single condition prevents deadlock: impose a global lock order (no circular wait), acquire all locks at once or none (no hold-and-wait), or use try-lock with timeout/backoff (allows giving up). Do not add a lock to a multi-lock path without considering the cycle it may close. Actions: choose one prevention technique and apply it consistently. Validation signals include an acyclic wait-for graph and a non-hanging stress test. Risk boundary: ad hoc locking that closes a wait cycle is a latent hang under load.",
+  "domain": "concurrency",
+  "scope_hint": "code.concurrency:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.concurrency",
+  "pack_id": "code.concurrency"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:pg:index-types-and-when-they-help",
+  "type": "knowledge",
+  "title": "Postgres index types and their use",
+  "description": "btree, gin, gist, brin, and hash each fit different predicates, and an index only helps a sargable query.",
+  "body": "Use when deciding whether and how to index. btree serves equality and ordered range scans and backs most indexes; gin indexes the contents of composite values (jsonb containment, arrays, tsvector full-text); gist supports overlap, ranges, and nearest-neighbor (geometry, ranges); brin gives a tiny index over physically-ordered data like append-only timestamps. An index helps only if the predicate is sargable — wrapping a column in a function (lower(col)=...) defeats it unless you build a matching expression index. Do not index a column you never filter or join on. Actions: pick by predicate and verify with EXPLAIN. Validation signals include the planner choosing the index. Risk boundary: over-indexing a write-heavy table slows writes and bloats storage.",
+  "domain": "postgres",
+  "scope_hint": "code.database.postgres:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.postgres",
+  "pack_id": "code.database.postgres"
+}

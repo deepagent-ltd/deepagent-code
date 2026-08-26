@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:migration:long-running-migration-locks-table",
+  "type": "failure_dossier",
+  "description": "A single large schema change or backfill takes a long lock, stalling production queries and spiking replication lag.",
+  "body": "Failure mode: an ALTER TABLE that rewrites the table or one massive UPDATE holds a lock for minutes, blocking reads/writes and causing replicas to fall far behind. Detection signals: query timeouts and connection pile-up during the migration; replication lag climbs sharply; the DB shows a long-held lock on the table. Do not run a table-rewriting change or unbatched backfill on a live hot table. Safer fallback: use online/concurrent DDL (CREATE INDEX CONCURRENTLY, online schema-change tools), split backfills into throttled resumable batches, monitor lag and back off, and schedule heavy steps in a low-traffic window.",
+  "domain": "code",
+  "scope_hint": "code.migration:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.migration:human_authored",
+  "pack_id": "code.migration"
+}

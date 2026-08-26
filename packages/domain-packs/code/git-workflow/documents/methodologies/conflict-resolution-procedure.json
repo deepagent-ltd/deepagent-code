@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:git:conflict-resolution-procedure",
+  "type": "methodology",
+  "title": "Work through merge conflicts methodically",
+  "description": "An ordered procedure for resolving a conflicted merge or rebase one file at a time with verification before continuing.",
+  "body": "Use when git halts with conflicts during merge, rebase, or cherry-pick. Do not mark files resolved without opening them. Steps: list conflicted paths with git status; for each, inspect both sides and the base; edit to a reconciled result and remove markers; stage the file; run the build; then continue or commit. Validation signals include no remaining markers, a clean git status, and passing tests. Risk boundary: if a conflict touches security or data-handling logic, slow down and verify behavior rather than guessing, escalating when intent is unclear.",
+  "domain": "git_workflow",
+  "scope_hint": "code.git-workflow:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.git-workflow",
+  "pack_id": "code.git-workflow"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:search:plan-reindex-for-mapping-changes",
+  "type": "strategy",
+  "title": "Plan a reindex for any mapping or analyzer change",
+  "description": "Treat analyzer and most field-type changes as requiring a full reindex via an alias, since they cannot apply to already-indexed documents.",
+  "body": "Use when changing an analyzer, field type, or most mapping settings. Do not expect a mapping change to retroactively affect existing documents — they were tokenized under the old analyzer and keep the old terms until reindexed. Actions: create a new index with the updated mapping, reindex into it, and swap a read alias atomically for zero-downtime cutover; keep the old index until verified. Validation signals include the alias pointing at the new index and queries returning consistent results post-swap. Risk boundary: changing mappings in place produces a half-old/half-new index with inconsistent results; require a reindex-via-alias plan before any analyzer/type change.",
+  "domain": "search",
+  "scope_hint": "code.search:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.search",
+  "pack_id": "code.search"
+}

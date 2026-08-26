@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:security:human-gate-for-security-risk",
+  "type": "methodology",
+  "title": "Human gate for security risk",
+  "description": "Escalate any change that broadens access, exposes data, weakens a control, or changes incident posture.",
+  "body": "Use when the agent cannot prove a security-sensitive change is conservative. Do not use to block read-only analysis or local-only test setup. Steps: identify the specific risk increase, stop short of applying the risky change when possible, present evidence and safer alternatives, and request approval from an accountable human. Validation signals include an explicit approval record or a rejected change. Risk boundary: never infer approval from silence, passing tests, or convenience.",
+  "domain": "security",
+  "scope_hint": "risk.security:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.security",
+  "pack_id": "risk.security"
+}

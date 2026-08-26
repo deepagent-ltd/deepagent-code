@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:vdb:diagnose-poor-recall",
+  "type": "methodology",
+  "title": "Diagnose poor search recall",
+  "description": "Work through metric mismatch, query parameters, index training, and filtering to find why neighbours are wrong.",
+  "body": "Use when an ANN search returns visibly wrong or incomplete neighbours. Actions, in order: confirm the query metric matches the index's build metric; raise ef_search or nprobe and re-measure recall; for IVFFlat, check the index was built on populated data with enough lists; and verify any metadata filter is applied as a pre-filter, not a post-filter. Compare each change against brute-force ground truth. Verify recall recovers after the correct cause is addressed. Validation signals include recall@k climbing back to target once the root cause is fixed. Risk boundary: silently low recall corrupts every downstream result, so treat it as a correctness defect and gate release on a recall threshold, not just on latency.",
+  "domain": "vector_db",
+  "scope_hint": "code.database.vector:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.vector",
+  "pack_id": "code.database.vector"
+}

@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json.schemastore.org/package.json",
+  "name": "@deepagent-code/cli",
+  "version": "1.0.0-beta",
+  "type": "module",
+  "license": "AGPL-3.0-or-later",
+  "bin": {
+    "dacode": "./bin/lildax.cjs",
+    "lildax": "./bin/lildax.cjs"
+  },
+  "files": [
+    "bin"
+  ],
+  "scripts": {
+    "build": "bun run script/build.ts",
+    "dev": "bun run src/index.ts",
+    "typecheck": "tsgo --noEmit",
+    "test": "bun test --timeout 30000",
+    "test:ci": "mkdir -p .artifacts/unit && bun test --timeout 30000 --reporter=junit --reporter-outfile=.artifacts/unit/junit.xml"
+  },
+  "dependencies": {
+    "@effect/platform-node": "catalog:",
+    "@deepagent-code/core": "workspace:*",
+    "@deepagent-code/sdk": "workspace:*",
+    "@deepagent-code/server": "workspace:*",
+    "@deepagent-code/tui": "workspace:*",
+    "@opentui/core": "catalog:",
+    "@opentui/solid": "catalog:",
+    "@parcel/watcher": "2.5.1",
+    "effect": "catalog:",
+    "solid-js": "catalog:"
+  },
+  "devDependencies": {
+    "@deepagent-code/script": "workspace:*",
+    "@tsconfig/bun": "catalog:",
+    "@types/bun": "catalog:",
+    "@typescript/native-preview": "catalog:"
+  }
+}

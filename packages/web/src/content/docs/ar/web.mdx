@@ -1,0 +1,142 @@
+---
+title: الويب
+description: استخدام DeepAgent Code في متصفحك.
+---
+
+يمكن تشغيل DeepAgent Code كتطبيق ويب داخل متصفحك، ليمنحك تجربة البرمجة القوية بالذكاء الاصطناعي نفسها دون الحاجة إلى terminal.
+
+![DeepAgent Code Web - جلسة جديدة](../../../assets/web/web-homepage-new-session.png)
+
+## البدء
+
+ابدأ تشغيل واجهة الويب عبر تنفيذ:
+
+```bash
+deepagent-code web
+```
+
+يؤدي ذلك إلى تشغيل خادم محلي على `127.0.0.1` بمنفذ عشوائي متاح، ويفتح DeepAgent Code تلقائيا في المتصفح الافتراضي لديك.
+
+:::caution
+إذا لم يتم تعيين `DEEPAGENT_CODE_SERVER_PASSWORD` فسيكون الخادم دون حماية. هذا مناسب للاستخدام المحلي، لكنه يجب أن يكون مُعينا عند إتاحة الوصول عبر الشبكة.
+:::
+
+:::tip[مستخدمو Windows]
+لأفضل تجربة، شغّل `deepagent-code web` من [WSL](/docs/windows-wsl) بدلا من PowerShell. يضمن ذلك وصولا صحيحا إلى نظام الملفات وتكاملا أفضل مع terminal.
+:::
+
+---
+
+## الإعدادات
+
+يمكنك ضبط خادم الويب باستخدام خيارات CLI أو عبر [ملف الإعدادات](/docs/config).
+
+### المنفذ
+
+افتراضيا، يختار DeepAgent Code منفذا متاحا. يمكنك تحديد منفذ:
+
+```bash
+deepagent-code web --port 4096
+```
+
+### اسم المضيف
+
+افتراضيا، يرتبط الخادم بـ `127.0.0.1` (للاستخدام المحلي فقط). لجعل DeepAgent Code متاحا على شبكتك:
+
+```bash
+deepagent-code web --hostname 0.0.0.0
+```
+
+عند استخدام `0.0.0.0` سيعرض DeepAgent Code كلا من عناوين الوصول المحلي وعناوين الشبكة:
+
+```
+  Local access:       http://localhost:4096
+  Network access:     http://192.168.1.100:4096
+```
+
+### اكتشاف mDNS
+
+فعّل mDNS لجعل خادمك قابلا للاكتشاف على الشبكة المحلية:
+
+```bash
+deepagent-code web --mdns
+```
+
+يضبط ذلك تلقائيا اسم المضيف إلى `0.0.0.0` ويعلن عن الخادم باسم `deepagent-code.local`.
+
+يمكنك تخصيص اسم نطاق mDNS لتشغيل عدة نسخ على الشبكة نفسها:
+
+```bash
+deepagent-code web --mdns --mdns-domain myproject.local
+```
+
+### CORS
+
+للسماح بنطاقات إضافية عبر CORS (مفيد للواجهات الأمامية المخصصة):
+
+```bash
+deepagent-code web --cors https://example.com
+```
+
+### المصادقة
+
+لحماية الوصول، عيّن كلمة مرور عبر متغير البيئة `DEEPAGENT_CODE_SERVER_PASSWORD`:
+
+```bash
+DEEPAGENT_CODE_SERVER_PASSWORD=secret deepagent-code web
+```
+
+اسم المستخدم الافتراضي هو `deepagent-code`، ويمكن تغييره عبر `DEEPAGENT_CODE_SERVER_USERNAME`.
+
+---
+
+## استخدام واجهة الويب
+
+بعد التشغيل، تتيح لك واجهة الويب الوصول إلى جلسات DeepAgent Code الخاصة بك.
+
+### الجلسات
+
+اعرض جلساتك وأدرها من الصفحة الرئيسية. يمكنك رؤية الجلسات النشطة وبدء جلسات جديدة.
+
+![DeepAgent Code Web - جلسة نشطة](../../../assets/web/web-homepage-active-session.png)
+
+### حالة الخادم
+
+انقر على "See Servers" لعرض الخوادم المتصلة وحالتها.
+
+![DeepAgent Code Web - See Servers (عرض الخوادم)](../../../assets/web/web-homepage-see-servers.png)
+
+---
+
+## إرفاق terminal
+
+يمكنك إرفاق واجهة terminal (TUI) بخادم ويب قيد التشغيل:
+
+```bash
+# ابدأ خادم الويب
+deepagent-code web --port 4096
+
+# في محطة طرفية أخرى، اربط TUI
+deepagent-code attach http://localhost:4096
+```
+
+يتيح لك ذلك استخدام واجهة الويب وterminal في الوقت نفسه، مع مشاركة الجلسات والحالة نفسها.
+
+---
+
+## ملف الإعدادات
+
+يمكنك أيضا ضبط إعدادات الخادم داخل ملف الإعدادات `deepagent-code.json`:
+
+```json
+{
+  "server": {
+    "port": 4096,
+    "hostname": "0.0.0.0",
+    "mdns": true,
+    "cors": ["https://example.com"]
+  }
+}
+```
+
+تكون خيارات CLI ذات أولوية أعلى من إعدادات ملف الإعدادات.

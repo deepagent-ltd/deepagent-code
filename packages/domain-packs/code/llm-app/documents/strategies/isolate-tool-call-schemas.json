@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:llm:isolate-tool-call-schemas",
+  "type": "strategy",
+  "title": "Define and enforce tool-call schemas",
+  "description": "Tool/function definitions exposed to the model have strict argument schemas, and returned arguments are validated before any tool executes.",
+  "body": "Use when exposing functions/tools the model can invoke. Do not pass model-produced arguments straight into a tool, and avoid loose schemas that accept free-form strings where an enum or id belongs. Actions: declare each tool with typed, constrained parameters; validate the returned arguments against that schema; reject or repair out-of-range values before execution; gate side-effecting tools behind permission checks. Validation signals include tests where the model returns malformed or out-of-range arguments and the executor refuses. Risk boundary: a side-effecting tool (write, delete, external call) invoked with unvalidated arguments is a critical finding requiring a human gate.",
+  "domain": "llm_app",
+  "scope_hint": "code.llm-app:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.llm-app",
+  "pack_id": "code.llm-app"
+}

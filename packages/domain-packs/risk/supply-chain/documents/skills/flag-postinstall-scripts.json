@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:supply_chain:flag-postinstall-scripts",
+  "type": "skill",
+  "title": "Flag dependency install/postinstall scripts",
+  "description": "Inspect a dependency or lockfile delta for lifecycle install scripts that execute code at install time and report what each runs.",
+  "body": "Use when reviewing a new or changed dependency for install-time execution risk. Actions: enumerate packages declaring preinstall/install/postinstall (or equivalent build) hooks, extract the command each runs, and report which fetch network resources, write outside the package, or invoke shells. Distinguish expected native-build scripts from unexpected ones. Do not run an unreviewed install with scripts enabled on untrusted packages. This skill exposes capability only and must not execute the scripts or install without runtime permission. Validation signals include a list of script-bearing packages with their commands and a clean diff for trusted ones. Risk boundary: an install script in an untrusted or newly-added package is arbitrary code execution; recommend installing with scripts disabled and escalate for human review rather than running it.",
+  "domain": "security",
+  "scope_hint": "risk.supply-chain:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.supply-chain",
+  "pack_id": "risk.supply-chain"
+}

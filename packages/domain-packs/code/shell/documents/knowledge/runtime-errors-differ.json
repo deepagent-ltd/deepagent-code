@@ -1,0 +1,11 @@
+{
+  "ref_id": "knowledge:shell:runtime-errors-differ",
+  "type": "knowledge",
+  "description": "In shell, a clean build does not prevent unquoted-expansion word splitting, glob surprises, and ignored failures without set -e.",
+  "body": "In shell, passing bash -n / sh -n syntax checks before execution says nothing about runtime: unquoted-expansion word splitting, glob surprises, and ignored failures without set -e surface only when the code actually runs. Use when a change touches control flow, IO, concurrency, or data shapes that the build cannot prove safe. Do not use a green compile as evidence that behavior is correct, and avoid shipping without exercising the path. Actions: run bats tests or a guarded dry-run with set -euo pipefail, reproduce the runtime path, and where relevant run subshell scoping and the cost of forking external processes to catch latent defects. Validation signals include the test/trace logs, a clean subshell scoping and the cost of forking external processes run, and observed correct output on representative input. Risk boundary: escalate or hold the change when the failure mode is data loss or memory corruption you cannot reproduce locally.",
+  "domain": "shell",
+  "scope_hint": "code.shell:knowledge",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.shell:skill_survey",
+  "pack_id": "code.shell"
+}

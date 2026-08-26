@@ -1,0 +1,11 @@
+{
+  "ref_id": "fail:aws:wildcard-iam-grant",
+  "type": "failure_dossier",
+  "description": "Resolving AccessDenied by attaching a wildcard IAM policy instead of the missing scoped statement.",
+  "body": "Failure mode: an engineer hits AccessDenied and attaches Action:* / Resource:* (or AdministratorAccess) to make it pass, silently over-privileging the principal. Detection signals: CloudTrail shows the call now succeeds but iam simulate-principal-policy allows far more than the task needs; IAM Access Analyzer flags unused or overly broad permissions. Do not use a wildcard grant or a broad managed policy as a fix. Safer fallback: add only the specific Action and Resource the CloudTrail event named, gate behind a condition key, and escalate to a human if a wildcard truly seems required.",
+  "domain": "aws",
+  "scope_hint": "platform.cloud.aws:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.aws:human_authored",
+  "pack_id": "platform.cloud.aws"
+}

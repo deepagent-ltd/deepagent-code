@@ -1,0 +1,11 @@
+{
+  "ref_id": "knowledge:review:negative-path-evidence",
+  "type": "knowledge",
+  "description": "Review risk often lives in rejection, boundary, empty, retry, and permission paths rather than the happy path.",
+  "body": "Apply this when a change adds validation, parsing, retries, authorization, persistence, migrations, or generated artifacts. Positive examples can pass while negative paths regress silently. The reviewer should inspect rejected inputs, empty or missing values, duplicate IDs, permission denial, timeout, retry, rollback, and malformed payload handling. Do not treat every missing negative-path test as a confirmed bug; separate observed defect from residual risk. Verification signals include explicit negative tests, error-shape assertions, branch coverage around guards, and logs from failure scenarios. The risk boundary is highest when the changed path protects security, privacy, money, data integrity, or public API compatibility. Use when Code Review work touches diff hunks, line evidence, tests, contracts, and blast radius. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: use the fact to constrain the change and test plan; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include file/line citations, failing or missing tests, reproduced behavior, and residual-risk notes. Risk boundary: escalate or stop when the task involves unsupported findings, severity inflation, hidden fixes, and ignoring user constraints, missing owner evidence, or live external state.",
+  "domain": "review",
+  "scope_hint": "code.review:knowledge",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.review:human_authored",
+  "pack_id": "code.review"
+}

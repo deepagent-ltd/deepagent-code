@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:redis:choose-streams-vs-pubsub-by-durability",
+  "type": "strategy",
+  "title": "Choose streams vs pub/sub by durability need",
+  "description": "Use Streams when messages must be retained, acked, and replayable; use pub/sub only for fire-and-forget fan-out.",
+  "body": "Use when sending messages through Redis. Do not use pub/sub for work that must not be lost — pub/sub delivers only to currently-connected subscribers and drops messages for anyone offline. Actions: use Redis Streams with consumer groups when you need persistence, per-consumer acknowledgements (XACK), redelivery of unacked entries (XPENDING/XCLAIM), and replay from an offset; reserve pub/sub for ephemeral notifications where loss is acceptable. Validation signals include a test that a stream consumer that was offline still receives backlogged entries and that unacked entries can be reclaimed. Risk boundary: using pub/sub for at-least-once work silently drops messages whenever a consumer is down — a correctness finding requiring streams or an external broker.",
+  "domain": "redis",
+  "scope_hint": "code.database.redis:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.redis",
+  "pack_id": "code.database.redis"
+}

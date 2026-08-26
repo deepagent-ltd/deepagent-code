@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:tf:run-plan-and-summarize",
+  "type": "skill",
+  "title": "Run terraform plan and summarize the diff",
+  "description": "Generate a plan and report create/update/destroy/replace counts plus any forcing attributes, without applying.",
+  "body": "Use when assessing the impact of an infrastructure change. Actions: run terraform init if needed, then terraform plan -out=plan.tfbin, and parse the output for create/update/destroy/replace counts, listing every destroy and every '# forces replacement' attribute with its resource address. Report the summary and flag stateful resources at risk. Do not apply. This skill exposes capability only and must not run apply or any mutating command without runtime permission. Validation signals include a plan that ran cleanly and a complete destroy/replace inventory. Risk boundary: if the plan shows destroys or replaces of stateful resources, report them as requiring human approval rather than proceeding.",
+  "domain": "terraform",
+  "scope_hint": "platform.terraform:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.terraform",
+  "pack_id": "platform.terraform"
+}

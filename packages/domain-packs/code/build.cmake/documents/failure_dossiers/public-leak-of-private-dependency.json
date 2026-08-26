@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:cmake:public-leak-of-private-dependency",
+  "type": "failure_dossier",
+  "description": "Marking an implementation-only dependency PUBLIC leaks it into every consumer, coupling them to internals and breaking when the dependency changes.",
+  "body": "Failure mode: a dependency needed only to build a library is given PUBLIC visibility, so its includes and link requirements propagate to all consumers that never use it directly. Detection signals: consumers gain access to headers they should not see; removing the internal dependency breaks unrelated downstream targets; the public interface pulls in transitive libraries. Do not mark a build-only dependency PUBLIC to clear a link error. Safer fallback: use PRIVATE for implementation details and INTERFACE or PUBLIC only for what consumers genuinely need, then verify consumers still link.",
+  "domain": "cmake",
+  "scope_hint": "code.build.cmake:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.build.cmake:human_authored",
+  "pack_id": "code.build.cmake"
+}

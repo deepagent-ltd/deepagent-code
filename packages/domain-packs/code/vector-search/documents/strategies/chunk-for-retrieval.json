@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:vsearch:chunk-for-retrieval",
+  "type": "strategy",
+  "title": "Choose chunking to match retrieval granularity",
+  "description": "Size and overlap chunks so each embedded unit is self-contained enough to match queries without diluting the vector.",
+  "body": "Use when splitting documents before embedding. Do not embed whole documents or tiny fragments blindly — oversized chunks average away the relevant signal, while fragments lose the context that makes them matchable. Actions: chunk on semantic boundaries with modest overlap, keep each chunk focused on one idea, and benchmark recall across chunk sizes on a labeled set. Validation signals include a recall comparison across chunk strategies and chunks whose retrieved text actually answers the query. Risk boundary: poor chunking caps achievable recall no matter the index; if recall is low and chunks are huge or fragmented, treat chunking as the root cause before tuning the index.",
+  "domain": "vector_search",
+  "scope_hint": "code.vector-search:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.vector-search",
+  "pack_id": "code.vector-search"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:game:variable-timestep-physics",
+  "type": "failure_dossier",
+  "description": "Advancing physics by the raw per-frame delta, making movement and simulation depend on frame rate and breaking determinism.",
+  "body": "Failure mode: update code multiplies velocity/forces by the variable frame delta, so behavior changes with frame rate, a frame spike produces a huge step that tunnels through walls, and results differ run to run. Detection signals: characters move faster on faster machines; objects pass through colliders during lag; replays and multiplayer desync. Do not scale simulation by a variable delta. Safer fallback: run the simulation on a fixed timestep with an accumulator, clamp catch-up steps, and interpolate rendering between sim states so behavior is frame-rate independent and deterministic.",
+  "domain": "game",
+  "scope_hint": "code.game:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.game:human_authored",
+  "pack_id": "code.game"
+}

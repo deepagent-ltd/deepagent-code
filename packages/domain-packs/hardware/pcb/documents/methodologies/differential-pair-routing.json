@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:pcb:differential-pair-routing",
+  "type": "methodology",
+  "title": "Route and tune differential pairs",
+  "description": "Maintain constant intra-pair spacing, match lengths within the pair, and tune skew at the source of mismatch.",
+  "body": "Use when routing differential interfaces such as USB, Ethernet, or LVDS. Do not let the two traces diverge in spacing or length, because mismatch converts differential signal into common-mode noise. Actions: route the pair with constant gap, match intra-pair length at the point of mismatch, and verify the differential impedance. Validation signals include intra-pair skew within the budget and a differential impedance reading on target. Risk boundary: excess skew radiates as common mode and can fail emissions, so escalate any pair exceeding the skew budget for re-tuning.",
+  "domain": "pcb",
+  "scope_hint": "hardware.pcb:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.pcb",
+  "pack_id": "hardware.pcb"
+}

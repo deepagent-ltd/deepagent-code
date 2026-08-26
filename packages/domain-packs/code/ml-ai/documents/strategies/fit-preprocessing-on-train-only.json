@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:mlai:fit-preprocessing-on-train-only",
+  "type": "strategy",
+  "title": "Fit preprocessing on the training fold only",
+  "description": "Compute normalization statistics, encoders, and imputers from the training split, then apply them to validation and test without refitting.",
+  "body": "Use when scaling, encoding, or imputing features. Do not fit a scaler, vocabulary, or imputer on the full dataset before splitting — the test distribution leaks into training and the metric becomes optimistic. Actions: split first, fit transforms on train, persist the fitted parameters, and apply them unchanged to validation/test; wrap this in a pipeline so it cannot be reordered. Validation signals include identical transform parameters across folds and a metric that holds on truly unseen data. Risk boundary: leakage is invisible in offline metrics and only surfaces in production; treat any global fit-before-split as a defect and re-run the experiment.",
+  "domain": "ml",
+  "scope_hint": "code.ml-ai:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.ml-ai",
+  "pack_id": "code.ml-ai"
+}

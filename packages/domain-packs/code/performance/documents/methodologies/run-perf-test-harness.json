@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:performance:run-perf-test-harness",
+  "type": "methodology",
+  "title": "Stand up a repeatable performance test harness",
+  "description": "Build a benchmark that fixes inputs, warms up, runs enough iterations, and reports stable percentiles so results are comparable across runs.",
+  "body": "Steps: 1. Fix a representative workload and dataset so runs are comparable. 2. Add warmup iterations to let JIT/caches stabilize, then a measured phase with enough iterations to shrink variance. 3. Report percentiles (p50/p95/p99) and allocations, not just the mean. 4. Pin the environment (CPU governor, isolated load) and record it. 5. Store the run as a baseline artifact for future comparison. Rollback point: before changing the workload definition (it invalidates old baselines). Validation: repeated runs land within a small noise band and the harness reproduces a known regression. Risk boundary: results from a noisy shared machine are not authoritative — flag environment variance rather than reporting a delta as real.",
+  "domain": "code",
+  "scope_hint": "code.performance:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.performance",
+  "pack_id": "code.performance"
+}

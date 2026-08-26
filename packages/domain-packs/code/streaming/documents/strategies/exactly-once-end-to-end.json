@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:stream:exactly-once-end-to-end",
+  "type": "strategy",
+  "title": "Make effects exactly-once end to end",
+  "description": "Combine checkpointed source offsets with idempotent or transactional sinks so a recovery neither drops nor duplicates output.",
+  "body": "Use when downstream effects must not double-count after a failure. Do not claim exactly-once from engine checkpointing alone — if the sink is not transactional or idempotent, recovery replays records and duplicates writes. Actions: checkpoint source offsets with operator state, use a transactional sink (two-phase commit) or an idempotent upsert keyed on an event id, and force a restart to confirm no duplicates. Validation signals include a post-recovery output count matching the input exactly and a sink that deduplicates replays. Risk boundary: at-least-once into a non-idempotent sink corrupts totals; if the sink cannot be made transactional or idempotent, escalate before promising exactly-once.",
+  "domain": "streaming",
+  "scope_hint": "code.streaming:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.streaming",
+  "pack_id": "code.streaming"
+}

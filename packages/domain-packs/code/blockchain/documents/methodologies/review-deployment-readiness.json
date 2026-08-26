@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:chain:review-deployment-readiness",
+  "type": "methodology",
+  "title": "Review a contract's deployment readiness",
+  "description": "Run a pre-deployment checklist covering audits, tests, upgrade authority, and constructor parameters before any mainnet release.",
+  "body": "Steps: 1. Confirm adversarial and invariant tests pass and a static-analysis run is clean or triaged. 2. Verify access control on every privileged function and that initializers are one-time. 3. Check constructor/initializer parameters (owner, fee, token addresses) against the intended values for the target network. 4. Confirm upgrade authority (if any) is held by a multisig/timelock, not a single hot key. 5. Plan source verification on the block explorer and a staged rollout with monitoring. Rollback point: there is none after mainnet deployment, so treat this as final. Validation: every checklist item is satisfied and parameters match the target network; because deployed code is immutable, an unreviewed deployment cannot be patched, so require human sign-off before broadcast.",
+  "domain": "blockchain",
+  "scope_hint": "code.blockchain:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.blockchain",
+  "pack_id": "code.blockchain"
+}

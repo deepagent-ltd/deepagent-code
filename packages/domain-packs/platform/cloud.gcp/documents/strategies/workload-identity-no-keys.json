@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:gcp:workload-identity-no-keys",
+  "type": "strategy",
+  "title": "Authenticate workloads with Workload Identity, never exported keys",
+  "description": "Bind a Kubernetes/Cloud Run service identity to a Google service account so credentials are issued automatically instead of shipping JSON key files.",
+  "body": "Use when a GKE or Cloud Run workload needs to call Google APIs. Do not download a service-account JSON key and mount it as a secret, and avoid using the default compute service account with broad scope. Actions: create a dedicated GSA with minimal roles, on GKE enable Workload Identity and bind the KSA to the GSA via the iam.workloadIdentityUser role, on Cloud Run set the service's runtime service account directly, and remove any exported keys. Validation signals include the workload calling APIs with no key file present and no serviceAccountKeys listed for the GSA. Risk boundary: creating a service-account key or granting a broad role is human-gated.",
+  "domain": "gcp",
+  "scope_hint": "platform.cloud.gcp:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.gcp",
+  "pack_id": "platform.cloud.gcp"
+}

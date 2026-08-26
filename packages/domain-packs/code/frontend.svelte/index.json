@@ -1,0 +1,452 @@
+[
+  {
+    "ref_id": "strategy:svelte:assign-to-trigger-reactivity",
+    "type": "strategy",
+    "title": "Trigger reactivity through assignment or runes",
+    "summary": "Svelte's compiler reacts to assignments, not to in-place mutation, so updates must reassign or use $state.",
+    "domains": [
+      "svelte",
+      "sveltekit",
+      "frontend"
+    ],
+    "triggers": [
+      "reactivity",
+      "assignment",
+      "mutation",
+      "state",
+      "rune",
+      "reassign"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.svelte"
+  },
+  {
+    "ref_id": "strategy:svelte:keep-load-serializable-and-universal",
+    "type": "strategy",
+    "title": "Keep load output serializable and universal-safe",
+    "summary": "A SvelteKit load function's return must serialize across the SSR boundary and must not touch browser-only APIs.",
+    "domains": [
+      "svelte",
+      "sveltekit",
+      "frontend"
+    ],
+    "triggers": [
+      "load",
+      "serializable",
+      "universal",
+      "ssr",
+      "sveltekit",
+      "fetch"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.svelte"
+  },
+  {
+    "ref_id": "strategy:svelte:prefer-derived-over-effect",
+    "type": "strategy",
+    "title": "Prefer $derived over $effect for computed values",
+    "summary": "Computed state should be declared as derived, reserving effects for genuine side effects to avoid feedback loops.",
+    "domains": [
+      "svelte",
+      "sveltekit",
+      "frontend"
+    ],
+    "triggers": [
+      "derived",
+      "effect",
+      "computed",
+      "loop",
+      "rune",
+      "reactive"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.svelte"
+  },
+  {
+    "ref_id": "strategy:svelte:clean-up-subscriptions-and-listeners",
+    "type": "strategy",
+    "title": "Clean up manual subscriptions and listeners",
+    "summary": "Auto-subscription via $store cleans itself up, but manual subscribe, timers, and listeners must be torn down.",
+    "domains": [
+      "svelte",
+      "sveltekit",
+      "frontend"
+    ],
+    "triggers": [
+      "subscription",
+      "cleanup",
+      "unsubscribe",
+      "ondestroy",
+      "listener",
+      "leak"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.svelte"
+  },
+  {
+    "ref_id": "strategy:svelte:guard-the-hydration-boundary",
+    "type": "strategy",
+    "title": "Guard the hydration boundary",
+    "summary": "Server-rendered markup must match the first client render, so non-deterministic or browser-only output must wait.",
+    "domains": [
+      "svelte",
+      "sveltekit",
+      "frontend"
+    ],
+    "triggers": [
+      "hydration",
+      "ssr",
+      "mismatch",
+      "browser",
+      "onmount",
+      "deterministic"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.svelte"
+  },
+  {
+    "ref_id": "strategy:svelte:scope-actions-to-the-element",
+    "type": "strategy",
+    "title": "Scope use: actions to element lifecycle",
+    "summary": "A use: action owns setup and teardown for one element and must return a destroy to release what it created.",
+    "domains": [
+      "svelte",
+      "sveltekit",
+      "frontend"
+    ],
+    "triggers": [
+      "action",
+      "use",
+      "directive",
+      "destroy",
+      "lifecycle",
+      "element"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.svelte"
+  },
+  {
+    "ref_id": "methodology:svelte:debug-a-non-updating-view",
+    "type": "methodology",
+    "title": "Debug a view that will not update",
+    "summary": "Trace a stale UI back to a mutation the compiler cannot see or a missing reactive declaration.",
+    "domains": [
+      "svelte",
+      "sveltekit",
+      "frontend"
+    ],
+    "triggers": [
+      "debug",
+      "stale",
+      "update",
+      "mutation",
+      "reactive",
+      "trace"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.svelte"
+  },
+  {
+    "ref_id": "methodology:svelte:structure-sveltekit-routing",
+    "type": "methodology",
+    "title": "Structure SvelteKit routing and data loading",
+    "summary": "Decide per route which data is server-only vs universal and place load logic accordingly.",
+    "domains": [
+      "svelte",
+      "sveltekit",
+      "frontend"
+    ],
+    "triggers": [
+      "routing",
+      "load",
+      "layout",
+      "server",
+      "universal",
+      "sveltekit"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.svelte"
+  },
+  {
+    "ref_id": "methodology:svelte:migrate-stores-to-runes",
+    "type": "methodology",
+    "title": "Migrate from stores/$: to runes",
+    "summary": "Move component state from legacy stores and $: labels to $state/$derived/$effect incrementally and verifiably.",
+    "domains": [
+      "svelte",
+      "sveltekit",
+      "frontend"
+    ],
+    "triggers": [
+      "migrate",
+      "runes",
+      "store",
+      "legacy",
+      "state",
+      "derived"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.svelte"
+  },
+  {
+    "ref_id": "methodology:svelte:set-up-component-tests",
+    "type": "methodology",
+    "title": "Set up component and load tests",
+    "summary": "Use Vitest with @testing-library/svelte for components and plain unit tests for load functions.",
+    "domains": [
+      "svelte",
+      "sveltekit",
+      "frontend"
+    ],
+    "triggers": [
+      "test",
+      "vitest",
+      "testing-library",
+      "load",
+      "component",
+      "setup"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.svelte"
+  },
+  {
+    "ref_id": "knowledge:svelte:runes-vs-legacy-reactivity",
+    "type": "knowledge",
+    "title": "Runes vs legacy reactivity",
+    "summary": "Svelte 5 runes ($state/$derived/$effect) make reactivity explicit and deep, replacing implicit $: labels and assignment tracking.",
+    "domains": [
+      "svelte",
+      "sveltekit",
+      "frontend"
+    ],
+    "triggers": [
+      "runes",
+      "legacy",
+      "state",
+      "derived",
+      "effect",
+      "reactivity"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.svelte"
+  },
+  {
+    "ref_id": "knowledge:svelte:store-contract-and-auto-subscription",
+    "type": "knowledge",
+    "title": "The store contract and auto-subscription",
+    "summary": "A Svelte store is any object with a subscribe method; the $store syntax auto-subscribes and auto-unsubscribes in components.",
+    "domains": [
+      "svelte",
+      "sveltekit",
+      "frontend"
+    ],
+    "triggers": [
+      "store",
+      "subscribe",
+      "writable",
+      "derived",
+      "contract",
+      "auto"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.svelte"
+  },
+  {
+    "ref_id": "knowledge:svelte:ssr-and-hydration-model",
+    "type": "knowledge",
+    "title": "SSR and the hydration model",
+    "summary": "SvelteKit renders HTML on the server then hydrates it on the client, so the first client render must match the server's.",
+    "domains": [
+      "svelte",
+      "sveltekit",
+      "frontend"
+    ],
+    "triggers": [
+      "ssr",
+      "hydration",
+      "server",
+      "client",
+      "mismatch",
+      "onmount"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.svelte"
+  },
+  {
+    "ref_id": "knowledge:svelte:transitions-and-the-block-lifecycle",
+    "type": "knowledge",
+    "title": "Transitions and the block lifecycle",
+    "summary": "Svelte transitions run when an element enters/leaves a block, driven by keyed each blocks and conditionals, not by data identity alone.",
+    "domains": [
+      "svelte",
+      "sveltekit",
+      "frontend"
+    ],
+    "triggers": [
+      "transition",
+      "each",
+      "key",
+      "lifecycle",
+      "animate",
+      "block"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.svelte"
+  },
+  {
+    "ref_id": "skill:svelte:review-reactivity-correctness",
+    "type": "skill",
+    "title": "Review reactivity correctness",
+    "summary": "Read a component and report mutations the compiler cannot track and effects that risk loops.",
+    "domains": [
+      "svelte",
+      "sveltekit",
+      "frontend"
+    ],
+    "triggers": [
+      "review",
+      "reactivity",
+      "mutation",
+      "effect",
+      "correctness",
+      "inspect"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.svelte"
+  },
+  {
+    "ref_id": "skill:svelte:audit-load-and-ssr-safety",
+    "type": "skill",
+    "title": "Audit load and SSR safety",
+    "summary": "Check load functions for browser-only calls, non-serializable returns, and secret leakage across the SSR boundary.",
+    "domains": [
+      "svelte",
+      "sveltekit",
+      "frontend"
+    ],
+    "triggers": [
+      "audit",
+      "load",
+      "ssr",
+      "serializable",
+      "secret",
+      "browser"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.svelte"
+  }
+]

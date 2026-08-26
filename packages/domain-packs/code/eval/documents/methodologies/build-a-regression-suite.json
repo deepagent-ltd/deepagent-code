@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:eval:build-a-regression-suite",
+  "type": "methodology",
+  "title": "Build a quality regression suite",
+  "description": "Wire the golden set, metrics, and significance checks into a repeatable suite that flags quality regressions per change.",
+  "body": "Steps: 1. Package the frozen golden set, metrics, and judge into a runnable harness. 2. Establish a baseline score with variance for the current system. 3. Run the suite on each candidate change and compare to baseline with significance. 4. Segment results so a regression in one category is visible. 5. Gate the change on no significant regression in any critical segment. Rollback point: before merging a change that moves a segment down. Validation: a deliberately worse system is caught by the suite as a significant regression.",
+  "domain": "eval",
+  "scope_hint": "code.eval:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.eval",
+  "pack_id": "code.eval"
+}

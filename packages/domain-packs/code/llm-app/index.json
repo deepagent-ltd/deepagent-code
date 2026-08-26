@@ -1,0 +1,544 @@
+[
+  {
+    "ref_id": "strategy:llm:treat-output-as-claim",
+    "type": "strategy",
+    "title": "Treat model output as a claim, not a fact",
+    "summary": "Every value a model returns is an unverified assertion that must be checked against ground truth or a schema before code acts on it.",
+    "domains": [
+      "llm_app",
+      "llm",
+      "model_api",
+      "tool_calls",
+      "structured_output"
+    ],
+    "triggers": [
+      "claim",
+      "verify",
+      "fact",
+      "output",
+      "trust",
+      "ground"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.llm-app"
+  },
+  {
+    "ref_id": "strategy:llm:validate-structured-output-with-repair",
+    "type": "strategy",
+    "title": "Validate structured output, then repair within budget",
+    "summary": "Parse model JSON against a strict schema and run a bounded repair loop on failure rather than trusting the first parse.",
+    "domains": [
+      "llm_app",
+      "llm",
+      "model_api",
+      "tool_calls",
+      "structured_output"
+    ],
+    "triggers": [
+      "structured",
+      "json",
+      "schema",
+      "validate",
+      "repair",
+      "parse"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.llm-app"
+  },
+  {
+    "ref_id": "strategy:llm:bound-cost-latency-with-timeouts",
+    "type": "strategy",
+    "title": "Bound every call with timeout, retry, and cost ceilings",
+    "summary": "Each model call carries an explicit timeout, a bounded retry policy with backoff, and a token/cost ceiling that fails closed.",
+    "domains": [
+      "llm_app",
+      "llm",
+      "model_api",
+      "tool_calls",
+      "structured_output"
+    ],
+    "triggers": [
+      "timeout",
+      "retry",
+      "cost",
+      "latency",
+      "budget",
+      "backoff"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.llm-app"
+  },
+  {
+    "ref_id": "strategy:llm:isolate-tool-call-schemas",
+    "type": "strategy",
+    "title": "Define and enforce tool-call schemas",
+    "summary": "Tool/function definitions exposed to the model have strict argument schemas, and returned arguments are validated before any tool executes.",
+    "domains": [
+      "llm_app",
+      "llm",
+      "model_api",
+      "tool_calls",
+      "structured_output"
+    ],
+    "triggers": [
+      "tool",
+      "function",
+      "schema",
+      "arguments",
+      "validate",
+      "call"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.llm-app"
+  },
+  {
+    "ref_id": "strategy:llm:guard-prompt-injection-boundary",
+    "type": "strategy",
+    "title": "Hold the prompt-injection boundary",
+    "summary": "Content drawn from users, documents, or tool outputs is data inside the prompt and must never be allowed to override system instructions.",
+    "domains": [
+      "llm_app",
+      "llm",
+      "model_api",
+      "tool_calls",
+      "structured_output"
+    ],
+    "triggers": [
+      "injection",
+      "boundary",
+      "system",
+      "instruction",
+      "untrusted",
+      "data"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.llm-app"
+  },
+  {
+    "ref_id": "strategy:llm:stream-with-incremental-validation",
+    "type": "strategy",
+    "title": "Stream output without trusting partials",
+    "summary": "Streaming responses are accumulated and only validated/acted on at well-defined boundaries, never on incomplete fragments.",
+    "domains": [
+      "llm_app",
+      "llm",
+      "model_api",
+      "tool_calls",
+      "structured_output"
+    ],
+    "triggers": [
+      "stream",
+      "partial",
+      "incremental",
+      "chunk",
+      "buffer",
+      "complete"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.llm-app"
+  },
+  {
+    "ref_id": "strategy:llm:pin-model-and-params",
+    "type": "strategy",
+    "title": "Pin model and sampling parameters",
+    "summary": "Model id, version, and sampling parameters are explicit and pinned so behavior is reproducible and changes are reviewable.",
+    "domains": [
+      "llm_app",
+      "llm",
+      "model_api",
+      "tool_calls",
+      "structured_output"
+    ],
+    "triggers": [
+      "pin",
+      "model",
+      "version",
+      "temperature",
+      "parameters",
+      "reproducible"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.llm-app"
+  },
+  {
+    "ref_id": "methodology:llm:design-tool-call-contract",
+    "type": "methodology",
+    "title": "Design a tool-call contract",
+    "summary": "Specify each model-invocable tool's purpose, typed parameters, side effects, and failure shape before wiring it to the model.",
+    "domains": [
+      "llm_app",
+      "llm",
+      "model_api",
+      "tool_calls",
+      "structured_output"
+    ],
+    "triggers": [
+      "contract",
+      "tool",
+      "design",
+      "parameters",
+      "side-effect",
+      "spec"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.llm-app"
+  },
+  {
+    "ref_id": "methodology:llm:build-structured-output-pipeline",
+    "type": "methodology",
+    "title": "Build a structured-output pipeline",
+    "summary": "Construct the schema, parse, validate, and bounded-repair stages so a call reliably yields conforming structure or a typed failure.",
+    "domains": [
+      "llm_app",
+      "llm",
+      "model_api",
+      "tool_calls",
+      "structured_output"
+    ],
+    "triggers": [
+      "pipeline",
+      "structured",
+      "schema",
+      "validate",
+      "repair",
+      "fallback"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.llm-app"
+  },
+  {
+    "ref_id": "methodology:llm:add-retry-timeout-budget",
+    "type": "methodology",
+    "title": "Add a retry, timeout, and cost budget",
+    "summary": "Wrap a model call with classified error handling, bounded backoff, a timeout, and an enforced token/cost ceiling.",
+    "domains": [
+      "llm_app",
+      "llm",
+      "model_api",
+      "tool_calls",
+      "structured_output"
+    ],
+    "triggers": [
+      "retry",
+      "timeout",
+      "budget",
+      "backoff",
+      "cost",
+      "classify"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.llm-app"
+  },
+  {
+    "ref_id": "methodology:llm:trace-model-call-end-to-end",
+    "type": "methodology",
+    "title": "Trace a model call end to end",
+    "summary": "Follow a request from prompt assembly through the API to parsing and the action it drives, recording each transformation.",
+    "domains": [
+      "llm_app",
+      "llm",
+      "model_api",
+      "tool_calls",
+      "structured_output"
+    ],
+    "triggers": [
+      "trace",
+      "request",
+      "prompt",
+      "parse",
+      "action",
+      "debug"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.llm-app"
+  },
+  {
+    "ref_id": "knowledge:llm:completion-vs-chat-vs-tool-apis",
+    "type": "knowledge",
+    "title": "Completion, chat, and tool-calling APIs",
+    "summary": "Providers expose raw completion, role-structured chat, and tool/function-calling surfaces that differ in how instructions and outputs are framed.",
+    "domains": [
+      "llm_app",
+      "llm",
+      "model_api",
+      "tool_calls",
+      "structured_output"
+    ],
+    "triggers": [
+      "completion",
+      "chat",
+      "tool",
+      "api",
+      "roles",
+      "surface"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.llm-app"
+  },
+  {
+    "ref_id": "knowledge:llm:tool-calling-mechanics",
+    "type": "knowledge",
+    "title": "How tool calling works",
+    "summary": "The model proposes a tool name and JSON arguments; the application executes and returns a result, looping until the model stops calling tools.",
+    "domains": [
+      "llm_app",
+      "llm",
+      "model_api",
+      "tool_calls",
+      "structured_output"
+    ],
+    "triggers": [
+      "tool",
+      "function",
+      "arguments",
+      "loop",
+      "result",
+      "mechanics"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.llm-app"
+  },
+  {
+    "ref_id": "knowledge:llm:structured-output-failure-modes",
+    "type": "knowledge",
+    "title": "Structured-output failure modes",
+    "summary": "Model JSON fails through truncation, extra prose, wrong types, missing required fields, hallucinated enums, and trailing-comma syntax errors.",
+    "domains": [
+      "llm_app",
+      "llm",
+      "model_api",
+      "tool_calls",
+      "structured_output"
+    ],
+    "triggers": [
+      "structured",
+      "json",
+      "truncation",
+      "enum",
+      "types",
+      "failure"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.llm-app"
+  },
+  {
+    "ref_id": "knowledge:llm:token-limits-and-context-window",
+    "type": "knowledge",
+    "title": "Token limits and the context window",
+    "summary": "Input plus requested output must fit the model's context window, and the output is separately capped by max-tokens.",
+    "domains": [
+      "llm_app",
+      "llm",
+      "model_api",
+      "tool_calls",
+      "structured_output"
+    ],
+    "triggers": [
+      "token",
+      "context",
+      "window",
+      "max-tokens",
+      "limit",
+      "truncation"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.llm-app"
+  },
+  {
+    "ref_id": "knowledge:llm:prompt-injection-vs-jailbreak",
+    "type": "knowledge",
+    "title": "Prompt injection vs jailbreak",
+    "summary": "Injection smuggles instructions through data the app trusts; jailbreak coaxes the model past its own guardrails. They need different defenses.",
+    "domains": [
+      "llm_app",
+      "llm",
+      "model_api",
+      "tool_calls",
+      "structured_output"
+    ],
+    "triggers": [
+      "injection",
+      "jailbreak",
+      "guardrail",
+      "data",
+      "instruction",
+      "defense"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.llm-app"
+  },
+  {
+    "ref_id": "skill:llm:review-model-call-safety",
+    "type": "skill",
+    "title": "Review a model call for safety",
+    "summary": "Read a model-calling path and report whether output is verified, calls are bounded, tool arguments are validated, and the injection boundary holds.",
+    "domains": [
+      "llm_app",
+      "llm",
+      "model_api",
+      "tool_calls",
+      "structured_output"
+    ],
+    "triggers": [
+      "review",
+      "safety",
+      "call",
+      "audit",
+      "inspect",
+      "bounded"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.llm-app"
+  },
+  {
+    "ref_id": "skill:llm:run-structured-output-conformance",
+    "type": "skill",
+    "title": "Run a structured-output conformance check",
+    "summary": "Execute or scaffold a conformance run that samples responses and asserts each conforms to the schema or reaches the typed fallback.",
+    "domains": [
+      "llm_app",
+      "llm",
+      "model_api",
+      "tool_calls",
+      "structured_output"
+    ],
+    "triggers": [
+      "conformance",
+      "structured",
+      "schema",
+      "sample",
+      "test",
+      "run"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.llm-app"
+  }
+]

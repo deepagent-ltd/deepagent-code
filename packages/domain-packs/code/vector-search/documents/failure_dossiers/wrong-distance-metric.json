@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:vsearch:wrong-distance-metric",
+  "type": "failure_dossier",
+  "description": "An index uses a distance metric the embedding model was not trained for, distorting all rankings.",
+  "body": "Failure mode: an index is configured with raw dot product or L2 while the embedding model expects cosine similarity on normalized vectors, so ranking is systematically distorted and similar items do not rank closest. Detection signals: a sanity check where a known-similar pair does not score as most similar, and rankings that change when vectors are normalized. Do not compensate by adding more candidates. Safer fallback: read the model's intended metric, normalize vectors when cosine is expected, reconfigure the index to the matching distance, and re-verify that semantically close items rank closest before serving.",
+  "domain": "vector_search",
+  "scope_hint": "code.vector-search:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.vector-search:human_authored",
+  "pack_id": "code.vector-search"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:cass:run-repair-to-maintain-consistency",
+  "type": "methodology",
+  "title": "Run repair to maintain replica consistency",
+  "description": "Schedule anti-entropy repair within gc_grace_seconds so deleted data does not resurrect across replicas.",
+  "body": "Use to keep replicas consistent and prevent zombie data. Actions: run nodetool repair (or a managed reaper) on a schedule shorter than gc_grace_seconds so tombstones are reconciled across all replicas before they are garbage-collected, prefer incremental or subrange repair to bound load, and stagger repairs across the ring. Verify repair completes for every table within the gc_grace window. Validation signals include repair logs showing full coverage within the window and no resurrected deleted rows. Risk boundary: if a replica misses repair before gc_grace_seconds and a tombstone is collected, previously deleted data can reappear, so never let the repair interval exceed gc_grace_seconds and escalate a missed cycle.",
+  "domain": "cassandra",
+  "scope_hint": "code.database.cassandra:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.cassandra",
+  "pack_id": "code.database.cassandra"
+}

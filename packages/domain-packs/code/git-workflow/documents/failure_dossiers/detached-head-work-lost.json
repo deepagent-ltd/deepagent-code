@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:git:detached-head-work-lost",
+  "type": "failure_dossier",
+  "description": "Commits made in detached HEAD are abandoned when the next checkout moves HEAD, since no branch ever referenced them.",
+  "body": "Failure mode: after checking out a tag or specific commit, work is committed while HEAD is detached, then a checkout or switch moves HEAD away, leaving those commits unreachable and slated for garbage collection. Detection signals: git status warned about detached HEAD; recent commits are absent from every branch's log; only git reflog still lists them. Do not do substantial work in detached HEAD without creating a branch. Safer fallback: run git switch -c <branch> before leaving the detached state, and if work was already lost, recover the hash from the reflog and branch from it.",
+  "domain": "git_workflow",
+  "scope_hint": "code.git-workflow:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.git-workflow:human_authored",
+  "pack_id": "code.git-workflow"
+}

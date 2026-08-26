@@ -1,0 +1,6464 @@
+import { NodeFileSystem } from "@effect/platform-node"
+import { ConfigV1 } from "@deepagent-code/core/v1/config/config"
+import { SessionV1 } from "@deepagent-code/core/v1/session"
+import { Database } from "@deepagent-code/core/database/database"
+import { DatabaseMigration } from "@deepagent-code/core/database/migration"
+import remoteCompactPersistenceMigration from "@deepagent-code/core/database/migration/20260820000000_remote_compact_persistence"
+import { LocationIdentity } from "@deepagent-code/core/context-federation/identity"
+import { LocationIdentityTable } from "@deepagent-code/core/context-federation/sql"
+import {
+  SessionActivityTable,
+  SessionContextSelectionTable,
+  SessionContextValidationTable,
+  SessionProviderAttemptTable,
+  SessionProviderOwnerLeaseTable,
+} from "@deepagent-code/core/context-federation/session-sql"
+import { SessionProviderOwner } from "@deepagent-code/core/context-federation/provider-owner"
+import { LocationKey, ProjectScopeKey, SecurityNamespaceID } from "@deepagent-code/core/context-federation/reference"
+import { DeepAgentReleasedSnapshot } from "@deepagent-code/core/deepagent/released-snapshot"
+import { AbsolutePath } from "@deepagent-code/core/schema"
+import { and, eq, sql } from "drizzle-orm"
+import { EventV2Bridge } from "@/event-v2-bridge"
+import { WorkspaceV2 } from "@deepagent-code/core/workspace"
+import { FetchHttpClient } from "effect/unstable/http"
+import { expect, test } from "bun:test"
+import { Cause, DateTime, Deferred, Duration, Effect, Exit, Fiber, Layer, Logger, Option, References, Stream } from "effect"
+import path from "path"
+import { fileURLToPath, pathToFileURL } from "url"
+import { NamedError } from "@deepagent-code/core/util/error"
+import { Hash } from "@deepagent-code/core/util/hash"
+import { Agent as AgentSvc } from "../../src/agent/agent"
+import { Auth } from "../../src/auth"
+import { BackgroundJob } from "@/background/job"
+import { Command } from "../../src/command"
+import { Config } from "@/config/config"
+import { LSP } from "@/lsp/lsp"
+import { MCP } from "../../src/mcp"
+import { Permission } from "../../src/permission"
+import { Plugin } from "../../src/plugin"
+import { Provider as ProviderSvc } from "@/provider/provider"
+import { Env } from "../../src/env"
+import { Git } from "../../src/git"
+import { Image } from "../../src/image/image"
+
+import { Question } from "../../src/question"
+import { Todo } from "../../src/session/todo"
+import { Session } from "@/session/session"
+import {
+  SessionHistoryStateTable,
+  SessionIntentTable,
+  SessionSteerTable,
+  MessageTable,
+  PartTable,
+  SessionMessageTable,
+  SessionPromptEpochMessageTable,
+  TaskRunEventTable,
+  TaskRunTable,
+  TaskStructuredOutputEvidenceTable,
+} from "@deepagent-code/core/session/sql"
+import { LLM } from "../../src/session/llm"
+import { MessageV2 } from "../../src/session/message-v2"
+import { FSUtil } from "@deepagent-code/core/fs-util"
+import { SessionCompaction } from "../../src/session/compaction"
+import { SessionSummary } from "../../src/session/summary"
+import { Instruction } from "../../src/session/instruction"
+import { SessionProcessor } from "../../src/session/processor"
+import { providerResponseFingerprint, recoverProviderReceiptsOnStartup, SessionPrompt } from "../../src/session/prompt"
+import { SessionRevert } from "../../src/session/revert"
+import { SessionRunState } from "../../src/session/run-state"
+import { SessionSteer } from "../../src/session/steer"
+import { SessionPromptIntent } from "../../src/session/prompt-intent"
+import { LegacyExecutionUnavailable } from "../../src/session/legacy-execution-zero"
+import { MessageID, PartID, SessionID } from "../../src/session/schema"
+import { SessionStatus } from "../../src/session/status"
+import { SessionV2 } from "@deepagent-code/core/session"
+import { V2ProviderTurnReceiptTable } from "@deepagent-code/core/session/runner/v2-provider-turn.sql"
+import { CurrentBuildIdentity, CurrentOwnerAuthorizationPublicKey, CurrentOwnerCampaign, ownerQualified as v2OwnerQualified } from "@deepagent-code/core/session/runner/v2-provider-turn"
+import { V2OwnerAuthorization } from "@deepagent-code/core/session/runner/v2-owner-authorization"
+import { V2OwnerAuthorizationTable } from "@deepagent-code/core/session/runner/v2-owner-authorization.sql"
+import { SessionInput } from "@deepagent-code/core/session/input"
+import { SessionProjector } from "@deepagent-code/core/session/projector"
+import { SessionExecution } from "@deepagent-code/core/session/execution"
+import { SessionExecutionLocal } from "@deepagent-code/core/session/execution/local"
+import { SessionStore } from "@deepagent-code/core/session/store"
+import { EventV2 } from "@deepagent-code/core/event"
+import { ProjectV2 } from "@deepagent-code/core/project"
+import { LocationServiceMap } from "@deepagent-code/core/location-layer"
+import { SessionMessage } from "@deepagent-code/core/session/message"
+import { Prompt } from "@deepagent-code/core/session/prompt"
+import { Skill } from "../../src/skill"
+import { SystemPrompt } from "../../src/session/system"
+import { Shell } from "../../src/shell/shell"
+import { Snapshot } from "../../src/snapshot"
+import { ToolRegistry } from "@/tool/registry"
+import type { TaskPromptOps } from "@/tool/task"
+import { DebugService } from "@/debug/service"
+import { RuntimeBase } from "@/runtime/base"
+import { Truncate } from "@/tool/truncate"
+import * as Log from "@deepagent-code/core/util/log"
+import { CrossSpawnSpawner } from "@deepagent-code/core/cross-spawn-spawner"
+import { Search } from "@deepagent-code/core/filesystem/search"
+import { Format } from "../../src/format"
+import { Reference } from "../../src/reference/reference"
+import { RepositoryCache } from "../../src/reference/repository-cache"
+import { TestInstance, testInstanceStoreLayer, tmpdirScoped } from "../fixture/fixture"
+import { InstanceStore } from "@/project/instance-store"
+import { AgentGateway } from "@deepagent-code/core/agent-gateway"
+import { Global } from "@deepagent-code/core/global"
+import { LLMClient, RequestExecutor, WebSocketExecutor } from "@deepagent-code/llm/route"
+import { createHash } from "node:crypto"
+import { symlink } from "node:fs/promises"
+import { awaitWithTimeout, pollWithTimeout, testEffect } from "../lib/effect"
+import { raw, reply, TestLLMServer } from "../lib/llm-server"
+import { RuntimeFlags } from "@/effect/runtime-flags"
+import { ProviderV2 } from "@deepagent-code/core/provider"
+import { ModelV2 } from "@deepagent-code/core/model"
+import { TestContextFacades } from "../fixture/context-facades"
+import { SessionFederatedContext } from "../../src/context-federation/session-context-runtime"
+import { ContextFederationObservability } from "../../src/context-federation/observability"
+import { ContextFederationReadiness } from "../../src/context-federation/readiness"
+import { ContextActivationReceipt } from "../../src/context-federation/activation-receipt"
+import { ContextFederationRollout } from "@deepagent-code/core/context-federation/rollout"
+import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
+import { PromptEpoch } from "@/session/prompt-epoch"
+import { SessionPromptEpochTable } from "@/session/prompt-epoch.sql"
+import { SessionToolRequestReceiptTable } from "@/session/tool-request-receipt.sql"
+import { SessionToolArgumentReceiptTable } from "@/session/tool-argument-receipt.sql"
+import { CompactionArtifactTable, CompactionRunTable } from "@/session/compaction-sql"
+import {
+  SessionActivityAdmissionTable,
+  SessionActivityProgressTable,
+  SessionLegacyActivityAdmissionTable,
+  SessionLegacyActivityRunTable,
+  SessionLegacyActivityTable,
+  SessionLegacyActivityTerminalTable,
+} from "@/session/activity-sql"
+
+void Log.init({ print: false })
+
+const summary = Layer.succeed(
+  SessionSummary.Service,
+  SessionSummary.Service.of({
+    summarize: () => Effect.void,
+    diff: () => Effect.succeed([]),
+    computeDiff: () => Effect.succeed([]),
+    computeManifest: () => Effect.succeed(SessionSummary.emptyManifest()),
+  }),
+)
+
+const ref = {
+  providerID: ProviderV2.ID.make("test"),
+  modelID: ModelV2.ID.make("test-model"),
+}
+
+function withSh<A, E, R>(fx: () => Effect.Effect<A, E, R>) {
+  return Effect.acquireUseRelease(
+    Effect.sync(() => {
+      const prev = process.env.SHELL
+      process.env.SHELL = "/bin/sh"
+      Shell.preferred.reset()
+      return prev
+    }),
+    () => fx(),
+    (prev) =>
+      Effect.sync(() => {
+        if (prev === undefined) delete process.env.SHELL
+        else process.env.SHELL = prev
+        Shell.preferred.reset()
+      }),
+  )
+}
+
+function toolPart(parts: SessionV1.Part[]) {
+  return parts.find((part): part is SessionV1.ToolPart => part.type === "tool")
+}
+
+type CompletedToolPart = SessionV1.ToolPart & { state: SessionV1.ToolStateCompleted }
+type ErrorToolPart = SessionV1.ToolPart & { state: SessionV1.ToolStateError }
+
+function completedTool(parts: SessionV1.Part[]) {
+  const part = toolPart(parts)
+  expect(part?.state.status).toBe("completed")
+  return part?.state.status === "completed" ? (part as CompletedToolPart) : undefined
+}
+
+function errorTool(parts: SessionV1.Part[]) {
+  const part = toolPart(parts)
+  expect(part?.state.status).toBe("error")
+  return part?.state.status === "error" ? (part as ErrorToolPart) : undefined
+}
+
+const mcp = Layer.succeed(
+  MCP.Service,
+  MCP.Service.of({
+    status: () => Effect.succeed({}),
+    clients: () => Effect.succeed({}),
+    tools: () => Effect.succeed({}),
+    prompts: () => Effect.succeed({}),
+    resources: () => Effect.succeed({}),
+    add: () => Effect.succeed({ status: { status: "disabled" as const } }),
+    connect: () => Effect.void,
+    disconnect: () => Effect.void,
+    getPrompt: () => Effect.succeed(undefined),
+    readResource: () => Effect.succeed(undefined),
+    startAuth: () => Effect.die("unexpected MCP auth in prompt-effect tests"),
+    authenticate: () => Effect.die("unexpected MCP auth in prompt-effect tests"),
+    finishAuth: () => Effect.die("unexpected MCP auth in prompt-effect tests"),
+    removeAuth: () => Effect.void,
+    supportsOAuth: () => Effect.succeed(false),
+    hasStoredTokens: () => Effect.succeed(false),
+    getAuthStatus: () => Effect.succeed("not_authenticated" as const),
+    catalog: () => Effect.succeed([]),
+    enableCatalogEntry: () => Effect.succeed({ status: {}, name: "x", config: { type: "local", command: [] } }),
+  }),
+)
+
+const lsp = Layer.succeed(
+  LSP.Service,
+  LSP.Service.of({
+    init: () => Effect.void,
+    status: () => Effect.succeed([]),
+    hasClients: () => Effect.succeed(false),
+    touchFile: () => Effect.void,
+    diagnostics: () => Effect.succeed({}),
+    hover: () => Effect.succeed(undefined),
+    definition: () => Effect.succeed([]),
+    references: () => Effect.succeed([]),
+    implementation: () => Effect.succeed([]),
+    documentSymbol: () => Effect.succeed([]),
+    workspaceSymbol: () => Effect.succeed([]),
+    prepareCallHierarchy: () => Effect.succeed([]),
+    incomingCalls: () => Effect.succeed([]),
+    outgoingCalls: () => Effect.succeed([]),
+    typeDefinition: () => Effect.succeed([]),
+    declaration: () => Effect.succeed([]),
+    prepareTypeHierarchy: () => Effect.succeed([]),
+    supertypes: () => Effect.succeed([]),
+    subtypes: () => Effect.succeed([]),
+    inlayHint: () => Effect.succeed([]),
+    codeAction: () => Effect.succeed([]),
+    executeCommand: () => Effect.succeed(null),
+    prepareRename: () => Effect.succeed(null),
+    rename: () => Effect.succeed(null),
+    documentHighlight: () => Effect.succeed([]),
+    foldingRange: () => Effect.succeed([]),
+    selectionRange: () => Effect.succeed([]),
+    completion: () => Effect.succeed(null),
+    signatureHelp: () => Effect.succeed(null),
+    serverCapabilities: () => Effect.succeed(undefined),
+    workspaceDiagnostics: () => Effect.succeed({}),
+  }),
+)
+
+const status = SessionStatus.layer.pipe(Layer.provideMerge(EventV2Bridge.defaultLayer))
+const run = SessionRunState.layer.pipe(Layer.provide(status))
+const infra = Layer.mergeAll(NodeFileSystem.layer, CrossSpawnSpawner.defaultLayer)
+
+const processorCreateStarted: Array<() => void> = []
+const blockingProcessor = Layer.succeed(
+  SessionProcessor.Service,
+  SessionProcessor.Service.of({
+    create: () => Effect.sync(() => processorCreateStarted.shift()?.()).pipe(Effect.andThen(Effect.never)),
+  }),
+)
+
+// V3.5: a no-op RuntimeBase (R0) stub so the tool registry layer can be built without
+// dragging in the real Worktree→Project→Database chain. These prompt tests never invoke
+// the debug/profile tools, so gate/withIsolation/checkPrivileges are never exercised.
+const stubRuntimeBaseLayer = Layer.succeed(
+  RuntimeBase.Service,
+  RuntimeBase.Service.of({
+    gate: () => Effect.void,
+    withIsolation: (_input, body) => body(""),
+    checkPrivileges: () => Effect.succeed([]),
+  }),
+)
+
+// Fully-inert DebugService (D1) stub. The real DebugService.layer runs InstanceState.make
+// + registers a scope finalizer at registry-build time, perturbing the instance-context
+// lifecycle these prompt tests rely on. The debug tool is never invoked here.
+const debugStubDie = <A>(): Effect.Effect<A, never, never> => Effect.die("DebugService stub (not used in prompt tests)")
+const stubDebugServiceLayer = Layer.succeed(
+  DebugService.Service,
+  DebugService.Service.of({
+    start: debugStubDie,
+    setBreakpoints: debugStubDie,
+    continue: debugStubDie,
+    step: debugStubDie,
+    stackTrace: debugStubDie,
+    scopes: debugStubDie,
+    variables: debugStubDie,
+    evaluate: debugStubDie,
+    terminate: debugStubDie,
+    get: () => Effect.succeed(undefined),
+    list: () => Effect.succeed([]),
+  }),
+)
+
+type PromptLayerOptions = {
+  processor?: "blocking"
+  flags?: Partial<RuntimeFlags.Info>
+  federation?: SessionFederatedContext.Interface
+  plugin?: Plugin.Interface
+  // FEAT-010: lets a test swap the V2 session layer (default: SessionV2.defaultLayer with noop
+  // execution) so the V2 owner branch of loop() can be observed without a live V2 runner.
+  sessionV2?: Layer.Layer<SessionV2.Service, never, never>
+}
+
+// UPD-002: LLM.defaultLayer hardwires RuntimeFlags.defaultLayer, which would
+// freeze default flags (e.g. experimentalNativeLlm) for every instance. Mirror
+// the default wiring over `LLM.layer` so each harness's runtimeFlags wins.
+const testLLMLayer = (runtimeFlags: Layer.Layer<RuntimeFlags.Service>) =>
+  LLM.layer.pipe(
+    Layer.provide(Auth.defaultLayer),
+    Layer.provide(Config.defaultLayer),
+    Layer.provide(ProviderSvc.defaultLayer),
+    Layer.provide(Plugin.defaultLayer),
+    Layer.provide(
+      Layer.mergeAll(
+        AgentGateway.layer({ enabled: true, runsDir: Global.Path.agent.runs }),
+        LLMClient.layer.pipe(Layer.provide(Layer.mergeAll(RequestExecutor.defaultLayer, WebSocketExecutor.layer))),
+      ),
+    ),
+    Layer.provide(runtimeFlags),
+  )
+
+// UPD-005: the Gap 1/Gap 2 persistence migration is not registered in
+// migration.gen.ts yet (mainline registers it). Apply it over the tracked history
+// so compaction_run carries the mode columns the drizzle schema already declares.
+const database = Layer.effect(
+  Database.Service,
+  Effect.gen(function* () {
+    const service = yield* Database.Service
+    yield* DatabaseMigration.applyOnly(service.db, [remoteCompactPersistenceMigration])
+    return service
+  }),
+).pipe(Layer.provide(Database.defaultLayer))
+
+function makePrompt(input?: PromptLayerOptions) {
+  const runtimeFlags = RuntimeFlags.layer({
+    experimentalEventSystem: true,
+    coreV2ExecutionOwner: false,
+    ...input?.flags,
+  })
+  const pluginLayer = input?.plugin ? Layer.succeed(Plugin.Service, input.plugin) : Plugin.defaultLayer
+  const deps = Layer.mergeAll(
+    Session.defaultLayer,
+    Snapshot.defaultLayer,
+    testLLMLayer(runtimeFlags),
+    Env.defaultLayer,
+    AgentSvc.defaultLayer,
+    Command.defaultLayer,
+    Permission.defaultLayer,
+    pluginLayer,
+    Config.defaultLayer,
+    Auth.defaultLayer,
+    ProviderSvc.defaultLayer,
+    lsp,
+    mcp,
+    FSUtil.defaultLayer,
+    BackgroundJob.defaultLayer,
+    status,
+    database,
+    EventV2Bridge.defaultLayer,
+    PromptEpoch.defaultLayer,
+  ).pipe(Layer.provideMerge(infra))
+  const question = Question.layer.pipe(Layer.provideMerge(deps))
+  const todo = Todo.layer.pipe(Layer.provideMerge(deps))
+  const registry = ToolRegistry.layer.pipe(
+    Layer.provide(TestContextFacades.layer),
+    Layer.provide(Skill.defaultLayer),
+    Layer.provide(FetchHttpClient.layer),
+    Layer.provide(CrossSpawnSpawner.defaultLayer),
+    Layer.provide(RepositoryCache.defaultLayer),
+    Layer.provide(Git.defaultLayer),
+    Layer.provide(EffectFlock.defaultLayer),
+    Layer.provide(Reference.defaultLayer),
+    Layer.provide(Search.defaultLayer),
+    Layer.provide(Format.defaultLayer),
+    Layer.provide(runtimeFlags),
+    // V3.5: the registry layer now requires DebugService + RuntimeBase (debug/profile
+    // tools route through D1/R0). These tests never invoke those tools, so provide the
+    // real (lightweight) DebugService over a no-op RuntimeBase stub — this satisfies the
+    // layer without pulling in the heavy Worktree→Project→Database chain (a second
+    // Database instance was stalling the shared LLM/provider path).
+    Layer.provide(stubDebugServiceLayer),
+    Layer.provide(stubRuntimeBaseLayer),
+    Layer.provideMerge(todo),
+    Layer.provideMerge(question),
+    Layer.provideMerge(deps),
+  )
+  const trunc = Truncate.layer.pipe(Layer.provideMerge(deps))
+  const proc =
+    input?.processor === "blocking"
+      ? blockingProcessor
+      : SessionProcessor.layer.pipe(
+          Layer.provide(summary),
+          Layer.provide(Image.defaultLayer),
+          Layer.provide(runtimeFlags),
+          Layer.provideMerge(deps),
+        )
+  const compact = SessionCompaction.layer.pipe(
+    Layer.provide(runtimeFlags),
+    Layer.provide(RequestExecutor.defaultLayer),
+    Layer.provideMerge(proc),
+    Layer.provideMerge(deps),
+  )
+  // V4.1 §S1.1: the durable steer buffer shares the SAME Database instance as Session (built over
+  // `deps`) so drained steers are visible to the loop's history reads.
+  const steer = SessionSteer.layer.pipe(Layer.provideMerge(deps))
+  const promptLayer = SessionPrompt.layer.pipe(
+    Layer.provide(input?.sessionV2 ?? SessionV2.defaultLayer),
+    Layer.provide(SessionProviderOwner.layer.pipe(Layer.provide(deps))),
+    Layer.provide(testInstanceStoreLayer),
+    Layer.provide(SessionRevert.defaultLayer),
+    Layer.provide(Image.defaultLayer),
+    Layer.provide(Reference.defaultLayer),
+    Layer.provide(summary),
+    Layer.provideMerge(steer),
+    Layer.provideMerge(run),
+    Layer.provideMerge(compact),
+    Layer.provideMerge(proc),
+    Layer.provideMerge(registry),
+    Layer.provideMerge(trunc),
+    Layer.provide(Instruction.defaultLayer),
+    Layer.provide(SystemPrompt.defaultLayer),
+    Layer.provide(LocationIdentity.layer.pipe(Layer.provide(deps))),
+    Layer.provide(
+      Layer.succeed(
+        ContextFederationReadiness.Service,
+        ContextFederationReadiness.Service.of({
+          snapshot: () => Effect.succeed(ContextFederationRollout.READINESS_READY_STUB),
+        }),
+      ),
+    ),
+    Layer.provide(runtimeFlags),
+    Layer.provideMerge(deps),
+    Layer.provide(summary),
+  )
+  if (!input?.federation) return promptLayer
+  return promptLayer.pipe(
+    Layer.provideMerge(
+      Layer.succeed(SessionFederatedContext.Service, SessionFederatedContext.Service.of(input.federation)),
+    ),
+  )
+}
+
+function makeHttp(input?: PromptLayerOptions) {
+  return Layer.mergeAll(TestLLMServer.layer, makePrompt(input))
+}
+
+function makeHttpNoLLMServer(input?: PromptLayerOptions) {
+  return makePrompt(input)
+}
+
+const it = testEffect(makeHttp())
+const durableControlPlane = testEffect(
+  makeHttp({ flags: { experimentalBackgroundSubagents: true, subagentControlPlane: "durable" } }),
+)
+const worldStateCompaction = testEffect(
+  makeHttp({ flags: { softLandingCompaction: false, worldStateReinjection: true } }),
+)
+const automaticContinuationTrigger: Plugin.Interface["trigger"] = (name, _input, output) =>
+  Effect.sync(() => {
+    if (name === "experimental.compaction.autocontinue") (output as { enabled: boolean }).enabled = true
+    return output
+  })
+const worldStateCompactionContinuation = testEffect(
+  makeHttp({
+    flags: { softLandingCompaction: false, worldStateReinjection: true },
+    plugin: Plugin.Service.of({
+      trigger: automaticContinuationTrigger,
+      list: () => Effect.succeed([]),
+      init: () => Effect.void,
+    }),
+  }),
+)
+const worldStateCompactionDisabled = testEffect(
+  makeHttp({ flags: { softLandingCompaction: false, worldStateReinjection: false } }),
+)
+const noLLMServer = testEffect(makeHttpNoLLMServer())
+// UPD-002: native runtime ON so a Responses+format-capable family can take the
+// wire structured-output path end to end.
+const wireStructuredOutput = testEffect(makeHttp({ flags: { experimentalNativeLlm: true } }))
+// UPD-002: same provider family but default (AI SDK) runtime — asserts the
+// synthetic StructuredOutput path is retained when the wire path is unavailable.
+const wireCapableAiSdk = testEffect(makeHttp())
+const raceNoLLMServer = testEffect(makeHttpNoLLMServer({ processor: "blocking" }))
+const mutatingProviderHistoryTrigger: Plugin.Interface["trigger"] = (name, _input, output) =>
+  Effect.sync(() => {
+    if (name !== "experimental.chat.messages.transform") return output
+    const messages = (output as { messages: SessionV1.WithParts[] }).messages
+    const user = messages.findLast((message) => message.info.role === "user")
+    const text = user?.parts.find((part) => part.type === "text")
+    if (user) user.info.id = MessageID.make("msg_plugin_projection_only")
+    if (text?.type === "text") text.text = "provider-only transformed text"
+    return output
+  })
+const providerHistoryTransform = testEffect(
+  makeHttp({
+    plugin: Plugin.Service.of({
+      trigger: mutatingProviderHistoryTrigger,
+      list: () => Effect.succeed([]),
+      init: () => Effect.void,
+    }),
+  }),
+)
+const federationTrace: string[] = []
+const federationAdapter = {
+  recover: () =>
+    Effect.sync(() => {
+      federationTrace.push("recover")
+      return 0
+    }),
+  resolve: (input: Parameters<SessionFederatedContext.Interface["resolve"]>[0]) =>
+    Effect.gen(function* () {
+      federationTrace.push(`resolve:${input.agent.name}:${input.inputIds.join(",")}`)
+      const db = (yield* Database.Service).db
+      const identity = yield* db.select().from(LocationIdentityTable).get().pipe(Effect.orDie)
+      if (!identity) return yield* Effect.die("prompt federation identity unavailable")
+      const releasedKnowledgeBinding = DeepAgentReleasedSnapshot.binding(input.releasedKnowledgeSelection)
+      yield* db
+        .insert(SessionActivityTable) // fixture-exempt: seeds active activity inside federation adapter stub
+        .values({
+          activity_id: "activity_prompt_adapter",
+          session_id: input.session.id,
+          ordinal: 0,
+          trigger_input_id: input.inputIds[0] ?? "msg_prompt_adapter",
+          delivery: "steer",
+          state: "active",
+          created_at: Date.now(),
+        })
+        .onConflictDoNothing()
+        .run()
+      yield* db
+        .insert(SessionContextSelectionTable)
+        .values({
+          selection_id: "selection_prompt_adapter",
+          session_id: input.session.id,
+          activity_id: "activity_prompt_adapter",
+          revision: 0,
+          trigger_input_id: input.inputIds[0] ?? "msg_prompt_adapter",
+          location_key: LocationKey.make(identity.location_key),
+          security_namespace_id: SecurityNamespaceID.make(identity.security_namespace_id),
+          project_scope_key: ProjectScopeKey.make(identity.project_scope_key),
+          query_fingerprint: "query_prompt_adapter",
+          authorization_fingerprint: "authorization_prompt_adapter",
+          authorization_epoch: 1,
+          execution_fingerprint: "execution_prompt_adapter",
+          selected_source_fingerprint: "sources_prompt_adapter",
+          observed_location_mutation_epoch: 1,
+          next_revalidation_at: Date.now() + 60_000,
+          released_knowledge_binding_state: releasedKnowledgeBinding.state,
+          released_knowledge_snapshot_id:
+            releasedKnowledgeBinding.state === "bound" ? releasedKnowledgeBinding.snapshotId : null,
+          released_knowledge_generation:
+            releasedKnowledgeBinding.state === "bound" ? releasedKnowledgeBinding.generation : null,
+          released_knowledge_membership_hash:
+            releasedKnowledgeBinding.state === "bound" ? releasedKnowledgeBinding.membershipHash : null,
+          released_knowledge_manifest_hash:
+            releasedKnowledgeBinding.state === "bound" ? releasedKnowledgeBinding.manifestHash : null,
+          released_knowledge_exact_refs: releasedKnowledgeBinding.exactRefs,
+          released_knowledge_exact_refs_fingerprint: releasedKnowledgeBinding.exactRefsFingerprint,
+          graph_revisions: JSON.stringify({ code: "1", documents: "1", knowledge: "1", memory: "1" }),
+          graph_statuses: "[]",
+          selected_refs: "[]",
+          projection: "project-context-json-v1 bytes=2\n{}",
+          projection_hash: "projection_prompt_adapter",
+          token_count: 8,
+          artifact_write_status: "available",
+          artifact_ref: "artifact_prompt_adapter",
+          created_at: Date.now(),
+        })
+        .onConflictDoNothing()
+        .run()
+      return {
+        selection: {
+          selectionId: "selection_prompt_adapter",
+          sessionId: input.session.id,
+          activityId: "activity_prompt_adapter",
+          revision: 0,
+          triggerInputId: input.inputIds[0] ?? "msg_prompt_adapter",
+          locationKey: identity.location_key,
+          securityNamespaceId: identity.security_namespace_id,
+          projectScopeKey: identity.project_scope_key,
+          promotedInputIds: input.inputIds,
+          queryFingerprint: "query_prompt_adapter",
+          authorizationFingerprint: "authorization_prompt_adapter",
+          authorizationEpoch: 1,
+          executionFingerprint: "execution_prompt_adapter",
+          selectedSourceFingerprint: "sources_prompt_adapter",
+          observedLocationMutationEpoch: 1,
+          nextRevalidationAt: Date.now() + 60_000,
+          releasedKnowledgeBinding,
+          graphRevisions: { code: "1", documents: "1", knowledge: "1", memory: "1" },
+          graphStatuses: [],
+          selectedRefs: [],
+          projection: "project-context-json-v1 bytes=2\n{}",
+          projectionHash: "projection_prompt_adapter",
+          tokenCount: 8,
+          artifactBinding: { status: "available", ref: "artifact_prompt_adapter" },
+          createdAt: Date.now(),
+        } as unknown as SessionFederatedContext.Resolved["selection"],
+        envelope: {
+          principal: {
+            securityNamespaceId: identity.security_namespace_id,
+            principalId: "local-user",
+            authorizationEpoch: 1,
+            locationKeys: [identity.location_key],
+            projectScopeKeys: [identity.project_scope_key],
+            sessionIds: [input.session.id],
+            subjectIds: ["local-user"],
+            allowBuiltin: true,
+          },
+          egress: {
+            policyId: "provider:test",
+            epoch: 1,
+            graphs: ["code", "documents", "knowledge", "memory"],
+            sensitivities: ["public", "source_code"],
+          },
+        } as unknown as SessionFederatedContext.Resolved["envelope"],
+        observedLocationMutationEpoch: 1,
+      }
+    }),
+  prepareProviderTurn: (input: Parameters<SessionFederatedContext.Interface["prepareProviderTurn"]>[0]) =>
+    Effect.gen(function* () {
+      federationTrace.push("prepare")
+      const db = (yield* Database.Service).db
+      yield* db
+        .insert(SessionContextValidationTable)
+        .values({
+          validation_id: "validation_prompt_adapter",
+          selection_id: input.selection.selectionId,
+          provider_turn_seq: 0,
+          authorization_epoch: input.envelope.principal.authorizationEpoch,
+          egress_epoch: input.envelope.egress.epoch,
+          observed_location_mutation_epoch: input.observedLocationMutationEpoch,
+          selected_source_fingerprint: input.selection.selectedSourceFingerprint,
+          validated_at: Date.now(),
+          valid_until: Date.now() + 60_000,
+          outcome: "valid",
+          reason_code: "prompt_adapter_test",
+        })
+        .onConflictDoNothing()
+        .run()
+      return {
+        attemptId: "attempt_prompt_adapter",
+        sessionId: input.selection.sessionId,
+        activityId: input.selection.activityId,
+        providerTurnSeq: 0,
+        selectionId: input.selection.selectionId,
+        projectionHash: input.selection.projectionHash,
+        requestHash: input.requestHash,
+        providerId: input.providerId,
+        authorizationEpoch: input.envelope.principal.authorizationEpoch,
+        egressEpoch: input.envelope.egress.epoch,
+        selectedSourceFingerprint: input.selection.selectedSourceFingerprint,
+        observedLocationMutationEpoch: input.observedLocationMutationEpoch,
+      }
+    }),
+  settleActivity: (
+    _selection: Parameters<SessionFederatedContext.Interface["settleActivity"]>[0],
+    state: Parameters<SessionFederatedContext.Interface["settleActivity"]>[1],
+  ) =>
+    Effect.sync(() => {
+      federationTrace.push(`activity:${state}`)
+    }),
+  settleOrphanedActivities: () => Effect.succeed(0),
+  replayIndeterminate: () => Effect.die("not used"),
+  releasedKnowledgeForActiveSession: () => Effect.succeed(undefined),
+} as unknown as SessionFederatedContext.Interface
+const federated = testEffect(
+  makeHttp({
+    flags: {
+      contextFederationShadow: true,
+      locationIndexesV2Shadow: true,
+      contextProjectionV2: true,
+      contextQueryToolsV2: true,
+    },
+    federation: federationAdapter,
+  }),
+)
+const prepareFailureFederated = testEffect(
+  makeHttp({
+    flags: {
+      contextFederationShadow: true,
+      locationIndexesV2Shadow: true,
+      contextProjectionV2: true,
+      // QUAL-006: pin tools OFF — this instance verifies the projection-prepare degradation path in
+      // isolation; the shipped default (tools ON) is covered by runtime-flags and the federated suite.
+      contextQueryToolsV2: false,
+    },
+    federation: {
+      ...federationAdapter,
+      prepareProviderTurn: () => Effect.fail(new SessionFederatedContext.RuntimeError({ reason: "prepare_failed" })),
+    },
+  }),
+)
+const shadowFederated = testEffect(
+  makeHttp({
+    flags: {
+      contextFederationShadow: true,
+      locationIndexesV2Shadow: true,
+      // QUAL-006: pin model-facing owners OFF — this instance verifies shadow-only behavior; the
+      // shipped defaults (both ON) are covered by runtime-flags and the federated suite.
+      contextProjectionV2: false,
+      contextQueryToolsV2: false,
+    },
+    federation: federationAdapter,
+  }),
+)
+const unix = process.platform !== "win32" ? it.instance : it.instance.skip
+const unixNoLLMServer = process.platform !== "win32" ? noLLMServer.instance : noLLMServer.instance.skip
+
+// Config that registers a custom "test" provider with a "test-model" model
+// so provider model lookup succeeds inside the loop.
+const cfg = {
+  provider: {
+    test: {
+      name: "Test",
+      id: "test",
+      env: [],
+      npm: "@ai-sdk/openai-compatible",
+      models: {
+        "test-model": {
+          id: "test-model",
+          name: "Test Model",
+          attachment: false,
+          reasoning: false,
+          temperature: false,
+          tool_call: true,
+          release_date: "2025-01-01",
+          limit: { context: 100000, output: 10000 },
+          cost: { input: 0, output: 0 },
+          options: {},
+        },
+      },
+      options: {
+        apiKey: "test-key",
+        baseURL: "http://localhost:1/v1",
+        // maxRetries:0 so a refused-connection test fails immediately instead of
+        // retrying 3× with exponential backoff (which eats 6s+ and trips the budget).
+        maxRetries: 0,
+      },
+    },
+  },
+}
+
+function providerCfg(url: string) {
+  return {
+    ...cfg,
+    provider: {
+      ...cfg.provider,
+      test: {
+        ...cfg.provider.test,
+        options: {
+          ...cfg.provider.test.options,
+          baseURL: url,
+        },
+      },
+    },
+  }
+}
+
+function providerCfgWithContext(url: string, context: number) {
+  const base = providerCfg(url)
+  return {
+    ...base,
+    provider: {
+      ...base.provider,
+      test: {
+        ...base.provider.test,
+        models: {
+          ...base.provider.test.models,
+          "test-model": {
+            ...base.provider.test.models["test-model"],
+            limit: { context, output: 10_000 },
+          },
+        },
+      },
+    },
+  }
+}
+
+// UPD-002: a Responses-family, wire-format-capable provider (@ai-sdk/openai).
+// Official provider IDs ignore config.provider overrides, so this uses a
+// custom id; the `deepagent-code*` prefix keeps the native runtime status gate
+// happy while the npm package drives Responses wire lowering.
+// The baseline `test` provider stays registered (title/small-model paths), and
+// the build agent is pinned to the wire-capable model.
+function wireProviderCfg(url: string) {
+  const base = providerCfg(url)
+  return {
+    ...base,
+    agent: {
+      build: { model: "deepagent-code-wire/test-model" },
+    },
+    provider: {
+      ...base.provider,
+      "deepagent-code-wire": {
+        name: "Wire Test",
+        id: "deepagent-code-wire",
+        env: [],
+        npm: "@ai-sdk/openai",
+        models: {
+          "test-model": {
+            id: "test-model",
+            name: "Test Model",
+            attachment: false,
+            reasoning: false,
+            temperature: false,
+            tool_call: true,
+            release_date: "2025-01-01",
+            limit: { context: 100000, output: 10000 },
+            cost: { input: 0, output: 0 },
+            options: {},
+          },
+        },
+        options: {
+          apiKey: "test-key",
+          baseURL: url,
+          maxRetries: 0,
+        },
+      },
+    },
+  }
+}
+
+const writeText = Effect.fn("test.writeText")(function* (file: string, text: string) {
+  const fs = yield* FSUtil.Service
+  yield* fs.writeWithDirs(file, text)
+})
+
+const ensureDir = Effect.fn("test.ensureDir")(function* (dir: string) {
+  const fs = yield* FSUtil.Service
+  yield* fs.ensureDir(dir)
+})
+
+const writeConfig = Effect.fn("test.writeConfig")(function* (dir: string, config: Partial<ConfigV1.Info>) {
+  yield* writeText(
+    path.join(dir, "deepagent-code.json"),
+    JSON.stringify({ $schema: "https://deepagent-code.ai/config.json", ...config }),
+  )
+})
+
+const useServerConfig = Effect.fn("test.useServerConfig")(function* (config: (url: string) => Partial<ConfigV1.Info>) {
+  const { directory: dir } = yield* TestInstance
+  const llm = yield* TestLLMServer
+  yield* writeConfig(dir, config(llm.url))
+  return { dir, llm }
+})
+
+const assertPlanProtocolProviderBudget = Effect.fn("test.assertPlanProtocolProviderBudget")(function* (input: {
+  payload: Record<string, unknown>
+  firstState: "completed" | "error"
+  protocol: "invalid" | "schema"
+  errorCode: string
+  validationOutcome: "schema_invalid" | "semantic_invalid"
+}) {
+  const { llm } = yield* useServerConfig(providerCfg)
+  const prompt = yield* SessionPrompt.Service
+  const sessions = yield* Session.Service
+  const session = yield* sessions.create({
+    title: "Pinned",
+    permission: [{ permission: "*", pattern: "*", action: "allow" }],
+  })
+  yield* prompt.prompt({
+    sessionID: session.id,
+    agent: "build",
+    noReply: true,
+    parts: [{ type: "text", text: "build the benchmark suite" }],
+  })
+  yield* llm.tool("plan", input.payload)
+  yield* llm.tool("plan", input.payload)
+  yield* llm.text("third provider dispatch must not happen")
+
+  const result = yield* prompt.loop({ sessionID: session.id })
+
+  expect(yield* llm.calls).toBe(2)
+  expect(yield* llm.pending).toBe(1)
+  expect(result.info.role).toBe("assistant")
+  if (result.info.role === "assistant") {
+    expect(result.info.finish).toBe("error")
+    expect(result.info.error).toMatchObject({
+      name: "PlanProtocolViolation",
+      data: { attemptOrdinal: 2, code: input.errorCode },
+    })
+  }
+  const planParts = (yield* sessions.messages({ sessionID: session.id }).pipe(Effect.orDie)).flatMap((message) =>
+    message.parts.filter((part): part is SessionV1.ToolPart => part.type === "tool" && part.tool === "plan"),
+  )
+  expect(planParts).toHaveLength(2)
+  expect(planParts[0]?.state.status).toBe(input.firstState)
+  expect(planParts[1]?.state.status).toBe(input.firstState)
+  planParts.forEach((part, index) => {
+    const text =
+      part.state.status === "completed" ? part.state.output : part.state.status === "error" ? part.state.error : ""
+    const metadata =
+      part.state.status === "completed" || part.state.status === "error" ? part.state.metadata : undefined
+    expect(text).toContain(`[Plan attempt ${index + 1} of 2]`)
+    expect(metadata).toMatchObject({ plan_protocol: input.protocol, plan_attempt_ordinal: index + 1 })
+  })
+  const { db } = yield* Database.Service
+  const requestReceipts = (yield* db
+    .select()
+    .from(SessionToolRequestReceiptTable)
+    .where(eq(SessionToolRequestReceiptTable.session_id, session.id))
+    .all()
+    .pipe(Effect.orDie)).toSorted((a, b) => a.request_ordinal - b.request_ordinal)
+  const argumentReceipts = yield* db.select().from(SessionToolArgumentReceiptTable).all().pipe(Effect.orDie)
+  expect(
+    requestReceipts.map(
+      (receipt) =>
+        argumentReceipts.find(
+          (argument) => argument.receipt_id === receipt.receipt_id && argument.layer === "processor_decoded",
+        )?.validation_outcome,
+    ),
+  ).toEqual([input.validationOutcome, input.validationOutcome])
+})
+
+// Wait for a session's runner to enter a busy state. SessionStatus is flipped
+// inside Runner.startShell's serialized transition, so cancel can't no-op once
+// we observe it.
+const waitForBusy = (sessionID: SessionID, duration: Duration.Input = "2 seconds") =>
+  pollWithTimeout(
+    Effect.gen(function* () {
+      const status = yield* SessionStatus.Service
+      const s = yield* status.get(sessionID)
+      return s.type === "busy" ? (true as const) : undefined
+    }),
+    `session ${sessionID} never became busy`,
+    duration,
+  )
+
+const hasBash = Effect.sync(() => Bun.which("bash") !== null)
+
+const deferredAsPromise = <A>(deferred: Deferred.Deferred<A>): PromiseLike<A> => ({
+  then: (onfulfilled, onrejected) => {
+    Effect.runFork(
+      Deferred.await(deferred).pipe(
+        Effect.match({
+          onFailure: (error) => {
+            onrejected?.(error)
+          },
+          onSuccess: (value) => {
+            onfulfilled?.(value)
+          },
+        }),
+      ),
+    )
+    return deferredAsPromise(deferred) as PromiseLike<never>
+  },
+})
+
+function defer<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  const promise = new Promise<T>((done) => {
+    resolve = done
+  })
+  return { promise, resolve }
+}
+
+const succeedVoid = (deferred: Deferred.Deferred<void>) => {
+  Effect.runSync(Deferred.succeed(deferred, void 0).pipe(Effect.ignore))
+}
+
+const user = Effect.fn("test.user")(function* (sessionID: SessionID, text: string) {
+  const session = yield* Session.Service
+  const msg = yield* session.updateMessage({
+    id: MessageID.ascending(),
+    role: "user",
+    sessionID,
+    agent: "build",
+    model: ref,
+    time: { created: Date.now() },
+  })
+  yield* session.updatePart({
+    id: PartID.ascending(),
+    messageID: msg.id,
+    sessionID,
+    type: "text",
+    text,
+  })
+  return msg
+})
+
+const seed = Effect.fn("test.seed")(function* (sessionID: SessionID, opts?: { finish?: string }) {
+  const session = yield* Session.Service
+  const msg = yield* user(sessionID, "hello")
+  const assistant: SessionV1.Assistant = {
+    id: MessageID.ascending(),
+    role: "assistant",
+    parentID: msg.id,
+    sessionID,
+    mode: "build",
+    agent: "build",
+    cost: 0,
+    path: { cwd: "/tmp", root: "/tmp" },
+    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+    modelID: ref.modelID,
+    providerID: ref.providerID,
+    time: { created: Date.now() },
+    ...(opts?.finish ? { finish: opts.finish } : {}),
+  }
+  yield* session.updateMessage(assistant)
+  yield* session.updatePart({
+    id: PartID.ascending(),
+    messageID: assistant.id,
+    sessionID,
+    type: "text",
+    text: "hi there",
+  })
+  return { user: msg, assistant }
+})
+
+const addSubtask = (sessionID: SessionID, messageID: MessageID, model = ref) =>
+  Effect.gen(function* () {
+    const session = yield* Session.Service
+    yield* session.updatePart({
+      id: PartID.ascending(),
+      messageID,
+      sessionID,
+      type: "subtask",
+      prompt: "look into the cache key path",
+      description: "inspect bug",
+      agent: "general",
+      model,
+    })
+  })
+
+const boot = Effect.fn("test.boot")(function* (input?: { title?: string }) {
+  const config = yield* Config.Service
+  const prompt = yield* SessionPrompt.Service
+  const run = yield* SessionRunState.Service
+  const sessions = yield* Session.Service
+  yield* config.get()
+  const chat = yield* sessions.create(input ?? { title: "Pinned" })
+  return { prompt, run, sessions, chat }
+})
+
+durableControlPlane.instance(
+  "durable initializer dispatches structured finalizer transport failure through production wiring",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const registry = yield* ToolRegistry.Service
+      const { db } = yield* Database.Service
+      const chat = yield* sessions.create({
+        title: "Durable dispatcher finalizer wiring",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      const parent = yield* seed(chat.id)
+      const { task } = yield* registry.named()
+
+      yield* llm.text("persisted durable research")
+      yield* llm.error(500, { error: { message: "provider unavailable" } })
+      const taskExit = yield* task
+        .execute(
+          {
+            description: "verify durable finalizer",
+            prompt: "Produce the durable research result.",
+            subagent_type: "researcher",
+            output_schema: {
+              type: "object",
+              properties: { result: { type: "string" } },
+              required: ["result"],
+              additionalProperties: false,
+            },
+          },
+          {
+            sessionID: chat.id,
+            messageID: parent.assistant.id,
+            callID: "tool_durable_dispatcher_finalizer_transport",
+            agent: "build",
+            abort: new AbortController().signal,
+            extra: {
+              promptOps: {
+                cancel: prompt.cancel,
+                resolvePromptParts: prompt.resolvePromptParts,
+                prepareTaskInput: prompt.prepareTaskInput,
+                prompt: (input) => prompt.prompt(input).pipe(Effect.catch(Effect.die)),
+              } satisfies TaskPromptOps,
+            },
+            messages: [],
+            metadata: () => Effect.void,
+            ask: () => Effect.void,
+          },
+        )
+        .pipe(Effect.exit)
+      expect(Exit.isFailure(taskExit)).toBe(true)
+
+      const run = yield* pollWithTimeout(
+        Effect.gen(function* () {
+          const row = yield* db
+            .select()
+            .from(TaskRunTable)
+            .where(eq(TaskRunTable.tool_call_id, "tool_durable_dispatcher_finalizer_transport"))
+            .get()
+            .pipe(Effect.orDie)
+          return row?.state === "failed" ? row : undefined
+        }),
+        "durable dispatcher did not settle the structured finalizer transport failure",
+        "15 seconds",
+      )
+
+      expect(yield* llm.calls).toBe(2)
+      expect(run).toMatchObject({
+        state: "failed",
+        reason: "structured_finalizer_transport_error",
+        attempts: 1,
+        raw_result_message_id: expect.any(String),
+        structured_result_message_id: null,
+        error: {
+          code: "structured_finalizer_transport_error",
+          data: { phase: "finalize", attempt: 1, failure_class: "transport", source_code: "provider_error" },
+        },
+      })
+      expect(
+        yield* db
+          .select({
+            type: TaskRunEventTable.type,
+            fromState: TaskRunEventTable.from_state,
+            toState: TaskRunEventTable.to_state,
+            reason: TaskRunEventTable.reason,
+          })
+          .from(TaskRunEventTable)
+          .where(eq(TaskRunEventTable.run_id, run.run_id))
+          .all()
+          .pipe(Effect.orDie),
+      ).toContainEqual({
+        type: "structured_finalizer_attempt_started",
+        fromState: "running",
+        toState: "finalizing",
+        reason: "attempt:1",
+      })
+      if (!run.raw_result_message_id) return yield* Effect.die("durable finalizer failure lost its raw result")
+      expect(
+        yield* db
+          .select({
+            terminalState: TaskStructuredOutputEvidenceTable.terminal_state,
+            attempts: TaskStructuredOutputEvidenceTable.attempts,
+            rawResultMessageID: TaskStructuredOutputEvidenceTable.raw_result_message_id,
+            failureCode: TaskStructuredOutputEvidenceTable.failure_code,
+          })
+          .from(TaskStructuredOutputEvidenceTable)
+          .where(eq(TaskStructuredOutputEvidenceTable.run_id, run.run_id))
+          .get()
+          .pipe(Effect.orDie),
+      ).toEqual({
+        terminalState: "failed",
+        attempts: 1,
+        rawResultMessageID: run.raw_result_message_id,
+        failureCode: "structured_finalizer_transport_error",
+      })
+      expect((yield* sessions.get(run.child_session_id)).metadata?.deepagent?.subagent).toMatchObject({
+        finished: true,
+        state: "error",
+        phase: "settled",
+        reason: "structured_finalizer_transport_error",
+        attempts: 1,
+        raw_result_ref: run.raw_result_message_id,
+        error: { code: "structured_finalizer_transport_error" },
+      })
+    }),
+  25_000,
+)
+
+noLLMServer.instance("prepareTaskInput materializes a stable envelope without persisting V1 rows", () =>
+  Effect.gen(function* () {
+    const { prompt, sessions, chat } = yield* boot()
+    const events = yield* EventV2Bridge.Service
+    const emitted: string[] = []
+    const off = yield* events.listen((event) =>
+      Effect.sync(() => {
+        if ((event.data as { sessionID?: SessionID }).sessionID !== chat.id) return
+        emitted.push(event.type)
+      }),
+    )
+    yield* Effect.addFinalizer(() => off)
+    const messageID = MessageID.ascending()
+    const prepared = yield* prompt.prepareTaskInput(
+      {
+        sessionID: chat.id,
+        messageID,
+        model: ref,
+        agent: "build",
+        metadata: { deepagent: { task_admission: { run_id: "run_prepare_test" } } },
+        parts: [
+          { type: "text", text: "inspect the durable boundary" },
+          { type: "text", text: "plugin-ready second part" },
+        ],
+      },
+      123_456,
+    )
+
+    expect(prepared.info.role).toBe("user")
+    expect(prepared.info.id).toBe(messageID)
+    expect(prepared.info.time.created).toBe(123_456)
+    if (prepared.info.role === "user") {
+      expect(SessionProcessor.planProtocolActivityID(prepared.info.metadata)).toBe(messageID)
+      expect(prepared.info.metadata).toMatchObject({
+        deepagent: { task_admission: { run_id: "run_prepare_test" } },
+      })
+    }
+    expect(prepared.parts).toHaveLength(2)
+    expect(prepared.parts.every((part) => part.messageID === messageID)).toBe(true)
+    expect(yield* sessions.messages({ sessionID: chat.id })).toEqual([])
+    expect(emitted).toEqual([])
+  }),
+)
+
+// Loop semantics
+
+noLLMServer.instance(
+  "loop exits immediately when last assistant has stop finish",
+  () =>
+    Effect.gen(function* () {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({ title: "Pinned" })
+      yield* seed(chat.id, { finish: "stop" })
+
+      const result = yield* prompt.loop({ sessionID: chat.id })
+      expect(result.info.role).toBe("assistant")
+      if (result.info.role === "assistant") expect(result.info.finish).toBe("stop")
+    }),
+  { config: cfg },
+)
+
+it.instance("loop exits without an LLM request for interrupted orphan tool calls", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const steer = yield* SessionSteer.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({ title: "Pinned" })
+    const seeded = yield* seed(chat.id, { finish: "stop" })
+    yield* sessions.updatePart({
+      id: PartID.ascending(),
+      messageID: seeded.assistant.id,
+      sessionID: chat.id,
+      type: "tool",
+      callID: "interrupted-call",
+      tool: "edit",
+      state: {
+        status: "error",
+        input: {},
+        error: "Tool execution aborted",
+        metadata: { interrupted: true },
+        time: { start: 1, end: 2 },
+      },
+    })
+
+    const result = yield* prompt.loop({ sessionID: chat.id })
+    expect(result.info.id).toBe(seeded.assistant.id)
+    expect(yield* llm.hits).toHaveLength(0)
+  }),
+)
+
+it.instance("loop calls LLM and returns assistant message", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({
+      title: "Pinned",
+      permission: [{ permission: "*", pattern: "*", action: "allow" }],
+    })
+    yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "hello" }],
+    })
+    const { db } = yield* Database.Service
+    expect(yield* db.select().from(SessionLegacyActivityTable).all().pipe(Effect.orDie)).toHaveLength(0)
+    expect(yield* db.select().from(SessionLegacyActivityRunTable).all().pipe(Effect.orDie)).toHaveLength(0)
+    yield* llm.text("world")
+
+    const result = yield* prompt.loop({ sessionID: chat.id })
+    expect(result.info.role).toBe("assistant")
+    const parts = result.parts.filter((p) => p.type === "text")
+    expect(parts.some((p) => p.type === "text" && p.text === "world")).toBe(true)
+    expect(yield* llm.hits).toHaveLength(1)
+    expect(yield* db.select().from(SessionLegacyActivityTable).all().pipe(Effect.orDie)).toHaveLength(1)
+    expect(yield* db.select().from(SessionLegacyActivityRunTable).all().pipe(Effect.orDie)).toHaveLength(1)
+  }),
+)
+
+it.instance(
+  "a new prompt reconciles a same-process pre-dispatch owner loss before admission",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const steer = yield* SessionSteer.Service
+      const sessions = yield* Session.Service
+      const { db } = yield* Database.Service
+      const chat = yield* sessions.create({
+        title: "Same-process owner loss",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      const deferred = yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "orphaned before provider dispatch" }],
+      })
+      const orphanedRun = yield* SessionPromptIntent.claimDeferredActivity({
+        sessionID: chat.id,
+        messageID: deferred.info.id,
+      })
+      expect(orphanedRun).toBeDefined()
+      const attachedSteer = yield* awaitWithTimeout(
+        steer.admit({
+          sessionID: chat.id,
+          prompt: new Prompt({ text: "attached to the orphaned run" }),
+        }),
+        "timed out attaching steer to orphaned run",
+        "2 seconds",
+      )
+      expect(yield* llm.hits).toHaveLength(0)
+
+      yield* awaitWithTimeout(llm.text("recovered next prompt"), "timed out queuing recovery response", "2 seconds")
+      const next = yield* awaitWithTimeout(
+        prompt.prompt({
+          sessionID: chat.id,
+          agent: "build",
+          parts: [{ type: "text", text: "start after owner loss" }],
+        }),
+        "timed out reconciling same-process owner loss",
+        "3 seconds",
+      )
+      expect(next.parts.some((part) => part.type === "text" && part.text === "recovered next prompt")).toBeTrue()
+      expect(yield* llm.hits).toHaveLength(1)
+      expect(
+        yield* db
+          .select()
+          .from(SessionSteerTable)
+          .where(eq(SessionSteerTable.id, attachedSteer.id))
+          .get()
+          .pipe(Effect.orDie),
+      ).toMatchObject({ consumed_seq: null, superseded_at: expect.any(Number) })
+      expect(
+        yield* db
+          .select()
+          .from(SessionIntentTable)
+          .where(eq(SessionIntentTable.admitted_message_id, attachedSteer.id))
+          .get()
+          .pipe(Effect.orDie),
+      ).toMatchObject({ execution_mode: "run_now", execution_state: "canceled" })
+
+      expect(
+        yield* db
+          .select()
+          .from(SessionLegacyActivityRunTable)
+          .where(eq(SessionLegacyActivityRunTable.session_id, chat.id))
+          .orderBy(SessionLegacyActivityRunTable.generation)
+          .all()
+          .pipe(Effect.orDie),
+      ).toMatchObject([
+        { run_id: orphanedRun?.runID, state: "failed", terminal_reason: "pre_dispatch_owner_lost" },
+        { state: "completed", terminal_reason: "assistant_completed" },
+      ])
+      expect(
+        yield* db
+          .select()
+          .from(SessionLegacyActivityTerminalTable)
+          .where(eq(SessionLegacyActivityTerminalTable.session_id, chat.id))
+          .orderBy(SessionLegacyActivityTerminalTable.created_at)
+          .all()
+          .pipe(Effect.orDie),
+      ).toMatchObject([
+        {
+          run_id: orphanedRun?.runID,
+          state: "failed",
+          reason_code: "pre_dispatch_owner_lost",
+          source: "same_process_recovery",
+        },
+        { state: "settled", reason_code: "assistant_completed", source: "provider_final" },
+      ])
+    }),
+  15_000,
+)
+
+it.instance("question rejection terminalizes the live run and permits the next prompt", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const question = yield* Question.Service
+    const { db } = yield* Database.Service
+    const chat = yield* sessions.create({
+      title: "Question rejection lifecycle",
+      permission: [{ permission: "*", pattern: "*", action: "allow" }],
+    })
+    yield* llm.tool("question", {
+      questions: [
+        {
+          question: "Continue with this approach?",
+          header: "Continue",
+          options: [{ label: "Yes", description: "Continue" }],
+        },
+      ],
+    })
+    yield* llm.text("next prompt succeeded")
+
+    const first = yield* prompt
+      .prompt({
+        sessionID: chat.id,
+        agent: "build",
+        parts: [{ type: "text", text: "ask before proceeding" }],
+      })
+      .pipe(Effect.forkChild)
+    const request = yield* pollWithTimeout(
+      Effect.gen(function* () {
+        const pending = yield* question.list()
+        return pending.find((item) => item.sessionID === chat.id)
+      }),
+      "timed out waiting for question request",
+    )
+    yield* question.reject(request.id)
+    const firstResult = yield* Fiber.join(first)
+    expect(firstResult.info.role).toBe("assistant")
+
+    expect(yield* db.select().from(SessionActivityProgressTable).all().pipe(Effect.orDie)).toMatchObject([
+      { state: "progress" },
+    ])
+    expect(yield* db.select().from(SessionLegacyActivityTable).all().pipe(Effect.orDie)).toMatchObject([
+      { state: "interrupted", terminal_reason: "user_rejected_question" },
+    ])
+    expect(yield* db.select().from(SessionLegacyActivityRunTable).all().pipe(Effect.orDie)).toMatchObject([
+      { state: "interrupted", terminal_reason: "user_rejected_question" },
+    ])
+    expect(yield* db.select().from(SessionLegacyActivityTerminalTable).all().pipe(Effect.orDie)).toMatchObject([
+      { state: "interrupted", reason_code: "user_rejected_question", source: "host_stop" },
+    ])
+
+    const next = yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      parts: [{ type: "text", text: "continue now" }],
+    })
+    expect(next.parts.some((part) => part.type === "text" && part.text === "next prompt succeeded")).toBeTrue()
+    expect(yield* llm.hits).toHaveLength(2)
+  }),
+)
+
+it.instance("fingerprints the final persisted structured assistant", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({
+      title: "Structured response receipt",
+      permission: [{ permission: "*", pattern: "*", action: "allow" }],
+    })
+    yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      noReply: true,
+      format: {
+        type: "json_schema",
+        schema: {
+          type: "object",
+          properties: { answer: { type: "number" } },
+          required: ["answer"],
+        },
+        retryCount: 1,
+      },
+      parts: [{ type: "text", text: "Return the answer." }],
+    })
+    yield* llm.tool("StructuredOutput", { answer: 4 })
+
+    const result = yield* prompt.loop({ sessionID: chat.id })
+    const persisted = (yield* sessions.messages({ sessionID: chat.id })).find(
+      (message) => message.info.id === result.info.id,
+    )
+    const { db } = yield* Database.Service
+    const receipt = yield* db
+      .select()
+      .from(SessionToolRequestReceiptTable)
+      .where(eq(SessionToolRequestReceiptTable.session_id, chat.id))
+      .get()
+      .pipe(Effect.orDie)
+    expect(result.info.role).toBe("assistant")
+    if (result.info.role === "assistant") {
+      expect(result.info.structured).toEqual({ answer: 4 })
+      expect(result.info.finish).toBe("tool-calls")
+    }
+    expect(persisted).toBeDefined()
+    if (persisted) expect(receipt?.response_fingerprint).toBe(providerResponseFingerprint(persisted))
+  }),
+)
+
+// UPD-002: wire-level structured output on a Responses + format-capable family.
+wireStructuredOutput.instance("delivers json_schema output through wire text.format", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(wireProviderCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({
+      title: "Wire structured output",
+      permission: [{ permission: "*", pattern: "*", action: "allow" }],
+    })
+    yield* llm.text('{"answer": 4}')
+    yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      noReply: true,
+      format: {
+        type: "json_schema",
+        schema: {
+          type: "object",
+          properties: { answer: { type: "number" } },
+          required: ["answer"],
+        },
+        retryCount: 1,
+      },
+      parts: [{ type: "text", text: "Return the answer." }],
+    })
+
+    const result = yield* prompt.loop({ sessionID: chat.id })
+
+    const wireRequest = (yield* llm.hits).find((item) => JSON.stringify(item.body).includes("Return the answer"))
+    expect(wireRequest).toBeDefined()
+    const body = wireRequest!.body
+    // Wire assertions: Responses endpoint, text.format lowered, NO synthesized
+    // StructuredOutput tool, and tool_choice is not forced to "required".
+    expect(wireRequest!.url.pathname).toBe("/v1/responses")
+    const text = body.text as Record<string, unknown> | undefined
+    expect(text?.format).toMatchObject({ type: "json_schema", name: "structured_output" })
+    expect((text?.format as Record<string, unknown> | undefined)?.schema).toMatchObject({
+      properties: { answer: { type: "number" } },
+    })
+    const tools = Array.isArray(body.tools) ? (body.tools as Array<Record<string, unknown>>) : []
+    expect(tools.some((tool) => tool.name === "StructuredOutput")).toBe(false)
+    expect(body.tool_choice).not.toBe("required")
+
+    expect(result.info.role).toBe("assistant")
+    if (result.info.role === "assistant") {
+      expect(result.info.structured).toEqual({ answer: 4 })
+      expect(result.info.finish).toBe("stop")
+    }
+  }),
+)
+
+// UPD-002: same wire-capable family but native runtime OFF ⇒ the AI SDK path
+// cannot carry the wire format, so the synthetic StructuredOutput tool stays.
+wireCapableAiSdk.instance("keeps the synthetic StructuredOutput path when the runtime is AI SDK", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(wireProviderCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({
+      title: "Synthetic structured output",
+      permission: [{ permission: "*", pattern: "*", action: "allow" }],
+    })
+    yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      noReply: true,
+      format: {
+        type: "json_schema",
+        schema: {
+          type: "object",
+          properties: { answer: { type: "number" } },
+          required: ["answer"],
+        },
+        retryCount: 1,
+      },
+      parts: [{ type: "text", text: "Return the answer." }],
+    })
+    yield* llm.tool("StructuredOutput", { answer: 4 })
+
+    const result = yield* prompt.loop({ sessionID: chat.id })
+
+    const syntheticRequest = (yield* llm.hits).find((item) => JSON.stringify(item.body).includes("Return the answer"))
+    expect(syntheticRequest).toBeDefined()
+    const body = syntheticRequest!.body
+    const tools = Array.isArray(body.tools) ? (body.tools as Array<Record<string, unknown>>) : []
+    expect(tools.some((tool) => tool.name === "StructuredOutput")).toBe(true)
+    expect(body.tool_choice).toBe("required")
+
+    expect(result.info.role).toBe("assistant")
+    if (result.info.role === "assistant") {
+      expect(result.info.structured).toEqual({ answer: 4 })
+      expect(result.info.finish).toBe("tool-calls")
+    }
+  }),
+)
+
+providerHistoryTransform.instance("isolates provider message transforms from durable history authority", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({
+      title: "Provider transform isolation",
+      permission: [{ permission: "*", pattern: "*", action: "allow" }],
+    })
+    yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "durable original text" }],
+    })
+    const original = (yield* sessions.messages({ sessionID: chat.id })).findLast(
+      (message) => message.info.role === "user",
+    )
+    expect(original).toBeDefined()
+    if (!original) return
+    yield* llm.text("transformed")
+
+    const result = yield* prompt.loop({ sessionID: chat.id })
+    const persisted = yield* sessions.messages({ sessionID: chat.id })
+    const request = (yield* llm.hits)[0]
+
+    expect(JSON.stringify(request?.body)).toContain("provider-only transformed text")
+    expect(JSON.stringify(request?.body)).not.toContain("durable original text")
+    expect(persisted.some((message) => message.info.id === "msg_plugin_projection_only")).toBe(false)
+    expect(
+      persisted.some((message) =>
+        message.parts.some((part) => part.type === "text" && part.text === "durable original text"),
+      ),
+    ).toBe(true)
+    expect(result.info.role).toBe("assistant")
+    if (result.info.role === "assistant") expect(result.info.parentID).toBe(original.info.id)
+  }),
+)
+
+it.instance("rejects an oversized unknown-limit request before provider dispatch", () => {
+  const previous = process.env["DEEPAGENT_CODE_UNKNOWN_CONTEXT_GUARD"]
+  process.env["DEEPAGENT_CODE_UNKNOWN_CONTEXT_GUARD"] = "1000"
+  return Effect.gen(function* () {
+    const { llm } = yield* useServerConfig((url) => ({
+      ...providerCfgWithContext(url, 0),
+      compaction: { auto: false },
+    }))
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({ title: "Unknown context guard" })
+    yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "x".repeat(5_000) }],
+    })
+
+    const result = yield* prompt.loop({ sessionID: chat.id })
+    expect(yield* llm.calls).toBe(0)
+    expect(result.info.role).toBe("assistant")
+    if (result.info.role === "assistant") {
+      expect(result.info.error?.name).toBe("ContextOverflowError")
+      expect(result.info.finish).toBe("error")
+    }
+    const { db } = yield* Database.Service
+    const receipt = yield* db
+      .select()
+      .from(SessionToolRequestReceiptTable)
+      .where(eq(SessionToolRequestReceiptTable.session_id, chat.id))
+      .get()
+      .pipe(Effect.orDie)
+    expect(receipt?.request_state).toBe("rejected")
+    expect(receipt?.provider_state).toBe("failed")
+    expect(receipt?.request_error_code).toBe("context_limit_unknown")
+    expect(receipt?.context_limit_provenance).toBe("host_guard")
+    expect(receipt?.request_input_hash).toHaveLength(64)
+    expect(receipt?.final_request_hash).toBeNull()
+    expect(receipt?.response_fingerprint).toHaveLength(64)
+    expect(receipt?.terminal_at).toBeNumber()
+  }).pipe(
+    Effect.ensuring(
+      Effect.sync(() => {
+        if (previous === undefined) delete process.env["DEEPAGENT_CODE_UNKNOWN_CONTEXT_GUARD"]
+        else process.env["DEEPAGENT_CODE_UNKNOWN_CONTEXT_GUARD"] = previous
+      }),
+    ),
+  )
+})
+
+it.instance("quarantines corrupt committed history before provider dispatch", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const parent = yield* sessions.create({ title: "History authority corruption" })
+    yield* prompt.prompt({
+      sessionID: parent.id,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "must never reach the provider after corruption" }],
+    })
+    const child = yield* sessions.fork({
+      sessionID: parent.id,
+      intentID: "prompt-history-corruption-fork",
+    })
+    const { db } = yield* Database.Service
+    yield* db
+      .delete(SessionPromptEpochMessageTable)
+      .where(eq(SessionPromptEpochMessageTable.session_id, child.id))
+      .run()
+      .pipe(Effect.orDie)
+
+    const result = yield* prompt.loop({ sessionID: child.id }).pipe(Effect.exit)
+    expect(Exit.isFailure(result)).toBe(true)
+    expect(yield* llm.calls).toBe(0)
+    expect(
+      yield* db
+        .select({ state: SessionHistoryStateTable.state, reason: SessionHistoryStateTable.reason })
+        .from(SessionHistoryStateTable)
+        .where(eq(SessionHistoryStateTable.session_id, child.id))
+        .get()
+        .pipe(Effect.orDie),
+    ).toMatchObject({ state: "recovery_required", reason: expect.stringContaining("membership is incomplete") })
+    expect(
+      yield* db
+        .select({
+          authority_state: SessionPromptEpochTable.authority_state,
+          recovery_reason: SessionPromptEpochTable.recovery_reason,
+        })
+        .from(SessionPromptEpochTable)
+        .where(eq(SessionPromptEpochTable.session_id, child.id))
+        .get()
+        .pipe(Effect.orDie),
+    ).toMatchObject({
+      authority_state: "recovery_required",
+      recovery_reason: expect.stringContaining("membership is incomplete"),
+    })
+  }),
+)
+
+it.instance("quarantines a missing committed replacement message before provider dispatch", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const parent = yield* sessions.create({ title: "Missing committed replacement message" })
+    yield* prompt.prompt({
+      sessionID: parent.id,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "replacement message fixture" }],
+    })
+    const child = yield* sessions.fork({
+      sessionID: parent.id,
+      intentID: "prompt-history-missing-message-fork",
+    })
+    const { db } = yield* Database.Service
+    const victim = yield* db
+      .select({ message_id: SessionPromptEpochMessageTable.message_id })
+      .from(SessionPromptEpochMessageTable)
+      .where(eq(SessionPromptEpochMessageTable.session_id, child.id))
+      .get()
+      .pipe(Effect.orDie)
+    expect(victim).toBeDefined()
+    if (!victim) return
+    yield* db
+      .delete(MessageTable)
+      .where(and(eq(MessageTable.session_id, child.id), eq(MessageTable.id, victim.message_id)))
+      .run()
+      .pipe(Effect.orDie)
+
+    const result = yield* prompt.loop({ sessionID: child.id }).pipe(Effect.exit)
+    expect(Exit.isFailure(result)).toBe(true)
+    expect(yield* llm.calls).toBe(0)
+    expect(
+      yield* db
+        .select({ state: SessionHistoryStateTable.state, reason: SessionHistoryStateTable.reason })
+        .from(SessionHistoryStateTable)
+        .where(eq(SessionHistoryStateTable.session_id, child.id))
+        .get()
+        .pipe(Effect.orDie),
+    ).toMatchObject({ state: "recovery_required", reason: expect.stringContaining("membership is incomplete") })
+    expect(
+      yield* db
+        .select({
+          authority_state: SessionPromptEpochTable.authority_state,
+          recovery_reason: SessionPromptEpochTable.recovery_reason,
+        })
+        .from(SessionPromptEpochTable)
+        .where(eq(SessionPromptEpochTable.session_id, child.id))
+        .get()
+        .pipe(Effect.orDie),
+    ).toMatchObject({
+      authority_state: "recovery_required",
+      recovery_reason: expect.stringContaining("membership is incomplete"),
+    })
+  }),
+)
+
+it.instance("recovers only compaction continuations that were durably not dispatched", () =>
+  Effect.gen(function* () {
+    const { dir } = yield* useServerConfig(providerCfg)
+    const sessions = yield* Session.Service
+    const compaction = yield* SessionCompaction.Service
+    const { db } = yield* Database.Service
+    const canonicalDir = yield* (yield* FSUtil.Service).realPath(dir)
+    const legacyProjectId = AgentGateway.DeepAgentDurableKnowledgeStore.projectIdForWorkspace(canonicalDir)
+    const releasedIdentity = yield* Effect.gen(function* () {
+      return yield* (yield* LocationIdentity.Service).resolve({
+        boundary: { kind: "implicit_local" },
+        directory: AbsolutePath.make(canonicalDir),
+        project: { kind: "registered_root", observedProjectId: legacyProjectId },
+      })
+    }).pipe(Effect.provide(LocationIdentity.layer))
+    const releasedKnowledgeBinding = DeepAgentReleasedSnapshot.binding(undefined)
+    const contextEligibility = ContextFederationRollout.resolveProject(
+      ContextFederationRollout.resolve(
+        {
+          contextFederationShadow: false,
+          locationIndexesV2Shadow: false,
+          contextProjectionV2: false,
+          contextQueryToolsV2: false,
+          coreV2ExecutionOwner: false,
+        },
+        { coreV2ParityVerified: false },
+      ),
+      releasedIdentity.projectScopeKey,
+      { stage: "all", percentage: 100, internalProjectScopeKeys: [], killSwitch: false },
+    )
+    const contextReadiness = {
+      ...ContextFederationRollout.READINESS_READY_STUB,
+      revision: "readiness-compaction-recovery",
+      projectScopeKey: releasedIdentity.projectScopeKey,
+      observedAt: 1,
+    }
+    const contextActivation = ContextActivationReceipt.make({
+      readiness: contextReadiness,
+      decision: ContextFederationRollout.activate(contextEligibility, contextReadiness),
+      recordedAt: 2,
+      projectionEnabled: false,
+      toolsEnabled: false,
+    })
+    const contextActivationFingerprint = ContextActivationReceipt.fingerprint({
+      eligibility: contextEligibility,
+      readiness: contextReadiness,
+      activation: contextActivation,
+    })
+    const recoveryOwnerToken = "prompt-recovery-owner"
+    yield* db.run(sql`
+      INSERT INTO session_provider_owner_lease (
+        owner_token, registered_at, heartbeat_at, lease_expires_at
+      ) VALUES
+        (
+          ${recoveryOwnerToken},
+          CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),
+          CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),
+          CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) + 60000
+        ),
+        (
+          'stale-process-owner',
+          CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),
+          CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),
+          CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) + 60000
+        )
+    `)
+
+    const seedContinuation = (input: { title: string; state: "admitted" | "dispatching" | "indeterminate" }) =>
+      Effect.gen(function* () {
+        const session = yield* sessions.create({ title: input.title })
+        const continuation = yield* user(session.id, `continuation-${input.state}`)
+        const assistant = yield* sessions.updateMessage({
+          id: MessageID.ascending(),
+          role: "assistant",
+          parentID: continuation.id,
+          sessionID: session.id,
+          mode: "build",
+          agent: "build",
+          cost: 0,
+          path: { cwd: "/tmp", root: "/tmp" },
+          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          modelID: ref.modelID,
+          providerID: ref.providerID,
+          time: { created: Date.now() },
+        })
+        const authority = yield* MessageV2.promptHistoryProjectionEffect(session.id)
+        const runID = `continuation-recovery-${input.state}`
+        const receiptID = `receipt-recovery-${input.state}`
+        const now = Date.now()
+        yield* db
+          .insert(CompactionRunTable)
+          .values({
+            run_id: runID,
+            session_id: session.id,
+            from_prompt_epoch: authority.epoch,
+            target_prompt_epoch: authority.epoch,
+            trigger: "manual",
+            state: "committed",
+            created_at: now,
+            committed_at: now,
+            source_window_id: authority.window.windowID,
+            source_effective_history_hash: authority.effectiveHistoryHash,
+            source_message_count: authority.messages.length,
+            source_projection_version: authority.projectionVersion,
+            continuation_wakeup_at: now,
+            continuation_state: input.state,
+            continuation_receipt_id: receiptID,
+            continuation_admitted_at: now,
+            continuation_dispatching_at: input.state === "admitted" ? null : now,
+            continuation_terminal_at: input.state === "indeterminate" ? now : null,
+            continuation_error_code:
+              input.state === "indeterminate" ? "legacy_terminal_without_response_fingerprint" : null,
+          })
+          .run()
+          .pipe(Effect.orDie)
+        yield* db
+          .insert(CompactionArtifactTable)
+          .values({
+            artifact_id: `artifact-recovery-${input.state}`,
+            run_id: runID,
+            session_id: session.id,
+            message_id: continuation.id,
+            kind: "continue",
+            state: "committed",
+            created_at: now,
+            committed_at: now,
+          })
+          .run()
+          .pipe(Effect.orDie)
+        yield* db
+          .insert(SessionToolRequestReceiptTable) // fixture-exempt: seeds preparing receipt with stale owner for recovery fixture
+          .values({
+            receipt_id: receiptID,
+            request_ordinal: 1,
+            session_id: session.id,
+            user_message_id: continuation.id,
+            assistant_message_id: assistant.id,
+            context_eligibility: contextEligibility,
+            context_readiness: contextReadiness,
+            context_activation: contextActivation,
+            context_activation_fingerprint: contextActivationFingerprint,
+            released_knowledge_security_namespace_id: releasedIdentity.securityNamespaceId,
+            released_knowledge_project_scope_key: releasedIdentity.projectScopeKey,
+            released_knowledge_binding_state: releasedKnowledgeBinding.state,
+            released_knowledge_exact_refs: releasedKnowledgeBinding.exactRefs,
+            released_knowledge_exact_refs_fingerprint: releasedKnowledgeBinding.exactRefsFingerprint,
+            provider_id: "test",
+            model_id: "test-model",
+            protocol: "chat",
+            registry_tool_ids: [],
+            permission_filtered_tool_ids: [],
+            final_offered_tool_ids: [],
+            call_ids: [],
+            prompt_epoch: authority.epoch,
+            prompt_window_id: authority.window.windowID,
+            effective_history_hash: authority.effectiveHistoryHash,
+            request_input_hash: "request-input-hash",
+            provider_state: "preparing",
+            owner_token: "stale-process-owner",
+            request_state: "prepared",
+            created_at: now,
+          })
+          .run()
+          .pipe(Effect.orDie)
+        yield* db
+          .update(SessionToolRequestReceiptTable)
+          .set({
+            released_knowledge_selected_refs: [],
+            released_knowledge_selected_refs_fingerprint: releasedKnowledgeBinding.exactRefsFingerprint,
+          })
+          .where(
+            and(
+              eq(SessionToolRequestReceiptTable.receipt_id, receiptID),
+              eq(SessionToolRequestReceiptTable.provider_state, "preparing"),
+            ),
+          )
+          .run()
+          .pipe(Effect.orDie)
+        yield* db
+          .update(SessionToolRequestReceiptTable)
+          .set({
+            provider_state: "prepared",
+            final_request_hash: Hash.sha256("compaction-final-request"),
+            provider_request_hash: Hash.sha256("compaction-final-request"),
+            prepared_turn_hash: Hash.sha256("compaction-prepared-turn"),
+            system_stable_hash: Hash.sha256("compaction-system-stable"),
+            system_volatile_hash: Hash.sha256("compaction-system-volatile"),
+            wire_request_hash: Hash.sha256("compaction-final-request"),
+            tool_definition_hash: Hash.sha256("[]"),
+            tool_result_reference_ids: [],
+            tool_result_reference_count: 0,
+            adapter_prepared_at: now,
+          })
+          .where(
+            and(
+              eq(SessionToolRequestReceiptTable.receipt_id, receiptID),
+              eq(SessionToolRequestReceiptTable.provider_state, "preparing"),
+            ),
+          )
+          .run()
+          .pipe(Effect.orDie)
+        if (input.state !== "admitted") {
+          yield* db
+            .update(SessionToolRequestReceiptTable)
+            .set({ provider_state: "dispatching", request_state: "dispatched", dispatching_at: now })
+            .where(
+              and(
+                eq(SessionToolRequestReceiptTable.receipt_id, receiptID),
+                eq(SessionToolRequestReceiptTable.provider_state, "prepared"),
+              ),
+            )
+            .run()
+            .pipe(Effect.orDie)
+        }
+        if (input.state === "indeterminate") {
+          yield* db
+            .update(SessionToolRequestReceiptTable)
+            .set({ provider_state: "settled", terminal_at: now })
+            .where(
+              and(
+                eq(SessionToolRequestReceiptTable.receipt_id, receiptID),
+                eq(SessionToolRequestReceiptTable.provider_state, "dispatching"),
+              ),
+            )
+            .run()
+            .pipe(Effect.orDie)
+        }
+        return { session, runID, receiptID, assistant }
+      })
+
+    const safe = yield* seedContinuation({ title: "Safe continuation recovery", state: "admitted" })
+    const ambiguous = yield* seedContinuation({ title: "Ambiguous continuation recovery", state: "dispatching" })
+    const incomplete = yield* seedContinuation({
+      title: "Incomplete terminal continuation recovery",
+      state: "indeterminate",
+    })
+    yield* db.run(sql`
+      UPDATE session_provider_owner_lease
+      SET released_at = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
+      WHERE owner_token = 'stale-process-owner'
+    `)
+    const unadmittedSession = yield* sessions.create({ title: "Unadmitted continuation recovery" })
+    const unadmittedContinuation = yield* user(unadmittedSession.id, "continuation-pending")
+    const unadmittedAuthority = yield* MessageV2.promptHistoryProjectionEffect(unadmittedSession.id)
+    const unadmittedAssistant = yield* sessions.updateMessage({
+      id: MessageID.ascending(),
+      role: "assistant",
+      parentID: unadmittedContinuation.id,
+      sessionID: unadmittedSession.id,
+      mode: "build",
+      agent: "build",
+      cost: 0,
+      path: { cwd: "/tmp", root: "/tmp" },
+      tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      modelID: ref.modelID,
+      providerID: ref.providerID,
+      time: { created: Date.now() },
+    })
+    yield* db
+      .insert(CompactionRunTable)
+      .values({
+        run_id: "continuation-recovery-pending",
+        session_id: unadmittedSession.id,
+        from_prompt_epoch: unadmittedAuthority.epoch,
+        target_prompt_epoch: unadmittedAuthority.epoch,
+        trigger: "manual",
+        state: "committed",
+        created_at: Date.now(),
+        committed_at: Date.now(),
+        source_window_id: unadmittedAuthority.window.windowID,
+        source_effective_history_hash: unadmittedAuthority.effectiveHistoryHash,
+        source_message_count: unadmittedAuthority.messages.length,
+        source_projection_version: unadmittedAuthority.projectionVersion,
+        continuation_state: "pending",
+      })
+      .run()
+      .pipe(Effect.orDie)
+    yield* db
+      .insert(CompactionArtifactTable)
+      .values({
+        artifact_id: "artifact-recovery-pending",
+        run_id: "continuation-recovery-pending",
+        session_id: unadmittedSession.id,
+        message_id: unadmittedContinuation.id,
+        kind: "continue",
+        state: "committed",
+        created_at: Date.now(),
+        committed_at: Date.now(),
+      })
+      .run()
+      .pipe(Effect.orDie)
+    yield* recoverProviderReceiptsOnStartup({ ownerToken: recoveryOwnerToken })
+
+    const recoveredUnadmittedAssistant = (yield* sessions.messages({ sessionID: unadmittedSession.id })).find(
+      (message) => message.info.id === unadmittedAssistant.id,
+    )
+    expect(recoveredUnadmittedAssistant?.info).not.toHaveProperty("finish")
+    expect(
+      (yield* compaction.recoverableContinuations(unadmittedSession.projectID)).map((item) => item.runID),
+    ).toContain("continuation-recovery-pending")
+
+    const safeRun = yield* db
+      .select()
+      .from(CompactionRunTable)
+      .where(eq(CompactionRunTable.run_id, safe.runID))
+      .get()
+      .pipe(Effect.orDie)
+    const safeReceipt = yield* db
+      .select()
+      .from(SessionToolRequestReceiptTable)
+      .where(eq(SessionToolRequestReceiptTable.receipt_id, safe.receiptID))
+      .get()
+      .pipe(Effect.orDie)
+    expect(safeRun?.continuation_state).toBe("pending")
+    expect(safeRun?.continuation_receipt_id).toBeNull()
+    expect(safeReceipt?.provider_state).toBe("failed")
+    expect(safeReceipt?.request_error_code).toBe("provider_not_dispatched_before_process_restart")
+    expect((yield* compaction.recoverableContinuations(safe.session.projectID)).map((item) => item.runID)).toContain(
+      safe.runID,
+    )
+    expect(Exit.isSuccess(yield* sessions.assertRunnable(safe.session.id).pipe(Effect.exit))).toBe(true)
+
+    const ambiguousRun = yield* db
+      .select()
+      .from(CompactionRunTable)
+      .where(eq(CompactionRunTable.run_id, ambiguous.runID))
+      .get()
+      .pipe(Effect.orDie)
+    const ambiguousReceipt = yield* db
+      .select()
+      .from(SessionToolRequestReceiptTable)
+      .where(eq(SessionToolRequestReceiptTable.receipt_id, ambiguous.receiptID))
+      .get()
+      .pipe(Effect.orDie)
+    const history = yield* db
+      .select()
+      .from(SessionHistoryStateTable)
+      .where(eq(SessionHistoryStateTable.session_id, ambiguous.session.id))
+      .get()
+      .pipe(Effect.orDie)
+    expect(ambiguousRun?.continuation_state).toBe("indeterminate")
+    expect(ambiguousReceipt?.provider_state).toBe("indeterminate_after_crash")
+    expect(history).toMatchObject({
+      state: "recovery_required",
+      reason: "provider outcome is unknown after process restart",
+    })
+    expect(
+      (yield* compaction.recoverableContinuations(ambiguous.session.projectID)).some(
+        (item) => item.runID === ambiguous.runID,
+      ),
+    ).toBe(false)
+    expect(Exit.isFailure(yield* sessions.assertRunnable(ambiguous.session.id).pipe(Effect.exit))).toBe(true)
+    expect(
+      yield* db
+        .select({ state: SessionHistoryStateTable.state })
+        .from(SessionHistoryStateTable)
+        .where(eq(SessionHistoryStateTable.session_id, incomplete.session.id))
+        .get()
+        .pipe(Effect.orDie),
+    ).toEqual({ state: "recovery_required" })
+    expect(
+      (yield* sessions.messages({ sessionID: incomplete.session.id })).find(
+        (message) => message.info.id === incomplete.assistant.id,
+      )?.info,
+    ).toMatchObject({ finish: "error", time: { completed: expect.any(Number) } })
+    expect(Exit.isFailure(yield* sessions.assertRunnable(incomplete.session.id).pipe(Effect.exit))).toBe(true)
+  }),
+)
+
+worldStateCompaction.instance(
+  "injects World State only after an automatic compaction is durable",
+  () =>
+    Effect.gen(function* () {
+      const { dir, llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({ title: "World State compaction ordering" })
+      const marker = `world-state-${crypto.randomUUID()}.ts`
+      const seeded = yield* seed(chat.id, { finish: "stop" })
+      seeded.assistant.tokens.input = 95_000
+      seeded.assistant.tokens.total = 95_000
+      yield* sessions.updateMessage(seeded.assistant)
+      yield* writeText(path.join(dir, marker), "marker contents are not part of the conversation")
+      yield* user(chat.id, "Continue after automatic compaction.")
+      yield* llm.text("## Progress\n- prior context compacted")
+      yield* llm.text("continued")
+
+      const result = yield* prompt.loop({ sessionID: chat.id })
+      const messages = yield* sessions.messages({ sessionID: chat.id })
+      const compaction = messages.find((message) => message.parts.some((part) => part.type === "compaction"))
+      const summary = messages.find((message) => message.info.role === "assistant" && message.info.summary === true)
+      const worldState = messages.find((message) =>
+        message.parts.some(
+          (part) => part.type === "text" && part.synthetic === true && part.text.includes("<world-state>"),
+        ),
+      )
+      const inputs = yield* llm.inputs
+      const projectedWorldState = yield* MessageV2.promptWorldStateProjectionEffect(chat.id)
+      const { db } = yield* Database.Service
+      const receipt = yield* db
+        .select()
+        .from(SessionToolRequestReceiptTable)
+        .where(eq(SessionToolRequestReceiptTable.session_id, chat.id))
+        .get()
+        .pipe(Effect.orDie)
+      const compactionRun = yield* db
+        .select()
+        .from(CompactionRunTable)
+        .where(eq(CompactionRunTable.session_id, chat.id))
+        .get()
+        .pipe(Effect.orDie)
+
+      expect(result.info.role).toBe("assistant")
+      expect(compaction?.parts.find((part) => part.type === "compaction")?.auto).toBe(true)
+      expect(summary?.info.role === "assistant" ? summary.info.parentID : undefined).toBe(compaction?.info.id)
+      expect(worldState).toBeUndefined()
+      expect(projectedWorldState?.rendered).toContain("<world-state>")
+      expect(inputs.some((input) => JSON.stringify(input.messages).includes("<world-state>"))).toBe(true)
+      expect(receipt?.prompt_epoch).toBe(1)
+      expect(receipt?.prompt_window_id).toStartWith("win_")
+      expect(receipt?.effective_history_hash).toStartWith("eh1_")
+      expect(receipt?.world_state_baseline_hash).toStartWith("wsb1_")
+      expect(receipt?.prompt_cache_key).toBeNull()
+      expect(receipt?.provider_state).toBe("settled")
+      expect(receipt?.request_input_hash).toHaveLength(64)
+      expect(receipt?.final_request_hash).toHaveLength(64)
+      expect(receipt?.provider_request_hash).toHaveLength(64)
+      expect(receipt?.provider_request_hash).toBe(receipt?.final_request_hash)
+      expect(receipt?.adapter_prepared_at).toBeNumber()
+      expect(receipt?.dispatching_at).toBeNumber()
+      expect(receipt?.streaming_at).toBeNumber()
+      expect(receipt?.terminal_at).toBeNumber()
+      expect(receipt?.response_fingerprint).toHaveLength(64)
+      expect(receipt?.owner_token).toStartWith(`${process.pid}:`)
+      expect(receipt?.response_chain_reuse_decision).toBe("not_supported")
+      expect(receipt?.response_chain_refusal_reason).toBe("provider_path_not_stateful")
+      expect(compactionRun?.continuation_state).toBe("settled")
+      expect(compactionRun?.continuation_receipt_id).toBe(receipt?.receipt_id)
+      expect(compactionRun?.continuation_admitted_at).toBeNumber()
+      expect(compactionRun?.continuation_dispatching_at).toBeNumber()
+      expect(compactionRun?.continuation_terminal_at).toBeNumber()
+      expect(compactionRun?.continuation_error_code).toBeNull()
+    }),
+  { git: true },
+  30_000,
+)
+
+worldStateCompactionContinuation.instance(
+  "does not readmit a settled compaction continuation on a later tool-result turn",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const { db } = yield* Database.Service
+      const chat = yield* sessions.create({
+        title: "Compaction continuation tool result",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      const seeded = yield* seed(chat.id, { finish: "stop" })
+      seeded.assistant.tokens.input = 95_000
+      seeded.assistant.tokens.total = 95_000
+      yield* sessions.updateMessage(seeded.assistant)
+      yield* user(chat.id, "Compact, inspect text files, then finish.")
+      yield* llm.text("## Progress\n- prior context compacted")
+      yield* llm.tool("glob", { pattern: "**/*.txt" })
+      yield* llm.text("continuation complete")
+
+      const result = yield* prompt.loop({ sessionID: chat.id })
+      const run = yield* db
+        .select()
+        .from(CompactionRunTable)
+        .where(eq(CompactionRunTable.session_id, chat.id))
+        .get()
+        .pipe(Effect.orDie)
+      const receipts = (yield* db
+        .select()
+        .from(SessionToolRequestReceiptTable)
+        .where(eq(SessionToolRequestReceiptTable.session_id, chat.id))
+        .all()
+        .pipe(Effect.orDie)).toSorted((left, right) => left.request_ordinal - right.request_ordinal)
+
+      expect(result.info.role).toBe("assistant")
+      expect(result.parts.some((part) => part.type === "text" && part.text === "continuation complete")).toBe(true)
+      expect(yield* llm.calls).toBe(3)
+      expect(receipts).toHaveLength(2)
+      expect(receipts.map((receipt) => receipt.provider_state)).toEqual(["settled", "settled"])
+      expect(receipts[0]?.tool_result_reference_ids).toEqual([])
+      expect(receipts[0]?.tool_result_reference_count).toBe(0)
+      expect(receipts[1]?.tool_result_reference_ids).toEqual(receipts[0]?.call_ids)
+      expect(receipts[1]?.tool_result_reference_count).toBe(receipts[0]?.call_ids.length)
+      expect(receipts.every((receipt) => receipt.prepared_turn_hash?.length === 64)).toBe(true)
+      expect(receipts.every((receipt) => receipt.system_stable_hash?.length === 64)).toBe(true)
+      expect(receipts.every((receipt) => receipt.system_volatile_hash?.length === 64)).toBe(true)
+      expect(receipts.every((receipt) => receipt.wire_request_hash === receipt.final_request_hash)).toBe(true)
+      expect(run?.continuation_state).toBe("settled")
+      expect(run?.continuation_receipt_id).toBe(receipts[0]?.receipt_id)
+      expect(run?.continuation_receipt_id).not.toBe(receipts[1]?.receipt_id)
+    }),
+  { git: true },
+  30_000,
+)
+
+worldStateCompaction.instance(
+  "holds a concurrent steer until compaction commits and materializes it once in the new epoch",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const gate = yield* Deferred.make<void>()
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const steerBuffer = yield* SessionSteer.Service
+      const compaction = yield* SessionCompaction.Service
+      const epochs = yield* PromptEpoch.Service
+      const { db } = yield* Database.Service
+      const chat = yield* sessions.create({ title: "Compaction steer ordering" })
+      const seeded = yield* seed(chat.id, { finish: "stop" })
+      seeded.assistant.tokens.input = 95_000
+      seeded.assistant.tokens.total = 95_000
+      yield* sessions.updateMessage(seeded.assistant)
+      yield* user(chat.id, "Start an automatic compaction before continuing.")
+      yield* llm.hold("## Progress\n- durable summary", deferredAsPromise(gate))
+      yield* llm.text("steer handled once")
+
+      const running = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
+      yield* llm.wait(1)
+      const steerID = MessageID.ascending()
+      const admitted = yield* prompt.promptOrSteer({
+        sessionID: chat.id,
+        messageID: steerID,
+        agent: "build",
+        model: ref,
+        parts: [{ type: "text", text: "CONCURRENT_STEER_EXACTLY_ONCE" }],
+      })
+
+      expect(admitted.kind).toBe("steer")
+      if (admitted.kind !== "steer") return
+      const durableSteerID = MessageID.make(admitted.admitted.id)
+      expect(yield* compaction.hasPending(chat.id)).toBe(true)
+      expect(yield* steerBuffer.hasPending(chat.id)).toBe(true)
+      expect((yield* epochs.getActive(chat.id))?.epoch).toBe(0)
+      expect(
+        (yield* sessions.messages({ sessionID: chat.id })).some((message) => message.info.id === durableSteerID),
+      ).toBe(false)
+
+      yield* Deferred.succeed(gate, void 0)
+      yield* Fiber.join(running)
+
+      expect(yield* compaction.hasPending(chat.id)).toBe(false)
+      expect(yield* steerBuffer.hasPending(chat.id)).toBe(false)
+      expect((yield* epochs.getActive(chat.id))?.epoch).toBe(1)
+      const physical = yield* sessions.messages({ sessionID: chat.id })
+      expect(physical.filter((message) => message.info.id === durableSteerID)).toHaveLength(1)
+      const continuation = physical.find(
+        (message) =>
+          message.info.role === "user" &&
+          message.parts.some((part) => part.type === "text" && part.metadata?.compaction_continue === true),
+      )
+      const materializedSteer = physical.find((message) => message.info.id === durableSteerID)
+      expect(continuation?.info.role).toBe("user")
+      expect(materializedSteer?.info.role).toBe("user")
+      if (continuation?.info.role === "user" && materializedSteer?.info.role === "user") {
+        expect(SessionProcessor.planProtocolActivityID(materializedSteer.info.metadata)).toBe(
+          SessionProcessor.planProtocolActivityID(continuation.info.metadata),
+        )
+      }
+      const projection = yield* MessageV2.promptHistoryProjectionEffect(chat.id)
+      expect(projection.messages.filter((message) => message.info.id === durableSteerID)).toHaveLength(1)
+      const inputs = yield* llm.inputs
+      expect(inputs).toHaveLength(2)
+      expect(JSON.stringify(inputs[0]?.messages)).not.toContain("CONCURRENT_STEER_EXACTLY_ONCE")
+      const userMessages = (Array.isArray(inputs[1]?.messages) ? inputs[1].messages : []).filter((message: unknown) => {
+        if (!message || typeof message !== "object") return false
+        const value = message as Record<string, unknown>
+        return value.role === "user" && value.content === "CONCURRENT_STEER_EXACTLY_ONCE"
+      })
+      expect(userMessages).toHaveLength(1)
+      const activity = yield* db
+        .select()
+        .from(SessionLegacyActivityTable)
+        .where(eq(SessionLegacyActivityTable.session_id, chat.id))
+        .get()
+        .pipe(Effect.orDie)
+      expect(activity).toMatchObject({ state: "settled", terminal_reason: "assistant_completed" })
+      if (!activity) return
+      expect(
+        yield* db
+          .select()
+          .from(SessionLegacyActivityAdmissionTable)
+          .where(eq(SessionLegacyActivityAdmissionTable.activity_id, activity.activity_id))
+          .all()
+          .pipe(Effect.orDie),
+      ).toMatchObject([{ ordinal: 0, role: "trigger" }])
+      const run = yield* db
+        .select()
+        .from(SessionLegacyActivityRunTable)
+        .where(eq(SessionLegacyActivityRunTable.activity_id, activity.activity_id))
+        .get()
+        .pipe(Effect.orDie)
+      expect(run).toMatchObject({ state: "completed", terminal_reason: "assistant_completed" })
+      expect(
+        yield* db
+          .select()
+          .from(SessionLegacyActivityTerminalTable)
+          .where(eq(SessionLegacyActivityTerminalTable.activity_id, activity.activity_id))
+          .all()
+          .pipe(Effect.orDie),
+      ).toMatchObject([
+        {
+          run_id: run?.run_id,
+          state: "settled",
+          reason_code: "assistant_completed",
+          source: "provider_final",
+          membership_ordinal: 0,
+        },
+      ])
+    }),
+  { git: true },
+  30_000,
+)
+
+worldStateCompaction.instance(
+  "cancel after compaction terminalizes a dynamically claimed steer run before provider dispatch",
+  () =>
+    Effect.gen(function* () {
+      const { dir, llm } = yield* useServerConfig(providerCfg)
+      const gate = yield* Deferred.make<void>()
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const steer = yield* SessionSteer.Service
+      const compaction = yield* SessionCompaction.Service
+      const { db } = yield* Database.Service
+      const chat = yield* sessions.create({ title: "Compaction dynamic run cancel" })
+      const seeded = yield* seed(chat.id, { finish: "stop" })
+      seeded.assistant.tokens.input = 95_000
+      seeded.assistant.tokens.total = 95_000
+      yield* sessions.updateMessage(seeded.assistant)
+      yield* user(chat.id, "Start compaction, then cancel the queued steer run.")
+      yield* llm.hold("## Progress\n- durable summary", deferredAsPromise(gate))
+
+      const running = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
+      yield* llm.wait(1)
+      const admitted = yield* steer.admit({
+        sessionID: chat.id,
+        prompt: new Prompt({ text: "CANCEL-DYNAMIC-RUN-BEFORE-DISPATCH" }),
+      })
+      expect(yield* compaction.hasPending(chat.id)).toBe(true)
+      const marker = path.join(dir, "activity-admit-and-bind.json")
+      const previousPoint = process.env.DEEPAGENT_CODE_TEST_ACTIVITY_CRASH_POINT
+      const previousRoot = process.env.DEEPAGENT_CODE_TEST_ROOT
+      const previousMarker = process.env.DEEPAGENT_CODE_TEST_ACTIVITY_CRASH_MARKER
+
+      yield* Effect.acquireUseRelease(
+        Effect.sync(() => {
+          process.env.DEEPAGENT_CODE_TEST_ACTIVITY_CRASH_POINT = "after_admit_and_bind"
+          process.env.DEEPAGENT_CODE_TEST_ROOT = dir
+          process.env.DEEPAGENT_CODE_TEST_ACTIVITY_CRASH_MARKER = marker
+        }),
+        () =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(gate, void 0)
+            yield* pollWithTimeout(
+              Effect.promise(async () => ((await Bun.file(marker).exists()) ? true : undefined)),
+              "timed out waiting for the dynamically claimed steer run",
+            )
+            expect(yield* llm.calls).toBe(1)
+            yield* awaitWithTimeout(prompt.cancel(chat.id), "timed out cancelling the dynamic steer run", "5 seconds")
+            yield* awaitWithTimeout(
+              Fiber.await(running),
+              "timed out joining the canceled dynamic steer run",
+              "5 seconds",
+            )
+          }),
+        () =>
+          Effect.sync(() => {
+            if (previousPoint === undefined) delete process.env.DEEPAGENT_CODE_TEST_ACTIVITY_CRASH_POINT
+            else process.env.DEEPAGENT_CODE_TEST_ACTIVITY_CRASH_POINT = previousPoint
+            if (previousRoot === undefined) delete process.env.DEEPAGENT_CODE_TEST_ROOT
+            else process.env.DEEPAGENT_CODE_TEST_ROOT = previousRoot
+            if (previousMarker === undefined) delete process.env.DEEPAGENT_CODE_TEST_ACTIVITY_CRASH_MARKER
+            else process.env.DEEPAGENT_CODE_TEST_ACTIVITY_CRASH_MARKER = previousMarker
+          }),
+      )
+
+      expect(yield* llm.calls).toBe(1)
+      expect(
+        yield* db
+          .select()
+          .from(SessionLegacyActivityTable)
+          .where(eq(SessionLegacyActivityTable.session_id, chat.id))
+          .all()
+          .pipe(Effect.orDie),
+      ).toMatchObject([{ state: "interrupted", terminal_reason: "user_cancelled" }])
+      const runs = yield* db
+        .select()
+        .from(SessionLegacyActivityRunTable)
+        .where(eq(SessionLegacyActivityRunTable.session_id, chat.id))
+        .all()
+        .pipe(Effect.orDie)
+      expect(runs).toMatchObject([{ state: "interrupted", terminal_reason: "user_cancelled" }])
+      expect(
+        yield* db
+          .select()
+          .from(SessionLegacyActivityTerminalTable)
+          .where(eq(SessionLegacyActivityTerminalTable.session_id, chat.id))
+          .all()
+          .pipe(Effect.orDie),
+      ).toMatchObject([{ state: "interrupted", reason_code: "user_cancelled", source: "cancel" }])
+      expect(
+        yield* db
+          .select()
+          .from(SessionIntentTable)
+          .where(eq(SessionIntentTable.admitted_message_id, admitted.id))
+          .get()
+          .pipe(Effect.orDie),
+      ).toMatchObject({
+        execution_mode: "run_now",
+        execution_state: "claimed",
+        execution_claim_id: runs[0]?.run_id,
+      })
+      expect(
+        yield* db
+          .select()
+          .from(SessionSteerTable)
+          .where(eq(SessionSteerTable.id, admitted.id))
+          .get()
+          .pipe(Effect.orDie),
+      ).toMatchObject({ consumed_seq: null, superseded_at: expect.any(Number) })
+    }),
+  { git: true },
+  30_000,
+)
+
+worldStateCompactionDisabled.instance(
+  "keeps a durable compaction baseline when summary narrowing is disabled",
+  () =>
+    Effect.gen(function* () {
+      const { dir, llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({ title: "World State compaction mutation control" })
+      const marker = `world-state-disabled-${crypto.randomUUID()}.txt`
+      const seeded = yield* seed(chat.id, { finish: "stop" })
+      seeded.assistant.tokens.input = 95_000
+      seeded.assistant.tokens.total = 95_000
+      yield* sessions.updateMessage(seeded.assistant)
+      yield* writeText(path.join(dir, marker), "marker contents are not part of the conversation")
+      yield* user(chat.id, "Continue after automatic compaction.")
+      yield* llm.text("## Progress\n- prior context compacted")
+      yield* llm.text("continued")
+
+      yield* prompt.loop({ sessionID: chat.id })
+      const messages = yield* sessions.messages({ sessionID: chat.id })
+      const inputs = yield* llm.inputs
+      const projection = yield* MessageV2.promptHistoryProjectionEffect(chat.id)
+      const worldState = yield* MessageV2.promptWorldStateProjectionEffect(chat.id)
+
+      expect(messages.some((message) => message.parts.some((part) => part.type === "compaction"))).toBe(true)
+      expect(
+        messages.some((message) =>
+          message.parts.some((part) => part.type === "text" && part.synthetic && part.text.includes("<world-state>")),
+        ),
+      ).toBe(false)
+      expect(projection.worldStateBaselineHash).toBe(worldState?.hash)
+      expect(worldState?.windowID).toBe(projection.window.windowID)
+      expect(JSON.stringify(inputs)).toContain(marker)
+    }),
+  { git: true },
+  30_000,
+)
+
+it.instance("loop stops provider overflow instead of auto-compacting when disabled", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig((url) => ({
+      ...providerCfg(url),
+      compaction: { auto: false },
+    }))
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({ title: "Pinned" })
+
+    yield* llm.error(413, { error: { message: "request entity too large" } })
+    yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "hello" }],
+    })
+
+    const result = yield* prompt.loop({ sessionID: chat.id })
+    const messages = yield* sessions.messages({ sessionID: chat.id })
+
+    expect(result.info.role).toBe("assistant")
+    if (result.info.role === "assistant") {
+      expect(result.info.error?.name).toBe("ContextOverflowError")
+      expect(result.info.finish).toBe("error")
+    }
+    expect(messages.some((message) => message.parts.some((part) => part.type === "compaction"))).toBe(false)
+  }),
+)
+
+federated.instance("production prompt adapter owns one federated tail and durable provider lifecycle", () =>
+  Effect.gen(function* () {
+    federationTrace.length = 0
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({ title: "Federated" })
+
+    yield* llm.text("done")
+    const user = yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      model: ref,
+      noReply: true,
+      parts: [{ type: "text", text: "find the runner" }],
+    })
+    const result = yield* prompt.loop({ sessionID: chat.id })
+    const inputs = yield* llm.inputs
+    const serialized = JSON.stringify(inputs[0]?.messages)
+    const calls = yield* llm.calls
+    const { db } = yield* Database.Service
+    const receipt = yield* db
+      .select()
+      .from(SessionToolRequestReceiptTable)
+      .where(eq(SessionToolRequestReceiptTable.session_id, chat.id))
+      .get()
+      .pipe(Effect.orDie)
+    const providerAttempt = receipt?.provider_attempt_id
+      ? yield* db
+          .select()
+          .from(SessionProviderAttemptTable)
+          .where(eq(SessionProviderAttemptTable.attempt_id, receipt.provider_attempt_id))
+          .get()
+          .pipe(Effect.orDie)
+      : undefined
+
+    expect(result.info.role).toBe("assistant")
+    if (result.info.role === "assistant") expect(result.info.error).toBeUndefined()
+    expect(calls).toBe(1)
+    expect(serialized.match(/project-context-json-v1/g)).toHaveLength(1)
+    expect(receipt?.context_selection_id).toBe("selection_prompt_adapter")
+    expect(receipt?.context_eligibility?.project).toMatchObject({
+      projectScopeKey: chat.projectID,
+      stage: "all",
+      selected: true,
+      killSwitch: false,
+    })
+    expect(receipt?.context_readiness).toMatchObject({ state: "ready", reasons: [] })
+    expect(receipt?.context_activation).toMatchObject({
+      outcome: "active",
+      enabledCapabilities: ["context_projection_v2", "context_query_tools_v2"],
+      fallbackReasons: [],
+      selection: {
+        selectionId: "selection_prompt_adapter",
+        projectionHash: "projection_prompt_adapter",
+      },
+    })
+    expect(receipt?.context_activation?.decision).toEqual(receipt?.context_eligibility ?? undefined)
+    expect(receipt?.context_activation_fingerprint).toHaveLength(64)
+    expect(receipt?.released_knowledge_selected_refs).toEqual([])
+    expect(receipt?.released_knowledge_selected_refs_fingerprint).toBe(
+      DeepAgentReleasedSnapshot.exactRefsFingerprint([]),
+    )
+    expect(receipt?.provider_state).toBe("settled")
+    expect(providerAttempt?.state).toBe("settled")
+    expect(providerAttempt?.prepared_turn_hash).toBe(receipt?.prepared_turn_hash)
+    expect(providerAttempt?.wire_request_hash).toBe(receipt?.wire_request_hash)
+    expect(providerAttempt?.wire_request_hash).toBe(receipt?.final_request_hash)
+    expect(providerAttempt?.settled_at).toBe(receipt?.terminal_at)
+    expect(receipt?.final_offered_tool_ids).toContain("context_query")
+    expect(federationTrace).toEqual(["recover", `resolve:auto:${user.info.id}`, "prepare", "activity:settled"])
+  }),
+)
+
+shadowFederated.instance("runs selection shadow without model projection or a Provider attempt", () =>
+  Effect.gen(function* () {
+    federationTrace.length = 0
+    ContextFederationObservability.reset()
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({ title: "Federated shadow" })
+
+    yield* llm.text("done")
+    const user = yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      model: ref,
+      noReply: true,
+      parts: [{ type: "text", text: "shadow the runner" }],
+    })
+    yield* prompt.loop({ sessionID: chat.id })
+    const inputs = yield* llm.inputs
+    const { db } = yield* Database.Service
+    const receipt = yield* db
+      .select()
+      .from(SessionToolRequestReceiptTable)
+      .where(eq(SessionToolRequestReceiptTable.session_id, chat.id))
+      .get()
+      .pipe(Effect.orDie)
+
+    expect(JSON.stringify(inputs[0]?.messages)).not.toContain("project-context-json-v1")
+    expect(ContextFederationObservability.snapshot().shadow.comparisons).toBe(1)
+    expect(receipt?.context_selection_id).toBe("selection_prompt_adapter")
+    expect(receipt?.context_activation).toMatchObject({
+      outcome: "shadow_only",
+      enabledCapabilities: [],
+      fallbackReasons: [],
+      selection: { selectionId: "selection_prompt_adapter" },
+    })
+    expect(receipt?.final_offered_tool_ids).not.toContain("context_query")
+    expect(federationTrace).toEqual([`resolve:auto:${user.info.id}`, "activity:settled"])
+  }),
+)
+
+federated.instance("production prompt adapter fails the attempt and interrupts the activity on cancel", () =>
+  Effect.gen(function* () {
+    federationTrace.length = 0
+    const { llm } = yield* useServerConfig(providerCfg)
+    const gate = yield* Deferred.make<void>()
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({ title: "Federated cancel" })
+
+    yield* llm.hold("partial", deferredAsPromise(gate))
+    yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      model: ref,
+      noReply: true,
+      parts: [{ type: "text", text: "hold the runner" }],
+    })
+    const running = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
+    yield* llm.wait(1)
+    const database = yield* Database.Service
+    yield* pollWithTimeout(
+      database.db
+        .select({ state: SessionProviderAttemptTable.state })
+        .from(SessionProviderAttemptTable)
+        .where(eq(SessionProviderAttemptTable.session_id, chat.id))
+        .get()
+        .pipe(
+          Effect.map((attempt) => (attempt?.state === "streaming" ? true : undefined)),
+          Effect.orDie,
+        ),
+      "timed out waiting for the federated attempt to enter streaming",
+    )
+    yield* prompt.cancel(chat.id)
+    yield* Fiber.await(running)
+    const { db } = yield* Database.Service
+    const receipt = yield* db
+      .select()
+      .from(SessionToolRequestReceiptTable)
+      .where(eq(SessionToolRequestReceiptTable.session_id, chat.id))
+      .get()
+      .pipe(Effect.orDie)
+    const providerAttempt = receipt?.provider_attempt_id
+      ? yield* db
+          .select()
+          .from(SessionProviderAttemptTable)
+          .where(eq(SessionProviderAttemptTable.attempt_id, receipt.provider_attempt_id))
+          .get()
+          .pipe(Effect.orDie)
+      : undefined
+
+    expect(receipt?.provider_state).toBe("failed")
+    expect(providerAttempt?.state).toBe("failed")
+    expect(providerAttempt?.settled_at).toBe(receipt?.terminal_at)
+    expect(federationTrace).toContain("activity:interrupted")
+    expect(federationTrace).not.toContain("activity:settled")
+  }),
+)
+
+prepareFailureFederated.instance("does not send projection when durable provider prepare fails", () =>
+  Effect.gen(function* () {
+    federationTrace.length = 0
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({ title: "Federated prepare failure" })
+
+    yield* llm.text("done")
+    yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      model: ref,
+      noReply: true,
+      parts: [{ type: "text", text: "prepare failure" }],
+    })
+    yield* prompt.loop({ sessionID: chat.id })
+    const inputs = yield* llm.inputs
+    const calls = yield* llm.calls
+    const { db } = yield* Database.Service
+    const receipt = yield* db
+      .select()
+      .from(SessionToolRequestReceiptTable)
+      .where(eq(SessionToolRequestReceiptTable.session_id, chat.id))
+      .get()
+      .pipe(Effect.orDie)
+
+    expect(calls).toBe(1)
+    expect(JSON.stringify(inputs[0]?.messages)).not.toContain("project-context-json-v1")
+    expect(receipt?.context_selection_id).toBe("selection_prompt_adapter")
+    expect(receipt?.provider_attempt_id).toBeNull()
+    expect(receipt?.context_activation).toMatchObject({
+      outcome: "shadow_only",
+      enabledCapabilities: [],
+      fallbackReasons: ["provider_attempt_prepare_failed"],
+      selection: { selectionId: "selection_prompt_adapter" },
+    })
+    expect(federationTrace.some((entry) => entry.startsWith("resolve:auto:"))).toBe(true)
+    expect(federationTrace).not.toContain("prepare")
+  }),
+)
+
+noLLMServer.instance.skip(
+  "prompt emits v2 prompted and synthetic events (v2 projector disabled)",
+  () =>
+    Effect.gen(function* () {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({ title: "Pinned" })
+
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        noReply: true,
+        parts: [
+          { type: "text", text: "hello v2" },
+          {
+            type: "file",
+            mime: "text/plain",
+            filename: "note.txt",
+            url: "data:text/plain;base64,bm90ZSBjb250ZW50",
+          },
+        ],
+      })
+
+      const messages = yield* SessionV2.Service.use((session) => session.messages({ sessionID: chat.id })).pipe(
+        Effect.provide(SessionExecution.noopLayer),
+        Effect.provide(SessionV2.defaultLayer),
+      )
+      const { db } = yield* Database.Service
+      const row = yield* db
+        .select()
+        .from(SessionMessageTable)
+        .where(eq(SessionMessageTable.session_id, chat.id))
+        .get()
+        .pipe(Effect.orDie)
+      expect(messages.find((message) => message.type === "user")).toMatchObject({ type: "user", text: "hello v2" })
+      expect(typeof row?.data.time.created).toBe("number")
+      expect(messages).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ type: "synthetic", text: expect.stringContaining("Called the Read tool") }),
+          expect.objectContaining({ type: "synthetic", text: "note content" }),
+        ]),
+      )
+    }),
+  { config: cfg },
+)
+
+it.instance("static loop returns assistant text through local provider", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const session = yield* sessions.create({
+      title: "Prompt provider",
+      permission: [{ permission: "*", pattern: "*", action: "allow" }],
+    })
+
+    yield* prompt.prompt({
+      sessionID: session.id,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "hello" }],
+    })
+
+    yield* llm.text("world")
+
+    const result = yield* prompt.loop({ sessionID: session.id })
+    expect(result.info.role).toBe("assistant")
+    expect(result.parts.some((part) => part.type === "text" && part.text === "world")).toBe(true)
+    expect(yield* llm.hits).toHaveLength(1)
+    expect(yield* llm.pending).toBe(0)
+  }),
+)
+
+it.instance("static loop consumes queued replies across turns", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const session = yield* sessions.create({
+      title: "Prompt provider turns",
+      permission: [{ permission: "*", pattern: "*", action: "allow" }],
+    })
+
+    yield* prompt.prompt({
+      sessionID: session.id,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "hello one" }],
+    })
+
+    yield* llm.text("world one")
+
+    const first = yield* prompt.loop({ sessionID: session.id })
+    expect(first.info.role).toBe("assistant")
+    expect(first.parts.some((part) => part.type === "text" && part.text === "world one")).toBe(true)
+
+    yield* prompt.prompt({
+      sessionID: session.id,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "hello two" }],
+    })
+
+    yield* llm.text("world two")
+
+    const second = yield* prompt.loop({ sessionID: session.id })
+    expect(second.info.role).toBe("assistant")
+    expect(second.parts.some((part) => part.type === "text" && part.text === "world two")).toBe(true)
+
+    expect(yield* llm.hits).toHaveLength(2)
+    expect(yield* llm.pending).toBe(0)
+  }),
+)
+
+it.instance("loop continues when finish is tool-calls", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const session = yield* sessions.create({
+      title: "Pinned",
+      permission: [{ permission: "*", pattern: "*", action: "allow" }],
+    })
+    yield* prompt.prompt({
+      sessionID: session.id,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "hello" }],
+    })
+    yield* llm.tool("first", { value: "first" })
+    yield* llm.text("second")
+    const initialAuthority = yield* MessageV2.promptHistoryProjectionEffect(session.id)
+
+    const result = yield* prompt.loop({ sessionID: session.id })
+    expect(yield* llm.calls).toBe(2)
+    expect(result.info.role).toBe("assistant")
+    if (result.info.role === "assistant") {
+      expect(result.parts.some((part) => part.type === "text" && part.text === "second")).toBe(true)
+      expect(result.info.finish).toBe("stop")
+    }
+    const { db } = yield* Database.Service
+    const receipts = (yield* db
+      .select()
+      .from(SessionToolRequestReceiptTable)
+      .where(eq(SessionToolRequestReceiptTable.session_id, session.id))
+      .all()
+      .pipe(Effect.orDie)).toSorted((a, b) => a.request_ordinal - b.request_ordinal)
+    expect(receipts.map((receipt) => [receipt.request_ordinal, receipt.request_state])).toEqual([
+      [1, "dispatched"],
+      [2, "dispatched"],
+    ])
+    expect(receipts[0]?.registry_tool_ids.length).toBeGreaterThan(0)
+    expect(receipts[0]?.final_offered_tool_ids.every((toolID) => receipts[0]?.registry_tool_ids.includes(toolID))).toBe(
+      true,
+    )
+    expect(
+      receipts[0]?.final_offered_tool_ids.every((toolID) => receipts[0]?.permission_filtered_tool_ids.includes(toolID)),
+    ).toBe(true)
+    expect(receipts[0]?.permission_filtered_tool_ids).toContain("invalid")
+    expect(receipts[0]?.final_offered_tool_ids).not.toContain("invalid")
+    expect(receipts[0]?.final_offered_tool_ids).not.toContain("first")
+    expect(receipts[0]?.tool_definition_hash).toHaveLength(64)
+    expect(receipts[0]?.estimated_input_tokens).toBeGreaterThan(0)
+    expect(receipts[0]?.physical_input_budget).toBeGreaterThan(receipts[0]?.estimated_input_tokens ?? 0)
+    expect(receipts[0]?.reserved_output_tokens).toBeGreaterThan(0)
+    expect(receipts[0]?.context_limit_provenance).toBe("model_limit")
+    expect(receipts[0]?.prompt_epoch).toBe(0)
+    expect(receipts[0]?.prompt_window_id).toStartWith("win_")
+    expect(receipts[0]?.effective_history_hash).toStartWith("eh1_")
+    expect(receipts[0]?.effective_history_hash).toBe(initialAuthority.effectiveHistoryHash)
+    expect(receipts[0]?.world_state_baseline_hash).toBeNull()
+    expect(receipts[0]?.prompt_cache_key).toBeNull()
+    expect(receipts.every((receipt) => receipt.provider_state === "settled")).toBe(true)
+    expect(receipts.every((receipt) => receipt.request_input_hash?.length === 64)).toBe(true)
+    expect(receipts.every((receipt) => receipt.final_request_hash?.length === 64)).toBe(true)
+    expect(receipts.every((receipt) => receipt.prepared_turn_hash?.length === 64)).toBe(true)
+    expect(receipts.every((receipt) => receipt.system_stable_hash?.length === 64)).toBe(true)
+    expect(receipts.every((receipt) => receipt.system_volatile_hash?.length === 64)).toBe(true)
+    expect(receipts.every((receipt) => receipt.wire_request_hash === receipt.final_request_hash)).toBe(true)
+    expect(receipts[0]?.provider_request_hash).toHaveLength(64)
+    expect(receipts[0]?.provider_request_hash).toBe(receipts[0]?.final_request_hash)
+    expect(receipts.every((receipt) => typeof receipt.adapter_prepared_at === "number")).toBe(true)
+    expect(receipts.every((receipt) => typeof receipt.dispatching_at === "number")).toBe(true)
+    expect(receipts.every((receipt) => typeof receipt.streaming_at === "number")).toBe(true)
+    expect(receipts.every((receipt) => typeof receipt.terminal_at === "number")).toBe(true)
+    expect(receipts.every((receipt) => receipt.response_fingerprint?.length === 64)).toBe(true)
+    expect(receipts[0]?.response_chain_reuse_decision).toBe("not_supported")
+    expect(receipts[0]?.response_chain_refusal_reason).toBe("provider_path_not_stateful")
+    expect(receipts[0]?.call_ids).toHaveLength(1)
+    expect(receipts[1]?.call_ids).toEqual([])
+    const argumentReceipts = (yield* db
+      .select()
+      .from(SessionToolArgumentReceiptTable)
+      .where(eq(SessionToolArgumentReceiptTable.receipt_id, receipts[0]!.receipt_id))
+      .all()
+      .pipe(Effect.orDie)).toSorted((a, b) => a.ordinal - b.ordinal)
+    const aiSdkInput = argumentReceipts.find((receipt) => receipt.layer === "ai_sdk_input")
+    const rawFrame = argumentReceipts.find((receipt) => receipt.layer === "raw_frame")
+    const adapterToolCall = argumentReceipts.find(
+      (receipt) => receipt.layer === "adapter_assembly" && receipt.event_type === "tool-call",
+    )
+    const processorDecoded = argumentReceipts.find((receipt) => receipt.layer === "processor_decoded")
+    expect(aiSdkInput).toMatchObject({
+      event_type: "tool-call",
+      call_id: receipts[0]!.call_ids[0],
+      tool_name: "first",
+      payload_keys: ["value"],
+      validation_outcome: "schema_valid",
+    })
+    expect(aiSdkInput?.payload_hash).toHaveLength(64)
+    expect(rawFrame).toMatchObject({
+      payload_hash: null,
+      payload_length: null,
+      unavailable_reason: "provider_transport_did_not_expose_raw_frame",
+      validation_outcome: "not_evaluated",
+    })
+    expect(adapterToolCall).toMatchObject({
+      call_id: receipts[0]!.call_ids[0],
+      tool_name: "first",
+      payload_keys: ["value"],
+      unavailable_reason: null,
+      validation_outcome: "schema_valid",
+    })
+    expect(processorDecoded).toMatchObject({
+      event_type: "tool-call",
+      call_id: adapterToolCall?.call_id,
+      tool_name: adapterToolCall?.tool_name,
+      payload_hash: adapterToolCall?.payload_hash,
+      payload_length: adapterToolCall?.payload_length,
+      payload_keys: adapterToolCall?.payload_keys,
+      validation_outcome: "schema_valid",
+    })
+  }),
+)
+
+it.instance("BUG-010 original schema-invalid plan payload stops before a third Provider dispatch", () =>
+  assertPlanProtocolProviderBudget({
+    payload: {
+      goal: "complete the benchmark and compress collectives to 3.3ms",
+      steps: [{ step_id: "s1", title: "ayContext", status: "active" }],
+      active_step_id: "s1",
+    },
+    firstState: "error",
+    protocol: "schema",
+    errorCode: "schema",
+    validationOutcome: "schema_invalid",
+  }),
+)
+
+it.instance("BUG-010 forward-compatible malformed plan stops before a third Provider dispatch", () =>
+  assertPlanProtocolProviderBudget({
+    payload: {
+      operation: "create",
+      expected_plan_id: null,
+      expected_version: null,
+      goal: "complete the benchmark and compress collectives to 3.3ms",
+      steps: [{ step_id: "s1", title: "", status: "active" }],
+      active_step_id: "s1",
+    },
+    firstState: "completed",
+    protocol: "invalid",
+    // Model create payloads now fail closed on supplied identity before the
+    // lower-priority empty-title check.
+    errorCode: "unsafe_step_identity",
+    validationOutcome: "semantic_invalid",
+  }),
+)
+
+// V4.0.1 P0b OUTPUT soft-landing — a length-capped response continues instead of ending the turn.
+it.instance("loop continues (not exits) when finish is length: injects a continue nudge + re-prompts", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const session = yield* sessions.create({
+      title: "Pinned",
+      permission: [{ permission: "*", pattern: "*", action: "allow" }],
+    })
+    // Seed an assistant that was cut off at the output ceiling (finish === "length"), then queue the
+    // continuation the re-prompt will consume. Without output soft-landing this would exit immediately
+    // like a "stop" finish (0 LLM calls); with it ON the loop injects a continue nudge and re-prompts.
+    const seeded = yield* seed(session.id, { finish: "length" })
+    yield* llm.text("...continued to the end.")
+
+    const result = yield* prompt.loop({ sessionID: session.id })
+
+    // It made an LLM request (continued) rather than exiting on the length cutoff.
+    expect(yield* llm.hits).toHaveLength(1)
+    expect(result.info.role).toBe("assistant")
+    if (result.info.role === "assistant") expect(result.info.finish).toBe("stop")
+
+    // A synthetic continue-nudge user message was injected before the re-prompt.
+    const msgs = yield* sessions.messages({ sessionID: session.id })
+    const injected = msgs.find((m) =>
+      m.parts.some((p) => p.type === "text" && p.synthetic === true && p.text.includes("输出长度上限")),
+    )
+    expect(injected).toBeDefined()
+    expect(
+      SessionProcessor.planProtocolActivityID(injected?.info.role === "user" ? injected.info.metadata : undefined),
+    ).toBe(seeded.user.id)
+  }),
+)
+
+it.instance("synthetic output continuation preserves the durable legacy activity owner", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const { db } = yield* Database.Service
+    const session = yield* sessions.create({
+      title: "Pinned",
+      permission: [{ permission: "*", pattern: "*", action: "allow" }],
+    })
+    yield* llm.push(
+      raw({
+        chunks: [
+          {
+            id: "chatcmpl-test",
+            object: "chat.completion.chunk",
+            choices: [{ delta: { role: "assistant" } }],
+          },
+          {
+            id: "chatcmpl-test",
+            object: "chat.completion.chunk",
+            choices: [{ delta: { content: "partial" } }],
+          },
+          {
+            id: "chatcmpl-test",
+            object: "chat.completion.chunk",
+            choices: [{ delta: {}, finish_reason: "length" }],
+          },
+        ],
+      }),
+    )
+    yield* llm.text("complete")
+
+    yield* prompt.prompt({
+      sessionID: session.id,
+      agent: "build",
+      parts: [{ type: "text", text: "produce a long response" }],
+    })
+
+    expect(yield* llm.hits).toHaveLength(2)
+    expect(
+      yield* db
+        .select({ activityID: SessionActivityProgressTable.activity_id, state: SessionActivityProgressTable.state })
+        .from(SessionActivityProgressTable)
+        .orderBy(SessionActivityProgressTable.revision)
+        .all()
+        .pipe(Effect.orDie),
+    ).toEqual([expect.objectContaining({ state: "progress" }), expect.objectContaining({ state: "final" })])
+    expect(yield* db.select().from(SessionLegacyActivityTable).all().pipe(Effect.orDie)).toMatchObject([
+      { state: "settled", terminal_reason: "assistant_completed" },
+    ])
+  }),
+)
+
+it.instance("loop retries truncated tool input with the bounded patch transaction guidance", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const session = yield* sessions.create({
+      title: "Pinned",
+      permission: [{ permission: "*", pattern: "*", action: "allow" }],
+    })
+    const seeded = yield* seed(session.id, { finish: "length" })
+    yield* sessions.updatePart({
+      id: PartID.ascending(),
+      messageID: seeded.assistant.id,
+      sessionID: session.id,
+      type: "tool",
+      callID: "truncated-call",
+      tool: "apply_patch",
+      state: {
+        status: "error",
+        input: {},
+        error: "Tool input was incomplete and was not executed",
+        metadata: { interrupted: true, incompleteInput: true },
+        time: { start: 1, end: 2 },
+      },
+    })
+    yield* llm.text("completed with chunked patch")
+
+    yield* prompt.loop({ sessionID: session.id })
+
+    const messages = yield* sessions.messages({ sessionID: session.id })
+    expect(
+      messages.some((message) =>
+        message.parts.some(
+          (part) => part.type === "text" && part.synthetic === true && part.text.includes("apply_patch_chunk"),
+        ),
+      ),
+    ).toBe(true)
+  }),
+)
+
+it.instance("glob tool keeps instance context during prompt runs", () =>
+  Effect.gen(function* () {
+    const { dir, llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const session = yield* sessions.create({
+      title: "Glob context",
+      permission: [{ permission: "*", pattern: "*", action: "allow" }],
+    })
+    const file = path.join(dir, "probe.txt")
+    yield* writeText(file, "probe")
+
+    yield* prompt.prompt({
+      sessionID: session.id,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "find text files" }],
+    })
+    yield* llm.tool("glob", { pattern: "**/*.txt" })
+    yield* llm.text("done")
+
+    const result = yield* prompt.loop({ sessionID: session.id })
+    expect(result.info.role).toBe("assistant")
+
+    const msgs = yield* MessageV2.filterCompactedEffect(session.id)
+    const tool = msgs
+      .flatMap((msg) => msg.parts)
+      .find(
+        (part): part is CompletedToolPart =>
+          part.type === "tool" && part.tool === "glob" && part.state.status === "completed",
+      )
+    if (!tool) return
+
+    expect(tool.state.output).toContain(file)
+    expect(tool.state.output).not.toContain("No context found for instance")
+    expect(result.parts.some((part) => part.type === "text" && part.text === "done")).toBe(true)
+  }),
+)
+
+it.instance("loop continues when finish is stop but assistant has tool parts", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const session = yield* sessions.create({
+      title: "Pinned",
+      permission: [{ permission: "*", pattern: "*", action: "allow" }],
+    })
+    yield* prompt.prompt({
+      sessionID: session.id,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "hello" }],
+    })
+    yield* llm.push(reply().tool("first", { value: "first" }).stop())
+    yield* llm.text("second")
+
+    const result = yield* prompt.loop({ sessionID: session.id })
+    expect(yield* llm.calls).toBe(2)
+    expect(result.info.role).toBe("assistant")
+    if (result.info.role === "assistant") {
+      expect(result.parts.some((part) => part.type === "text" && part.text === "second")).toBe(true)
+      expect(result.info.finish).toBe("stop")
+    }
+  }),
+)
+
+it.instance("agent step limit removes tools from the final provider turn", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig((url) => ({
+      ...providerCfg(url),
+      agent: { build: { steps: 2 } },
+    }))
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const session = yield* sessions.create({
+      title: "Bounded",
+      permission: [{ permission: "*", pattern: "*", action: "allow" }],
+    })
+    yield* prompt.prompt({
+      sessionID: session.id,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "inspect files" }],
+    })
+    yield* llm.tool("glob", { pattern: "**/*.txt" })
+    yield* llm.text("Maximum steps reached; here is the partial result.")
+
+    yield* prompt.loop({ sessionID: session.id })
+
+    const finalInput = (yield* llm.inputs).find((input) =>
+      JSON.stringify(input).includes("CRITICAL - MAXIMUM STEPS REACHED"),
+    )
+    expect(finalInput).toBeDefined()
+    expect(finalInput?.tools ?? []).toEqual([])
+  }),
+)
+
+it.instance("legacy non-interactive token metadata does not hard-stop a provider turn", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const session = yield* sessions.create({ title: "Pinned" })
+    yield* prompt.prompt({
+      sessionID: session.id,
+      agent: "build",
+      noReply: true,
+      metadata: {
+        deepagent: {
+          task_activity: {
+            interactive: false,
+            started_at: Date.now(),
+            budget: { max_steps: 4, max_tokens: 1, max_wall_ms: 60_000, max_no_progress: 2 },
+          },
+        },
+      },
+      parts: [{ type: "text", text: "bounded research" }],
+    })
+    yield* llm.text("looks complete", { usage: { input: 2, output: 2 } })
+
+    const result = yield* prompt.loop({ sessionID: session.id })
+    expect(result.info.role).toBe("assistant")
+    if (result.info.role === "assistant") expect(result.info.error).toBeUndefined()
+    expect(yield* llm.calls).toBe(1)
+  }),
+)
+
+it.instance("non-interactive task step budget prevents another provider turn", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const session = yield* sessions.create({
+      title: "Pinned",
+      permission: [{ permission: "*", pattern: "*", action: "allow" }],
+    })
+    yield* prompt.prompt({
+      sessionID: session.id,
+      agent: "build",
+      noReply: true,
+      metadata: {
+        deepagent: {
+          task_activity: {
+            interactive: false,
+            started_at: Date.now(),
+            budget: { max_steps: 1, max_wall_ms: 60_000, max_no_progress: 2 },
+          },
+        },
+      },
+      parts: [{ type: "text", text: "bounded research" }],
+    })
+    yield* llm.tool("first", { value: "first" })
+
+    const result = yield* prompt.loop({ sessionID: session.id })
+    expect(result.info.role).toBe("assistant")
+    if (result.info.role === "assistant") expect(result.info.error?.name).toBe("TaskBudgetExceededError")
+    expect(yield* llm.calls).toBe(1)
+  }),
+)
+
+it.instance("failed subtask preserves metadata on error tool state", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig((url) => ({
+      ...providerCfg(url),
+      agent: {
+        general: {
+          model: "test/missing-model",
+        },
+      },
+    }))
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({ title: "Pinned" })
+    yield* llm.tool("task", {
+      description: "inspect bug",
+      prompt: "look into the cache key path",
+      subagent_type: "general",
+    })
+    yield* llm.text("done")
+    const msg = yield* user(chat.id, "hello")
+    yield* addSubtask(chat.id, msg.id)
+
+    const result = yield* prompt.loop({ sessionID: chat.id })
+    expect(result.info.role).toBe("assistant")
+    expect(yield* llm.calls).toBe(2)
+
+    const msgs = yield* MessageV2.filterCompactedEffect(chat.id)
+    const taskMsg = msgs.find((item) => item.info.role === "assistant" && item.info.agent === "general")
+    expect(taskMsg?.info.role).toBe("assistant")
+    if (!taskMsg || taskMsg.info.role !== "assistant") return
+
+    const tool = errorTool(taskMsg.parts)
+    if (!tool) return
+
+    expect(tool.state.error).toContain("Tool execution failed")
+    expect(tool.state.metadata).toBeDefined()
+    expect(tool.state.metadata?.sessionId).toBeDefined()
+    expect(tool.state.metadata?.model).toEqual({
+      providerID: ProviderV2.ID.make("test"),
+      modelID: ModelV2.ID.make("missing-model"),
+    })
+  }),
+)
+
+it.instance(
+  "running subtask preserves metadata after tool-call transition",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({ title: "Pinned" })
+      yield* llm.hang
+      const msg = yield* user(chat.id, "hello")
+      yield* addSubtask(chat.id, msg.id)
+
+      const fiber = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
+
+      const tool = yield* pollWithTimeout(
+        Effect.gen(function* () {
+          const msgs = yield* MessageV2.filterCompactedEffect(chat.id)
+          const taskMsg = msgs.find((item) => item.info.role === "assistant" && item.info.agent === "general")
+          const tool = taskMsg?.parts.find((part): part is SessionV1.ToolPart => part.type === "tool")
+          if (tool?.state.status === "running" && tool.state.metadata?.sessionId) return tool
+        }),
+        "timed out waiting for running subtask metadata",
+      )
+
+      if (tool.state.status !== "running") return
+      expect(typeof tool.state.metadata?.sessionId).toBe("string")
+      expect(tool.state.title).toBeDefined()
+      expect(tool.state.metadata?.model).toBeDefined()
+
+      yield* prompt.cancel(chat.id)
+      yield* Fiber.await(fiber)
+    }),
+  5_000,
+)
+
+it.instance(
+  "running task tool preserves metadata after tool-call transition",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({
+        title: "Pinned",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      yield* llm.tool("task", {
+        description: "inspect bug",
+        prompt: "look into the cache key path",
+        subagent_type: "general",
+      })
+      yield* llm.hang
+      yield* user(chat.id, "hello")
+
+      const fiber = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
+
+      const tool = yield* pollWithTimeout(
+        Effect.gen(function* () {
+          const msgs = yield* MessageV2.filterCompactedEffect(chat.id)
+          const assistant = msgs.findLast((item) => item.info.role === "assistant" && item.info.agent === "auto")
+          const tool = assistant?.parts.find(
+            (part): part is SessionV1.ToolPart => part.type === "tool" && part.tool === "task",
+          )
+          if (tool?.state.status === "running" && tool.state.metadata?.sessionId) return tool
+        }),
+        "timed out waiting for running task metadata",
+        "12 seconds",
+      )
+
+      if (tool.state.status !== "running") return
+      expect(typeof tool.state.metadata?.sessionId).toBe("string")
+      expect(tool.state.title).toBe("inspect bug")
+      expect(tool.state.metadata?.model).toBeDefined()
+
+      yield* prompt.cancel(chat.id)
+      yield* Fiber.await(fiber)
+    }),
+  { git: true },
+  20_000,
+)
+
+it.instance(
+  "loop sets status to busy then idle",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const status = yield* SessionStatus.Service
+
+      yield* llm.hang
+
+      const chat = yield* sessions.create({})
+      yield* user(chat.id, "hi")
+
+      const fiber = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
+      yield* llm.wait(1)
+      expect((yield* status.get(chat.id)).type).toBe("busy")
+      yield* prompt.cancel(chat.id)
+      yield* Fiber.await(fiber)
+      expect((yield* status.get(chat.id)).type).toBe("idle")
+    }),
+  15_000,
+)
+
+// Cancel semantics
+
+it.instance(
+  "cancel interrupts loop and resolves with an assistant message",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({ title: "Pinned" })
+      yield* seed(chat.id)
+
+      yield* llm.hang
+
+      yield* user(chat.id, "more")
+
+      const fiber = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
+      yield* llm.wait(1)
+      yield* prompt.cancel(chat.id)
+      const exit = yield* Fiber.await(fiber)
+      expect(Exit.isSuccess(exit)).toBe(true)
+      if (Exit.isSuccess(exit)) {
+        expect(exit.value.info.role).toBe("assistant")
+      }
+    }),
+  15_000,
+)
+
+it.instance(
+  "cancel records MessageAbortedError on interrupted process",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({ title: "Pinned" })
+      yield* llm.hang
+      yield* user(chat.id, "hello")
+
+      const fiber = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
+      yield* llm.wait(1)
+      yield* prompt.cancel(chat.id)
+      const exit = yield* Fiber.await(fiber)
+      expect(Exit.isSuccess(exit)).toBe(true)
+      if (Exit.isSuccess(exit)) {
+        const info = exit.value.info
+        if (info.role === "assistant") {
+          expect(info.error?.name).toBe("MessageAbortedError")
+        }
+        const persisted = (yield* sessions.messages({ sessionID: chat.id })).find(
+          (message) => message.info.id === info.id,
+        )
+        const { db } = yield* Database.Service
+        const receipt = yield* db
+          .select()
+          .from(SessionToolRequestReceiptTable)
+          .where(eq(SessionToolRequestReceiptTable.session_id, chat.id))
+          .get()
+          .pipe(Effect.orDie)
+        expect(receipt?.provider_state).toBe("failed")
+        expect(receipt?.terminal_at).toBeNumber()
+        expect(persisted).toBeDefined()
+        if (persisted) expect(receipt?.response_fingerprint).toBe(providerResponseFingerprint(persisted))
+      }
+    }),
+  15_000,
+)
+
+raceNoLLMServer.instance(
+  "finalizes assistant when cancelled before processor creation completes",
+  () =>
+    Effect.gen(function* () {
+      processorCreateStarted.length = 0
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          processorCreateStarted.length = 0
+        }),
+      )
+
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({ title: "Processor creation race" })
+
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "first" }],
+      })
+
+      const firstCreate = defer<void>()
+      processorCreateStarted.push(firstCreate.resolve)
+      const first = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
+      yield* Effect.promise(() => firstCreate.promise)
+
+      yield* prompt.cancel(chat.id)
+      const firstExit = yield* Fiber.await(first)
+      expect(Exit.isSuccess(firstExit)).toBe(true)
+
+      let messages = yield* sessions.messages({ sessionID: chat.id })
+      const firstInterrupted = messages.at(-1)
+      expect(firstInterrupted?.info.role).toBe("assistant")
+      expect(firstInterrupted?.parts).toHaveLength(0)
+      if (firstInterrupted?.info.role === "assistant") {
+        expect(firstInterrupted.info.finish).toBeUndefined()
+        expect(firstInterrupted.info.time.completed).toBeNumber()
+        expect(firstInterrupted.info.error?.name).toBe("MessageAbortedError")
+      }
+
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "second" }],
+      })
+
+      const secondCreate = defer<void>()
+      processorCreateStarted.push(secondCreate.resolve)
+      const second = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
+      yield* Effect.promise(() => secondCreate.promise)
+
+      yield* prompt.cancel(chat.id)
+      const secondExit = yield* Fiber.await(second)
+      expect(Exit.isSuccess(secondExit)).toBe(true)
+
+      messages = yield* sessions.messages({ sessionID: chat.id })
+      const poisonMessages = messages.filter(
+        (message) =>
+          message.info.role === "assistant" &&
+          message.parts.length === 0 &&
+          !message.info.finish &&
+          !message.info.time.completed &&
+          !message.info.error,
+      )
+      expect(poisonMessages).toHaveLength(0)
+
+      const interruptedMessages = messages.filter(
+        (message) =>
+          message.info.role === "assistant" &&
+          message.parts.length === 0 &&
+          message.info.time.completed &&
+          message.info.error?.name === "MessageAbortedError",
+      )
+      expect(interruptedMessages).toHaveLength(2)
+
+      const lastUser = messages.at(-2)
+      const lastAssistant = messages.at(-1)
+      expect(lastUser?.info.role).toBe("user")
+      expect(lastAssistant?.info.role).toBe("assistant")
+      if (lastUser?.info.role === "user" && lastAssistant?.info.role === "assistant") {
+        expect(lastAssistant.info.parentID).toBe(lastUser?.info.id)
+      }
+    }),
+  { config: cfg },
+  15_000,
+)
+
+noLLMServer.instance(
+  "cancel finalizes subtask tool state",
+  () =>
+    Effect.gen(function* () {
+      const ready = yield* Deferred.make<void>()
+      const aborted = yield* Deferred.make<void>()
+      const registry = yield* ToolRegistry.Service
+      const { task } = yield* registry.named()
+      const original = task.execute
+      task.execute = (_args, ctx) =>
+        Effect.callback<never>((_resume) => {
+          ctx.abort.addEventListener("abort", () => succeedVoid(aborted), { once: true })
+          if (ctx.abort.aborted) succeedVoid(aborted)
+          succeedVoid(ready)
+          return Effect.sync(() => succeedVoid(aborted))
+        })
+      yield* Effect.addFinalizer(() => Effect.sync(() => void (task.execute = original)))
+
+      const { prompt, chat } = yield* boot()
+      const msg = yield* user(chat.id, "hello")
+      yield* addSubtask(chat.id, msg.id)
+
+      const fiber = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
+      yield* awaitWithTimeout(Deferred.await(ready), "timed out waiting for task tool to start", "10 seconds")
+      yield* prompt.cancel(chat.id)
+
+      const exit = yield* Fiber.await(fiber)
+      expect(Exit.isSuccess(exit)).toBe(true)
+      yield* awaitWithTimeout(Deferred.await(aborted), "timed out waiting for task tool abort", "10 seconds")
+
+      const msgs = yield* MessageV2.filterCompactedEffect(chat.id)
+      const taskMsg = msgs.find((item) => item.info.role === "assistant" && item.info.agent === "general")
+      expect(taskMsg?.info.role).toBe("assistant")
+      if (!taskMsg || taskMsg.info.role !== "assistant") return
+
+      const tool = toolPart(taskMsg.parts)
+      expect(tool?.type).toBe("tool")
+      if (!tool) return
+
+      expect(tool.state.status).not.toBe("running")
+      expect(taskMsg.info.time.completed).toBeDefined()
+      expect(taskMsg.info.finish).toBeDefined()
+    }),
+  { config: cfg },
+  30_000,
+)
+
+it.instance(
+  "cancel propagates from slash command subtask to child session",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const status = yield* SessionStatus.Service
+      const chat = yield* sessions.create({ title: "Pinned" })
+      yield* llm.hang
+      const msg = yield* user(chat.id, "hello")
+      yield* addSubtask(chat.id, msg.id)
+
+      const fiber = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
+      yield* llm.wait(1)
+
+      const msgs = yield* MessageV2.filterCompactedEffect(chat.id)
+      const taskMsg = msgs.find((item) => item.info.role === "assistant" && item.info.agent === "general")
+      const tool = taskMsg ? toolPart(taskMsg.parts) : undefined
+      const sessionID = tool?.state.status === "running" ? tool.state.metadata?.sessionId : undefined
+      expect(typeof sessionID).toBe("string")
+      if (typeof sessionID !== "string") throw new Error("missing child session id")
+      const childID = SessionID.make(sessionID)
+      expect((yield* status.get(childID)).type).toBe("busy")
+
+      yield* prompt.cancel(chat.id)
+      const exit = yield* Fiber.await(fiber)
+      expect(Exit.isSuccess(exit)).toBe(true)
+
+      expect((yield* status.get(chat.id)).type).toBe("idle")
+      expect((yield* status.get(childID)).type).toBe("idle")
+    }),
+  10_000,
+)
+
+it.instance(
+  "cancel with queued callers resolves all cleanly",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({ title: "Pinned" })
+      yield* llm.hang
+      yield* user(chat.id, "hello")
+
+      const a = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
+      yield* llm.wait(1)
+      const b = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
+      yield* Effect.sleep(50)
+
+      yield* prompt.cancel(chat.id)
+      const [exitA, exitB] = yield* Effect.all([Fiber.await(a), Fiber.await(b)])
+      expect(Exit.isSuccess(exitA)).toBe(true)
+      expect(Exit.isSuccess(exitB)).toBe(true)
+      if (Exit.isSuccess(exitA) && Exit.isSuccess(exitB)) {
+        expect(exitA.value.info.id).toBe(exitB.value.info.id)
+      }
+    }),
+  { git: true },
+  15_000,
+)
+
+// Queue semantics
+
+noLLMServer.instance("concurrent loop callers get same result", () =>
+  Effect.gen(function* () {
+    const { prompt, run, chat } = yield* boot()
+    yield* seed(chat.id, { finish: "stop" })
+
+    const [a, b] = yield* Effect.all([prompt.loop({ sessionID: chat.id }), prompt.loop({ sessionID: chat.id })], {
+      concurrency: "unbounded",
+    })
+
+    expect(a.info.id).toBe(b.info.id)
+    expect(a.info.role).toBe("assistant")
+    yield* run.assertNotBusy(chat.id)
+  }),
+)
+
+it.instance(
+  "concurrent loop callers all receive same error result",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({ title: "Pinned" })
+
+      yield* llm.fail("boom")
+      yield* user(chat.id, "hello")
+
+      const [a, b] = yield* Effect.all([prompt.loop({ sessionID: chat.id }), prompt.loop({ sessionID: chat.id })], {
+        concurrency: "unbounded",
+      })
+      expect(a.info.id).toBe(b.info.id)
+      expect(a.info.role).toBe("assistant")
+    }),
+  15_000,
+)
+
+it.instance(
+  "prompt submitted during an active run is included in the next LLM input",
+  () =>
+    Effect.gen(function* () {
+      const { dir, llm } = yield* useServerConfig(providerCfg)
+      const previousMode = process.env.DEEPAGENT_MODE
+      const previousGatewayMode = AgentGateway.snapshot().agentMode
+      process.env.DEEPAGENT_MODE = "general"
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          if (previousMode === undefined) delete process.env.DEEPAGENT_MODE
+          else process.env.DEEPAGENT_MODE = previousMode
+          AgentGateway.configure({ agentMode: previousGatewayMode })
+        }),
+      )
+      const gate = yield* Deferred.make<void>()
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({ title: "Pinned" })
+      const { db } = yield* Database.Service
+      const canonicalDir = yield* (yield* FSUtil.Service).realPath(dir)
+      const legacyProjectId = AgentGateway.DeepAgentDurableKnowledgeStore.projectIdForWorkspace(canonicalDir)
+      const resolvedIdentity = yield* Effect.gen(function* () {
+        return yield* (yield* LocationIdentity.Service).resolve({
+          boundary: { kind: "implicit_local" },
+          directory: AbsolutePath.make(canonicalDir),
+          project: {
+            kind: "registered_root",
+            observedProjectId: legacyProjectId,
+          },
+        })
+      }).pipe(Effect.provide(LocationIdentity.layer))
+      const identity = yield* db
+        .select()
+        .from(LocationIdentityTable)
+        .where(
+          and(
+            eq(LocationIdentityTable.security_namespace_id, resolvedIdentity.securityNamespaceId),
+            eq(LocationIdentityTable.location_key, resolvedIdentity.locationKey),
+          ),
+        )
+        .get()
+        .pipe(Effect.orDie)
+      if (!identity) return yield* Effect.die("prompt location identity unavailable")
+      const releasedScope = {
+        securityNamespaceId: identity.security_namespace_id,
+        projectScopeKey: identity.project_scope_key,
+        legacyProjectId: identity.observed_project_id ?? legacyProjectId,
+      }
+      const emptyDocumentAuthority = {
+        userGlobal: { get: () => null },
+        project: { get: () => null },
+      }
+      const s1 = yield* DeepAgentReleasedSnapshot.publish(
+        db,
+        {
+          snapshotId: "snapshot_prompt_legacy_activity_s1",
+          evaluationId: "evaluation_prompt_legacy_activity_s1",
+          scope: releasedScope,
+          expectedParentSnapshotId: null,
+          expectedGeneration: 0,
+          releaseKind: "legacy_baseline",
+          verdict: "passed",
+          documents: [],
+          evaluationMatrix: { kind: "legacy_baseline" },
+          baselineRef: "prompt-legacy-activity-s1",
+          repetitions: 1,
+          actor: { type: "system", id: "prompt-test" },
+        },
+        emptyDocumentAuthority,
+      )
+      if (!s1) return yield* Effect.die("S1 baseline did not produce a released selection")
+
+      yield* llm.hold("first", deferredAsPromise(gate))
+      yield* llm.text("second")
+
+      const a = yield* prompt
+        .prompt({
+          sessionID: chat.id,
+          agent: "build",
+          model: ref,
+          parts: [{ type: "text", text: "first" }],
+        })
+        .pipe(Effect.forkChild)
+
+      const firstProviderReceipt = yield* pollWithTimeout(
+        Effect.gen(function* () {
+          const early = a.pollUnsafe()
+          if (early) return yield* Effect.die(`first prompt ended before provider receipt: ${JSON.stringify(early)}`)
+          const receipt = yield* db
+            .select()
+            .from(SessionToolRequestReceiptTable)
+            .where(eq(SessionToolRequestReceiptTable.session_id, chat.id))
+            .get()
+            .pipe(Effect.orDie)
+          if (receipt?.provider_state === "dispatching" || receipt?.provider_state === "streaming") return receipt
+        }),
+        "timed out waiting for the first provider receipt to start",
+      )
+      expect(firstProviderReceipt.released_knowledge_snapshot_id).toBe(s1.snapshotId)
+
+      const s2 = yield* DeepAgentReleasedSnapshot.publish(
+        db,
+        {
+          snapshotId: "snapshot_prompt_legacy_activity_s2",
+          evaluationId: "evaluation_prompt_legacy_activity_s2",
+          scope: releasedScope,
+          expectedParentSnapshotId: s1.snapshotId,
+          expectedGeneration: s1.generation,
+          releaseKind: "rollback",
+          verdict: "passed",
+          documents: [],
+          evaluationMatrix: { kind: "rollback" },
+          baselineRef: s1.snapshotId,
+          repetitions: 1,
+          actor: { type: "system", id: "prompt-test" },
+        },
+        emptyDocumentAuthority,
+      )
+      if (!s2) return yield* Effect.die("S2 rollback did not produce a released selection")
+
+      const receipt = yield* prompt.promptAsync({
+        sessionID: chat.id,
+        messageID: MessageID.ascending(),
+        intentID: "intent_concurrent_prompt_steer",
+        agent: "build",
+        model: ref,
+        parts: [{ type: "text", text: "second" }],
+      })
+      expect(receipt.delivery).toBe("steer")
+      const durableMessageID = SessionMessage.ID.make(receipt.messageID)
+      expect(
+        yield* db
+          .select({ id: SessionSteerTable.id, consumedSeq: SessionSteerTable.consumed_seq })
+          .from(SessionSteerTable)
+          .where(eq(SessionSteerTable.id, durableMessageID))
+          .get()
+          .pipe(Effect.orDie),
+      ).toEqual({ id: durableMessageID, consumedSeq: null })
+
+      yield* Deferred.succeed(gate, void 0)
+
+      const ea = yield* Fiber.await(a)
+      expect(Exit.isSuccess(ea)).toBe(true)
+      expect(yield* llm.calls).toBe(2)
+
+      const msgs = yield* sessions.messages({ sessionID: chat.id })
+      const assistants = msgs.filter((msg) => msg.info.role === "assistant")
+      expect(assistants).toHaveLength(2)
+      const last = assistants.at(-1)
+      if (!last || last.info.role !== "assistant") throw new Error("expected second assistant")
+      expect(last.info.parentID).toBe(receipt.messageID)
+      expect(last.parts.some((part) => part.type === "text" && part.text === "second")).toBe(true)
+
+      const inputs = yield* llm.inputs
+      expect(inputs).toHaveLength(2)
+      const steeredInput = JSON.stringify(inputs.at(-1)?.messages)
+      expect(steeredInput).toContain("second")
+      expect(steeredInput).not.toContain("The user sent the following message:")
+      expect((yield* DeepAgentReleasedSnapshot.current(db, releasedScope))?.snapshotId).toBe(s2.snapshotId)
+      const providerReceipts = (yield* db
+        .select()
+        .from(SessionToolRequestReceiptTable)
+        .where(eq(SessionToolRequestReceiptTable.session_id, chat.id))
+        .all()
+        .pipe(Effect.orDie)).toSorted((a, b) => a.request_ordinal - b.request_ordinal)
+      expect(providerReceipts).toHaveLength(2)
+      expect(providerReceipts.map((providerReceipt) => providerReceipt.released_knowledge_snapshot_id)).toEqual([
+        s1.snapshotId,
+        s1.snapshotId,
+      ])
+
+      yield* llm.text("third")
+      const nextActivity = yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        model: ref,
+        parts: [{ type: "text", text: "third" }],
+      })
+      expect(nextActivity.parts.some((part) => part.type === "text" && part.text === "third")).toBe(true)
+      const nextActivityReceipts = (yield* db
+        .select()
+        .from(SessionToolRequestReceiptTable)
+        .where(eq(SessionToolRequestReceiptTable.session_id, chat.id))
+        .all()
+        .pipe(Effect.orDie)).toSorted((a, b) => a.request_ordinal - b.request_ordinal)
+      expect(nextActivityReceipts).toHaveLength(3)
+      expect(nextActivityReceipts.at(-1)?.released_knowledge_snapshot_id).toBe(s2.snapshotId)
+    }),
+  15_000,
+)
+
+it.instance(
+  "promptAsync without an explicit intent acknowledges durable admission before the provider settles",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const gate = yield* Deferred.make<void>()
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({ title: "Implicit prompt intent" })
+      const messageID = MessageID.ascending()
+
+      yield* llm.hold("eventual answer", deferredAsPromise(gate))
+      const receipt = yield* prompt.promptAsync({
+        sessionID: chat.id,
+        messageID,
+        agent: "build",
+        model: ref,
+        parts: [{ type: "text", text: "hello" }],
+      })
+
+      expect(receipt).toEqual({ messageID, delivery: "turn" })
+      yield* llm.wait(1)
+      const { db } = yield* Database.Service
+      expect(
+        yield* db
+          .select({
+            state: SessionIntentTable.state,
+            executionState: SessionIntentTable.execution_state,
+            delivery: SessionIntentTable.delivery,
+          })
+          .from(SessionIntentTable)
+          .where(eq(SessionIntentTable.intent_id, `legacy-prompt:${chat.id}:${messageID}`))
+          .get()
+          .pipe(Effect.orDie),
+      ).toEqual({ state: "admitted", executionState: "claimed", delivery: "turn" })
+
+      yield* Deferred.succeed(gate, undefined)
+      yield* pollWithTimeout(
+        sessions
+          .messages({ sessionID: chat.id })
+          .pipe(
+            Effect.map((messages) =>
+              messages.some((message) => message.info.role === "assistant" && message.info.time.completed)
+                ? messages
+                : undefined,
+            ),
+          ),
+        "provider turn did not settle after admission",
+      )
+    }),
+  15_000,
+)
+
+it.instance(
+  "assertNotBusy fails with BusyError when loop running",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const run = yield* SessionRunState.Service
+      const sessions = yield* Session.Service
+      yield* llm.hang
+
+      const chat = yield* sessions.create({})
+      yield* user(chat.id, "hi")
+
+      const fiber = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
+      yield* llm.wait(1)
+
+      const exit = yield* run.assertNotBusy(chat.id).pipe(Effect.exit)
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) {
+        expect(Cause.squash(exit.cause)).toBeInstanceOf(Session.BusyError)
+        expect(Cause.squash(exit.cause)).toMatchObject({ _tag: "SessionBusyError", sessionID: chat.id })
+      }
+
+      yield* prompt.cancel(chat.id)
+      yield* Fiber.await(fiber)
+    }),
+  15_000,
+)
+
+noLLMServer.instance("assertNotBusy succeeds when idle", () =>
+  Effect.gen(function* () {
+    const run = yield* SessionRunState.Service
+    const sessions = yield* Session.Service
+
+    const chat = yield* sessions.create({})
+    const exit = yield* run.assertNotBusy(chat.id).pipe(Effect.exit)
+    expect(Exit.isSuccess(exit)).toBe(true)
+  }),
+)
+
+// Shell semantics
+
+it.instance(
+  "shell rejects with BusyError when loop running",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({ title: "Pinned" })
+      yield* llm.hang
+      yield* user(chat.id, "hi")
+
+      const fiber = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
+      yield* llm.wait(1)
+
+      const exit = yield* prompt.shell({ sessionID: chat.id, agent: "build", command: "echo hi" }).pipe(Effect.exit)
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) {
+        expect(Cause.squash(exit.cause)).toBeInstanceOf(Session.BusyError)
+        expect(Cause.squash(exit.cause)).toMatchObject({ _tag: "SessionBusyError", sessionID: chat.id })
+      }
+
+      yield* prompt.cancel(chat.id)
+      yield* Fiber.await(fiber)
+    }),
+  15_000,
+)
+
+unixNoLLMServer(
+  "shell captures stdout and stderr in completed tool output",
+  () =>
+    Effect.gen(function* () {
+      const { prompt, run, chat } = yield* boot()
+      const result = yield* prompt.shell({
+        sessionID: chat.id,
+        agent: "build",
+        command: "printf out && printf err >&2",
+      })
+
+      expect(result.info.role).toBe("assistant")
+      const tool = completedTool(result.parts)
+      if (!tool) return
+
+      expect(tool.state.output).toContain("out")
+      expect(tool.state.output).toContain("err")
+      expect(tool.state.metadata.output).toContain("out")
+      expect(tool.state.metadata.output).toContain("err")
+      yield* run.assertNotBusy(chat.id)
+    }),
+  { config: cfg },
+)
+
+unixNoLLMServer(
+  "shell completes a fast command on the preferred shell",
+  () =>
+    Effect.gen(function* () {
+      const { directory: dir } = yield* TestInstance
+      const { prompt, run, chat } = yield* boot()
+      const result = yield* prompt.shell({
+        sessionID: chat.id,
+        agent: "build",
+        command: "pwd",
+      })
+
+      expect(result.info.role).toBe("assistant")
+      const tool = completedTool(result.parts)
+      if (!tool) return
+
+      expect(tool.state.input.command).toBe("pwd")
+      expect(tool.state.output).toContain(dir)
+      expect(tool.state.metadata.output).toContain(dir)
+      yield* run.assertNotBusy(chat.id)
+    }),
+  { config: cfg },
+)
+
+unixNoLLMServer(
+  "shell uses configured shell over env shell",
+  () =>
+    withSh(() =>
+      Effect.gen(function* () {
+        if (!(yield* hasBash)) return
+
+        const { prompt, chat } = yield* boot()
+        const result = yield* prompt.shell({
+          sessionID: chat.id,
+          agent: "build",
+          command: "[[ 1 -eq 1 ]] && printf configured",
+        })
+
+        const tool = completedTool(result.parts)
+        if (!tool) return
+        expect(tool.state.output).toContain("configured")
+      }),
+    ),
+  { config: { ...cfg, shell: "bash" } },
+  30_000,
+)
+
+unixNoLLMServer(
+  "shell commands can change directory after startup",
+  () =>
+    withSh(() =>
+      Effect.gen(function* () {
+        const { directory: dir } = yield* TestInstance
+        const { prompt, run, chat } = yield* boot()
+        const parent = path.dirname(dir)
+        const result = yield* prompt.shell({
+          sessionID: chat.id,
+          agent: "build",
+          command: "cd .. && pwd",
+        })
+
+        expect(result.info.role).toBe("assistant")
+        const tool = completedTool(result.parts)
+        if (!tool) return
+
+        expect(tool.state.output).toContain(parent)
+        expect(tool.state.metadata.output).toContain(parent)
+        yield* run.assertNotBusy(chat.id)
+      }),
+    ),
+  { config: cfg },
+)
+
+unixNoLLMServer(
+  "shell lists files from the project directory",
+  () =>
+    Effect.gen(function* () {
+      const { directory: dir } = yield* TestInstance
+      const { prompt, run, chat } = yield* boot()
+      yield* writeText(path.join(dir, "README.md"), "# e2e\n")
+
+      const result = yield* prompt.shell({
+        sessionID: chat.id,
+        agent: "build",
+        command: "command ls",
+      })
+
+      expect(result.info.role).toBe("assistant")
+      const tool = completedTool(result.parts)
+      if (!tool) return
+
+      expect(tool.state.input.command).toBe("command ls")
+      expect(tool.state.output).toContain("README.md")
+      expect(tool.state.metadata.output).toContain("README.md")
+      yield* run.assertNotBusy(chat.id)
+    }),
+  { config: cfg },
+)
+
+unixNoLLMServer(
+  "shell captures stderr from a failing command",
+  () =>
+    Effect.gen(function* () {
+      const { prompt, run, chat } = yield* boot()
+      const result = yield* prompt.shell({
+        sessionID: chat.id,
+        agent: "build",
+        command: "command -v __nonexistent_cmd_e2e__ || echo 'not found' >&2; exit 1",
+      })
+
+      expect(result.info.role).toBe("assistant")
+      const tool = completedTool(result.parts)
+      if (!tool) return
+
+      expect(tool.state.output).toContain("not found")
+      expect(tool.state.metadata.output).toContain("not found")
+      yield* run.assertNotBusy(chat.id)
+    }),
+  { config: cfg },
+)
+
+unixNoLLMServer(
+  "shell updates running metadata before process exit",
+  () =>
+    withSh(() =>
+      Effect.gen(function* () {
+        const { prompt, chat } = yield* boot()
+
+        const fiber = yield* prompt
+          .shell({ sessionID: chat.id, agent: "build", command: "printf first && sleep 0.2 && printf second" })
+          .pipe(Effect.forkChild)
+
+        yield* pollWithTimeout(
+          Effect.gen(function* () {
+            const msgs = yield* MessageV2.filterCompactedEffect(chat.id)
+            const taskMsg = msgs.find((item) => item.info.role === "assistant")
+            const tool = taskMsg ? toolPart(taskMsg.parts) : undefined
+            if (tool?.state.status === "running" && tool.state.metadata?.output.includes("first")) return true
+          }),
+          "timed out waiting for running shell metadata",
+        )
+
+        const exit = yield* Fiber.await(fiber)
+        expect(Exit.isSuccess(exit)).toBe(true)
+      }),
+    ),
+  { config: cfg },
+  30_000,
+)
+
+it.instance(
+  "loop waits while shell runs and starts after shell exits",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({
+        title: "Pinned",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      yield* llm.text("after-shell")
+
+      const sh = yield* prompt
+        .shell({ sessionID: chat.id, agent: "build", command: "sleep 0.2" })
+        .pipe(Effect.forkChild)
+      yield* waitForBusy(chat.id)
+
+      const loop = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
+      yield* Effect.sleep(50)
+
+      expect(yield* llm.calls).toBe(0)
+
+      yield* Fiber.await(sh)
+      const exit = yield* Fiber.await(loop)
+
+      expect(Exit.isSuccess(exit)).toBe(true)
+      if (Exit.isSuccess(exit)) {
+        expect(exit.value.info.role).toBe("assistant")
+        expect(exit.value.parts.some((part) => part.type === "text" && part.text === "after-shell")).toBe(true)
+      }
+      expect(yield* llm.calls).toBe(1)
+    }),
+  { git: true },
+  15_000,
+)
+
+it.instance(
+  "shell completion resumes queued loop callers",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({
+        title: "Pinned",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      yield* llm.text("done")
+
+      const sh = yield* prompt
+        .shell({ sessionID: chat.id, agent: "build", command: "sleep 0.2" })
+        .pipe(Effect.forkChild)
+      yield* waitForBusy(chat.id)
+
+      const a = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
+      const b = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
+      yield* Effect.sleep(50)
+
+      expect(yield* llm.calls).toBe(0)
+
+      yield* Fiber.await(sh)
+      const [ea, eb] = yield* Effect.all([Fiber.await(a), Fiber.await(b)])
+
+      expect(Exit.isSuccess(ea)).toBe(true)
+      expect(Exit.isSuccess(eb)).toBe(true)
+      if (Exit.isSuccess(ea) && Exit.isSuccess(eb)) {
+        expect(ea.value.info.id).toBe(eb.value.info.id)
+        expect(ea.value.info.role).toBe("assistant")
+      }
+      expect(yield* llm.calls).toBe(1)
+    }),
+  { git: true },
+  15_000,
+)
+
+unix(
+  "command ! expansion uses configured shell over env shell",
+  () =>
+    withSh(() =>
+      Effect.gen(function* () {
+        if (!(yield* hasBash)) return
+        const { llm } = yield* useServerConfig((url) => ({
+          ...providerCfg(url),
+          shell: "bash",
+          command: {
+            probe: {
+              template: "Probe: !`[[ 1 -eq 1 ]] && printf configured`",
+            },
+          },
+        }))
+
+        const { prompt, chat } = yield* boot()
+        yield* llm.text("done")
+
+        const result = yield* prompt.command({
+          sessionID: chat.id,
+          command: "probe",
+          arguments: "",
+        })
+
+        expect(result.info.role).toBe("assistant")
+        const inputs = yield* llm.inputs
+        expect(JSON.stringify(inputs.at(-1)?.messages)).toContain("configured")
+      }),
+    ),
+  30_000,
+)
+
+unixNoLLMServer(
+  "cancel interrupts shell and resolves cleanly",
+  () =>
+    withSh(() =>
+      Effect.gen(function* () {
+        const { prompt, run, chat } = yield* boot()
+
+        const sh = yield* prompt
+          .shell({ sessionID: chat.id, agent: "build", command: "sleep 30" })
+          .pipe(Effect.forkChild)
+        yield* waitForBusy(chat.id)
+
+        yield* prompt.cancel(chat.id)
+
+        const status = yield* SessionStatus.Service
+        expect((yield* status.get(chat.id)).type).toBe("idle")
+        const busy = yield* run.assertNotBusy(chat.id).pipe(Effect.exit)
+        expect(Exit.isSuccess(busy)).toBe(true)
+
+        const exit = yield* Fiber.await(sh)
+        expect(Exit.isSuccess(exit)).toBe(true)
+        if (Exit.isSuccess(exit)) {
+          expect(exit.value.info.role).toBe("assistant")
+          const tool = completedTool(exit.value.parts)
+          if (tool) {
+            expect(tool.state.output).toContain("User aborted the command")
+          }
+        }
+      }),
+    ),
+  { git: true, config: cfg },
+  30_000,
+)
+
+unixNoLLMServer(
+  "cancel persists aborted shell result when shell ignores TERM",
+  () =>
+    withSh(() =>
+      Effect.gen(function* () {
+        const { prompt, chat } = yield* boot()
+        const { directory: dir } = yield* TestInstance
+        const afs = yield* FSUtil.Service
+        const ready = path.join(dir, ".trap-ready")
+
+        const sh = yield* prompt
+          .shell({
+            sessionID: chat.id,
+            agent: "build",
+            // Touch marker AFTER trap installs so the test waits for the actual
+            // ignore-TERM state before cancelling; otherwise SIGTERM can arrive
+            // before `trap` runs and the escalation path is never exercised.
+            command: `trap '' TERM; touch "${ready}"; sleep 30`,
+          })
+          .pipe(Effect.forkChild)
+
+        yield* Effect.gen(function* () {
+          while (!(yield* afs.existsSafe(ready))) {
+            yield* Effect.sleep(Duration.millis(10))
+          }
+        }).pipe(Effect.timeout(Duration.seconds(5)))
+
+        yield* prompt.cancel(chat.id)
+
+        const exit = yield* Fiber.await(sh)
+        expect(Exit.isSuccess(exit)).toBe(true)
+        if (Exit.isSuccess(exit)) {
+          expect(exit.value.info.role).toBe("assistant")
+          const tool = completedTool(exit.value.parts)
+          if (tool) {
+            expect(tool.state.output).toContain("User aborted the command")
+          }
+        }
+      }),
+    ),
+  { git: true, config: cfg },
+  30_000,
+)
+
+unix(
+  "cancel finalizes interrupted bash tool output through normal truncation",
+  () =>
+    Effect.gen(function* () {
+      const { dir, llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({
+        title: "Interrupted bash truncation",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "run bash" }],
+      })
+
+      yield* llm.tool("bash", {
+        command:
+          'i=0; while [ "$i" -lt 4000 ]; do printf "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx %05d\\n" "$i"; i=$((i + 1)); done; printf truncation-ready; sleep 30',
+        description: "Print many lines",
+        timeout: 30_000,
+        workdir: path.resolve(dir),
+      })
+
+      const run = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
+      yield* llm.wait(1)
+      yield* pollWithTimeout(
+        Effect.gen(function* () {
+          const msgs = yield* MessageV2.filterCompactedEffect(chat.id)
+          const assistant = msgs.findLast((item) => item.info.role === "assistant")
+          const tool = assistant ? toolPart(assistant.parts) : undefined
+          if (tool?.state.status === "running" && tool.state.metadata?.output.includes("truncation-ready")) return true
+        }),
+        "timed out waiting for truncated shell output",
+      )
+      yield* prompt.cancel(chat.id)
+
+      const exit = yield* Fiber.await(run)
+      expect(Exit.isSuccess(exit)).toBe(true)
+      if (Exit.isFailure(exit)) return
+
+      const tool = completedTool(exit.value.parts)
+      if (!tool) return
+
+      expect(tool.state.metadata.truncated).toBe(true)
+      expect(typeof tool.state.metadata.outputPath).toBe("string")
+      expect(tool.state.output).toMatch(/\.\.\.output truncated\.\.\./)
+      expect(tool.state.output).toMatch(/Full output saved to:\s+\S+/)
+      expect(tool.state.output).not.toContain("Tool execution aborted")
+    }),
+  { git: true },
+  30_000,
+)
+
+// activity progress projection §7.1 deterministic regressions: the computed activity-progress projection must be
+// derived from the durable progress authority on read, independent of whether the owning assistant
+// message carries a text part (reasoning-only / tool-only turns still project progress).
+unix(
+  "activity progress projection #5: a tool-only assistant turn still yields a computed activityProgress projection",
+  () =>
+    Effect.gen(function* () {
+      const { dir, llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({
+        title: "tool-only computed projection",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "run the tool" }],
+      })
+      yield* llm.tool("bash", { command: "echo progress-marker", description: "emit", workdir: path.resolve(dir) })
+      yield* llm.text("done")
+      yield* prompt.loop({ sessionID: chat.id })
+
+      const msgs = yield* MessageV2.filterCompactedEffect(chat.id)
+      const withTool = msgs.filter(
+        (item) => item.info.role === "assistant" && item.parts.some((p) => p.type === "tool"),
+      )
+      expect(withTool.length).toBeGreaterThan(0)
+      // The assistant message that owns the tool call carries a computed activityProgress derived
+      // from the durable progress authority — even though it may have no text part of its own.
+      const projected = withTool.find((item) => (item.info as SessionV1.Assistant).activityProgress)
+      expect(projected).toBeDefined()
+      const progress = projected ? (projected.info as SessionV1.Assistant).activityProgress : undefined
+      expect(progress?.revision).toBeGreaterThanOrEqual(0)
+      expect(progress?.activityID).toBeTruthy()
+    }),
+  { git: true },
+  30_000,
+)
+
+unixNoLLMServer(
+  "cancel interrupts loop queued behind shell",
+  () =>
+    Effect.gen(function* () {
+      const { prompt, chat } = yield* boot()
+
+      const sh = yield* prompt.shell({ sessionID: chat.id, agent: "build", command: "sleep 30" }).pipe(Effect.forkChild)
+      yield* waitForBusy(chat.id)
+
+      const loop = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
+      yield* Effect.sleep(50)
+
+      yield* prompt.cancel(chat.id)
+
+      const exit = yield* Fiber.await(loop)
+      expect(Exit.isSuccess(exit)).toBe(true)
+      if (Exit.isSuccess(exit)) {
+        const tool = completedTool(exit.value.parts)
+        expect(tool?.state.output).toContain("User aborted the command")
+      }
+
+      yield* Fiber.await(sh)
+    }),
+  { git: true, config: cfg },
+  30_000,
+)
+
+unixNoLLMServer(
+  "shell rejects when another shell is already running",
+  () =>
+    withSh(() =>
+      Effect.gen(function* () {
+        const { prompt, chat } = yield* boot()
+
+        const a = yield* prompt
+          .shell({ sessionID: chat.id, agent: "build", command: "sleep 30" })
+          .pipe(Effect.forkChild)
+        yield* waitForBusy(chat.id)
+
+        const exit = yield* prompt.shell({ sessionID: chat.id, agent: "build", command: "echo hi" }).pipe(Effect.exit)
+        expect(Exit.isFailure(exit)).toBe(true)
+        if (Exit.isFailure(exit)) {
+          expect(Cause.squash(exit.cause)).toBeInstanceOf(Session.BusyError)
+        }
+
+        yield* prompt.cancel(chat.id)
+        yield* Fiber.await(a)
+      }),
+    ),
+  { git: true, config: cfg },
+  30_000,
+)
+
+// Abort signal propagation tests for inline tool execution
+
+function hangUntilAborted(tool: { execute: (...args: any[]) => any }) {
+  return Effect.gen(function* () {
+    const ready = yield* Deferred.make<void>()
+    const aborted = yield* Deferred.make<void>()
+    const original = tool.execute
+    tool.execute = (_args: any, ctx: any) => {
+      ctx.abort.addEventListener("abort", () => succeedVoid(aborted), { once: true })
+      if (ctx.abort.aborted) succeedVoid(aborted)
+      succeedVoid(ready)
+      return Effect.callback<never>(() => Effect.sync(() => succeedVoid(aborted)))
+    }
+    const restore = Effect.addFinalizer(() => Effect.sync(() => void (tool.execute = original)))
+    return { ready, aborted, restore }
+  })
+}
+
+noLLMServer.instance(
+  "interrupt propagates abort signal to read tool via file part (text/plain)",
+  () =>
+    Effect.gen(function* () {
+      const { directory: dir } = yield* TestInstance
+      const registry = yield* ToolRegistry.Service
+      const { read } = yield* registry.named()
+      const { ready, restore } = yield* hangUntilAborted(read)
+      yield* restore
+
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({ title: "Abort Test" })
+
+      const testFile = path.join(dir, "test.txt")
+      yield* writeText(testFile, "hello world")
+
+      const fiber = yield* prompt
+        .prompt({
+          sessionID: chat.id,
+          agent: "build",
+          parts: [
+            { type: "text", text: "read this" },
+            { type: "file", url: `file://${testFile}`, filename: "test.txt", mime: "text/plain" },
+          ],
+        })
+        .pipe(Effect.forkChild)
+
+      yield* awaitWithTimeout(Deferred.await(ready), "timed out waiting for read tool to start", "10 seconds")
+      yield* prompt.cancel(chat.id)
+      yield* Fiber.interrupt(fiber)
+      const exit = yield* Fiber.await(fiber)
+      expect(Exit.isFailure(exit)).toBe(true)
+    }),
+  { config: cfg },
+  30_000,
+)
+
+noLLMServer.instance(
+  "interrupt propagates abort signal to read tool via file part (directory)",
+  () =>
+    Effect.gen(function* () {
+      const { directory: dir } = yield* TestInstance
+      const registry = yield* ToolRegistry.Service
+      const { read } = yield* registry.named()
+      const { ready, restore } = yield* hangUntilAborted(read)
+      yield* restore
+
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({ title: "Abort Test" })
+
+      const fiber = yield* prompt
+        .prompt({
+          sessionID: chat.id,
+          agent: "build",
+          parts: [
+            { type: "text", text: "read this" },
+            { type: "file", url: `file://${dir}`, filename: "dir", mime: "application/x-directory" },
+          ],
+        })
+        .pipe(Effect.forkChild)
+
+      yield* awaitWithTimeout(Deferred.await(ready), "timed out waiting for read tool to start", "10 seconds")
+      yield* prompt.cancel(chat.id)
+      yield* Fiber.interrupt(fiber)
+      const exit = yield* Fiber.await(fiber)
+      expect(Exit.isFailure(exit)).toBe(true)
+    }),
+  { config: cfg },
+  30_000,
+)
+
+// Missing file handling
+
+noLLMServer.instance(
+  "direct prompts auto-claim one durable intent and reconcile exact retries",
+  () =>
+    Effect.gen(function* () {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const { db } = yield* Database.Service
+      const session = yield* sessions.create({})
+      const messageID = MessageID.make("msg_direct_intent_retry")
+      const input = {
+        sessionID: session.id,
+        messageID,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text" as const, text: "durable direct prompt" }],
+      }
+
+      const first = yield* prompt.prompt(input)
+      const retry = yield* prompt.prompt(input)
+      const conflict = yield* prompt
+        .prompt({
+          ...input,
+          parts: [{ type: "text", text: "conflicting retry" }],
+        })
+        .pipe(Effect.exit)
+
+      expect(retry).toEqual(first)
+      expect(Exit.isFailure(conflict)).toBe(true)
+      expect(
+        yield* db
+          .select()
+          .from(SessionIntentTable)
+          .where(eq(SessionIntentTable.admitted_message_id, messageID))
+          .all()
+          .pipe(Effect.orDie),
+      ).toHaveLength(1)
+      expect(yield* db.select().from(SessionActivityAdmissionTable).all().pipe(Effect.orDie)).toHaveLength(1)
+      expect(yield* db.select().from(SessionLegacyActivityTable).all().pipe(Effect.orDie)).toHaveLength(0)
+    }),
+  { config: cfg },
+)
+
+noLLMServer.instance(
+  "task notification prompt retries reuse the persisted user message",
+  () =>
+    Effect.gen(function* () {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const session = yield* sessions.create({})
+      const messageID = MessageID.ascending()
+      const metadata = {
+        deepagent: {
+          task_notification: { run_id: "job_exact", outbox_id: "task-notify:job_exact" },
+        },
+      }
+
+      const first = yield* prompt.prompt({
+        sessionID: session.id,
+        messageID,
+        agent: "build",
+        noReply: true,
+        metadata,
+        parts: [{ type: "text", text: "task completed" }],
+      })
+      const retry = yield* prompt.prompt({
+        sessionID: session.id,
+        messageID,
+        agent: "build",
+        noReply: true,
+        metadata,
+        parts: [{ type: "text", text: "this payload must not be persisted twice" }],
+      })
+      const conflict = yield* Effect.exit(
+        prompt.prompt({
+          sessionID: session.id,
+          messageID,
+          agent: "build",
+          noReply: true,
+          metadata: {
+            deepagent: {
+              task_notification: { run_id: "job_other", outbox_id: "task-notify:job_other" },
+            },
+          },
+          parts: [{ type: "text", text: "conflicting retry" }],
+        }),
+      )
+      const stored = yield* MessageV2.get({ sessionID: session.id, messageID })
+
+      expect(first.info.id).toBe(messageID)
+      expect(retry).toEqual(first)
+      expect(stored.parts.filter((part) => part.type === "text").map((part) => part.text)).toEqual(["task completed"])
+      expect(Exit.isFailure(conflict)).toBe(true)
+
+      yield* sessions.remove(session.id)
+    }),
+  { config: cfg },
+)
+
+noLLMServer.instance(
+  "does not fail the prompt when a file part is missing",
+  () =>
+    Effect.gen(function* () {
+      const { directory: dir } = yield* TestInstance
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const session = yield* sessions.create({})
+
+      const missing = path.join(dir, "does-not-exist.ts")
+      const msg = yield* prompt.prompt({
+        sessionID: session.id,
+        agent: "build",
+        noReply: true,
+        parts: [
+          { type: "text", text: "please review @does-not-exist.ts" },
+          {
+            type: "file",
+            mime: "text/plain",
+            url: `file://${missing}`,
+            filename: "does-not-exist.ts",
+          },
+        ],
+      })
+
+      if (msg.info.role !== "user") throw new Error("expected user message")
+      const hasFailure = msg.parts.some(
+        (part) => part.type === "text" && part.synthetic && part.text.includes("Read tool failed to read"),
+      )
+      expect(hasFailure).toBe(true)
+
+      yield* sessions.remove(session.id)
+    }),
+  { config: cfg },
+)
+
+noLLMServer.instance(
+  "keeps stored part order stable when file resolution is async",
+  () =>
+    Effect.gen(function* () {
+      const { directory: dir } = yield* TestInstance
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const session = yield* sessions.create({})
+
+      const missing = path.join(dir, "still-missing.ts")
+      const msg = yield* prompt.prompt({
+        sessionID: session.id,
+        agent: "build",
+        noReply: true,
+        parts: [
+          {
+            type: "file",
+            mime: "text/plain",
+            url: `file://${missing}`,
+            filename: "still-missing.ts",
+          },
+          { type: "text", text: "after-file" },
+        ],
+      })
+
+      if (msg.info.role !== "user") throw new Error("expected user message")
+
+      const stored = yield* MessageV2.get({
+        sessionID: session.id,
+        messageID: msg.info.id,
+      })
+      const text = stored.parts.filter((part) => part.type === "text").map((part) => part.text)
+
+      expect(text[0]?.startsWith("Called the Read tool with the following input:")).toBe(true)
+      expect(text[1]?.includes("Read tool failed to read")).toBe(true)
+      expect(text[2]).toBe("after-file")
+
+      yield* sessions.remove(session.id)
+    }),
+  { config: cfg },
+)
+
+noLLMServer.instance(
+  "resolves configured reference mentions to one root directory attachment",
+  () =>
+    Effect.gen(function* () {
+      const { directory: dir } = yield* TestInstance
+      const docs = path.join(dir, "external-docs")
+      yield* ensureDir(path.join(docs, "guide"))
+      yield* ensureDir(path.join(dir, "docs"))
+      yield* writeText(path.join(docs, "README.md"), "reference readme")
+      yield* writeText(path.join(docs, "guide", "intro.md"), "reference intro")
+      yield* writeText(path.join(dir, "docs", "README.md"), "workspace readme")
+
+      const prompt = yield* SessionPrompt.Service
+      const parts = yield* prompt.resolvePromptParts(
+        "Use @docs and @docs/README.md and @docs/guide and @docs/missing.md and @docs/README.md and @build",
+      )
+      const files = parts.filter((part): part is SessionV1.FilePartInput => part.type === "file")
+      const agents = parts.filter((part): part is SessionV1.AgentPartInput => part.type === "agent")
+      const text = parts.find((part): part is SessionV1.TextPartInput => part.type === "text" && !part.synthetic)
+
+      expect(text?.text).toContain("@docs")
+      expect(files).toHaveLength(1)
+      expect(files[0]).toMatchObject({
+        filename: "docs",
+        mime: "application/x-directory",
+        source: { type: "file", path: "docs", text: { value: "@docs" } },
+      })
+      expect(fileURLToPath(files[0].url)).toBe(docs)
+      expect(agents.map((agent) => agent.name)).toEqual(["auto"])
+    }),
+  {
+    config: {
+      ...cfg,
+      reference: {
+        docs: "./external-docs",
+      },
+    },
+  },
+)
+
+noLLMServer.instance(
+  "stores raw reference mentions alongside directory attachments",
+  () =>
+    Effect.gen(function* () {
+      const { directory: dir } = yield* TestInstance
+      const docs = path.join(dir, "external-docs")
+      yield* ensureDir(docs)
+
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const session = yield* sessions.create({})
+      const message = yield* prompt.prompt({
+        sessionID: session.id,
+        noReply: true,
+        parts: [{ type: "text", text: "Use @docs for context" }],
+      })
+
+      const stored = yield* MessageV2.get({ sessionID: session.id, messageID: message.info.id })
+      const synthetic = stored.parts.filter(
+        (part): part is SessionV1.TextPart => part.type === "text" && part.synthetic === true,
+      )
+      const files = stored.parts.filter((part): part is SessionV1.FilePart => part.type === "file")
+      const text = stored.parts.find((part): part is SessionV1.TextPart => part.type === "text" && !part.synthetic)
+
+      expect(text?.text).toBe("Use @docs for context")
+      expect(synthetic.some((part) => part.text.includes(JSON.stringify({ filePath: docs })))).toBe(true)
+      expect(files).toHaveLength(1)
+      expect(files[0]).toMatchObject({
+        filename: "docs",
+        mime: "application/x-directory",
+        source: { type: "file", path: "docs", text: { value: "@docs", start: 4, end: 9 } },
+      })
+      expect(fileURLToPath(files[0].url)).toBe(docs)
+
+      yield* sessions.remove(session.id)
+    }),
+  {
+    config: {
+      ...cfg,
+      reference: {
+        docs: "./external-docs",
+      },
+    },
+  },
+)
+
+// Special characters in filenames
+
+noLLMServer.instance(
+  "handles filenames with # character",
+  () =>
+    Effect.gen(function* () {
+      const { directory: dir } = yield* TestInstance
+      yield* writeText(path.join(dir, "file#name.txt"), "special content\n")
+
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const session = yield* sessions.create({})
+      const parts = yield* prompt.resolvePromptParts("Read @file#name.txt")
+      const fileParts = parts.filter((part) => part.type === "file")
+
+      expect(fileParts.length).toBe(1)
+      expect(fileParts[0].filename).toBe("file#name.txt")
+      expect(fileParts[0].url).toContain("%23")
+
+      const decodedPath = fileURLToPath(fileParts[0].url)
+      expect(decodedPath).toBe(path.join(dir, "file#name.txt"))
+
+      const message = yield* prompt.prompt({
+        sessionID: session.id,
+        parts,
+        noReply: true,
+      })
+      const stored = yield* MessageV2.get({ sessionID: session.id, messageID: message.info.id })
+      const textParts = stored.parts.filter((part) => part.type === "text")
+      const hasContent = textParts.some((part) => part.text.includes("special content"))
+      expect(hasContent).toBe(true)
+
+      yield* sessions.remove(session.id)
+    }),
+  { git: true, config: cfg },
+)
+
+// Regression: empty assistant turn loop
+
+it.instance("does not loop empty assistant turns for a simple reply", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const session = yield* sessions.create({ title: "Prompt regression" })
+
+    yield* llm.text("packages/deepagent-code/src/session/processor.ts")
+
+    const result = yield* prompt.prompt({
+      sessionID: session.id,
+      agent: "build",
+      parts: [{ type: "text", text: "Where is SessionProcessor?" }],
+    })
+
+    expect(result.info.role).toBe("assistant")
+    expect(result.parts.some((part) => part.type === "text" && part.text.includes("processor.ts"))).toBe(true)
+
+    const msgs = yield* sessions.messages({ sessionID: session.id })
+    expect(msgs.filter((msg) => msg.info.role === "assistant")).toHaveLength(1)
+    expect(yield* llm.calls).toBe(1)
+  }),
+)
+
+it.instance("runs a prompt in the persisted session directory", () =>
+  Effect.gen(function* () {
+    const { directory: parentDirectory } = yield* TestInstance
+    const targetDirectory = yield* tmpdirScoped({ git: true })
+    const aliasRoot = yield* tmpdirScoped()
+    const persistedDirectory = process.platform === "win32" ? targetDirectory : path.join(aliasRoot, "workspace-alias")
+    if (persistedDirectory !== targetDirectory) {
+      yield* Effect.promise(() => symlink(targetDirectory, persistedDirectory, "dir"))
+    }
+    const llm = yield* TestLLMServer
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const instances = yield* InstanceStore.Service
+    const events = yield* EventV2Bridge.Service
+
+    yield* writeConfig(targetDirectory, providerCfg(llm.url))
+    const rootWorkspaceID = WorkspaceV2.ID.make("wrk_prompt_event_route")
+    const parent = yield* sessions.create({ title: "Parent session", workspaceID: rootWorkspaceID })
+    const child = yield* instances.provide(
+      { directory: targetDirectory },
+      sessions.create({
+        title: "Persisted directory child",
+        directory: persistedDirectory,
+        parentID: parent.id,
+      }),
+    )
+    const childEventDirectories: string[] = []
+    const childEventWorkspaceIDs: Array<WorkspaceV2.ID | undefined> = []
+    const off = yield* events.listen((event) =>
+      Effect.sync(() => {
+        if ((event.data as { sessionID?: SessionID }).sessionID !== child.id) return
+        if (!event.location?.directory) return
+        childEventDirectories.push(event.location.directory)
+        childEventWorkspaceIDs.push(event.location.workspaceID)
+      }),
+    )
+    yield* Effect.addFinalizer(() => off)
+    yield* llm.text("child context complete")
+
+    const result = yield* prompt.prompt({
+      sessionID: child.id,
+      agent: "build",
+      parts: [{ type: "text", text: "Report the active directory context." }],
+    })
+
+    expect(path.resolve(parentDirectory)).not.toBe(path.resolve(targetDirectory))
+    expect(FSUtil.resolve(child.directory)).toBe(FSUtil.resolve(targetDirectory))
+    expect(result.info.role).toBe("assistant")
+    if (result.info.role === "assistant") {
+      expect(path.resolve(result.info.path.cwd)).toBe(path.resolve(targetDirectory))
+      expect(path.resolve(result.info.path.root)).toBe(path.resolve(targetDirectory))
+    }
+    expect(childEventDirectories.length).toBeGreaterThan(0)
+    expect(childEventDirectories.every((directory) => path.resolve(directory) === path.resolve(parentDirectory))).toBe(
+      true,
+    )
+    expect(childEventWorkspaceIDs.every((workspaceID) => workspaceID === rootWorkspaceID)).toBe(true)
+  }),
+)
+
+it.instance(
+  "records aborted errors when prompt is cancelled mid-stream",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const session = yield* sessions.create({ title: "Prompt cancel regression" })
+
+      yield* llm.hang
+
+      const fiber = yield* prompt
+        .prompt({
+          sessionID: session.id,
+          agent: "build",
+          parts: [{ type: "text", text: "Cancel me" }],
+        })
+        .pipe(Effect.forkChild)
+
+      yield* llm.wait(1)
+      yield* prompt.cancel(session.id)
+
+      const exit = yield* Fiber.await(fiber)
+      expect(Exit.isSuccess(exit)).toBe(true)
+      if (Exit.isSuccess(exit)) {
+        expect(exit.value.info.role).toBe("assistant")
+        if (exit.value.info.role === "assistant") {
+          expect(exit.value.info.error?.name).toBe("MessageAbortedError")
+        }
+      }
+
+      const msgs = yield* sessions.messages({ sessionID: session.id })
+      const last = msgs.findLast((msg) => msg.info.role === "assistant")
+      expect(last?.info.role).toBe("assistant")
+      if (last?.info.role === "assistant") {
+        expect(last.info.error?.name).toBe("MessageAbortedError")
+      }
+    }),
+  15_000,
+)
+
+it.instance(
+  "cancel terminalizes the durable run, supersedes attached steer, and permits the next prompt",
+  () =>
+    Effect.gen(function* () {
+      const { dir, llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const steer = yield* SessionSteer.Service
+      const sessions = yield* Session.Service
+      const { db } = yield* Database.Service
+      const session = yield* sessions.create({ title: "Durable cancel lifecycle" })
+      const marker = path.join(dir, "normal-prompt-admit-and-bind.json")
+      const previousPoint = process.env.DEEPAGENT_CODE_TEST_ACTIVITY_CRASH_POINT
+      const previousRoot = process.env.DEEPAGENT_CODE_TEST_ROOT
+      const previousMarker = process.env.DEEPAGENT_CODE_TEST_ACTIVITY_CRASH_MARKER
+      const steered = yield* Effect.acquireUseRelease(
+        Effect.sync(() => {
+          process.env.DEEPAGENT_CODE_TEST_ACTIVITY_CRASH_POINT = "after_admit_and_bind"
+          process.env.DEEPAGENT_CODE_TEST_ROOT = dir
+          process.env.DEEPAGENT_CODE_TEST_ACTIVITY_CRASH_MARKER = marker
+        }),
+        () =>
+          Effect.gen(function* () {
+            const running = yield* prompt
+              .prompt({
+                sessionID: session.id,
+                agent: "build",
+                parts: [{ type: "text", text: "Cancel this run" }],
+              })
+              .pipe(Effect.forkChild)
+            yield* pollWithTimeout(
+              Effect.promise(async () => ((await Bun.file(marker).exists()) ? true : undefined)),
+              "timed out waiting for normal prompt admit-and-bind",
+            )
+            expect(yield* llm.calls).toBe(0)
+            const admitted = yield* steer.admit({
+              sessionID: session.id,
+              prompt: new Prompt({ text: "This steer belongs to the canceled run" }),
+            })
+            expect(
+              yield* db
+                .select({
+                  activityID: SessionLegacyActivityAdmissionTable.activity_id,
+                  executionMode: SessionIntentTable.execution_mode,
+                  executionState: SessionIntentTable.execution_state,
+                })
+                .from(SessionLegacyActivityAdmissionTable)
+                .innerJoin(
+                  SessionActivityAdmissionTable,
+                  eq(SessionActivityAdmissionTable.admission_id, SessionLegacyActivityAdmissionTable.admission_id),
+                )
+                .innerJoin(
+                  SessionIntentTable,
+                  eq(SessionIntentTable.intent_id, SessionActivityAdmissionTable.legacy_intent_id),
+                )
+                .where(eq(SessionActivityAdmissionTable.admitted_message_id, admitted.id))
+                .get()
+                .pipe(Effect.orDie),
+            ).toMatchObject({ executionMode: "run_now", executionState: "pending" })
+            yield* awaitWithTimeout(prompt.cancel(session.id), "timed out cancelling durable run", "5 seconds")
+            yield* awaitWithTimeout(Fiber.await(running), "timed out joining canceled durable run", "5 seconds")
+            return admitted
+          }),
+        () =>
+          Effect.sync(() => {
+            if (previousPoint === undefined) delete process.env.DEEPAGENT_CODE_TEST_ACTIVITY_CRASH_POINT
+            else process.env.DEEPAGENT_CODE_TEST_ACTIVITY_CRASH_POINT = previousPoint
+            if (previousRoot === undefined) delete process.env.DEEPAGENT_CODE_TEST_ROOT
+            else process.env.DEEPAGENT_CODE_TEST_ROOT = previousRoot
+            if (previousMarker === undefined) delete process.env.DEEPAGENT_CODE_TEST_ACTIVITY_CRASH_MARKER
+            else process.env.DEEPAGENT_CODE_TEST_ACTIVITY_CRASH_MARKER = previousMarker
+          }),
+      )
+      expect(yield* db.select().from(SessionLegacyActivityTable).all().pipe(Effect.orDie)).toMatchObject([
+        { state: "interrupted", terminal_reason: "user_cancelled" },
+      ])
+      expect(yield* db.select().from(SessionLegacyActivityRunTable).all().pipe(Effect.orDie)).toMatchObject([
+        { state: "interrupted", terminal_reason: "user_cancelled" },
+      ])
+      expect(yield* db.select().from(SessionLegacyActivityTerminalTable).all().pipe(Effect.orDie)).toMatchObject([
+        { state: "interrupted", reason_code: "user_cancelled", source: "cancel" },
+      ])
+      expect(yield* db.select().from(SessionSteerTable).all().pipe(Effect.orDie)).toMatchObject([
+        { consumed_seq: null, superseded_at: expect.any(Number) },
+      ])
+      expect(
+        yield* db
+          .select()
+          .from(SessionIntentTable)
+          .where(eq(SessionIntentTable.admitted_message_id, steered.id))
+          .get()
+          .pipe(Effect.orDie),
+      ).toMatchObject({ execution_mode: "run_now", execution_state: "canceled" })
+
+      yield* llm.text("next prompt completed")
+      const next = yield* awaitWithTimeout(
+        prompt.prompt({
+          sessionID: session.id,
+          agent: "build",
+          parts: [{ type: "text", text: "Start a new run" }],
+        }),
+        "timed out starting prompt after durable cancel",
+        "5 seconds",
+      )
+      expect(next.parts.some((part) => part.type === "text" && part.text === "next prompt completed")).toBeTrue()
+    }),
+  15_000,
+)
+
+it.instance(
+  "cancel keeps a finalizing follow-up busy until durable teardown completes",
+  () =>
+    Effect.gen(function* () {
+      const { dir, llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const steer = yield* SessionSteer.Service
+      const runState = yield* SessionRunState.Service
+      const status = yield* SessionStatus.Service
+      const { db } = yield* Database.Service
+      const session = yield* sessions.create({
+        title: "Finalizing cancel lifecycle",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      const gate = yield* Deferred.make<void>()
+      const marker = path.join(dir, "activity-finalizing-followup.json")
+      const previousPoint = process.env.DEEPAGENT_CODE_TEST_ACTIVITY_CRASH_POINT
+      const previousRoot = process.env.DEEPAGENT_CODE_TEST_ROOT
+      const previousMarker = process.env.DEEPAGENT_CODE_TEST_ACTIVITY_CRASH_MARKER
+
+      const admitted = yield* Effect.acquireUseRelease(
+        Effect.sync(() => {
+          process.env.DEEPAGENT_CODE_TEST_ACTIVITY_CRASH_POINT = "while_finalizing_before_follow_up_drain"
+          process.env.DEEPAGENT_CODE_TEST_ROOT = dir
+          process.env.DEEPAGENT_CODE_TEST_ACTIVITY_CRASH_MARKER = marker
+        }),
+        () =>
+          Effect.gen(function* () {
+            yield* llm.hold("first answer", deferredAsPromise(gate))
+            const running = yield* prompt
+              .prompt({
+                sessionID: session.id,
+                agent: "build",
+                parts: [{ type: "text", text: "finish, then absorb my follow-up" }],
+              })
+              .pipe(Effect.forkChild)
+            yield* llm.wait(1)
+            const admitted = yield* steer.admit({
+              sessionID: session.id,
+              prompt: new Prompt({ text: "cancel before this follow-up drains" }),
+            })
+            yield* Deferred.succeed(gate, undefined)
+            yield* pollWithTimeout(
+              Effect.promise(async () => ((await Bun.file(marker).exists()) ? true : undefined)),
+              "timed out waiting for finalizing follow-up boundary",
+              "5 seconds",
+            )
+            expect(yield* runState.isBusy(session.id)).toBe(true)
+            expect((yield* status.get(session.id)).type).toBe("busy")
+            expect(yield* llm.calls).toBe(1)
+
+            yield* awaitWithTimeout(prompt.cancel(session.id), "timed out cancelling finalizing run", "5 seconds")
+            yield* awaitWithTimeout(Fiber.await(running), "timed out joining finalizing run", "5 seconds")
+            expect(yield* runState.isBusy(session.id)).toBe(false)
+            expect((yield* status.get(session.id)).type).toBe("idle")
+            return admitted
+          }),
+        () =>
+          Effect.sync(() => {
+            if (previousPoint === undefined) delete process.env.DEEPAGENT_CODE_TEST_ACTIVITY_CRASH_POINT
+            else process.env.DEEPAGENT_CODE_TEST_ACTIVITY_CRASH_POINT = previousPoint
+            if (previousRoot === undefined) delete process.env.DEEPAGENT_CODE_TEST_ROOT
+            else process.env.DEEPAGENT_CODE_TEST_ROOT = previousRoot
+            if (previousMarker === undefined) delete process.env.DEEPAGENT_CODE_TEST_ACTIVITY_CRASH_MARKER
+            else process.env.DEEPAGENT_CODE_TEST_ACTIVITY_CRASH_MARKER = previousMarker
+          }),
+      )
+
+      expect(yield* llm.calls).toBe(1)
+      expect(
+        yield* db
+          .select()
+          .from(SessionLegacyActivityTable)
+          .where(eq(SessionLegacyActivityTable.session_id, session.id))
+          .all()
+          .pipe(Effect.orDie),
+      ).toMatchObject([{ state: "interrupted", terminal_reason: "user_cancelled" }])
+      expect(
+        yield* db
+          .select()
+          .from(SessionLegacyActivityRunTable)
+          .where(eq(SessionLegacyActivityRunTable.session_id, session.id))
+          .all()
+          .pipe(Effect.orDie),
+      ).toMatchObject([{ state: "interrupted", terminal_reason: "user_cancelled" }])
+      expect(
+        yield* db
+          .select()
+          .from(SessionLegacyActivityTerminalTable)
+          .where(eq(SessionLegacyActivityTerminalTable.session_id, session.id))
+          .all()
+          .pipe(Effect.orDie),
+      ).toMatchObject([{ state: "interrupted", reason_code: "user_cancelled", source: "cancel" }])
+      expect(
+        yield* db
+          .select()
+          .from(SessionSteerTable)
+          .where(eq(SessionSteerTable.id, admitted.id))
+          .get()
+          .pipe(Effect.orDie),
+      ).toMatchObject({ consumed_seq: null, superseded_at: expect.any(Number) })
+    }),
+  20_000,
+)
+
+// Agent variant
+
+noLLMServer.instance(
+  "applies agent variant only when using agent model",
+  () =>
+    Effect.gen(function* () {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const otherSession = yield* sessions.create({})
+
+      const other = yield* prompt.prompt({
+        sessionID: otherSession.id,
+        agent: "build",
+        model: { providerID: ProviderV2.ID.make("deepagent-code"), modelID: ModelV2.ID.make("kimi-k2.5-free") },
+        noReply: true,
+        parts: [{ type: "text", text: "hello" }],
+      })
+      if (other.info.role !== "user") throw new Error("expected user message")
+      expect(other.info.model.variant).toBeUndefined()
+
+      const matchingSession = yield* sessions.create({})
+      const match = yield* prompt.prompt({
+        sessionID: matchingSession.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "hello again" }],
+      })
+      if (match.info.role !== "user") throw new Error("expected user message")
+      expect(match.info.model).toEqual({
+        providerID: ProviderV2.ID.make("test"),
+        modelID: ModelV2.ID.make("test-model"),
+        variant: "xhigh",
+      })
+      expect(match.info.model.variant).toBe("xhigh")
+
+      const overrideSession = yield* sessions.create({})
+      const override = yield* prompt.prompt({
+        sessionID: overrideSession.id,
+        agent: "build",
+        noReply: true,
+        variant: "high",
+        parts: [{ type: "text", text: "hello third" }],
+      })
+      if (override.info.role !== "user") throw new Error("expected user message")
+      expect(override.info.model.variant).toBe("high")
+
+      yield* Effect.forEach(
+        [otherSession, matchingSession, overrideSession],
+        (session) => sessions.remove(session.id),
+        {
+          discard: true,
+        },
+      )
+    }),
+  {
+    config: {
+      ...cfg,
+      provider: {
+        ...cfg.provider,
+        test: {
+          ...cfg.provider.test,
+          models: {
+            "test-model": {
+              ...cfg.provider.test.models["test-model"],
+              variants: { xhigh: {}, high: {} },
+            },
+          },
+        },
+      },
+      agent: {
+        build: {
+          model: "test/test-model",
+          variant: "xhigh",
+        },
+      },
+    },
+  },
+)
+
+// Agent / command resolution errors
+
+noLLMServer.instance(
+  "unknown agent throws typed error",
+  () =>
+    Effect.gen(function* () {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const session = yield* sessions.create({})
+      const exit = yield* prompt
+        .prompt({
+          sessionID: session.id,
+          agent: "nonexistent-agent-xyz",
+          noReply: true,
+          parts: [{ type: "text", text: "hello" }],
+        })
+        .pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) {
+        const err = Cause.squash(exit.cause)
+        expect(err).not.toBeInstanceOf(TypeError)
+        expect(NamedError.Unknown.isInstance(err)).toBe(true)
+        if (NamedError.Unknown.isInstance(err)) {
+          expect(err.data.message).toContain('Agent not found: "nonexistent-agent-xyz"')
+        }
+      }
+    }),
+  30_000,
+)
+
+noLLMServer.instance(
+  "unknown agent error includes available agent names",
+  () =>
+    Effect.gen(function* () {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const session = yield* sessions.create({})
+      const exit = yield* prompt
+        .prompt({
+          sessionID: session.id,
+          agent: "nonexistent-agent-xyz",
+          noReply: true,
+          parts: [{ type: "text", text: "hello" }],
+        })
+        .pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) {
+        const err = Cause.squash(exit.cause)
+        expect(NamedError.Unknown.isInstance(err)).toBe(true)
+        if (NamedError.Unknown.isInstance(err)) {
+          expect(err.data.message).toContain("auto")
+        }
+      }
+    }),
+  30_000,
+)
+
+noLLMServer.instance(
+  "unknown command throws typed error with available names",
+  () =>
+    Effect.gen(function* () {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const session = yield* sessions.create({})
+      const exit = yield* prompt
+        .command({
+          sessionID: session.id,
+          command: "nonexistent-command-xyz",
+          arguments: "",
+        })
+        .pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) {
+        const err = Cause.squash(exit.cause)
+        expect(err).not.toBeInstanceOf(TypeError)
+        expect(NamedError.Unknown.isInstance(err)).toBe(true)
+        if (NamedError.Unknown.isInstance(err)) {
+          expect(err.data.message).toContain('Command not found: "nonexistent-command-xyz"')
+          expect(err.data.message).toContain("init")
+        }
+      }
+    }),
+  30_000,
+)
+
+// Mirrors the production prompt_prepare handler: build a draft on disk via the prompt
+// pipeline so the confirm step can load it through the real PromptDraftStore. This is the
+// same code path the HTTP handler uses, so the test exercises the production confirm flow
+// (prepare -> confirmedDraftID submit) rather than the removed requires_confirmation branch.
+const prepareDraft = (directory: string, sessionID: string, mode: "intelligence", rawInput: string) => {
+  const projectID = `project_${createHash("sha256").update(directory).digest("hex").slice(0, 16)}`
+  const home = new AgentGateway.DeepAgentWorkspace.DeepAgentCodeHome()
+  const sessionPath = home.ensureSession(projectID, sessionID)
+  const store = new AgentGateway.DeepAgentPromptPipeline.PromptDraftStore(sessionPath)
+  const refiner = new AgentGateway.DeepAgentPromptPipeline.PromptRefiner(store)
+  const { draft } = refiner.refine({ rawInput, mode })
+  return draft.id
+}
+
+noLLMServer.instance(
+  "prepared intelligence draft is not submitted until it is confirmed",
+  () =>
+    Effect.gen(function* () {
+      const { directory: dir } = yield* TestInstance
+      const sessions = yield* Session.Service
+      const session = yield* sessions.create({})
+
+      // Preparing a draft (what prompt_prepare does) must not create a user message on its own.
+      prepareDraft(dir, session.id, "intelligence", "Implement prompt confirmation")
+      const beforeConfirm = yield* sessions.messages({ sessionID: session.id })
+      expect(beforeConfirm.filter((message) => message.info.role === "user")).toHaveLength(0)
+    }),
+  30_000,
+)
+
+noLLMServer.instance(
+  "intelligence draft fails closed for code tasks when model refinement fails",
+  () =>
+    Effect.gen(function* () {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const session = yield* sessions.create({})
+
+      const exit = yield* prompt
+        .refineIntelligenceDraft({
+          sessionID: session.id,
+          rawInput: "写一个 cuda 的 GEMM kernel",
+        })
+        .pipe(Effect.exit)
+
+      expect(exit._tag).toBe("Failure")
+
+      const messages = yield* sessions.messages({ sessionID: session.id })
+      expect(messages.filter((message) => message.info.role === "user")).toHaveLength(0)
+    }),
+  { config: cfg },
+  30_000,
+)
+
+it.instance(
+  "intelligence draft rejects code refinements that are equivalent to the raw input",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const session = yield* sessions.create({})
+
+      yield* llm.text(
+        JSON.stringify({
+          route: "code",
+          refined_prompt: "写一个 cuda 的 GEMM kernel",
+          goal: "写一个 cuda 的 GEMM kernel",
+          task_type: "implementation",
+          constraints: [],
+          acceptance: [],
+          assumptions: [],
+        }),
+      )
+
+      const exit = yield* prompt
+        .refineIntelligenceDraft({
+          sessionID: session.id,
+          rawInput: "写一个 cuda 的 GEMM kernel",
+        })
+        .pipe(Effect.exit)
+
+      expect(exit._tag).toBe("Failure")
+      expect(yield* llm.calls).toBe(1)
+
+      const messages = yield* sessions.messages({ sessionID: session.id })
+      expect(messages.filter((message) => message.info.role === "user")).toHaveLength(0)
+    }),
+  30_000,
+)
+
+it.instance(
+  "intelligence draft uses DeepAgent model scoped upstream auth",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig((url) => ({
+        provider: {
+          deepagent: {
+            name: "DeepAgent",
+            models: {
+              "deepseek-v4-flash": {
+                id: "deepseek-v4-flash",
+                name: "DeepSeek V4 Flash",
+                reasoning: true,
+                provider: {
+                  npm: "@ai-sdk/openai-compatible",
+                  api: url,
+                },
+                options: {
+                  authProviderID: "test",
+                  upstreamProviderID: "deepseek",
+                },
+                tool_call: true,
+                limit: { context: 100000, output: 10000 },
+              },
+            },
+          },
+        },
+        model: "deepagent/deepseek-v4-flash",
+      }))
+      const auth = yield* Auth.Service
+      yield* auth.set("test", { type: "api", key: "upstream-test-key" })
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const session = yield* sessions.create({})
+      const progress: string[] = []
+
+      yield* llm.text(
+        JSON.stringify({
+          route: "code",
+          refined_prompt: "请在当前仓库中定位登录测试失败原因，修复实现或测试夹具，并运行对应测试验证。",
+          goal: "修复登录测试",
+          task_type: "test",
+          constraints: [],
+          acceptance: ["登录测试通过"],
+          assumptions: [],
+        }),
+      )
+
+      const exit = yield* prompt
+        .refineIntelligenceDraft({
+          sessionID: session.id,
+          rawInput: "修复登录测试",
+          outputLanguage: "chinese",
+          onProgress: (preview) => progress.push(preview),
+        })
+        .pipe(Effect.exit)
+
+      expect(exit._tag).toBe("Success")
+      if (exit._tag === "Success") {
+        expect(exit.value.route).toBe("code")
+        expect(exit.value.goal).toContain("登录测试")
+      }
+      expect(yield* llm.calls).toBe(1)
+      expect(JSON.stringify((yield* llm.hits)[0]?.body)).toContain("in Chinese")
+      expect((yield* llm.hits)[0]?.headers.authorization).toBe("Bearer upstream-test-key")
+      expect(yield* llm.misses).toEqual([])
+      expect(progress.at(-1)).toContain("登录测试")
+    }),
+  30_000,
+)
+
+noLLMServer.instance(
+  "confirmed prompt draft submits through the production task path",
+  () =>
+    Effect.gen(function* () {
+      const { directory: dir } = yield* TestInstance
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const session = yield* sessions.create({})
+
+      const draftID = prepareDraft(dir, session.id, "intelligence", "Design the prompt confirmation flow")
+      expect(draftID).toMatch(/^prompt_draft:/)
+
+      const submitted = yield* prompt.prompt({
+        sessionID: session.id,
+        agent: "build",
+        noReply: true,
+        metadata: {
+          deepagent: { prompt_pipeline: { confirmedDraftID: draftID, editedGoal: "Confirmed prompt goal" } },
+        },
+        parts: [{ type: "text", text: "ignored raw prompt" }],
+      })
+
+      expect(submitted.info.role).toBe("user")
+      if (submitted.info.role === "user") {
+        expect(submitted.info.metadata?.deepagent?.prompt_pipeline).toMatchObject({
+          prompt_draft_id: draftID,
+          confirmed: true,
+          task_prompt: "Confirmed prompt goal",
+        })
+      }
+      expect(submitted.parts.some((part) => part.type === "text" && part.text === "Confirmed prompt goal")).toBe(true)
+    }),
+  30_000,
+)
+
+// Tier-3 wire compat: an older client (or a session persisted before the wish→intelligence rename)
+// submits metadata with the legacy `mode: "wish"` literal. The server-side normalizer
+// (promptPipelineRequest) must map it to "intelligence" so the submitted message records
+// mode "intelligence" — NOT "direct_override" (which is what an unrecognized mode would degrade to).
+// This is the deterministic guard for the server READ side of the wire contract that the `.live`
+// prompt-prepare CLI test otherwise covers only end-to-end.
+noLLMServer.instance(
+  "legacy 'wish' prompt_pipeline mode is normalized to intelligence on submit",
+  () =>
+    Effect.gen(function* () {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const session = yield* sessions.create({})
+
+      const submitted = yield* prompt.prompt({
+        sessionID: session.id,
+        agent: "build",
+        noReply: true,
+        metadata: {
+          deepagent: { prompt_pipeline: { mode: "wish" } },
+        },
+        parts: [{ type: "text", text: "修复登录测试" }],
+      })
+
+      expect(submitted.info.role).toBe("user")
+      if (submitted.info.role === "user") {
+        // The normalizer mapped "wish" → "intelligence"; a broken normalizer would leave the raw
+        // "wish" mode unrecognized and fall through to "direct_override".
+        expect(submitted.info.metadata?.deepagent?.prompt_pipeline?.mode).toBe("intelligence")
+      }
+    }),
+  30_000,
+)
+
+// FEAT-010: V2 owner fork observability lock-in. The fork logic itself is unchanged — these tests
+// pin the observation seams: (1) when the V2 owner branch is selected, the selection/receipt
+// correlation logs appear and the V2 runner is invoked; (2) the legacy path is unaffected and logs
+// owner=legacy; (3) the fork slog always carries the decision-factor snapshot.
+type CapturedLog = { message: string; level: string; annotations: Record<string, unknown> }
+const captureLogs = <A, E, R>(sink: CapturedLog[], fx: Effect.Effect<A, E, R>) =>
+  fx.pipe(
+    Effect.provide(
+      Logger.layer(
+        [
+          Logger.make(({ message, logLevel, fiber }) => {
+            sink.push({
+              message: String(message),
+              level: logLevel,
+              annotations: { ...fiber.getRef(References.CurrentLogAnnotations) },
+            })
+          }),
+        ],
+        { mergeWithExisting: false },
+      ),
+    ),
+  )
+
+const v2OwnerResumeCalls: string[] = []
+const cancelInterruptCalls: string[] = []
+// FEAT-010: the stub replaces SessionV2.Service only; SessionProjector.defaultLayer is merged back
+// in because the default SessionV2 layer stack carries it, and it is the subscriber that persists
+// session/message rows from events (without it, Session.get fails with "Session not found").
+const v2OwnerStubLayer = Layer.merge(
+  Layer.succeed(
+    SessionV2.Service,
+    SessionV2.Service.of({
+      list: () => Effect.succeed([]),
+      create: () => Effect.die("v2 owner stub: create unused"),
+      get: () => Effect.die("v2 owner stub: get unused"),
+      messages: () => Effect.succeed([]),
+      message: () => Effect.succeed(undefined),
+      context: () =>
+        Effect.succeed([
+          new SessionMessage.Assistant({
+            id: SessionMessage.ID.create(),
+            type: "assistant",
+            agent: "build",
+            model: { id: ModelV2.ID.make("test-model"), providerID: ProviderV2.ID.make("test") },
+            content: [
+              new SessionMessage.AssistantText({ type: "text", id: "text-v2-owner-stub", text: "v2 owner reply" }),
+            ],
+            finish: "stop",
+            cost: 0,
+            time: { created: DateTime.makeUnsafe(Date.now()), completed: DateTime.makeUnsafe(Date.now()) },
+          }),
+        ]),
+      events: () => Stream.empty,
+      switchAgent: () => Effect.die("v2 owner stub: switchAgent unused"),
+      switchModel: () => Effect.die("v2 owner stub: switchModel unused"),
+      prompt: () => Effect.die("v2 owner stub: prompt unused"),
+      shell: () => Effect.die("v2 owner stub: shell unused"),
+      skill: () => Effect.die("v2 owner stub: skill unused"),
+      compact: () => Effect.die("v2 owner stub: compact unused"),
+      wait: () => Effect.die("v2 owner stub: wait unused"),
+      resume: (sessionID) =>
+        Effect.sync(() => {
+          v2OwnerResumeCalls.push(sessionID)
+        }),
+      interrupt: (sessionID) =>
+        Effect.sync(() => {
+          cancelInterruptCalls.push(sessionID)
+        }),
+    }),
+  ),
+  SessionProjector.defaultLayer,
+)
+const v2Owner = testEffect(makeHttp({ flags: { coreV2ExecutionOwner: true }, sessionV2: v2OwnerStubLayer }))
+
+const v2Only = testEffect(
+  makeHttp({ flags: { coreV2Only: true, coreV2ExecutionOwner: true }, sessionV2: v2OwnerStubLayer }),
+)
+
+// LEGACY-EXECUTION-ZERO: under the V2-only profile every legacy execution entry refuses with the
+// typed LegacyExecutionUnavailable BEFORE any durable write — the zero-reachability contract. Row
+// invariance across the legacy writer set (intent / steer / receipt / message / part) is the oracle:
+// legacy execution, writer and owner rows must not move.
+type LegacyRowSnapshot = {
+  intents: number
+  steers: number
+  receipts: number
+  messages: number
+  parts: number
+  leases: number
+  activities: number
+  selections: number
+}
+
+const expectLegacyZeroRows = (
+  db: Database.Interface["db"],
+  before: LegacyRowSnapshot,
+): Effect.Effect<void, never, never> =>
+  Effect.gen(function* () {
+    const rows = yield* Effect.all([
+      db.select().from(SessionIntentTable).all(),
+      db.select().from(SessionSteerTable).all(),
+      db.select().from(SessionToolRequestReceiptTable).all(),
+      db.select().from(MessageTable).all(),
+      db.select().from(PartTable).all(),
+      db.select().from(SessionProviderOwnerLeaseTable).all(),
+      db.select().from(SessionActivityTable).all(),
+      db.select().from(SessionContextSelectionTable).all(),
+    ]).pipe(Effect.orDie)
+    expect(rows[0].length).toBe(before.intents)
+    expect(rows[1].length).toBe(before.steers)
+    expect(rows[2].length).toBe(before.receipts)
+    expect(rows[3].length).toBe(before.messages)
+    expect(rows[4].length).toBe(before.parts)
+    expect(rows[5].length).toBe(before.leases)
+    expect(rows[6].length).toBe(before.activities)
+    expect(rows[7].length).toBe(before.selections)
+  })
+
+const snapshotLegacyRows = (db: Database.Interface["db"]): Effect.Effect<LegacyRowSnapshot, never, never> =>
+  Effect.gen(function* () {
+    const counts = yield* Effect.all([
+      db.select().from(SessionIntentTable).all(),
+      db.select().from(SessionSteerTable).all(),
+      db.select().from(SessionToolRequestReceiptTable).all(),
+      db.select().from(MessageTable).all(),
+      db.select().from(PartTable).all(),
+      db.select().from(SessionProviderOwnerLeaseTable).all(),
+      db.select().from(SessionActivityTable).all(),
+      db.select().from(SessionContextSelectionTable).all(),
+    ]).pipe(Effect.orDie)
+    return {
+      intents: counts[0].length,
+      steers: counts[1].length,
+      receipts: counts[2].length,
+      messages: counts[3].length,
+      parts: counts[4].length,
+      leases: counts[5].length,
+      activities: counts[6].length,
+      selections: counts[7].length,
+    }
+  })
+
+const failureIsLegacyUnavailable = (exit: Exit.Exit<unknown, unknown>): LegacyExecutionUnavailable => {
+  expect(Exit.isFailure(exit)).toBe(true)
+  if (!Exit.isFailure(exit)) throw new Error("expected failure")
+  expect(exit.cause.reasons.every(Cause.isFailReason)).toBe(true)
+  const error = Option.getOrUndefined(Cause.findErrorOption(exit.cause))
+  expect(error).toBeInstanceOf(LegacyExecutionUnavailable)
+  return error as LegacyExecutionUnavailable
+}
+
+v2Only.instance(
+  "LEGACY-EXECUTION-ZERO: prompt admission refuses typed with zero legacy writer rows",
+  () =>
+    Effect.gen(function* () {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const { db } = yield* Database.Service
+      const chat = yield* sessions.create({ title: "V2-only unavailable" })
+      const before = yield* snapshotLegacyRows(db)
+
+      const logs: CapturedLog[] = []
+      const exit = yield* captureLogs(
+        logs,
+        prompt.prompt({
+          sessionID: chat.id,
+          agent: "build",
+          noReply: true,
+          parts: [{ type: "text", text: "must not enter legacy" }],
+        }),
+      ).pipe(Effect.exit)
+      const refusal = failureIsLegacyUnavailable(exit)
+      // 1.4.8.r0: prompt routes to the V2 owner, so an unqualified owner refuses v2_owner_unavailable.
+      expect(refusal.reason).toBe("v2_owner_unavailable")
+      expect(refusal.sessionID).toBe(chat.id)
+      yield* expectLegacyZeroRows(db, before)
+      expect(logs.some((entry) => entry.annotations.owner === "legacy")).toBe(false)
+    }),
+  30_000,
+)
+
+v2Only.instance(
+  "LEGACY-EXECUTION-ZERO: promptOrSteer, command, shell, steer and cancel refuse typed under the profile",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const { db } = yield* Database.Service
+      const chat = yield* sessions.create({ title: "V2-only entries" })
+      void llm
+      const before = yield* snapshotLegacyRows(db)
+
+      const promptOrSteerExit = yield* prompt
+        .promptOrSteer({
+          sessionID: chat.id,
+          agent: "build",
+          noReply: true,
+          parts: [{ type: "text", text: "hello" }],
+        })
+        .pipe(Effect.exit)
+      expect(failureIsLegacyUnavailable(promptOrSteerExit).reason).toBe("v2_owner_unavailable")
+
+      const commandExit = yield* prompt
+        .command({ sessionID: chat.id, command: Command.Default.INIT, arguments: "", model: "test/test-model" })
+        .pipe(Effect.exit)
+      expect(failureIsLegacyUnavailable(commandExit).reason).toBe("v2_owner_unavailable")
+
+      const shellExit = yield* prompt
+        .shell({ sessionID: chat.id, agent: "build", command: "ls" })
+        .pipe(Effect.exit)
+      expect(failureIsLegacyUnavailable(shellExit).reason).toBe("v2_only_profile")
+
+      const steerExit = yield* prompt
+        .steer({ sessionID: chat.id, prompt: new Prompt({ text: "steer text" }) })
+        .pipe(Effect.exit)
+      expect(failureIsLegacyUnavailable(steerExit).reason).toBe("v2_only_profile")
+
+      const cancelExit = yield* prompt.cancel(chat.id).pipe(Effect.exit)
+      // cancel is NOT part of the refusal matrix: under the profile it targets the V2 execution
+      // owner (interrupt), so it succeeds without touching legacy run-state.
+      expect(Exit.isSuccess(cancelExit)).toBe(true)
+      expect(cancelInterruptCalls).toContain(chat.id)
+
+      const refineExit = yield* prompt
+        .refineIntelligenceDraft({ sessionID: chat.id, rawInput: "a code task" })
+        .pipe(Effect.exit)
+      expect(failureIsLegacyUnavailable(refineExit).reason).toBe("v2_only_profile")
+
+      yield* expectLegacyZeroRows(db, before)
+    }),
+  30_000,
+)
+
+v2Only.instance(
+  "LEGACY-EXECUTION-ZERO: layer build registers no legacy provider owner lease under the profile",
+  () =>
+    Effect.gen(function* () {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const { db } = yield* Database.Service
+      // Layer already built by the harness (fresh per test): under the V2-only profile the legacy
+      // provider owner register + startup recovery are skipped, so no lease rows exist at all.
+      const before = yield* snapshotLegacyRows(db)
+      const chat = yield* sessions.create({ title: "V2-only layer" })
+      const exit = yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "must not enter legacy" }],
+      }).pipe(Effect.exit)
+      expect(failureIsLegacyUnavailable(exit).reason).toBe("v2_owner_unavailable")
+      yield* expectLegacyZeroRows(db, before)
+      expect(before.leases).toBe(0)
+      expect(before.intents).toBe(0)
+      expect(before.receipts).toBe(0)
+    }),
+  30_000,
+)
+
+v2Only.instance(
+  "LEGACY-EXECUTION-ZERO: loop refuses typed (not a defect) with the fork log showing blocked_v2_only",
+  () =>
+    Effect.gen(function* () {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const { db } = yield* Database.Service
+      const chat = yield* sessions.create({ title: "V2-only loop" })
+      const before = yield* snapshotLegacyRows(db)
+
+      const logs: CapturedLog[] = []
+      const exit = yield* captureLogs(logs, prompt.loop({ sessionID: chat.id })).pipe(Effect.exit)
+      const refusal = failureIsLegacyUnavailable(exit)
+      expect(refusal.reason).toBe("v2_owner_unavailable")
+      expect(refusal.sessionID).toBe(chat.id)
+      yield* expectLegacyZeroRows(db, before)
+      expect(logs.some((entry) => entry.annotations.owner === "blocked_v2_only")).toBe(true)
+      expect(logs.some((entry) => entry.annotations.owner === "legacy")).toBe(false)
+    }),
+  30_000,
+)
+
+v2Owner.instance(
+  "explicit V2 owner flag cannot bypass missing durable owner authorization",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({
+        title: "V2 owner fork",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "hello" }],
+      })
+      yield* llm.text("contained legacy reply")
+      v2OwnerResumeCalls.length = 0
+      const logs: CapturedLog[] = []
+      const result = yield* captureLogs(logs, prompt.loop({ sessionID: chat.id }))
+
+      expect(v2OwnerResumeCalls).toHaveLength(0)
+      expect(yield* llm.hits).toHaveLength(1)
+      expect(result.info.role).toBe("assistant")
+      expect(result.parts.some((part) => part.type === "text" && part.text === "contained legacy reply")).toBe(true)
+      expect(result.parts.some((part) => part.type === "text" && part.text === "v2 owner reply")).toBe(false)
+
+      const forks = logs.filter((entry) => entry.message === "v2 owner fork")
+      expect(forks.length).toBeGreaterThan(0)
+      for (const fork of forks) {
+        expect(fork.level).toBe("Info")
+        expect(fork.annotations).toMatchObject({
+          "session.id": chat.id,
+          owner: "legacy",
+          ownerQualified: false,
+          coreV2ExecutionOwnerFlag: true,
+          coreV2ExecutionOwnerEnabled: false,
+          parityCampaign: "none",
+          ownerCampaign: "none",
+          blockedReasons: ["core_v2_parity_required"],
+        })
+      }
+      expect(logs.some((entry) => entry.message === "v2 owner branch selected")).toBe(false)
+      expect(logs.some((entry) => entry.message === "v2 owner turn receipt")).toBe(false)
+    }),
+  30_000,
+)
+
+it.instance(
+  "legacy loop is unaffected by the fork observation and logs owner=legacy with decision factors",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({
+        title: "Legacy fork",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "hello" }],
+      })
+      yield* llm.text("world")
+      v2OwnerResumeCalls.length = 0
+      const logs: CapturedLog[] = []
+
+      const result = yield* captureLogs(logs, prompt.loop({ sessionID: chat.id }))
+
+      // Legacy behavior intact: the turn ran through the legacy provider and returned the reply.
+      expect(result.info.role).toBe("assistant")
+      expect(result.parts.some((part) => part.type === "text" && part.text === "world")).toBe(true)
+      expect(yield* llm.hits).toHaveLength(1)
+      expect(v2OwnerResumeCalls).toHaveLength(0)
+
+      // Fork slog still fires with the decision-factor snapshot, selecting legacy.
+      const forks = logs.filter((entry) => entry.message === "v2 owner fork")
+      expect(forks.length).toBeGreaterThan(0)
+      for (const fork of forks) {
+        expect(fork.level).toBe("Info")
+        expect(fork.annotations).toMatchObject({
+          "session.id": chat.id,
+          owner: "legacy",
+          ownerQualified: false,
+          coreV2ExecutionOwnerFlag: false,
+          coreV2ExecutionOwnerEnabled: false,
+        })
+      }
+      expect(logs.some((entry) => entry.message === "v2 owner branch selected")).toBe(false)
+    }),
+  30_000,
+)
+
+// 1.4.8.r0 — V2 interactive execution on the legacy instance surface (qualified harness). The owner
+// authorization is a REAL Ed25519-signed row (ephemeral issuance keypair, provided to the verifier via
+// the reference seam) so promptV2 qualifies at call time and the V2 admission + drain + mirror path
+// executes end-to-end against the stub V2 stack.
+const r0Issuance = V2OwnerAuthorization.generateAuthorizationKeyPair()
+const r0Identity = {
+  subjectCommit: "a".repeat(40),
+  subjectTree: "b".repeat(40),
+  schemaDigest: "c".repeat(64),
+  buildID: "d".repeat(64),
+  packageDigest: "e".repeat(64),
+}
+const r0Campaign = "r0-test-campaign"
+const r0Fields = {
+  authorizationID: "auth_r0_test",
+  campaignID: r0Campaign,
+  ...r0Identity,
+  validFrom: 1_000,
+  expiresAt: 4_000_000_000_000,
+}
+const r0Signed = {
+  ...r0Fields,
+  signatureDigest: V2OwnerAuthorization.signAuthorization(r0Issuance.privateKeyPem, r0Fields),
+}
+const r0V2PromptCalls: string[] = []
+const r0V2ResumeCalls: string[] = []
+const r0V2AdoptCalls: string[] = []
+const r0V2Stub = SessionV2.Service.of({
+  list: () => Effect.succeed([]),
+  create: (input) =>
+    Effect.sync(() => {
+      if (input.id) r0V2AdoptCalls.push(input.id)
+    }).pipe(
+      Effect.as({ id: input.id, directory: "/tmp/ws1", slug: "r0", agent: "build" } as unknown as SessionV2.Info),
+    ),
+  get: () => Effect.fail(new Error("stub: not adopted") as unknown as SessionV2.NotFoundError),
+  messages: () =>
+    Effect.succeed([
+      new SessionMessage.User({
+        id: SessionMessage.ID.make("msg_user_r0_1"),
+        type: "user",
+        time: { created: DateTime.makeUnsafe(1_000_000) },
+        text: "user text",
+      }),
+      new SessionMessage.Assistant({
+        id: SessionMessage.ID.make("msg_assistant_r0_1"),
+        type: "assistant",
+        agent: "build",
+        model: { id: ModelV2.ID.make("test-model"), providerID: ProviderV2.ID.make("test") },
+        content: [new SessionMessage.AssistantText({ type: "text", id: "text_r0_1", text: "v2 owner reply" })],
+        finish: "stop",
+        cost: 0,
+        time: { created: DateTime.makeUnsafe(1_000_100), completed: DateTime.makeUnsafe(1_000_100) },
+      }),
+    ]),
+  message: () => Effect.succeed(undefined),
+  context: () =>
+    Effect.succeed([
+      new SessionMessage.Assistant({
+        id: SessionMessage.ID.make("msg_assistant_r0_1"),
+        type: "assistant",
+        agent: "build",
+        model: { id: ModelV2.ID.make("test-model"), providerID: ProviderV2.ID.make("test") },
+        content: [new SessionMessage.AssistantText({ type: "text", id: "text_r0_1", text: "v2 owner reply" })],
+        finish: "stop",
+        cost: 0,
+        time: { created: DateTime.makeUnsafe(1_000_100), completed: DateTime.makeUnsafe(1_000_100) },
+      }),
+    ]),
+  events: () => Stream.empty,
+  switchAgent: () => Effect.die("r0 stub: switchAgent unused"),
+  switchModel: () => Effect.die("r0 stub: switchModel unused"),
+  prompt: (input) =>
+    Effect.sync(() => {
+      r0V2PromptCalls.push(input.sessionID)
+    }).pipe(
+      Effect.as({ id: SessionMessage.ID.make("msg_r0_admitted"), delivery: "steer" } as unknown as SessionInput.Admitted),
+    ),
+  shell: () => Effect.die("r0 stub: shell unused"),
+  skill: () => Effect.die("r0 stub: skill unused"),
+  compact: () => Effect.die("r0 stub: compact unused"),
+  wait: () => Effect.die("r0 stub: wait unused"),
+  resume: (sessionID) =>
+    Effect.sync(() => {
+      r0V2ResumeCalls.push(sessionID)
+    }),
+  interrupt: () => Effect.void,
+})
+const r0V2StubLayer = Layer.merge(Layer.succeed(SessionV2.Service, r0V2Stub), SessionProjector.defaultLayer)
+
+// REAL-STACK harness: SessionV2.layer over the SAME module-level Database.defaultLayer constant the
+// prompt harness uses, with the LOCAL execution (real runner) + the harness's LLM transport
+// (TestLLMServer via LLM.layer). This is the deterministic full-stack r0 E2E: admission -> wake-free
+// drain -> real runner (one llm.stream) -> journal -> V1 mirror -> projection.
+const realV2Layer = SessionV2.layer.pipe(
+  Layer.provide(SessionStore.defaultLayer),
+  Layer.provide(EventV2.defaultLayer),
+  Layer.provide(ProjectV2.defaultLayer),
+  Layer.provide(SessionProjector.defaultLayer),
+  Layer.provide(SessionExecutionLocal.liveLayer),
+  Layer.provide(Database.defaultLayer),
+)
+const v2Real = testEffect(
+  makeHttp({ flags: { coreV2Only: true, coreV2ExecutionOwner: true }, sessionV2: realV2Layer }).pipe(
+    Layer.provide(Layer.succeed(CurrentOwnerCampaign, r0Campaign)),
+    Layer.provide(Layer.succeed(CurrentBuildIdentity, r0Identity)),
+    Layer.provide(Layer.succeed(CurrentOwnerAuthorizationPublicKey, r0Issuance.publicKeyPem)),
+  ),
+)
+const v2Qualified = testEffect(makeHttp({ flags: { coreV2Only: true, coreV2ExecutionOwner: true }, sessionV2: r0V2StubLayer }))
+const realStackTestName = "1.4.8.rN REAL-STACK: interactive prompt executes through the real V2 runner end-to-end"
+const realStackTest = () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const { db } = yield* Database.Service
+    yield* mintR0Authorization(db)
+    const chat = yield* sessions.create({ title: "r0 real-stack" })
+    yield* llm.text("real v2 runner reply")
+
+    const result = yield* provideR0OwnerRefs(
+      prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        parts: [{ type: "text", text: "hello via real v2 runner" }],
+      }),
+    )
+
+    // The real runner produced the assistant; the V1 mirror serves the reader; legacy rows zero.
+    expect(result.info.role).toBe("assistant")
+    expect(result.parts.some((part) => part.type === "text" && part.text === "real v2 runner reply")).toBe(true)
+    const v1 = yield* sessions.messages({ sessionID: chat.id })
+    expect(v1.some((m) => m.info.role === "user")).toBe(true)
+    expect(v1.some((m) => m.info.role === "assistant")).toBe(true)
+    const intents = (yield* db.select().from(SessionIntentTable).all()).length
+    expect(intents).toBe(0)
+  })
+
+if (process.env.DEEPAGENT_CODE_REAL_STACK_CHILD === "1") {
+  v2Real.instance(realStackTestName, realStackTest, 60_000)
+} else {
+  // This is a cold-stack gate. A dedicated process prevents thousands of preceding suites from
+  // donating process-global layers and fibers to the runtime being qualified.
+  test(
+    realStackTestName,
+    async () => {
+      const child = Bun.spawn(
+        [process.execPath, "test", fileURLToPath(import.meta.url), "--test-name-pattern", realStackTestName],
+        {
+          cwd: path.join(import.meta.dir, "../.."),
+          env: { ...process.env, DEEPAGENT_CODE_REAL_STACK_CHILD: "1" },
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      )
+      const [exitCode, stdout, stderr] = await Promise.all([
+        child.exited,
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+      ])
+      if (exitCode === 0) return
+      throw new Error(`REAL-STACK child failed (${exitCode})\n${stdout}\n${stderr}`)
+    },
+    60_000,
+  )
+}
+
+const provideR0OwnerRefs = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  effect.pipe(
+    Effect.provideService(CurrentOwnerCampaign, r0Campaign),
+    Effect.provideService(CurrentBuildIdentity, r0Identity),
+    Effect.provideService(CurrentOwnerAuthorizationPublicKey, r0Issuance.publicKeyPem),
+  )
+
+const mintR0Authorization = (db: Database.Interface["db"]): Effect.Effect<void, unknown, never> =>
+  Effect.gen(function* () {
+    yield* db
+      .insert(V2OwnerAuthorizationTable)
+      .values({
+        authorization_id: r0Signed.authorizationID,
+        campaign_id: r0Signed.campaignID,
+        subject_commit: r0Signed.subjectCommit,
+        subject_tree: r0Signed.subjectTree,
+        schema_digest: r0Signed.schemaDigest,
+        build_id: r0Signed.buildID,
+        package_digest: r0Signed.packageDigest,
+        valid_from: r0Signed.validFrom,
+        expires_at: r0Signed.expiresAt,
+        status: "active",
+        signature_digest: r0Signed.signatureDigest,
+        authorization_digest: Hash.sha256(V2OwnerAuthorization.authorizationPayload(r0Fields)),
+        created_at: Date.now(),
+      })
+      .run()
+  })
+
+v2Qualified.instance(
+  "1.4.8.r0: qualified V2 owner executes the interactive prompt via admission + drain + mirror",
+  () =>
+    Effect.gen(function* () {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const { db } = yield* Database.Service
+      yield* mintR0Authorization(db)
+      expect(yield* provideR0OwnerRefs(v2OwnerQualified(db, r0Campaign))).toBe(true)
+      const chat = yield* sessions.create({ title: "r0 interactive" })
+      r0V2PromptCalls.length = 0
+      r0V2ResumeCalls.length = 0
+
+      const result = yield* provideR0OwnerRefs(
+        prompt.prompt({
+          sessionID: chat.id,
+          agent: "build",
+          parts: [{ type: "text", text: "hello via v2" }],
+        }),
+      )
+
+      expect(r0V2PromptCalls).toContain(chat.id)
+      expect(r0V2ResumeCalls).toContain(chat.id)
+      expect(r0V2AdoptCalls).toContain(chat.id)
+      expect(result.info.role).toBe("assistant")
+      expect(result.parts.some((part) => part.type === "text" && part.text === "v2 owner reply")).toBe(true)
+      // Mirror: V1 reader sees the user + assistant rows (V2 authority projected to the limited reader).
+      const v1 = yield* sessions.messages({ sessionID: chat.id })
+      expect(v1.some((m) => m.info.role === "user")).toBe(true)
+      expect(v1.some((m) => m.info.role === "assistant")).toBe(true)
+      // Zero legacy execution rows: intent/steer/receipt/lease stay untouched (message/part are the
+      // allowed V2 mirror).
+      const intents = (yield* db.select().from(SessionIntentTable).all()).length
+      const steers = (yield* db.select().from(SessionSteerTable).all()).length
+      const leases = (yield* db.select().from(SessionProviderOwnerLeaseTable).all()).length
+      expect(intents).toBe(0)
+      expect(steers).toBe(0)
+      expect(leases).toBe(0)
+    }),
+  30_000,
+)
+
+v2Qualified.instance(
+  "1.4.8.r0: slash command executes on the V2 owner under the profile",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const { db } = yield* Database.Service
+      yield* mintR0Authorization(db)
+      const chat = yield* sessions.create({ title: "r0 command" })
+      void llm
+      r0V2PromptCalls.length = 0
+      r0V2ResumeCalls.length = 0
+
+      const result = yield* provideR0OwnerRefs(
+        prompt.command({
+          sessionID: chat.id,
+          command: Command.Default.INIT,
+          model: "test/test-model",
+          arguments: "",
+        }),
+      )
+
+      expect(r0V2PromptCalls).toContain(chat.id)
+      expect(r0V2ResumeCalls).toContain(chat.id)
+      expect(result.info.role).toBe("assistant")
+      expect(result.parts.some((part) => part.type === "text" && part.text === "v2 owner reply")).toBe(true)
+      const intents = (yield* db.select().from(SessionIntentTable).all()).length
+      const steers = (yield* db.select().from(SessionSteerTable).all()).length
+      const leases = (yield* db.select().from(SessionProviderOwnerLeaseTable).all()).length
+      expect(intents).toBe(0)
+      expect(steers).toBe(0)
+      expect(leases).toBe(0)
+      // V1 mirror serves the reader after the V2 command turn.
+      const v1 = yield* sessions.messages({ sessionID: chat.id })
+      expect(v1.some((m) => m.info.role === "user")).toBe(true)
+      expect(v1.some((m) => m.info.role === "assistant")).toBe(true)
+    }),
+  30_000,
+)
+
+v2Qualified.instance(
+  "1.4.8.rN: prompt-async under the profile admits durably into V2 and drains explicitly",
+  () =>
+    Effect.gen(function* () {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const { db } = yield* Database.Service
+      yield* mintR0Authorization(db)
+      const chat = yield* sessions.create({ title: "r0 async" })
+      r0V2PromptCalls.length = 0
+      r0V2ResumeCalls.length = 0
+      const receipt = yield* provideR0OwnerRefs(
+        prompt.promptAsync({
+          sessionID: chat.id,
+          agent: "build",
+          noReply: true,
+          parts: [{ type: "text", text: "admit only" }],
+        }),
+      )
+
+      expect(receipt.messageID).toBeDefined()
+      expect(r0V2PromptCalls).toContain(chat.id)
+      // r0 wired the V2 execution owner for the installed stack: prompt-async admits (resume:false)
+      // and then drives the drain explicitly (admission-before-wake, wake-after-admit), so the
+      // durable input IS executed — a pure no-drain admission would leave the prompt unserved.
+      expect(r0V2ResumeCalls).toContain(chat.id)
+    }),
+  30_000,
+)

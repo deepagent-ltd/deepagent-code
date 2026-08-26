@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:finetune:build-eval-harness",
+  "type": "methodology",
+  "title": "Build a fine-tuning evaluation harness first",
+  "description": "Stand up task, capability, and safety evals before training so every checkpoint is judged on fixed, comparable criteria.",
+  "body": "Use before launching any fine-tuning run. Do not start training without a frozen eval — you cannot tell improvement from regression or compare checkpoints. Actions: assemble a held-out task eval, a general-capability holdout, and a safety/refusal set; score the base first as a baseline, then score each checkpoint identically. Validation signals include a baseline score for the base model and per-checkpoint scores on all three eval sets. Risk boundary: training blind ships regressions; if the capability or safety holdout cannot be assembled, escalate before any model is promoted to serving.",
+  "domain": "fine_tuning",
+  "scope_hint": "code.fine-tuning:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.fine-tuning",
+  "pack_id": "code.fine-tuning"
+}

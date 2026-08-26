@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:stream:bound-out-of-order-with-watermarks",
+  "type": "strategy",
+  "title": "Bound lateness with watermarks and allowed lateness",
+  "description": "Configure watermark delay and allowed lateness to a measured out-of-order bound so windows fire correctly without waiting forever.",
+  "body": "Use when events can arrive after later-timestamped ones. Do not set a zero watermark delay on an out-of-order source — windows close early and drop late but valid events. Actions: measure the real out-of-order distribution, set the watermark bound to cover the bulk of it, configure allowed lateness for stragglers, and route still-later events to a side output. Validation signals include a dropped-late-record metric near zero under normal skew and a side output capturing genuine stragglers. Risk boundary: too tight a bound silently discards data while too loose stalls results; if lateness exceeds the configured bound regularly, escalate to revisit the source rather than widening unbounded.",
+  "domain": "streaming",
+  "scope_hint": "code.streaming:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.streaming",
+  "pack_id": "code.streaming"
+}

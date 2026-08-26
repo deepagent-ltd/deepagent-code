@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:cmake:genex-string-comparison",
+  "type": "failure_dossier",
+  "description": "Treating a generator expression as a configure-time string makes a per-configuration condition evaluate wrong, applying flags to the wrong build type.",
+  "body": "Failure mode: a conditional meant to apply only in Debug compares CMAKE_BUILD_TYPE as a plain string during configure, but with multi-config generators the build type is unknown until generate time. Detection signals: debug-only flags appear in release builds or vice versa; the condition behaves differently between single- and multi-config generators. Do not branch on CMAKE_BUILD_TYPE for per-config flags. Safer fallback: express per-configuration logic with a generator expression like $<CONFIG:Debug> and verify the emitted flags per configuration with file(GENERATE).",
+  "domain": "cmake",
+  "scope_hint": "code.build.cmake:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.build.cmake:human_authored",
+  "pack_id": "code.build.cmake"
+}

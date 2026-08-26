@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:comp:broken-ir-invariant",
+  "type": "failure_dossier",
+  "description": "A pass that leaves the IR malformed (multiple defs in SSA, bad phi nodes, broken dominance), causing a later pass to miscompile.",
+  "body": "Failure mode: a transformation edits the IR but does not re-establish its invariants — it creates a second definition of an SSA value, leaves a phi with the wrong predecessor count, or breaks dominance — and the compiler does not catch it, so a downstream analysis reasons on malformed IR and produces wrong code. Detection signals: the IR verifier (if run) reports the violation; a later pass crashes or miscompiles on output of this pass; results change when the pass order changes. Do not leave the IR malformed after a transform. Safer fallback: re-establish all IR invariants within the pass, run the IR verifier after every transformation, and fix the producing pass rather than the consumer that tripped over it.",
+  "domain": "compiler",
+  "scope_hint": "code.compiler:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.compiler:human_authored",
+  "pack_id": "code.compiler"
+}

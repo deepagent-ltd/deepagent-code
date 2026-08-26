@@ -1,0 +1,481 @@
+[
+  {
+    "ref_id": "strategy:auth:enforce-authorization-server-side",
+    "type": "strategy",
+    "title": "Enforce authorization server-side",
+    "summary": "Every access decision is made on the server from the authenticated principal, never from a client-supplied role, id, or hidden field.",
+    "domains": [
+      "backend_auth",
+      "authz",
+      "authn",
+      "session",
+      "permissions"
+    ],
+    "triggers": [
+      "authorization",
+      "server-side",
+      "access",
+      "control",
+      "principal",
+      "role"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.auth"
+  },
+  {
+    "ref_id": "strategy:auth:deny-by-default-permissions",
+    "type": "strategy",
+    "title": "Deny by default",
+    "summary": "Unmatched permission requests are denied; new resources and roles start with no access and are granted explicitly.",
+    "domains": [
+      "backend_auth",
+      "authz",
+      "authn",
+      "session",
+      "permissions"
+    ],
+    "triggers": [
+      "deny",
+      "default",
+      "permission",
+      "allowlist",
+      "rbac",
+      "grant"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.auth"
+  },
+  {
+    "ref_id": "strategy:auth:short-lived-tokens-with-revocation",
+    "type": "strategy",
+    "title": "Short-lived tokens with revocation",
+    "summary": "Access tokens are short-lived and revocable; long sessions rely on refresh with server-side revocation, not on long token TTLs.",
+    "domains": [
+      "backend_auth",
+      "authz",
+      "authn",
+      "session",
+      "permissions"
+    ],
+    "triggers": [
+      "token",
+      "ttl",
+      "refresh",
+      "revocation",
+      "session",
+      "expiry"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.auth"
+  },
+  {
+    "ref_id": "strategy:auth:scope-queries-by-tenant",
+    "type": "strategy",
+    "title": "Scope every query by tenant",
+    "summary": "In multi-tenant systems, every data access is scoped by tenant at the query layer, not filtered after fetch.",
+    "domains": [
+      "backend_auth",
+      "authz",
+      "authn",
+      "session",
+      "permissions"
+    ],
+    "triggers": [
+      "tenant",
+      "multi-tenant",
+      "scope",
+      "isolation",
+      "row",
+      "query"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.auth"
+  },
+  {
+    "ref_id": "strategy:auth:validate-token-signature-and-claims",
+    "type": "strategy",
+    "title": "Validate token signature and claims",
+    "summary": "JWTs are verified for signature, issuer, audience, and expiry before any claim is trusted; alg is pinned.",
+    "domains": [
+      "backend_auth",
+      "authz",
+      "authn",
+      "session",
+      "permissions"
+    ],
+    "triggers": [
+      "jwt",
+      "signature",
+      "issuer",
+      "audience",
+      "claims",
+      "verify"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.auth"
+  },
+  {
+    "ref_id": "strategy:auth:separate-authn-from-authz",
+    "type": "strategy",
+    "title": "Separate authentication from authorization",
+    "summary": "Proving who the principal is (authn) is kept distinct from what they may do (authz); a valid login is not access.",
+    "domains": [
+      "backend_auth",
+      "authz",
+      "authn",
+      "session",
+      "permissions"
+    ],
+    "triggers": [
+      "authentication",
+      "authorization",
+      "identity",
+      "separate",
+      "principal"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.auth"
+  },
+  {
+    "ref_id": "methodology:auth:build-authorization-matrix",
+    "type": "methodology",
+    "title": "Build and test an authorization matrix",
+    "summary": "Enumerate (role × resource × action) cells and back each allowed and denied cell with a test before changing policy.",
+    "domains": [
+      "backend_auth",
+      "authz",
+      "authn",
+      "session",
+      "permissions"
+    ],
+    "triggers": [
+      "matrix",
+      "role",
+      "resource",
+      "action",
+      "coverage",
+      "rbac"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.auth"
+  },
+  {
+    "ref_id": "methodology:auth:trace-permission-on-protected-path",
+    "type": "methodology",
+    "title": "Trace the permission check on a protected path",
+    "summary": "Follow a request from entry to data access and locate exactly where the access decision is made and on what input.",
+    "domains": [
+      "backend_auth",
+      "authz",
+      "authn",
+      "session",
+      "permissions"
+    ],
+    "triggers": [
+      "trace",
+      "path",
+      "middleware",
+      "decision",
+      "request",
+      "protected"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.auth"
+  },
+  {
+    "ref_id": "methodology:auth:migrate-auth-policy-safely",
+    "type": "methodology",
+    "title": "Migrate an auth policy without lockout or widening",
+    "summary": "Change permission models behind tests and a compatibility window so no role is silently widened or locked out.",
+    "domains": [
+      "backend_auth",
+      "authz",
+      "authn",
+      "session",
+      "permissions"
+    ],
+    "triggers": [
+      "migrate",
+      "policy",
+      "rollout",
+      "compatibility",
+      "lockout"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.auth"
+  },
+  {
+    "ref_id": "methodology:auth:review-oauth-callback-flow",
+    "type": "methodology",
+    "title": "Review an OAuth/OIDC callback flow",
+    "summary": "Verify state, PKCE, redirect-uri allowlisting, and token handling on the callback before trusting the session.",
+    "domains": [
+      "backend_auth",
+      "authz",
+      "authn",
+      "session",
+      "permissions"
+    ],
+    "triggers": [
+      "oauth",
+      "oidc",
+      "callback",
+      "state",
+      "pkce",
+      "redirect"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.auth"
+  },
+  {
+    "ref_id": "knowledge:auth:authn-vs-authz",
+    "type": "knowledge",
+    "title": "Authentication vs authorization",
+    "summary": "Authentication establishes identity; authorization decides permitted actions. They fail independently and need separate tests.",
+    "domains": [
+      "backend_auth",
+      "authz",
+      "authn",
+      "session",
+      "permissions"
+    ],
+    "triggers": [
+      "authentication",
+      "authorization",
+      "identity",
+      "permission",
+      "difference"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.auth"
+  },
+  {
+    "ref_id": "knowledge:auth:session-vs-token-tradeoffs",
+    "type": "knowledge",
+    "title": "Session cookies vs bearer tokens",
+    "summary": "Server sessions are easy to revoke but need shared state; stateless JWTs scale but are hard to revoke before expiry.",
+    "domains": [
+      "backend_auth",
+      "authz",
+      "authn",
+      "session",
+      "permissions"
+    ],
+    "triggers": [
+      "session",
+      "cookie",
+      "jwt",
+      "bearer",
+      "stateless",
+      "revocation"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.auth"
+  },
+  {
+    "ref_id": "knowledge:auth:idor-and-object-level-access",
+    "type": "knowledge",
+    "title": "IDOR and object-level access",
+    "summary": "Checking that a user is authenticated and has a role is not enough; access to a specific object must verify ownership/scope.",
+    "domains": [
+      "backend_auth",
+      "authz",
+      "authn",
+      "session",
+      "permissions"
+    ],
+    "triggers": [
+      "idor",
+      "object",
+      "ownership",
+      "resource",
+      "access",
+      "horizontal"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.auth"
+  },
+  {
+    "ref_id": "knowledge:auth:common-token-validation-pitfalls",
+    "type": "knowledge",
+    "title": "Common token-validation pitfalls",
+    "summary": "alg:none, algorithm confusion, unverified claims, missing aud/iss checks, and clock-skew handling are recurring JWT bugs.",
+    "domains": [
+      "backend_auth",
+      "authz",
+      "authn",
+      "session",
+      "permissions"
+    ],
+    "triggers": [
+      "jwt",
+      "alg",
+      "none",
+      "confusion",
+      "audience",
+      "validation"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.auth"
+  },
+  {
+    "ref_id": "skill:auth:review-authorization-path",
+    "type": "skill",
+    "title": "Review the authorization path",
+    "summary": "Read the request path and report where (and whether) a server-side, object-level access decision is made.",
+    "domains": [
+      "backend_auth",
+      "authz",
+      "authn",
+      "session",
+      "permissions"
+    ],
+    "triggers": [
+      "review",
+      "authorization",
+      "path",
+      "check",
+      "audit",
+      "inspect"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.auth"
+  },
+  {
+    "ref_id": "skill:auth:run-negative-permission-tests",
+    "type": "skill",
+    "title": "Run negative permission tests",
+    "summary": "Execute or scaffold tests that call protected endpoints as unauthorized principals and assert denial.",
+    "domains": [
+      "backend_auth",
+      "authz",
+      "authn",
+      "session",
+      "permissions"
+    ],
+    "triggers": [
+      "negative",
+      "test",
+      "permission",
+      "deny",
+      "403",
+      "unauthorized"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.auth"
+  }
+]

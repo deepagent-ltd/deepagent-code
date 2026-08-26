@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:healthcare:software-emits-clinical-decision",
+  "type": "failure_dossier",
+  "description": "A code path autonomously producing a diagnosis, dosing, or triage decision presented as authoritative without clinical human review.",
+  "body": "Failure mode: software computes a clinically-relevant output (a dose, a diagnosis, a triage priority) and surfaces it as a decision rather than decision support, so a patient could be affected without a qualified human in the loop. Detection signals: a clinical output finalizes with no human confirmation step; no reviewing-clinician record; the system frames output as medical advice. Do not let software auto-finalize clinical decisions. Safer fallback: present output as decision support requiring qualified human confirmation, log the reviewer, and block autonomous clinical action. Risk boundary: advisory only and never a substitute for clinical judgment; escalate any request for autonomous clinical decisions or medical advice to qualified humans rather than emitting it.",
+  "domain": "healthcare",
+  "scope_hint": "business.healthcare:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:business.healthcare:human_authored",
+  "pack_id": "business.healthcare"
+}

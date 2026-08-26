@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:scala:scope-implicits-narrowly",
+  "type": "strategy",
+  "title": "Scope implicits/givens narrowly and unambiguously",
+  "description": "Place implicit instances where resolution is predictable and avoid importing competing instances into one scope.",
+  "body": "Use when defining or importing implicit values, given instances, or type-class instances. Do not scatter implicits in random objects or import two instances of the same type class into one scope. Actions: put a type class's canonical instance in the companion object of the type or the type class so it is found without import, import additional instances explicitly and locally, and prefer given/using (Scala 3) for clarity. Validation signals include a clean compile with no ambiguous-implicit error and a test confirming the intended instance is selected. Risk boundary: an implicit silently pulled from an unexpected scope changes behavior invisibly (a different Ordering, Encoder, or Monoid); ambiguous implicits should be resolved by scoping, not by adding priority hacks blindly.",
+  "domain": "scala",
+  "scope_hint": "code.scala:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.scala",
+  "pack_id": "code.scala"
+}

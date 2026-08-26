@@ -1,0 +1,11 @@
+{
+  "ref_id": "knowledge:frontend_vue:reactive-destructure-can-lose-tracking",
+  "type": "knowledge",
+  "description": "Naive destructuring of reactive props/objects can break dependency tracking unless using supported helpers/patterns.",
+  "body": "Use when values stop updating after refactors. Do not destructure reactive state blindly for convenience. Preserve refs with toRefs/storeToRefs or use computed access according to project pattern. Verify state updates after mutation. Risk boundary: Vue version and compiler transform settings affect props destructure behavior. Use when Vue Frontend Engineering work touches visible UI behavior, browser console output, DOM state, assets, viewport behavior, and interaction evidence. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: use the fact to constrain the change and test plan; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include browser smoke, component tests, viewport screenshots, console/network checks, and accessibility assertions. Risk boundary: escalate or stop when the task involves visual regressions, inaccessible interaction, hydration mismatch, and browser-only failures, missing owner evidence, or live external state.",
+  "domain": "frontend_vue",
+  "scope_hint": "code.frontend.vue:knowledges",
+  "evidence_strength": "strong",
+  "provenance_tag": "code.frontend.vue:seed:vue_nuxt_pinia_vite_docs:paraphrased",
+  "pack_id": "code.frontend.vue"
+}

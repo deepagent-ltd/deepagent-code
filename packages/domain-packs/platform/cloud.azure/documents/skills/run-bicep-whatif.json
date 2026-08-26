@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:azure:run-bicep-whatif",
+  "type": "skill",
+  "title": "Run a Bicep what-if and read the resource delta",
+  "description": "Execute az deployment what-if and interpret Create/Modify/Delete/NoChange so risky changes surface before an apply.",
+  "body": "Use when you are about to deploy a Bicep/ARM template. Do not deploy without previewing the change set. Actions: run az deployment group what-if with the template and parameters, read the color-coded output for Create/Modify/Delete/NoChange, scrutinize any Delete or property replacement on stateful resources, and only then deploy in incremental mode. Validation signals include what-if listing only intended changes, no surprise deletions, and an idempotent re-run showing NoChange. Risk boundary: a what-if that shows deletion or replacement of a production resource must be reviewed by a human before deploying.",
+  "domain": "azure",
+  "scope_hint": "platform.cloud.azure:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.azure",
+  "pack_id": "platform.cloud.azure"
+}

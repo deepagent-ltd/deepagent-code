@@ -1,0 +1,471 @@
+[
+  {
+    "ref_id": "knowledge:benchmarking:benchmark-needs-correctness",
+    "type": "knowledge",
+    "title": "Benchmark Needs Correctness",
+    "summary": "A faster wrong result is a correctness failure, not optimization.",
+    "domains": [
+      "benchmarking",
+      "code",
+      "performance"
+    ],
+    "triggers": [
+      "faster",
+      "wrong",
+      "result",
+      "correctness",
+      "failure",
+      "optimization",
+      "performance",
+      "gates"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.benchmarking"
+  },
+  {
+    "ref_id": "knowledge:benchmarking:environment-is-part-of-result",
+    "type": "knowledge",
+    "title": "Environment Is Part Of Result",
+    "summary": "Benchmark results are tied to hardware, runtime, flags, and load.",
+    "domains": [
+      "benchmarking",
+      "code",
+      "performance"
+    ],
+    "triggers": [
+      "benchmark",
+      "results",
+      "tied",
+      "hardware",
+      "runtime",
+      "flags",
+      "load",
+      "record"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.benchmarking"
+  },
+  {
+    "ref_id": "knowledge:benchmarking:thresholds-prevent-noise",
+    "type": "knowledge",
+    "title": "Thresholds Prevent Noise",
+    "summary": "Explicit thresholds prevent noisy benchmark churn.",
+    "domains": [
+      "benchmarking",
+      "code",
+      "performance"
+    ],
+    "triggers": [
+      "explicit",
+      "thresholds",
+      "prevent",
+      "noisy",
+      "benchmark",
+      "churn",
+      "gates"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.benchmarking"
+  },
+  {
+    "ref_id": "methodology:benchmarking:bench-harness-validation",
+    "type": "methodology",
+    "title": "Bench Harness Validation",
+    "summary": "Validate benchmark harness before trusting numbers.",
+    "domains": [
+      "benchmarking",
+      "code",
+      "performance"
+    ],
+    "triggers": [
+      "validate",
+      "benchmark",
+      "harness",
+      "before",
+      "trusting",
+      "numbers",
+      "steps",
+      "confirm"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.benchmarking"
+  },
+  {
+    "ref_id": "methodology:benchmarking:benchmark-regression-protocol",
+    "type": "methodology",
+    "title": "Benchmark Regression Protocol",
+    "summary": "Prepare environment, run repeated baseline/candidate, compare trend, attribute regression.",
+    "domains": [
+      "benchmarking",
+      "code",
+      "performance"
+    ],
+    "triggers": [
+      "prepare",
+      "environment",
+      "repeated",
+      "baseline",
+      "candidate",
+      "compare",
+      "trend",
+      "attribute"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.benchmarking"
+  },
+  {
+    "ref_id": "methodology:benchmarking:outlier-review",
+    "type": "methodology",
+    "title": "Outlier Review",
+    "summary": "Classify outliers before including or excluding them.",
+    "domains": [
+      "benchmarking",
+      "code",
+      "performance"
+    ],
+    "triggers": [
+      "classify",
+      "outliers",
+      "before",
+      "including",
+      "excluding",
+      "them",
+      "steps",
+      "inspect"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.benchmarking"
+  },
+  {
+    "ref_id": "skill:benchmarking:run-benchmark-protocol",
+    "type": "skill",
+    "title": "Run Benchmark Protocol",
+    "summary": "Run repeated benchmark and produce normalized comparison evidence.",
+    "domains": [
+      "benchmarking",
+      "code",
+      "performance"
+    ],
+    "triggers": [
+      "repeated",
+      "benchmark",
+      "produce",
+      "normalized",
+      "comparison",
+      "evidence",
+      "inputs",
+      "baseline"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.benchmarking"
+  },
+  {
+    "ref_id": "strategy:benchmarking:baseline-lock",
+    "type": "strategy",
+    "title": "Baseline Lock",
+    "summary": "Compare against a pinned baseline and identical workload.",
+    "domains": [
+      "benchmarking",
+      "code",
+      "performance"
+    ],
+    "triggers": [
+      "compare",
+      "against",
+      "pinned",
+      "baseline",
+      "identical",
+      "workload",
+      "benchmark",
+      "claims"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.benchmarking"
+  },
+  {
+    "ref_id": "strategy:benchmarking:regression-threshold",
+    "type": "strategy",
+    "title": "Regression Threshold",
+    "summary": "Use explicit thresholds for fail/pass decisions.",
+    "domains": [
+      "benchmarking",
+      "code",
+      "performance"
+    ],
+    "triggers": [
+      "explicit",
+      "thresholds",
+      "fail",
+      "pass",
+      "decisions",
+      "benchmark",
+      "gate",
+      "needs"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.benchmarking"
+  },
+  {
+    "ref_id": "strategy:benchmarking:repeat-and-variance",
+    "type": "strategy",
+    "title": "Repeat And Variance",
+    "summary": "Use repeated runs and variance instead of single-run claims.",
+    "domains": [
+      "benchmarking",
+      "code",
+      "performance"
+    ],
+    "triggers": [
+      "repeated",
+      "runs",
+      "variance",
+      "instead",
+      "single",
+      "claims",
+      "benchmark"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.benchmarking"
+  },
+  {
+    "ref_id": "strategy:benchmarking:warmup-control",
+    "type": "strategy",
+    "title": "Warmup Control",
+    "summary": "Account for JIT, cache, disk, network, and GPU warmup effects.",
+    "domains": [
+      "benchmarking",
+      "code",
+      "performance"
+    ],
+    "triggers": [
+      "account",
+      "cache",
+      "disk",
+      "network",
+      "warmup",
+      "effects",
+      "dominate"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.benchmarking"
+  },
+  {
+    "ref_id": "strategy:benchmarking:isolate-the-measured-unit",
+    "type": "strategy",
+    "title": "Isolate exactly the unit you measure",
+    "summary": "Ensure the benchmark times only the code under test, excluding setup, I/O, and harness overhead that distort microbenchmark results.",
+    "domains": [
+      "code",
+      "benchmarking",
+      "performance"
+    ],
+    "triggers": [
+      "microbenchmark",
+      "isolation",
+      "setup",
+      "overhead",
+      "harness",
+      "timer"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.benchmarking"
+  },
+  {
+    "ref_id": "strategy:benchmarking:pin-the-environment",
+    "type": "strategy",
+    "title": "Pin and record the benchmark environment",
+    "summary": "Fix and capture hardware, runtime, flags, and load so a result is reproducible and comparisons are apples-to-apples.",
+    "domains": [
+      "code",
+      "benchmarking",
+      "performance"
+    ],
+    "triggers": [
+      "environment",
+      "pinning",
+      "reproducible",
+      "cpu",
+      "flags",
+      "load"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.benchmarking"
+  },
+  {
+    "ref_id": "methodology:benchmarking:establish-statistical-significance",
+    "type": "methodology",
+    "title": "Establish statistical significance of a delta",
+    "summary": "Decide whether a baseline-vs-candidate difference is real by comparing distributions, not single means, accounting for variance.",
+    "domains": [
+      "code",
+      "benchmarking",
+      "performance"
+    ],
+    "triggers": [
+      "significance",
+      "variance",
+      "distribution",
+      "confidence",
+      "median",
+      "samples"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.benchmarking"
+  },
+  {
+    "ref_id": "knowledge:benchmarking:warmup-separates-transient-from-steady",
+    "type": "knowledge",
+    "title": "Warmup separates transient from steady state",
+    "summary": "Early iterations pay JIT compilation, cold caches, and lazy initialization costs that do not reflect steady-state performance.",
+    "domains": [
+      "code",
+      "benchmarking",
+      "performance"
+    ],
+    "triggers": [
+      "warmup",
+      "jit",
+      "cache",
+      "steady state",
+      "cold start",
+      "transient"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.benchmarking"
+  },
+  {
+    "ref_id": "skill:benchmarking:summarize-run-distribution",
+    "type": "skill",
+    "title": "Summarize a benchmark run distribution",
+    "summary": "Aggregate repeated benchmark samples into median, spread, and outlier counts with the environment recorded for comparison.",
+    "domains": [
+      "code",
+      "benchmarking",
+      "performance"
+    ],
+    "triggers": [
+      "distribution",
+      "median",
+      "percentile",
+      "outliers",
+      "aggregate",
+      "summary"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.benchmarking"
+  }
+]

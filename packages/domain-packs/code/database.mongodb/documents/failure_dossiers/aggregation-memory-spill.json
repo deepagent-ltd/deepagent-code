@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:mongo:aggregation-memory-spill",
+  "type": "failure_dossier",
+  "description": "A blocking pipeline stage exceeds the 100MB memory limit and spills or fails.",
+  "body": "Failure mode: a $group or in-memory $sort processing a large unfiltered input exceeds the 100MB per-stage memory limit, so the stage either errors (without allowDiskUse) or spills to disk and runs far slower. Detection signals: the pipeline errors with QueryExceededMemoryLimitNoDiskUseAllowed, or explain reports usedDisk true with high executionTimeMillis. Do not place a blocking stage before filtering the input. Safer fallback: move $match before the blocking stage so an index shrinks the input, $project away unneeded fields, and enable allowDiskUse only as a deliberate last resort for genuinely large aggregations.",
+  "domain": "mongodb",
+  "scope_hint": "code.database.mongodb:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.mongodb:human_authored",
+  "pack_id": "code.database.mongodb"
+}

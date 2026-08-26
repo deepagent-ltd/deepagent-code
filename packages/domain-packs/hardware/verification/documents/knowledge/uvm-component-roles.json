@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:hwverif:uvm-component-roles",
+  "type": "knowledge",
+  "title": "Roles of UVM testbench components",
+  "description": "The driver, monitor, sequencer, scoreboard, and agent each have a distinct role in stimulating and checking a design.",
+  "body": "Use when reasoning about where verification logic belongs. Do not blur driving and checking into one component, since separation is what keeps the testbench reusable and observable. Actions: place stimulus generation in the sequencer and driver, observation in the monitor, and checking in the scoreboard. Validation signals include each component owning a single responsibility and the monitor independent of the driver. Risk boundary: a monitor that reuses driver state cannot independently confirm behavior, so flag any checking that depends on the stimulus path.",
+  "domain": "hw_verification",
+  "scope_hint": "hardware.verification:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.verification",
+  "pack_id": "hardware.verification"
+}

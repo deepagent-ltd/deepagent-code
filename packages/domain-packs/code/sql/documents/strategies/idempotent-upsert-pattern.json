@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:sql:idempotent-upsert-pattern",
+  "type": "strategy",
+  "title": "Make writes idempotent with the dialect's upsert",
+  "description": "Use INSERT ... ON CONFLICT / MERGE with a unique constraint so retries and concurrent inserts converge instead of duplicating or racing.",
+  "body": "Use when a write may be retried or run concurrently (event ingestion, sync, ret- safe APIs). Do not implement upsert as SELECT-then-INSERT/UPDATE in application code (it races) or ignore the dialect's atomic construct. Actions: define the natural unique key as a constraint, then use Postgres INSERT ... ON CONFLICT (key) DO UPDATE / DO NOTHING, MySQL INSERT ... ON DUPLICATE KEY UPDATE, or standard MERGE; return the affected row to confirm. Validation signals include running the same insert twice yielding one row and no unique-violation errors under concurrent load. Risk boundary: MERGE has known concurrency anomalies on some engines without proper isolation; verify behavior under concurrent writers and escalate to ON CONFLICT or serializable isolation if duplicates slip through.",
+  "domain": "sql",
+  "scope_hint": "code.sql:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.sql",
+  "pack_id": "code.sql"
+}

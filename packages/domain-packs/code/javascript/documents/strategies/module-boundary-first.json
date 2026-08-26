@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:runtime_javascript:module-boundary-first",
+  "type": "strategy",
+  "description": "Resolve ESM/CJS behavior from package boundaries before changing import syntax.",
+  "body": "Use when a change touches import/export, package.json type, conditional exports, or mixed Node tooling. Do not use for TypeScript-only type import diagnostics. Inspect nearest package.json, file extension, runtime entry, and bundler config before editing. Verify with the package script that actually loads the changed module plus a direct node smoke when applicable. Risk rises when library consumers depend on both require and import entrypoints. Use when JavaScript Runtime and Tooling work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: choose the smallest direction that preserves the domain contract; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "javascript",
+  "scope_hint": "code.javascript:strategys",
+  "evidence_strength": "medium",
+  "provenance_tag": "code.javascript:seed:official_docs_and_common_tooling_behavior:paraphrased",
+  "pack_id": "code.javascript"
+}

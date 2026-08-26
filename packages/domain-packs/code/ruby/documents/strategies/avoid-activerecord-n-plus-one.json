@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:ruby:avoid-activerecord-n-plus-one",
+  "type": "strategy",
+  "title": "Avoid ActiveRecord N+1 with eager loading",
+  "description": "Eager-load associations with includes/preload so a collection issues a bounded number of queries.",
+  "body": "Use when rendering or iterating a collection that touches an association per row. Do not access record.association inside a loop without preloading. Actions: add .includes(:assoc) (or preload/eager_load) so Rails batches the association into one or two queries, select only needed columns, and use find_each to batch large result sets. Validation signals include a request/model spec asserting a constant query count regardless of row count, often via a query-count matcher or the log. Risk boundary: an unbounded N+1 scales linearly with data and overloads the database under production load; confirm the query count dropped, not merely that the view renders.",
+  "domain": "ruby",
+  "scope_hint": "code.ruby:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.ruby",
+  "pack_id": "code.ruby"
+}

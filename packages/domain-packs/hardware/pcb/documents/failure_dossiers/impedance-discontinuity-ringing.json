@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:pcb:impedance-discontinuity-ringing",
+  "type": "failure_dossier",
+  "description": "A fast edge rings and overshoots because an impedance discontinuity from a stub or width change reflects energy.",
+  "body": "Failure mode: a controlled-impedance net hits a stub, abrupt width change, or unmatched connector, creating a reflection that appears as ringing on the edge. Detection signals: overshoot and ringing on a fast edge, reflections timed to a discontinuity location, and behavior that worsens at faster edge rates. Do not slow the driver as a permanent fix while the discontinuity remains. Safer fallback: remove the stub, keep the trace width constant, and add termination matched to the line impedance, then re-verify the edge.",
+  "domain": "pcb",
+  "scope_hint": "hardware.pcb:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.pcb:human_authored",
+  "pack_id": "hardware.pcb"
+}

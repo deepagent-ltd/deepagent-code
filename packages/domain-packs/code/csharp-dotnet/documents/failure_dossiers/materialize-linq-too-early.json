@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:csharp_dotnet:materialize-linq-too-early",
+  "type": "failure_dossier",
+  "description": "Materializing LINQ too early",
+  "body": "Calling ToList/AsEnumerable before filters over provider-backed data can move work client-side and load too much data. Safer path: keep queryable filters server-side and verify provider translation.\n\nUse only as a diagnostic do-not-use signal; do not expose this as positive strategy, methodology, knowledge, skill, or memory.",
+  "domain": "csharp_dotnet",
+  "scope_hint": "code.csharp-dotnet:failure_dossiers",
+  "evidence_strength": "medium",
+  "provenance_tag": "code.csharp-dotnet:failure_seed:paraphrased_common_failures",
+  "pack_id": "code.csharp-dotnet"
+}

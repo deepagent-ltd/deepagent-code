@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:privacy:redact-before-operational-sinks",
+  "type": "strategy",
+  "title": "Redact before operational sinks",
+  "description": "Logs, errors, traces, metrics labels, analytics, crash dumps, support bundles, and prompts must receive redacted data before emission.",
+  "body": "Use when changing observability, exception handling, analytics, support export, prompt assembly, or debugging helpers. Do not rely on downstream dashboards or manual scrubbing as the primary protection. Actions: redact at the producer, avoid raw object serialization, keep stable non-identifying correlation IDs, and test both normal and error paths. Validation signals include snapshots or tests showing redacted output and no raw personal fields in artifacts. Risk boundary: any discovered raw PII/PHI/PCI in persisted logs requires human incident review. Use when Privacy Risk Controls work touches personal-data classes, sinks, retention, consent, logs, prompts, and exports. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: choose the smallest direction that preserves the domain contract; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include data inventory, redaction tests, retention checks, export/delete tests, and approval evidence. Risk boundary: escalate or stop when the task involves PII disclosure, consent bypass, retention drift, and unapproved processor expansion, missing owner evidence, or live external state.",
+  "domain": "privacy",
+  "scope_hint": "risk.privacy:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.privacy",
+  "pack_id": "risk.privacy"
+}

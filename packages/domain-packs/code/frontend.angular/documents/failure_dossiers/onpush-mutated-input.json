@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:ng:onpush-mutated-input",
+  "type": "failure_dossier",
+  "description": "An OnPush component's input object is mutated in place, so change detection never sees a new reference and the view goes stale.",
+  "body": "Failure mode: a parent mutates a field of the object it passes to an OnPush child (same reference) and expects the child to update, but OnPush only re-checks when the input reference changes, so the view stays stale. Detection signals: the data changed but the OnPush child shows old values; the update used obj.field = x or arr.push instead of replacing the reference; markForCheck was added to paper over it. Do not mutate OnPush inputs in place. Safer fallback: replace objects/arrays immutably so a new reference flows in, or bind the data via an async-piped observable, and test that the view updates on replacement but not on mutation.",
+  "domain": "angular",
+  "scope_hint": "code.frontend.angular:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.angular:human_authored",
+  "pack_id": "code.frontend.angular"
+}

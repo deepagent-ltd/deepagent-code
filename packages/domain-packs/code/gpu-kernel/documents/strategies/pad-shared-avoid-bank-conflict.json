@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:gpu:pad-shared-avoid-bank-conflict",
+  "type": "strategy",
+  "description": "Pad shared memory tiles to avoid bank conflicts in CUDA/GPU kernels and prevent throughput loss. 给 shared memory tile 加 padding 规避 bank conflict，避免吞吐下降。",
+  "body": "给 shared memory tile 加 padding 规避 bank conflict，避免吞吐下降。每行多加1-2列使相邻行的同列元素落在不同 bank。加 padding 后必须同步更新所有索引表达式。. Use when GPU kernel correctness and profiling work touches kernel launch parameters, memory-access shape, correctness harnesses, occupancy evidence, and profiler counters. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: choose the smallest direction that preserves the domain contract; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include golden-output comparisons, deterministic benchmark runs, sanitizer output, Nsight or rocprof evidence, and CPU/GPU tolerance checks. Risk boundary: escalate or stop when the task involves benchmark-only changes, silent numerical drift, undefined synchronization, bank conflicts, and hardware-specific regressions, missing owner evidence, or live external state.",
+  "domain": "gpu_kernel",
+  "scope_hint": "gpu_kernel",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:gpu_kernel",
+  "pack_id": "code.gpu-kernel"
+}

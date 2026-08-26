@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:sigproc:iir-pole-instability",
+  "type": "failure_dossier",
+  "description": "An IIR filter output grows without bound or rings forever because a pole was placed on or outside the unit circle.",
+  "body": "Failure mode: feedback coefficients put a pole at or beyond unit radius, so the recursive output diverges or sustains oscillation. Detection signals: output amplitude climbing each sample, a sustained tone after the input stops, and a computed pole radius at or above one. Do not deploy the filter while any pole sits outside the unit circle. Safer fallback: redesign with poles strictly inside the unit circle or factor into stable second-order sections and re-verify pole radii.",
+  "domain": "signal_processing",
+  "scope_hint": "hardware.signal-processing:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.signal-processing:human_authored",
+  "pack_id": "hardware.signal-processing"
+}

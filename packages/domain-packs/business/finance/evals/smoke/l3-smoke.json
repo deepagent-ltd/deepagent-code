@@ -1,0 +1,74 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "business.finance",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "business",
+      "risk"
+    ],
+    "business_domains": [
+      "finance"
+    ],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for business.finance: payments, ledger entries, balances, invoices, reconciliation, idempotency keys, audit trails, and approvals"
+    ],
+    "round_signals": [
+      "l3_validation_smoke"
+    ],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "round_signals": [],
+    "user_overrides": [],
+    "repo_signals": [
+      "fix CSS responsive text overlap in the marketing page header"
+    ]
+  },
+  "retrieval_query": "money integer minor units rounding idempotent payment audit trail reconciliation human gate",
+  "expected_pack_id": "business.finance",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "finance engineering safety L3 validation smoke",
+    "signals": [
+      "decimal precision tests",
+      "duplicate-submit tests",
+      "ledger/reconciliation checks",
+      "immutable audit evidence",
+      "and human approval notes"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "finance engineering safety diagnosis smoke",
+    "signals": [
+      "separate calculation precision",
+      "idempotency",
+      "ledger posting",
+      "reconciliation",
+      "authorization",
+      "and audit trail failures"
+    ]
+  },
+  "source_refs": [
+    "source:official-tooling-docs:paraphrased",
+    "source:engineering-practice:paraphrased"
+  ]
+}

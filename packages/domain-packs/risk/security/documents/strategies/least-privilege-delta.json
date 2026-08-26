@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:security:least-privilege-delta",
+  "type": "strategy",
+  "title": "Least privilege for permission deltas",
+  "description": "Permission expansions should be scoped, justified, reviewed, and paired with a rollback or removal path.",
+  "body": "Use when modifying IAM, scopes, OAuth grants, database roles, filesystem access, CI tokens, sandbox permissions, or MCP/tool permissions. Do not use to silently approve broader access for convenience. Actions: compare old and new privileges, narrow resource and action scope, document why each privilege is needed, and prefer time-bound or environment-bound grants. Validation signals include diff evidence, denied tests outside the intended scope, and review confirmation for elevated access. Risk boundary: broad wildcard grants, production credentials, cross-tenant access, or disabling a guard require a human gate.",
+  "domain": "security",
+  "scope_hint": "risk.security:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.security",
+  "pack_id": "risk.security"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:llm:no-timeout-unbounded-cost",
+  "type": "failure_dossier",
+  "description": "A model call runs with no timeout and unbounded retries, so a hang or error storm exhausts latency budget, rate limits, or spend.",
+  "body": "Failure mode: the call has no per-request timeout and retries on any error without a cap or backoff, so a slow upstream or a transient 5xx triggers a retry storm and runaway cost. Detection signals: no timeout configured; retry loop without a cap or jitter; no token/cost ceiling; no metric for retries or spend. Do not retry terminal 4xx errors or leave a call able to hang indefinitely. Safer fallback: set a per-call timeout, cap retries with exponential backoff and jitter, classify retryable vs terminal errors, and enforce a max-token/cost ceiling that fails closed.",
+  "domain": "llm_app",
+  "scope_hint": "code.llm-app:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.llm-app:human_authored",
+  "pack_id": "code.llm-app"
+}

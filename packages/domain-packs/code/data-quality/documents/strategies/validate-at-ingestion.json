@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:dq:validate-at-ingestion",
+  "type": "strategy",
+  "title": "Validate data at the ingestion boundary",
+  "description": "Run quality checks where data first lands, before it propagates, so bad data is caught at the source instead of in every downstream consumer.",
+  "body": "Use when data enters a pipeline or warehouse. Do not defer validation to dashboards or downstream models — by then bad data has already corrupted derived tables and is far harder to trace. Actions: attach an expectation suite (schema, ranges, nulls, uniqueness, freshness) to the landing/staging step and gate promotion on it; quarantine failures rather than promoting them. Validation signals include a passing suite before any downstream read and a quarantine trail for rejects. Risk boundary: data validated late spreads through every consumer before detection; treat an unvalidated ingestion path as a defect and add a gate at the boundary.",
+  "domain": "data_quality",
+  "scope_hint": "code.data-quality:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-quality",
+  "pack_id": "code.data-quality"
+}

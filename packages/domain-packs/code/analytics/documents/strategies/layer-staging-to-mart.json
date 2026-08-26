@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:analytics:layer-staging-to-mart",
+  "type": "strategy",
+  "title": "Layer models from staging to mart",
+  "description": "Separate light source-shaped staging models from business-shaped mart models so logic is reusable and lineage is clear.",
+  "body": "Use when structuring a dbt project beyond a handful of models. Do not pile joins, renames, and business logic into one giant model — it becomes untestable and unreusable. Actions: build staging models that rename and lightly clean each source one-to-one, intermediate models for reusable joins, and mart models shaped for consumption; keep each layer's responsibility distinct. Validation signals include a clean staging-to-mart lineage graph and mart models reusing tested staging models rather than raw sources. Risk boundary: skipping layers couples business logic to raw source quirks; if a mart reads raw sources directly, treat it as technical debt and refactor through staging before it spreads.",
+  "domain": "analytics",
+  "scope_hint": "code.analytics:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.analytics",
+  "pack_id": "code.analytics"
+}

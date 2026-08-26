@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:fpgatf:constrain-cdc",
+  "type": "strategy",
+  "title": "Constrain and synchronize clock-domain crossings",
+  "description": "Declare asynchronous crossings and ensure each is covered by a proper synchronizer rather than left for STA to time.",
+  "body": "Use when signals cross between unrelated clock domains. Do not let STA try to time an asynchronous crossing as if it were synchronous, since that produces meaningless slack and hides metastability risk. Actions: identify each crossing, confirm a multi-flop or handshake synchronizer is present, and apply the appropriate set_max_delay or asynchronous grouping. Validation signals include every crossing covered by a synchronizer and CDC analysis reporting no unsynchronized crossings. Risk boundary: an unsynchronized crossing causes intermittent metastability failures in the field, so treat any uncovered crossing as a blocking defect.",
+  "domain": "fpga_toolflow",
+  "scope_hint": "hardware.fpga-toolflow:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.fpga-toolflow",
+  "pack_id": "hardware.fpga-toolflow"
+}

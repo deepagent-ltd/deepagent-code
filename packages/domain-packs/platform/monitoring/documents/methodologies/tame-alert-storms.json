@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:mon:tame-alert-storms",
+  "type": "methodology",
+  "title": "Tame alert storms",
+  "description": "Reduce a flood of pages through grouping, inhibition, and demoting non-actionable alerts.",
+  "body": "Steps: 1. Capture a recent storm and count alerts per incident. 2. Identify alerts that share a root cause and group them by common labels. 3. Add inhibition so the top-level failure suppresses dependents. 4. Demote non-actionable alerts to dashboards or tickets. 5. Re-evaluate the next incident's notification volume. Rollback point: keep prior routing until the new grouping is validated. Validation: a comparable incident produces a single grouped, actionable notification.",
+  "domain": "monitoring",
+  "scope_hint": "platform.monitoring:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.monitoring",
+  "pack_id": "platform.monitoring"
+}

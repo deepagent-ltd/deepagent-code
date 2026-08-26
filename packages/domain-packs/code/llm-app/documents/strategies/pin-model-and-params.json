@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:llm:pin-model-and-params",
+  "type": "strategy",
+  "title": "Pin model and sampling parameters",
+  "description": "Model id, version, and sampling parameters are explicit and pinned so behavior is reproducible and changes are reviewable.",
+  "body": "Use when configuring which model and parameters a call uses. Do not rely on a provider's default or floating alias for production paths, and avoid silently changing temperature or max-tokens. Actions: pin an explicit model id/version; set temperature, top-p, and max-tokens deliberately; record the exact configuration with each stored response for replay. Validation signals include a test that the configured model/params are sent and a diff check that flags model-version changes for review. Risk boundary: an unpinned model upgrade can silently change output distribution; route such changes through evaluation before rollout.",
+  "domain": "llm_app",
+  "scope_hint": "code.llm-app:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.llm-app",
+  "pack_id": "code.llm-app"
+}

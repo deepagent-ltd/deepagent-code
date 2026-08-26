@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:privacy:data-export-should-be-complete-and-safe",
+  "type": "knowledge",
+  "title": "Data export should be complete and safe",
+  "description": "User data export paths must balance completeness with redaction of other users, secrets, internal abuse signals, and system-only metadata.",
+  "body": "Use when changing export APIs, admin tools, support bundles, or account portability features. Do not decide statutory scope. Actions: include user-owned personal data, exclude third-party personal data and secrets, and test nested or derived records. Validation signals include export fixtures and field-level review. Risk boundary: cross-user data in export is a blocking privacy issue. Use when Privacy Risk Controls work touches personal-data classes, sinks, retention, consent, logs, prompts, and exports. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: use the fact to constrain the change and test plan; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include data inventory, redaction tests, retention checks, export/delete tests, and approval evidence. Risk boundary: escalate or stop when the task involves PII disclosure, consent bypass, retention drift, and unapproved processor expansion, missing owner evidence, or live external state.",
+  "domain": "privacy",
+  "scope_hint": "risk.privacy:knowledge",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:risk.privacy",
+  "pack_id": "risk.privacy"
+}

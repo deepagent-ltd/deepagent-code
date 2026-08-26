@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:rlang:inspect-frame-structure",
+  "type": "skill",
+  "title": "Inspect data frame structure",
+  "description": "Report dimensions, column classes, factor levels, and NA counts to ground data decisions.",
+  "body": "Use when reasoning about an unfamiliar data frame in R. Actions: run str() or glimpse() and summary() to report dimensions, each column's class, factor levels, and per-column NA counts; surface any unexpected factor or character coercion. Do not propose transformations without first reporting the actual column types and missingness. This skill is read-only and exposes capability only; it must not mutate the frame without runtime permission. Validation signals include a concrete class-and-NA breakdown per column. Risk boundary: if a numeric column has been coerced to factor, flag it before any arithmetic relies on it.",
+  "domain": "r_lang",
+  "scope_hint": "code.r:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.r",
+  "pack_id": "code.r"
+}

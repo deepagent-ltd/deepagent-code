@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:scala:eager-future-side-effect",
+  "type": "failure_dossier",
+  "description": "A Future is constructed eagerly so its side effect fires immediately, before the intended composition or sequencing.",
+  "body": "Failure mode: code writes val f = Future { sideEffect() } expecting it to be a recipe, but Future runs on creation, so the effect fires at construction and any later sequencing or retry logic operates on an already-executed, memoized result. Detection signals: side effects happen earlier than the for-comprehension that 'sequences' them; retries re-use a cached result instead of re-running; multiple Futures built before a for run in parallel unintentionally. Do not treat a Future as lazy. Safer fallback: defer construction (a def, or wrap in IO/Task which is lazy), build the program first and run it once at the edge, and test that no effect fires until execution.",
+  "domain": "scala",
+  "scope_hint": "code.scala:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.scala:human_authored",
+  "pack_id": "code.scala"
+}

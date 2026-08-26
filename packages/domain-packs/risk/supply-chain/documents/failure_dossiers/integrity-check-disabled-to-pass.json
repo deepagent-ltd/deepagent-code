@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:supply_chain:integrity-check-disabled-to-pass",
+  "type": "failure_dossier",
+  "description": "Disabling lockfile integrity or hash verification to get a failing install to succeed, masking a tampered or drifted package.",
+  "body": "Failure mode: an install fails on a hash or version mismatch and the fix applied is to regenerate the lockfile or pass a flag that skips integrity checks, so a package whose content no longer matches what was reviewed installs anyway. Detection signals: integrity-check flags added to install commands; lockfile regenerated to clear a mismatch; resolved content differs from the reviewed version. Do not bypass integrity verification to unblock a build. Safer fallback: investigate why the hash changed, confirm the package's legitimacy from its source, and only update the lockfile after verifying the new content. Risk boundary: treat a hash mismatch as potential tampering and escalate rather than disabling the check.",
+  "domain": "security",
+  "scope_hint": "risk.supply-chain:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.supply-chain:human_authored",
+  "pack_id": "risk.supply-chain"
+}

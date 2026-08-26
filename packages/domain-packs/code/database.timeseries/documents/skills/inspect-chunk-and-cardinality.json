@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:tsdb:inspect-chunk-and-cardinality",
+  "type": "skill",
+  "title": "Inspect chunks and cardinality",
+  "description": "Report chunk count/sizes and per-tag series cardinality to ground tuning decisions in measured state.",
+  "body": "Use when diagnosing a time-series performance or storage issue. Actions: query the engine's chunk metadata (count, size, interval) and series cardinality estimators per measurement/tag; report the largest contributors with numbers. Do not propose interval or schema changes without these measurements. This skill is read-only and exposes capability only; it must not alter policies without runtime permission. Validation signals include a concrete cardinality and chunk-size breakdown. Risk boundary: if cardinality is already near the instance limit, report it as a capacity risk and recommend escalation before more ingest.",
+  "domain": "timeseries_db",
+  "scope_hint": "code.database.timeseries:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.timeseries",
+  "pack_id": "code.database.timeseries"
+}

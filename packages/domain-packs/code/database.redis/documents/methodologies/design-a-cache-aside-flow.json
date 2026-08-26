@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:redis:design-a-cache-aside-flow",
+  "type": "methodology",
+  "title": "Design a cache-aside flow",
+  "description": "Implement read-through-on-miss with TTL plus write-time invalidation and stampede protection.",
+  "body": "Steps: 1. On read, GET the key; on hit return it. 2. On miss, load from the source, SET with a TTL (add small random jitter to TTLs to avoid synchronized expiry), and return. 3. On write to the source, DEL the derived keys. 4. Protect hot keys from stampede with a short lock or single-flight so only one loader rebuilds while others wait or serve a slightly stale value. 5. Choose key naming so writes can compute the keys to invalidate. Rollback point: bypass the cache (always read source) to isolate cache bugs. Validation: a flushed cache still returns correct data, an update is reflected next read, and a hot-key expiry does not stampede the source.",
+  "domain": "redis",
+  "scope_hint": "code.database.redis:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.redis",
+  "pack_id": "code.database.redis"
+}

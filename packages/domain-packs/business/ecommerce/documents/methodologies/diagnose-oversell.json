@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:ecom:diagnose-oversell",
+  "type": "methodology",
+  "title": "Diagnose an oversell",
+  "description": "Trace concurrent checkouts on a SKU to find the non-atomic check-then-decrement gap.",
+  "body": "Steps: 1. Reproduce with concurrent checkouts on a single low-stock SKU. 2. Trace the availability check and the decrement and confirm whether they are one atomic step. 3. Look for a read-then-write gap or a missing row lock. 4. Replace it with an atomic conditional decrement or serialized reservation. 5. Re-run the concurrent test and confirm no oversell. Rollback point: before changing the reservation path under live traffic. Validation: sold-plus-reserved never exceeds on-hand under load.",
+  "domain": "ecommerce",
+  "scope_hint": "business.ecommerce:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:business.ecommerce",
+  "pack_id": "business.ecommerce"
+}

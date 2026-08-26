@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:sim:energy-drift-nonsymplectic",
+  "type": "failure_dossier",
+  "description": "A long physics simulation gains or loses energy over time because a non-symplectic integrator was used on a conservative system.",
+  "body": "Failure mode: a generic integrator applied to a conservative system systematically adds or removes energy each step, so an orbit spirals or a pendulum gains amplitude over a long run. Detection signals: total energy drifting monotonically instead of staying bounded, trajectories that diverge from the conserved manifold, and worsening over longer integration. Do not raise the integrator order expecting energy conservation. Safer fallback: switch to a symplectic integrator such as leapfrog or velocity Verlet and confirm energy stays bounded over the full run.",
+  "domain": "simulation",
+  "scope_hint": "code.simulation:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.simulation:human_authored",
+  "pack_id": "code.simulation"
+}

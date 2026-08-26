@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:orch:orchestrator-comparison",
+  "type": "knowledge",
+  "title": "Airflow, Dagster, and Prefect models",
+  "description": "How a task-centric scheduler, an asset/software-defined model, and a flexible Pythonic flow model differ in abstraction.",
+  "body": "Use when choosing or reasoning about an orchestrator. Airflow centers on tasks and operators with a scheduler driving DAG runs per interval; Dagster centers on software-defined assets and their dependencies, modeling data products and lineage directly; Prefect emphasizes dynamic, Pythonic flows with lighter ceremony. Do not assume DAG concepts map identically — asset-centric and task-centric models differ in how dependencies and backfills are expressed. Actions: match the model to whether you think in tasks or in data assets. Validation signals include a pipeline whose dependency model matches the tool's abstraction and reproducible backfills. Risk boundary: forcing one tool's idioms onto another breeds fragile pipelines; if the model fights the workload, escalate the choice before scaling on it.",
+  "domain": "orchestration",
+  "scope_hint": "code.data-pipeline-orchestration:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-pipeline-orchestration",
+  "pack_id": "code.data-pipeline-orchestration"
+}

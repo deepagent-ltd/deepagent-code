@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:privacy:privacy-release-gate",
+  "type": "methodology",
+  "title": "Privacy release gate",
+  "description": "Before shipping privacy-impacting changes, confirm inventory, minimization, redaction, retention, user-rights impact, and human approval when required.",
+  "body": "Use for production-bound changes involving personal data collection, sharing, retention, deletion, export, telemetry, or model context. Do not perform deployment or approve legal policy. Steps: assemble data-flow evidence, list changed fields and sinks, show tests for redaction/export/delete as applicable, record residual risk, and request approval for regulated or ambiguous cases. Validation signals include reproducible commands, review notes, and explicit approval where needed. Risk boundary: missing evidence or unresolved user-rights impact blocks release. Use when Privacy Risk Controls work touches personal-data classes, sinks, retention, consent, logs, prompts, and exports. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: follow the ordered review, edit, and validation sequence; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include data inventory, redaction tests, retention checks, export/delete tests, and approval evidence. Risk boundary: escalate or stop when the task involves PII disclosure, consent bypass, retention drift, and unapproved processor expansion, missing owner evidence, or live external state.",
+  "domain": "privacy",
+  "scope_hint": "risk.privacy:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.privacy",
+  "pack_id": "risk.privacy"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:apidesign:unbounded-list-no-pagination",
+  "type": "failure_dossier",
+  "description": "A list endpoint with no pagination contract returns the entire collection, degrading as data grows and offering no stable iteration.",
+  "body": "Failure mode: a collection endpoint returns all items because paging was never designed, working in testing but failing at scale. Detection signals: response sizes and latencies grow with the dataset; clients time out on large collections; there is no documented way to page. Do not ship a growable collection without a paging contract. Safer fallback: define cursor-based paging with a page size and next-page mechanism before launch, keep ordering stable, and verify a client can iterate all pages as data changes.",
+  "domain": "api_design",
+  "scope_hint": "code.api-design:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.api-design:human_authored",
+  "pack_id": "code.api-design"
+}

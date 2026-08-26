@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:migration:dual-write-divergence",
+  "type": "failure_dossier",
+  "description": "During a dual-write window one of the two stores silently falls out of sync, so the new store holds incomplete or stale data at cutover.",
+  "body": "Failure mode: writes go to both old and new stores but a failure, race, or missed code path updates only one, so the stores diverge and cutover serves wrong data. Detection signals: a reconciliation job reports mismatches; row counts differ between stores; some mutation paths write to only one store. Do not cut reads over to the new store while reconciliation shows drift. Safer fallback: make dual-writes transactional or idempotent with retries, alert on reconciliation divergence, fix the missed write paths, and only cut over after a clean parity window; keep old-store reads as the rollback.",
+  "domain": "code",
+  "scope_hint": "code.migration:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.migration:human_authored",
+  "pack_id": "code.migration"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:k8s:dry-run-and-diff-before-apply",
+  "type": "methodology",
+  "title": "Validate manifests by dry-run and diff before apply",
+  "description": "Run server-side dry-run, schema validation, and a diff against live state so an apply has no surprises.",
+  "body": "Steps: 1. Render the final manifests (kustomize build or helm template). 2. Validate schema and policy (kubectl apply --dry-run=server, plus conftest/kubeconform if present). 3. Run kubectl diff (or helm diff upgrade) against the live cluster and read every changed field. 4. Confirm the diff matches intent and contains no unexpected deletions or RBAC widening. 5. Only then apply, watching rollout status. Rollback point: before the apply, since diff is read-only. Validation: the diff is the gate; an apply whose diff was not reviewed is unverified.",
+  "domain": "kubernetes",
+  "scope_hint": "platform.kubernetes:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.kubernetes",
+  "pack_id": "platform.kubernetes"
+}

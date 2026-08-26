@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:frontend_performance:split-and-defer-bundles",
+  "type": "strategy",
+  "title": "Split and defer non-critical JavaScript",
+  "description": "Code-split by route and interaction, lazy-load below-the-fold and rarely-used modules, and keep the critical path bundle small.",
+  "body": "Use when the initial JS payload is large or a route pulls in code it does not immediately need. Do not eagerly import heavy libraries (charts, editors, date pickers) into the critical path. Actions: route-level split, dynamic-import interaction-triggered features, preload only what the first paint needs, and inspect the bundle analyzer for the biggest chunks. Validation signals include a smaller initial transfer in the network panel and an improved LCP/TBT in a trace. Risk boundary: over-splitting causes request waterfalls and layout pop-in; verify perceived load did not get worse, not just that the main chunk shrank.",
+  "domain": "frontend",
+  "scope_hint": "code.frontend.performance:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.performance",
+  "pack_id": "code.frontend.performance"
+}

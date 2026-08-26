@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:sdk:semver-encodes-compatibility-promise",
+  "type": "knowledge",
+  "title": "Semver encodes a compatibility promise",
+  "description": "Major signals a breaking change, minor adds backward-compatible features, and patch fixes bugs; the version is a contract, not a label.",
+  "body": "Use when choosing a version bump for an SDK change. Under semver, a major bump is the only place breaking changes belong; minor must stay backward compatible; patch must be behavior-preserving bug fixes. Do not slip a breaking change into a minor or patch because it 'feels small'. Actions: diff the public surface (names, types, defaults, errors, wire shapes) and pick the bump from the largest change. Validation signals include a public-API diff and a contract test passing against the prior minor. Risk boundary: a breaking change shipped as a patch silently breaks pinned consumers on auto-update; treat any public-surface removal or semantic change as major.",
+  "domain": "sdk",
+  "scope_hint": "code.sdk:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.sdk",
+  "pack_id": "code.sdk"
+}

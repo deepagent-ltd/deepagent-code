@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:mt:silo-pool-bridge-tradeoffs",
+  "type": "knowledge",
+  "title": "Silo, pool, and bridge isolation trade-offs",
+  "description": "Silo gives each tenant dedicated resources for strong isolation at higher cost, pool shares them for density, and bridge mixes the two.",
+  "body": "Use when reasoning about which isolation model fits a tenant. Do not treat the choice as purely a cost decision. Silo isolates a tenant in its own resources, maximizing separation and blast-radius containment but costing more per tenant; pool shares resources with logical separation for density but concentrates risk; bridge assigns sensitive tenants silos and others pools. Inspect each tenant's sensitivity and scale. Validation signals include the model matching each tenant's isolation requirement. Risk boundary: pooling a highly sensitive tenant trades isolation for cost in a way that is hard to undo, so map sensitivity to model deliberately.",
+  "domain": "multi_tenant",
+  "scope_hint": "code.backend.multi-tenant:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.multi-tenant",
+  "pack_id": "code.backend.multi-tenant"
+}

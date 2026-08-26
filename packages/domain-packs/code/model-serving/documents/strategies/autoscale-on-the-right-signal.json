@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:serving:autoscale-on-the-right-signal",
+  "type": "strategy",
+  "title": "Autoscale on queue depth, not just CPU",
+  "description": "Scale inference replicas on a saturation signal like queue depth or batch latency, which reflects accelerator load better than CPU.",
+  "body": "Use when configuring autoscaling for a GPU-backed service. Do not scale on CPU utilization — a GPU-bound server can be CPU-idle while requests pile up, so CPU-based scaling never triggers. Actions: scale on queue depth, in-flight batch latency, or accelerator utilization, set targets below saturation, and account for replica warm-up time in the scale-up threshold. Validation signals include replicas added before the queue saturates and latency held under a load ramp. Risk boundary: scaling on the wrong signal leaves the service overloaded while metrics look fine; verify the scaling metric reflects actual accelerator saturation under load.",
+  "domain": "model_serving",
+  "scope_hint": "code.model-serving:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.model-serving",
+  "pack_id": "code.model-serving"
+}

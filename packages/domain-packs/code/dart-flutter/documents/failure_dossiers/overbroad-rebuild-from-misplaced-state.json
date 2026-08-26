@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:flutter:overbroad-rebuild-from-misplaced-state",
+  "type": "failure_dossier",
+  "description": "State held too high or non-const widgets cause the whole tree to rebuild on every change, producing list and animation jank.",
+  "body": "Failure mode: all state lives in a top-level widget and subtrees are not const, so any small change rebuilds the entire tree including static parts, causing dropped frames on scrollable lists and animations. Detection signals: the DevTools rebuild counter shows far more widgets rebuilding than changed; jank during scrolling or typing; a single setState at the root driving the whole screen; widgets that never change lack const. Do not hoist all state to the top or omit const on static subtrees. Safer fallback: push state down to the smallest widget that needs it, mark unchanging subtrees const, use targeted listeners (Selector/ValueListenableBuilder) so only dependents rebuild, and confirm with the rebuild profiler.",
+  "domain": "dart",
+  "scope_hint": "code.dart-flutter:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.dart-flutter:human_authored",
+  "pack_id": "code.dart-flutter"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:glci:rules-evaluation-and-pipeline-sources",
+  "type": "knowledge",
+  "title": "Rules evaluation and pipeline sources",
+  "description": "Rules are evaluated top-down to the first match against the pipeline source and predefined variables; mixing with only/except is invalid.",
+  "body": "Use when controlling when jobs run or debugging unexpected job creation. Rules evaluate in order and the first matching clause decides whether the job is added and with what when (on_success, manual, never); if none match, the job is not added. The CI_PIPELINE_SOURCE variable (push, merge_request_event, schedule, web, trigger, tag) is the key signal in if conditions. Rules and only/except cannot be combined on the same job. Do not assume an unmatched job runs by default or that branch pipelines and MR pipelines are the same source. Actions: write explicit if rules per source and preview with CI lint. Validation signals include jobs appearing only in the intended sources. Risk boundary: a rule matching a broader source than intended can run privileged jobs on untrusted refs.",
+  "domain": "ci_gitlab",
+  "scope_hint": "platform.ci-gitlab:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.ci-gitlab",
+  "pack_id": "platform.ci-gitlab"
+}

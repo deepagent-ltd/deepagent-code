@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:flutter:dart-async-model",
+  "type": "knowledge",
+  "title": "Dart's async model: event loop, Futures, Streams, isolates",
+  "description": "Each isolate is single-threaded with an event loop; async/await yields without parallelism, and only isolates run code in parallel.",
+  "body": "Use when reasoning about concurrency in Dart. An isolate has a single thread and an event loop; async/await and Futures schedule continuations on that loop, so awaiting I/O lets other events run but does not create parallelism, and a synchronous CPU-heavy function still blocks the loop even inside an async method. Streams deliver a sequence of async events (single- or broadcast-subscription). True parallelism requires another isolate, which shares no memory and communicates by message passing (copying data). Do not expect await to offload CPU work or assume isolates share state. Actions: use async for I/O concurrency and compute()/Isolate.run for CPU parallelism. Validation signals include a frame trace showing no UI-isolate stall during heavy work. Risk boundary: blocking the UI isolate freezes rendering, and broadcast streams without cancellation leak subscriptions.",
+  "domain": "dart",
+  "scope_hint": "code.dart-flutter:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.dart-flutter",
+  "pack_id": "code.dart-flutter"
+}

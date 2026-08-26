@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:mongo:bson-document-size-limit",
+  "type": "knowledge",
+  "title": "The 16MB BSON document size limit",
+  "description": "A single document cannot exceed 16MB, which caps how much can be embedded before a redesign is forced.",
+  "body": "Reference for embedding decisions. Every BSON document has a hard 16MB ceiling, so an unbounded embedded array or accumulated history eventually fails to update. Use when deciding whether growth-prone data can be embedded. Do not embed a collection that grows without limit; updates start to fail with a document-too-large error as it nears the cap. Validation signals include the failing update reporting BSONObjectTooLarge and Object.bsonsize() showing the document near 16MB. Risk boundary: when content is legitimately large (files, blobs), use GridFS or external object storage instead of embedding, and escalate any model that assumes unlimited document growth.",
+  "domain": "mongodb",
+  "scope_hint": "code.database.mongodb:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.mongodb",
+  "pack_id": "code.database.mongodb"
+}

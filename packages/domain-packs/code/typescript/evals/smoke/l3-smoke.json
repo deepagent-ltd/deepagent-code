@@ -1,0 +1,74 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.typescript",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "typescript",
+      "javascript"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [
+      "typescript"
+    ],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.typescript: typecheck, tsconfig, declaration files, module resolution, ESM/CJS, generics, package exports, and generated types"
+    ],
+    "round_signals": [
+      "l3_validation_smoke"
+    ],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "plain prose note with no repository or domain signal"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "TypeScript type and module behavior typecheck, tsconfig, declaration files, module resolution, ESM/CJS, generics, package exports, and generated types validation smoke diagnosis",
+  "expected_pack_id": "code.typescript",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "TypeScript type and module behavior L3 validation smoke",
+    "signals": [
+      "package-local typecheck",
+      "tsconfig/package.json inspection",
+      "emitted declarations",
+      "module smoke",
+      "and consumer import checks"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "TypeScript type and module behavior diagnosis smoke",
+    "signals": [
+      "separate inference",
+      "exported surface",
+      "module format",
+      "path alias",
+      "generated type",
+      "and runtime mismatch causes"
+    ]
+  },
+  "source_refs": [
+    "source:typescript-handbook:paraphrased",
+    "source:nodejs-docs:paraphrased"
+  ]
+}

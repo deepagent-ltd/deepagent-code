@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:local_dev:one-command-bootstrap",
+  "type": "strategy",
+  "title": "Make onboarding a single reproducible command",
+  "description": "Provide one documented command that installs dependencies, sets up config, and brings the dev environment to a runnable state on a fresh checkout.",
+  "body": "Use when a new contributor or a fresh machine needs to run the project. Do not document a long manual sequence of undocumented steps, and avoid setup that silently depends on globally-installed tools a newcomer lacks. Actions: encode install, config scaffolding, and any codegen into one entrypoint (make setup, a task runner, or a script), have it check prerequisites and fail with clear guidance, and inspect that it works from a clean clone. Validation signals include a fresh-clone run reaching a runnable state with no manual edits and a documented expected output. Risk boundary: if bootstrap needs a real secret or production credential to complete, stop and require the human to supply it deliberately rather than embedding or defaulting it.",
+  "domain": "platform",
+  "scope_hint": "platform.local-dev:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.local-dev",
+  "pack_id": "platform.local-dev"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:mon:define-sli-slo-and-budget",
+  "type": "methodology",
+  "title": "Define an SLI, SLO, and error budget",
+  "description": "Pick a user-centric SLI, set an achievable SLO target, and derive the error budget and burn alerts.",
+  "body": "Steps: 1. Choose an SLI that reflects user experience (success ratio, latency percentile). 2. Set an SLO target that is achievable and meaningful. 3. Derive the error budget as one minus the target over the window. 4. Build multi-window burn-rate alerts (fast and slow). 5. Validate against historical data so the alerts would have fired correctly. Rollback point: before enabling the burn-rate alerts in paging. Validation: a simulated burn triggers the expected alert and a quiet period stays silent.",
+  "domain": "monitoring",
+  "scope_hint": "platform.monitoring:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.monitoring",
+  "pack_id": "platform.monitoring"
+}

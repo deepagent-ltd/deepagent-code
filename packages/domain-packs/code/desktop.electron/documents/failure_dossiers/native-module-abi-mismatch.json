@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:electron:native-module-abi-mismatch",
+  "type": "failure_dossier",
+  "description": "Shipping a native module compiled against the system Node ABI instead of Electron's, causing load-time crashes on users' machines.",
+  "body": "Failure mode: a native addon is installed/built for the system Node version rather than the app's Electron version, so it is ABI-incompatible and throws or crashes when Electron tries to load it, sometimes only on a user's platform. Detection signals: 'was compiled against a different Node.js version' errors; the module loads in dev but crashes in the packaged app; failures on specific platforms/arches. Do not assume system-Node native builds work in Electron. Safer fallback: prefer N-API/prebuilt modules, otherwise rebuild against the app's exact Electron version per target with electron-rebuild, and smoke-test loading on every shipped platform in CI.",
+  "domain": "electron",
+  "scope_hint": "code.desktop.electron:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.desktop.electron:human_authored",
+  "pack_id": "code.desktop.electron"
+}

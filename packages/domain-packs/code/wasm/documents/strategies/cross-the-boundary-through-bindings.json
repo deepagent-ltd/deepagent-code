@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:wasm:cross-the-boundary-through-bindings",
+  "type": "strategy",
+  "title": "Cross the JS boundary through generated bindings",
+  "description": "Pass strings, structs, and arrays via a binding layer (wasm-bindgen) that marshals them, not as raw integers you decode by hand.",
+  "body": "Use when exposing functions across the JS<->WASM boundary. Do not hand-pass pointers and lengths and decode linear memory manually unless you must, because the ABI only natively carries numbers and getting the encoding/ownership wrong corrupts data. Actions: use wasm-bindgen (or the component model) to generate typed glue that copies strings/arrays in and out and manages allocation, and keep the raw exported functions for hot numeric paths only. Validation signals include round-tripping a string and a struct across the boundary and getting identical values back in a test. Risk boundary: a hand-rolled ABI that mis-encodes length or ownership reads garbage or frees twice; prefer generated bindings and verify any manual marshalling with a round-trip test.",
+  "domain": "wasm",
+  "scope_hint": "code.wasm:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.wasm",
+  "pack_id": "code.wasm"
+}

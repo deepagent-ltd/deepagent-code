@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:lang_csharp_dotnet:nullable-contract-owner",
+  "type": "strategy",
+  "description": "Fix nullable reference warnings at the API or data boundary rather than suppressing them locally.",
+  "body": "Use when compiler warnings mention possible null dereference, non-null initialization, or nullable conversion. Do not add ! or #nullable disable to silence ownership problems. Inspect the producer, constructor, model binding, serializer, or database boundary; add validation or correct annotations. Verify dotnet build with warnings policy and negative tests where possible. Risk boundary includes public API contract changes. Use when C# / .NET Engineering work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: choose the smallest direction that preserves the domain contract; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "csharp_dotnet",
+  "scope_hint": "code.csharp-dotnet:strategys",
+  "evidence_strength": "medium",
+  "provenance_tag": "code.csharp-dotnet:seed:dotnet_cli_csharp_docs:paraphrased",
+  "pack_id": "code.csharp-dotnet"
+}

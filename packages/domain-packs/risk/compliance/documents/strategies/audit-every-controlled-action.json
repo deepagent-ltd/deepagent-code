@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:comp:audit-every-controlled-action",
+  "type": "strategy",
+  "title": "Emit an audit record for every controlled action",
+  "description": "Each action on a regulated resource writes an append-only record of who, what, when, and the before/after state.",
+  "body": "Use when adding or changing any code path that creates, reads, modifies, or deletes a regulated resource (financial transaction, health record, access grant). Do not rely on application logs that can be edited or rotated away. Actions: write a structured audit record carrying actor identity, timestamp, action, resource id, and before/after values to an append-only sink at the point the action commits, inside the same transaction. Validation signals include a test that performing the action produces exactly one immutable record with all required fields. Risk boundary: a controlled action that can succeed without emitting an audit record is a blocking finding; escalate rather than ship the path.",
+  "domain": "compliance",
+  "scope_hint": "risk.compliance:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.compliance",
+  "pack_id": "risk.compliance"
+}

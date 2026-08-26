@@ -1,0 +1,11 @@
+{
+  "ref_id": "skill:cpp:run-language-gate",
+  "type": "skill",
+  "description": "In C++, run the package-local validation gate (CMake targets (cmake --build) with the configured generator and CMAKE_BUILD_TYPE) and summarize the diagnostics.",
+  "body": "In C++, this capability runs the owning package's gate and reports the outcome so the next action is obvious. Use when you need an authoritative pass/fail for a C++ package before or after a change. Do not run a root or generic command that bypasses the package's real config, and avoid reporting success without the exit code. Actions: take the package path, run the compiler at the project's -std (e.g. -std=c++20) with -Wall -Wextra then clang-tidy, include-what-you-use, and -Wpedantic diagnostics and the ctest suite plus a sanitized build of the touched target, and record the command, exit code, the first template/overload-resolution error and the instantiation backtrace, and the recommended next step. Validation signals include the captured command log, the exit code, and the first diagnostics with file and line. Risk boundary: surface, do not auto-fix; escalate when the gate requires network access, credentials, or a toolchain change.",
+  "domain": "cpp",
+  "scope_hint": "code.cpp:skills",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.cpp:skill_survey",
+  "pack_id": "code.cpp"
+}

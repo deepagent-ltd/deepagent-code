@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:orch:sensor-slot-exhaustion",
+  "type": "failure_dossier",
+  "description": "Poke-mode sensors hold worker slots for hours and deadlock the scheduler under concurrency.",
+  "body": "Failure mode: many sensors run in poke mode, each occupying a worker slot while polling for hours, so the executor's slots fill with waiting sensors and no real tasks can run, stalling the whole scheduler. Detection signals: a worker pool saturated by sensor tasks in a running state, and ready downstream tasks queued behind them unable to start. Do not just add more workers to absorb the waiting sensors. Safer fallback: switch sensors to reschedule or deferrable mode so waiting frees the slot, set explicit timeouts, and limit concurrent sensors, then confirm real tasks can schedule while sensors wait.",
+  "domain": "orchestration",
+  "scope_hint": "code.data-pipeline-orchestration:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-pipeline-orchestration:human_authored",
+  "pack_id": "code.data-pipeline-orchestration"
+}

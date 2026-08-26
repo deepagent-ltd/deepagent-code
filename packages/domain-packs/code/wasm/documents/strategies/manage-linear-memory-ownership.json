@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:wasm:manage-linear-memory-ownership",
+  "type": "strategy",
+  "title": "Make linear-memory ownership explicit across the boundary",
+  "description": "Define who allocates and frees each buffer so data crossing the boundary is neither leaked nor freed twice.",
+  "body": "Use when passing buffers (strings, byte arrays) between JS and WASM. Do not assume the garbage collector or the other side will free a buffer you allocated in linear memory, because WASM linear memory is manually managed and JS will not reclaim it. Actions: decide an ownership contract (caller allocates and frees, or the binding layer owns it), free exactly once after the consumer is done, and prefer the binding layer's managed wrappers that pair alloc with free. Validation signals include a leak test that round-trips many buffers with linear-memory size staying bounded, and no use-after-free. Risk boundary: a buffer freed on both sides or never freed corrupts or grows memory; make ownership explicit and verify with a repeated round-trip leak test.",
+  "domain": "wasm",
+  "scope_hint": "code.wasm:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.wasm",
+  "pack_id": "code.wasm"
+}

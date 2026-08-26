@@ -1,0 +1,73 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "hardware.protocols",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "hw_protocols",
+      "i2c",
+      "spi",
+      "uart",
+      "can",
+      "usb",
+      "pcie"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for hardware.protocols: I2C addressing and clock stretching, SPI modes and chip select, UART framing and baud, CAN arbitration, USB enumeration, PCIe lanes and TLP"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "fix a React useEffect dependency array bug"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "i2c address ack clock stretching spi mode chip select uart baud framing can arbitration usb enumeration pcie lane tlp",
+  "expected_pack_id": "hardware.protocols",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "hardware.protocols L3 validation smoke",
+    "signals": [
+      "a logic-analyzer capture shows the expected start, address, ack, and stop phases on the I2C bus",
+      "the SPI clock polarity and phase match the peripheral datasheet and data lands on the correct edge",
+      "UART framing matches the configured baud, parity, and stop bits with no framing errors counted",
+      "USB enumeration completes through address assignment and configuration without descriptor request retries"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "hardware.protocols diagnosis smoke",
+    "signals": [
+      "a missing I2C ACK points to a wrong device address or a peripheral held in reset",
+      "garbled UART characters that worsen at higher baud indicate a clock or baud-rate mismatch",
+      "SPI data shifted by one bit reveals a clock-polarity or phase mode mismatch",
+      "repeated CAN error frames suggest bit-timing misconfiguration or bus-off from acknowledgement loss",
+      "a USB device that fails enumeration after reset implies a malformed or unanswered descriptor request"
+    ]
+  },
+  "source_refs": [
+    "source:nxp-i2c-spec:paraphrased",
+    "source:usb-2-0-spec:paraphrased"
+  ]
+}

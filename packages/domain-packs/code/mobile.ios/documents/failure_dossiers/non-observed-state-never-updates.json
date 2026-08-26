@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:ios:non-observed-state-never-updates",
+  "type": "failure_dossier",
+  "description": "Mutating a SwiftUI property that isn't part of the observed state, so the view silently never re-renders.",
+  "body": "Failure mode: a value is stored in a plain property (not @State) or a model field that isn't @Published, so changing it does not invalidate the view and the UI shows stale data with no error. Detection signals: data clearly changes but the screen doesn't update; adding a manual refresh 'fixes' it; the property has no state wrapper. Do not expect non-observed changes to refresh SwiftUI. Safer fallback: make the mutable source the authoritative observed state (@State for value, @Published in a @StateObject/@ObservedObject model), pass writes via @Binding, and let the framework re-render from the single source of truth.",
+  "domain": "ios",
+  "scope_hint": "code.mobile.ios:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mobile.ios:human_authored",
+  "pack_id": "code.mobile.ios"
+}

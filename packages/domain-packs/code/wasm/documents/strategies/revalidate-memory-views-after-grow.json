@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:wasm:revalidate-memory-views-after-grow",
+  "type": "strategy",
+  "title": "Re-fetch memory views after the heap can grow",
+  "description": "Treat any JS TypedArray view of WASM memory as invalidated whenever the module may call memory.grow.",
+  "body": "Use when JS reads WASM linear memory through a TypedArray (e.g. new Uint8Array(memory.buffer)). Do not cache that view across a call that can allocate, because memory.grow replaces the underlying ArrayBuffer and detaches the old one, so the cached view reads stale or throws on a detached buffer. Actions: re-create the view from memory.buffer after any WASM call that may grow the heap, or copy data out immediately; keep views short-lived. Validation signals include a test that grows memory between obtaining and using a view and still reads correct bytes. Risk boundary: reading through a detached buffer yields wrong data or exceptions intermittently; refresh views after potential growth and verify under a grow-triggering workload.",
+  "domain": "wasm",
+  "scope_hint": "code.wasm:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.wasm",
+  "pack_id": "code.wasm"
+}

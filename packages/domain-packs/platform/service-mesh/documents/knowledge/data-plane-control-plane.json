@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:mesh:data-plane-control-plane",
+  "type": "knowledge",
+  "title": "Mesh data plane vs control plane responsibilities",
+  "description": "Explains how the control plane (e.g. istiod) configures sidecar proxies and how the data plane (Envoy) carries traffic and enforces policy.",
+  "body": "Use when reasoning about how mesh config reaches traffic. Do not expect a config change to take effect without the proxies reloading. Actions: understand the control plane watches Kubernetes/mesh CRDs and pushes xDS config to each sidecar, the data plane proxies intercept inbound/outbound traffic via iptables and enforce routing/mTLS/policy, and config propagation is eventually consistent. Inspect with istioctl proxy-status to see sync state. Validation signals include proxy-status showing SYNCED and the new config present in the proxy dump. Risk boundary: a control-plane upgrade can disrupt config push and is operationally sensitive.",
+  "domain": "service_mesh",
+  "scope_hint": "platform.service-mesh:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.service-mesh",
+  "pack_id": "platform.service-mesh"
+}

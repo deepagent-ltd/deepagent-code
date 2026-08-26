@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:gcp:cloud-run-execution-model",
+  "type": "knowledge",
+  "title": "Cloud Run request lifecycle, CPU allocation, and concurrency",
+  "description": "Explains per-instance concurrency, CPU allocated only during requests vs always-on, autoscaling on concurrency, and the container contract.",
+  "body": "Use when reasoning about Cloud Run behavior. Do not assume background goroutines keep running between requests by default. Actions: understand that an instance serves up to its concurrency setting in parallel, CPU is throttled outside request handling unless CPU-always-allocated is set, autoscaling reacts to concurrent requests and queue depth, and the container must listen on $PORT and start fast. Inspect request logs and instance count. Validation signals include instance count tracking load and background work completing only when CPU-always-on is enabled. Risk boundary: enabling always-on CPU raises cost and should be a deliberate choice.",
+  "domain": "gcp",
+  "scope_hint": "platform.cloud.gcp:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.gcp",
+  "pack_id": "platform.cloud.gcp"
+}

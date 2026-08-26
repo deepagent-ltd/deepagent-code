@@ -1,0 +1,11 @@
+{
+  "ref_id": "skill:gpu:run-correctness-harness",
+  "type": "skill",
+  "description": "Run a CPU-reference correctness harness against the kernel output before trusting any benchmark number.",
+  "body": "Use when a GPU kernel has been edited and you need ground truth on whether it still computes the right result. Procedure: build a small deterministic input, compute the expected output on the CPU (or a known-good reference kernel), run the GPU kernel, and compare element-wise within an explicit floating-point tolerance. Report the max absolute and relative error, the tolerance used, and the input shape. Do not use a benchmark pass, a clean compile, or visual inspection as evidence of correctness; only a reference comparison is evidence. This skill exposes capability only and must not run device code without runtime permission. Risk boundary: if the comparison fails or tolerance is unclear, stop and surface the numerical drift rather than continuing to optimize.",
+  "domain": "gpu_kernel",
+  "scope_hint": "gpu_kernel:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:gpu_kernel:human_authored",
+  "pack_id": "code.gpu-kernel"
+}

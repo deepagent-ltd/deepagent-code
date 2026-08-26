@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:redis:invalidate-on-write-deterministically",
+  "type": "strategy",
+  "title": "Invalidate cache on write deterministically",
+  "description": "Writes to the source delete or update the affected cache keys so reads cannot serve indefinitely-stale data.",
+  "body": "Use when the same data is both written to a source and cached. Do not rely on TTL alone to clear stale data after an update, which leaves a window of wrong reads as long as the TTL. Actions: on each write, delete (preferred over update, to avoid races) the precise cache keys derived from the changed entity; key naming must make the affected keys computable from the write. Validation signals include a test that an update is reflected on the next read rather than serving the old cached value until expiry. Risk boundary: invalidation that cannot enumerate all derived keys (e.g. list/aggregate caches) leaves stale data; flag the un-invalidatable keys and shorten their TTL or version the key namespace.",
+  "domain": "redis",
+  "scope_hint": "code.database.redis:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.redis",
+  "pack_id": "code.database.redis"
+}

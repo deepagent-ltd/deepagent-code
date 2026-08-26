@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:ecom:enforce-order-state-graph",
+  "type": "strategy",
+  "title": "Enforce the order state graph",
+  "description": "Allow only explicit transitions between order states and reject illegal jumps.",
+  "body": "Use when an order moves through pending, paid, shipped, delivered, cancelled, and refunded. Do not let any code set an arbitrary status — unguarded writes produce impossible states like shipped-but-unpaid. Actions: define the allowed transition graph, guard every status change against it, and persist the transition with its trigger. Validation signals include every persisted transition being a legal edge and rejected illegal jumps. Risk boundary: a cancelled or refunded order must not transition back to fulfilment — treat backward money-affecting transitions as requiring human review.",
+  "domain": "ecommerce",
+  "scope_hint": "business.ecommerce:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:business.ecommerce",
+  "pack_id": "business.ecommerce"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:cass:unbounded-partition-growth",
+  "type": "failure_dossier",
+  "description": "A partition key with too little cardinality grows without bound and destabilises its replicas.",
+  "body": "Failure mode: a low-cardinality partition key (or an append-only series with no bucketing) accumulates rows indefinitely, so one partition grows past hundreds of megabytes and the replicas owning it suffer GC pressure, slow reads, and repair difficulty. Detection signals: nodetool tablehistograms shows a max partition far above the 100MB warning, reads on that key time out, and a few nodes carry disproportionate load. Do not model unbounded data on a single partition. Safer fallback: add a bucketing component (such as a time window) to the partition key, backfill into the re-bucketed table, and verify max partition size stays bounded.",
+  "domain": "cassandra",
+  "scope_hint": "code.database.cassandra:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.cassandra:human_authored",
+  "pack_id": "code.database.cassandra"
+}

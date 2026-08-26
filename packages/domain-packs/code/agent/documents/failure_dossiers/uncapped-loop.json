@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:agent:uncapped-loop",
+  "type": "failure_dossier",
+  "description": "An agent loop runs until the model decides to stop, with no step cap or terminal check, so a wrong decision loops forever.",
+  "body": "Failure mode: the control loop is a while-true that exits only when the model emits a 'done' token, so a task it cannot complete spins indefinitely, calling tools and burning cost. Detection signals: no maximum step count; no explicit terminal condition checked each iteration; the only exit is model-driven; no test for a non-converging task. Do not depend on the model choosing to stop. Safer fallback: set a step cap with defined at-cap behavior, check an explicit terminal condition every iteration, and add a test that a non-converging task halts at the cap.",
+  "domain": "agent",
+  "scope_hint": "code.agent:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.agent:human_authored",
+  "pack_id": "code.agent"
+}

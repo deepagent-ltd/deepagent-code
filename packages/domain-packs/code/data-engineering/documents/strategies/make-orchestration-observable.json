@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:dataeng:make-orchestration-observable",
+  "type": "strategy",
+  "title": "Make orchestration dependencies and SLAs explicit",
+  "description": "Model task dependencies as a DAG with declared SLAs and alerting so a late or failed upstream is visible, not silently stale.",
+  "body": "Use when scheduling multi-step pipelines. Do not chain jobs by guessing run times or cron offsets — a slow upstream then feeds a downstream stale or empty data. Actions: declare explicit task dependencies in the orchestrator, set SLAs/timeouts, trigger downstream on upstream success (data-aware scheduling), and alert on miss. Validation signals include a DAG where every downstream waits on its real upstream and an SLA-miss alert firing on delay. Risk boundary: a hidden timing dependency produces correct-looking but stale outputs; treat cron-coupled pipelines as fragile and convert them to explicit dependencies.",
+  "domain": "data_engineering",
+  "scope_hint": "code.data-engineering:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-engineering",
+  "pack_id": "code.data-engineering"
+}

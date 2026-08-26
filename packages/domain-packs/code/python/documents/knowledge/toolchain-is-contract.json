@@ -1,0 +1,11 @@
+{
+  "ref_id": "knowledge:python:toolchain-is-contract",
+  "type": "knowledge",
+  "description": "In Python, the interpreter version, the active venv, and the dependency resolver are part of the contract and changing them changes behavior.",
+  "body": "In Python, the interpreter version, the active venv, and the dependency resolver define how code compiles, lints, and resolves dependencies; bumping any of them can change diagnostics and emitted output. Use when you touch the interpreter version, the active venv, and the dependency resolver or when a build behaves differently than the pinned environment. Do not silently upgrade the toolchain or override the pinned version to make an error disappear. Actions: read the pinned config, match the project's the interpreter version, the active venv, and the dependency resolver, then run mypy/pyright type checks, ruff/flake8 lint, and DeprecationWarnings and the package's editable install (pip install -e / uv sync) inside its venv to compare against the baseline. Validation signals include identical mypy/pyright type checks, ruff/flake8 lint, and DeprecationWarnings output, a reproducible build, and unchanged lockfile resolution. Risk boundary: a toolchain bump is a deliberate, reviewed change; escalate rather than upgrading to unblock yourself.",
+  "domain": "python",
+  "scope_hint": "code.python:knowledge",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.python:skill_survey",
+  "pack_id": "code.python"
+}

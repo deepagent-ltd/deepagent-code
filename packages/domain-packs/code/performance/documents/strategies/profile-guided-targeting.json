@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:performance:profile-guided-targeting",
+  "type": "strategy",
+  "title": "Let the profile choose the optimization target",
+  "description": "Optimize the function the profiler proves dominates cost, not the code that looks slow, so effort lands on the actual bottleneck.",
+  "body": "Use when deciding where to spend optimization effort. Do not guess from intuition or micro-optimize a path that the profile shows is negligible, and avoid optimizing before measuring. Actions: capture a representative profile under realistic load, read the flame graph or top-N self/total time, and pick the dominant frame; estimate the ceiling (Amdahl) before investing. Record the profiled hotspot and its share of total time. Validation signals include a flame graph identifying the frame and a post-change profile showing the share dropped. Risk boundary: if the hottest frame is in a dependency or syscall you cannot change, escalate a design change rather than churning unreachable code.",
+  "domain": "code",
+  "scope_hint": "code.performance:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.performance",
+  "pack_id": "code.performance"
+}

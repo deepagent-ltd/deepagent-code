@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:mlai:no-checkpoint-on-long-run",
+  "type": "failure_dossier",
+  "description": "Running a long or preemptible training job without checkpointing optimizer state, losing all progress on interruption.",
+  "body": "Failure mode: a multi-hour job saves nothing (or saves weights without optimizer/scheduler state), so a preemption or crash forces a full restart or a degraded resume. Detection signals: no checkpoint files appear during training; a resume restarts the learning-rate schedule from scratch; spot-instance reclaim wipes the run. Do not run long jobs without resumable checkpoints. Safer fallback: checkpoint weights, optimizer, scheduler, and step on an interval and at best-validation, and verify a resume continues at the same loss.",
+  "domain": "ml",
+  "scope_hint": "code.ml-ai:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.ml-ai:human_authored",
+  "pack_id": "code.ml-ai"
+}

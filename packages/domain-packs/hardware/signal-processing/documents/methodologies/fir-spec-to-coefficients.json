@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:sigproc:fir-spec-to-coefficients",
+  "type": "methodology",
+  "title": "Design an FIR filter from spec to coefficients",
+  "description": "Translate passband, stopband, and ripple requirements into a tap count and coefficient set using a windowed or equiripple method.",
+  "body": "Use when a filtering requirement arrives as frequency-domain specifications. Do not pick a tap count by guess, because too few taps misses attenuation and too many wastes cycles. Actions: estimate order from the transition width and attenuation, generate coefficients, then verify the simulated magnitude response against every spec edge. Validation signals include a passband ripple and stopband attenuation that both meet the mask and a group-delay measurement confirming linear phase. Risk boundary: when the order estimate exceeds the cycle budget, escalate to a multirate or cascaded structure rather than silently relaxing the spec.",
+  "domain": "signal_processing",
+  "scope_hint": "hardware.signal-processing:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.signal-processing",
+  "pack_id": "hardware.signal-processing"
+}

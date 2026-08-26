@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:sigproc:choose-fft-length-radix",
+  "type": "strategy",
+  "title": "Choose FFT length and radix for the workload",
+  "description": "Select FFT size as a power of two near the signal length and pick a radix the target hardware accelerates, padding rather than truncating.",
+  "body": "Use when transforming a finite signal block and you control the transform length. Do not truncate the input to force a convenient size, since dropped samples discard energy and shift bins. Actions: round the block length up to a power of two, zero-pad to that length, and verify the chosen radix maps onto the platform's FFT primitive. Validation signals include a parity test where inverse FFT reconstructs the padded input and bin resolution equals sample_rate divided by FFT length. Risk boundary: when latency forbids padding, escalate to a chirp-z or Bluestein transform rather than silently dropping samples.",
+  "domain": "signal_processing",
+  "scope_hint": "hardware.signal-processing:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.signal-processing",
+  "pack_id": "hardware.signal-processing"
+}

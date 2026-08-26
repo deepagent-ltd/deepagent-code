@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:cli:design-a-subcommand-structure",
+  "type": "methodology",
+  "title": "Design a subcommand structure",
+  "description": "Organize a multi-action tool into a verb/noun subcommand tree with consistent global and per-command flags and discoverable help.",
+  "body": "Steps: 1. Enumerate the actions the tool performs and group them into subcommands (e.g. `tool create`, `tool list`). 2. Decide global flags (apply everywhere, like --verbose) vs per-subcommand flags. 3. Give each subcommand its own help and usage, plus a top-level help listing subcommands. 4. Make unknown subcommands and missing required args fail with a usage error (exit 2). 5. Keep naming and flag conventions consistent across subcommands. Rollback point: before renaming an existing command (a breaking change for scripts). Validation: `tool --help` and `tool <cmd> --help` both work and exit 0, unknown commands error clearly; inconsistent flag names across subcommands is a UX defect to fix.",
+  "domain": "cli",
+  "scope_hint": "code.cli:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.cli",
+  "pack_id": "code.cli"
+}

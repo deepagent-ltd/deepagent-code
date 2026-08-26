@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:embed:measure-isr-and-task-timing",
+  "type": "skill",
+  "title": "Measure ISR and task timing",
+  "description": "Instrument GPIO toggles or a cycle counter and report worst-case ISR latency and task execution time under load.",
+  "body": "Use when asked to verify real-time behavior. Actions: add a GPIO set/clear (or read the DWT cycle counter) around the ISR or task body, capture on a logic analyzer/scope under worst-case load, and report max latency and execution time against the budget. Do not report average timing when a hard deadline requires the worst case. This skill exposes capability only and must not flash or reconfigure hardware without runtime permission. Validation signals include a captured worst-case duration within the timing budget. Risk boundary: if no hardware or analyzer is available, report the timing as unverified rather than asserting a deadline is met from estimation alone.",
+  "domain": "embedded",
+  "scope_hint": "code.embedded:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.embedded",
+  "pack_id": "code.embedded"
+}

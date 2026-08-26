@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:analytics:write-incremental-model",
+  "type": "skill",
+  "title": "Write a correct incremental dbt model",
+  "description": "Steps to define the incremental predicate, late-arriving window, and idempotent merge so it matches a full refresh.",
+  "body": "Use when converting a costly full-refresh model to incremental. Do not append rows where the timestamp simply exceeds the last run — backdated and updated rows are then missed. Actions: configure incremental with a unique key for merge/upsert, set the filter to a lookback window covering late arrivals, handle updates via merge, and reconcile the result against a full refresh. Validation signals include an incremental build matching a full refresh on the same input and a reconciliation diff within tolerance. Risk boundary: a too-narrow lookback drops late data and the model silently undercounts; if reconciliation drifts, treat the model as incorrect, full-refresh it, and widen the window before relying on it.",
+  "domain": "analytics",
+  "scope_hint": "code.analytics:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.analytics",
+  "pack_id": "code.analytics"
+}

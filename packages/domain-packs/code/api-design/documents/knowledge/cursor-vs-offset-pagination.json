@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:apidesign:cursor-vs-offset-pagination",
+  "type": "knowledge",
+  "title": "Cursor versus offset pagination",
+  "description": "Offset paging is simple but skips or repeats items when the underlying data changes, while cursor paging stays stable across mutations.",
+  "body": "Use when choosing a paging mechanism. Do not default to offset for large or frequently changing collections. Offset paging uses a numeric skip that shifts when rows are inserted or deleted between pages, causing gaps or duplicates; cursor paging encodes a position so iteration stays consistent. Inspect whether the data mutates during iteration. Validation signals include a client paging a changing collection without missing or repeating items. Risk boundary: offset paging on volatile data silently loses records, so prefer cursors when correctness during change matters.",
+  "domain": "api_design",
+  "scope_hint": "code.api-design:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.api-design",
+  "pack_id": "code.api-design"
+}

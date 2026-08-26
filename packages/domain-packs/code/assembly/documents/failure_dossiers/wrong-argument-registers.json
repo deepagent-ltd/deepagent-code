@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:asm:wrong-argument-registers",
+  "type": "failure_dossier",
+  "description": "Reading arguments from the wrong registers (or stack slots) for the platform ABI, so the function operates on garbage.",
+  "body": "Failure mode: an assembly function assumes one ABI's argument registers but is built for another (System V vs Windows x64, or x86-64 vs AArch64), or miscounts which argument is where, so it reads parameters from the wrong registers or stack offsets and computes on unrelated values. Detection signals: results are wrong in a way that tracks argument order; the function works on one OS/architecture but not another; the first argument value appears where the second should be. Do not guess the argument registers. Safer fallback: consult the exact target ABI for argument placement (and stack overflow slots / shadow space), read each parameter from its mandated location, and validate against a C caller across many inputs on each target.",
+  "domain": "assembly",
+  "scope_hint": "code.assembly:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.assembly:human_authored",
+  "pack_id": "code.assembly"
+}

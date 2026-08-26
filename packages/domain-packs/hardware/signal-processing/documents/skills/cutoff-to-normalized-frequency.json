@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:sigproc:cutoff-to-normalized-frequency",
+  "type": "skill",
+  "title": "Convert filter cutoff to normalized frequency",
+  "description": "Express a cutoff in hertz as a fraction of the sample rate so filter design tools receive the correct normalized value.",
+  "body": "Use when feeding a cutoff into a design routine that expects normalized frequency. Do not pass a raw hertz value where a fraction of Nyquist is expected, since that mis-specifies the filter entirely. Actions: divide the cutoff by the Nyquist frequency, verify the result lies between zero and one, and compare the resulting response against the intended corner. Validation signals include the simulated minus-three-decibel point matching the requested cutoff and a normalized value within the valid range. Risk boundary: an out-of-range normalized cutoff silently clips or wraps, so deny any value outside zero to one and recompute the scaling.",
+  "domain": "signal_processing",
+  "scope_hint": "hardware.signal-processing:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.signal-processing",
+  "pack_id": "hardware.signal-processing"
+}

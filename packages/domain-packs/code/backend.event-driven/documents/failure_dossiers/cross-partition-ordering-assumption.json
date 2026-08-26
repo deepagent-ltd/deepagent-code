@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:evt:cross-partition-ordering-assumption",
+  "type": "failure_dossier",
+  "description": "Consumer logic assumes a global event order that the broker does not provide across partitions or topics.",
+  "body": "Failure mode: handlers expect created-before-updated globally, but events for different keys land on different partitions consumed in parallel, so an update can be processed before its create. Detection signals: state corruption when load increases or partitions are added; updates failing because the entity does not exist yet; ordering not enforced by a partition key. Do not assume topic-wide order. Safer fallback: key events for one entity to a single partition, carry a version/sequence, and make handlers tolerant of out-of-order arrival for different keys.",
+  "domain": "event_driven",
+  "scope_hint": "code.backend.event-driven:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.event-driven:human_authored",
+  "pack_id": "code.backend.event-driven"
+}

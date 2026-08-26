@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:cmake:keep-builds-out-of-source",
+  "type": "strategy",
+  "title": "Always build out-of-source",
+  "description": "Configure and build in a dedicated build directory so generated artifacts never mix with tracked source files.",
+  "body": "Use whenever configuring a project. Do not run cmake in the source directory itself. Actions: create a separate build directory; run cmake -S . -B build; build with cmake --build build; add the build dir to .gitignore. Validation signals include a source tree that stays free of CMakeCache.txt and object files, and a clean rebuild after deleting the build directory. Risk boundary: an in-source configure scatters generated files that can shadow a clean build and are easy to commit by accident, so guard against it and remove stray artifacts if found.",
+  "domain": "cmake",
+  "scope_hint": "code.build.cmake:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.build.cmake",
+  "pack_id": "code.build.cmake"
+}

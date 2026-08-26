@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:cmake:fix-stale-cache-configure",
+  "type": "methodology",
+  "title": "Recover from a stale CMake cache",
+  "description": "A procedure to identify and clear cached variables that no longer reflect the intended configuration.",
+  "body": "Use when configure picks up old compiler paths or option values that no longer apply. Do not edit CMakeCache.txt by hand to patch around it. Steps: inspect cached values with cmake -LAH; if a fundamental setting like the compiler changed, delete the build directory and reconfigure clean; otherwise override the specific cache variable with -D. Validation signals include a configure that reflects the current toolchain and a clean rebuild. Risk boundary: a stale cache can silently keep building with the wrong compiler, so prefer a clean build directory when core settings change.",
+  "domain": "cmake",
+  "scope_hint": "code.build.cmake:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.build.cmake",
+  "pack_id": "code.build.cmake"
+}

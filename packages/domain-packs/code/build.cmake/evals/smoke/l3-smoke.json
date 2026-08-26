@@ -1,0 +1,69 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.build.cmake",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "cmake",
+      "build_system",
+      "cmake_targets"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.build.cmake: target usage requirements PUBLIC PRIVATE INTERFACE, find_package vs FetchContent, generator expressions, CMakePresets, ctest"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "fix a React useEffect dependency bug"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "cmake target_link_libraries add_library find_package FetchContent generator expression CMakePresets ctest out-of-source",
+  "expected_pack_id": "code.build.cmake",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "code.build.cmake L3 validation smoke",
+    "signals": [
+      "a clean configure and build from an empty build directory succeeds with no manual edits",
+      "ctest runs the registered tests and reports them as passed",
+      "linking a consumer target pulls the producer's INTERFACE include dirs without restating them",
+      "cmake --build with a different generator or preset produces an equivalent build"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "code.build.cmake diagnosis smoke",
+    "signals": [
+      "a downstream target fails to find headers that an upstream library uses internally only",
+      "find_package reports a package as not found despite it being installed",
+      "in-source build artifacts pollute the source tree and shadow a clean configure",
+      "a generator expression evaluates to the wrong value because it was compared as a plain string",
+      "changing a header does not trigger a rebuild because the dependency was not declared"
+    ]
+  },
+  "source_refs": [
+    "cmake-docs:cmake-buildsystem-7-targets",
+    "cmake-docs:cmake-presets-7-reference"
+  ]
+}

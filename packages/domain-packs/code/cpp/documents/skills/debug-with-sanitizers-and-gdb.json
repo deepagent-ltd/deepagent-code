@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:cpp:debug-with-sanitizers-and-gdb",
+  "type": "skill",
+  "title": "Diagnose memory bugs with sanitizers and gdb/lldb",
+  "description": "Rebuild with AddressSanitizer/UBSan, reproduce the crash, and use gdb/lldb to capture the faulting stack and the offending allocation.",
+  "body": "Use when diagnosing a segfault, use-after-free, or undefined behavior. Actions: rebuild with -fsanitize=address,undefined -g -fno-omit-frame-pointer, rerun to get ASan's report (the access, the allocation site, and the free site), and if needed run under gdb/lldb to `bt` the faulting frame and inspect locals. Report the bug class, the file/line of the bad access, and the allocating/freeing stacks. Do not chase a release-build crash without a debug+sanitizer rebuild. This skill exposes capability only and must not attach to production processes without runtime permission. Validation signals include a reproducible ASan trace pinpointing the access and a clean rerun after the fix. Risk boundary: heap corruption can manifest far from its cause; if ASan and the crash site disagree, trust ASan's allocation trace and escalate rather than patching the symptom.",
+  "domain": "cpp",
+  "scope_hint": "code.cpp:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.cpp",
+  "pack_id": "code.cpp"
+}

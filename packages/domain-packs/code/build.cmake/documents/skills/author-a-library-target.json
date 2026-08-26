@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:cmake:author-a-library-target",
+  "type": "skill",
+  "title": "Author a library target with correct visibility",
+  "description": "Define a library, attach its includes and dependencies with the right PUBLIC/PRIVATE/INTERFACE scope, and verify a consumer links it cleanly.",
+  "body": "Use when adding a new library component to a CMake project. Do not default every requirement to PUBLIC. Actions: add_library with its sources; target_include_directories using PUBLIC for headers consumers include and PRIVATE for internal ones; target_link_libraries with visibility matching each dependency's need; add a small consumer target and confirm it builds via link alone. Validation signals include the consumer compiling without restating includes and only intended requirements propagating. Risk boundary: leaking implementation dependencies through PUBLIC is hard to reverse once consumers depend on them, so scope deliberately.",
+  "domain": "cmake",
+  "scope_hint": "code.build.cmake:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.build.cmake",
+  "pack_id": "code.build.cmake"
+}

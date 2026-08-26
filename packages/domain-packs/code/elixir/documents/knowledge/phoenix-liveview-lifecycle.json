@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:elixir:phoenix-liveview-lifecycle",
+  "type": "knowledge",
+  "title": "The Phoenix LiveView process lifecycle",
+  "description": "A LiveView mounts twice (static then connected), runs as a stateful process per socket, and re-renders from assigns.",
+  "body": "Use when building or debugging LiveView. A LiveView mounts first for a static HTTP render and again after the WebSocket connects (connected?/2 distinguishes them), then lives as a process holding state in socket assigns; events from the client call handle_event, which updates assigns and triggers a diff-based re-render pushed over the socket. Heavy state is best held as temporary assigns or streams to avoid bloating the process. Do not assume mount runs once or that all assigns persist cheaply. Actions: defer expensive work to the connected mount and offload blocking work to Tasks. Validation signals include Phoenix.LiveViewTest covering both mount phases and events. Risk boundary: blocking the LiveView process freezes that user's UI, and assigns are server-side state that must never carry secrets destined to leak into the rendered diff.",
+  "domain": "elixir",
+  "scope_hint": "code.elixir:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.elixir",
+  "pack_id": "code.elixir"
+}

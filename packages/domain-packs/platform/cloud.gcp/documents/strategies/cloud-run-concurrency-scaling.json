@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:gcp:cloud-run-concurrency-scaling",
+  "type": "strategy",
+  "title": "Tune Cloud Run concurrency and instance bounds for the workload shape",
+  "description": "Set per-instance concurrency to match the app's parallelism, use minScale to defeat cold starts, and cap maxScale to bound cost and downstream load.",
+  "body": "Use when a Cloud Run service is slow under burst, cold-starting, or overrunning a downstream. Do not leave concurrency at the default 80 for a single-threaded or memory-heavy app, and avoid minScale 0 for a latency-sensitive endpoint. Actions: set container concurrency to the number of requests one instance handles safely, raise minScale to keep warm instances for latency paths, cap maxScale to protect databases and budget, and enable CPU-always-allocated only if background work runs between requests. Validation signals include gcloud run services describe showing the new bounds, no request-overload 429s, and p99 stable after minScale warms the pool. Risk boundary: changing a production service's scaling or traffic split is human-gated.",
+  "domain": "gcp",
+  "scope_hint": "platform.cloud.gcp:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.gcp",
+  "pack_id": "platform.cloud.gcp"
+}

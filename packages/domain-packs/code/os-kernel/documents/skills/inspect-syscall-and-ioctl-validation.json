@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:kernel:inspect-syscall-and-ioctl-validation",
+  "type": "skill",
+  "title": "Inspect syscall/ioctl input validation",
+  "description": "Audit a syscall or ioctl path and report every user input that is copied, validated, or trusted, flagging missing checks.",
+  "body": "Use when reviewing a kernel entry point for safety. Actions: trace each user-supplied argument from entry, report whether it is brought in via copy_from_user/get_user with its return checked, whether sizes and indices are bounds-checked, and flag any direct user-pointer dereference or unchecked length. Do not assume a value is validated because the function looks tidy. This skill exposes capability only and reports findings; it must not modify kernel sources without runtime permission. Validation signals include every user input shown to be copied-and-validated. Risk boundary: any direct user-pointer dereference or unchecked size is a potential privilege-escalation hole; flag it as security-blocking and recommend escalation.",
+  "domain": "kernel",
+  "scope_hint": "code.os-kernel:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.os-kernel",
+  "pack_id": "code.os-kernel"
+}

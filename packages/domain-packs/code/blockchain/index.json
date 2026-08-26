@@ -1,0 +1,468 @@
+[
+  {
+    "ref_id": "strategy:chain:checks-effects-interactions",
+    "type": "strategy",
+    "title": "Order code as checks, effects, interactions",
+    "summary": "Validate inputs, update all state, then make external calls last so a re-entering call finds already-updated state.",
+    "domains": [
+      "blockchain",
+      "smart_contract",
+      "solidity",
+      "web3"
+    ],
+    "triggers": [
+      "checks-effects-interactions",
+      "reentrancy",
+      "external call",
+      "state update",
+      "ordering",
+      "guard"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.blockchain"
+  },
+  {
+    "ref_id": "strategy:chain:bound-gas-and-loops",
+    "type": "strategy",
+    "title": "Bound gas so transactions cannot get stuck",
+    "summary": "Avoid unbounded loops and storage growth that can push a transaction past the block gas limit and permanently brick a function.",
+    "domains": [
+      "blockchain",
+      "smart_contract",
+      "solidity",
+      "web3"
+    ],
+    "triggers": [
+      "gas limit",
+      "unbounded loop",
+      "block gas",
+      "pagination",
+      "pull",
+      "dos"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.blockchain"
+  },
+  {
+    "ref_id": "strategy:chain:enforce-explicit-access-control",
+    "type": "strategy",
+    "title": "Guard every privileged function explicitly",
+    "summary": "Apply an access-control modifier to all state-changing and admin functions, and never authorize on tx.origin.",
+    "domains": [
+      "blockchain",
+      "smart_contract",
+      "solidity",
+      "web3"
+    ],
+    "triggers": [
+      "access control",
+      "onlyOwner",
+      "modifier",
+      "tx.origin",
+      "permission",
+      "privileged"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.blockchain"
+  },
+  {
+    "ref_id": "strategy:chain:distrust-external-contracts",
+    "type": "strategy",
+    "title": "Treat external calls and inputs as hostile",
+    "summary": "Assume any external contract can fail, re-enter, or return crafted values, and validate return data and call success.",
+    "domains": [
+      "blockchain",
+      "smart_contract",
+      "solidity",
+      "web3"
+    ],
+    "triggers": [
+      "external contract",
+      "untrusted",
+      "return value",
+      "call success",
+      "validate",
+      "interface"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.blockchain"
+  },
+  {
+    "ref_id": "strategy:chain:keep-secrets-and-heavy-work-off-chain",
+    "type": "strategy",
+    "title": "Keep secrets and heavy computation off-chain",
+    "summary": "Place only what must be trustlessly verified on-chain; never store private data on-chain and move expensive logic off-chain with on-chain verification.",
+    "domains": [
+      "blockchain",
+      "smart_contract",
+      "solidity",
+      "web3"
+    ],
+    "triggers": [
+      "on-chain",
+      "off-chain",
+      "storage",
+      "secret",
+      "oracle",
+      "verification"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.blockchain"
+  },
+  {
+    "ref_id": "strategy:chain:plan-immutability-and-upgrades",
+    "type": "strategy",
+    "title": "Plan for immutability and safe upgrades",
+    "summary": "Decide deliberately between immutable contracts and an upgrade proxy, and protect upgrade authority and storage layout.",
+    "domains": [
+      "blockchain",
+      "smart_contract",
+      "solidity",
+      "web3"
+    ],
+    "triggers": [
+      "immutable",
+      "upgrade",
+      "proxy",
+      "storage layout",
+      "initializer",
+      "migration"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.blockchain"
+  },
+  {
+    "ref_id": "methodology:chain:write-adversarial-contract-tests",
+    "type": "methodology",
+    "title": "Write adversarial smart-contract tests",
+    "summary": "Test not just the happy path but attacker behavior: reentrancy, overflow, access bypass, and malicious external contracts.",
+    "domains": [
+      "blockchain",
+      "smart_contract",
+      "solidity",
+      "web3"
+    ],
+    "triggers": [
+      "adversarial",
+      "test",
+      "foundry",
+      "fuzz",
+      "attack",
+      "invariant"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.blockchain"
+  },
+  {
+    "ref_id": "methodology:chain:analyze-and-optimize-gas",
+    "type": "methodology",
+    "title": "Analyze and optimize gas usage",
+    "summary": "Measure per-function gas, find storage-write hot spots, and reduce cost without breaking correctness or safety.",
+    "domains": [
+      "blockchain",
+      "smart_contract",
+      "solidity",
+      "web3"
+    ],
+    "triggers": [
+      "gas",
+      "optimization",
+      "storage",
+      "sstore",
+      "profiling",
+      "cost"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.blockchain"
+  },
+  {
+    "ref_id": "methodology:chain:diagnose-a-failed-transaction",
+    "type": "methodology",
+    "title": "Diagnose a reverted or stuck transaction",
+    "summary": "Trace a failing transaction to its revert reason or gas/nonce cause instead of resubmitting blindly.",
+    "domains": [
+      "blockchain",
+      "smart_contract",
+      "solidity",
+      "web3"
+    ],
+    "triggers": [
+      "revert",
+      "transaction",
+      "trace",
+      "nonce",
+      "out of gas",
+      "debug"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.blockchain"
+  },
+  {
+    "ref_id": "methodology:chain:review-deployment-readiness",
+    "type": "methodology",
+    "title": "Review a contract's deployment readiness",
+    "summary": "Run a pre-deployment checklist covering audits, tests, upgrade authority, and constructor parameters before any mainnet release.",
+    "domains": [
+      "blockchain",
+      "smart_contract",
+      "solidity",
+      "web3"
+    ],
+    "triggers": [
+      "deployment",
+      "checklist",
+      "mainnet",
+      "readiness",
+      "constructor",
+      "verify"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.blockchain"
+  },
+  {
+    "ref_id": "knowledge:chain:evm-gas-and-execution",
+    "type": "knowledge",
+    "title": "The EVM gas and execution model",
+    "summary": "Every opcode costs gas the caller prepays; running out reverts all state changes, and storage writes are by far the most expensive operations.",
+    "domains": [
+      "blockchain",
+      "smart_contract",
+      "solidity",
+      "web3"
+    ],
+    "triggers": [
+      "evm",
+      "gas",
+      "opcode",
+      "revert",
+      "sstore",
+      "execution"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.blockchain"
+  },
+  {
+    "ref_id": "knowledge:chain:everything-on-chain-is-public",
+    "type": "knowledge",
+    "title": "All on-chain state and code is public",
+    "summary": "Anyone can read every storage slot and decompile bytecode, so 'private' Solidity visibility hides nothing from observers.",
+    "domains": [
+      "blockchain",
+      "smart_contract",
+      "solidity",
+      "web3"
+    ],
+    "triggers": [
+      "public",
+      "private",
+      "storage",
+      "visibility",
+      "transparency",
+      "secret"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.blockchain"
+  },
+  {
+    "ref_id": "knowledge:chain:reentrancy-mechanism",
+    "type": "knowledge",
+    "title": "How reentrancy actually works",
+    "summary": "An external call can hand control to attacker code that calls back into the original function before its state finished updating.",
+    "domains": [
+      "blockchain",
+      "smart_contract",
+      "solidity",
+      "web3"
+    ],
+    "triggers": [
+      "reentrancy",
+      "callback",
+      "external call",
+      "fallback",
+      "recursion",
+      "state"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.blockchain"
+  },
+  {
+    "ref_id": "knowledge:chain:transactions-wallets-and-signing",
+    "type": "knowledge",
+    "title": "Transactions, wallets, and signing",
+    "summary": "A transaction is a signed message ordered by an account nonce; the private key holder authorizes everything, and signatures must be replay-protected.",
+    "domains": [
+      "blockchain",
+      "smart_contract",
+      "solidity",
+      "web3"
+    ],
+    "triggers": [
+      "transaction",
+      "wallet",
+      "signing",
+      "nonce",
+      "replay",
+      "private key"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.blockchain"
+  },
+  {
+    "ref_id": "skill:chain:audit-contract-for-known-vulns",
+    "type": "skill",
+    "title": "Audit a contract for known vulnerabilities",
+    "summary": "Scan a Solidity contract for reentrancy, access-control, gas, and external-call issues and report each with location.",
+    "domains": [
+      "blockchain",
+      "smart_contract",
+      "solidity",
+      "web3"
+    ],
+    "triggers": [
+      "audit",
+      "vulnerability",
+      "slither",
+      "reentrancy",
+      "scan",
+      "report"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.blockchain"
+  },
+  {
+    "ref_id": "skill:chain:run-contract-test-suite",
+    "type": "skill",
+    "title": "Run the contract test and gas suite",
+    "summary": "Compile contracts and run the Foundry/Hardhat tests including adversarial cases and the gas report.",
+    "domains": [
+      "blockchain",
+      "smart_contract",
+      "solidity",
+      "web3"
+    ],
+    "triggers": [
+      "test",
+      "foundry",
+      "hardhat",
+      "compile",
+      "gas report",
+      "run"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.blockchain"
+  }
+]

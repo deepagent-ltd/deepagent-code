@@ -1,0 +1,780 @@
+[
+  {
+    "ref_id": "knowledge:backend_api:error-shape-contract",
+    "type": "knowledge",
+    "title": "Error Shape Contract",
+    "summary": "Error response fields are client compatibility surface.",
+    "domains": [
+      "api",
+      "backend",
+      "rest",
+      "graphql"
+    ],
+    "triggers": [
+      "error",
+      "response",
+      "fields",
+      "client",
+      "compatibility",
+      "surface",
+      "stable",
+      "code"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.api"
+  },
+  {
+    "ref_id": "knowledge:backend_api:error-shape-is-client-api",
+    "type": "knowledge",
+    "title": "Error Shape Is Client Api",
+    "summary": "Error codes, messages, details, and correlation fields are part of the API contract.",
+    "domains": [
+      "api",
+      "backend",
+      "rest",
+      "graphql"
+    ],
+    "triggers": [
+      "error",
+      "codes",
+      "messages",
+      "details",
+      "correlation",
+      "fields",
+      "part",
+      "contract"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.api"
+  },
+  {
+    "ref_id": "knowledge:backend_api:graphql-partial-errors",
+    "type": "knowledge",
+    "title": "Graphql Partial Errors",
+    "summary": "GraphQL can return data and errors together.",
+    "domains": [
+      "api",
+      "backend",
+      "rest",
+      "graphql"
+    ],
+    "triggers": [
+      "graphql",
+      "return",
+      "data",
+      "errors",
+      "together",
+      "clients",
+      "observe"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.api"
+  },
+  {
+    "ref_id": "knowledge:backend_api:openapi-generated-clients-amplify-breakage",
+    "type": "knowledge",
+    "title": "Openapi Generated Clients Amplify Breakage",
+    "summary": "Generated clients turn small schema changes into compile-time or runtime client breakage.",
+    "domains": [
+      "api",
+      "backend",
+      "rest",
+      "graphql"
+    ],
+    "triggers": [
+      "generated",
+      "clients",
+      "turn",
+      "small",
+      "schema",
+      "changes",
+      "into",
+      "compile"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.api"
+  },
+  {
+    "ref_id": "knowledge:backend_api:request-validation-is-boundary",
+    "type": "knowledge",
+    "title": "Request Validation Is Boundary",
+    "summary": "Request validation defines which untrusted inputs can enter backend behavior.",
+    "domains": [
+      "api",
+      "backend",
+      "rest",
+      "graphql"
+    ],
+    "triggers": [
+      "request",
+      "validation",
+      "defines",
+      "which",
+      "untrusted",
+      "inputs",
+      "enter",
+      "backend"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.api"
+  },
+  {
+    "ref_id": "knowledge:backend_api:rest-graphql-rpc-contracts-differ",
+    "type": "knowledge",
+    "title": "Rest Graphql Rpc Contracts Differ",
+    "summary": "REST, GraphQL, and RPC expose different compatibility and error surfaces.",
+    "domains": [
+      "api",
+      "backend",
+      "rest",
+      "graphql"
+    ],
+    "triggers": [
+      "rest",
+      "graphql",
+      "expose",
+      "different",
+      "compatibility",
+      "error",
+      "surfaces",
+      "this"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.api"
+  },
+  {
+    "ref_id": "knowledge:backend_api:status-code-contract",
+    "type": "knowledge",
+    "title": "Status Code Contract",
+    "summary": "HTTP status codes are part of client-visible contract.",
+    "domains": [
+      "api",
+      "backend",
+      "rest",
+      "graphql"
+    ],
+    "triggers": [
+      "http",
+      "status",
+      "codes",
+      "part",
+      "client",
+      "visible",
+      "contract",
+      "changing"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.api"
+  },
+  {
+    "ref_id": "knowledge:backend_api:validation-before-business",
+    "type": "knowledge",
+    "title": "Validation Before Business",
+    "summary": "Boundary validation reduces downstream assumptions.",
+    "domains": [
+      "api",
+      "backend",
+      "rest",
+      "graphql"
+    ],
+    "triggers": [
+      "boundary",
+      "validation",
+      "reduces",
+      "downstream",
+      "assumptions",
+      "typed",
+      "validated",
+      "inputs"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.api"
+  },
+  {
+    "ref_id": "methodology:backend_api:client-impact-scan",
+    "type": "methodology",
+    "title": "Client Impact Scan",
+    "summary": "Search internal clients before changing response or request shape.",
+    "domains": [
+      "api",
+      "backend",
+      "rest",
+      "graphql"
+    ],
+    "triggers": [
+      "search",
+      "internal",
+      "clients",
+      "before",
+      "changing",
+      "response",
+      "request",
+      "shape"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.api"
+  },
+  {
+    "ref_id": "methodology:backend_api:contract-first-change",
+    "type": "methodology",
+    "title": "Contract First Change",
+    "summary": "Update schema, validation, handler, and tests as one contract change.",
+    "domains": [
+      "api",
+      "backend",
+      "rest",
+      "graphql"
+    ],
+    "triggers": [
+      "update",
+      "schema",
+      "validation",
+      "handler",
+      "tests",
+      "contract",
+      "change",
+      "steps"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.api"
+  },
+  {
+    "ref_id": "methodology:backend_api:endpoint-regression-matrix",
+    "type": "methodology",
+    "title": "Endpoint Regression Matrix",
+    "summary": "Check success, validation, auth, not-found, and conflict paths.",
+    "domains": [
+      "api",
+      "backend",
+      "rest",
+      "graphql"
+    ],
+    "triggers": [
+      "check",
+      "success",
+      "validation",
+      "auth",
+      "found",
+      "conflict",
+      "paths",
+      "steps"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.api"
+  },
+  {
+    "ref_id": "methodology:backend_api:observability-contract-check",
+    "type": "methodology",
+    "title": "Observability Contract Check",
+    "summary": "Preserve request IDs and safe error logging around API changes.",
+    "domains": [
+      "api",
+      "backend",
+      "rest",
+      "graphql"
+    ],
+    "triggers": [
+      "preserve",
+      "request",
+      "safe",
+      "error",
+      "logging",
+      "around",
+      "changes",
+      "steps"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.api"
+  },
+  {
+    "ref_id": "methodology:backend_api:route-smoke-matrix",
+    "type": "methodology",
+    "title": "Route Smoke Matrix",
+    "summary": "Smoke changed routes across success, validation, missing resource, conflict, and unexpected-error paths.",
+    "domains": [
+      "api",
+      "backend",
+      "rest",
+      "graphql"
+    ],
+    "triggers": [
+      "smoke",
+      "changed",
+      "routes",
+      "across",
+      "success",
+      "validation",
+      "missing",
+      "resource"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.api"
+  },
+  {
+    "ref_id": "skill:backend_api:graphql-rpc-protocol-smoke",
+    "type": "skill",
+    "title": "Graphql Rpc Protocol Smoke",
+    "summary": "Run protocol-specific smoke checks for GraphQL resolvers or RPC procedures.",
+    "domains": [
+      "api",
+      "backend",
+      "rest",
+      "graphql"
+    ],
+    "triggers": [
+      "protocol",
+      "specific",
+      "smoke",
+      "checks",
+      "graphql",
+      "resolvers",
+      "procedures",
+      "inputs"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.api"
+  },
+  {
+    "ref_id": "skill:backend_api:idempotency-negative-path-check",
+    "type": "skill",
+    "title": "Idempotency Negative Path Check",
+    "summary": "Verify duplicate, retry, timeout-adjacent, and conflict behavior for mutating API operations.",
+    "domains": [
+      "api",
+      "backend",
+      "rest",
+      "graphql"
+    ],
+    "triggers": [
+      "verify",
+      "duplicate",
+      "retry",
+      "timeout",
+      "adjacent",
+      "conflict",
+      "behavior",
+      "mutating"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.api"
+  },
+  {
+    "ref_id": "skill:backend_api:route-contract-smoke",
+    "type": "skill",
+    "title": "Route Contract Smoke",
+    "summary": "Exercise changed API routes locally and verify observable status, headers, body, and error shape.",
+    "domains": [
+      "api",
+      "backend",
+      "rest",
+      "graphql"
+    ],
+    "triggers": [
+      "exercise",
+      "changed",
+      "routes",
+      "locally",
+      "verify",
+      "observable",
+      "status",
+      "headers"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.api"
+  },
+  {
+    "ref_id": "skill:backend_api:schema-compatibility-diff",
+    "type": "skill",
+    "title": "Schema Compatibility Diff",
+    "summary": "Compare API schema outputs or generated clients to classify compatibility risk.",
+    "domains": [
+      "api",
+      "backend",
+      "rest",
+      "graphql"
+    ],
+    "triggers": [
+      "compare",
+      "schema",
+      "outputs",
+      "generated",
+      "clients",
+      "classify",
+      "compatibility",
+      "risk"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.api"
+  },
+  {
+    "ref_id": "strategy:backend_api:compat-window",
+    "type": "strategy",
+    "title": "Compat Window",
+    "summary": "Keep public API shape compatible unless breaking change is explicit.",
+    "domains": [
+      "api",
+      "backend",
+      "rest",
+      "graphql"
+    ],
+    "triggers": [
+      "keep",
+      "public",
+      "shape",
+      "compatible",
+      "unless",
+      "breaking",
+      "change",
+      "explicit"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.api"
+  },
+  {
+    "ref_id": "strategy:backend_api:entry-validation",
+    "type": "strategy",
+    "title": "Entry Validation",
+    "summary": "Validate untrusted request data at the API boundary.",
+    "domains": [
+      "api",
+      "backend",
+      "rest",
+      "graphql"
+    ],
+    "triggers": [
+      "validate",
+      "untrusted",
+      "request",
+      "data",
+      "boundary",
+      "params",
+      "query",
+      "headers"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.api"
+  },
+  {
+    "ref_id": "strategy:backend_api:idempotent-mutators",
+    "type": "strategy",
+    "title": "Idempotent Mutators",
+    "summary": "Design retryable mutating operations with explicit idempotency.",
+    "domains": [
+      "api",
+      "backend",
+      "rest",
+      "graphql"
+    ],
+    "triggers": [
+      "design",
+      "retryable",
+      "mutating",
+      "operations",
+      "with",
+      "explicit",
+      "idempotency",
+      "duplicate"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.api"
+  },
+  {
+    "ref_id": "strategy:backend_api:middleware-order-awareness",
+    "type": "strategy",
+    "title": "Middleware Order Awareness",
+    "summary": "Middleware order is part of route behavior.",
+    "domains": [
+      "api",
+      "backend",
+      "rest",
+      "graphql"
+    ],
+    "triggers": [
+      "middleware",
+      "order",
+      "part",
+      "route",
+      "behavior",
+      "auth",
+      "parsing",
+      "validation"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.api"
+  },
+  {
+    "ref_id": "strategy:backend_api:retry-and-timeout-contract",
+    "type": "strategy",
+    "title": "Retry And Timeout Contract",
+    "summary": "Make retryability, timeout, and duplicate-submit behavior explicit for API operations.",
+    "domains": [
+      "api",
+      "backend",
+      "rest",
+      "graphql"
+    ],
+    "triggers": [
+      "make",
+      "retryability",
+      "timeout",
+      "duplicate",
+      "submit",
+      "behavior",
+      "explicit",
+      "operations"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.api"
+  },
+  {
+    "ref_id": "strategy:backend_api:route-behavior-over-implementation-shape",
+    "type": "strategy",
+    "title": "Route Behavior Over Implementation Shape",
+    "summary": "Judge API changes by observable route behavior, not only internal handler structure.",
+    "domains": [
+      "api",
+      "backend",
+      "rest",
+      "graphql"
+    ],
+    "triggers": [
+      "judge",
+      "changes",
+      "observable",
+      "route",
+      "behavior",
+      "only",
+      "internal",
+      "handler"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.api"
+  },
+  {
+    "ref_id": "strategy:backend_api:schema-diff-before-handler",
+    "type": "strategy",
+    "title": "Schema Diff Before Handler",
+    "summary": "Compare API schema or generated contract before treating a handler edit as safe.",
+    "domains": [
+      "api",
+      "backend",
+      "rest",
+      "graphql"
+    ],
+    "triggers": [
+      "compare",
+      "schema",
+      "generated",
+      "contract",
+      "before",
+      "treating",
+      "handler",
+      "edit"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.api"
+  },
+  {
+    "ref_id": "strategy:backend_api:stable-error-contract",
+    "type": "strategy",
+    "title": "Stable Error Contract",
+    "summary": "Use consistent error codes and details for client handling.",
+    "domains": [
+      "api",
+      "backend",
+      "rest",
+      "graphql"
+    ],
+    "triggers": [
+      "consistent",
+      "error",
+      "codes",
+      "details",
+      "client",
+      "handling",
+      "clients",
+      "branch"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.api"
+  }
+]

@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:comp:attestation-vs-assertion",
+  "type": "knowledge",
+  "title": "Attestation vs assertion of a control",
+  "description": "Claiming a control exists is an assertion; proving it actually ran on real transactions for the period is attestation.",
+  "body": "Use when reporting that a control is in place. An assertion says the control is designed (the approval gate exists in code). An attestation provides evidence that the control operated effectively over the audit period (sampled deploys all carry independent approvals across the window). Auditors test operating effectiveness, not just design, so a control that exists but was bypassed or disabled part of the period fails. Do not mark a control passing from its presence in code alone. Actions: gather a time-boxed sample proving the control fired on representative transactions and record exceptions. Validation signals include an attestation test over a sample of real actions, not a single happy-path check. Risk boundary: reporting design as if it were operating effectiveness misleads the assessor; if you cannot evidence operation over the period, report it as unverified and escalate.",
+  "domain": "compliance",
+  "scope_hint": "risk.compliance:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.compliance",
+  "pack_id": "risk.compliance"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:review:read-only-ground-truth",
+  "type": "strategy",
+  "description": "Keep review work read-only and derive conclusions from diff, callers, tests, and runtime artifacts.",
+  "body": "Apply when the user asks for review, audit, validation, or findings. The action is to inspect repository ground truth without editing files: read the diff, changed implementation, affected callers, tests, schemas, generated outputs, and logs. Do not fix the defect during review unless the user explicitly changes the task. If evidence requires a command, prefer non-mutating commands and report exact command intent and result. Validation signals are file/line citations, reproduced diagnostics, and explicit statements of what was not inspected. The risk boundary is that modifying code during a review can destroy evidence, mix responsibilities, and make findings less auditable. Use when Code Review work touches diff hunks, line evidence, tests, contracts, and blast radius. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: choose the smallest direction that preserves the domain contract; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include file/line citations, failing or missing tests, reproduced behavior, and residual-risk notes. Risk boundary: escalate or stop when the task involves unsupported findings, severity inflation, hidden fixes, and ignoring user constraints, missing owner evidence, or live external state.",
+  "domain": "review",
+  "scope_hint": "code.review:strategies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.review:human_authored",
+  "pack_id": "code.review"
+}

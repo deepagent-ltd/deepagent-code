@@ -1,0 +1,74 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "platform.docker",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "container"
+    ],
+    "business_domains": [],
+    "platforms": [
+      "platform",
+      "docker"
+    ],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for platform.docker: Dockerfiles, compose files, build contexts, layers, secrets, images, entrypoints, and runtime users"
+    ],
+    "round_signals": [
+      "l3_validation_smoke"
+    ],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "round_signals": [],
+    "user_overrides": [],
+    "repo_signals": [
+      "write a window-function SQL query with a CTE"
+    ]
+  },
+  "retrieval_query": "Docker multi-stage build layer cache image size non-root user healthcheck dockerignore secrets",
+  "expected_pack_id": "platform.docker",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "container build and runtime behavior L3 validation smoke",
+    "signals": [
+      "docker build output",
+      "image inspection",
+      "non-root runtime checks",
+      "secret absence",
+      "compose smoke",
+      "and reproducible build evidence"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "container build and runtime behavior diagnosis smoke",
+    "signals": [
+      "separate context leakage",
+      "layer caching",
+      "entrypoint",
+      "networking",
+      "permissions",
+      "and runtime dependency failures"
+    ]
+  },
+  "source_refs": [
+    "source:docker-docs:paraphrased"
+  ]
+}

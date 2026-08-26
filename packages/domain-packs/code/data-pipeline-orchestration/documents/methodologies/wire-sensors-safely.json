@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:orch:wire-sensors-safely",
+  "type": "methodology",
+  "title": "Wire sensors with timeouts and reschedule mode",
+  "description": "Use sensors to wait for external readiness without exhausting worker slots, with explicit timeouts and failure handling.",
+  "body": "Use when a pipeline must wait for an external file, partition, or upstream job. Do not poll in a tight loop that holds a worker slot for hours — sensors can starve the pool. Actions: use reschedule/deferrable sensor mode so waiting does not occupy a slot, set a timeout, and define what happens on timeout (fail and alert, not silently skip). Validation signals include a sensor releasing its slot while waiting and a timeout that fails loudly with context. Risk boundary: a slot-holding sensor can deadlock the scheduler under many concurrent waits; if sensors block the pool, escalate to deferrable mode before scaling workers to mask it.",
+  "domain": "orchestration",
+  "scope_hint": "code.data-pipeline-orchestration:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-pipeline-orchestration",
+  "pack_id": "code.data-pipeline-orchestration"
+}

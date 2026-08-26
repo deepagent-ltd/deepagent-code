@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:ansible:partial-convergence-on-failure",
+  "type": "failure_dossier",
+  "description": "A play fails mid-run leaving hosts half-configured, with handlers skipped and state inconsistent.",
+  "body": "Failure mode: a play errors partway through, so some tasks applied and others did not, handlers never flushed, and hosts are left in an inconsistent, half-converged state. Detection signals: hosts with new config but no restart; an aborted play with mixed task results; services running against partially-updated files. Do not leave failures unhandled. Safer fallback: wrap risky sequences in block/rescue/always, define failed_when precisely, flush critical handlers explicitly, and re-run the idempotent play to reconverge.",
+  "domain": "ansible",
+  "scope_hint": "platform.ansible:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.ansible:human_authored",
+  "pack_id": "platform.ansible"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:cli:exit-zero-on-failure",
+  "type": "failure_dossier",
+  "description": "Returning exit code 0 even though the command failed, making broken steps look successful to shells and CI.",
+  "body": "Failure mode: an error path prints a message but the process still exits 0 (or never sets a non-zero code), so `set -e`, `&&` chains, and CI all treat the run as success. Detection signals: CI stays green despite visible errors; a failed step does not stop a `&&` pipeline; `echo $?` is 0 after an error. Do not exit 0 on failure. Safer fallback: set a distinct non-zero code on every failure path before exiting, document the codes, and add tests asserting `$?` for success and each failure case.",
+  "domain": "cli",
+  "scope_hint": "code.cli:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.cli:human_authored",
+  "pack_id": "code.cli"
+}

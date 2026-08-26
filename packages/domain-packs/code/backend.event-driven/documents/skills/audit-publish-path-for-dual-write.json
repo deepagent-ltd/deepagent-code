@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:evt:audit-publish-path-for-dual-write",
+  "type": "skill",
+  "title": "Audit a publish path for dual writes",
+  "description": "Trace where a state change publishes an event and report whether it is atomic via an outbox or a risky dual write.",
+  "body": "Use when asked whether event publishing is reliable. Actions: locate the command that mutates state and emits the event; verify the event is written to an outbox inside the same transaction and relayed separately, rather than published as a second independent step; check the relay is idempotent. Do not accept ordered try/catch as a substitute for atomicity. Report and record the exact location and classify it as outbox-backed, CDC-backed, or dual-write. This skill is read-only and must not publish to live topics. Validation signals include a crash-injection test showing no orphaned/lost event. Risk boundary: a dual write on a critical flow is a blocking finding to escalate.",
+  "domain": "event_driven",
+  "scope_hint": "code.backend.event-driven:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.event-driven",
+  "pack_id": "code.backend.event-driven"
+}

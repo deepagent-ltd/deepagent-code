@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:k8s:missing-limits-oomkill-and-noisy-neighbor",
+  "type": "failure_dossier",
+  "description": "Containers without memory limits get OOMKilled or starve neighbors, and without requests get evicted first under node pressure.",
+  "body": "Failure mode: containers run with no resource requests/limits, so the scheduler cannot reserve capacity, the pod is BestEffort and evicted first under pressure, and a memory leak can consume the node and OOMKill neighbors. Detection signals: OOMKilled status, frequent evictions, node memory pressure, one workload degrading others on the same node. Do not ship production workloads with empty resources. Safer fallback: set requests from observed steady-state usage and memory limits with headroom, choose the right QoS class, and verify no OOMKills under load.",
+  "domain": "kubernetes",
+  "scope_hint": "platform.kubernetes:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.kubernetes:human_authored",
+  "pack_id": "platform.kubernetes"
+}

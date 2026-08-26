@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:go:idiom-preserving-change",
+  "type": "strategy",
+  "description": "In Go, prefer established idioms (explicit error wrapping (fmt.Errorf with %w), context propagation, and small interfaces) over generic rewrites.",
+  "body": "In Go, the ecosystem has settled idioms — explicit error wrapping (fmt.Errorf with %w), context propagation, and small interfaces — and changes that ignore them add risk and review friction. Use when adding or modifying Go code near existing patterns. Do not impose a foreign style or rewrite working code into a generic shape, and avoid abandoning nearby conventions. Actions: read the surrounding code, follow its explicit error wrapping (fmt.Errorf with %w), context propagation, and small interfaces, keep the change minimal, then run go vet, staticcheck, and the race detector (go test -race) and go test ./... -race on the changed package to confirm fit. Validation signals include a small diff consistent with neighbors, a clean lint pass, and passing tests. Risk boundary: a broad idiom migration is its own reviewed task; escalate rather than bundling it into an unrelated change.",
+  "domain": "go",
+  "scope_hint": "code.go:strategies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.go:skill_survey",
+  "pack_id": "code.go"
+}

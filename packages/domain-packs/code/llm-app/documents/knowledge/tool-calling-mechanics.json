@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:llm:tool-calling-mechanics",
+  "type": "knowledge",
+  "title": "How tool calling works",
+  "description": "The model proposes a tool name and JSON arguments; the application executes and returns a result, looping until the model stops calling tools.",
+  "body": "Use when implementing or debugging function/tool calling. The model does not run the tool: it emits a structured request (name + JSON arguments) which the application validates and executes, then returns the result as a new message; the model may chain further calls. Do not treat the model's proposed arguments as trusted or assume the tool actually ran, and avoid infinite call loops. Actions: validate arguments against the tool schema, execute under permission checks, return a typed result or error, and cap the number of tool turns. Validation signals include tests for malformed arguments, a denied side-effecting call, and a loop cap. Risk boundary: executing a side-effecting tool on unvalidated model arguments is a critical finding.",
+  "domain": "llm_app",
+  "scope_hint": "code.llm-app:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.llm-app",
+  "pack_id": "code.llm-app"
+}

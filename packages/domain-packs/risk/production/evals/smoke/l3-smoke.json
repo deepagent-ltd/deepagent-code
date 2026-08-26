@@ -1,0 +1,77 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "risk.production",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "operate",
+    "code_domains": [
+      "deployment",
+      "migration",
+      "rollback",
+      "incident"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [
+      "production"
+    ],
+    "repo_signals": [
+      "L3 smoke for risk.production: deployments, production-impacting code, feature flags, traffic shift, rollback, artifacts, versioning, and incidents"
+    ],
+    "round_signals": [
+      "l3_validation_smoke"
+    ],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "plain prose note with no repository or domain signal"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "release and production change safety deployments, production-impacting code, feature flags, traffic shift, rollback, artifacts, versioning, and incidents validation smoke diagnosis",
+  "expected_pack_id": "risk.production",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "release and production change safety L3 validation smoke",
+    "signals": [
+      "dry-run output",
+      "artifact checks",
+      "rollout/rollback plan",
+      "observability baseline",
+      "changelog/version checks",
+      "and owner approval"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "release and production change safety diagnosis smoke",
+    "signals": [
+      "separate build artifact",
+      "config",
+      "traffic",
+      "external state",
+      "monitoring",
+      "and rollback failures"
+    ]
+  },
+  "source_refs": [
+    "source:kubernetes-docs:paraphrased",
+    "source:github-actions-docs:paraphrased"
+  ]
+}

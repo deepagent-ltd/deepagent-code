@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:rag:embedding-query-mismatch",
+  "type": "failure_dossier",
+  "description": "The embedding model or index does not fit the real query distribution, so relevant passages never enter the candidate set.",
+  "body": "Failure mode: a default embedding or an approximate index is adopted without measuring it on real queries, so semantically relevant or exact-term passages are missed and recall silently drops. Detection signals: embedding chosen without a recall measurement; exact-term queries (names, codes) miss; an approximate index used with no recall check; mixed embeddings in one index. Do not assume a default embedding fits or that approximate recall is adequate. Safer fallback: evaluate candidate embeddings on a labeled query set from real traffic, choose dense/sparse/hybrid by query type, tune the index to the recall budget, and re-embed consistently on model change.",
+  "domain": "rag",
+  "scope_hint": "code.rag:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.rag:human_authored",
+  "pack_id": "code.rag"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:llm:add-retry-timeout-budget",
+  "type": "methodology",
+  "title": "Add a retry, timeout, and cost budget",
+  "description": "Wrap a model call with classified error handling, bounded backoff, a timeout, and an enforced token/cost ceiling.",
+  "body": "Steps: 1. Classify provider errors into retryable (429, 5xx, timeout) and terminal (4xx). 2. Set a per-call timeout that aborts the request. 3. Cap retries with exponential backoff plus jitter. 4. Compute the request's max token/cost and reject if it exceeds the ceiling. 5. Emit a metric for latency, retries, and cost per call. Rollback point: before raising any ceiling. Validation: a forced timeout aborts, a 4xx does not retry, and a request over the ceiling is refused before sending.",
+  "domain": "llm_app",
+  "scope_hint": "code.llm-app:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.llm-app",
+  "pack_id": "code.llm-app"
+}

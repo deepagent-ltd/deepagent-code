@@ -1,0 +1,452 @@
+[
+  {
+    "ref_id": "strategy:cache:choose-pattern-by-consistency",
+    "type": "strategy",
+    "title": "Choose the cache pattern by consistency need",
+    "summary": "Match cache-aside, read/write-through, or write-behind to the workload's durability and latency tolerance.",
+    "domains": [
+      "caching",
+      "cache_invalidation",
+      "cache_layer",
+      "cdn_cache"
+    ],
+    "triggers": [
+      "cache-aside",
+      "write-through",
+      "write-behind",
+      "pattern",
+      "consistency"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.caching"
+  },
+  {
+    "ref_id": "strategy:cache:prevent-stampede-with-coalescing",
+    "type": "strategy",
+    "title": "Coalesce recomputes to prevent stampede",
+    "summary": "Serialize the refill of a hot key so one worker recomputes while others wait or serve stale.",
+    "domains": [
+      "caching",
+      "cache_invalidation",
+      "cache_layer",
+      "cdn_cache"
+    ],
+    "triggers": [
+      "stampede",
+      "thundering herd",
+      "single-flight",
+      "coalesce",
+      "lock"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.caching"
+  },
+  {
+    "ref_id": "strategy:cache:jitter-the-ttl",
+    "type": "strategy",
+    "title": "Add jitter to TTLs",
+    "summary": "Randomize per-entry TTLs so bulk-populated keys do not all expire on the same tick.",
+    "domains": [
+      "caching",
+      "cache_invalidation",
+      "cache_layer",
+      "cdn_cache"
+    ],
+    "triggers": [
+      "ttl",
+      "jitter",
+      "expiry",
+      "cold start",
+      "spread"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.caching"
+  },
+  {
+    "ref_id": "strategy:cache:design-collision-safe-keys",
+    "type": "strategy",
+    "title": "Design collision-safe cache keys",
+    "summary": "Derive keys from every value-affecting input with a version prefix so distinct requests never collide.",
+    "domains": [
+      "caching",
+      "cache_invalidation",
+      "cache_layer",
+      "cdn_cache"
+    ],
+    "triggers": [
+      "cache key",
+      "collision",
+      "namespace",
+      "version",
+      "input"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.caching"
+  },
+  {
+    "ref_id": "strategy:cache:assign-roles-per-layer",
+    "type": "strategy",
+    "title": "Assign a distinct role per cache layer",
+    "summary": "Give browser, CDN, application, and DB-buffer tiers separate responsibilities and freshness budgets.",
+    "domains": [
+      "caching",
+      "cache_invalidation",
+      "cache_layer",
+      "cdn_cache"
+    ],
+    "triggers": [
+      "multi-layer",
+      "cdn",
+      "browser",
+      "layer",
+      "freshness"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.caching"
+  },
+  {
+    "ref_id": "strategy:cache:cache-negatives-against-penetration",
+    "type": "strategy",
+    "title": "Cache negative results against penetration",
+    "summary": "Store not-found answers briefly so repeated absent-key lookups do not penetrate to the datastore.",
+    "domains": [
+      "caching",
+      "cache_invalidation",
+      "cache_layer",
+      "cdn_cache"
+    ],
+    "triggers": [
+      "negative cache",
+      "penetration",
+      "not found",
+      "bloom filter",
+      "miss"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.caching"
+  },
+  {
+    "ref_id": "methodology:cache:plan-invalidation-strategy",
+    "type": "methodology",
+    "title": "Plan the invalidation strategy",
+    "summary": "Map every write path to an invalidation mechanism so reads reflect writes within a bound.",
+    "domains": [
+      "caching",
+      "cache_invalidation",
+      "cache_layer",
+      "cdn_cache"
+    ],
+    "triggers": [
+      "invalidation",
+      "write path",
+      "versioned key",
+      "backstop",
+      "plan"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.caching"
+  },
+  {
+    "ref_id": "methodology:cache:diagnose-low-hit-rate",
+    "type": "methodology",
+    "title": "Diagnose a low hit rate",
+    "summary": "Attribute misses to expiry, eviction, or never-cached reads, then fix the dominant cause.",
+    "domains": [
+      "caching",
+      "cache_invalidation",
+      "cache_layer",
+      "cdn_cache"
+    ],
+    "triggers": [
+      "hit rate",
+      "miss",
+      "eviction",
+      "diagnose",
+      "memory"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.caching"
+  },
+  {
+    "ref_id": "methodology:cache:roll-out-cache-safely",
+    "type": "methodology",
+    "title": "Roll out a new cache safely",
+    "summary": "Shadow-compare cached against origin values, ramp traffic, and keep a bypass switch.",
+    "domains": [
+      "caching",
+      "cache_invalidation",
+      "cache_layer",
+      "cdn_cache"
+    ],
+    "triggers": [
+      "rollout",
+      "shadow",
+      "ramp",
+      "bypass",
+      "compare"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.caching"
+  },
+  {
+    "ref_id": "methodology:cache:verify-cross-layer-coherence",
+    "type": "methodology",
+    "title": "Verify cross-layer coherence",
+    "summary": "Trace one update through every cache layer and document the converged staleness window.",
+    "domains": [
+      "caching",
+      "cache_invalidation",
+      "cache_layer",
+      "cdn_cache"
+    ],
+    "triggers": [
+      "coherence",
+      "layer",
+      "purge",
+      "converge",
+      "trace"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.caching"
+  },
+  {
+    "ref_id": "knowledge:cache:read-write-pattern-model",
+    "type": "knowledge",
+    "title": "Read/write pattern model",
+    "summary": "Cache-aside, read/write-through, and write-behind differ in who owns loads, writes, and durability.",
+    "domains": [
+      "caching",
+      "cache_invalidation",
+      "cache_layer",
+      "cdn_cache"
+    ],
+    "triggers": [
+      "cache-aside",
+      "read-through",
+      "write-behind",
+      "ownership",
+      "durability"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.caching"
+  },
+  {
+    "ref_id": "knowledge:cache:why-invalidation-is-hard",
+    "type": "knowledge",
+    "title": "Why invalidation is hard",
+    "summary": "TTL, explicit invalidation, and versioned keys trade staleness, coupling, and race-safety differently.",
+    "domains": [
+      "caching",
+      "cache_invalidation",
+      "cache_layer",
+      "cdn_cache"
+    ],
+    "triggers": [
+      "invalidation",
+      "ttl",
+      "versioned key",
+      "race",
+      "stale"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.caching"
+  },
+  {
+    "ref_id": "knowledge:cache:stampede-mechanics",
+    "type": "knowledge",
+    "title": "Stampede mechanics",
+    "summary": "A hot key's expiry is a synchronized burst, not a per-request event, multiplying origin load by concurrency.",
+    "domains": [
+      "caching",
+      "cache_invalidation",
+      "cache_layer",
+      "cdn_cache"
+    ],
+    "triggers": [
+      "stampede",
+      "thundering herd",
+      "expiry",
+      "concurrency",
+      "origin"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.caching"
+  },
+  {
+    "ref_id": "knowledge:cache:coherence-and-staleness",
+    "type": "knowledge",
+    "title": "Coherence and staleness",
+    "summary": "Across layers, end-to-end staleness is additive and the slowest-to-purge copy sets the floor.",
+    "domains": [
+      "caching",
+      "cache_invalidation",
+      "cache_layer",
+      "cdn_cache"
+    ],
+    "triggers": [
+      "coherence",
+      "staleness",
+      "layer",
+      "converge",
+      "floor"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.caching"
+  },
+  {
+    "ref_id": "skill:cache:inspect-hit-rate",
+    "type": "skill",
+    "title": "Inspect cache hit rate",
+    "summary": "Report hits, misses, evictions, memory, and key count to ground tuning in measured state.",
+    "domains": [
+      "caching",
+      "cache_invalidation",
+      "cache_layer",
+      "cdn_cache"
+    ],
+    "triggers": [
+      "hit rate",
+      "stats",
+      "eviction",
+      "inspect",
+      "report"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.caching"
+  },
+  {
+    "ref_id": "skill:cache:trace-key-collisions",
+    "type": "skill",
+    "title": "Trace cache key collisions",
+    "summary": "Decode how keys derive from requests to find collisions or missing value-affecting inputs.",
+    "domains": [
+      "caching",
+      "cache_invalidation",
+      "cache_layer",
+      "cdn_cache"
+    ],
+    "triggers": [
+      "key",
+      "collision",
+      "derive",
+      "leak",
+      "trace"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.caching"
+  }
+]

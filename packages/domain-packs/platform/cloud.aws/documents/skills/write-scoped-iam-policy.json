@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:aws:write-scoped-iam-policy",
+  "type": "skill",
+  "title": "Author a least-privilege IAM policy document",
+  "description": "Produce a JSON policy scoped to exact actions, resource ARNs, and condition keys, then validate it with the policy simulator.",
+  "body": "Use when you must grant an AWS principal exactly the access it needs. Do not start from an AWS managed policy with broad scope and trim later. Actions: list the precise API calls the code makes, build a Statement per logical access with explicit Action and Resource ARNs, add condition keys to bind it to the calling service or tag, and run iam simulate-principal-policy against both intended and forbidden actions. Validation signals include the simulator returning Allow only for listed actions and Deny for everything else, plus a clean CloudTrail on the real call. Risk boundary: if the task seems to need a wildcard or a cross-account trust, stop and escalate for human approval.",
+  "domain": "aws",
+  "scope_hint": "platform.cloud.aws:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.aws",
+  "pack_id": "platform.cloud.aws"
+}

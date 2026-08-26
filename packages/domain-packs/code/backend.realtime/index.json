@@ -1,0 +1,484 @@
+[
+  {
+    "ref_id": "strategy:rt:assume-disconnect-and-resync",
+    "type": "strategy",
+    "title": "Assume disconnect and resync on reconnect",
+    "summary": "Treat every connection as transient; on reconnect the client requests state since a cursor rather than trusting continuity.",
+    "domains": [
+      "realtime",
+      "websocket",
+      "sse",
+      "pubsub",
+      "subscriptions"
+    ],
+    "triggers": [
+      "reconnect",
+      "resync",
+      "cursor",
+      "resume",
+      "disconnect",
+      "recovery"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.realtime"
+  },
+  {
+    "ref_id": "strategy:rt:apply-backpressure-not-unbounded-buffers",
+    "type": "strategy",
+    "title": "Apply backpressure, never unbounded buffers",
+    "summary": "When a client cannot keep up, the server bounds its send buffer and slows or drops, rather than growing memory.",
+    "domains": [
+      "realtime",
+      "websocket",
+      "sse",
+      "pubsub",
+      "subscriptions"
+    ],
+    "triggers": [
+      "backpressure",
+      "buffer",
+      "slow",
+      "client",
+      "memory",
+      "drop"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.realtime"
+  },
+  {
+    "ref_id": "strategy:rt:revalidate-auth-on-long-connections",
+    "type": "strategy",
+    "title": "Revalidate auth on long-lived connections",
+    "summary": "Authorization is re-checked as tokens expire or permissions change, not trusted from the initial handshake forever.",
+    "domains": [
+      "realtime",
+      "websocket",
+      "sse",
+      "pubsub",
+      "subscriptions"
+    ],
+    "triggers": [
+      "auth",
+      "token",
+      "expiry",
+      "revalidate",
+      "refresh",
+      "permission"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.realtime"
+  },
+  {
+    "ref_id": "strategy:rt:bound-broadcast-fan-out",
+    "type": "strategy",
+    "title": "Bound and decouple broadcast fan-out",
+    "summary": "Broadcasting to many subscribers runs concurrently with per-connection isolation so one slow client cannot stall the rest.",
+    "domains": [
+      "realtime",
+      "websocket",
+      "sse",
+      "pubsub",
+      "subscriptions"
+    ],
+    "triggers": [
+      "broadcast",
+      "fan-out",
+      "subscribers",
+      "concurrency",
+      "isolation",
+      "channel"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.realtime"
+  },
+  {
+    "ref_id": "strategy:rt:heartbeat-to-detect-dead-connections",
+    "type": "strategy",
+    "title": "Heartbeat to detect dead connections",
+    "summary": "Ping/pong or keepalive with a timeout reaps half-open connections so resources are not leaked by silent drops.",
+    "domains": [
+      "realtime",
+      "websocket",
+      "sse",
+      "pubsub",
+      "subscriptions"
+    ],
+    "triggers": [
+      "heartbeat",
+      "ping",
+      "pong",
+      "keepalive",
+      "timeout",
+      "half-open"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.realtime"
+  },
+  {
+    "ref_id": "strategy:rt:prefer-sse-for-one-way-streams",
+    "type": "strategy",
+    "title": "Prefer SSE for one-way server-to-client streams",
+    "summary": "Use Server-Sent Events for unidirectional updates and reserve WebSocket for genuine bidirectional needs.",
+    "domains": [
+      "realtime",
+      "websocket",
+      "sse",
+      "pubsub",
+      "subscriptions"
+    ],
+    "triggers": [
+      "sse",
+      "websocket",
+      "one-way",
+      "bidirectional",
+      "transport",
+      "choose"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.realtime"
+  },
+  {
+    "ref_id": "methodology:rt:design-reconnect-and-resume",
+    "type": "methodology",
+    "title": "Design reconnect and resume",
+    "summary": "Add sequence ids, client cursors, and server replay so a dropped connection recovers without lost or duplicate state.",
+    "domains": [
+      "realtime",
+      "websocket",
+      "sse",
+      "pubsub",
+      "subscriptions"
+    ],
+    "triggers": [
+      "reconnect",
+      "resume",
+      "cursor",
+      "sequence",
+      "replay",
+      "design"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.realtime"
+  },
+  {
+    "ref_id": "methodology:rt:add-backpressure-to-a-stream",
+    "type": "methodology",
+    "title": "Add backpressure to a push stream",
+    "summary": "Bound per-connection buffers and define a slow-consumer policy so server memory stays flat under load.",
+    "domains": [
+      "realtime",
+      "websocket",
+      "sse",
+      "pubsub",
+      "subscriptions"
+    ],
+    "triggers": [
+      "backpressure",
+      "buffer",
+      "slow-consumer",
+      "bound",
+      "drop",
+      "coalesce"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.realtime"
+  },
+  {
+    "ref_id": "methodology:rt:wire-auth-refresh-on-connection",
+    "type": "methodology",
+    "title": "Wire auth refresh on a connection",
+    "summary": "Track token expiry per connection and require re-auth before expiry so private streams never outlive authorization.",
+    "domains": [
+      "realtime",
+      "websocket",
+      "sse",
+      "pubsub",
+      "subscriptions"
+    ],
+    "triggers": [
+      "auth",
+      "refresh",
+      "expiry",
+      "token",
+      "revalidate",
+      "connection"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.realtime"
+  },
+  {
+    "ref_id": "methodology:rt:build-pubsub-fan-out",
+    "type": "methodology",
+    "title": "Build a pub/sub fan-out layer",
+    "summary": "Route channel events to subscribers across instances with per-connection isolation and bounded delivery.",
+    "domains": [
+      "realtime",
+      "websocket",
+      "sse",
+      "pubsub",
+      "subscriptions"
+    ],
+    "triggers": [
+      "pubsub",
+      "fan-out",
+      "channel",
+      "subscribe",
+      "broker",
+      "scale"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.realtime"
+  },
+  {
+    "ref_id": "knowledge:rt:websocket-vs-sse-vs-polling",
+    "type": "knowledge",
+    "title": "WebSocket vs SSE vs long-polling",
+    "summary": "These differ in directionality, proxy friendliness, reconnect support, and operational cost; pick by actual need.",
+    "domains": [
+      "realtime",
+      "websocket",
+      "sse",
+      "pubsub",
+      "subscriptions"
+    ],
+    "triggers": [
+      "websocket",
+      "sse",
+      "polling",
+      "transport",
+      "directionality",
+      "tradeoff"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.realtime"
+  },
+  {
+    "ref_id": "knowledge:rt:connection-state-and-scaling",
+    "type": "knowledge",
+    "title": "Connection state and horizontal scaling",
+    "summary": "Persistent connections pin state to one instance, so broadcasting across a fleet needs a shared pub/sub backplane.",
+    "domains": [
+      "realtime",
+      "websocket",
+      "sse",
+      "pubsub",
+      "subscriptions"
+    ],
+    "triggers": [
+      "state",
+      "scaling",
+      "sticky",
+      "backplane",
+      "instance",
+      "fan-out"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.realtime"
+  },
+  {
+    "ref_id": "knowledge:rt:delivery-and-ordering-on-a-channel",
+    "type": "knowledge",
+    "title": "Delivery and ordering on a channel",
+    "summary": "Realtime transports do not guarantee delivery across disconnects; ordering and at-least-once need application support.",
+    "domains": [
+      "realtime",
+      "websocket",
+      "sse",
+      "pubsub",
+      "subscriptions"
+    ],
+    "triggers": [
+      "delivery",
+      "ordering",
+      "channel",
+      "sequence",
+      "loss",
+      "at-least-once"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.realtime"
+  },
+  {
+    "ref_id": "knowledge:rt:auth-pitfalls-on-persistent-connections",
+    "type": "knowledge",
+    "title": "Auth pitfalls on persistent connections",
+    "summary": "Long connections complicate auth: handshake-only checks, token expiry mid-stream, and cross-origin hijacking.",
+    "domains": [
+      "realtime",
+      "websocket",
+      "sse",
+      "pubsub",
+      "subscriptions"
+    ],
+    "triggers": [
+      "auth",
+      "handshake",
+      "expiry",
+      "origin",
+      "hijack",
+      "csrf"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.realtime"
+  },
+  {
+    "ref_id": "skill:rt:audit-connection-lifecycle",
+    "type": "skill",
+    "title": "Audit a realtime connection lifecycle",
+    "summary": "Read a WebSocket/SSE handler and report on reconnect-resync, backpressure, heartbeat, and auth revalidation.",
+    "domains": [
+      "realtime",
+      "websocket",
+      "sse",
+      "pubsub",
+      "subscriptions"
+    ],
+    "triggers": [
+      "audit",
+      "connection",
+      "lifecycle",
+      "websocket",
+      "review",
+      "sse"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.realtime"
+  },
+  {
+    "ref_id": "skill:rt:review-broadcast-fan-out",
+    "type": "skill",
+    "title": "Review broadcast fan-out for head-of-line blocking",
+    "summary": "Trace how a channel event reaches subscribers and report whether a slow client can stall delivery to others.",
+    "domains": [
+      "realtime",
+      "websocket",
+      "sse",
+      "pubsub",
+      "subscriptions"
+    ],
+    "triggers": [
+      "broadcast",
+      "fan-out",
+      "review",
+      "head-of-line",
+      "slow",
+      "channel"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.backend.realtime"
+  }
+]

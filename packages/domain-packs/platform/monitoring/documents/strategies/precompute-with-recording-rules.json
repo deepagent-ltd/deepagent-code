@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:mon:precompute-with-recording-rules",
+  "type": "strategy",
+  "title": "Precompute with recording rules",
+  "description": "Materialize expensive or repeated PromQL into recording rules so dashboards and alerts read cheap series.",
+  "body": "Use when a costly aggregation is queried repeatedly by dashboards or alerts. Do not recompute a heavy expression on every dashboard refresh and alert evaluation — it loads the server and slows panels. Actions: define a recording rule that evaluates the expression on a schedule into a new series, and point dashboards and alert rules at that precomputed series. Validation signals include faster dashboard loads and the recording rule's series existing at the expected interval. Risk boundary: a recording rule with a too-coarse interval lags reality — match its evaluation interval to how fresh consumers need the data.",
+  "domain": "monitoring",
+  "scope_hint": "platform.monitoring:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.monitoring",
+  "pack_id": "platform.monitoring"
+}

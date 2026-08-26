@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:asm:operand-width-or-subregister-mistake",
+  "type": "failure_dossier",
+  "description": "Using the wrong operand width or assuming a sub-register write clears the full register, corrupting adjacent bits or memory.",
+  "body": "Failure mode: code writes an 8- or 16-bit sub-register expecting the upper bits to be cleared (they are not on x86-64, unlike a 32-bit write which zero-extends), or uses the wrong load/store width, so stale high bits leak into a later use or the wrong number of bytes are touched in memory. Detection signals: a value has unexpected high bits set; a memory write corrupts an adjacent field; the result is correct for small inputs but wrong once high bits matter. Do not assume sub-register writes clear the rest. Safer fallback: use the correct operand width for the data type, explicitly zero- or sign-extend when needed, match load/store widths to the field size, and verify the loaded/stored bytes by stepping in the debugger against a reference.",
+  "domain": "assembly",
+  "scope_hint": "code.assembly:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.assembly:human_authored",
+  "pack_id": "code.assembly"
+}

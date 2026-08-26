@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:rlang:translate-loop-to-vectorized",
+  "type": "methodology",
+  "title": "Translate a loop to vectorized form",
+  "description": "Convert a slow row-wise loop into vectorized or apply-family code while preserving results.",
+  "body": "Steps: 1. Capture the loop's output and a benchmark as the baseline. 2. Identify whether each iteration is independent or carries state. 3. Replace independent element work with vectorized ops or vapply/map with a fixed return type. 4. Handle NA and edge cases the loop handled implicitly. 5. Compare output element-by-element against the baseline and re-benchmark. Rollback point: before deleting the original loop. Validation: identical output and a measurable speedup.",
+  "domain": "r_lang",
+  "scope_hint": "code.r:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.r",
+  "pack_id": "code.r"
+}

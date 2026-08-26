@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:electron:validate-ipc-in-main",
+  "type": "strategy",
+  "title": "Validate every IPC message in the main process",
+  "description": "Treat all IPC payloads from renderers as untrusted input; validate sender, channel, and arguments before acting.",
+  "body": "Use when handling ipcMain.handle/on messages. Do not trust the channel name, argument types, or file paths a renderer sends, and do not perform privileged actions (file write, shell, network) on raw input. Actions: validate the payload shape/types, check the sender frame where relevant, constrain file paths to allowed directories, and reject anything unexpected. Validation signals include handlers that reject malformed or out-of-bounds requests in tests. Risk boundary: a path-traversal or command argument injected through IPC turns a renderer compromise into arbitrary file or command access via the privileged main process — main-process input validation is mandatory, the renderer is not a trust boundary.",
+  "domain": "electron",
+  "scope_hint": "code.desktop.electron:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.desktop.electron",
+  "pack_id": "code.desktop.electron"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:prompt:review-prompt-pipeline-safety",
+  "type": "skill",
+  "title": "Review prompt pipeline safety",
+  "description": "Read the assembly path and report whether input is scrubbed, PII redacted, instructions isolated, and assembly deterministic.",
+  "body": "Use when asked whether a prompt pipeline is safe to ship. Actions: inspect the order of stages to confirm scrubbing and PII redaction run before assembly; verify untrusted input is confined to a labeled data region and cannot reach instruction position; check that assembly is deterministic and the template is versioned. Do not assume a working happy path means input is contained. Report and record the exact stage or line of each gap, classifying it as unscrubbed-input, unredacted-pii, input-in-instructions, or nondeterministic-assembly. This skill is read-only and must not change the template without runtime permission. Validation signals include a confirmed injection payload that fails to alter behavior and seeded PII absent from the outbound request. Risk boundary: raw input reaching instruction position or PII reaching the model is a blocking finding.",
+  "domain": "prompt_pipeline",
+  "scope_hint": "code.prompt-pipeline:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.prompt-pipeline",
+  "pack_id": "code.prompt-pipeline"
+}

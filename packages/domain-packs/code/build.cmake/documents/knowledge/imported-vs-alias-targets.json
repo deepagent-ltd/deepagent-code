@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:cmake:imported-vs-alias-targets",
+  "type": "knowledge",
+  "title": "Imported targets versus alias targets",
+  "description": "An imported target represents a pre-built external dependency, while an alias gives an existing target a stable namespaced name for consumers.",
+  "body": "Use when reading why a dependency is referenced as Foo::foo. Do not assume a namespaced name always means an external package. find_package and FetchContent expose imported targets carrying a dependency's INTERFACE properties; add_library(... ALIAS ...) lets a project export its own targets under a namespace so internal and packaged consumers use one name. Inspect the defining CMake to tell which it is. Validation signals include consumers linking the same Foo::foo name whether built in-tree or found externally. Risk boundary: linking the raw target name instead of the alias couples consumers to layout, so prefer the namespaced name.",
+  "domain": "cmake",
+  "scope_hint": "code.build.cmake:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.build.cmake",
+  "pack_id": "code.build.cmake"
+}

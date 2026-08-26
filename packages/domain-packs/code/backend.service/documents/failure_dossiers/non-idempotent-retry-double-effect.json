@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:svc:non-idempotent-retry-double-effect",
+  "type": "failure_dossier",
+  "description": "A retried operation runs its side effect twice, producing duplicate charges, emails, or rows.",
+  "body": "Failure mode: a client or queue retries after a timeout, but the operation has no dedup, so the effect (charge, send, insert) executes again. Detection signals: no idempotency key or unique constraint on the write; the response that timed out actually succeeded server-side; duplicate rows/charges appear under retry. Do not rely on the network delivering exactly once. Safer fallback: add an idempotency key recorded in the same transaction as the effect, short-circuit on replay, and add a replay test asserting a single effect.",
+  "domain": "backend_service",
+  "scope_hint": "code.backend.service:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.service:human_authored",
+  "pack_id": "code.backend.service"
+}

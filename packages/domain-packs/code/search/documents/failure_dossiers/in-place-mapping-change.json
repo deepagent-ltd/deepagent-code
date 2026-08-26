@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:search:in-place-mapping-change",
+  "type": "failure_dossier",
+  "description": "Changing an analyzer or field type in place expecting it to apply to existing documents, yielding an inconsistent index.",
+  "body": "Failure mode: a mapping or analyzer is altered on a live index assuming it retroactively re-analyzes documents, but existing docs keep their old terms while new docs use the new analysis, so results are inconsistent and queries behave unpredictably. Detection signals: old and new documents match differently for the same query; mapping update errors or is silently ignored for indexed fields; results changed only for recent data. Do not mutate analysis/mapping in place. Safer fallback: reindex into a new index with the new mapping and swap a read alias atomically, keeping the old index until verified.",
+  "domain": "search",
+  "scope_hint": "code.search:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.search:human_authored",
+  "pack_id": "code.search"
+}

@@ -1,0 +1,78 @@
+---
+title: ระบบนิเวศ
+description: โปรเจ็กต์และการผสานรวมที่สร้างด้วย DeepAgent Code
+---
+
+ชุดโครงการชุมชนที่สร้างขึ้นบน DeepAgent Code
+
+:::note
+ต้องการเพิ่มโครงการที่เกี่ยวข้องกับ DeepAgent Code ของคุณลงในรายการนี้หรือไม่ ส่งพีอาร์.
+:::
+
+คุณยังสามารถลองดู [awesome-deepagent-code](https://github.com/awesome-deepagent-code/awesome-deepagent-code) และ [deepagent-code.cafe](https://deepagent-code.cafe) ซึ่งเป็นชุมชนที่รวบรวมระบบนิเวศและชุมชนไว้ด้วยกัน
+
+---
+
+## ปลั๊กอิน
+
+| ชื่อ                                                                                               | คำอธิบาย                                                                                                              |
+| -------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| [deepagent-code-daytona](https://github.com/daytonaio/daytona/tree/main/libs/deepagent-code-plugin)            | เรียกใช้เซสชัน DeepAgent Code โดยอัตโนมัติในแซนด์บ็อกซ์ Daytona ที่แยกออกมาพร้อม git sync และการแสดงตัวอย่างแบบสด           |
+| [deepagent-code-helicone-session](https://github.com/H2Shami/deepagent-code-helicone-session)                  | แทรกส่วนหัวเซสชัน Helicone โดยอัตโนมัติสำหรับการจัดกลุ่มคำขอ                                                          |
+| [deepagent-code-type-inject](https://github.com/nick-vi/deepagent-code-type-inject)                            | ฉีดประเภท TypeScript/Svelte ลงในไฟล์ที่อ่านโดยอัตโนมัติด้วยเครื่องมือค้นหา                                            |
+| [deepagent-code-openai-codex-auth](https://github.com/numman-ali/deepagent-code-openai-codex-auth)             | ใช้การสมัครสมาชิก ChatGPT Plus/Pro แทนเครดิต API                                                                      |
+| [deepagent-code-gemini-auth](https://github.com/jenslys/deepagent-code-gemini-auth)                            | ใช้แผน Gemini ที่มีอยู่ของคุณแทนการเรียกเก็บเงิน API                                                                  |
+| [deepagent-code-antigravity-auth](https://github.com/NoeFabris/deepagent-code-antigravity-auth)                | ใช้โมเดลฟรีของ Antigravity แทนการเรียกเก็บเงิน API                                                                    |
+| [deepagent-code-devcontainers](https://github.com/athal7/deepagent-code-devcontainers)                         | การแยกคอนเทนเนอร์ Devcontainer แบบหลายสาขาพร้อมโคลนแบบตื้นและพอร์ตที่กำหนดอัตโนมัติ                                   |
+| [deepagent-code-google-antigravity-auth](https://github.com/shekohex/deepagent-code-google-antigravity-auth)   | ปลั๊กอิน Google Antigravity OAuth พร้อมรองรับ Google Search และการจัดการ API ที่แข็งแกร่งยิ่งขึ้น                     |
+| [deepagent-code-dynamic-context-pruning](https://github.com/Tarquinen/deepagent-code-dynamic-context-pruning)  | ปรับการใช้โทเค็นให้เหมาะสมโดยการตัดเอาท์พุตของเครื่องมือที่ล้าสมัย                                                    |
+| [deepagent-code-vibeguard](https://github.com/inkdust2021/deepagent-code-vibeguard)                            | ปกปิดความลับ/PII เป็นตัวยึดตำแหน่งแบบ VibeGuard ก่อนการเรียก LLM และกู้คืนในเครื่อง                                   |
+| [deepagent-code-websearch-cited](https://github.com/ghoulr/deepagent-code-websearch-cited.git)                 | เพิ่มการสนับสนุนการค้นหาเว็บแบบเนทีฟสำหรับผู้ให้บริการที่รองรับด้วยรูปแบบที่มีเหตุผลของ Google                        |
+| [deepagent-code-pty](https://github.com/shekohex/deepagent-code-pty.git)                                       | ช่วยให้ตัวแทน AI สามารถเรียกใช้กระบวนการเบื้องหลังใน PTY และส่งข้อมูลเชิงโต้ตอบให้พวกเขาได้                           |
+| [deepagent-code-shell-strategy](https://github.com/JRedeker/deepagent-code-shell-strategy)                     | คำแนะนำสำหรับคำสั่ง shell แบบไม่โต้ตอบ - ป้องกันการแฮงค์จากการดำเนินการที่ขึ้นอยู่กับ TTY                             |
+| [deepagent-code-wakatime](https://github.com/angristan/deepagent-code-wakatime)                                | ติดตามการใช้งาน DeepAgent Code ด้วย Wakatime                                                                                |
+| [deepagent-code-md-table-formatter](https://github.com/franlol/deepagent-code-md-table-formatter/tree/main)    | ทำความสะอาดตาราง Markdown ที่ผลิตโดย LLM                                                                              |
+| [deepagent-code-morph-plugin](https://github.com/morphllm/deepagent-code-morph-plugin)                         | การแก้ไข Fast Apply, การค้นหาโค้ดเบส WarpGrep และการบีบอัดบริบทผ่าน Morph                                             |
+| [oh-my-deepagent-code](https://github.com/code-yeongyu/oh-my-deepagent-code)                                   | ตัวแทนเบื้องหลัง, เครื่องมือ LSP/AST/MCP ที่สร้างไว้ล่วงหน้า, ตัวแทนที่ได้รับการดูแลจัดการ, เข้ากันได้กับ Claude Code |
+| [deepagent-code-notificator](https://github.com/panta82/deepagent-code-notificator)                            | การแจ้งเตือนบนเดสก์ท็อปและเสียงเตือนสำหรับเซสชัน DeepAgent Code                                                             |
+| [deepagent-code-notifier](https://github.com/mohak34/deepagent-code-notifier)                                  | การแจ้งเตือนบนเดสก์ท็อปและเสียงเตือนสำหรับการอนุญาต การดำเนินการเสร็จสิ้น และเหตุการณ์ข้อผิดพลาด                      |
+| [deepagent-code-zellij-namer](https://github.com/24601/deepagent-code-zellij-namer)                            | การตั้งชื่อเซสชัน Zellij อัตโนมัติที่ขับเคลื่อนด้วย AI ตามบริบทของ DeepAgent Code                                           |
+| [deepagent-code-skillful](https://github.com/zenobi-us/deepagent-code-skillful)                                | อนุญาตให้ตัวแทน DeepAgent Code โหลดแบบ Lazy Load ตามความต้องการพร้อมการค้นพบทักษะและการแทรก                                 |
+| [deepagent-code-supermemory](https://github.com/supermemoryai/deepagent-code-supermemory)                      | หน่วยความจำถาวรตลอดเซสชันโดยใช้ Supermemory                                                                           |
+| [@plannotator/deepagent-code](https://github.com/backnotprop/plannotator/tree/main/apps/deepagent-code-plugin) | การตรวจสอบแผนเชิงโต้ตอบพร้อมคำอธิบายประกอบแบบภาพและการแชร์ส่วนตัว/offline                                             |
+| [@openspoon/subtask2](https://github.com/spoons-and-mirrors/subtask2)                              | ขยาย deepagent-code /commands ไปสู่ระบบการประสานที่มีประสิทธิภาพพร้อมการควบคุมโฟลว์แบบละเอียด                               |
+| [deepagent-code-scheduler](https://github.com/different-ai/deepagent-code-scheduler)                           | กำหนดเวลางานที่เกิดซ้ำโดยใช้ launchd (Mac) หรือ systemd (Linux) ด้วยไวยากรณ์ cron                                     |
+| [micode](https://github.com/vtemian/micode)                                                        | ระดมความคิดอย่างมีโครงสร้าง → วางแผน → นำเวิร์กโฟลว์ไปใช้ด้วยความต่อเนื่องของเซสชัน                                   |
+| [octto](https://github.com/vtemian/octto)                                                          | UI เบราว์เซอร์แบบโต้ตอบสำหรับการระดมความคิด AI ด้วยแบบฟอร์มคำถามหลายข้อ                                               |
+| [deepagent-code-background-agents](https://github.com/kdcokenny/deepagent-code-background-agents)              | เอเจนต์พื้นหลังสไตล์ Claude Code พร้อมการมอบหมายแบบอะซิงก์และการคงอยู่ของบริบท                                        |
+| [deepagent-code-notify](https://github.com/kdcokenny/deepagent-code-notify)                                    | การแจ้งเตือนระบบปฏิบัติการดั้งเดิมสำหรับ DeepAgent Code – ทราบเมื่องานเสร็จสมบูรณ์                                          |
+| [deepagent-code-workspace](https://github.com/kdcokenny/deepagent-code-workspace)                              | ชุดสายรัดประสานหลายเอเจนต์ที่ให้มา – ส่วนประกอบ 16 ชิ้น ติดตั้งเพียงครั้งเดียว                                        |
+| [deepagent-code-worktree](https://github.com/kdcokenny/deepagent-code-worktree)                                | เวิร์กทรีคอมไพล์ไร้แรงเสียดทานสำหรับ DeepAgent Code                                                                         |
+| [deepagent-code-sentry-monitor](https://github.com/stolinski/deepagent-code-sentry-monitor)                    | ติดตามและแก้ไขข้อบกพร่องเอเจนต์ AI ของคุณด้วย Sentry AI Monitoring                                                    |
+
+---
+
+## โครงการ
+
+| ชื่อ                                                                                       | คำอธิบาย                                                                  |
+| ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------- |
+| [kimaki](https://github.com/remorses/kimaki)                                               | บอท Discord เพื่อควบคุมเซสชัน DeepAgent Code สร้างขึ้นบน SDK                    |
+| [deepagent-code.nvim](https://github.com/NickvanDyke/deepagent-code.nvim)                              | ปลั๊กอิน Neovim สำหรับข้อความแจ้งที่ทราบโดยบรรณาธิการ ซึ่งสร้างขึ้นบน API |
+| [portal](https://github.com/hosenur/portal)                                                | UI เว็บบนมือถือเป็นครั้งแรกสำหรับ DeepAgent Code บน Tailscale/VPN               |
+| [deepagent-code plugin template](https://github.com/zenobi-us/deepagent-code-plugin-template/)         | เทมเพลตสำหรับสร้างปลั๊กอิน DeepAgent Code                                       |
+| [deepagent-code.nvim](https://github.com/sudo-tee/deepagent-code.nvim)                                 | ส่วนหน้า Neovim สำหรับ deepagent-code - เอเจนต์การเข้ารหัส AI ที่ใช้ terminal   |
+| [ai-sdk-provider-deepagent-code-sdk](https://github.com/ben-vargas/ai-sdk-provider-deepagent-code-sdk) | ผู้ให้บริการ Vercel AI SDK สำหรับการใช้งาน DeepAgent Code ผ่าน @deepagent-code/sdk |
+| [OpenChamber](https://github.com/btriapitsyn/openchamber)                                  | แอพเว็บ / เดสก์ท็อปและส่วนขยาย VS Code สำหรับ DeepAgent Code                    |
+| [DeepAgent Code-Obsidian](https://github.com/mtymek/deepagent-code-obsidian)                           | ปลั๊กอิน Obsidian ที่ฝัง DeepAgent Code ไว้ใน UI ของ Obsidian                   |
+| [OpenWork](https://github.com/different-ai/openwork)                                       | ทางเลือกโอเพ่นซอร์สแทน Claude Cowork ซึ่งขับเคลื่อนโดย DeepAgent Code           |
+| [ocx](https://github.com/kdcokenny/ocx)                                                    | ตัวจัดการส่วนขยาย DeepAgent Code พร้อมโปรไฟล์แบบพกพาและแยกส่วน                  |
+| [CodeNomad](https://github.com/NeuralNomadsAI/CodeNomad)                                   | แอปเดสก์ท็อป เว็บ มือถือ และไคลเอ็นต์ระยะไกลสำหรับ DeepAgent Code               |
+
+---
+
+## ตัวแทน
+
+| ชื่อ                                                              | คำอธิบาย                                                                 |
+| ----------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| [Agentic](https://github.com/Cluster444/agentic)                  | เอเจนต์ AI แบบแยกส่วนและคำสั่งสำหรับการพัฒนาแบบมีโครงสร้าง               |
+| [deepagent-code-agents](https://github.com/darrenhinde/deepagent-code-agents) | กำหนดค่า พรอมต์ เอเจนต์ และปลั๊กอินสำหรับเวิร์กโฟลว์ที่ได้รับการปรับปรุง |

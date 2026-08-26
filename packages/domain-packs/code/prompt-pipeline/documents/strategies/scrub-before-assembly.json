@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:prompt:scrub-before-assembly",
+  "type": "strategy",
+  "title": "Scrub untrusted input before assembly",
+  "description": "User and external input is sanitized and length-bounded before it is placed into the prompt, not after.",
+  "body": "Use when external text enters the prompt pipeline. Do not assemble the prompt and clean it afterward, and avoid passing unbounded or control-character-laden input through. Actions: normalize and bound input length, strip or neutralize control sequences and instruction-like delimiters, and label the cleaned content as data before assembly. Validation signals include a test that oversized or delimiter-laden input is bounded and neutralized before reaching the template. Risk boundary: scrubbing after assembly leaves a window where raw input shapes the prompt; scrub at the boundary and treat unscrubbed input reaching the template as a blocking finding.",
+  "domain": "prompt_pipeline",
+  "scope_hint": "code.prompt-pipeline:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.prompt-pipeline",
+  "pack_id": "code.prompt-pipeline"
+}

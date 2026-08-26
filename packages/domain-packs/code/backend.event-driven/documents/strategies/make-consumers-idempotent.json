@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:evt:make-consumers-idempotent",
+  "type": "strategy",
+  "title": "Make every consumer idempotent",
+  "description": "Consumers dedup on event id so at-least-once redelivery produces a single effect.",
+  "body": "Use when handling any event from an at-least-once broker. Do not assume each event is delivered once or process before recording the id. Actions: dedup on the event's stable id (processed-ids table or idempotent upsert) committed atomically with the effect; ack/commit offset only after the effect is durable. Validation signals include a test that replaying the same event id yields one effect and identical downstream state. Risk boundary: a non-idempotent consumer on a money or inventory event double-applies on every redelivery and must be escalated as a correctness defect.",
+  "domain": "event_driven",
+  "scope_hint": "code.backend.event-driven:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.event-driven",
+  "pack_id": "code.backend.event-driven"
+}

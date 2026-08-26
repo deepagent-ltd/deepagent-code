@@ -1,0 +1,11 @@
+{
+  "ref_id": "skill:frontend_web:media-canvas-render-check",
+  "type": "skill",
+  "description": "Check that image, video, SVG, and canvas outputs render actual visible pixels in browser viewports.",
+  "body": "Inputs: route, media or canvas selectors, expected asset state, and target viewports. Procedure: load the route; wait for image decode, video metadata, or canvas draw completion; verify rendered dimensions and aspect ratio; inspect network and console for missing assets, CORS, decode, or WebGL errors; for canvas, sample pixels or use screenshot evidence to reject blank output. This skill does not optimize compression, CDN policy, or art direction. Outputs: asset URLs or selectors checked, viewport, rendered size, blank/cropped/distorted findings, and console/network errors. Validation signals include nonzero natural and rendered dimensions, expected crop behavior, nonblank canvas pixels, and no broken icon fallback. Failure handling: if external assets are unavailable, distinguish environment failure from source path or render logic failure. Use when Frontend Web work touches visible UI behavior, browser console output, DOM state, assets, viewport behavior, and interaction evidence. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: run the documented inspection and validation workflow; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include browser smoke, component tests, viewport screenshots, console/network checks, and accessibility assertions. Risk boundary: escalate or stop when the task involves visual regressions, inaccessible interaction, hydration mismatch, and browser-only failures, missing owner evidence, or live external state.",
+  "domain": "web",
+  "scope_hint": "code.frontend.web:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.web:media_render_skill",
+  "pack_id": "code.frontend.web"
+}

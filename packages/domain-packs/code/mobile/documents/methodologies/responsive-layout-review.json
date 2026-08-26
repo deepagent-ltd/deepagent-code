@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:mobile:responsive-layout-review",
+  "type": "methodology",
+  "title": "Review responsive layout across devices",
+  "description": "Verify the changed UI adapts to screen sizes, orientation, safe areas, dynamic font scaling, and notches without clipping or overlap.",
+  "body": "Steps: 1. Render the changed screen on a small phone, a large phone, and a tablet. 2. Rotate to landscape and back, checking for clipped or overlapping content. 3. Inset for safe areas/notches and the on-screen keyboard. 4. Increase the OS dynamic font/display size and confirm text reflows without truncation. 5. Record screenshots per configuration. Rollback point: before changing fixed dimensions to flexible ones. Validation: the layout adapts at every tested size and font scale with no clipping, overlap, or unreachable controls, evidenced by screenshots; a single-device check is not sufficient coverage.",
+  "domain": "mobile",
+  "scope_hint": "code.mobile:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mobile",
+  "pack_id": "code.mobile"
+}

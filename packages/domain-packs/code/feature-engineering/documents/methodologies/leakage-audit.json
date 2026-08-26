@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:feat:leakage-audit",
+  "type": "methodology",
+  "title": "Run a leakage audit before training",
+  "description": "A checklist pass over features for temporal and target leakage so an inflated offline metric is caught early.",
+  "body": "Use before trusting any offline metric from a freshly assembled training set. Do not celebrate a sudden metric jump — it is more often leakage than genuine signal. Actions: trace each feature's timing relative to the label, confirm point-in-time joins, drop post-outcome and target-derived fields, and re-evaluate on a temporal holdout. Validation signals include a leakage checklist with each feature's timing recorded and a metric that survives the temporal split. Risk boundary: leaked features create models that fail in production; if a feature's timing cannot be established, deny its use and escalate before training proceeds.",
+  "domain": "feature_engineering",
+  "scope_hint": "code.feature-engineering:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.feature-engineering",
+  "pack_id": "code.feature-engineering"
+}

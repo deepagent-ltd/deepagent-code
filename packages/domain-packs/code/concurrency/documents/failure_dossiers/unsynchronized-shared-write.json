@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:conc:unsynchronized-shared-write",
+  "type": "failure_dossier",
+  "description": "Two threads read-modify-write the same state without synchronization, losing updates and triggering undefined behavior.",
+  "body": "Failure mode: shared mutable state (a counter, map, or struct) is read and written from multiple threads with no lock, atomic, or owner, so updates are lost (read-modify-write interleaves) and in many languages the data race is undefined behavior that may corrupt unrelated memory. Detection signals: a race detector flags conflicting accesses; a counter ends lower than the number of increments; intermittent corruption under load. Do not assume a single statement is atomic or that it 'works in practice'. Safer fallback: route every access through one mutex, atomic, or owning task, then prove it with a race-detector clean run and a stress test that reconciles the final state.",
+  "domain": "concurrency",
+  "scope_hint": "code.concurrency:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.concurrency:human_authored",
+  "pack_id": "code.concurrency"
+}

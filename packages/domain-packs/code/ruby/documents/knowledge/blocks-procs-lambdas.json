@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:ruby:blocks-procs-lambdas",
+  "type": "knowledge",
+  "title": "Blocks, procs, and lambdas",
+  "description": "Ruby's three closure forms differ in arity strictness and return behavior, which changes control flow.",
+  "body": "Use when reading or writing callables. A block is the anonymous chunk passed to a method and run via yield or captured with &block. A Proc (Proc.new/proc) is lenient about arity (extra args ignored, missing ones nil) and a return inside it returns from the method that created it. A lambda (->/lambda) checks arity strictly and a return inside it returns only from the lambda, behaving like a method. Do not treat a proc and a lambda as interchangeable. Actions: use lambda when arity and local return matter, proc/block for lightweight iteration. Validation signals include a test exercising arity and return behavior. Risk boundary: a bare return inside a proc passed around can jump out of an enclosing method unexpectedly, producing control-flow bugs that are hard to trace.",
+  "domain": "ruby",
+  "scope_hint": "code.ruby:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.ruby",
+  "pack_id": "code.ruby"
+}

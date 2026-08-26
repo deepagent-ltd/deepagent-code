@@ -1,0 +1,254 @@
+[
+  {
+    "ref_id": "methodology:git-aware-editing",
+    "type": "methodology",
+    "title": "Git Aware Editing",
+    "summary": "Check git status before editing. Commit logical units. Never force-push or rebase without asking.",
+    "domains": [
+      "code"
+    ],
+    "triggers": [
+      "check",
+      "status",
+      "before",
+      "editing",
+      "commit",
+      "logical",
+      "units",
+      "never"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.core"
+  },
+  {
+    "ref_id": "methodology:test-driven-fix",
+    "type": "methodology",
+    "title": "Test Driven Fix",
+    "summary": "Run failing test → read error → identify root cause → apply minimal fix → rerun test.",
+    "domains": [
+      "code_repair",
+      "code"
+    ],
+    "triggers": [
+      "failing",
+      "test",
+      "read",
+      "error",
+      "identify",
+      "root",
+      "cause",
+      "apply"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.core"
+  },
+  {
+    "ref_id": "methodology:type-first-refactor",
+    "type": "methodology",
+    "title": "Type First Refactor",
+    "summary": "Fix type errors first, then logic errors, then style issues. Typecheck after each step.",
+    "domains": [
+      "code"
+    ],
+    "triggers": [
+      "type",
+      "errors",
+      "first",
+      "then",
+      "logic",
+      "style"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.core"
+  },
+  {
+    "ref_id": "skill:code_core:test-selection",
+    "type": "skill",
+    "title": "Test Selection",
+    "summary": "Select the smallest validation command set that covers changed code paths before broadening to package-level gates.",
+    "domains": [
+      "code"
+    ],
+    "triggers": [
+      "select",
+      "smallest",
+      "validation",
+      "command",
+      "that",
+      "covers",
+      "changed",
+      "code"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.core"
+  },
+  {
+    "ref_id": "strategy:bounded-context-management",
+    "type": "strategy",
+    "title": "Bounded Context Management",
+    "summary": "Keep prompt minimal. Use refs and summaries instead of full content. Respect token budgets.",
+    "domains": [
+      "code"
+    ],
+    "triggers": [
+      "keep",
+      "prompt",
+      "minimal",
+      "refs",
+      "summaries",
+      "instead",
+      "full",
+      "content"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.core"
+  },
+  {
+    "ref_id": "strategy:diagnosis-before-retry",
+    "type": "strategy",
+    "title": "Diagnosis Before Retry",
+    "summary": "Never blindly retry. Diagnose root cause with evidence before attempting fix.",
+    "domains": [
+      "code"
+    ],
+    "triggers": [
+      "never",
+      "blindly",
+      "retry",
+      "diagnose",
+      "root",
+      "cause",
+      "with",
+      "evidence"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.core"
+  },
+  {
+    "ref_id": "strategy:first-fast-design",
+    "type": "strategy",
+    "title": "First Fast Design",
+    "summary": "First round: short design, execute, validate. No upfront heavy reasoning.",
+    "domains": [
+      "code"
+    ],
+    "triggers": [
+      "first",
+      "round",
+      "short",
+      "design",
+      "execute",
+      "validate",
+      "upfront",
+      "heavy"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.core"
+  },
+  {
+    "ref_id": "strategy:incremental-validation",
+    "type": "strategy",
+    "title": "Incremental Validation",
+    "summary": "Validate after every change. Prefer small scoped changes over large rewrites.",
+    "domains": [
+      "code"
+    ],
+    "triggers": [
+      "validate",
+      "after",
+      "every",
+      "change",
+      "prefer",
+      "small",
+      "scoped",
+      "changes"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.core"
+  },
+  {
+    "ref_id": "strategy:mcp-tool-coordination",
+    "type": "strategy",
+    "title": "Mcp Tool Coordination",
+    "summary": "MCP tools extend capabilities. Use them through approval flow, coordinate with builtin tools.",
+    "domains": [
+      "code"
+    ],
+    "triggers": [
+      "tools",
+      "extend",
+      "capabilities",
+      "them",
+      "through",
+      "approval",
+      "flow",
+      "coordinate"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.core"
+  }
+]

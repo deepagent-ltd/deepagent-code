@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:sdk:partial-pagination-truncation",
+  "type": "failure_dossier",
+  "description": "A client that reads only the first page of a paginated endpoint and presents it as the complete result set.",
+  "body": "Failure mode: the SDK calls a list endpoint once and returns the first page, ignoring the next-page cursor, so callers silently get a truncated collection. Detection signals: result counts cap at the page size; missing items that exist on the server; no cursor-following loop in the client. Do not treat a single page as the full collection. Safer fallback: provide an auto-paginating iterator that follows cursors to exhaustion, document ordering and page size, and verify against a multi-page fixture that the count matches the server total.",
+  "domain": "sdk",
+  "scope_hint": "code.sdk:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.sdk:human_authored",
+  "pack_id": "code.sdk"
+}

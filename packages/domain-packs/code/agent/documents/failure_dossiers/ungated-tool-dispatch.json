@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:agent:ungated-tool-dispatch",
+  "type": "failure_dossier",
+  "description": "The agent can invoke any function by name with no registry or permission check, so it reaches side-effecting tools freely.",
+  "body": "Failure mode: dispatch looks up a tool by the model-provided name and calls it without a registry entry or permission gate, so a write, delete, or external tool runs on model whim. Detection signals: dispatch accepts arbitrary names; side-effecting tools have no permission flag; no deny-by-default; no test for an unregistered or unpermitted call. Do not expose an open function dispatch to the model. Safer fallback: register every tool with its side-effect class and required permission, deny unregistered names, gate side-effecting tools behind explicit grants, and add denial tests.",
+  "domain": "agent",
+  "scope_hint": "code.agent:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.agent:human_authored",
+  "pack_id": "code.agent"
+}

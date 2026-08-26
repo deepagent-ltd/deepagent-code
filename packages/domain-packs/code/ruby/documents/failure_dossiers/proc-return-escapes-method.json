@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:ruby:proc-return-escapes-method",
+  "type": "failure_dossier",
+  "description": "A bare return inside a non-lambda proc returns from the enclosing method, breaking control flow unexpectedly.",
+  "body": "Failure mode: code stores or passes a Proc (not a lambda) containing a return, and when it runs the return jumps out of the method that created the proc rather than just the proc, skipping later code or returning a wrong value. Detection signals: a method exits earlier than expected when a stored proc runs; a LocalJumpError if the creating method already returned; return used inside Proc.new/proc rather than a lambda. Do not rely on a proc's return behaving like a method's. Safer fallback: use a lambda (->) when the callable needs a local return and strict arity, reserve procs/blocks for cases without an explicit return, and test the callable's return value and control flow.",
+  "domain": "ruby",
+  "scope_hint": "code.ruby:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.ruby:human_authored",
+  "pack_id": "code.ruby"
+}

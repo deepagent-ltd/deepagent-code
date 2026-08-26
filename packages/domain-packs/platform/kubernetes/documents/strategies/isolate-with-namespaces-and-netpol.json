@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:k8s:isolate-with-namespaces-and-netpol",
+  "type": "strategy",
+  "title": "Isolate workloads by namespace and NetworkPolicy",
+  "description": "Use namespaces as the unit of RBAC, quota, and naming isolation, and default-deny NetworkPolicy so pods only reach intended peers.",
+  "body": "Use when placing a new workload or separating environments/tenants in one cluster. Do not put unrelated tenants in the default namespace with open pod-to-pod traffic. Actions: create a namespace per boundary, attach a ResourceQuota and LimitRange, and apply a default-deny NetworkPolicy plus explicit allow rules for required ingress/egress. Validation signals include a denied connection test between namespaces that should not talk and quota enforcement on excess requests. Risk boundary: removing a default-deny policy or merging tenant namespaces is an isolation change requiring review.",
+  "domain": "kubernetes",
+  "scope_hint": "platform.kubernetes:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.kubernetes",
+  "pack_id": "platform.kubernetes"
+}

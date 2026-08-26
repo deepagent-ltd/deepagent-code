@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:mobile:push-delivery-is-best-effort",
+  "type": "knowledge",
+  "title": "Push notification delivery is best-effort",
+  "description": "Push messages can be delayed, deduplicated, collapsed, or dropped by the OS and platform, so they must not be the only source of truth.",
+  "body": "Use when designing features that depend on push notifications. Delivery via APNs/FCM is best-effort: messages may be throttled, collapsed by collapse-key, delayed in low-power states, or dropped if the device is offline too long, and tokens rotate. Do not treat a push as guaranteed or as the sole trigger for critical state. Actions: reconcile state on app foreground via a fetch, handle token refresh, and make handlers idempotent. Validation signals include a test where a dropped push still resolves correctly on next foreground sync. Risk boundary: relying on push for security-critical or billing actions risks missed events; always provide a server-reconciled fallback.",
+  "domain": "mobile",
+  "scope_hint": "code.mobile:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mobile",
+  "pack_id": "code.mobile"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:agent:permission-gate-the-tool-registry",
+  "type": "strategy",
+  "title": "Permission-gate the tool registry",
+  "description": "Tools are registered with explicit capability and permission metadata, and the loop checks permission before any invocation.",
+  "body": "Use when adding tools an agent can call or wiring the dispatch layer. Do not let the agent invoke an arbitrary function by name, and avoid registering a side-effecting tool without a permission flag. Actions: register each tool with its capability, side-effect class, and required permission; check permission at dispatch; deny-by-default for unregistered names. Validation signals include a test that an unregistered tool name is rejected and that a side-effecting tool without granted permission is denied. Risk boundary: an agent able to call a write/delete/external tool with no permission check is a critical finding requiring a human gate.",
+  "domain": "agent",
+  "scope_hint": "code.agent:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.agent",
+  "pack_id": "code.agent"
+}

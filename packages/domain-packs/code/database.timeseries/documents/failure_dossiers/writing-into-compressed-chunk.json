@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:tsdb:writing-into-compressed-chunk",
+  "type": "failure_dossier",
+  "description": "Backfilling or updating data inside a compressed/cold chunk, causing failures or expensive decompression.",
+  "body": "Failure mode: a late or backfilled write targets a chunk already compressed for cold storage, which either errors or forces a costly decompress-recompress cycle. Detection signals: write errors on old timestamps; sudden CPU spikes from decompression; compression policy age below the lateness window. Do not compress chunks that still receive writes. Safer fallback: set the compression age beyond the maximum lateness window, and batch genuine backfills into an explicit decompress→write→recompress maintenance step.",
+  "domain": "timeseries_db",
+  "scope_hint": "code.database.timeseries:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.timeseries:human_authored",
+  "pack_id": "code.database.timeseries"
+}

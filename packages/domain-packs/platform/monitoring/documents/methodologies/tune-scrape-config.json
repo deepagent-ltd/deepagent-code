@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:mon:tune-scrape-config",
+  "type": "methodology",
+  "title": "Tune the scrape config",
+  "description": "Align scrape interval, timeout, and relabeling with metric freshness and cardinality goals.",
+  "body": "Steps: 1. List each target's freshness need and metric volume. 2. Set the scrape interval to balance resolution against load. 3. Ensure the scrape timeout is below the interval. 4. Apply relabel_configs to keep only needed targets and metric_relabel_configs to drop noisy labels. 5. Verify samples arrive at the expected interval without timeouts. Rollback point: before applying new scrape settings to all targets. Validation: targets report up, samples land on schedule, and dropped labels are gone.",
+  "domain": "monitoring",
+  "scope_hint": "platform.monitoring:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.monitoring",
+  "pack_id": "platform.monitoring"
+}

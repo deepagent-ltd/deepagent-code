@@ -1,0 +1,71 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.cryptography",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "cryptography",
+      "encryption",
+      "hashing",
+      "key_management"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.cryptography: AES-GCM authenticated encryption, Argon2 password hashing, HKDF key derivation, Ed25519 signatures, nonce management and constant-time comparison via libsodium"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "add pagination to a REST endpoint and write handler unit tests"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "aead aes-gcm chacha20-poly1305 authenticated encryption argon2 bcrypt password hashing hkdf kdf ed25519 signature key management rotation nonce constant-time csprng tls",
+  "expected_pack_id": "code.cryptography",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "code.cryptography L3 validation smoke",
+    "signals": [
+      "uses a named AEAD construction with no manual MAC composition",
+      "passwords hashed with a memory-hard KDF (Argon2/scrypt/bcrypt) at current parameters",
+      "all randomness sourced from a CSPRNG, never a PRNG",
+      "nonces are unique per key (counter or random of sufficient width)",
+      "secret comparisons use a constant-time function"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "code.cryptography diagnosis smoke",
+    "signals": [
+      "ECB mode or unauthenticated CBC used for encryption",
+      "a nonce/IV reused across two messages under the same key",
+      "MD5/SHA-1 or a fast unsalted hash used for passwords",
+      "a hand-rolled cipher or custom MAC composition",
+      "secret compared with a short-circuiting equality operator (timing leak)"
+    ]
+  },
+  "source_refs": [
+    "source:nist-crypto-guidance:paraphrased",
+    "source:libsodium-misuse-resistant-practice:paraphrased"
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:evt:consumer-assumes-exactly-once",
+  "type": "failure_dossier",
+  "description": "A consumer applies each event without deduping, so at-least-once redelivery double-applies the effect.",
+  "body": "Failure mode: the consumer processes an event and commits the offset assuming the broker delivered it once, but after a crash between effect and commit the event is redelivered and re-applied. Detection signals: no processed-id check or idempotent upsert; offset committed before the effect is durable; duplicate downstream rows/charges after consumer restarts. Do not trust broker 'exactly-once' for external side effects. Safer fallback: dedup on the event id atomically with the effect, commit the offset only after the effect commits, and add a redelivery test.",
+  "domain": "event_driven",
+  "scope_hint": "code.backend.event-driven:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.event-driven:human_authored",
+  "pack_id": "code.backend.event-driven"
+}

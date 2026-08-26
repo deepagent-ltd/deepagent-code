@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:tsdb:compress-cold-chunks",
+  "type": "strategy",
+  "title": "Compress cold chunks",
+  "description": "Enable native columnar compression on chunks past the active write window to cut storage and speed scans.",
+  "body": "Use when storage growth is a concern and old chunks are read-mostly. Do not compress the active write chunk — compression targets immutable cold data; writes to compressed chunks are expensive or blocked. Actions: set a compression policy keyed on chunk age, choose segment-by/order-by columns matching query shape, and verify compression ratio and query speed. Validation signals include reduced chunk size and faster cold-range scans. Risk boundary: late-arriving writes into a compressed window can fail or force decompression — confirm data is truly cold first.",
+  "domain": "timeseries_db",
+  "scope_hint": "code.database.timeseries:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.timeseries",
+  "pack_id": "code.database.timeseries"
+}

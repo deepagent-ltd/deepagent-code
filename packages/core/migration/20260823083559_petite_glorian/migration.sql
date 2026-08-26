@@ -1,0 +1,1 @@
+ALTER TABLE `session_v2_provider_turn_receipt` ADD `provider_attempt_id` text REFERENCES session_provider_attempt(attempt_id);

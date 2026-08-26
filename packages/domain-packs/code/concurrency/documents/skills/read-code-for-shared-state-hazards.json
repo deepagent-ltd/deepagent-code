@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:conc:read-code-for-shared-state-hazards",
+  "type": "skill",
+  "title": "Read code for shared-state and locking hazards",
+  "description": "Inspect a module and report unsynchronized shared access, inconsistent lock order, and cancellation leaks.",
+  "body": "Use when asked whether code is thread-safe. Actions: read the module and identify every piece of state reachable from more than one thread/task, verify each access goes through the same lock or owner, check that all multi-lock paths follow one acquisition order, and confirm spawned tasks are scoped and honor cancellation. Do not assume a small read/write is atomic or that 'it has not crashed' implies safety. Record each hazard with the file/line and classify as data-race, lock-order/deadlock, idempotency, or cancellation-leak. This skill is read-only and must not change synchronization without runtime permission and detector evidence. Validation signals include a concrete list of accesses and their guard (or absence). Risk boundary: report any unguarded shared write or lock-order inversion as a blocking finding and recommend a detector run.",
+  "domain": "concurrency",
+  "scope_hint": "code.concurrency:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.concurrency",
+  "pack_id": "code.concurrency"
+}

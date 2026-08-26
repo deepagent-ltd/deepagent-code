@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:hwpwr:dynamic-vs-static-power",
+  "type": "knowledge",
+  "title": "Dynamic versus static power components",
+  "description": "Dynamic power scales with activity, capacitance, and voltage squared, while static power comes from transistor leakage.",
+  "body": "Use when deciding where to focus power optimization. Do not treat all power as one number, since dynamic and static respond to different levers. Actions: separate the dynamic contribution from switching from the static leakage, identify which dominates the state of interest, and target the right technique. Validation signals include a power breakdown attributing each component and optimization moving the dominant term. Risk boundary: optimizing the wrong component wastes effort, so flag any plan that ignores the dominant power source for the design's operating state.",
+  "domain": "power_design",
+  "scope_hint": "hardware.power:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.power",
+  "pack_id": "hardware.power"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:hdl:metastability-and-cdc",
+  "type": "knowledge",
+  "title": "Metastability and clock-domain crossing",
+  "description": "A flop sampling an async signal near its clock edge can settle to an undefined value; synchronizers reduce but never eliminate the probability.",
+  "body": "Use when any signal crosses between unrelated clocks. When setup/hold is violated, the flop output can be metastable and resolve unpredictably; a 2-flop synchronizer gives the first flop time to settle, lowering failure probability (raising MTBF) but never to zero. Multi-bit buses need gray coding or async FIFOs because bits can resolve independently. Do not treat a single synchronizer as making CDC 'safe'. Actions: classify each crossing and apply the right structure plus constraints. Validation signals include a CDC tool report and MTBF estimate. Risk boundary: CDC bugs appear only in the field and intermittently; never dismiss a CDC warning.",
+  "domain": "hdl",
+  "scope_hint": "hardware.hdl:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.hdl",
+  "pack_id": "hardware.hdl"
+}

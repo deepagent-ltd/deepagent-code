@@ -1,0 +1,69 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.database.postgres",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "postgres",
+      "postgresql",
+      "database"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.database.postgres: EXPLAIN ANALYZE plan tuning, MVCC and autovacuum bloat, CREATE INDEX CONCURRENTLY, gin index on jsonb, lock modes, and transaction isolation"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "plain prose note with no repository or domain signal"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "postgres postgresql explain analyze mvcc vacuum autovacuum bloat gin gist btree index concurrently lock mode transaction isolation serializable jsonb pg_stat",
+  "expected_pack_id": "code.database.postgres",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "code.database.postgres L3 validation smoke",
+    "signals": [
+      "EXPLAIN ANALYZE shows index scan not seq scan on the hot query",
+      "CREATE INDEX CONCURRENTLY used on a populated table test",
+      "no long-held strong lock during migration on a large table",
+      "isolation level matches the consistency the code assumes"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "code.database.postgres diagnosis smoke",
+    "signals": [
+      "sequential scan on a large filtered query",
+      "table bloat from dead tuples / stalled autovacuum",
+      "ALTER TABLE taking ACCESS EXCLUSIVE on a hot table",
+      "missing index for a JSONB containment query",
+      "lost update from read-committed assumption"
+    ]
+  },
+  "source_refs": [
+    "source:postgresql-docs-mvcc:paraphrased",
+    "source:use-the-index-luke:paraphrased"
+  ]
+}

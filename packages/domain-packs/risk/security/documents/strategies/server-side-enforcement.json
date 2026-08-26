@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:security:server-side-enforcement",
+  "type": "strategy",
+  "title": "Prefer server-side enforcement",
+  "description": "Client checks can guide UX, but security decisions must be enforced on the trusted side of the boundary.",
+  "body": "Use when a requested change relies on hidden buttons, disabled fields, client route guards, local storage flags, mobile app checks, or generated SDK assumptions. Do not use to remove useful client-side affordances; keep them as secondary hints. Actions: locate the server, worker, database policy, or trusted service that owns the decision and add enforcement there before touching UI-only behavior. Validation signals include direct API or service tests that bypass the client and still receive deny results. Risk boundary: if no trusted enforcement point exists, stop at a finding or design note and escalate rather than claiming the change is secure.",
+  "domain": "authz",
+  "scope_hint": "risk.security:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.security",
+  "pack_id": "risk.security"
+}

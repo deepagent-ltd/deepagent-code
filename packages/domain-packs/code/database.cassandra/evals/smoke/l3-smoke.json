@@ -1,0 +1,70 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.database.cassandra",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "cassandra",
+      "wide_column",
+      "scylladb",
+      "cql"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.database.cassandra: query-first partition key design, clustering columns, tombstones and compaction, tunable consistency QUORUM, denormalization, wide-row hotspots, LWT cost"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "fix CSS grid alignment"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "Cassandra partition key clustering column tombstone compaction consistency level quorum denormalization wide row LWT",
+  "expected_pack_id": "code.database.cassandra",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "code.database.cassandra L3 validation smoke",
+    "signals": [
+      "nodetool tablehistograms shows partition sizes bounded well under the warning threshold",
+      "a read at LOCAL_QUORUM returns consistent data after a node restart with the write at LOCAL_QUORUM",
+      "the query runs without ALLOW FILTERING because the partition key is fully specified",
+      "tracing shows the read touched a small, bounded number of SSTables rather than scanning many"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "code.database.cassandra diagnosis smoke",
+    "signals": [
+      "nodetool reports a partition far above the 100MB warning size, signalling an unbounded partition",
+      "read latency spikes and tracing shows thousands of tombstones scanned before returning live rows",
+      "a coordinator hotspot appears because a low-cardinality partition key concentrates traffic on few nodes",
+      "a query requires ALLOW FILTERING, meaning it scans partitions instead of seeking by key",
+      "frequent LWT (IF NOT EXISTS) operations serialize through Paxos and collapse write throughput"
+    ]
+  },
+  "source_refs": [
+    "cass:ref:query-first-data-modelling",
+    "cass:ref:tombstones-and-compaction-strategies"
+  ]
+}

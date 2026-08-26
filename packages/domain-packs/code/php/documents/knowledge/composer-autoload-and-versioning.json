@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:php:composer-autoload-and-versioning",
+  "type": "knowledge",
+  "title": "Composer autoloading and version resolution",
+  "description": "Composer resolves a version graph into composer.lock and generates a PSR-4 autoloader; apps pin the lock, libraries do not.",
+  "body": "Use when managing dependencies or autoloading. composer.json declares version constraints (^ allows compatible minor/patch, ~ a tighter range) and a PSR-4 namespace-to-path map; composer install resolves them once into composer.lock and generates vendor/autoload.php which maps classes to files lazily. Applications commit the lock so every environment installs identical versions; libraries omit it so consumers resolve fresh. composer update re-resolves and rewrites the lock. Do not run update on deploy or hand-write requires. Actions: pin apps via the committed lock, run dump-autoload after autoload map changes. Validation signals include a clean install reproducing vendor/ from the lock. Risk boundary: resolving at deploy time runs untested versions in production.",
+  "domain": "php",
+  "scope_hint": "code.php:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.php",
+  "pack_id": "code.php"
+}

@@ -1,0 +1,75 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.database",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "migrate",
+    "code_domains": [
+      "database",
+      "sql",
+      "migration",
+      "transaction"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.database: migrations, transactions, indexes, constraints, locks, query plans, rollback, and data backfills"
+    ],
+    "round_signals": [
+      "l3_validation_smoke"
+    ],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "plain prose note with no repository or domain signal"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "database persistence behavior migrations, transactions, indexes, constraints, locks, query plans, rollback, and data backfills validation smoke diagnosis",
+  "expected_pack_id": "code.database",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "database persistence behavior L3 validation smoke",
+    "signals": [
+      "migration dry-run",
+      "rollback rehearsal",
+      "EXPLAIN plan",
+      "constraint tests",
+      "transaction failure tests",
+      "and fixture data comparison"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "database persistence behavior diagnosis smoke",
+    "signals": [
+      "separate schema drift",
+      "lock contention",
+      "missing index",
+      "non-atomic write",
+      "backfill volume",
+      "and rollback impossibility"
+    ]
+  },
+  "source_refs": [
+    "source:postgresql-docs:paraphrased",
+    "source:sqlite-docs:paraphrased"
+  ]
+}

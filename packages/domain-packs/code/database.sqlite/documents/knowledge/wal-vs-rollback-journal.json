@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:sqlite:wal-vs-rollback-journal",
+  "type": "knowledge",
+  "title": "WAL vs rollback journal",
+  "description": "WAL lets readers and one writer run concurrently and is faster, but adds sidecar files and needs checkpointing.",
+  "body": "Use when choosing a journaling mode. The default rollback journal copies original pages out before a write and blocks readers and writers from overlapping. WAL instead appends changes to a -wal file that readers can ignore, so many readers proceed during a write and write throughput improves; a checkpoint later folds the WAL back into the main file. Do not use WAL on a network filesystem (its shared-memory index breaks) and remember WAL still allows only one writer. Actions: enable WAL for concurrent local access, tune wal_autocheckpoint, and keep the -wal/-shm files with the database. Validation signals include readers succeeding during a write. Risk boundary: an ever-growing WAL from a long-lived reader pinning checkpoints can bloat the file — monitor and checkpoint.",
+  "domain": "sqlite",
+  "scope_hint": "code.database.sqlite:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.sqlite",
+  "pack_id": "code.database.sqlite"
+}

@@ -1,0 +1,473 @@
+[
+  {
+    "ref_id": "knowledge:mobile:app-lifecycle-breaks-assumptions",
+    "type": "knowledge",
+    "title": "App Lifecycle Breaks Assumptions",
+    "summary": "Mobile OS can pause or kill apps between operations.",
+    "domains": [
+      "ios",
+      "mobile",
+      "android"
+    ],
+    "triggers": [
+      "mobile",
+      "pause",
+      "kill",
+      "apps",
+      "between",
+      "operations",
+      "persist",
+      "critical"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mobile"
+  },
+  {
+    "ref_id": "knowledge:mobile:device-data-privacy",
+    "type": "knowledge",
+    "title": "Device Data Privacy",
+    "summary": "Location, contacts, device IDs, and notifications carry privacy risk.",
+    "domains": [
+      "ios",
+      "mobile",
+      "android"
+    ],
+    "triggers": [
+      "location",
+      "contacts",
+      "device",
+      "notifications",
+      "carry",
+      "privacy",
+      "risk",
+      "apply"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mobile"
+  },
+  {
+    "ref_id": "knowledge:mobile:mobile-permissions-are-state",
+    "type": "knowledge",
+    "title": "Mobile Permissions Are State",
+    "summary": "Permission status is part of app state and can change outside the app.",
+    "domains": [
+      "ios",
+      "mobile",
+      "android"
+    ],
+    "triggers": [
+      "permission",
+      "status",
+      "part",
+      "state",
+      "change",
+      "outside",
+      "users",
+      "revoke"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mobile"
+  },
+  {
+    "ref_id": "methodology:mobile:mobile-smoke-matrix",
+    "type": "methodology",
+    "title": "Mobile Smoke Matrix",
+    "summary": "Test core flow across device size, OS version, lifecycle, and permission states.",
+    "domains": [
+      "ios",
+      "mobile",
+      "android"
+    ],
+    "triggers": [
+      "test",
+      "core",
+      "flow",
+      "across",
+      "device",
+      "size",
+      "version",
+      "lifecycle"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mobile"
+  },
+  {
+    "ref_id": "methodology:mobile:offline-sync-check",
+    "type": "methodology",
+    "title": "Offline Sync Check",
+    "summary": "Verify offline writes, retry, conflict, and user feedback.",
+    "domains": [
+      "ios",
+      "mobile",
+      "android"
+    ],
+    "triggers": [
+      "verify",
+      "offline",
+      "writes",
+      "retry",
+      "conflict",
+      "user",
+      "feedback",
+      "steps"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mobile"
+  },
+  {
+    "ref_id": "methodology:mobile:permission-flow-check",
+    "type": "methodology",
+    "title": "Permission Flow Check",
+    "summary": "Verify request, denial, limited access, settings change, and retry behavior.",
+    "domains": [
+      "ios",
+      "mobile",
+      "android"
+    ],
+    "triggers": [
+      "verify",
+      "request",
+      "denial",
+      "limited",
+      "access",
+      "settings",
+      "change",
+      "retry"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mobile"
+  },
+  {
+    "ref_id": "skill:mobile:run-mobile-flow-check",
+    "type": "skill",
+    "title": "Run Mobile Flow Check",
+    "summary": "Plan and record a mobile smoke matrix for changed flow.",
+    "domains": [
+      "ios",
+      "mobile",
+      "android"
+    ],
+    "triggers": [
+      "plan",
+      "record",
+      "mobile",
+      "smoke",
+      "matrix",
+      "changed",
+      "flow",
+      "inputs"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mobile"
+  },
+  {
+    "ref_id": "strategy:mobile:lifecycle-aware-state",
+    "type": "strategy",
+    "title": "Lifecycle Aware State",
+    "summary": "Mobile flows must handle background, foreground, rotation, and process death.",
+    "domains": [
+      "ios",
+      "mobile",
+      "android"
+    ],
+    "triggers": [
+      "mobile",
+      "flows",
+      "must",
+      "handle",
+      "background",
+      "foreground",
+      "rotation",
+      "process"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mobile"
+  },
+  {
+    "ref_id": "strategy:mobile:offline-and-retry",
+    "type": "strategy",
+    "title": "Offline And Retry",
+    "summary": "Mobile network behavior must handle offline and intermittent connectivity.",
+    "domains": [
+      "ios",
+      "mobile",
+      "android"
+    ],
+    "triggers": [
+      "mobile",
+      "network",
+      "behavior",
+      "must",
+      "handle",
+      "offline",
+      "intermittent",
+      "connectivity"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mobile"
+  },
+  {
+    "ref_id": "strategy:mobile:permission-before-use",
+    "type": "strategy",
+    "title": "Permission Before Use",
+    "summary": "Device capabilities require explicit permission and fallback behavior.",
+    "domains": [
+      "ios",
+      "mobile",
+      "android"
+    ],
+    "triggers": [
+      "device",
+      "capabilities",
+      "require",
+      "explicit",
+      "permission",
+      "fallback",
+      "behavior",
+      "camera"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mobile"
+  },
+  {
+    "ref_id": "strategy:mobile:privacy-by-device-data",
+    "type": "strategy",
+    "title": "Privacy By Device Data",
+    "summary": "Device identifiers and location are privacy-sensitive.",
+    "domains": [
+      "ios",
+      "mobile",
+      "android"
+    ],
+    "triggers": [
+      "device",
+      "identifiers",
+      "location",
+      "privacy",
+      "sensitive",
+      "treat",
+      "metadata"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mobile"
+  },
+  {
+    "ref_id": "strategy:mobile:budget-battery-and-network",
+    "type": "strategy",
+    "title": "Budget battery and network for background work",
+    "summary": "Batch network and wake-ups, respect OS background limits, and avoid polling so the app does not drain battery or data.",
+    "domains": [
+      "mobile",
+      "ios",
+      "android"
+    ],
+    "triggers": [
+      "battery",
+      "background",
+      "polling",
+      "wake lock",
+      "data usage",
+      "doze"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mobile"
+  },
+  {
+    "ref_id": "strategy:mobile:deep-link-routing-contract",
+    "type": "strategy",
+    "title": "Treat deep links as a routing contract",
+    "summary": "Validate and authorize every deep link and universal link target, handling cold start, logged-out state, and unknown paths safely.",
+    "domains": [
+      "mobile",
+      "ios",
+      "android"
+    ],
+    "triggers": [
+      "deep link",
+      "universal link",
+      "app link",
+      "routing",
+      "cold start",
+      "intent"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mobile"
+  },
+  {
+    "ref_id": "methodology:mobile:responsive-layout-review",
+    "type": "methodology",
+    "title": "Review responsive layout across devices",
+    "summary": "Verify the changed UI adapts to screen sizes, orientation, safe areas, dynamic font scaling, and notches without clipping or overlap.",
+    "domains": [
+      "mobile",
+      "ios",
+      "android"
+    ],
+    "triggers": [
+      "responsive",
+      "orientation",
+      "safe area",
+      "font scaling",
+      "notch",
+      "layout"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mobile"
+  },
+  {
+    "ref_id": "knowledge:mobile:push-delivery-is-best-effort",
+    "type": "knowledge",
+    "title": "Push notification delivery is best-effort",
+    "summary": "Push messages can be delayed, deduplicated, collapsed, or dropped by the OS and platform, so they must not be the only source of truth.",
+    "domains": [
+      "mobile",
+      "ios",
+      "android"
+    ],
+    "triggers": [
+      "push",
+      "notification",
+      "fcm",
+      "apns",
+      "delivery",
+      "token"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mobile"
+  },
+  {
+    "ref_id": "skill:mobile:capture-device-matrix-evidence",
+    "type": "skill",
+    "title": "Capture device-matrix evidence for a flow",
+    "summary": "Run a changed flow across a device/OS/state matrix and report screenshots, logs, and pass/fail per configuration.",
+    "domains": [
+      "mobile",
+      "ios",
+      "android"
+    ],
+    "triggers": [
+      "device matrix",
+      "emulator",
+      "simulator",
+      "screenshot",
+      "os version",
+      "evidence"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mobile"
+  }
+]

@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:security:dependency-risk-pass",
+  "type": "methodology",
+  "title": "Dependency risk pass",
+  "description": "Review dependency changes for provenance, permissions, scripts, lockfile deltas, advisories, and runtime reachability.",
+  "body": "Use when manifests, lockfiles, build images, plugin registries, or generated clients change. Do not use as a license legal conclusion. Steps: compare direct and transitive dependency deltas, inspect install or postinstall scripts, check package source and maintainer signals, run available audit tooling, and confirm tests cover the code path that will import the dependency. Validation signals include lockfile diff, audit output, and package manager behavior. Risk boundary: new binary downloads or registry source changes require human approval.",
+  "domain": "supply_chain",
+  "scope_hint": "risk.security:methodologies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:risk.security",
+  "pack_id": "risk.security"
+}

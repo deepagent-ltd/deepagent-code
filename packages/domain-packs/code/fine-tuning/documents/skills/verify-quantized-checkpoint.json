@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:finetune:verify-quantized-checkpoint",
+  "type": "skill",
+  "title": "Verify a quantized checkpoint against budget",
+  "description": "Steps to benchmark a quantized model versus full precision and accept or reject it on the quality delta.",
+  "body": "Use when validating a quantized export before serving. Do not trust that quantization preserved quality based on a perplexity check alone — task and long-context behavior can degrade while perplexity barely moves. Actions: run the quantized and full-precision models on the task and capability evals, compute per-eval deltas, and accept only if every delta is inside the budget. Validation signals include a benchmark report of quantized vs full precision and a recorded accept/reject decision. Risk boundary: an over-quantized model fails silently on hard inputs; if any eval falls outside budget, deny the checkpoint and escalate to a higher bit-width.",
+  "domain": "fine_tuning",
+  "scope_hint": "code.fine-tuning:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.fine-tuning",
+  "pack_id": "code.fine-tuning"
+}

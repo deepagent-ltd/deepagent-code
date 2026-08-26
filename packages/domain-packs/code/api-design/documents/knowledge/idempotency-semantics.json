@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:apidesign:idempotency-semantics",
+  "type": "knowledge",
+  "title": "What idempotency means for an operation",
+  "description": "An idempotent operation produces the same effect whether applied once or many times, which lets clients retry safely after uncertain failures.",
+  "body": "Use when reasoning about retry safety for an operation. Do not assume all writes are safe to repeat. GET, PUT, and DELETE are naturally idempotent, while POST creates are not unless an idempotency key dedupes repeats; idempotency is about the resulting state, not the response bytes. Inspect whether a repeat changes state. Validation signals include a repeated request leaving state unchanged after the first application. Risk boundary: treating a non-idempotent create as retry-safe causes duplicates on network retries, so add an idempotency key when clients may retry.",
+  "domain": "api_design",
+  "scope_hint": "code.api-design:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.api-design",
+  "pack_id": "code.api-design"
+}

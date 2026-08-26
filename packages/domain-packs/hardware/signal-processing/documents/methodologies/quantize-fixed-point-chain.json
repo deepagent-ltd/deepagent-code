@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:sigproc:quantize-fixed-point-chain",
+  "type": "methodology",
+  "title": "Profile and quantize a fixed-point DSP chain",
+  "description": "Measure per-stage dynamic range from a floating reference, then assign word lengths and verify the quantized chain against the error budget.",
+  "body": "Use when porting a validated floating algorithm onto fixed-point hardware. Do not apply a uniform word length everywhere, since stages have very different dynamic ranges. Actions: instrument the float model to record min and max at each node, assign integer and fractional bits from those ranges, and compare the fixed output against the float reference. Validation signals include no saturation across a representative stimulus and quantization SNR meeting the budget at every stage. Risk boundary: if a stage saturates under realistic input, deny the build and widen that stage before shipping.",
+  "domain": "signal_processing",
+  "scope_hint": "hardware.signal-processing:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.signal-processing",
+  "pack_id": "hardware.signal-processing"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:cpp:own-resources-with-raii",
+  "type": "strategy",
+  "title": "Own every resource with RAII and smart pointers",
+  "description": "Tie each heap allocation, file, lock, or handle to an object's lifetime via unique_ptr/shared_ptr and scope guards instead of manual new/delete.",
+  "body": "Use when allocating or managing any resource in C++. Do not pair raw new/delete by hand, return owning raw pointers, or use shared_ptr where unique_ptr suffices (atomic refcount overhead). Actions: prefer make_unique/make_shared, express single ownership with unique_ptr and shared ownership only when truly shared, use std::lock_guard/scoped_lock for mutexes, and pass non-owning views as references or std::span. Validation signals include a clean AddressSanitizer/LeakSanitizer run and Valgrind reporting no leaks or invalid frees. Risk boundary: a leaked or double-freed resource is UB that may only crash in production; if ownership is ambiguous, escalate the design rather than guessing with raw pointers.",
+  "domain": "cpp",
+  "scope_hint": "code.cpp:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.cpp",
+  "pack_id": "code.cpp"
+}

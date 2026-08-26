@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:llm:structured-output-failure-modes",
+  "type": "knowledge",
+  "title": "Structured-output failure modes",
+  "description": "Model JSON fails through truncation, extra prose, wrong types, missing required fields, hallucinated enums, and trailing-comma syntax errors.",
+  "body": "Use when a structured-output path is flaky. Common defects: output truncated by max-tokens (length finish-reason); JSON wrapped in prose or code fences; correct shape but wrong types or coerced numbers; required fields omitted; enum values invented outside the allowed set. Do not paper over these by regex-extracting JSON and coercing, and avoid silent field drops. Actions: validate against a strict schema, detect the length finish-reason as truncation, and route failures into a bounded repair loop. Validation signals include a conformance run that classifies each failure type and tests that truncation and bad enums are rejected. Risk boundary: coercing a malformed payload to satisfy a type can corrupt downstream state; fail closed instead.",
+  "domain": "llm_app",
+  "scope_hint": "code.llm-app:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.llm-app",
+  "pack_id": "code.llm-app"
+}

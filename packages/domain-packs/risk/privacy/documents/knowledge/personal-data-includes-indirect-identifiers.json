@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:privacy:personal-data-includes-indirect-identifiers",
+  "type": "knowledge",
+  "title": "Personal data can include indirect identifiers",
+  "description": "Email, phone, account IDs, device IDs, IP addresses, location, unique event IDs, and combinations of attributes can identify a person.",
+  "body": "Use when reviewing payloads that appear non-sensitive because they do not include a name. Do not decide legal classification for every jurisdiction. Actions: treat unique or linkable identifiers as privacy-relevant, minimize exposure, and avoid broad logs or exports. Validation signals include field classification and sink restrictions. Risk boundary: linkable identifiers combined with behavior, health, payment, or location data need stricter controls and human review. Use when Privacy Risk Controls work touches personal-data classes, sinks, retention, consent, logs, prompts, and exports. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: use the fact to constrain the change and test plan; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include data inventory, redaction tests, retention checks, export/delete tests, and approval evidence. Risk boundary: escalate or stop when the task involves PII disclosure, consent bypass, retention drift, and unapproved processor expansion, missing owner evidence, or live external state.",
+  "domain": "pii",
+  "scope_hint": "risk.privacy:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.privacy",
+  "pack_id": "risk.privacy"
+}

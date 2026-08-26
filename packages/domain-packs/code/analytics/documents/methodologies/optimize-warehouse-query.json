@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:analytics:optimize-warehouse-query",
+  "type": "methodology",
+  "title": "Optimize a slow warehouse query",
+  "description": "Use the query plan and bytes-scanned to cut scan volume on a columnar store rather than guessing at rewrites.",
+  "body": "Use when a warehouse query is slow or expensive. Do not blindly add indexes as on an OLTP database — columnar warehouses optimize scans via partitioning and clustering, not B-tree indexes. Actions: read the query plan, find the largest scan, prune unneeded columns, ensure filters hit the partition/cluster key, and pre-aggregate if the same rollup recurs. Validation signals include a plan showing partition pruning and a measured drop in bytes scanned and runtime. Risk boundary: an unbounded scan on a huge table runs up cost every execution; if the query cannot prune to the filtered range, escalate to repartition the table before it runs at production cadence.",
+  "domain": "analytics",
+  "scope_hint": "code.analytics:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.analytics",
+  "pack_id": "code.analytics"
+}

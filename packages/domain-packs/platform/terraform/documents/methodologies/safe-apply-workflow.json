@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:tf:safe-apply-workflow",
+  "type": "methodology",
+  "title": "Run a safe plan-and-apply workflow",
+  "description": "Move a change through fmt/validate, a reviewed saved plan, targeted apply, and a post-apply drift check.",
+  "body": "Steps: 1. Run terraform fmt and terraform validate to catch syntax/type errors. 2. terraform plan -out=plan.tfbin and read the create/update/destroy/replace summary. 3. Have a human review any destroy or replace of stateful resources. 4. terraform apply plan.tfbin so only the reviewed diff executes. 5. Re-run plan to confirm zero drift (no changes). Rollback point: before step 4, while only the plan file exists and no change is live. Validation: the post-apply plan reports no changes and the apply output matches the reviewed plan; a green apply with surprise destroys is not success.",
+  "domain": "terraform",
+  "scope_hint": "platform.terraform:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.terraform",
+  "pack_id": "platform.terraform"
+}

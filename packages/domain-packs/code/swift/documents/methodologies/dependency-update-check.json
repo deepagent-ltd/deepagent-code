@@ -1,0 +1,11 @@
+{
+  "ref_id": "methodology:swift:dependency-update-check",
+  "type": "methodology",
+  "description": "In Swift, when Package.swift / Package.resolved and the resolved version graph change, verify the lockfile, generated artifacts, and a runtime smoke.",
+  "body": "In Swift, a dependency change ripples through Package.swift / Package.resolved and the resolved version graph, generated bindings, and runtime behavior, so it needs more than a recompile. Use when Package.swift / Package.resolved and the resolved version graph are added, removed, or version-bumped. Do not merge a dependency bump on a green compile alone, and avoid editing the lockfile by hand. Actions: inspect the dependency delta, re-resolve and review Package.swift / Package.resolved and the resolved version graph, regenerate affected Swift Package plugin output and generated bindings (e.g. from .proto), then run swift test (XCTest/swift-testing) on the affected target and smoke the import/runtime path. Validation signals include a reviewed lockfile diff, a clean swift build -warnings-as-errors and the Xcode static analyzer pass, and a passing runtime smoke. Risk boundary: escalate on a major-version bump, a transitive conflict you cannot resolve, or a license/security flag.",
+  "domain": "swift",
+  "scope_hint": "code.swift:methodologies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.swift:skill_survey",
+  "pack_id": "code.swift"
+}

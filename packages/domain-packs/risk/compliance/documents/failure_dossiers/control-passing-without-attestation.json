@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:comp:control-passing-without-attestation",
+  "type": "failure_dossier",
+  "description": "A control is reported as effective based only on its presence in code, with no evidence it operated over the period.",
+  "body": "Failure mode: a control is marked passing because the enforcing code exists, but no one verified it actually fired on real transactions across the audit period, and in fact it was disabled or bypassed for part of the window. Detection signals: the report cites design (code exists) not operation; there is no time-boxed sample of real actions showing the control fired; exceptions during the period were never recorded. Do not equate a control's existence in code with its operating effectiveness. Safer fallback: gather a representative, period-spanning sample proving the control executed on real transactions, record every exception, and report a control as unverified when operation cannot be evidenced.",
+  "domain": "compliance",
+  "scope_hint": "risk.compliance:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.compliance:human_authored",
+  "pack_id": "risk.compliance"
+}

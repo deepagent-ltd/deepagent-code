@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:net:review-a-network-client-change",
+  "type": "methodology",
+  "title": "Review a network client change for resilience",
+  "description": "Check timeouts, retry safety, backpressure, pooling, and TLS before accepting a client-side change.",
+  "body": "Steps: 1. Confirm every new call sets connect/read/overall timeouts. 2. Verify retries are bounded, jittered, classify errors correctly, and only apply to idempotent operations (or carry an idempotency key). 3. Check that concurrency/queues are bounded so backpressure exists. 4. Confirm connections are pooled and bodies closed so there is no leak. 5. Verify TLS verification is intact. Rollback point: the change is reversible per file. Validation: each item has a test or trace as evidence; a client change missing a timeout or retrying a non-idempotent call is unverified.",
+  "domain": "networking",
+  "scope_hint": "code.networking:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.networking",
+  "pack_id": "code.networking"
+}

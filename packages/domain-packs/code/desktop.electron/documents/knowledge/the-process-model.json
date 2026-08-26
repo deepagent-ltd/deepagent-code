@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:electron:the-process-model",
+  "type": "knowledge",
+  "title": "Electron's main/renderer process model",
+  "description": "One privileged main process manages app lifecycle and windows; each window runs a separate sandboxed Chromium renderer process.",
+  "body": "Use when reasoning about where code runs. Electron has a single main process (Node-enabled, owns the app lifecycle, windows, menus, and native APIs) and one renderer process per window (Chromium, runs the web UI, ideally sandboxed without Node). They share nothing directly and communicate only via IPC. Do not assume renderer code can call Node APIs or that main and renderer share memory. Actions: put privileged/native work in main, UI in renderers, and bridge with IPC. Validation signals include features working with the renderer sandboxed. Risk boundary: confusing the two leads either to blocking the whole app (work in main) or to dangerously granting Node to the UI (work wrongly forced into the renderer) — keep the split clear.",
+  "domain": "electron",
+  "scope_hint": "code.desktop.electron:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.desktop.electron",
+  "pack_id": "code.desktop.electron"
+}

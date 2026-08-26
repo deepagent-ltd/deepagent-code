@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:azure:resource-manager-deployment-model",
+  "type": "knowledge",
+  "title": "Azure Resource Manager deployment modes and idempotency",
+  "description": "Explains incremental vs complete deployment modes, ARM's declarative idempotency, and how resource providers and dependsOn ordering work.",
+  "body": "Use when reasoning about how ARM/Bicep applies changes. Do not assume a deployment only adds resources. Actions: know incremental mode leaves unlisted resources untouched while complete mode deletes resources not in the template; ARM is declarative and idempotent so re-applying converges to the template state; resource providers must be registered and dependsOn (or implicit references) order creation. Inspect the deployment mode and what-if before applying. Validation signals include a re-run reporting NoChange and dependent resources created in the right order. Risk boundary: complete mode against a populated resource group can delete live resources and is human-gated.",
+  "domain": "azure",
+  "scope_hint": "platform.cloud.azure:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.azure",
+  "pack_id": "platform.cloud.azure"
+}

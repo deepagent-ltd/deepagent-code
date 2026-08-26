@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:healthcare:map-phi-data-flow",
+  "type": "methodology",
+  "title": "Map the end-to-end PHI data flow for a change",
+  "description": "Trace where protected health information enters, is stored, transmitted, logged, and exits to confirm every hop is access-controlled, encrypted, and audited.",
+  "body": "Steps: 1. Identify every point the change touches PHI: input, storage, transit, logs, caches, backups, exports. 2. For each hop confirm encryption in transit and at rest and that access is role-restricted. 3. Check that PHI does not leak into logs, error messages, URLs, or analytics. 4. Confirm each access is audited with who/what/when. 5. Record the flow and any residual exposure. Rollback point: before merging a change that adds a new PHI sink. Validation: each hop shows encryption, access control, and audit logging, and no PHI appears in logs/traces. Risk boundary: advisory only; an unencrypted or unaudited PHI hop must be denied and escalated to a human privacy review rather than shipped.",
+  "domain": "healthcare",
+  "scope_hint": "business.healthcare:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:business.healthcare",
+  "pack_id": "business.healthcare"
+}

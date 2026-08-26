@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:stream:design-stateful-job",
+  "type": "methodology",
+  "title": "Design a stateful streaming job for recovery",
+  "description": "A path from defining keys and state to checkpointing and recovery testing before the job carries production load.",
+  "body": "Use when building a job that keeps state across events. Do not wire operators and ship — without a recovery plan the first failure loses or duplicates data. Actions: define keys and state with TTL, enable checkpointing to durable storage, choose the restart and state-backend strategy, then chaos-test by killing a task and confirming clean recovery. Validation signals include a forced-restart test that resumes from a checkpoint with consistent output and a bounded state-size trend. Risk boundary: an untested recovery path fails when it matters most; if a kill test cannot recover cleanly, treat the job as not production-ready and escalate before deployment.",
+  "domain": "streaming",
+  "scope_hint": "code.streaming:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.streaming",
+  "pack_id": "code.streaming"
+}

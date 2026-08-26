@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:cpp:prefer-move-over-copy",
+  "type": "strategy",
+  "title": "Enable and use move semantics for expensive types",
+  "description": "Define or default move operations and pass-by-value-then-move so large objects transfer ownership cheaply instead of deep-copying.",
+  "body": "Use when handling vectors, strings, buffers, or other heap-backed types in hot paths or sink functions. Do not std::move a const object (it silently copies), move a value you still need, or leave the rule of five half-implemented. Actions: =default move ctor/assignment when members are movable, take sink parameters by value and std::move them into members, return local objects by value to enable RVO/NRVO, and mark moved-from objects as only valid for assignment/destruction. Validation signals include a benchmark showing fewer allocations after enabling moves and ASan confirming no use-after-move. Risk boundary: using a moved-from object is UB for most types; if a type both copies and moves, verify the rule of five is complete before relying on either.",
+  "domain": "cpp",
+  "scope_hint": "code.cpp:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.cpp",
+  "pack_id": "code.cpp"
+}

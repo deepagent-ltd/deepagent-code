@@ -1,0 +1,468 @@
+[
+  {
+    "ref_id": "strategy:tf:plan-before-apply",
+    "type": "strategy",
+    "title": "Always review a saved plan before applying",
+    "summary": "Generate an explicit plan file, read it for destroys and replacements, and apply only that artifact rather than re-planning at apply time.",
+    "domains": [
+      "terraform",
+      "iac",
+      "infrastructure",
+      "hcl"
+    ],
+    "triggers": [
+      "plan",
+      "apply",
+      "review",
+      "destroy",
+      "replace",
+      "saved plan"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.terraform"
+  },
+  {
+    "ref_id": "strategy:tf:remote-state-with-locking",
+    "type": "strategy",
+    "title": "Use remote state with locking",
+    "summary": "Store state in a shared remote backend with state locking so concurrent runs cannot corrupt it, never local files on a team project.",
+    "domains": [
+      "terraform",
+      "iac",
+      "infrastructure",
+      "hcl"
+    ],
+    "triggers": [
+      "remote state",
+      "backend",
+      "locking",
+      "concurrent",
+      "tfstate",
+      "dynamodb"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.terraform"
+  },
+  {
+    "ref_id": "strategy:tf:keep-secrets-out-of-state",
+    "type": "strategy",
+    "title": "Keep secrets out of HCL and state",
+    "summary": "Never hardcode credentials in .tf files; inject via variables/secret managers and treat the state file itself as secret-bearing.",
+    "domains": [
+      "terraform",
+      "iac",
+      "infrastructure",
+      "hcl"
+    ],
+    "triggers": [
+      "secret",
+      "credential",
+      "state",
+      "variable",
+      "sensitive",
+      "vault"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.terraform"
+  },
+  {
+    "ref_id": "strategy:tf:design-modules-with-clear-contracts",
+    "type": "strategy",
+    "title": "Design modules with explicit input/output contracts",
+    "summary": "Compose infrastructure from modules that expose typed variables and outputs, avoiding hidden coupling and copy-paste resource blocks.",
+    "domains": [
+      "terraform",
+      "iac",
+      "infrastructure",
+      "hcl"
+    ],
+    "triggers": [
+      "module",
+      "variable",
+      "output",
+      "composition",
+      "reuse",
+      "contract"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.terraform"
+  },
+  {
+    "ref_id": "strategy:tf:detect-and-reconcile-drift",
+    "type": "strategy",
+    "title": "Detect and reconcile drift deliberately",
+    "summary": "Periodically refresh and plan to surface out-of-band changes, then decide to codify or revert them rather than blindly overwriting.",
+    "domains": [
+      "terraform",
+      "iac",
+      "infrastructure",
+      "hcl"
+    ],
+    "triggers": [
+      "drift",
+      "refresh",
+      "plan",
+      "reconcile",
+      "out-of-band",
+      "manual change"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.terraform"
+  },
+  {
+    "ref_id": "strategy:tf:import-before-recreate",
+    "type": "strategy",
+    "title": "Import existing resources instead of recreating",
+    "summary": "Bring already-existing infrastructure under management with import/import blocks rather than letting Terraform create a duplicate.",
+    "domains": [
+      "terraform",
+      "iac",
+      "infrastructure",
+      "hcl"
+    ],
+    "triggers": [
+      "import",
+      "existing",
+      "adopt",
+      "duplicate",
+      "brownfield",
+      "state"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.terraform"
+  },
+  {
+    "ref_id": "methodology:tf:safe-apply-workflow",
+    "type": "methodology",
+    "title": "Run a safe plan-and-apply workflow",
+    "summary": "Move a change through fmt/validate, a reviewed saved plan, targeted apply, and a post-apply drift check.",
+    "domains": [
+      "terraform",
+      "iac",
+      "infrastructure",
+      "hcl"
+    ],
+    "triggers": [
+      "workflow",
+      "apply",
+      "plan",
+      "validate",
+      "review",
+      "pipeline"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.terraform"
+  },
+  {
+    "ref_id": "methodology:tf:recover-corrupted-or-locked-state",
+    "type": "methodology",
+    "title": "Recover from corrupted or stuck state",
+    "summary": "Diagnose a locked or corrupted state safely by backing up, confirming no live run, then surgically repairing.",
+    "domains": [
+      "terraform",
+      "iac",
+      "infrastructure",
+      "hcl"
+    ],
+    "triggers": [
+      "state",
+      "lock",
+      "corrupt",
+      "recover",
+      "backup",
+      "force-unlock"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.terraform"
+  },
+  {
+    "ref_id": "methodology:tf:write-a-reusable-module",
+    "type": "methodology",
+    "title": "Extract a reusable, versioned module",
+    "summary": "Turn a repeated resource pattern into a module with validated inputs, minimal outputs, and a pinned version.",
+    "domains": [
+      "terraform",
+      "iac",
+      "infrastructure",
+      "hcl"
+    ],
+    "triggers": [
+      "module",
+      "extract",
+      "version",
+      "inputs",
+      "outputs",
+      "reuse"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.terraform"
+  },
+  {
+    "ref_id": "methodology:tf:investigate-a-replacement-diff",
+    "type": "methodology",
+    "title": "Investigate an unexpected replace in a plan",
+    "summary": "When plan shows destroy-and-recreate, find the forcing attribute and decide whether the replacement is acceptable.",
+    "domains": [
+      "terraform",
+      "iac",
+      "infrastructure",
+      "hcl"
+    ],
+    "triggers": [
+      "replace",
+      "force new",
+      "destroy",
+      "recreate",
+      "diff",
+      "plan"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.terraform"
+  },
+  {
+    "ref_id": "knowledge:tf:declarative-desired-state",
+    "type": "knowledge",
+    "title": "Terraform is declarative desired-state",
+    "summary": "You describe the end state in HCL; Terraform diffs it against recorded state and computes the minimal set of API calls, not imperative steps.",
+    "domains": [
+      "terraform",
+      "iac",
+      "infrastructure",
+      "hcl"
+    ],
+    "triggers": [
+      "declarative",
+      "desired state",
+      "diff",
+      "graph",
+      "dependency",
+      "idempotent"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.terraform"
+  },
+  {
+    "ref_id": "knowledge:tf:state-is-the-source-of-truth",
+    "type": "knowledge",
+    "title": "State maps config to real resources",
+    "summary": "The state file binds HCL addresses to real resource ids and caches attributes; without it Terraform cannot know what it manages.",
+    "domains": [
+      "terraform",
+      "iac",
+      "infrastructure",
+      "hcl"
+    ],
+    "triggers": [
+      "state",
+      "tfstate",
+      "mapping",
+      "resource id",
+      "attributes",
+      "source of truth"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.terraform"
+  },
+  {
+    "ref_id": "knowledge:tf:providers-and-versioning",
+    "type": "knowledge",
+    "title": "Providers, version pinning, and the lock file",
+    "summary": "Providers translate HCL into provider API calls; unpinned provider/module versions make plans non-reproducible across runs and machines.",
+    "domains": [
+      "terraform",
+      "iac",
+      "infrastructure",
+      "hcl"
+    ],
+    "triggers": [
+      "provider",
+      "version",
+      "lock file",
+      "constraint",
+      "reproducible",
+      "upgrade"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.terraform"
+  },
+  {
+    "ref_id": "knowledge:tf:apply-is-not-atomic",
+    "type": "knowledge",
+    "title": "Apply is not transactional",
+    "summary": "Terraform executes resource changes incrementally; a mid-apply failure leaves partially-applied infrastructure and updated state, with no automatic rollback.",
+    "domains": [
+      "terraform",
+      "iac",
+      "infrastructure",
+      "hcl"
+    ],
+    "triggers": [
+      "apply",
+      "atomic",
+      "partial",
+      "failure",
+      "rollback",
+      "tainted"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.terraform"
+  },
+  {
+    "ref_id": "skill:tf:run-plan-and-summarize",
+    "type": "skill",
+    "title": "Run terraform plan and summarize the diff",
+    "summary": "Generate a plan and report create/update/destroy/replace counts plus any forcing attributes, without applying.",
+    "domains": [
+      "terraform",
+      "iac",
+      "infrastructure",
+      "hcl"
+    ],
+    "triggers": [
+      "plan",
+      "diff",
+      "summarize",
+      "destroy",
+      "replace",
+      "dry-run"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.terraform"
+  },
+  {
+    "ref_id": "skill:tf:scan-config-for-state-and-secret-risks",
+    "type": "skill",
+    "title": "Scan config for secret and state risks",
+    "summary": "Statically inspect HCL/tfvars/backend for hardcoded secrets, missing locking, and local state on shared projects.",
+    "domains": [
+      "terraform",
+      "iac",
+      "infrastructure",
+      "hcl"
+    ],
+    "triggers": [
+      "scan",
+      "secret",
+      "backend",
+      "locking",
+      "tfvars",
+      "audit"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.terraform"
+  }
+]

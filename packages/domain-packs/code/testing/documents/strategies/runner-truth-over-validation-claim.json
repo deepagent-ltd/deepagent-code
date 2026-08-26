@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:testing:runner-truth-over-validation-claim",
+  "type": "strategy",
+  "description": "Validation status is determined by the runner result, not by the model's statement about tests.",
+  "body": "Use when a task asks whether tests, typecheck, lint, build, or smoke validation passed, failed, timed out, or was skipped. Do not use this as permission to rewrite assertions or to mark a task done from a natural-language claim. Actions: record the exact command, package directory, exit code, timeout status, truncated-output flag, and the smallest diagnostic that explains the result. Compare the model's stated validation status against the runner result before declaring completion. Validation signals include exit code, named failing test, assertion diff, compiler diagnostic, runner summary, and rerun evidence after a fix. Risk boundary: if no runner result exists, the correct state is unverified or needs_human for completion, not pass; if output is from the wrong workspace or package, treat it as inconclusive.",
+  "domain": "testing",
+  "scope_hint": "code.testing:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.testing:docs38",
+  "pack_id": "code.testing"
+}

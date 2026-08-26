@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:svc:thundering-herd-and-backoff",
+  "type": "knowledge",
+  "title": "Thundering herd and backoff strategy",
+  "description": "Synchronized retries amplify outages; full jitter spreads load so a recovering dependency is not re-overwhelmed.",
+  "body": "Use when many clients retry the same failing dependency. Without jitter, exponential backoff still synchronizes retries into waves that re-knock-over a recovering service. Do not use fixed-interval retries or backoff without randomization on a hot dependency. Actions: apply full jitter (sleep = random(0, min(cap, base*2^attempt))), cap total attempts, and add a circuit breaker so a sustained failure stops retrying entirely. Validation signals include a load test showing retries spread across the window and the dependency recovering rather than flatlining. Risk boundary: a retry storm that takes down a shared dependency affects unrelated services and warrants immediate escalation.",
+  "domain": "backend_service",
+  "scope_hint": "code.backend.service:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.service",
+  "pack_id": "code.backend.service"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:prompt:version-and-evaluate-a-prompt-change",
+  "type": "methodology",
+  "title": "Version and evaluate a prompt change",
+  "description": "Treat a prompt edit like a code change: branch a new version, diff it, evaluate against the suite, and gate on no regression.",
+  "body": "Steps: 1. Create a new versioned template rather than editing in place. 2. Diff the new version against the current one for review. 3. Run the evaluation suite on both versions on the same dataset. 4. Compare with a significance check and gate on no regression. 5. Record the chosen version and stamp it on production responses. Rollback point: the previous template version. Validation: the diff is reviewable and the new version shows no significant regression before it ships.",
+  "domain": "prompt_pipeline",
+  "scope_hint": "code.prompt-pipeline:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.prompt-pipeline",
+  "pack_id": "code.prompt-pipeline"
+}

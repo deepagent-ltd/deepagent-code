@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:net:diagnose-a-hanging-or-slow-request",
+  "type": "methodology",
+  "title": "Diagnose a hanging or slow request",
+  "description": "Localize the stall to DNS, connect, TLS, server processing, or body transfer using timings and a packet/trace view.",
+  "body": "Steps: 1. Reproduce and capture per-phase timings (DNS, TCP connect, TLS handshake, time-to-first-byte, body transfer). 2. Identify which phase dominates: slow DNS, connect refused/timeout, TLS negotiation, or server think-time. 3. Inspect with a packet capture or client trace to see retransmits, resets, or a half-open connection. 4. Check the client's timeout config against where it actually stalls. 5. Fix the phase: resolver, pool sizing, timeout, or escalate a server-side slowness. Rollback point: diagnostic only, read-only. Validation: the dominant phase is identified from timings/trace and the fix moves that number, not just masks it.",
+  "domain": "networking",
+  "scope_hint": "code.networking:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.networking",
+  "pack_id": "code.networking"
+}

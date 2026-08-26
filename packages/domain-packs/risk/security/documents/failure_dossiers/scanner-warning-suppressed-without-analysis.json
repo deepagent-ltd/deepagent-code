@@ -1,0 +1,12 @@
+{
+  "ref_id": "failure_dossier:security:scanner-warning-suppressed-without-analysis",
+  "type": "failure_dossier",
+  "title": "Scanner warning suppressed without analysis",
+  "description": "A security scanner or dependency advisory is silenced without proving false positive or compensating control.",
+  "body": "Failure mode: linter, SAST, dependency audit, or secret scanner output blocks a build and the change adds ignores, baselines, or severity downgrades. Detection signals include new ignore comments, expanded allowlists, baseline snapshots, or skipped scanner steps with no issue link. Remediation is analyze the finding, fix the cause, or document a reviewed exception with expiry. Human gate is required for suppressing high-severity or secret findings. Use when a proposed approach skips trust boundaries, authorization decisions, dangerous sinks, secrets, and dependency execution or claims success without domain evidence. Do not use this dossier as a positive implementation strategy; it is a do-not-use signal. Actions: block the shortcut, name the missing evidence, and switch to a safer methodology or ask for human approval. Validation signals include absence or contradiction in negative security tests, server-side checks, sink payload tests, and secret scans. Risk boundary: treat repeated recurrence as a blocker when it can cause client-only controls, injection, credential leakage, permissive fallback, and unsafe dependency changes.",
+  "domain": "security",
+  "scope_hint": "risk.security:failure_dossiers",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:risk.security",
+  "pack_id": "risk.security"
+}

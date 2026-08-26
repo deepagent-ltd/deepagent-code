@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:git:blind-side-selection-conflict",
+  "type": "failure_dossier",
+  "description": "Resolving a conflict by accepting one side wholesale silently discards the other side's change, reintroducing a bug or dropping a feature.",
+  "body": "Failure mode: a conflicted merge is resolved with checkout --ours or --theirs across the file to clear markers fast, throwing away the opposite side's edits without reading them. Detection signals: a previously fixed bug returns after the merge; a feature's lines are missing from the merged file; tests that passed on both branches fail after merge. Do not resolve conflicts by blanket side selection without inspecting intent. Safer fallback: read both sides against the merge base, reconcile so both intents survive where compatible, and confirm behavior with a test before committing.",
+  "domain": "git_workflow",
+  "scope_hint": "code.git-workflow:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.git-workflow:human_authored",
+  "pack_id": "code.git-workflow"
+}

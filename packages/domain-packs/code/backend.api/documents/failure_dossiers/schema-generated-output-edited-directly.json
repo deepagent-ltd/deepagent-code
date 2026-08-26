@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:backend_api:schema-generated-output-edited-directly",
+  "type": "failure_dossier",
+  "description": "Generated API client or schema output was edited directly while the source contract stayed stale.",
+  "body": "Failure mode: tests or examples pass against manually edited generated files, but the next generation step reverts the change or clients regenerate the old contract. Diagnostic trigger: diffs touch generated SDK, OpenAPI output, GraphQL types, or RPC clients without touching the schema source or generator command. Do-not-use signal: do not treat generated artifact edits as authoritative contract changes unless the project documents that artifact as the source. Recovery: find and update the source schema or route annotations, regenerate artifacts, and diff the result. Risk boundary: if source ownership is unclear, stop and report the ambiguity instead of guessing which contract clients consume.",
+  "domain": "api",
+  "scope_hint": "code.backend.api:failure_dossiers",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.api:generated_contract_failure",
+  "pack_id": "code.backend.api"
+}

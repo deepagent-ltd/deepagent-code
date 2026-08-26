@@ -1,0 +1,70 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "platform.cdn-edge",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "cdn",
+      "edge_compute",
+      "edge_cache",
+      "edge_function"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for platform.cdn-edge: cache-control headers, edge functions, cache purge, origin shielding, edge vs origin split"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "fix a SQL deadlock in the migration"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "cdn edge compute cache control header surrogate key edge function cloudflare worker lambda edge purge invalidation origin shield stale while revalidate",
+  "expected_pack_id": "platform.cdn-edge",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "platform.cdn-edge L3 validation smoke",
+    "signals": [
+      "cache-control + surrogate keys set per response",
+      "edge function within CPU/memory limit",
+      "purge propagation measured",
+      "cache hit ratio at edge meets target"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "platform.cdn-edge diagnosis smoke",
+    "signals": [
+      "cache-control missing so edge does not cache",
+      "edge function exceeds CPU/memory limit and is killed",
+      "purge does not propagate to all PoPs",
+      "cold-cache penalty on origin",
+      "edge logic depends on filesystem/long-lived state"
+    ]
+  },
+  "source_refs": [
+    "source:cloudflare-workers-docs:paraphrased",
+    "source:fastly-caching-guide:paraphrased"
+  ]
+}

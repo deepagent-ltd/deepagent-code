@@ -1,0 +1,11 @@
+{
+  "ref_id": "methodology:query:artifact-backed-answer",
+  "type": "methodology",
+  "description": "Answer deterministic facts from a bounded result summary or artifact ref; if no result exists, mark the answer unverified.",
+  "body": "Use when the final answer contains deterministic facts such as counts, file lists, test status, diff status, configuration values, SQL results, or log findings. Build the answer from a tool result, runner truth, or deterministic result artifact. Include the source scope in concise prose. If the model has a plausible answer but no result reference, do not present it as verified. Degrade to an unverified answer or ask for permission to run the needed read-only query. This method intentionally avoids strict final-answer schemas.",
+  "domain": "query",
+  "scope_hint": "code.query:artifact-backed-answer",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.query",
+  "pack_id": "code.query"
+}

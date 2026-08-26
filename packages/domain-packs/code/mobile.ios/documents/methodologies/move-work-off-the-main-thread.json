@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:ios:move-work-off-the-main-thread",
+  "type": "methodology",
+  "title": "Move work off the main thread",
+  "description": "Relocate heavy or blocking work to a background context and marshal only the UI update back to main.",
+  "body": "Steps: 1. Profile to find the main-thread hang (Time Profiler / hangs instrument) — image decode, parsing, disk, or sync network. 2. Move the heavy work to a background context (Task with appropriate priority, a background queue, or a non-main actor). 3. Compute results off-main, then hop to @MainActor/DispatchQueue.main to apply UI changes. 4. Ensure shared mutable state accessed from multiple threads is synchronized or actor-isolated. 5. Re-profile to confirm the main thread stays responsive. Rollback point: before introducing concurrency around shared state (data-race risk). Validation: the UI stays responsive and the Main Thread Checker shows no off-main UI access; moving work off main but then touching views from the background trades a hang for a crash.",
+  "domain": "ios",
+  "scope_hint": "code.mobile.ios:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mobile.ios",
+  "pack_id": "code.mobile.ios"
+}

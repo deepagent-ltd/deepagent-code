@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:gfx:uniform-buffer-alignment-mismatch",
+  "type": "failure_dossier",
+  "description": "A CPU struct whose field offsets do not match std140/std430 rules, so the shader reads padded or shifted values as garbage.",
+  "body": "Failure mode: a uniform/storage buffer is filled from a tightly-packed CPU struct, but the shader expects std140 alignment where a vec3 occupies 16 bytes and arrays are padded, so every field after the first misalignment reads wrong data. Detection signals: uniforms read plausible-but-wrong values; the first few fields are correct and later ones are garbage; reflection reports offsets that differ from the CPU struct. Do not assume the CPU and GPU agree on packing. Safer fallback: lay out the CPU struct to match the shader's std140/std430 rules (explicit padding for vec3), confirm offsets via shader reflection, and add an assertion that CPU and reflected sizes match.",
+  "domain": "graphics",
+  "scope_hint": "code.graphics:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.graphics:human_authored",
+  "pack_id": "code.graphics"
+}

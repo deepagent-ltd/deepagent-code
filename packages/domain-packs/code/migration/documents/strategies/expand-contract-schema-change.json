@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:migration:expand-contract-schema-change",
+  "type": "strategy",
+  "title": "Change schemas with expand-contract, never in place",
+  "description": "Split a breaking schema change into an additive expand phase, a migrate/dual-read phase, and a later contract phase so old and new code coexist safely.",
+  "body": "Use when changing a database schema or API consumed by running code. Do not rename/drop a column or change a type in a single deploy while old instances still run. Actions: phase 1 add the new column/field as nullable and backfill, phase 2 dual-write and migrate reads to the new shape, phase 3 only after all consumers use the new path drop the old column. Keep each phase independently deployable and reversible. Validation signals include both old and new application versions passing their tests against the intermediate schema and zero errors during a simulated mixed-version deploy. Risk boundary: dropping the old column before every consumer is migrated causes errors on rollback; verify no code references it and escalate the contract phase rather than rushing the drop.",
+  "domain": "code",
+  "scope_hint": "code.migration:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.migration",
+  "pack_id": "code.migration"
+}

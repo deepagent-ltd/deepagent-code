@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:rag:match-embedding-to-query-distribution",
+  "type": "strategy",
+  "title": "Match the embedding to the query distribution",
+  "description": "The embedding model and index are chosen for the actual query and document distribution, not a default, and re-evaluated when either shifts.",
+  "body": "Use when selecting or changing the embedding model or vector index. Do not adopt a default embedding without measuring it on real queries, and avoid mixing embeddings from different models in one index. Actions: evaluate candidate embeddings on a labeled query set drawn from real traffic, pick the index type (flat, HNSW, IVF) for the corpus size and latency budget, and re-embed consistently when the model changes. Validation signals include a recall comparison across embedding choices on the labeled set. Risk boundary: a query/document distribution shift can silently degrade recall; route embedding changes through retrieval evaluation before rollout.",
+  "domain": "rag",
+  "scope_hint": "code.rag:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.rag",
+  "pack_id": "code.rag"
+}

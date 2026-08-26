@@ -1,0 +1,11 @@
+{
+  "ref_id": "methodology:python:dependency-update-check",
+  "type": "methodology",
+  "description": "In Python, when the resolved lockfile (poetry.lock / uv.lock / requirements.txt) and extras change, verify the lockfile, generated artifacts, and a runtime smoke.",
+  "body": "In Python, a dependency change ripples through the resolved lockfile (poetry.lock / uv.lock / requirements.txt) and extras, generated bindings, and runtime behavior, so it needs more than a recompile. Use when the resolved lockfile (poetry.lock / uv.lock / requirements.txt) and extras are added, removed, or version-bumped. Do not merge a dependency bump on a green compile alone, and avoid editing the lockfile by hand. Actions: inspect the dependency delta, re-resolve and review the resolved lockfile (poetry.lock / uv.lock / requirements.txt) and extras, regenerate affected outputs from protoc, pydantic codegen, or setuptools entry-point generation, then run pytest on the changed package inside the project venv and smoke the import/runtime path. Validation signals include a reviewed lockfile diff, a clean mypy/pyright type checks, ruff/flake8 lint, and DeprecationWarnings pass, and a passing runtime smoke. Risk boundary: escalate on a major-version bump, a transitive conflict you cannot resolve, or a license/security flag.",
+  "domain": "python",
+  "scope_hint": "code.python:methodologies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.python:skill_survey",
+  "pack_id": "code.python"
+}

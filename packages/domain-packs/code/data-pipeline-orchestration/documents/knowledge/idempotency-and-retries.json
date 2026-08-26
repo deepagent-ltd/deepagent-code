@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:orch:idempotency-and-retries",
+  "type": "knowledge",
+  "title": "Idempotency as the basis for safe retries",
+  "description": "Why retries and backfills are only safe when a task's effect for a given date is the same no matter how many times it runs.",
+  "body": "Use when reasoning about whether automatic retries are safe to enable. A task is idempotent if running it twice for the same execution date leaves the same result; retries and backfills depend on this because the engine may run a task more than once. Do not enable retries on a task that appends or sends a non-deduplicated side effect — duplicates result. Actions: design writes as overwrite/merge per date partition and make external effects deduplicated by a date key. Validation signals include identical output across reruns and a side effect that is not duplicated on retry. Risk boundary: retrying a non-idempotent task multiplies its effect; if idempotency cannot be guaranteed, escalate to disable auto-retry and handle failures manually.",
+  "domain": "orchestration",
+  "scope_hint": "code.data-pipeline-orchestration:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-pipeline-orchestration",
+  "pack_id": "code.data-pipeline-orchestration"
+}
