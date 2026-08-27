@@ -5,6 +5,10 @@ import { Cause, Data, Effect, Exit, Schedule, Semaphore } from "effect"
 import type { EffectDrizzleSqlite } from "@deepagent-code/effect-drizzle-sqlite"
 import { migrations } from "./migration.gen"
 import { MigrationIdentity } from "./migration-identity"
+import { DatabaseUpgradeRun } from "./upgrade-run"
+import { DatabaseMigrationLease as MigrationLease, type MigrationLease as MigrationLeaseHandle } from "./migration-lease"
+import type { UpgradeRun } from "../contract/upgrade-run"
+import { InstallationVersion, InstallationCommit } from "../installation/version"
 
 type Database = EffectDrizzleSqlite.EffectSQLiteDatabase
 type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0]
@@ -69,15 +73,52 @@ export type Migration = {
   up: (tx: Transaction) => Effect.Effect<void, unknown>
 }
 
-export function apply(db: Database) {
-  return lock.withPermit(applyMigrations(db, migrations, true))
+export type ApplyOptions = {
+  /** Database file path (for the OS migration lock). Omitted for in-memory databases. */
+  filename?: string
+  readerProtocol?: string
+  writerProtocol?: string
+  buildIdentity?: string
+  packageVersion?: string
+  /** OS-lock / lease tuning (bounded timeout into maintenance, never unbounded). */
+  timeoutMs?: number
+  staleMs?: number
+  leaseMs?: number
+}
+
+export function apply(db: Database, opts: ApplyOptions = {}) {
+  return lock.withPermit(
+    Effect.gen(function* () {
+      yield* DatabaseUpgradeRun.ensureTables(db)
+      yield* MigrationLease.ensureTables(db)
+      const { completed } = yield* readCompletedSet(db, migrations, true)
+      const pending = migrations.filter((migration) => !completed.has(migration.id))
+      if (pending.length === 0) return undefined
+      const lease = yield* MigrationLease.acquire(
+        db,
+        { leaseMs: opts.leaseMs ?? 60_000, staleMs: opts.staleMs ?? 60_000, timeoutMs: opts.timeoutMs ?? 5_000 },
+        opts.filename,
+      )
+      const run = yield* beginOrResumeRun(db, opts, pending)
+      if (run.state !== "verifying") {
+        yield* DatabaseUpgradeRun.advanceRun(db, run.runId, "applying")
+        yield* applyMigrations(db, migrations, true, { run, lease, opts })
+        yield* DatabaseUpgradeRun.advanceRun(db, run.runId, "verifying")
+      }
+      yield* DatabaseUpgradeRun.advanceRun(db, run.runId, "ready")
+      yield* lease.release()
+      return yield* DatabaseUpgradeRun.loadRun(db, run.runId)
+    }),
+  )
 }
 
 export function applyOnly(db: Database, input: Migration[]) {
   return applyMigrations(db, input, false)
 }
 
-function applyMigrations(db: Database, input: Migration[], requireLinearHistory: boolean) {
+type ReadCompleted = { completed: Set<string>; reconcileMergedHistory: boolean }
+
+function readCompletedSet(db: Database, input: Migration[], requireLinearHistory: boolean) {
   return Effect.gen(function* () {
     const duplicate = input.find(
       (migration, index) => input.findIndex((candidate) => candidate.id === migration.id) !== index,
@@ -137,19 +178,92 @@ function applyMigrations(db: Database, input: Migration[], requireLinearHistory:
         )
     }
 
+    return { completed, reconcileMergedHistory }
+  })
+}
+
+function beginOrResumeRun(db: Database, opts: ApplyOptions, pending: Migration[]) {
+  return Effect.gen(function* () {
+    const existing = yield* DatabaseUpgradeRun.loadActiveRun(db)
+    if (existing) {
+      if (existing.state === "planned") yield* DatabaseUpgradeRun.advanceRun(db, existing.runId, "backup_verified")
+      return existing
+    }
+    const reader = opts.readerProtocol ?? DatabaseUpgradeRun.RuntimeReaderProtocol
+    const writer = opts.writerProtocol ?? DatabaseUpgradeRun.RuntimeWriterProtocol
+    const targetDigest = DatabaseUpgradeRun.registryDigest(migrations)
+    const sourceDigest = DatabaseUpgradeRun.registryDigest(migrations.filter((migration) => !pending.some((p) => p.id === migration.id)))
+    const sourceProtocol = yield* currentProtocol(db, reader, writer)
+    const run = yield* DatabaseUpgradeRun.beginRun(db, {
+      sourceRegistryDigest: sourceDigest,
+      targetRegistryDigest: targetDigest,
+      sourceProtocol,
+      targetProtocol: { reader, writer },
+      buildIdentity: opts.buildIdentity ?? InstallationCommit ?? "local-build",
+      packageVersion: opts.packageVersion ?? InstallationVersion,
+      pendingMigrationIds: pending.map((migration) => migration.id),
+      totalMigrations: pending.length,
+    })
+    yield* DatabaseUpgradeRun.advanceRun(db, run.runId, "backup_verified")
+    return run
+  })
+}
+
+function currentProtocol(db: Database, defaultReader: string, defaultWriter: string) {
+  return Effect.gen(function* () {
+    const exists = yield* db
+      .get(sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'database_capability'`)
+      .pipe(Effect.orDie)
+    if (!exists) return { reader: defaultReader, writer: defaultWriter }
+    const capability = yield* db
+      .get<{ minimum_reader_protocol: number; minimum_writer_protocol: number }>(
+        sql`SELECT minimum_reader_protocol, minimum_writer_protocol FROM database_capability LIMIT 1`,
+      )
+      .pipe(Effect.orDie)
+    if (!capability) return { reader: defaultReader, writer: defaultWriter }
+    return { reader: String(capability.minimum_reader_protocol), writer: String(capability.minimum_writer_protocol) }
+  })
+}
+
+function applyMigrations(
+  db: Database,
+  input: Migration[],
+  requireLinearHistory: boolean,
+  upgrade?: { run: UpgradeRun; lease: MigrationLeaseHandle; opts: ApplyOptions },
+) {
+  return Effect.gen(function* () {
+    const { completed, reconcileMergedHistory } = yield* readCompletedSet(db, input, requireLinearHistory)
     for (const migration of input) {
       if (completed.has(migration.id)) continue
+      if (upgrade) yield* upgrade.lease.refresh()
+      const startedAt = Date.now()
       yield* db
         .transaction((tx) =>
           Effect.gen(function* () {
-            if (!process.env.DEEPAGENT_CODE_SKIP_MIGRATIONS) {
-              if (reconcileMergedHistory && migration.id === "20260812120000_legacy_provider_recovery")
-                yield* reconcileLegacyProviderRecovery(tx)
-              else yield* migration.up(tx)
-            }
+            if (reconcileMergedHistory && migration.id === "20260812120000_legacy_provider_recovery")
+              yield* reconcileLegacyProviderRecovery(tx)
+            else yield* migration.up(tx)
             yield* tx.run(
               sql`INSERT INTO ${sql.identifier("migration")} (id, time_completed) VALUES (${migration.id}, ${Date.now()})`,
             )
+            if (upgrade) {
+              yield* DatabaseUpgradeRun.recordReceipt(
+                tx,
+                {
+                  runId: upgrade.run.runId,
+                  migrationId: migration.id,
+                  contentHash: DatabaseUpgradeRun.migrationContentHash(migration),
+                  bodyHash: DatabaseUpgradeRun.migrationBodyHash(migration),
+                  ordinal: input.indexOf(migration) + 1,
+                  buildIdentity: upgrade.opts.buildIdentity ?? InstallationCommit ?? "local-build",
+                  packageVersion: upgrade.opts.packageVersion ?? InstallationVersion,
+                  result: "applied",
+                  startedAt,
+                  completedAt: Date.now(),
+                },
+                upgrade.lease,
+              )
+            }
           }),
         )
         .pipe(

@@ -26,6 +26,12 @@ type DatabaseShape = Effect.Success<typeof makeDatabase>
 export const SupportedReaderProtocol = 3
 export const SupportedWriterProtocol = 3
 
+/** The database file path used to derive the OS migration lock (skipped for in-memory databases). */
+export const CurrentDatabaseFile = Context.Reference<{ filename?: string }>(
+  "@deepagent-code/v2/storage/CurrentDatabaseFile",
+  { defaultValue: () => ({}) },
+)
+
 export interface Interface {
   db: DatabaseShape
 }
@@ -134,6 +140,38 @@ export const layer = Layer.effect(
       const bootState = yield* Effect.tryPromise(() => bootstrap(filename))
       if (!bootState.ready) return yield* Effect.fail(new DatabaseBootstrapError(bootState))
     }
+    const db = yield* makeDatabase
+
+    yield* db.run("PRAGMA journal_mode = WAL")
+    yield* db.run("PRAGMA synchronous = NORMAL")
+    yield* db.run("PRAGMA busy_timeout = 5000")
+    yield* db.run("PRAGMA cache_size = -64000")
+    yield* db.run("PRAGMA foreign_keys = ON")
+    // Tune WAL autocheckpoint: default 1000 pages (~4MB) causes large infrequent merges that spike
+    // write-lock hold time. 200 pages (~800KB) keeps each merge cheap while still amortizing I/O.
+    // Removed the blocking wal_checkpoint(PASSIVE) call (was 1-3s on large DBs); frequent small
+    // autocheckpoints are a better long-term strategy.
+    yield* db.run("PRAGMA wal_autocheckpoint = 200")
+    const file = yield* CurrentDatabaseFile
+    yield* DatabaseMigration.apply(db, {
+      filename: file.filename,
+      readerProtocol: String(SupportedReaderProtocol),
+      writerProtocol: String(SupportedWriterProtocol),
+    })
+
+    const capabilities = yield* db.all<{
+      capability: string
+      minimum_reader_protocol: number
+      minimum_writer_protocol: number
+    }>("SELECT capability, minimum_reader_protocol, minimum_writer_protocol FROM database_capability")
+    for (const capability of capabilities) {
+      if (capability.minimum_reader_protocol > SupportedReaderProtocol || capability.minimum_writer_protocol > SupportedWriterProtocol)
+        return yield* Effect.die(
+          new Error(
+            `Database capability ${capability.capability} requires reader protocol ${capability.minimum_reader_protocol} and writer protocol ${capability.minimum_writer_protocol}; this runtime supports protocol ${SupportedWriterProtocol}`,
+          ),
+        )
+    }
 
     const { db } = yield* openAndMigrate
     return { db }
@@ -141,7 +179,10 @@ export const layer = Layer.effect(
 )
 
 export function layerFromPath(filename: string) {
-  return layer.pipe(Layer.provide(sqliteLayer({ filename })))
+  return layer.pipe(
+    Layer.provide(Layer.effect(CurrentDatabaseFile, Effect.succeed({ filename }))),
+    Layer.provide(sqliteLayer({ filename })),
+  )
 }
 
 export function path() {
