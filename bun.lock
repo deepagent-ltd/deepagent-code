@@ -30,7 +30,7 @@
     },
     "packages/app": {
       "name": "@deepagent-code/app",
-      "version": "1.4.7",
+      "version": "2.0.0-alpha.0",
       "dependencies": {
         "@codemirror/autocomplete": "6",
         "@codemirror/commands": "6",
@@ -130,7 +130,7 @@
     },
     "packages/core": {
       "name": "@deepagent-code/core",
-      "version": "4.0.8",
+      "version": "2.0.0-alpha.0",
       "bin": {
         "deepagent-code": "./bin/deepagent-code",
       },
@@ -221,7 +221,7 @@
     },
     "packages/deepagent-code": {
       "name": "deepagent-code",
-      "version": "1.0.0-beta",
+      "version": "2.0.0-alpha.0",
       "bin": {
         "deepagent-code": "./bin/deepagent",
         "deepagent": "./bin/deepagent",
@@ -348,7 +348,7 @@
     },
     "packages/desktop": {
       "name": "@deepagent-code/desktop",
-      "version": "1.4.7",
+      "version": "2.0.0-alpha.0",
       "dependencies": {
         "@lydell/node-pty": "catalog:",
         "@zip.js/zip.js": "2.7.62",
