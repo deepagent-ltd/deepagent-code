@@ -14,12 +14,17 @@ const fromConfig = (input: Record<string, unknown>) =>
 const readFlags = RuntimeFlags.Service.useSync((flags) => flags)
 
 describe("RuntimeFlags", () => {
-  it.effect("forces the 1.4.8 internal series into V2-only mode", () =>
+  it.effect("forces the Core V2 alpha release series into V2-only mode", () =>
     Effect.sync(() => {
       expect(isCoreV2OnlyVersion("1.4.7")).toBe(false)
       expect(isCoreV2OnlyVersion("1.4.8")).toBe(true)
       expect(isCoreV2OnlyVersion("1.4.8-r0")).toBe(true)
       expect(isCoreV2OnlyVersion("1.4.8.r3")).toBe(true)
+      expect(isCoreV2OnlyVersion("2.0alpha")).toBe(true)
+      expect(isCoreV2OnlyVersion("2.0.0-alpha.0")).toBe(true)
+      expect(isCoreV2OnlyVersion("2.0.0-alpha.1")).toBe(true)
+      expect(isCoreV2OnlyVersion("2.0.0-beta.1")).toBe(false)
+      expect(isCoreV2OnlyVersion("2.0.0")).toBe(false)
       expect(isCoreV2OnlyVersion("1.4.80")).toBe(false)
     }),
   )

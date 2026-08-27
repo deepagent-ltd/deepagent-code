@@ -18,7 +18,7 @@ const positiveIntegerWithDefault = (name: string, fallback: number) =>
   )
 export const DEFAULT_SUBAGENT_TIMEOUT_MS = 30 * 60_000
 export const DEFAULT_SUBAGENT_OUTPUT_MAX_CHARS = 8_000
-export const isCoreV2OnlyVersion = (version: string) => /^1\.4\.8(?:[.-]|$)/.test(version)
+export const isCoreV2OnlyVersion = (version: string) => /^(?:1\.4\.8(?:[.-]|$)|2\.0(?:\.0-)?alpha(?:[.-]|$))/.test(version)
 const experimental = bool("DEEPAGENT_CODE_EXPERIMENTAL")
 const enabledByExperimental = (name: string) =>
   Config.all({ experimental, enabled: Config.boolean(name).pipe(Config.option) }).pipe(
@@ -131,7 +131,7 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   contextQueryToolsV2: stableOn("DEEPAGENT_CODE_CONTEXT_QUERY_TOOLS_V2"),
   // M-1 containment: execution remains closed until a durable M10 cohort authorization exists.
   coreV2ExecutionOwner: bool("DEEPAGENT_CODE_CORE_V2_EXECUTION_OWNER"),
-  // Internal 1.4.8 V2-only profile: when enabled, an unavailable/unqualified V2 owner fails closed
+  // Core V2 alpha profile: an unavailable/unqualified V2 owner fails closed
   // instead of entering the legacy SessionPrompt executor. This is a kill switch for admission,
   // never a legacy fallback selector.
   coreV2Only: Config.all({

@@ -2,6 +2,15 @@
 
 This changelog contains public, user-facing product changes. Internal incident identifiers, local paths, private environment topology, test credentials, release-gate evidence, and operational measurements are intentionally excluded.
 
+## Core V2.0 alpha / Desktop 2.0 alpha
+
+Release labels: `core-v2.0alpha` and `desktop-v2.0alpha` (`2.0.0-alpha.0`).
+
+- Consolidated the durable V2 session runtime as the alpha release line for Core and Desktop.
+- Hardened interruption, startup recovery, provider ownership, activity projection, and migration compatibility.
+- Aligned Core, CLI, renderer, and Electron package metadata for the alpha build.
+- Kept the GitHub Action on its independent release line until it is published separately.
+
 ## Desktop 1.4.7 / DeepAgent Core V4.0.8
 
 - Hardened startup recovery so incomplete continuation work settles predictably without creating retry loops.

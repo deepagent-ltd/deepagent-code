@@ -16,6 +16,29 @@
 
 ---
 
+## Alpha Release Line
+
+The repository is preparing the coordinated Core V2 and Desktop 2.0 alpha line. Core and Desktop are validated and released as separate products, so their public labels remain explicit.
+
+| Component | Version | Git tag | Scope |
+|---|---|---|---|
+| **Core runtime** | `2.0.0-alpha.0` | `core-v2.0alpha` | Durable V2 sessions, storage, provider ownership, context, tools, and recovery |
+| **Desktop app** | `2.0.0-alpha.0` | `desktop-v2.0alpha` | Electron shell, renderer, bundled CLI, updater, and packaged user experience |
+
+These alpha tags identify the validated source line. They do not promise stable API compatibility or authorize a production database migration. The GitHub Action remains on its independent `github-v1.4.7` line until that component is released separately.
+
+## Repository Map
+
+| Path | Responsibility |
+|---|---|
+| `packages/core` | Shared durable runtime and database authority |
+| `packages/deepagent-code` | CLI, server, session orchestration, and bundled runtime |
+| `packages/app` | Desktop renderer and user-facing application state |
+| `packages/desktop` | Electron process, packaging, updater, and native integration |
+| `packages/sdk/js` | Public JavaScript SDK surface |
+
+The root README covers the product and quick-start workflow. Component READMEs cover local package development; `CHANGELOG.md` records public release changes.
+
 DeepAgent Code is an AI coding workspace for work that lasts longer than one prompt. It combines a production coding-agent runtime with durable sessions, connected project memory, live planning, code intelligence, multi-agent collaboration, and human oversight.
 
 You can ask for a small edit, guide a running task without interrupting it, hand over a migration with objective completion criteria, or bring several specialist agents into a decision. DeepAgent keeps the work coherent across turns, restarts, tools, people, and projects.
