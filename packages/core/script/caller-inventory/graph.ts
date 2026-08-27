@@ -11,6 +11,7 @@ import ts from "typescript"
 import { existsSync, readFileSync } from "node:fs"
 import type { HandlerSite, Requirement } from "./types"
 import { declarationNodes, moduleAnchorLine, parseModule, refsInSubtree, rootRepoPath } from "./ast"
+import { DELEGATION_CLIENT_BINDINGS, DELEGATION_SPAWN_BINDINGS, PORTS } from "./authority"
 
 const repoRoot = () => rootRepoPath()
 
@@ -460,6 +461,183 @@ function tailMatchHit(
 }
 
 /**
+ * Static process/CLI/client delegation edge: scan this entry's own module (and its resolved handler
+ * modules) for a spawn/fork/exec/fork call whose first STRING-LITERAL argument (or a client endpoint
+ * string) resolves, via DELEGATION_SPAWN_BINDINGS, to the target inventory entry id. Returns the
+ * call site so the delegation edge is attributed to a real file:line.
+ */
+function delegationSpawnHit(entryFile: string, extraRoots: readonly string[], targetId: string): VerifiedHit | undefined {
+  const roots = [entryFile, ...extraRoots]
+  for (const file of roots) {
+    if (!existsSync(file)) continue
+    const mod = parseModule(file)
+    const sf = mod.sourceFile
+    let found: VerifiedHit | undefined
+    // Collect string fragments a spawn/fork argument could resolve to (string literal directly, or
+    // the string literals inside a const initializer like join(dirname(...), "sidecar.js")).
+    const stringFragments = (expr: ts.Expression): string[] => {
+      const out: string[] = []
+      const collect = (node: ts.Node): void => {
+        if (ts.isStringLiteralLike(node)) out.push(node.text)
+        ts.forEachChild(node, collect)
+      }
+      collect(expr)
+      if (ts.isIdentifier(expr)) {
+        for (const decl of declarationNodes(mod, expr.text)) collect(decl)
+      }
+      return out
+    }
+    const visit = (node: ts.Node): void => {
+      if (found) return
+      if (ts.isCallExpression(node)) {
+        const callee = ts.isPropertyAccessExpression(node.expression) ? node.expression.name.text
+          : ts.isIdentifier(node.expression) ? node.expression.text : undefined
+        if (
+          ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword &&
+          ts.isStringLiteralLike(node.arguments[0]) &&
+          DELEGATION_SPAWN_BINDINGS[node.arguments[0].text] === targetId
+        ) {
+          found = { marker: `delegates:${targetId}`, file, line: sf.getLineAndCharacterOfPosition(node.getStart()).line + 1 }
+          return
+        }
+        if (callee && ["fork", "spawn", "exec", "execFile", "execSync", "forkFile", "forkChild"].includes(callee)) {
+          const first = node.arguments[0]
+          if (first) {
+            const fragments = stringFragments(first)
+            if (fragments.some((fragment) => DELEGATION_SPAWN_BINDINGS[fragment] === targetId)) {
+              found = { marker: `delegates:${targetId}`, file, line: sf.getLineAndCharacterOfPosition(node.getStart()).line + 1 }
+              return
+            }
+          }
+        }
+      }
+      ts.forEachChild(node, visit)
+    }
+    visit(sf)
+    if (found) return found
+  }
+  return undefined
+}
+
+/** Machine-checked positive body-shape fact: an entry whose own module performs NO authority/business
+ * call — its only calls are log/no-op/registration statements (a no-op lifecycle command). */
+const BUSINESS_CALLEES = new Set(["prompt", "promptOrSteer", "loop", "publish", "tryPublish", "register", "materialize", "wake", "executor", "registry", "steer", "resume", "admit", "run", "fork", "spawn", "replay", "snapshotRows"])
+export function bodyLogsOnlyHit(entryFile: string, extraRoots: readonly string[] = []): VerifiedHit | undefined {
+  // Scan the entry's OWN handler modules (the resolved lazy handler, e.g. migrate.ts), NOT the
+  // command-tree registration file (commands.ts, whose Spec.make tree would trivially satisfy).
+  // A no-op handler body performs only log/no-op/registration calls; any business callee fails it.
+  const roots = [entryFile, ...extraRoots]
+  let anchorLine = 1
+  let anchorFile = entryFile
+  for (const file of roots) {
+    if (!existsSync(file)) continue
+    const mod = parseModule(file)
+    const sf = mod.sourceFile
+    let businessFound = false
+    const visit = (node: ts.Node): void => {
+      if (businessFound) return
+      if (ts.isCallExpression(node)) {
+        const callee = ts.isPropertyAccessExpression(node.expression) ? node.expression.name.text
+          : ts.isIdentifier(node.expression) ? node.expression.text : undefined
+        if (callee && BUSINESS_CALLEES.has(callee)) businessFound = true
+      }
+      ts.forEachChild(node, visit)
+    }
+    visit(sf)
+    if (businessFound) return undefined
+  }
+  // Anchor the marker at the resolved handler module (or the entry if none) — its first statement.
+  const firstHandler = extraRoots.find((file) => existsSync(file)) ?? entryFile
+  anchorFile = firstHandler
+  anchorLine = 1
+  return { marker: "bodyLogsOnly", file: anchorFile, line: anchorLine }
+}
+
+/** A client/service INVOCATION call site in the entry's own handler body: a body chain that performs a
+ * member call on a bound client object (e.g. Daemon.Service.start / daemon.client().v2.agent.list).
+ * Evidence is the actual call-site chain line — never a module self-export/reference anchor. */
+function clientInvocationHit(
+  entryFile: string,
+  extraRoots: readonly string[],
+  targetId: string,
+): VerifiedHit | undefined {
+  // Scan the entry's OWN module and its resolved handler modules for a client/service INVOCATION call
+  // site (member-call or identifier-call) whose chain resolves to targetId. A passive import alone
+  // never produces a hit — evidence is always a real CallExpression.
+  for (const file of [entryFile, ...extraRoots]) {
+    if (!existsSync(file)) continue
+    const mod = parseModule(file)
+    const sf = mod.sourceFile
+    // Match the entry's own handler body against the client-call chain (AST refLines flatten
+    // (yield* Daemon.Service).start() into "Daemon.Service.start", so a member-call is matched even
+    // through yield*/parentheses — always a genuine invocation, never a passive import).
+    for (const [chainKey, lines] of mod.refLines) {
+      for (const [binding, target] of Object.entries(DELEGATION_CLIENT_BINDINGS)) {
+        if (target !== targetId) continue
+        if (chainKey === binding || chainKey.startsWith(binding + ".") || chainKey.endsWith("." + binding)) {
+          // Prefer a line that is itself a CALL (contains "(") so the edge is a real invocation site,
+          // never a bare field/declaration line.
+          const srcLines = readFileSync(file, "utf8").split("\n")
+          for (const line of [...lines].sort((a, b) => a - b)) {
+            if ((srcLines[line - 1] ?? "").includes("(")) {
+              return { marker: `delegates:${targetId}`, file, line }
+            }
+          }
+        }
+      }
+    }
+  }
+  return undefined
+}
+
+/** A port module provides a service via a static Layer.effect/sync/succeed first-arg = port service. */
+function moduleProvidesPortService(mod: ReturnType<typeof parseModule>, service: string): boolean {
+  let found = false
+  const visit = (node: ts.Node): void => {
+    if (found) return
+    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
+      const method = node.expression.name.text
+      const head = ts.isIdentifier(node.expression.expression) ? node.expression.expression.text : undefined
+      if (head === "Layer" && (method === "effect" || method === "sync" || method === "succeed")) {
+        const first = node.arguments[0]
+        if (first && ts.isIdentifier(first) && first.text === service) found = true
+      }
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(mod.sourceFile)
+  // Robust fallback: the provider module must export a *Live layer binding the service (e.g.
+  // ServerAgentReplySinkLive = Layer.sync(AgentReplySinkService, ...)). Source-text positive fact.
+  if (!found) {
+    const text = readFileSync(mod.file, "utf8")
+    found = new RegExp("Layer\\.(?:effect|sync|succeed)\\(\\s*" + service + "\\b").test(text)
+  }
+  return found
+}
+
+/**
+ * Effect service-layer DI binding (layered resolution): the entry imports the port module; the port's
+ * canonical production provider module (authority.ts PORTS) exports a static Layer.effect/sync for the
+ * port service; and the production composition module imports/provides that provider layer. Returns a
+ * hit so the consumer inherits the provider entry's verdict (portBound:<providerEntryId>).
+ */
+function portBoundHit(entryFile: string, portModule: string): VerifiedHit | undefined {
+  const port = PORTS[portModule]
+  if (!port) return undefined
+  const entryImports = edges(entryFile)
+  const importSite = entryImports.find((edge) => normalizePath(edge.target).endsWith(normalizePath(portModule)))
+  if (!importSite) return undefined
+  const providerFile = `${rootRepoPath()}/${port.providerModule}`
+  if (!existsSync(providerFile)) return undefined
+  if (!moduleProvidesPortService(parseModule(providerFile), port.service)) return undefined
+  const compositionFile = `${rootRepoPath()}/${port.compositionModule}`
+  if (!existsSync(compositionFile)) return undefined
+  const compProvides = edges(compositionFile).some((edge) => normalizePath(edge.target).endsWith(port.providerModule))
+  if (!compProvides) return undefined
+  return { marker: `portBound:${port.providerEntryId}`, file: entryFile, line: importSite.line }
+}
+
+/**
  * Verify a claim's requirements entirely inside the entry's real import-graph closure
  * plus its own handler-body scope:
  * injected probe files are unreachable modules, so no requirement can ever be satisfied
@@ -483,6 +661,23 @@ export function verifyRequirements(
   const files = [...reachMap.keys()]
   const scopeChains = scope?.bodies && scope.bodies.length > 0 ? bodyScopes(scope.bodies) : { chains: new Map() }
   const results = requirements.map((requirement): RequirementResult => {
+    if (requirement.kind === "portBoundTo") {
+      const hit = portBoundHit(entryFile, requirement.portModule)
+      return { requirement, hit }
+    }
+    if (requirement.kind === "bodyLogsOnly") {
+      return { requirement, hit: bodyLogsOnlyHit(entryFile, extraRoots) }
+    }
+    if (requirement.kind === "delegatesTo") {
+      // NEW-P6-B: delegation is CALL-PATH-ONLY. A delegation edge is sound only when the entry's flow
+      // performs an actual invocation — a spawn/fork/exec call whose target resolves to the receiver, or
+      // a client/service member-call in the entry's own body that resolves to the receiver. Reach of a
+      // module (reference/target-module) is NOT sufficient on its own (it can be a passive import).
+      const spawnHit = delegationSpawnHit(entryFile, extraRoots, requirement.targetId)
+      if (spawnHit) return { requirement, hit: spawnHit }
+      const clientHit = clientInvocationHit(entryFile, extraRoots, requirement.targetId)
+      return { requirement, hit: clientHit }
+    }
     if (requirement.kind === "reach") {
       const target = files.find((file) => normalizePath(file).endsWith(normalizePath(requirement.pathSuffix)))
       if (!target) return { requirement, hit: undefined }

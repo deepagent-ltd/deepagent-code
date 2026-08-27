@@ -117,6 +117,13 @@ export type EntryWithHandlers = {
  *                        entry roots — the entry's import closure cannot bring the writer
  *                        authority into its own flow, supporting an honest read_only / non-owner
  *                        verdict for entries that never touch the authority module;
+ *   - delegatesTo       : a static spawn/exec/fork, service-layer binding, client call, or reach of
+ *                        the target entry's module proves THIS entry delegates authority to the
+ *                        inventory entry {@link targetId}; the gate inherits the target's verdict per
+ *                        dimension (and asserts the target exists & is classified non-unclassified);
+ *   - portBoundTo       : the entry imports an Effect service port whose canonical production provider
+ *                        (authority.ts PORTS registry) is a Layer.effect in a provider module wired by a
+ *                        production composition; the consumer inherits the provider entry's verdict;
  *   - productionProfile: three-site proof that THIS packaged build force-selects the Core-V2-only
  *                        runtime profile (package.json version matches isCoreV2OnlyVersion, the
  *                        flag wires that predicate to InstallationVersion, and the production
@@ -129,6 +136,9 @@ export type Requirement =
   | { readonly kind: "bodyChain"; readonly chain: string }
   | { readonly kind: "noBodyChain"; readonly chain: string }
   | { readonly kind: "noReach"; readonly pathSuffix: string }
+  | { readonly kind: "delegatesTo"; readonly targetId: string }
+  | { readonly kind: "portBoundTo"; readonly portModule: string }
+  | { readonly kind: "bodyLogsOnly" }
   | { readonly kind: "productionProfile" }
 
 /** A declared, machine-checked ownership claim for one entry. */
@@ -170,6 +180,9 @@ export type ClassifiedEntry = {
   readonly unclassifiedCount: number
   /** Per-dimension reason for each owner left unclassified (same key set size). */
   readonly openOwners?: Readonly<Partial<Record<Dimension, string>>>
+  /** External authority receiver (out-of-repo service, e.g. a remote gateway); the local flow is
+   * fully characterized but the authority is external by scope (never guessed). */
+  readonly externalReceiver?: string
 }
 
 export type Inventory = {

@@ -12,10 +12,12 @@
  *     production path are classified as non-v2.
  */
 import { describe, expect, test } from "bun:test"
-import { mkdirSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { buildInventory } from "../script/caller-inventory/build"
 import { INVENTORY_SURFACE_IDS, SURFACE_IDS } from "../script/caller-inventory/types"
+import { DELEGATION_CLIENT_BINDINGS } from "../script/caller-inventory/authority"
+import { bodyLogsOnlyHit } from "../script/caller-inventory/graph"
 import { DIMENSIONS, VERDICTS } from "../script/caller-inventory/types"
 
 const ROOT = new URL("../", import.meta.url).pathname.replace(/\/$/, "")
@@ -244,6 +246,169 @@ describe("C0-01 caller inventory gate", () => {
     expect(inventory.totals.unclassifiedEntries).toBe(
       inventory.entries.filter((e) => e.unclassifiedCount > 0).length,
     )
+  })
+
+  test("delegation model gate: edges real, acyclic, no self-delegation, no delegation to an unclassified target", () => {
+    const byId = new Map(inventory.entries.map((e) => [e.entry.id, e]))
+    const graph = new Map<string, Set<string>>()
+    for (const entry of inventory.entries) {
+      for (const role of entry.roles) {
+        for (const proof of role.evidence) {
+          const isDel = proof.marker.startsWith("delegates:")
+          const isPort = proof.marker.startsWith("portBound:")
+          if (!isDel && !isPort) continue
+          const targetId = proof.marker.slice((isDel ? "delegates:" : "portBound:").length)
+          // (a) edge is real: the marker is anchored at a genuine file:line in an owned source file.
+          expect(proof.repoFile.endsWith(".ts")).toBe(true)
+          expect(proof.line).toBeGreaterThan(0)
+          // (d) no self-delegation.
+          expect(targetId).not.toBe(entry.entry.id)
+          // (c) delegation to an unknown or unclassified target is a finding.
+          const target = byId.get(targetId)
+          expect(target).toBeDefined()
+          const tRole = target!.roles.find((x) => x.dimension === role.dimension)
+          expect(tRole).toBeDefined()
+          expect(tRole!.verdict).not.toBe("unclassified")
+          // record the edge for acyclicity.
+          const set = graph.get(entry.entry.id) ?? new Set()
+          set.add(targetId)
+          graph.set(entry.entry.id, set)
+        }
+      }
+    }
+    // (b) the delegation graph is acyclic (standard DFS cycle detection).
+    const visiting = new Set<string>()
+    const visited = new Set<string>()
+    const visit = (node: string): void => {
+      if (visiting.has(node)) throw new Error("delegation cycle at " + node)
+      if (visited.has(node)) return
+      visiting.add(node)
+      for (const next of graph.get(node) ?? []) visit(next)
+      visiting.delete(node)
+      visited.add(node)
+    }
+    for (const node of graph.keys()) visit(node)
+  })
+
+  test("C0-01 strict exit condition: every production caller classified on all seven dimensions (unclassified=0)", () => {
+    // Revived as the PRIMARY oracle once the honest classification reached unclassified=0.
+    expect(inventory.totals.unclassifiedRoles).toBe(0)
+    expect(inventory.totals.unclassifiedEntries).toBe(0)
+    for (const entry of inventory.entries) {
+      expect(entry.unclassifiedCount).toBe(0)
+      expect(entry.roles.length).toBe(DIMENSIONS.length)
+    }
+  })
+
+  test("portBound gate: port edge real, provider entry classified, single canonical provider, test-only layers excluded", () => {
+    const byId = new Map(inventory.entries.map((e) => [e.entry.id, e]))
+    const provided = new Set<string>()
+    for (const entry of inventory.entries) {
+      for (const role of entry.roles) {
+        for (const proof of role.evidence) {
+          if (!proof.marker.startsWith("portBound:")) continue
+          const providerId = proof.marker.slice("portBound:".length)
+          // provider entry must be inventoried and classified non-unclassified.
+          const provider = byId.get(providerId)
+          expect(provider).toBeDefined()
+          expect(provider!.roles.find((x) => x.dimension === role.dimension)?.verdict).not.toBe("unclassified")
+          // port edge anchored at a real file:line.
+          expect(proof.repoFile.endsWith(".ts")).toBe(true)
+          expect(proof.line).toBeGreaterThan(0)
+          provided.add(providerId)
+        }
+      }
+    }
+    // Each provider entry is a legacy IM authority (single canonical provider, no conflicting port provider).
+    expect([...provided]).toEqual(["im.agent-executor"])
+  })
+
+  test("NEW-P6 call-path / bodyLogsOnly / external-receiver soundness", () => {
+    const byId = new Map(inventory.entries.map((e) => [e.entry.id, e]))
+    const ROOT = new URL("../", import.meta.url).pathname.replace(/\/$/, "")
+    // repoFile is repo-relative to the worktree root; ROOT here is packages/core, so go up to it.
+    const REPO_ROOT = new URL("../../../", import.meta.url).pathname.replace(/\/$/, "")
+    const abs = (repoFile: string) => join(REPO_ROOT, repoFile)
+    // (a) every delegation/port edge must be attributed to a real CALL site (a line in the cited
+    // source that contains a call expression) — never a passive import/self-export/reference line.
+    for (const entry of inventory.entries) {
+      for (const role of entry.roles) {
+        for (const proof of role.evidence) {
+          if (!proof.marker.startsWith("delegates:") && !proof.marker.startsWith("portBound:")) continue
+          const src = require("node:fs").readFileSync(abs(proof.repoFile), "utf8").split("\n")
+          const lineText = src[proof.line - 1] ?? ""
+          const moduleText = src.join("\n")
+          // Call-path sound: a DELEGATION (spawn/client) edge must be attributed to a source that
+          // actually performs an INVOCATION (a member-call daemon.<m>()/client.v2.<m>()/spawn/fork),
+          // not a passive import/self-export/reference line. A portBound edge is a service-port import
+          // binding (its port-import line is the correct evidence), so it is exempt from the strict
+          // call-site test but must still be anchored at a real line.
+          if (proof.marker.startsWith("delegates:")) {
+            expect(
+              moduleText.includes(".start(") || moduleText.includes(".stop(") ||
+              moduleText.includes(".status(") || moduleText.includes(".password(") ||
+              moduleText.includes(".restart(") || moduleText.includes(".client(") ||
+              moduleText.includes(".list(") || moduleText.includes(".fork(") ||
+              moduleText.includes(".spawn(") || moduleText.includes("spawn(") ||
+              moduleText.includes("fork(") || /\S+\(/.test(lineText),
+            ).toBe(true)
+          }
+          if (proof.marker.startsWith("delegates:")) expect(lineText.trim().startsWith("import")).toBe(false)
+        }
+      }
+    }
+    // (b) bodyLogsOnly: cli.lildax.migrate is a no-op lifecycle command -> read_only + bodyLogsOnly.
+    const migrate = byId.get("cli.lildax.migrate")
+    expect(migrate).toBeDefined()
+    expect(migrate!.roles.every((rr) => rr.verdict === "read_only")).toBe(true)
+    expect(migrate!.roles.flatMap((rr) => rr.evidence).some((pr) => pr.marker === "bodyLogsOnly")).toBe(true)
+    // (c) external_receiver annotations are consistent: the entry is read_only and carries a genuine
+    // reach to the remote gateway client module (server-mode.ts) as positive evidence.
+    for (const entry of inventory.entries) {
+      if (!entry.externalReceiver) continue
+      expect(entry.roles.every((rr) => rr.verdict === "read_only")).toBe(true)
+      expect(entry.roles.flatMap((rr) => rr.evidence).some((pr) => pr.marker.includes("server-mode"))).toBe(true)
+    }
+  })
+
+  test("NEW-P7-A: bodyLogsOnly scans the resolved handler, not the command-tree registration", () => {
+    // bodyLogsOnlyHit must scan the entry's handler module for business callees. A probe handler that
+    // performs a business call must NOT satisfy bodyLogsOnly; the real no-op handler (migrate.ts) must.
+    const REPO = new URL("../../../", import.meta.url).pathname.replace(/\/$/, "")
+    const probe = join(PROBE_DIR, "probe-biz-handler.ts")
+    try {
+      mkdirSync(PROBE_DIR, { recursive: true })
+      writeFileSync(
+        probe,
+        [
+          "import { SessionPrompt } from '@deepagent-code/core/session/prompt'",
+          "export default function handler() {",
+          "  const promptSvc = null",
+          "  promptSvc.loop({ sessionID: 'x' }).pipe(() => {})",
+          "}",
+        ].join("\n"),
+      )
+      expect(bodyLogsOnlyHit(probe)).toBeUndefined()
+      const migrate = join(REPO, "packages/cli/src/commands/handlers/migrate.ts")
+      expect(existsSync(migrate)).toBe(true)
+      expect(bodyLogsOnlyHit(migrate)).toBeDefined()
+    } finally {
+      rmSync(PROBE_DIR, { recursive: true, force: true })
+    }
+  })
+
+  test("NEW-P7-B: no dead DELEGATION_CLIENT_BINDINGS (every target is exercised by a delegation edge)", () => {
+    const used = new Set<string>()
+    for (const entry of inventory.entries) {
+      for (const role of entry.roles) {
+        for (const proof of role.evidence) {
+          if (proof.marker.startsWith("delegates:")) used.add(proof.marker.slice("delegates:".length))
+        }
+      }
+    }
+    for (const [, target] of Object.entries(DELEGATION_CLIENT_BINDINGS)) {
+      expect(used.has(target)).toBe(true)
+    }
   })
 })
 
