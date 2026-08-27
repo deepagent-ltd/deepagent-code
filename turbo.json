@@ -4,6 +4,10 @@
   "globalPassThroughEnv": ["CI", "DEEPAGENT_CODE_DISABLE_SHARE"],
   "tasks": {
     "typecheck": {},
+    "test": {
+      "outputs": [],
+      "passThroughEnv": ["*"]
+    },
     "build": {
       "dependsOn": [],
       "outputs": ["dist/**"]

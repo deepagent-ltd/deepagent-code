@@ -133,7 +133,7 @@ const table = sqliteTable("session", {
 
 - Avoid mocks as much as possible
 - Test actual implementation, do not duplicate logic into tests
-- Tests cannot run from repo root (guard: `do-not-run-tests-from-root`); run from package dirs like `packages/deepagent-code`.
+- Bare `bun test` cannot run from repo root (guard: `do-not-run-tests-from-root`); run tests from package dirs like `packages/deepagent-code`, or use the root `bun run test` entry, which delegates to `bun turbo test` and covers every package with a `test` script.
 
 ## Type Checking
 
