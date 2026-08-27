@@ -74,6 +74,7 @@ export interface PreflightObservations {
   pageSize: number | null
   pageCount: number | null
   journalMode: string | null
+  dbReadable: boolean
   journalRows: JournalRow[]
   capabilities: CapabilityRow[]
   upgradeRuns: UpgradeRunRow[]
@@ -106,9 +107,15 @@ export interface PreflightProbes {
 const SQLITE_HEADER_MAGIC = "SQLite format 3\x00"
 const HEADER_MAGIC_BYTES = Uint8Array.from([0x53, 0x51, 0x4c, 0x69, 0x74, 0x65, 0x20, 0x66, 0x6f, 0x72, 0x6d, 0x61, 0x74, 0x20, 0x33, 0x00])
 
-const readOnlyConnection = (filename: string): BunDatabase | null => {
+const readConnection = (filename: string): BunDatabase | null => {
+  // Open with read-write + `query_only` so a freshly created empty WAL DB can be
+  // inspected (a pure read-only open cannot create the shared-memory file and
+  // returns SQLITE_CANTOPEN). `query_only` fences every write at the SQLite level,
+  // so the preflight never mutates user data.
   try {
-    return new BunDatabase(filename, { readonly: true, readwrite: false, create: false })
+    const db = new BunDatabase(filename, { readwrite: true, create: false })
+    db.run("PRAGMA query_only = ON")
+    return db
   } catch {
     return null
   }
@@ -138,7 +145,7 @@ const defaultProbes: PreflightProbes = {
     return { headerValid, pageSize }
   },
   async readJournalMode(filename) {
-    const db = readOnlyConnection(filename)
+    const db = readConnection(filename)
     if (!db) return null
     try {
       const journal = db.query("PRAGMA journal_mode").get() as { journal_mode?: string } | undefined
@@ -149,7 +156,7 @@ const defaultProbes: PreflightProbes = {
     }
   },
   async readJournalRows(filename) {
-    const db = readOnlyConnection(filename)
+    const db = readConnection(filename)
     if (!db) return null
     try {
       const exists = db
@@ -162,7 +169,7 @@ const defaultProbes: PreflightProbes = {
     }
   },
   async readCapabilities(filename) {
-    const db = readOnlyConnection(filename)
+    const db = readConnection(filename)
     if (!db) return null
     try {
       const exists = db
@@ -177,7 +184,7 @@ const defaultProbes: PreflightProbes = {
     }
   },
   async readUpgradeRuns(filename) {
-    const db = readOnlyConnection(filename)
+    const db = readConnection(filename)
     if (!db) return null
     try {
       const exists = db
@@ -254,6 +261,7 @@ const gatherObservations = async (
     pageSize: header?.pageSize ?? null,
     pageCount: journalMode?.pageCount ?? null,
     journalMode: journalMode?.journalMode ?? null,
+    dbReadable: readStat ? journalMode !== null : true,
     journalRows,
     capabilities,
     upgradeRuns,
@@ -295,6 +303,14 @@ export const analyzePreflight = (
       resource: observations.filename,
       expected: "SQLite format 3",
       actual: "invalid header",
+    })
+
+  // A non-empty existing DB that cannot be opened read-only cannot be proven safe.
+  if (observations.exists && observations.size > 0 && !observations.dbReadable)
+    issues.push({
+      code: "db_open_failed",
+      message: "unable to open database read-only: " + observations.filename,
+      resource: observations.filename,
     })
 
   for (const capability of observations.capabilities) {

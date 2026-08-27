@@ -14,6 +14,7 @@ const observations = (overrides: Partial<PreflightObservations> = {}): Preflight
   pageSize: 4096,
   pageCount: 10,
   journalMode: "wal",
+  dbReadable: true,
   journalRows: [],
   capabilities: [],
   upgradeRuns: [],
