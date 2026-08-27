@@ -88,7 +88,7 @@ const makeCommand = (over?: Record<string, unknown>): EventEnvelope =>
 describe("EventRegistry create + lookup", () => {
   test("seeds a registry and indexes types by eventType", () => {
     expect(registry.size).toBe(3)
-    expect(registry.eventTypes().sort()).toEqual(["agent.task.completed", "ci.failure.observed", "goal.tick.requested"])
+    expect([...registry.eventTypes()].sort()).toEqual(["agent.task.completed", "ci.failure.observed", "goal.tick.requested"])
     expect(registry.lookup("goal.tick.requested")?.kind).toBe("command")
     expect(registry.lookup("missing")).toBeUndefined()
   })

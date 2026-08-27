@@ -101,12 +101,13 @@ const outboxId = (now: number, eventId: string) => `outbox_${eventId}_${now}`
  * This is a single INSERT (atomic by itself) used INSIDE a caller's `db.transaction` so aggregate
  * state + event commit together. When called standalone it still returns an idempotent row.
  */
-export function enqueue(db: DatabaseClient, input: EnqueueInput): Effect.Effect<OutboxRow> {
+export function enqueue(db: DatabaseClient, input: EnqueueInput): Effect.Effect<OutboxRow, EventRegistry.EventPublishError> {
   return Effect.gen(function* () {
     // Defense in depth: the outbox never accepts an envelope the publisher policy has NOT approved.
+    // This is the 拒绝 (rejection) path — a typed failure (never a buried throw or a silent drop).
     const verdict = validatePublish(input.registry, input.event)
     if (!verdict.ok) {
-      throw new EventRegistry.EventPublishError(verdict.reason, input.event.eventType, verdict.message)
+      return yield* Effect.fail(new EventRegistry.EventPublishError(verdict.reason, input.event.eventType, verdict.message))
     }
     const json = JSON.stringify(encodeEventEnvelope(input.event))
     const digest = eventEnvelopeDigest(input.event)
