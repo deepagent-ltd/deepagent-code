@@ -80,6 +80,7 @@ export const runTurnPrepare = async (options: TurnPrepareOptions): Promise<Scena
       groups: recorder.results(),
       extras: {
         unit: "ms",
+        warmup_policy: "5 warmup admissions then 120 measured admissions; plus 30 exact-retry reconciles and 30 projected-history reloads (all reported, no samples dropped)",
         sample_basis:
           "120 admission samples + 30 exact-retry reconciles + 30 history reloads after 5 warmup admissions; individually sub-ms operations need the larger N for stable p95/p99",
         session_id: info.id,

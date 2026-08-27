@@ -87,6 +87,7 @@ export const runSystemContext = async (options: SystemContextOptions): Promise<S
         groups: result.groups,
         extras: {
           unit: "ms",
+          warmup_policy: "5 warmup registry.load then 60 measured registry.load (no samples dropped)",
           sample_basis:
             "60 registry.load samples after 5 warmups; sources are deterministic strings so variance is tiny and modest N is sufficient; real builtin filesystem/git probing excluded (see deviation)",
           environment_block_bytes: result.environment_bytes,

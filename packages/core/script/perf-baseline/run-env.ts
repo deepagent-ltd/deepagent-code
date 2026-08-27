@@ -17,8 +17,13 @@ export const machineInfo = () => {
     physical_cores: Number(sh(["sysctl", "-n", "hw.physicalcpu"]).text),
     logical_cores: Number(sh(["sysctl", "-n", "hw.ncpu"]).text),
     memory_bytes: Number(sh(["sysctl", "-n", "hw.memsize"]).text),
+    // os.release() == Darwin kernel (uname -r); os.version() == kernel string (uname -v).
+    // sw_vers gives the macOS product/build versions (ProductVersion / BuildVersion),
+    // which live on a different numbering layer and must both be recorded explicitly.
     os_release: os.release(),
     os_version: os.version(),
+    macos_product_version: sh(["sw_vers", "-productVersion"]).text,
+    macos_build_version: sh(["sw_vers", "-buildVersion"]).text,
     platform: `${process.platform}`,
   }
 }

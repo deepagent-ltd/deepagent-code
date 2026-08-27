@@ -60,10 +60,14 @@ export const runMemoryGrowth = async (options: MemoryOptions): Promise<ScenarioO
           "single-process RSS under repeated V2 durable prompt admission (no model turns, no compaction). Sample unit = bytes of RSS.",
         status: "ok",
         evidence_refs: ["packages/core/src/session.ts"],
-        groups: [{ group: "admit_wall_time_subsample", values: result.admit_sample_timings, failures: 0 }],
+        groups: [
+          { group: "admit_wall_time_subsample", values: result.admit_sample_timings, failures: 0, unit: "ms" },
+          { group: "rss_bytes", values: result.rss_series, failures: 0, unit: "bytes" },
+        ],
         extras: {
           unit_rss: "bytes",
           unit_admit: "ms",
+          warmup_policy: "no declared warmup; the single process is warmed by the first ~20 admissions that are also reported explicitly, RSS is a sequential series sampled every N operations",
           sample_basis:
             "1500 admission operations; RSS sampled every 25 ops (60 samples) for the slope; admit wall times are a declared subsample (~500+first20), not the full population",
           operations: options.operations,

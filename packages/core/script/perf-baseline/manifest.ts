@@ -36,6 +36,7 @@ export interface RunManifest {
   readonly warmup_policy: Record<string, string>
   readonly statistics_method: string
   readonly unit: string
+  readonly isolation: IsolationCheck | null
   readonly scenarios: Array<Record<string, unknown>>
 }
 
@@ -45,11 +46,19 @@ const scenarioArtifacts = async (outputDir: string, outcome: ScenarioOutcome) =>
   for (const group of outcome.groups) {
     const relative = `raw/${outcome.name}-${group.group}.csv`
     writeSamplesCsv(path.join(outputDir, relative), `${outcome.name}/${group.group}`, [
-      { name: group.group, values: group.values },
+      { name: group.group, values: group.values, unit: group.unit },
     ])
     files.push({ ...recordArtifact(outputDir, relative), samples: group.values.length })
   }
   return files
+}
+
+export interface IsolationCheck {
+  readonly isolated: boolean
+  readonly data_root: string
+  readonly home_base: string
+  readonly test_home: string
+  readonly check: string
 }
 
 export interface ManifestInput {
@@ -59,6 +68,7 @@ export interface ManifestInput {
   readonly outcomes: readonly ScenarioOutcome[]
   readonly fixtureScale: Record<string, unknown>
   readonly testHome: string
+  readonly isolation?: IsolationCheck
   readonly expectations?: { readonly commit?: string; readonly tree?: string }
 }
 
@@ -75,7 +85,7 @@ export const buildAndWriteManifest = async (input: ManifestInput): Promise<strin
       group: group.group,
       owner_note: outcome.owner_note,
       status: outcome.status,
-      unit: UNIT,
+      unit: group.unit ?? UNIT,
       ...PerfStats.summarize(group.values),
       failures: group.failures,
       extras: outcome.extras ?? {},
@@ -97,6 +107,7 @@ export const buildAndWriteManifest = async (input: ManifestInput): Promise<strin
           group.group,
           {
             ...PerfStats.summarize(group.values),
+            unit: group.unit ?? UNIT,
             failures: group.failures,
           },
         ]),
@@ -133,8 +144,11 @@ export const buildAndWriteManifest = async (input: ManifestInput): Promise<strin
     env_allowlist: {
       // The only environment redirection mechanism used by this harness and its child processes.
       DEEPAGENT_CODE_TEST_HOME: input.testHome,
-      DEEPAGENT_CODE_HOME: process.env.DEEPAGENT_CODE_HOME ?? "(not set)",
-      note: "DEEPAGENT_CODE_TEST_HOME alone resolves the data root to $TEST_HOME/.deepagent/code (packages/core/src/global-path.ts); no production data directory was touched",
+      // DEEPAGENT_CODE_HOME is cleared by main() before scenarios run so it can never
+      // redirect the data root away from the sandbox (see resolveDataPath in global-path.ts).
+      DEEPAGENT_CODE_HOME: process.env.DEEPAGENT_CODE_HOME ?? "(cleared by harness)",
+      HOME: process.env.HOME ?? "(not set)",
+      note: "DEEPAGENT_CODE_TEST_HOME resolves the data root to $TEST_HOME/.deepagent/code; DEEPAGENT_CODE_HOME is cleared and HOME is pinned to $TEST_HOME so os.homedir() cannot reach the real account home; no production data directory was touched (see isolation block)",
     },
     warmup_policy: Object.fromEntries(
       input.outcomes.map((outcome) => [
@@ -144,6 +158,7 @@ export const buildAndWriteManifest = async (input: ManifestInput): Promise<strin
     ),
     statistics_method: STAT_METHOD,
     unit: UNIT,
+    isolation: input.isolation ?? null,
     scenarios,
   }
 

@@ -57,6 +57,7 @@ export const runDatabaseOpen = async (options: DatabaseOpenOptions): Promise<Sce
       groups,
       extras: {
         unit: "ms",
+        warmup_policy: `no warmup sweep; ${options.opensPerTier} opens per tier re-open the same warm-page-cache fixture (36 per tier), every open reported`,
         sample_basis:
           "36 opens per tier after fixture build; open cost is single-digit-to-tens of ms, so 36 samples resolve p95/p99 while keeping tier sweep under a minute",
         fixture_note: "same migrated file reopened per sample; warm page cache steady state",

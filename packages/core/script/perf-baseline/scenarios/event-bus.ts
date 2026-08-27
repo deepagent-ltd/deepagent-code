@@ -97,6 +97,7 @@ export const runEventBus = async (options: EventBusOptions): Promise<ScenarioOut
         groups: result.groups,
         extras: {
           unit: "ms",
+          warmup_policy: "10 warmup sync publishes then 300 measured local+sync publish pairs + 60 claims + 1 aggregate drain (no samples dropped)",
           sample_basis:
             "300 local+sync publish pairs and 60 claims after 10 sync warmups; per-op cost is sub-ms so larger N keeps p95/p99 meaningful",
           probe_aggregate_events_after_drain: result.drainedCount,

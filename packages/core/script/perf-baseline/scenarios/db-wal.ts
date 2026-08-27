@@ -3,7 +3,7 @@ import * as path from "node:path"
 import { Effect, Layer, Schema } from "effect"
 import { Database } from "@deepagent-code/core/database/database"
 import { EventV2 } from "@deepagent-code/core/event"
-import { tempRoot, summarizeGroups, timeEffect, Recorder, type ScenarioOutcome } from "../lib"
+import { tempRoot, summarizeGroups, timeEffect, Recorder, withUnits, type ScenarioOutcome } from "../lib"
 
 const Probe = EventV2.define({
   type: "perf.wal.probe",
@@ -76,6 +76,8 @@ export const runDbWalWriteAmplification = async (options: DbWalOptions): Promise
         const snapshot = sizeSnapshot(file)
         walSeries.push(snapshot.wal_bytes)
         dbSeries.push(snapshot.db_bytes)
+        recorder.add("wal_bytes_series", snapshot.wal_bytes)
+        recorder.add("db_bytes_series", snapshot.db_bytes)
       }
     }
 
@@ -112,6 +114,9 @@ export const runDbWalWriteAmplification = async (options: DbWalOptions): Promise
 
   try {
     const result = await Effect.runPromise(Effect.scoped(program))
+    const groups = withUnits(result.groups).map((group) =>
+      group.group === "wal_bytes_series" || group.group === "db_bytes_series" ? { ...group, unit: "bytes" } : group,
+    )
     return summarizeGroups(
       {
         name: "db-wal-size-write-amplification",
@@ -119,13 +124,14 @@ export const runDbWalWriteAmplification = async (options: DbWalOptions): Promise
           "sizes and amplification observed through the production writer stack (Database.layerFromPath PRAGMAs + EventV2 durable publish); unit = bytes for size fields, ms for publish wall times",
         status: "ok",
         evidence_refs: ["packages/core/src/database/database.ts", "packages/core/src/event/sql.ts"],
-        groups: result.groups,
+        groups,
         extras: {
           unit: "ms",
           unit_sizes: "bytes",
           ...result.sizes,
           wal_series_bytes: result.wal_series_bytes,
           db_series_bytes: result.db_series_bytes,
+          warmup_policy: `${options.warmup} warmup publishes then ${options.measured} measured publishes; size series sampled every ${options.sizeSampleEvery} writes and reported separately (both measured and warmup public groups retained)`,
           sample_basis: `one fresh temp database; ${options.measured} measured publishes of ~${options.payloadBytes}B payloads after ${options.warmup} warmups; file sizes sampled every ${options.sizeSampleEvery} writes plus at loop end`,
           limitation:
             "db_growth/logical-payload is the durable-storage amplification observable from file metadata; total bytes physically written by SQLite per statement needs OS-level counters and is out of scope (declared)",

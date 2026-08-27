@@ -70,6 +70,31 @@ const main = async () => {
   // opener finds a sandbox dir instead of SQLITE_CANTOPEN (and never the real home).
   fs.mkdirSync(path.join(testHome, ".deepagent", "code"), { recursive: true })
   process.env.DEEPAGENT_CODE_TEST_HOME = testHome
+  // Airtight home redirection: clear the exact override so the data root can never be
+  // redirected away from the sandbox, and pin HOME so os.homedir() cannot reach the real
+  // account home. Every spawned child (cold-start composition root) inherits these and then
+  // overrides DEEPAGENT_CODE_TEST_HOME with its own empty temp home per sample.
+  delete process.env.DEEPAGENT_CODE_HOME
+  process.env.HOME = testHome
+  if (process.platform.startsWith("win")) process.env.USERPROFILE = testHome
+
+  // Prove the sandbox root is the only possible data root before any scenario runs.
+  // We assert through the production resolver (packages/core/src/global-path.ts), never by
+  // reading the real default data directory (that is forbidden as a measurement object).
+  const { resolveDataPath, resolveHomeBase } = await import("@deepagent-code/core/global-path")
+  const dataRoot = resolveDataPath(process.env)
+  const homeBase = resolveHomeBase(process.env)
+  const isolation = {
+    isolated: dataRoot.startsWith(testHome) && homeBase === testHome,
+    data_root: dataRoot,
+    home_base: homeBase,
+    test_home: testHome,
+    check: "resolveDataPath(process.env) must resolve under testHome and resolveHomeBase must equal testHome; DEEPAGENT_CODE_HOME was cleared, HOME pinned to testHome; sandbox root is the only data root",
+  }
+  if (!isolation.isolated) {
+    throw new Error(`data root isolation check failed: dataRoot=${dataRoot} homeBase=${homeBase} testHome=${testHome}`)
+  }
+  console.log(`[perf-baseline] isolation ok: dataRoot=${dataRoot}`)
 
   const startedAtMs = Date.now()
   console.log(EVIDENCE_LEVEL_DECLARATION)
@@ -149,6 +174,7 @@ const main = async () => {
       ]),
     ),
     testHome,
+    isolation,
     expectations: { commit: FROZEN_COMMIT, tree: FROZEN_TREE },
   })
   console.log(`[perf-baseline] manifest: ${manifestPath}`)

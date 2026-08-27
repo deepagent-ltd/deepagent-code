@@ -17,7 +17,13 @@ export interface GroupResult {
   readonly group: string
   readonly values: readonly number[]
   readonly failures: number
+  /** Physical unit of `values`; defaults to "ms" when omitted. */
+  readonly unit?: string
 }
+
+/** Attach a physical unit to every group of a recorder outcome (defaults to "ms"). */
+export const withUnits = (result: GroupResult[], unit = "ms"): GroupResult[] =>
+  result.map((group) => ({ ...group, unit: group.unit ?? unit }))
 
 export interface ScenarioOutcome {
   readonly name: string

@@ -7,6 +7,8 @@ export const UNIT = "ms"
 export interface SampleGroup {
   readonly name: string
   readonly values: readonly number[]
+  /** Physical unit of the values; defaults to UNIT ("ms") when omitted. */
+  readonly unit?: string
 }
 
 export class Collector {
@@ -44,7 +46,7 @@ export const csvEscape = (value: string | number) => {
 
 /** One CSV per collector: every raw sample is a row; nothing is filtered. */
 export const writeSamplesCsv = (target: string, scenario: string, groups: readonly SampleGroup[]) => {
-  const header = ["scenario", "group", "sample_index_in_group", `value_${UNIT}`]
+  const header = ["scenario", "group", "sample_index_in_group", `value_${groups[0]?.unit ?? UNIT}`]
   const rows: string[] = [header.join(",")]
   for (const group of groups) {
     group.values.forEach((value, index) => rows.push([scenario, group.name, index, value].map(csvEscape).join(",")))
