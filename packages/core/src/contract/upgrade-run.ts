@@ -19,12 +19,23 @@ export const UpgradeRunVersion = {
 } as const
 
 /**
- * Upgrade run state machine. This is a closed variant set per the frozen
- * contract: pending | running | committed | failed | rollback. There is no
- * `skipped` state — skipping a migration is a typed violation, never a legal
- * transition (worklist C1A-04).
+ * Upgrade run state machine, frozen per design §10.5 (line 475):
+ * planned -> backup_verified -> applying -> verifying -> ready, with any
+ * failure entering `recovery_required`. There is no `skipped` state — skipping
+ * a migration is a typed violation, never a legal transition (worklist C1A-04).
+ *
+ * SUCCESSOR NOTE: `recovery_required` is TERMINAL in this frozen contract. The
+ * exit / recovery transitions out of `recovery_required` belong to the C1A
+ * design and are intentionally not frozen here.
  */
-export const UpgradeRunState = Schema.Literals(["pending", "running", "committed", "failed", "rollback"])
+export const UpgradeRunState = Schema.Literals([
+  "planned",
+  "backup_verified",
+  "applying",
+  "verifying",
+  "ready",
+  "recovery_required",
+])
 export type UpgradeRunState = typeof UpgradeRunState.Type
 
 /**
@@ -105,11 +116,12 @@ export const migrationReceiptContentAddress = (receipt: MigrationReceipt): strin
 
 /** Allowed state transitions; anything else is an illegal/immutable transition. */
 export const ALLOWED_TRANSITIONS: Readonly<Record<UpgradeRunState, readonly UpgradeRunState[]>> = {
-  pending: ["running"],
-  running: ["committed", "failed", "rollback"],
-  committed: [],
-  failed: ["rollback"],
-  rollback: ["committed"],
+  planned: ["backup_verified"],
+  backup_verified: ["applying", "recovery_required"],
+  applying: ["verifying", "recovery_required"],
+  verifying: ["ready", "recovery_required"],
+  ready: [],
+  recovery_required: [],
 }
 
 /** Whether `from -> to` is an allowed transition under the frozen trigger rules. */
@@ -134,19 +146,20 @@ export const assertRunTransition = (from: UpgradeRunState, to: UpgradeRunState):
 }
 
 /**
- * Enforce that a migration was genuinely executed (not skipped). A skipped
- * migration has no content-addressed identity: it must carry a real content
- * hash, body hash and ordinal, and a real completion result. Empty identity
- * fields throw the typed `SkipMigrationError`.
+ * Enforce that a migration was genuinely executed (not skipped). `verify_failed`
+ * and `rolled_back` are genuine, content-addressed completions and never count
+ * as a skip. Only a receipt that claims applied/backfilled without a
+ * content-addressed identity is the write of a skipped migration (worklist
+ * C1A-04); that throws the typed `SkipMigrationError`.
  */
 export const assertMigrationNotSkipped = (receipt: MigrationReceipt): void => {
+  if (receipt.result === "verify_failed" || receipt.result === "rolled_back") return
   if (
     receipt.contentHash.trim() === "" ||
     receipt.bodyHash.trim() === "" ||
     receipt.migrationId.trim() === "" ||
     receipt.runId.trim() === "" ||
-    receipt.ordinal < 1 ||
-    receipt.result === "verify_failed"
+    receipt.ordinal < 1
   ) {
     throw new SkipMigrationError({ reason: "migration_receipt_missing_content_identity" })
   }

@@ -32,7 +32,7 @@ function makeRun(overrides: Record<string, unknown> = {}): UpgradeRun {
     packageVersion: "2.0.0-beta.0",
     backupManifestRef: "backup://1",
     pendingMigrationIds: ["m-1", "m-2"],
-    state: "running",
+    state: "applying",
     failureCode: undefined,
     appliedOrdinal: 1,
     totalMigrations: 2,
@@ -198,24 +198,51 @@ describe("skip migration is illegal", () => {
   test("assertMigrationNotSkipped accepts a genuine receipt", () => {
     expect(() => assertMigrationNotSkipped(makeReceipt())).not.toThrow()
   })
+
+  test("assertMigrationNotSkipped accepts verify_failed (genuine completion, not a skip)", () => {
+    expect(() => assertMigrationNotSkipped(makeReceipt({ result: "verify_failed" }))).not.toThrow()
+  })
+
+  test("assertMigrationNotSkipped accepts rolled_back (genuine completion, not a skip)", () => {
+    expect(() => assertMigrationNotSkipped(makeReceipt({ result: "rolled_back" }))).not.toThrow()
+  })
+
+  test("assertMigrationNotSkipped rejects a genuine skip with the skip reason", () => {
+    const receipt = makeReceipt({ bodyHash: "", result: "applied" })
+    try {
+      assertMigrationNotSkipped(receipt)
+      throw new Error("expected SkipMigrationError")
+    } catch (error) {
+      expect(error).toBeInstanceOf(SkipMigrationError)
+      expect((error as SkipMigrationError).reason).toEqual("migration_receipt_missing_content_identity")
+    }
+  })
 })
 
 describe("immutable transition trigger rules", () => {
-  test("allowed transitions are correct", () => {
-    expect(canTransition("pending", "running")).toBe(true)
-    expect(canTransition("running", "committed")).toBe(true)
-    expect(canTransition("running", "failed")).toBe(true)
-    expect(canTransition("running", "rollback")).toBe(true)
-    expect(canTransition("failed", "rollback")).toBe(true)
-    expect(canTransition("rollback", "committed")).toBe(true)
+  test("allowed transitions follow design §10.5", () => {
+    expect(canTransition("planned", "backup_verified")).toBe(true)
+    expect(canTransition("backup_verified", "applying")).toBe(true)
+    expect(canTransition("backup_verified", "recovery_required")).toBe(true)
+    expect(canTransition("applying", "verifying")).toBe(true)
+    expect(canTransition("applying", "recovery_required")).toBe(true)
+    expect(canTransition("verifying", "ready")).toBe(true)
+    expect(canTransition("verifying", "recovery_required")).toBe(true)
   })
 
-  test("immutable terminal states reject all transitions", () => {
-    expect(canTransition("committed", "running")).toBe(false)
-    expect(canTransition("committed", "failed")).toBe(false)
-    expect(canTransition("pending", "committed")).toBe(false)
-    expect(canTransition("pending", "rollback")).toBe(false)
-    expect(() => assertRunTransition("committed", "running")).toThrow(InvalidTransitionError)
+  test("backward / terminal / failure-forward transitions are rejected", () => {
+    // backward transition
+    expect(canTransition("verifying", "planned")).toBe(false)
+    expect(() => assertRunTransition("verifying", "planned")).toThrow(InvalidTransitionError)
+    // ready is terminal in the frozen contract
+    expect(canTransition("ready", "applying")).toBe(false)
+    expect(canTransition("ready", "verifying")).toBe(false)
+    expect(canTransition("ready", "recovery_required")).toBe(false)
+    expect(() => assertRunTransition("ready", "applying")).toThrow(InvalidTransitionError)
+    // recovery_required is terminal in the frozen contract (C1A owns the exit)
+    expect(canTransition("recovery_required", "applying")).toBe(false)
+    expect(canTransition("recovery_required", "ready")).toBe(false)
+    expect(() => assertRunTransition("recovery_required", "applying")).toThrow(InvalidTransitionError)
   })
 })
 
