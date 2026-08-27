@@ -2,7 +2,7 @@ import { PerfStats, STAT_METHOD } from "./stats"
 import { UNIT, recordArtifact, sha256Short, writeSamplesCsv, writeSummariesJsonl } from "./samples"
 import * as fs from "node:fs"
 import * as path from "node:path"
-import { bunVersion, gitIdentity, powerState, machineInfo, interferenceSnapshot, type GitIdentity } from "./run-env"
+import { bunVersion, gitIdentity, powerState, machineInfo, captureInterference, type GitIdentity, type InterferenceSnapshotRecord } from "./run-env"
 import type { ScenarioOutcome } from "./lib"
 
 export const EVIDENCE_LEVEL_DECLARATION =
@@ -28,8 +28,8 @@ export interface RunManifest {
   readonly machine: ReturnType<typeof machineInfo>
   readonly power_state: ReturnType<typeof powerState>
   readonly interference_processes: {
-    readonly at_start: ReturnType<typeof interferenceSnapshot>
-    readonly at_end: ReturnType<typeof interferenceSnapshot>
+    readonly at_start: InterferenceSnapshotRecord
+    readonly at_end: InterferenceSnapshotRecord
   }
   readonly fixture_scale: Record<string, unknown>
   readonly env_allowlist: Record<string, string | null>
@@ -37,6 +37,7 @@ export interface RunManifest {
   readonly statistics_method: string
   readonly unit: string
   readonly isolation: IsolationCheck | null
+  readonly exit_status: number
   readonly scenarios: Array<Record<string, unknown>>
 }
 
@@ -58,6 +59,7 @@ export interface IsolationCheck {
   readonly data_root: string
   readonly home_base: string
   readonly test_home: string
+  readonly sandbox_root: string
   readonly check: string
 }
 
@@ -69,6 +71,7 @@ export interface ManifestInput {
   readonly fixtureScale: Record<string, unknown>
   readonly testHome: string
   readonly isolation?: IsolationCheck
+  readonly interferenceAtStart?: InterferenceSnapshotRecord
   readonly expectations?: { readonly commit?: string; readonly tree?: string }
 }
 
@@ -117,6 +120,13 @@ export const buildAndWriteManifest = async (input: ManifestInput): Promise<strin
     })
   }
 
+  // Genuine end-of-run interference snapshot (captured here, at manifest build time) plus
+  // the genuine start-of-run snapshot captured in main() before any scenario ran. Both are
+  // independent samples with their own capture timestamps; at_start is never re-sampled here.
+  const atStart = input.interferenceAtStart ?? captureInterference(0)
+  const atEnd = captureInterference(Date.now() - input.startedAtMs)
+  const exitStatus = input.outcomes.some((outcome) => outcome.status === "error") ? 1 : 0
+
   const manifest: RunManifest = {
     run_id: input.runId,
     declaration: EVIDENCE_LEVEL_DECLARATION,
@@ -137,8 +147,8 @@ export const buildAndWriteManifest = async (input: ManifestInput): Promise<strin
     machine: machineInfo(),
     power_state: powerState(),
     interference_processes: {
-      at_start: interferenceSnapshot(),
-      at_end: interferenceSnapshot(),
+      at_start: atStart,
+      at_end: atEnd,
     },
     fixture_scale: input.fixtureScale,
     env_allowlist: {
@@ -159,6 +169,7 @@ export const buildAndWriteManifest = async (input: ManifestInput): Promise<strin
     statistics_method: STAT_METHOD,
     unit: UNIT,
     isolation: input.isolation ?? null,
+    exit_status: exitStatus,
     scenarios,
   }
 

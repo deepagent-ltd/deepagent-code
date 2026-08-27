@@ -96,7 +96,24 @@ export interface SummaryRow {
   readonly extras?: Record<string, number>
 }
 
-export const tempRoot = (label: string) => fs.mkdtempSync(path.join(os.tmpdir(), `deepagent-perf-${label}-`))
+/**
+ * Base directory for every scenario temp root. Set by run-baseline main() to the run
+ * sandbox (`<run>/.tmp`) BEFORE any scenario runs, so EVERY temp data root — including
+ * the cold-start child process homes — is created under the run directory, never under
+ * os.tmpdir() or the real account home. When unset (e.g. standalone smoke), falls back
+ * to os.tmpdir() so the helper stays usable on its own.
+ */
+let tempBase = ""
+
+/** @internal Point tempRoot at the run sandbox scratch root. */
+export const setTempBase = (base: string) => {
+  tempBase = base
+}
+
+export const tempRoot = (label: string) =>
+  fs.mkdtempSync(path.join(tempBase === "" ? os.tmpdir() : tempBase, `deepagent-perf-${label}-`))
+
+export const tempRootBase = (): string => (tempBase === "" ? os.tmpdir() : tempBase)
 
 /**
  * Full V2 session stack bound to ONE fixture sqlite file. Mirrors the production-test

@@ -12,6 +12,8 @@ import { runJournalHydration } from "./scenarios/journal"
 import { runMemoryGrowth } from "./scenarios/memory"
 import { runFourMapStatus } from "./scenarios/four-map"
 import { PerfStats } from "./stats"
+import { captureInterference } from "./run-env"
+import { setTempBase } from "./lib"
 import type { ScenarioOutcome } from "./lib"
 
 const FROZEN_COMMIT = "584d2ff985f0d3890bb0b1c33b3540c420f1bf39"
@@ -78,6 +80,12 @@ const main = async () => {
   process.env.HOME = testHome
   if (process.platform.startsWith("win")) process.env.USERPROFILE = testHome
 
+  // Route EVERY scenario temp root (including the cold-start child process homes) under the
+  // run sandbox scratch dir instead of os.tmpdir(), so "the sandbox root is the only data
+  // root" holds for the whole run — not just for the harness process itself.
+  const sandboxRoot = path.join(outputDir, ".tmp")
+  setTempBase(sandboxRoot)
+
   // Prove the sandbox root is the only possible data root before any scenario runs.
   // We assert through the production resolver (packages/core/src/global-path.ts), never by
   // reading the real default data directory (that is forbidden as a measurement object).
@@ -89,7 +97,8 @@ const main = async () => {
     data_root: dataRoot,
     home_base: homeBase,
     test_home: testHome,
-    check: "resolveDataPath(process.env) must resolve under testHome and resolveHomeBase must equal testHome; DEEPAGENT_CODE_HOME was cleared, HOME pinned to testHome; sandbox root is the only data root",
+    sandbox_root: sandboxRoot,
+    check: "resolveDataPath(process.env) must resolve under testHome and resolveHomeBase must equal testHome; DEEPAGENT_CODE_HOME was cleared, HOME pinned to testHome; setTempBase routes every scenario temp root (incl. cold-start child homes) under this sandbox root, which is the only data root",
   }
   if (!isolation.isolated) {
     throw new Error(`data root isolation check failed: dataRoot=${dataRoot} homeBase=${homeBase} testHome=${testHome}`)
@@ -97,6 +106,10 @@ const main = async () => {
   console.log(`[perf-baseline] isolation ok: dataRoot=${dataRoot}`)
 
   const startedAtMs = Date.now()
+  // Genuine START-of-run interference snapshot: captured BEFORE any scenario runs so the
+  // most noise-sensitive phase (cold-start sweep) has a real baseline. The end-of-run sample
+  // is captured inside buildAndWriteManifest at manifest-build time.
+  const interferenceAtStart = captureInterference(0)
   console.log(EVIDENCE_LEVEL_DECLARATION)
   console.log(`[perf-baseline] out=${outputDir}`)
 
@@ -175,8 +188,12 @@ const main = async () => {
     ),
     testHome,
     isolation,
+    interferenceAtStart,
     expectations: { commit: FROZEN_COMMIT, tree: FROZEN_TREE },
   })
+  // Surface a genuine failure exit code when any scenario ended in "error" (unavailable is a
+  // legitimate measured-at-zero result, not a crash).
+  if (outcomes.some((outcome) => outcome.status === "error")) process.exitCode = 1
   console.log(`[perf-baseline] manifest: ${manifestPath}`)
 }
 

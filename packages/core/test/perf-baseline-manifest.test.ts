@@ -35,6 +35,8 @@ const REQUIRED_TOP_LEVEL_FIELDS = [
   "warmup_policy",
   "statistics_method",
   "unit",
+  "isolation",
+  "exit_status",
   "scenarios",
 ] as const
 
@@ -72,6 +74,9 @@ describe("perf baseline run manifest integrity", () => {
       // Environment boundary fields must be populated objects, never empty stubs.
       expect(Object.keys(manifest.machine).length).toBeGreaterThan(0)
       expect(manifest.env_allowlist.DEEPAGENT_CODE_TEST_HOME).toBe("/tmp/perf-unit-test-home")
+      // ok-only outcomes record a non-failing exit status.
+      expect(manifest.exit_status).toBe(0)
+      expect(manifest.isolation).toBe(null) // not supplied in this unit-test call
 
       const scenario = manifest.scenarios[0]
       expect(scenario.name).toBe("probe-scenario")
@@ -91,6 +96,47 @@ describe("perf baseline run manifest integrity", () => {
       const digests = JSON.parse(fs.readFileSync(path.join(dir, "artifact-hashes.json"), "utf8"))
       expect(digests.files.length).toBe(2)
       expect(digests.files[0].sha256_12).toMatch(/^[0-9a-f]{12}$/)
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("interference at_start/at_end are genuine independent samples with capture timestamps", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "perf-manifest-iso-"))
+    try {
+      const startSnapshot = {
+        captured_at: "2026-01-01T00:00:00.000Z",
+        elapsed_ms: 0,
+        processes: [{ pcpu: "0.0", pmem: "0.0", command: "test-proc" }],
+      }
+      const manifestPath = await buildAndWriteManifest({
+        runId: "iso-run-id",
+        outputDir: dir,
+        startedAtMs: Date.now() - 5000,
+        outcomes: [sampleOutcome],
+        fixtureScale: { empty: { session_rows: 0, message_rows: 0 } },
+        testHome: "/tmp/perf-unit-test-home",
+        interferenceAtStart: startSnapshot,
+        expectations: { commit: "unit-commit", tree: "unit-tree" },
+      })
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"))
+      const atStart = manifest.interference_processes.at_start
+      const atEnd = manifest.interference_processes.at_end
+
+      // StStart: the value we injected verbatim (manifest must NOT re-sample it at build time).
+      expect(atStart.captured_at).toBe("2026-01-01T00:00:00.000Z")
+      expect(atStart.elapsed_ms).toBe(0)
+      expect(atStart.processes[0].command).toBe("test-proc")
+      // AtEnd: captured at build time, so it must be a DIFFERENT sample (independent, not byte-identical).
+      expect(atEnd.captured_at).not.toBe(atStart.captured_at)
+      expect(atEnd.elapsed_ms).toBeGreaterThan(atStart.elapsed_ms)
+      // Both carry capture metadata and a process list; timestamps parse.
+      for (const snap of [atStart, atEnd]) {
+        expect(Object.hasOwn(snap, "captured_at")).toBe(true)
+        expect(Object.hasOwn(snap, "elapsed_ms")).toBe(true)
+        expect(Array.isArray(snap.processes)).toBe(true)
+        expect(Number.isNaN(Date.parse(snap.captured_at))).toBe(false)
+      }
     } finally {
       fs.rmSync(dir, { recursive: true, force: true })
     }
