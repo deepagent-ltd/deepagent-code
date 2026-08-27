@@ -286,18 +286,26 @@ function lildaxCliSurface(): EntryWithHandlers[] {
       stack.pop()
       return
     }
-    if (ts.isImportDeclaration(node) || (ts.isAwaitExpression(node) && node.expression.getText().includes("import("))) {
+    if (
+      ts.isImportDeclaration(node) ||
+      (ts.isAwaitExpression(node) && node.expression.getText().includes("import(")) ||
+      (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword)
+    ) {
       const line = indexMod.sourceFile.getLineAndCharacterOfPosition(node.getStart()).line + 1
-      const key = [...stack].reverse().find((frame) => frame.key)?.key
+      // Record the FULL command path (nested property keys, e.g. service.start / workspace.list),
+      // not just the leaf — so each command entry can be matched to its own lazy handler.
+      const key = stack.filter((frame) => frame.key).map((frame) => frame.key).join(".")
       if (key) dynamicImports.push({ name: `lazy-handler:${key}`, repoFile: "packages/cli/src/index.ts", line })
     }
     ts.forEachChild(node, walkBindings)
   }
   for (const statement of indexMod.sourceFile.statements) walkBindings(statement)
 
-  return out.map((item) => ({ ...item, handlers: dynamicImports })).sort((a, b) =>
-    a.entry.id < b.entry.id ? -1 : a.entry.id > b.entry.id ? 1 : 0,
-  )
+  return out.map((item) => {
+    const path = item.entry.id.slice("cli.lildax.".length)
+    const handler = dynamicImports.find((d) => d.name === `lazy-handler:${path}`)
+    return { ...item, handlers: handler ? [handler] : [] }
+  }).sort((a, b) => (a.entry.id < b.entry.id ? -1 : a.entry.id > b.entry.id ? 1 : 0))
 }
 
 const ACP_PROTOCOL_METHODS = [

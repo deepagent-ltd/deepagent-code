@@ -10,7 +10,7 @@
 import ts from "typescript"
 import { existsSync, readFileSync } from "node:fs"
 import type { HandlerSite, Requirement } from "./types"
-import { declarationNodes, parseModule, refsInSubtree, rootRepoPath } from "./ast"
+import { declarationNodes, moduleAnchorLine, parseModule, refsInSubtree, rootRepoPath } from "./ast"
 
 const repoRoot = () => rootRepoPath()
 
@@ -79,16 +79,29 @@ export function edges(file: string): readonly ImportEdge[] {
   const mod = parseModule(file)
   const sf = mod.sourceFile
   const out: ImportEdge[] = []
+  const recordEdge = (spec: string, line: number): void => {
+    const target = resolveSpecifier(file, spec)
+    if (!target) return
+    out.push({ target, line })
+  }
   for (const st of sf.statements) {
     if (!ts.isImportDeclaration(st)) continue
     const spec = st.moduleSpecifier.getText(sf).slice(1, -1)
-    const target = resolveSpecifier(file, spec)
-    if (!target) continue
-    out.push({
-      target,
-      line: sf.getLineAndCharacterOfPosition(st.getStart()).line + 1,
-    })
+    recordEdge(spec, sf.getLineAndCharacterOfPosition(st.getStart()).line + 1)
   }
+  // Dynamic import() edges are REAL runtime imports (e.g. the lildax CLI lazily loads command
+  // handlers and their authority-bearing modules). Ignoring them makes the reach closure
+  // under-approximate and lets noReach be falsely satisfied, so always follow them.
+  const walk = (node: ts.Node): void => {
+    if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+      const arg = node.arguments[0]
+      if (arg && ts.isStringLiteralLike(arg)) {
+        recordEdge(arg.text, sf.getLineAndCharacterOfPosition(node.getStart()).line + 1)
+      }
+    }
+    ts.forEachChild(node, walk)
+  }
+  for (const st of sf.statements) walk(st)
   const frozen = out.sort((a, b) => (a.target < b.target ? -1 : a.target > b.target ? 1 : 0))
   edgeCache.set(file, frozen)
   return frozen
@@ -473,10 +486,14 @@ export function verifyRequirements(
     if (requirement.kind === "reach") {
       const target = files.find((file) => normalizePath(file).endsWith(normalizePath(requirement.pathSuffix)))
       if (!target) return { requirement, hit: undefined }
-      const enteredLine = reachMap.get(target) ?? 1
+      // Anchor the marker to a REPO-RELATIVE path (cross-machine byte-stable) and the line to
+      // the reached module's OWN anchor — never a line borrowed from the importer, which can
+      // exceed the cited file's length and misattribute the fact.
+      const relative = normalizePath(target).slice(normalizePath(rootRepoPath()).length + 1)
+      const anchorLine = moduleAnchorLine(parseModule(target))
       return {
         requirement,
-        hit: { marker: `reach:${normalizePath(target)}`, file: target, line: enteredLine },
+        hit: { marker: `reach:${relative}`, file: target, line: anchorLine },
       }
     }
     if (requirement.kind === "noReach") {

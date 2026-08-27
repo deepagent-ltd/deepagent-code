@@ -25,7 +25,7 @@ export type VerdictRule = {
 export type EntryRules = Readonly<Partial<Record<Dimension, VerdictRule>>>
 export type RulePack = { readonly match: (id: string) => boolean; readonly rules: EntryRules }
 
-const LEGACY_PROMPT_PATH = AUTHORITY.LEGACY_PROMPT_CORE
+const LEGACY_PROMPT_PATH = AUTHORITY.LEGACY_PROMPT
 const V2_EXEC_LOCAL_PATH = AUTHORITY.V2_EXECUTION_LOCAL
 
 const LEGACY_PROMPT: Requirement = { kind: "reach", pathSuffix: LEGACY_PROMPT_PATH }
@@ -39,6 +39,7 @@ const RECOVERY_BINDING: Requirement = { kind: "reach", pathSuffix: AUTHORITY.REC
 const GOAL_MANAGER: Requirement = { kind: "reach", pathSuffix: AUTHORITY.GOAL_MANAGER }
 const LEGACY_CANONICALIZER: Requirement = { kind: "reach", pathSuffix: AUTHORITY.LEGACY_CANONICALIZER }
 const LEGACY_PROVIDER_RESOLUTION: Requirement = { kind: "reach", pathSuffix: AUTHORITY.LEGACY_PROVIDER_RESOLUTION }
+const LEGACY_SESSION_CORE: Requirement = { kind: "reach", pathSuffix: AUTHORITY.LEGACY_SESSION_CORE }
 
 const AUTHORITY_WRITERS: readonly string[] = [
   AUTHORITY.LEGACY_PROMPT,
@@ -220,10 +221,10 @@ export const RULE_PACKS: readonly RulePack[] = [
   },
   {
     match: (id) => id === "http.instance.global.event",
-    rules: withReadOnlyRest(
-      { event_producer_consumer: doubleWrite([body("EventV2"), body("GlobalBus")]) },
-      [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt")],
-    ),
+    // Consumer-only SSE stream: it SUBSCRIBES to the event channels (GlobalBus.on / EventV2.ID
+    // for SSE payload ids) but never publishes or writes a channel; so it is read_only (positive
+    // read-side evidence = the subscribe call), NOT double_write.
+    rules: all7(readOnly([body("GlobalBus.on"), notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt")])),
   },
   {
     match: (id) => id.startsWith("http.instance.global."),
@@ -295,16 +296,22 @@ export const RULE_PACKS: readonly RulePack[] = [
 
   // ---- event subscribe (legacy event-plane consumer, no handler body) ----
   {
-    match: (id) => id === "http.instance.event.subscribe" || id === "http.server.server.event.event.subscribe",
+    match: (id) => id === "http.instance.event.subscribe",
     rules: legacyAll7([LEGACY_PROMPT]),
   },
+  {
+    match: (id) => id === "http.server.server.event.event.subscribe",
+    rules: legacyAll7([LEGACY_SESSION_CORE]),
+  },
 
-  // ---- legacy server session/message planes (old server: reaches the legacy prompt) ----
+  // ---- legacy server session/message planes (old packages/server path: drives the CORE
+  // Session service, a legacy authority, and the old server session operations) ----
   {
     match: (id) =>
       id.startsWith("http.server.server.session.") ||
-      id === "http.server.server.message.session.messages",
-    rules: legacyAll7([LEGACY_PROMPT]),
+      id === "http.server.server.message.session.messages" ||
+      id === "http.server.server.event.event.subscribe",
+    rules: legacyAll7([LEGACY_SESSION_CORE]),
   },
 
   // ---- server read-only catalog / provider / skill ----
@@ -357,25 +364,41 @@ export const RULE_PACKS: readonly RulePack[] = [
   {
     match: (id) =>
       id === "composition.app-runtime-layers" || id === "composition.dacode-cli-entry" ||
-      id === "composition.instance-httpapi-stack" || id === "composition.server-web-handler",
+      id === "composition.instance-httpapi-stack",
     rules: legacyAll7([LEGACY_PROMPT]),
   },
-
-  // Panel / IM components that are not wired to any authority writer -> read_only.
   {
-    match: (id) => id === "panel.orchestrator" || id === "panel.arbiter" || id === "im.agent-orchestrator" || id === "im.agent-reply-sink",
-    rules: readOnlyNoReach(),
+    match: (id) => id === "composition.server-web-handler" || id === "composition.lildax-runtime",
+    rules: legacyAll7([LEGACY_SESSION_CORE]),
   },
 
-  // ===========================================================================
-  // Task / Goal / Panel pipelines (legacy AgentGateway goal/panel runtime)
-  // ===========================================================================
+  // lildax CLI commands run inside the lildax Handlers runtime which provides the legacy server
+  // (createRoutes in packages/server/src/routes.ts); commands whose handler reaches that composition
+  // drive the legacy server, so they are legacy.
+  {
+    match: (id) => id.startsWith("cli.lildax."),
+    rules: legacyAll7([{ kind: "reach", pathSuffix: "packages/server/src/routes.ts" }]),
+  },
+  // Panel / IM orchestration components (panel.orchestrator/arbiter, im.agent-orchestrator,
+  // im.agent-reply-sink) resolve their authority through dynamic dispatch / DI to a receiver that
+  // is not statically bound to them at this freeze point. They are not readers, so classifying them
+  // read_only by absence would be dishonest (F5); they are intentionally left UNCLASSIFIED here.
+
   {
     match: (id) =>
-      id === "task.goal-manager" || id === "task.goal-driver" || id === "task.goal-loop-wiring" ||
-      id === "task.task-run-admission" || id === "background.job" ||
-      id === "panel.consult" || id === "panel.panelist-runner",
+      id === "task.goal-manager" || id === "task.goal-loop-wiring" ||
+      id === "background.job" || id === "panel.consult" || id === "panel.panelist-runner",
     rules: legacyAll7([LEGACY_PROMPT]),
+  },
+  {
+    match: (id) => id === "task.task-run-admission",
+    rules: legacyAll7([LEGACY_SESSION_CORE]),
+  },
+  {
+    // goal-driver drives goals through the CORE DeepAgent goal loop (a legacy goal authority);
+    // it does not reach the SessionPrompt pipeline directly, so anchor legacy at the goal loop.
+    match: (id) => id === "task.goal-driver",
+    rules: legacyAll7([{ kind: "reach", pathSuffix: AUTHORITY.GOAL_LOOP }]),
   },
 
   // ===========================================================================
@@ -425,14 +448,14 @@ export const RULE_PACKS: readonly RulePack[] = [
   {
     match: (id) => id === "tools.dacode-registry",
     rules: withReadOnlyRest(
-      { provider_tool_writer: legacy([LEGACY_PROMPT, V2_TOOL_REGISTRY, call("register")]) },
+      { provider_tool_writer: legacy([LEGACY_PROMPT]) },
       [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish")],
     ),
   },
   {
     match: (id) => id === "tools.v2-registry",
     rules: withReadOnlyRest(
-      { provider_tool_writer: v2([V2_TOOL_REGISTRY, call("register")]) },
+      { provider_tool_writer: v2([V2_TOOL_REGISTRY, call("register", "packages/core/src/tool/registry.ts")]) },
       [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish")],
     ),
   },
