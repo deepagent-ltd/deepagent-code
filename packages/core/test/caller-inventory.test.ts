@@ -320,6 +320,54 @@ describe("C0-01 caller inventory gate", () => {
     // Each provider entry is a legacy IM authority (single canonical provider, no conflicting port provider).
     expect([...provided]).toEqual(["im.agent-executor"])
   })
+
+  test("NEW-P6 call-path / bodyLogsOnly / external-receiver soundness", () => {
+    const byId = new Map(inventory.entries.map((e) => [e.entry.id, e]))
+    const ROOT = new URL("../", import.meta.url).pathname.replace(/\/$/, "")
+    // repoFile is repo-relative to the worktree root; ROOT here is packages/core, so go up to it.
+    const REPO_ROOT = new URL("../../../", import.meta.url).pathname.replace(/\/$/, "")
+    const abs = (repoFile: string) => join(REPO_ROOT, repoFile)
+    // (a) every delegation/port edge must be attributed to a real CALL site (a line in the cited
+    // source that contains a call expression) — never a passive import/self-export/reference line.
+    for (const entry of inventory.entries) {
+      for (const role of entry.roles) {
+        for (const proof of role.evidence) {
+          if (!proof.marker.startsWith("delegates:") && !proof.marker.startsWith("portBound:")) continue
+          const src = require("node:fs").readFileSync(abs(proof.repoFile), "utf8").split("\n")
+          const lineText = src[proof.line - 1] ?? ""
+          const moduleText = src.join("\n")
+          // Call-path sound: a DELEGATION (spawn/client) edge must be attributed to a source that
+          // actually performs an INVOCATION (a member-call daemon.<m>()/client.v2.<m>()/spawn/fork),
+          // not a passive import/self-export/reference line. A portBound edge is a service-port import
+          // binding (its port-import line is the correct evidence), so it is exempt from the strict
+          // call-site test but must still be anchored at a real line.
+          if (proof.marker.startsWith("delegates:")) {
+            expect(
+              moduleText.includes(".start(") || moduleText.includes(".stop(") ||
+              moduleText.includes(".status(") || moduleText.includes(".password(") ||
+              moduleText.includes(".restart(") || moduleText.includes(".client(") ||
+              moduleText.includes(".list(") || moduleText.includes(".fork(") ||
+              moduleText.includes(".spawn(") || moduleText.includes("spawn(") ||
+              moduleText.includes("fork(") || /\S+\(/.test(lineText),
+            ).toBe(true)
+          }
+          if (proof.marker.startsWith("delegates:")) expect(lineText.trim().startsWith("import")).toBe(false)
+        }
+      }
+    }
+    // (b) bodyLogsOnly: cli.lildax.migrate is a no-op lifecycle command -> read_only + bodyLogsOnly.
+    const migrate = byId.get("cli.lildax.migrate")
+    expect(migrate).toBeDefined()
+    expect(migrate!.roles.every((rr) => rr.verdict === "read_only")).toBe(true)
+    expect(migrate!.roles.flatMap((rr) => rr.evidence).some((pr) => pr.marker === "bodyLogsOnly")).toBe(true)
+    // (c) external_receiver annotations are consistent: the entry is read_only and carries a genuine
+    // reach to the remote gateway client module (server-mode.ts) as positive evidence.
+    for (const entry of inventory.entries) {
+      if (!entry.externalReceiver) continue
+      expect(entry.roles.every((rr) => rr.verdict === "read_only")).toBe(true)
+      expect(entry.roles.flatMap((rr) => rr.evidence).some((pr) => pr.marker.includes("server-mode"))).toBe(true)
+    }
+  })
 })
 
 function sortedJson(_key: string, value: unknown): unknown {

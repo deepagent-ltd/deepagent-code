@@ -11,7 +11,7 @@ import ts from "typescript"
 import { existsSync, readFileSync } from "node:fs"
 import type { HandlerSite, Requirement } from "./types"
 import { declarationNodes, moduleAnchorLine, parseModule, refsInSubtree, rootRepoPath } from "./ast"
-import { DELEGATION_REFERENCE_MODULE, DELEGATION_SPAWN_BINDINGS, DELEGATION_TARGET_MODULE, PORTS } from "./authority"
+import { DELEGATION_CLIENT_BINDINGS, DELEGATION_SPAWN_BINDINGS, PORTS } from "./authority"
 
 const repoRoot = () => rootRepoPath()
 
@@ -519,6 +519,65 @@ function delegationSpawnHit(entryFile: string, extraRoots: readonly string[], ta
   return undefined
 }
 
+/** Machine-checked positive body-shape fact: an entry whose own module performs NO authority/business
+ * call — its only calls are log/no-op/registration statements (a no-op lifecycle command). */
+const BUSINESS_CALLEES = new Set(["prompt", "promptOrSteer", "loop", "publish", "tryPublish", "register", "materialize", "wake", "executor", "registry", "steer", "resume", "admit", "run", "fork", "spawn", "replay", "snapshotRows"])
+function bodyLogsOnlyHit(entryFile: string): VerifiedHit | undefined {
+  if (!existsSync(entryFile)) return undefined
+  const mod = parseModule(entryFile)
+  const sf = mod.sourceFile
+  let businessFound = false
+  const visit = (node: ts.Node): void => {
+    if (businessFound) return
+    if (ts.isCallExpression(node)) {
+      const callee = ts.isPropertyAccessExpression(node.expression) ? node.expression.name.text
+        : ts.isIdentifier(node.expression) ? node.expression.text : undefined
+      if (callee && BUSINESS_CALLEES.has(callee)) businessFound = true
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(sf)
+  if (businessFound) return undefined
+  return { marker: "bodyLogsOnly", file: entryFile, line: 1 }
+}
+
+/** A client/service INVOCATION call site in the entry's own handler body: a body chain that performs a
+ * member call on a bound client object (e.g. Daemon.Service.start / daemon.client().v2.agent.list).
+ * Evidence is the actual call-site chain line — never a module self-export/reference anchor. */
+function clientInvocationHit(
+  entryFile: string,
+  extraRoots: readonly string[],
+  targetId: string,
+): VerifiedHit | undefined {
+  // Scan the entry's OWN module and its resolved handler modules for a client/service INVOCATION call
+  // site (member-call or identifier-call) whose chain resolves to targetId. A passive import alone
+  // never produces a hit — evidence is always a real CallExpression.
+  for (const file of [entryFile, ...extraRoots]) {
+    if (!existsSync(file)) continue
+    const mod = parseModule(file)
+    const sf = mod.sourceFile
+    // Match the entry's own handler body against the client-call chain (AST refLines flatten
+    // (yield* Daemon.Service).start() into "Daemon.Service.start", so a member-call is matched even
+    // through yield*/parentheses — always a genuine invocation, never a passive import).
+    for (const [chainKey, lines] of mod.refLines) {
+      for (const [binding, target] of Object.entries(DELEGATION_CLIENT_BINDINGS)) {
+        if (target !== targetId) continue
+        if (chainKey === binding || chainKey.startsWith(binding + ".") || chainKey.endsWith("." + binding)) {
+          // Prefer a line that is itself a CALL (contains "(") so the edge is a real invocation site,
+          // never a bare field/declaration line.
+          const srcLines = readFileSync(file, "utf8").split("\n")
+          for (const line of [...lines].sort((a, b) => a - b)) {
+            if ((srcLines[line - 1] ?? "").includes("(")) {
+              return { marker: `delegates:${targetId}`, file, line }
+            }
+          }
+        }
+      }
+    }
+  }
+  return undefined
+}
+
 /** A port module provides a service via a static Layer.effect/sync/succeed first-arg = port service. */
 function moduleProvidesPortService(mod: ReturnType<typeof parseModule>, service: string): boolean {
   let found = false
@@ -535,6 +594,12 @@ function moduleProvidesPortService(mod: ReturnType<typeof parseModule>, service:
     ts.forEachChild(node, visit)
   }
   visit(mod.sourceFile)
+  // Robust fallback: the provider module must export a *Live layer binding the service (e.g.
+  // ServerAgentReplySinkLive = Layer.sync(AgentReplySinkService, ...)). Source-text positive fact.
+  if (!found) {
+    const text = readFileSync(mod.file, "utf8")
+    found = new RegExp("Layer\\.(?:effect|sync|succeed)\\(\\s*" + service + "\\b").test(text)
+  }
   return found
 }
 
@@ -588,28 +653,18 @@ export function verifyRequirements(
       const hit = portBoundHit(entryFile, requirement.portModule)
       return { requirement, hit }
     }
+    if (requirement.kind === "bodyLogsOnly") {
+      return { requirement, hit: bodyLogsOnlyHit(entryFile) }
+    }
     if (requirement.kind === "delegatesTo") {
-      // Delegation edge: a static spawn/fork/exec/client call (or a reach-of-the-target-module)
-      // attributes this flow to the target inventory entry; the gate inherits the target verdict.
-      const targetModule = DELEGATION_TARGET_MODULE[requirement.targetId]
-      if (targetModule) {
-        const target = files.find((file) => normalizePath(file).endsWith(normalizePath(targetModule)))
-        if (target) {
-          return { requirement, hit: { marker: `delegates:${requirement.targetId}`, file: target, line: moduleAnchorLine(parseModule(target)) } }
-        }
-      }
-      // Reference-module delegation: the entry reaches a module that owns/provides the delegated
-      // authority (e.g. the lildax Daemon service refers the daemon runtime, or a service layer that
-      // binds the legacy executor). Cite the reference module itself.
-      for (const [refModule, refTarget] of Object.entries(DELEGATION_REFERENCE_MODULE)) {
-        if (refTarget !== requirement.targetId) continue
-        const ref = files.find((file) => normalizePath(file).endsWith(normalizePath(refModule)))
-        if (ref) {
-          return { requirement, hit: { marker: `delegates:${requirement.targetId}`, file: ref, line: moduleAnchorLine(parseModule(ref)) } }
-        }
-      }
+      // NEW-P6-B: delegation is CALL-PATH-ONLY. A delegation edge is sound only when the entry's flow
+      // performs an actual invocation — a spawn/fork/exec call whose target resolves to the receiver, or
+      // a client/service member-call in the entry's own body that resolves to the receiver. Reach of a
+      // module (reference/target-module) is NOT sufficient on its own (it can be a passive import).
       const spawnHit = delegationSpawnHit(entryFile, extraRoots, requirement.targetId)
-      return { requirement, hit: spawnHit }
+      if (spawnHit) return { requirement, hit: spawnHit }
+      const clientHit = clientInvocationHit(entryFile, extraRoots, requirement.targetId)
+      return { requirement, hit: clientHit }
     }
     if (requirement.kind === "reach") {
       const target = files.find((file) => normalizePath(file).endsWith(normalizePath(requirement.pathSuffix)))

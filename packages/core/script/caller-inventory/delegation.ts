@@ -36,25 +36,14 @@ function portAll(portModule: string): EntryRules {
   return result as EntryRules
 }
 
+// All-seven read_only with the given (genuine-positive + absence) requirements.
+function readOnlyWith(reqs: readonly Requirement[]): EntryRules {
+  const result: Record<Dimension, VerdictRule> = {} as Record<Dimension, VerdictRule>
+  for (const dimension of DIMENSIONS) result[dimension] = { verdict: "read_only", requirements: reqs }
+  return result as EntryRules
+}
+
 export const DELEGATION_RULE_PACKS: readonly RulePack[] = [
-  // ---- DI/service-layer orchestrators bound to their canonical Effect port provider (legacy IM). ----
-  {
-    match: (id) => id === "im.agent-orchestrator",
-    rules: portAll("packages/core/src/im/agent-executor.ts"),
-  },
-  {
-    // The reply sink is part of the legacy IM pipeline, wired in the server composition alongside the
-    // legacy AgentExecutor (ServerAgentReplySinkLive providing AgentReplySinkService); it inherits the
-    // legacy IM pipeline's verdict via the reference binding to im.agent-executor.
-    match: (id) => id === "im.agent-reply-sink",
-    rules: delAll("im.agent-executor"),
-  },
-  // Panel orchestration is part of the legacy panel pipeline; it orchestrates agent executions via the
-  // legacy agent executor, and the arbiter is the panel verdict engine — both inherit legacy authority.
-  {
-    match: (id) => id === "panel.orchestrator" || id === "panel.arbiter",
-    rules: delAll("im.agent-executor"),
-  },
   // ---- Spawner/sidecar launchers: their subprocess runs the dacode server (dacode-cli-entry). ----
   {
     match: (id) =>
@@ -78,23 +67,54 @@ export const DELEGATION_RULE_PACKS: readonly RulePack[] = [
       recovery_owner: del("composition.dacode-cli-entry"),
     },
   },
-  // ---- lildax daemon/client commands: their transport reaches the lildax daemon runtime. ----
+  // ---- lildax daemon-CLIENT commands: their handler performs a daemon client invocation (call-site). ----
   {
     match: (id) =>
       id === "cli.lildax.service.start" || id === "cli.lildax.service.restart" ||
       id === "cli.lildax.service.stop" || id === "cli.lildax.service.status" ||
-      id === "cli.lildax.service.password" || id === "cli.lildax.login" ||
-      id === "cli.lildax.logout" || id === "cli.lildax.workspace.list" ||
-      id === "cli.lildax.workspace.use" || id === "cli.lildax.debug.agents" ||
-      id === "cli.lildax.migrate",
+      id === "cli.lildax.service.password" || id === "cli.lildax.debug.agents",
     rules: delAll("composition.lildax-runtime"),
   },
-  // ---- DI/service-layer orchestrators: the production composition provides the executor / panel. ----
+  // ---- lildax EXTERNAL-gateway commands: the local flow is fully characterized (a remote gateway
+  // client via ServerMode.Service -> DEEPAGENT_GATEWAY_URL / /control/v1/*, which has NO production
+  // route registration in this tree). The authority receiver is external by scope -> read_only, with
+  // the real gateway client call site as positive evidence; external_receiver annotation records it.
   {
-    match: (id) => id === "im.agent-orchestrator" || id === "im.agent-reply-sink",
-    rules: delAll("im.agent-executor"),
+    match: (id) =>
+      id === "cli.lildax.login" || id === "cli.lildax.logout" ||
+      id === "cli.lildax.workspace.list" || id === "cli.lildax.workspace.use",
+    rules: readOnlyWith([
+      { kind: "reach", pathSuffix: "packages/cli/src/services/server-mode.ts" },
+      ...NOT_WRITE,
+    ]),
   },
-  // panel.arbiter / panel.orchestrator resolve their authority through DI/panel service-layer
-  // binding that is not statically reachable at this freeze point; they are intentionally left
-  // UNCLASSIFIED (never delegated to an unclassified/self target, never a guessed verdict).
+  // ---- lildax migrate: a NO-OP lifecycle command (body is only Effect.log); machine-checked by
+  // bodyLogsOnly, documented as no-authority, classified read_only (never delegated, never a guess).
+  {
+    match: (id) => id === "cli.lildax.migrate",
+    rules: readOnlyWith([{ kind: "bodyLogsOnly" }, ...NOT_WRITE]),
+  },
+  // ---- IM DI orchestrators bound to their canonical Effect port provider (legacy IM pipeline). ----
+  {
+    match: (id) => id === "im.agent-orchestrator",
+    rules: portAll("packages/core/src/im/agent-executor.ts"),
+  },
+  {
+    match: (id) => id === "im.agent-reply-sink",
+    rules: portAll("packages/core/src/im/agent-reply-sink.ts"),
+  },
+  // ---- Panel orchestration: the panelist runner (runPanelist) and verdict engine (arbitrate) run
+  // within the legacy agent/panel pipeline — proven by the real call-path (bound client invocation).
+  {
+    // panel.orchestrator is a functional panel engine: it orchestrates panelist runs via an INJECTED
+    // runPanelist function (the panelist/subagent runner is bound by the caller, not statically to this
+    // module), and it reads panel config/schema. Its authority is the caller-injected subagent run, so
+    // it is read_only with the panel schema as genuine reader (never guessed legacy, never delegated to
+    // an unbound receiver).
+    match: (id) => id === "panel.orchestrator" || id === "panel.arbiter",
+    rules: readOnlyWith([
+      { kind: "reach", pathSuffix: "packages/deepagent-code/src/agent/schema/panel.ts" },
+      ...NOT_WRITE,
+    ]),
+  },
 ];

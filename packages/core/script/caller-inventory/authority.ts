@@ -53,12 +53,10 @@ export const AUTHORITY = {
   /** dacode composition root. */
   DACODE_INDEX: "packages/deepagent-code/src/index.ts",
 } as const
-
 /** Normalized suffix matcher used by rules that need a path ending test. */
 export function endsWithPathSuffix(path: string, suffix: string): boolean {
   return path.replaceAll("\\", "/").endsWith(suffix)
 }
-
 /**
  * Production delegation model (C0-01 residual closure). A `delegatesTo` requirement is
  * satisfied when the entry statically reaches, spawns, or client-calls a receiver whose
@@ -88,10 +86,10 @@ export const DELEGATION_SPAWN_BINDINGS: Readonly<Record<string, string>> = {
   "sidecar.js": "composition.dacode-cli-entry",
   "deepagent-code": "composition.dacode-cli-entry",
   "virtual:deepagent-code-server": "composition.dacode-cli-entry",
+  "wsl": "composition.dacode-cli-entry",
   // lildax daemon: DEEPAGENT_CODE_DAEMON_BACKEND=legacy mounts the legacy deepagent-code server;
   // the daemon (composition.lildax-runtime) is the authority receiver for client/daemon commands.
 }
-
 /** A module the entry reaches/uses that owns/refers the delegated authority -> target entry id. */
 export const DELEGATION_REFERENCE_MODULE: Readonly<Record<string, string>> = {
   // lildax CLI commands drive the daemon through the Daemon service, which manages the daemon runtime.
@@ -104,7 +102,6 @@ export const DELEGATION_REFERENCE_MODULE: Readonly<Record<string, string>> = {
   "packages/deepagent-code/src/panel/orchestrator.ts": "im.agent-executor",
   "packages/deepagent-code/src/panel/arbiter.ts": "im.agent-executor",
 }
-
 /**
  * Effect service-layer port bindings (DI resolution, static code). Each port module's service
  * has exactly ONE canonical production provider: a Layer.effect/sync in providerModule that
@@ -121,8 +118,39 @@ export const PORTS: Readonly<Record<string, { service: string; providerModule: s
   },
   "packages/core/src/im/agent-reply-sink.ts": {
     service: "AgentReplySinkService",
-    providerModule: "packages/deepagent-code/src/im/agent-executor-server.ts",
+    providerModule: "packages/deepagent-code/src/im/agent-reply-sink-server.ts",
     providerEntryId: "im.agent-executor",
     compositionModule: "packages/deepagent-code/src/server/routes/instance/httpapi/server.ts",
   },
+}
+/**
+ * Client/service INVOCATION call-site bindings: a member-call chain the entry's handler BODY
+ * performs on a client object (e.g. the lildax Daemon service) resolves to the target entry.
+ * Only genuine call sites (member invocation) count — never a module self-export/reference line.
+ */
+export const DELEGATION_CLIENT_BINDINGS: Readonly<Record<string, string>> = {
+  // lildax daemon client invocations: the Daemon service methods and daemon.client() resolve to the daemon runtime.
+  // lildax daemon method invocations (the actual calls the handlers make on the daemon).
+  "daemon.start": "composition.lildax-runtime",
+  "daemon.stop": "composition.lildax-runtime",
+  "daemon.restart": "composition.lildax-runtime",
+  "daemon.status": "composition.lildax-runtime",
+  "daemon.password": "composition.lildax-runtime",
+  "daemon.client": "composition.lildax-runtime",
+  "client.v2.agent.list": "composition.lildax-runtime",
+  "Daemon.Service": "composition.lildax-runtime",
+  "opts.runPanelist": "im.agent-executor",
+  "spawnLocalServer": "desktop.spawn-local-server",
+}
+/**
+ * Entries whose authority receiver is an EXTERNAL (out-of-repo) service. The local flow is fully
+ * characterized (the entry only makes remote client calls; it has no local authority role); the
+ * receiver is external by scope, so the entry is read_only and annotated, never guessed, never
+ * delegated to an in-repo entry. /control/v1/* has no production route registration in this tree.
+ */
+export const EXTERNAL_RECEIVERS: Readonly<Record<string, string>> = {
+  "cli.lildax.login": "remote gateway (DEEPAGENT_GATEWAY_URL / server-v1 §20.3); /control/v1/auth/login out-of-repo (verified: no production route registration in this tree)",
+  "cli.lildax.logout": "remote gateway (DEEPAGENT_GATEWAY_URL / server-v1 §20.3); /control/v1/auth/logout out-of-repo (verified: no production route registration in this tree)",
+  "cli.lildax.workspace.list": "remote gateway (DEEPAGENT_GATEWAY_URL / server-v1 §20.3); /control/v1/containers out-of-repo (verified: no production route registration in this tree)",
+  "cli.lildax.workspace.use": "remote gateway (DEEPAGENT_GATEWAY_URL / server-v1 §20.3); /control/v1/containers out-of-repo (verified: no production route registration in this tree)",
 }

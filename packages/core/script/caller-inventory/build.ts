@@ -10,7 +10,7 @@ import { join } from "node:path"
 import { rootRepoPath } from "./ast"
 import { OPEN_OWNER_REASON, rulesForEntry, type VerdictRule } from "./declarations"
 import { verifyRequirements } from "./graph"
-import { PORTS } from "./authority"
+import { EXTERNAL_RECEIVERS, PORTS } from "./authority"
 import { extractAllEntries } from "./extractors"
 import {
   DIMENSIONS,
@@ -83,11 +83,13 @@ function classifyOne(item: EntryWithHandlers): ClassifiedEntry {
     roles.push({ dimension, verdict: "unclassified", evidence: [] })
   }
   const unclassifiedCount = roles.filter((role) => role.verdict === "unclassified").length
+  const externalReceiver = EXTERNAL_RECEIVERS[item.entry.id]
   return {
     entry: item.entry,
     handlers: item.handlers,
     roles,
     unclassifiedCount,
+    ...(externalReceiver ? { externalReceiver } : {}),
     ...(unclassifiedCount > 0 ? { openOwners } : {}),
   }
 }

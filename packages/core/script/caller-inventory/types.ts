@@ -138,6 +138,7 @@ export type Requirement =
   | { readonly kind: "noReach"; readonly pathSuffix: string }
   | { readonly kind: "delegatesTo"; readonly targetId: string }
   | { readonly kind: "portBoundTo"; readonly portModule: string }
+  | { readonly kind: "bodyLogsOnly" }
   | { readonly kind: "productionProfile" }
 
 /** A declared, machine-checked ownership claim for one entry. */
@@ -179,6 +180,9 @@ export type ClassifiedEntry = {
   readonly unclassifiedCount: number
   /** Per-dimension reason for each owner left unclassified (same key set size). */
   readonly openOwners?: Readonly<Partial<Record<Dimension, string>>>
+  /** External authority receiver (out-of-repo service, e.g. a remote gateway); the local flow is
+   * fully characterized but the authority is external by scope (never guessed). */
+  readonly externalReceiver?: string
 }
 
 export type Inventory = {
