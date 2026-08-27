@@ -1,5 +1,6 @@
 import { DateTime, Schema } from "effect"
 import { DateTimeUtcFromMillis } from "effect/Schema"
+import { ModelProtocolCapabilities } from "./contract/model-protocol"
 import { ProviderV2 } from "./provider"
 import { ModelRequest } from "./model-request"
 
@@ -45,10 +46,14 @@ export const Api = Schema.Union([
   Schema.Struct({
     id: ID,
     ...ProviderV2.AISDK.fields,
+    // Resolved protocol capability set (design §5.1). Optional: withheld until
+    // the model declares it (probe is C2-03); the resolver defaults otherwise.
+    protocolCapabilities: ModelProtocolCapabilities.pipe(Schema.optional),
   }),
   Schema.Struct({
     id: ID,
     ...ProviderV2.Native.fields,
+    protocolCapabilities: ModelProtocolCapabilities.pipe(Schema.optional),
   }),
 ]).pipe(Schema.toTaggedUnion("type"))
 export type Api = typeof Api.Type

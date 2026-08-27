@@ -3,13 +3,16 @@ export * as SessionRunnerModel from "./model"
 import { type Model } from "@deepagent-code/llm"
 import * as AnthropicMessages from "@deepagent-code/llm/protocols/anthropic-messages"
 import * as OpenAICompatibleChat from "@deepagent-code/llm/protocols/openai-compatible-chat"
+import { OpenAICompatibleResponses } from "@deepagent-code/llm/protocols"
 import * as OpenAIResponses from "@deepagent-code/llm/protocols/openai-responses"
 import { Auth, type AnyRoute } from "@deepagent-code/llm/route"
 import { Context, Effect, Layer, Option, Schema } from "effect"
 import { produce } from "immer"
 import { Catalog } from "../../catalog"
+import { ModelProtocolDisabledReason } from "../../contract/model-protocol"
 import { ModelV2 } from "../../model"
 import { ModelRequest } from "../../model-request"
+import { resolveModelProtocol } from "../../model-protocol"
 import { PluginBoot } from "../../plugin/boot"
 import { ProviderV2 } from "../../provider"
 import { SessionSchema } from "../schema"
@@ -30,11 +33,24 @@ export class UnsupportedApiError extends Schema.TaggedErrorClass<UnsupportedApiE
   },
 ) {}
 
+/** A model whose protocol selection is explicitly disabled (unknown/conflict). */
+export class ModelProtocolDisabledError extends Schema.TaggedErrorClass<ModelProtocolDisabledError>()(
+  "SessionRunnerModel.ModelProtocolDisabledError",
+  {
+    providerID: ProviderV2.ID,
+    modelID: ModelV2.ID,
+    protocol: Schema.String.pipe(Schema.optional),
+    reason: ModelProtocolDisabledReason,
+    selectionState: Schema.String,
+  },
+) {}
+
 export type Error =
   | Catalog.ProviderNotFoundError
   | Catalog.ModelNotFoundError
   | ModelNotSelectedError
   | UnsupportedApiError
+  | ModelProtocolDisabledError
 
 export interface Interface {
   readonly resolve: (session: SessionSchema.Info) => Effect.Effect<Model, Error>
@@ -81,49 +97,83 @@ const withVariant = (model: ModelV2.Info, variantID: ModelV2.VariantID | undefin
 const apiName = (model: ModelV2.Info) =>
   model.api.type === "aisdk" ? `${model.api.type}:${model.api.package}` : model.api.type
 
+const routeFor = (
+  protocol: NonNullable<ReturnType<typeof resolveModelProtocol>["protocol"]>,
+  model: ModelV2.Info,
+  key: ReturnType<typeof apiKey> | undefined,
+): Effect.Effect<Model, UnsupportedApiError> => {
+  switch (protocol) {
+    case "openai.responses":
+      return Effect.succeed(
+        withDefaults(model, OpenAIResponses.route)
+          .with({ auth: key === undefined ? Auth.none : Auth.bearer(key) })
+          .model({ id: model.api.id }),
+      )
+    case "openai-compatible.responses":
+      if (model.api.url === undefined) {
+        return Effect.fail(new UnsupportedApiError({ providerID: model.providerID, modelID: model.id, api: apiName(model) }))
+      }
+      return Effect.succeed(
+        withDefaults(model, OpenAICompatibleResponses.route)
+          .with({ auth: key === undefined ? Auth.none : Auth.bearer(key) })
+          .model({ id: model.api.id }),
+      )
+    case "anthropic.messages":
+      return Effect.succeed(
+        withDefaults(model, AnthropicMessages.route)
+          .with({ auth: key === undefined ? Auth.none : Auth.header("x-api-key", key) })
+          .model({ id: model.api.id }),
+      )
+    case "openai-compatible.chat":
+      if (model.api.url === undefined) {
+        return Effect.fail(new UnsupportedApiError({ providerID: model.providerID, modelID: model.id, api: apiName(model) }))
+      }
+      return Effect.succeed(
+        withDefaults(model, OpenAICompatibleChat.route)
+          .with({ auth: key === undefined ? Auth.none : Auth.bearer(key) })
+          .model({ id: model.api.id }),
+      )
+  }
+  return Effect.fail(new UnsupportedApiError({ providerID: model.providerID, modelID: model.id, api: apiName(model) }))
+}
+
+/**
+ * Select the route by the explicitly resolved protocol (design §5.2, C2-02).
+ * Compatible models are no longer uniformly routed to Chat: a model that
+ * resolves to `openai-compatible.responses` goes to the Responses adapter. A
+ * disabled selection (unknown/conflict) is a typed error — never a silent
+ * fallback to a guessed Chat route.
+ */
 export const fromCatalogModel = (
   model: ModelV2.Info,
   provider?: ProviderV2.Info,
-): Effect.Effect<Model, UnsupportedApiError> => {
-  const key = apiKey(model, provider)
-  if (model.api.type === "aisdk" && model.api.package === "@ai-sdk/openai") {
-    return Effect.succeed(
-      withDefaults(model, OpenAIResponses.route)
-        .with({ auth: key === undefined ? Auth.none : Auth.bearer(key) })
-        .model({ id: model.api.id }),
+): Effect.Effect<Model, ModelProtocolDisabledError | UnsupportedApiError> => {
+  const selection = resolveModelProtocol(model, provider)
+  if (!selection.protocol || selection.selectionState === "disabled") {
+    return Effect.fail(
+      new ModelProtocolDisabledError({
+        providerID: model.providerID,
+        modelID: model.id,
+        protocol: model.api.protocol ?? provider?.api.protocol,
+        reason: selection.disabledReason ?? "model_protocol_selection_required",
+        selectionState: selection.selectionState,
+      }),
     )
   }
-  if (model.api.type === "aisdk" && model.api.package === "@ai-sdk/anthropic") {
-    return Effect.succeed(
-      withDefaults(model, AnthropicMessages.route)
-        .with({ auth: key === undefined ? Auth.none : Auth.header("x-api-key", key) })
-        .model({ id: model.api.id }),
-    )
-  }
-  if (model.api.type === "aisdk" && model.api.package === "@ai-sdk/openai-compatible" && model.api.url) {
-    return Effect.succeed(
-      withDefaults(model, OpenAICompatibleChat.route)
-        .with({ auth: key === undefined ? Auth.none : Auth.bearer(key) })
-        .model({ id: model.api.id }),
-    )
-  }
-  return Effect.fail(
-    new UnsupportedApiError({
-      providerID: model.providerID,
-      modelID: model.id,
-      api: apiName(model),
-    }),
-  )
+  return routeFor(selection.protocol, model, apiKey(model, provider))
 }
 
 export const resolve = (session: SessionSchema.Info, model: ModelV2.Info, provider?: ProviderV2.Info) =>
   fromCatalogModel(withVariant(model, session.model?.variant), provider)
 
-export const supported = (model: ModelV2.Info) =>
-  model.api.type === "aisdk" &&
-  (model.api.package === "@ai-sdk/openai" ||
-    model.api.package === "@ai-sdk/anthropic" ||
-    (model.api.package === "@ai-sdk/openai-compatible" && model.api.url !== undefined))
+export const supported = (model: ModelV2.Info) => {
+  const selection = resolveModelProtocol(model)
+  if (selection.protocol === null || selection.selectionState === "disabled") return false
+  if (selection.protocol === "openai-compatible.chat" || selection.protocol === "openai-compatible.responses") {
+    return model.api.url !== undefined
+  }
+  return true
+}
 
 /** Resolves models from the catalog belonging to the current Location runtime. */
 export const locationLayer = Layer.effect(
