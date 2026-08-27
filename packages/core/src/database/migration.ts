@@ -99,15 +99,28 @@ export function apply(db: Database, opts: ApplyOptions = {}) {
         { leaseMs: opts.leaseMs ?? 60_000, staleMs: opts.staleMs ?? 60_000, timeoutMs: opts.timeoutMs ?? 5_000 },
         opts.filename,
       )
-      const run = yield* beginOrResumeRun(db, opts, pending)
-      if (run.state !== "verifying") {
-        yield* DatabaseUpgradeRun.advanceRun(db, run.runId, "applying")
-        yield* applyMigrations(db, migrations, true, { run, lease, opts })
-        yield* DatabaseUpgradeRun.advanceRun(db, run.runId, "verifying")
-      }
-      yield* DatabaseUpgradeRun.advanceRun(db, run.runId, "ready")
-      yield* lease.release()
-      return yield* DatabaseUpgradeRun.loadRun(db, run.runId)
+      const outcome = yield* Effect.gen(function* () {
+        const run = yield* beginOrResumeRun(db, opts, pending)
+        if (run.state !== "verifying") {
+          yield* DatabaseUpgradeRun.advanceRun(db, run.runId, "applying")
+          yield* applyMigrations(db, migrations, true, { run, lease, opts })
+          yield* DatabaseUpgradeRun.advanceRun(db, run.runId, "verifying")
+        }
+        yield* DatabaseUpgradeRun.advanceRun(db, run.runId, "ready")
+        return yield* DatabaseUpgradeRun.loadRun(db, run.runId)
+      }).pipe(
+        // On any failure (including a migration defect), the run goes to recovery_required and
+        // the lease is always released below — a failed run must never stay "applying" forever.
+        Effect.catchCause((cause) =>
+          Effect.gen(function* () {
+            const active = yield* DatabaseUpgradeRun.loadActiveRun(db).pipe(Effect.orDie)
+            if (active) yield* DatabaseUpgradeRun.failRun(db, active.runId, "migration_apply_failed").pipe(Effect.ignore)
+            return yield* Effect.failCause(cause)
+          }),
+        ),
+        Effect.ensuring(lease.release()),
+      )
+      return outcome
     }),
   )
 }
