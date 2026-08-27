@@ -21,8 +21,8 @@ export const RecoveryVersion = {
   providerState: 1,
 } as const
 
-/** Five descriptor classes (design §9.1). */
-export const RecoveryDescriptorKind = Schema.Literals(["exact", "repairable", "fork", "coordination", "resolved"])
+/** Five descriptor classes, using the design §9.1 authority labels: resolvable_exact | repairable_exact | fork_only | coordination_required | resolved. */
+export const RecoveryDescriptorKind = Schema.Literals(["resolvable_exact", "repairable_exact", "fork_only", "coordination_required", "resolved"])
 export type RecoveryDescriptorKind = typeof RecoveryDescriptorKind.Type
 
 /** Command discriminant union (design §9.2). */
@@ -36,6 +36,24 @@ export const RecoveryCommandKind = Schema.Literals([
 ])
 export type RecoveryCommandKind = typeof RecoveryCommandKind.Type
 
+/**
+ * Expected provider-attempt state a recovery command binds to (design §9.2,
+ * §4.2). A command must declare the exact attempt version AND state it targets.
+ */
+export const RecoveryAttemptState = Schema.Literals([
+  "prepared",
+  "dispatching",
+  "streaming",
+  "settled",
+  "failed_terminal",
+  "indeterminate_after_crash",
+  "abandoned_before_dispatch",
+  "resolved_abandoned",
+  "resolved_settled",
+  "frozen_forked",
+])
+export type RecoveryAttemptState = typeof RecoveryAttemptState.Type
+
 /** Terminal outcome of a resolution / bridge. */
 export const RecoveryTerminal = Schema.Literals(["settled", "abandoned", "forked", "unknown"])
 export type RecoveryTerminal = typeof RecoveryTerminal.Type
@@ -43,6 +61,24 @@ export type RecoveryTerminal = typeof RecoveryTerminal.Type
 /** External provider evidence state (design §9.2, C1B-08). */
 export const RecoveryProviderEvidenceState = Schema.Literals(["settled", "rejected", "unknown"])
 export type RecoveryProviderEvidenceState = typeof RecoveryProviderEvidenceState.Type
+
+/**
+ * Bounded evidence metadata keys (design §9.2). Evidence metadata records
+ * provider lookup, baseline reconstruction and safe-boundary refs/hashes, so
+ * its keys are a closed set — an unlisted key (e.g. free-text 'note') is
+ * rejected with a typed error. Values may be string | number | boolean.
+ */
+export const EvidenceMetadataKey = Schema.Literals([
+  "provider_lookup_ref",
+  "baseline_reconstruction_ref",
+  "safe_boundary_ref",
+  "provider_region",
+  "provider_response_status",
+  "provider_attempt_count",
+  "provider_latency_ms",
+  "terminal_reason_code",
+])
+export type EvidenceMetadataKey = typeof EvidenceMetadataKey.Type
 
 /** Bounded reason code — never free text. */
 export const RecoveryReasonCode = Schema.Literals([
@@ -110,7 +146,7 @@ const descriptorCommon = {
 /** Descriptor: everything about an attempt is verifiable (design §9.1 resolvable_exact). */
 export class ExactDescriptor extends Schema.Class<ExactDescriptor>("Recovery.ExactDescriptor")({
   ...descriptorCommon,
-  descriptorKind: Schema.Literal("exact"),
+  descriptorKind: Schema.Literal("resolvable_exact"),
   exact: Schema.Struct({
     attemptHash: Schema.String,
     selectionHash: Schema.String,
@@ -123,7 +159,7 @@ export class ExactDescriptor extends Schema.Class<ExactDescriptor>("Recovery.Exa
 /** Descriptor: baseline is corrupt/missing but a trusted snapshot can be rebuilt (design §9.1 repairable_exact). */
 export class RepairableDescriptor extends Schema.Class<RepairableDescriptor>("Recovery.RepairableDescriptor")({
   ...descriptorCommon,
-  descriptorKind: Schema.Literal("repairable"),
+  descriptorKind: Schema.Literal("repairable_exact"),
   repairable: Schema.Struct({
     baselineState: Schema.Literals(["corrupt", "missing"]),
     sourceSnapshotRef: Schema.String,
@@ -134,7 +170,7 @@ export class RepairableDescriptor extends Schema.Class<RepairableDescriptor>("Re
 /** Descriptor: the original turn is unrecoverable but a safe boundary exists (design §9.1 fork_only). */
 export class ForkDescriptor extends Schema.Class<ForkDescriptor>("Recovery.ForkDescriptor")({
   ...descriptorCommon,
-  descriptorKind: Schema.Literal("fork"),
+  descriptorKind: Schema.Literal("fork_only"),
   fork: Schema.Struct({
     safeBoundaryRef: Schema.String,
     safeBoundaryHash: Schema.String,
@@ -146,7 +182,7 @@ export class ForkDescriptor extends Schema.Class<ForkDescriptor>("Recovery.ForkD
 /** Descriptor: local resolution is not provable and needs admin/external coordination (design §9.1). */
 export class CoordinationDescriptor extends Schema.Class<CoordinationDescriptor>("Recovery.CoordinationDescriptor")({
   ...descriptorCommon,
-  descriptorKind: Schema.Literal("coordination"),
+  descriptorKind: Schema.Literal("coordination_required"),
   coordination: Schema.Struct({
     reason: RecoveryReasonCode,
     requiredActor: RecoveryCoordinationActor,
@@ -172,8 +208,29 @@ export const RecoveryDescriptor = Schema.Union([
   ForkDescriptor,
   CoordinationDescriptor,
   ResolvedDescriptor,
-])
+]).pipe(Schema.toTaggedUnion("descriptorKind"))
 export type RecoveryDescriptor = typeof RecoveryDescriptor.Type
+
+/** Bounded value type for evidence metadata: string | number | boolean. */
+export const EvidenceMetadataValue = Schema.Union([Schema.String, Schema.Number, Schema.Boolean])
+export type EvidenceMetadataValue = typeof EvidenceMetadataValue.Type
+
+/**
+ * Bounded evidence metadata. Keys are a closed set (see EvidenceMetadataKey) — a
+ * key outside the set (e.g. free-text 'note') is rejected, while any subset of the
+ * listed keys may be present. Values are string | number | boolean.
+ */
+export const EvidenceMetadata = Schema.Struct({
+  provider_lookup_ref: EvidenceMetadataValue.pipe(Schema.optional),
+  baseline_reconstruction_ref: EvidenceMetadataValue.pipe(Schema.optional),
+  safe_boundary_ref: EvidenceMetadataValue.pipe(Schema.optional),
+  provider_region: EvidenceMetadataValue.pipe(Schema.optional),
+  provider_response_status: EvidenceMetadataValue.pipe(Schema.optional),
+  provider_attempt_count: EvidenceMetadataValue.pipe(Schema.optional),
+  provider_latency_ms: EvidenceMetadataValue.pipe(Schema.optional),
+  terminal_reason_code: EvidenceMetadataValue.pipe(Schema.optional),
+})
+export type EvidenceMetadata = typeof EvidenceMetadata.Type
 
 /**
  * Evidence manifest (design §9.2). External provider evidence is carried as
@@ -192,7 +249,7 @@ export class RecoveryEvidence extends Schema.Class<RecoveryEvidence>("Recovery.E
   responseFingerprint: Schema.String,
   retrievalRef: Schema.String,
   attestationRef: Schema.String.pipe(Schema.optional),
-  metadata: Schema.Record(Schema.String, Schema.String),
+  metadata: EvidenceMetadata,
   verifiedAt: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
 }) {}
 
@@ -203,6 +260,7 @@ const commandCommon = {
   actorId: Schema.String,
   permissionFingerprint: Schema.String,
   expectedAttemptVersion: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  expectedAttemptState: RecoveryAttemptState,
   requestedHash: Schema.String,
   decision: Schema.Literals(["proceed", "query_only"]),
   commandCreatedAt: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
@@ -280,7 +338,7 @@ export const RecoveryCommand = Schema.Union([
   ForkFromSafeBoundaryCommand,
   ConfirmSettledCommand,
   QueryCommand,
-])
+]).pipe(Schema.toTaggedUnion("commandKind"))
 export type RecoveryCommand = typeof RecoveryCommand.Type
 
 // ---- typed violations ------------------------------------------------------

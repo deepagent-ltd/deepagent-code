@@ -27,26 +27,26 @@ const descriptorCommon = {
   casTokens: { expectedState: "running", expectedVersion: 1, ownerToken: "owner-1" },
 }
 
-function descriptorPayload(kind: "exact" | "repairable" | "fork" | "coordination" | "resolved") {
+function descriptorPayload(kind: "resolvable_exact" | "repairable_exact" | "fork_only" | "coordination_required" | "resolved") {
   switch (kind) {
-    case "exact":
+    case "resolvable_exact":
       return { exact: { attemptHash: "ah", selectionHash: "sh", historyHash: "hh", baselineHash: "bh", allVerified: true } }
-    case "repairable":
+    case "repairable_exact":
       return { repairable: { baselineState: "corrupt", sourceSnapshotRef: "ctx://snap/1", canReconstruct: true } }
-    case "fork":
+    case "fork_only":
       return { fork: { safeBoundaryRef: "ctx://bound/1", safeBoundaryHash: "sbh", reasonCode: "safe_boundary_none", originalSessionReadOnly: true } }
-    case "coordination":
+    case "coordination_required":
       return { coordination: { reason: "provider_lookup_incomplete", requiredActor: "admin", evidenceExportRef: "ctx://exp/1" } }
     case "resolved":
       return { resolved: { resolutionRef: "ctx://res/1", bridgeRef: "ctx://bridge/1", terminal: "settled" } }
   }
 }
 
-function descriptorInput(kind: "exact" | "repairable" | "fork" | "coordination" | "resolved") {
+function descriptorInput(kind: "resolvable_exact" | "repairable_exact" | "fork_only" | "coordination_required" | "resolved") {
   return { ...descriptorCommon, descriptorKind: kind, ...descriptorPayload(kind) }
 }
 
-function makeDescriptor(kind: "exact" | "repairable" | "fork" | "coordination" | "resolved"): RecoveryDescriptor {
+function makeDescriptor(kind: "resolvable_exact" | "repairable_exact" | "fork_only" | "coordination_required" | "resolved"): RecoveryDescriptor {
   return decodeRecoveryDescriptor(descriptorInput(kind))
 }
 
@@ -61,7 +61,7 @@ function makeEvidence(): RecoveryEvidence {
     responseFingerprint: "fingerprint-1",
     retrievalRef: "ctx://retrieve/1",
     attestationRef: "ctx://attest/1",
-    metadata: { region: "us-east-1" },
+    metadata: { provider_region: "us-east-1", provider_attempt_count: 1 },
     verifiedAt: 0,
   })
 }
@@ -73,6 +73,7 @@ const commandCommon = {
   actorId: "act-1",
   permissionFingerprint: "perm-fp",
   expectedAttemptVersion: 1,
+  expectedAttemptState: "prepared",
   requestedHash: "req-hash",
   decision: "proceed",
   commandCreatedAt: 0,
@@ -81,7 +82,7 @@ const commandCommon = {
 function commandInput(variant: "recover" | "abandon_exact" | "repair_baseline_and_abandon" | "fork_from_safe_boundary" | "confirm_settled" | "query_command"): Record<string, unknown> {
   const kindPayload: Record<string, unknown> =
     variant === "recover"
-      ? { recover: { descriptor: makeDescriptor("exact"), intent: "resolve" } }
+      ? { recover: { descriptor: makeDescriptor("resolvable_exact"), intent: "resolve" } }
       : variant === "abandon_exact"
         ? { abandonExact: { descriptorRef: "desc-1", reasonCode: "network_unknown", acknowledgment: true } }
         : variant === "repair_baseline_and_abandon"
@@ -99,37 +100,20 @@ function makeCommand(variant: "recover" | "abandon_exact" | "repair_baseline_and
 }
 
 function commandError(input: unknown): RecoveryDecodeError {
-  try {
-    decodeRecoveryCommand(input)
-  } catch (error) {
-    if (error instanceof RecoveryDecodeError) return error
-    throw error
-  }
+  try { decodeRecoveryCommand(input) } catch (error) { if (error instanceof RecoveryDecodeError) return error; throw error }
   throw new Error("expected decodeRecoveryCommand to fail")
 }
-
 function descriptorError(input: unknown): RecoveryDecodeError {
-  try {
-    decodeRecoveryDescriptor(input)
-  } catch (error) {
-    if (error instanceof RecoveryDecodeError) return error
-    throw error
-  }
+  try { decodeRecoveryDescriptor(input) } catch (error) { if (error instanceof RecoveryDecodeError) return error; throw error }
   throw new Error("expected decodeRecoveryDescriptor to fail")
 }
-
 function evidenceError(input: unknown): RecoveryDecodeError {
-  try {
-    decodeRecoveryEvidence(input)
-  } catch (error) {
-    if (error instanceof RecoveryDecodeError) return error
-    throw error
-  }
+  try { decodeRecoveryEvidence(input) } catch (error) { if (error instanceof RecoveryDecodeError) return error; throw error }
   throw new Error("expected decodeRecoveryEvidence to fail")
 }
 
 const allCommandVariants = ["recover", "abandon_exact", "repair_baseline_and_abandon", "fork_from_safe_boundary", "confirm_settled", "query_command"] as const
-const allDescriptorKinds = ["exact", "repairable", "fork", "coordination", "resolved"] as const
+const allDescriptorKinds = ["resolvable_exact", "repairable_exact", "fork_only", "coordination_required", "resolved"] as const
 
 describe("recovery contract round-trip and digest", () => {
   test("all five descriptor classes round-trip encode -> decode deterministically", () => {
@@ -168,51 +152,94 @@ describe("recovery contract round-trip and digest", () => {
   })
 
   test("descriptor digest is deterministic", () => {
-    const a = makeDescriptor("fork")
+    const a = makeDescriptor("fork_only")
     expect(recoveryDescriptorDigest(a)).toEqual(recoveryDescriptorDigest(a))
   })
 })
 
 describe("recovery descriptor negative shapes", () => {
   test("missing nested field -> typed error with exact path", () => {
-    const input = makeDescriptor("exact") as unknown as { exact: { allVerified?: unknown } }
-    delete input.exact!.allVerified
-    expect(descriptorError(input).path).toEqual(["exact", "allVerified"])
+    const input = makeDescriptor("resolvable_exact") as unknown as { exact: { attemptHash?: unknown } }
+    delete input.exact!.attemptHash
+    expect(descriptorError(input).path).toEqual(["exact", "attemptHash"])
   })
 
   test("extra field -> typed error with exact path", () => {
-    const input = { ...(makeDescriptor("exact") as unknown as Record<string, unknown>), extra: true }
+    const input = { ...(makeDescriptor("resolvable_exact") as unknown as Record<string, unknown>), extra: true }
     expect(descriptorError(input).path).toEqual(["extra"])
   })
 
-  test("wrong type nested -> typed error with exact path", () => {
-    const input = { ...(makeDescriptor("exact") as unknown as Record<string, unknown>), exact: { attemptHash: "a", selectionHash: "s", historyHash: "h", baselineHash: "b", allVerified: "yes" } }
+  test("wrong type nested (exact.allVerified) -> typed error with exact path", () => {
+    const input = { ...(makeDescriptor("resolvable_exact") as unknown as Record<string, unknown>), exact: { attemptHash: "a", selectionHash: "s", historyHash: "h", baselineHash: "b", allVerified: "yes" } }
     expect(descriptorError(input).path).toEqual(["exact", "allVerified"])
   })
 
   test("unknown enum value (descriptor kind) -> typed error with exact path", () => {
-    const input = { ...(makeDescriptor("exact") as unknown as Record<string, unknown>), descriptorKind: "bogus" }
+    const input = { ...(makeDescriptor("resolvable_exact") as unknown as Record<string, unknown>), descriptorKind: "bogus" }
     expect(descriptorError(input).path[0]).toEqual("descriptorKind")
   })
 
   test("version mismatch -> typed error with exact path", () => {
-    const input = { ...(makeDescriptor("exact") as unknown as Record<string, unknown>), schemaVersion: "recovery-descriptor.v2" }
+    const input = { ...(makeDescriptor("resolvable_exact") as unknown as Record<string, unknown>), schemaVersion: "recovery-descriptor.v2" }
     expect(descriptorError(input).path).toEqual(["schemaVersion"])
+  })
+})
+
+describe("per-member descriptor nested negatives (toTaggedUnion precise paths)", () => {
+  const cases: [string, (input: Record<string, unknown>) => void, string[]][] = [
+    ["repairable_exact", (i) => ((i.repairable as any).canReconstruct = "yes"), ["repairable"]],
+    ["fork_only", (i) => ((i.fork as any).originalSessionReadOnly = "yes"), ["fork"]],
+    ["coordination_required", (i) => ((i.coordination as any).requiredActor = 42), ["coordination"]],
+    ["resolved", (i) => ((i.resolved as any).terminal = 42), ["resolved"]],
+  ]
+  test("each descriptor member rejects a wrong-typed nested field at its precise path", () => {
+    for (const [kind, mutate, expected] of cases) {
+      const input = descriptorInput(kind as any) as Record<string, unknown>
+      mutate(input)
+      expect(descriptorError(input).path).toEqual(expected)
+    }
+  })
+})
+
+describe("per-member command nested negatives (toTaggedUnion precise paths)", () => {
+  test("recover rejects a wrong-typed nested descriptor field at its deep path", () => {
+    const input = commandInput("recover") as Record<string, unknown>
+    ;(input.recover as { descriptor: any }).descriptor.exact.attemptHash = 1
+    expect(commandError(input).path).toEqual(["recover", "descriptor", "exact", "attemptHash"])
+  })
+
+  const cases: [string, (input: Record<string, unknown>) => void, string[]][] = [
+    ["abandon_exact", (i) => ((i.abandonExact as any).reasonCode = 42), ["abandonExact"]],
+    ["repair_baseline_and_abandon", (i) => ((i.repairBaselineAndAbandon as any).baselineHash = 42), ["repairBaselineAndAbandon"]],
+    ["fork_from_safe_boundary", (i) => ((i.forkFromSafeBoundary as any).safeBoundaryRef = 42), ["forkFromSafeBoundary"]],
+    ["confirm_settled", (i) => ((i.confirmSettled as any).evidence.payloadHash = 42), ["confirmSettled"]],
+    ["query_command", (i) => ((i.queryCommand as any).commandRef = 42), ["queryCommand"]],
+  ]
+  test("each command member rejects a wrong-typed nested field at its precise path", () => {
+    for (const [variant, mutate, expected] of cases) {
+      const input = commandInput(variant as any) as Record<string, unknown>
+      mutate(input)
+      expect(commandError(input).path).toEqual(expected)
+    }
   })
 })
 
 describe("recovery command negative shapes", () => {
   test("wrong discriminant (command kind) -> typed error", () => {
     const input = { ...(makeCommand("recover") as unknown as Record<string, unknown>), commandKind: "bogus" }
+    expect(commandError(input)).toBeInstanceOf(RecoveryDecodeError)
+  })
+
+  test("missing expectedAttemptState -> typed error", () => {
+    const input = commandInput("query_command") as Record<string, unknown>
+    delete input.expectedAttemptState
     const error = commandError(input)
     expect(error).toBeInstanceOf(RecoveryDecodeError)
   })
 
-  test("malformed variant payload -> typed error", () => {
-    const input = commandInput("query_command")
-    ;(input.queryCommand as { commandRef: unknown }).commandRef = 42
-    const error = commandError(input)
-    expect(error).toBeInstanceOf(RecoveryDecodeError)
+  test("unknown expectedAttemptState value -> typed error", () => {
+    const input = { ...(commandInput("query_command") as Record<string, unknown>), expectedAttemptState: "bogus" }
+    expect(commandError(input)).toBeInstanceOf(RecoveryDecodeError)
   })
 
   test("version mismatch -> typed error with exact path", () => {
@@ -238,12 +265,22 @@ describe("recovery evidence negative shapes and free-text rule", () => {
     expect(evidenceError(input).path).toEqual(["schemaVersion"])
   })
 
-  test("free text as evidence is rejected structurally (excess key)", () => {
+  test("metadata with an unlisted key is rejected with an exact path", () => {
+    const input = { ...(makeEvidence() as unknown as Record<string, unknown>), metadata: { note: "free text" } }
+    expect(evidenceError(input).path).toEqual(["metadata", "note"])
+  })
+
+  test("metadata value must be string | number | boolean (fails on object value)", () => {
+    const input = { ...(makeEvidence() as unknown as Record<string, unknown>), metadata: { provider_region: { nested: true } } }
+    expect(evidenceError(input).path[0]).toEqual("metadata")
+  })
+
+  test("free text as evidence top-level key is rejected structurally (excess key)", () => {
     const input = { ...(makeEvidence() as unknown as Record<string, unknown>), note: "the provider told us it settled" }
     expect(evidenceError(input).path).toEqual(["note"])
   })
 
-  test("assertEvidenceTyped throws a typed violation for a free-text key", () => {
+  test("assertEvidenceTyped throws a typed violation for a top-level free-text key", () => {
     const evidence = makeEvidence() as unknown as Record<string, unknown>
     ;(evidence as Record<string, unknown>)["description"] = "free text"
     expect(() => assertEvidenceTyped(evidence as unknown as RecoveryEvidence)).toThrow(FreeTextEvidenceError)
@@ -258,7 +295,7 @@ describe("recovery validate (non-throwing)", () => {
   test("valid command -> ok true; invalid -> ok false with typed error", () => {
     const ok = validateRecoveryCommand(makeCommand("recover"))
     expect(ok.ok).toBe(true)
-    const bad = validateRecoveryCommand({ ...(makeCommand("recover") as unknown as Record<string, unknown>), commandKind: "bogus" })
+    const bad = validateRecoveryCommand({ ...(commandInput("query_command") as Record<string, unknown>), expectedAttemptState: "bogus" })
     expect(bad.ok).toBe(false)
     if (!bad.ok) expect(bad.error).toBeInstanceOf(RecoveryDecodeError)
   })
