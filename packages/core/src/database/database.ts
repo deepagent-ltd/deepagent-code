@@ -50,8 +50,8 @@ const preflightOptionsFor = (filename: string, buildVersion: string): DatabasePr
   buildVersion,
 })
 
-const toBootstrapInput = (preflightResult: DatabasePreflight.PreflightResult, buildVersion: string): BootstrapInput => {
-  const observations = preflightResult.ok ? preflightResult.observations : preflightResult.observations
+const toBootstrapInput = (preflightResult: DatabasePreflight.PreflightResult): BootstrapInput => {
+  const observations = preflightResult.observations
   const completed = new Set(
     observations.journalRows.map((row) => DatabaseMigration.historicalAliases.get(row.id) ?? row.id),
   )
@@ -84,7 +84,7 @@ const toBootstrapInput = (preflightResult: DatabasePreflight.PreflightResult, bu
 export const bootstrap = async (filename: string, buildVersion = InstallationVersion): Promise<BootstrapState> => {
   const buildDigest = registryDigest(knownMigrationIds)
   const preflightResult = await DatabasePreflight.preflight(preflightOptionsFor(filename, buildVersion))
-  return DatabaseBootstrap.describeBootstrap(toBootstrapInput(preflightResult, buildVersion), { buildDigest })
+  return DatabaseBootstrap.describeBootstrap(toBootstrapInput(preflightResult), { buildDigest })
 }
 
 /** Open the business DB and apply forward migrations. Failures are defects (existing semantics). */
