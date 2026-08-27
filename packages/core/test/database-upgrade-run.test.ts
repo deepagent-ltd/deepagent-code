@@ -182,6 +182,28 @@ describe("DatabaseUpgradeRun", () => {
     )
   })
 
+  test("a failure transitions into recovery_required and is terminal", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* DatabaseUpgradeRun.ensureTables(db)
+        const runValue = yield* DatabaseUpgradeRun.beginRun(db, runInput())
+        const runId = runValue.runId
+        yield* DatabaseUpgradeRun.advanceRun(db, runId, "backup_verified")
+        yield* DatabaseUpgradeRun.failRun(db, runId, "migration_body_failed")
+        const recovered = yield* DatabaseUpgradeRun.loadRun(db, runId)
+        expect(recovered!.state).toBe("recovery_required")
+        expect(recovered!.failureCode).toBe("migration_body_failed")
+        // recovery_required is terminal under the frozen contract.
+        const retry = yield* DatabaseUpgradeRun.advanceRun(db, runId, "ready").pipe(Effect.exit)
+        expect(retry._tag).toBe("Failure")
+        expect(String(retry)).toContain("already terminal")
+        const completed = yield* db.get<{ completed_at: number }>(sql`SELECT completed_at FROM database_upgrade_run WHERE run_id = ${runId}`)
+        expect(completed!.completed_at).toBe(0)
+      }),
+    )
+  })
+
   test("migration content hash is deterministic and content-addressed", async () => {
     await run(
       Effect.gen(function* () {
