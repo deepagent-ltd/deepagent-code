@@ -66,14 +66,14 @@ export type GraphStatusReasonCode = typeof GraphStatusReasonCode.Type
 
 /**
  * Per-graph status. The `status` field is a closed union
- * ready | empty | degraded | denied | timeout (design §6.2), so a V2 attempt can
+ * ready | empty | degraded_unavailable | denied | timeout (design §6.2), so a V2 attempt can
  * never fall back to the legacy v2-none value: an absent or unknown graph must
  * be represented explicitly with one of these five states, and an unknown value
  * is rejected with a typed decode error.
  */
 export const GraphStatus = Schema.Struct({
   graph: GraphKindSchema,
-  status: Schema.Literals(["ready", "empty", "degraded", "denied", "timeout"]),
+  status: Schema.Literals(["ready", "empty", "degraded_unavailable", "denied", "timeout"]),
   revision: Schema.String,
   adapterVersion: Schema.String,
   observedMutationEpoch: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
@@ -134,7 +134,7 @@ export const SelectionEgress = Schema.Struct({
 })
 export type SelectionEgress = typeof SelectionEgress.Type
 
-/** Agent policy governing whether degraded/denied retrieval may continue. */
+/** Agent policy governing whether degraded_unavailable/denied retrieval may continue. */
 export const SelectionAgentPolicy = Schema.Struct({
   agentId: Schema.String,
   autonomyCeiling: Schema.Literals(["low", "medium", "high", "critical"]),
@@ -224,7 +224,7 @@ export type SelectionArtifactBinding = typeof SelectionArtifactBinding.Type
  * Lane P references as `SelectionEnvelope`. `selectionMode` is the single
  * literal "v2": a V2 attempt must always be backed by a real four-graph
  * selection, and the legacy v2-none fallback is not a legal value here. Absence
- * of a graph is expressed per graph (empty / degraded / denied / timeout),
+ * of a graph is expressed per graph (empty / degraded_unavailable / denied / timeout),
  * never as a default "none" at the envelope level.
  */
 export class SelectionEnvelope extends Schema.Class<SelectionEnvelope>("ContextSelection.SelectionEnvelope")({

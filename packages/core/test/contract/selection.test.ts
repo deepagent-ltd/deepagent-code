@@ -235,12 +235,50 @@ describe("selection contract: v2-none is not a legal value", () => {
     expect(error.path).toEqual(["selectionMode"])
   })
 
+  test("shorthand degraded is rejected (only degraded_unavailable is legal)", () => {
+    const input = makeEnvelope() as unknown as { graphStatuses: { code: { status: unknown } } }
+    input.graphStatuses.code.status = "degraded"
+    const error = decodeError(input)
+    expect(error.path).toEqual(["graphStatuses", "code", "status"])
+  })
+
   test("each of the five legal graph statuses decodes", () => {
-    for (const status of ["ready", "empty", "degraded", "denied", "timeout"] as const) {
+    for (const status of ["ready", "empty", "degraded_unavailable", "denied", "timeout"] as const) {
       const envelope = makeEnvelope()
       ;(envelope.graphStatuses.code as { status: string }).status = status
       expect(() => decodeSelectionEnvelope(envelope)).not.toThrow()
     }
+  })
+})
+
+describe("versioned enums reject unknown values", () => {
+  test("query intent rejects an unknown value", () => {
+    const input = { ...(makeEnvelope() as unknown as Record<string, unknown>), queryIntent: "bogus_intent" }
+    expect(decodeError(input).path).toEqual(["queryIntent"])
+  })
+
+  test("agent policy autonomy ceiling rejects an unknown value", () => {
+    const input = makeEnvelope() as unknown as { agentPolicy: { autonomyCeiling?: unknown } }
+    input.agentPolicy.autonomyCeiling = "bogus"
+    expect(decodeError(input).path).toEqual(["agentPolicy", "autonomyCeiling"])
+  })
+
+  test("model capability protocol rejects an unknown value", () => {
+    const input = makeEnvelope() as unknown as { modelCapability: { protocol?: unknown } }
+    input.modelCapability.protocol = "bogus"
+    expect(decodeError(input).path).toEqual(["modelCapability", "protocol"])
+  })
+
+  test("selected ref freshness rejects an unknown value", () => {
+    const input = makeEnvelope() as unknown as { selectedRefs: { freshness?: unknown }[] }
+    input.selectedRefs[0].freshness = "bogus"
+    expect(decodeError(input).path[0]).toEqual("selectedRefs")
+  })
+
+  test("GraphStatusReasonCode already rejects unknown values (regression)", () => {
+    const input = makeEnvelope() as unknown as Record<string, unknown>
+    ;(input.graphStatuses as { code: { reasonCode?: unknown } }).code.reasonCode = "definitely_not_a_reason"
+    expect(decodeError(input).path).toEqual(["graphStatuses", "code", "reasonCode"])
   })
 })
 
