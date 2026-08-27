@@ -205,11 +205,20 @@ function collectContract(repoRoot: string): Record<string, string> {
  * Migration registry. Authoritative source = the generated registry listing every
  * applied migration: `packages/core/src/database/migration.gen.ts` (written by the
  * migration generator, owned by the main Agent per worklist §2; do not edit).
+ * The group also captures every migration body under `packages/core/src/database/migration/**`
+ * so a body-only edit (which leaves the registry import id unchanged) is still drift.
  */
 function collectMigrationRegistry(repoRoot: string): Record<string, string> {
-  const relPath = "packages/core/src/database/migration.gen.ts"
-  const abs = path.join(repoRoot, relPath)
-  return { [relPath]: fs.existsSync(abs) ? digestFileContent(fs.readFileSync(abs, "utf8")) : absentDigest() }
+  // The registry (apply order) plus every migration body. Collapsing the
+  // migration.gen.ts import list into a single digest would miss a body-only edit
+  // (the import id is unchanged), so the executable sources are captured too.
+  const registryRel = "packages/core/src/database/migration.gen.ts"
+  const registryAbs = path.join(repoRoot, registryRel)
+  const out: Record<string, string> = {
+    [registryRel]: fs.existsSync(registryAbs) ? digestFileContent(fs.readFileSync(registryAbs, "utf8")) : absentDigest(),
+  }
+  Object.assign(out, collectTsDir(path.join(repoRoot, "packages/core/src/database/migration"), repoRoot))
+  return out
 }
 
 const PACKAGE_MANIFESTS = [

@@ -4,6 +4,7 @@ import {
   assertManifestMatches,
   assertManifestShape,
   buildManifest,
+  generateManifest,
   serializeManifest,
   type DeterministicManifest,
 } from "../script/manifest-digest/manifest"
@@ -72,5 +73,31 @@ describe("assertManifestShape", () => {
   test("rejects a non-hex setTreeDigest with the exact path", () => {
     const m = buildManifest(groupsA) as DeterministicManifest
     expect(() => assertManifestShape({ ...m, setTreeDigest: "zz" })).toThrow(/manifest.setTreeDigest:/)
+  })
+})
+
+describe("generateManifest (live tree)", () => {
+  test("is byte-stable across two runs", () => {
+    const first = serializeManifest(generateManifest())
+    const second = serializeManifest(generateManifest())
+    expect(first).toBe(second)
+  })
+
+  test("changes when an input is added to the input set", () => {
+    const base = generateManifest()
+    const changed = generateManifest({ extraInputs: { contract: { "contract/extra.ts": "export const x = 1" } } })
+    expect(changed.overallDigest).not.toBe(base.overallDigest)
+    expect(changed.setTreeDigest).not.toBe(base.setTreeDigest)
+  })
+
+  test("emits only repo-relative input keys (no absolute paths)", () => {
+    const manifest = generateManifest()
+    for (const group of Object.values(manifest.inputs)) {
+      for (const key of Object.keys(group)) {
+        expect(key.startsWith("/")).toBe(false)
+        expect(key).not.toMatch(/^[A-Za-z]:[\\/]/)
+        expect(key).not.toContain("core-v2-beta-w2-digest")
+      }
+    }
   })
 })
