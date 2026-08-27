@@ -29,7 +29,7 @@ const isLockError = (value: unknown): boolean => {
 const isTransientLockCause = (cause: Cause.Cause<unknown>): boolean => cause.reasons.some(isLockError)
 
 const transientLockRetry = Schedule.spaced("2 seconds").pipe(Schedule.take(30))
-const historicalAliases = new Map([
+export const historicalAliases = new Map([
   ["20260530232709_lovely_romulus", "20260511173437_session-metadata"],
   ["20260803000000_subagent_control_plane_l1", "20260803000001_subagent_control_plane_l1"],
   [MigrationIdentity.Historical.finalAuthorities, MigrationIdentity.Canonical.finalAuthorities],
@@ -38,8 +38,8 @@ const historicalAliases = new Map([
   [MigrationIdentity.Historical.eventSidecarIndexes, MigrationIdentity.Canonical.eventSidecarIndexes],
   [MigrationIdentity.Historical.eventAggregateIndexes, MigrationIdentity.Canonical.eventAggregateIndexes],
 ])
-const mergedHistoryAnchor = "20260813041400_context_activation_semantic_authority"
-const mergedHistoryInsertions = new Set([
+export const mergedHistoryAnchor = "20260813041400_context_activation_semantic_authority"
+export const mergedHistoryInsertions = new Set([
   "20260812120000_legacy_provider_recovery",
   "20260812130000_legacy_activity_lifecycle_expand",
   "20260812140000_session_diff_manifest",
