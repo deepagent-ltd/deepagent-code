@@ -58,3 +58,48 @@ export const AUTHORITY = {
 export function endsWithPathSuffix(path: string, suffix: string): boolean {
   return path.replaceAll("\\", "/").endsWith(suffix)
 }
+
+/**
+ * Production delegation model (C0-01 residual closure). A `delegatesTo` requirement is
+ * satisfied when the entry statically reaches, spawns, or client-calls a receiver whose
+ * spawn/client target resolves (via the tables below) to an inventory entry id, AND that
+ * target is classified non-unclassified on every inherited dimension (checked in build).
+ */
+/** Receiver entry id -> the module path that owns/provides the delegated authority. */
+export const DELEGATION_TARGET_MODULE: Readonly<Record<string, string>> = {
+  "composition.dacode-cli-entry": "packages/deepagent-code/src/index.ts",
+  "composition.instance-httpapi-stack": "packages/deepagent-code/src/server/routes/instance/httpapi/server.ts",
+  "composition.server-web-handler": "packages/server/src/routes.ts",
+  "composition.lildax-runtime": "packages/cli/src/index.ts",
+  "composition.app-runtime-layers": "packages/deepagent-code/src/effect/app-runtime.ts",
+  "im.agent-executor": "packages/deepagent-code/src/im/agent-executor-server.ts",
+  "panel.orchestrator": "packages/deepagent-code/src/panel/orchestrator.ts",
+  "event.panel-convene-consumer": "packages/deepagent-code/src/panel/panel-convene-consumer.ts",
+  "event.goal-tick-consumer": "packages/deepagent-code/src/session/goal-tick-consumer.ts",
+  "task.goal-manager": "packages/deepagent-code/src/session/goal-manager.ts",
+}
+/** Dispatched inventory entry id -> referenced in spawned/sidecar launcher entry id. */
+export const DELEGATION_TARGET_ENTRY: Readonly<Record<string, string>> = {
+  "composition.dacode-cli-entry": "desktop.app-main",
+}
+/** Spawn/fork/exec or client-call string-literal target -> inventory entry id (process/CLI boundary). */
+export const DELEGATION_SPAWN_BINDINGS: Readonly<Record<string, string>> = {
+  // Desktop sidecar process forks sidecar.js, which loads the dacode server (dacode-cli-entry).
+  "sidecar.js": "composition.dacode-cli-entry",
+  "deepagent-code": "composition.dacode-cli-entry",
+  "virtual:deepagent-code-server": "composition.dacode-cli-entry",
+  // lildax daemon: DEEPAGENT_CODE_DAEMON_BACKEND=legacy mounts the legacy deepagent-code server;
+  // the daemon (composition.lildax-runtime) is the authority receiver for client/daemon commands.
+}
+
+/** A module the entry reaches/uses that owns/refers the delegated authority -> target entry id. */
+export const DELEGATION_REFERENCE_MODULE: Readonly<Record<string, string>> = {
+  // lildax CLI commands drive the daemon through the Daemon service, which manages the daemon runtime.
+  "packages/cli/src/services/daemon.ts": "composition.lildax-runtime",
+  // panel orchestration is provided by the panel orchestrator module the panel engine is built on.
+  "packages/deepagent-code/src/panel/orchestrator.ts": "panel.orchestrator",
+  // IM orchestration runs under the legacy AgentExecutor service provided by the server composition.
+  "packages/deepagent-code/src/session/legacy-execution-zero.ts": "im.agent-executor",
+  "packages/desktop/src/main/server.ts": "desktop.spawn-local-server",
+  "packages/desktop/src/main/wsl/runtime.ts": "composition.dacode-cli-entry",
+}

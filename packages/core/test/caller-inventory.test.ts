@@ -245,6 +245,46 @@ describe("C0-01 caller inventory gate", () => {
       inventory.entries.filter((e) => e.unclassifiedCount > 0).length,
     )
   })
+
+  test("delegation model gate: edges real, acyclic, no self-delegation, no delegation to an unclassified target", () => {
+    const byId = new Map(inventory.entries.map((e) => [e.entry.id, e]))
+    const graph = new Map<string, Set<string>>()
+    for (const entry of inventory.entries) {
+      for (const role of entry.roles) {
+        for (const proof of role.evidence) {
+          if (!proof.marker.startsWith("delegates:")) continue
+          const targetId = proof.marker.slice("delegates:".length)
+          // (a) edge is real: the marker is anchored at a genuine file:line in an owned source file.
+          expect(proof.repoFile.endsWith(".ts")).toBe(true)
+          expect(proof.line).toBeGreaterThan(0)
+          // (d) no self-delegation.
+          expect(targetId).not.toBe(entry.entry.id)
+          // (c) delegation to an unknown or unclassified target is a finding.
+          const target = byId.get(targetId)
+          expect(target).toBeDefined()
+          const tRole = target!.roles.find((x) => x.dimension === role.dimension)
+          expect(tRole).toBeDefined()
+          expect(tRole!.verdict).not.toBe("unclassified")
+          // record the edge for acyclicity.
+          const set = graph.get(entry.entry.id) ?? new Set()
+          set.add(targetId)
+          graph.set(entry.entry.id, set)
+        }
+      }
+    }
+    // (b) the delegation graph is acyclic (standard DFS cycle detection).
+    const visiting = new Set<string>()
+    const visited = new Set<string>()
+    const visit = (node: string): void => {
+      if (visiting.has(node)) throw new Error("delegation cycle at " + node)
+      if (visited.has(node)) return
+      visiting.add(node)
+      for (const next of graph.get(node) ?? []) visit(next)
+      visiting.delete(node)
+      visited.add(node)
+    }
+    for (const node of graph.keys()) visit(node)
+  })
 })
 
 function sortedJson(_key: string, value: unknown): unknown {

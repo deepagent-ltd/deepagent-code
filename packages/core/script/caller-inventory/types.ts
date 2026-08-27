@@ -117,6 +117,10 @@ export type EntryWithHandlers = {
  *                        entry roots — the entry's import closure cannot bring the writer
  *                        authority into its own flow, supporting an honest read_only / non-owner
  *                        verdict for entries that never touch the authority module;
+ *   - delegatesTo       : a static spawn/exec/fork, service-layer binding, client call, or reach of
+ *                        the target entry's module proves THIS entry delegates authority to the
+ *                        inventory entry {@link targetId}; the gate inherits the target's verdict per
+ *                        dimension (and asserts the target exists & is classified non-unclassified);
  *   - productionProfile: three-site proof that THIS packaged build force-selects the Core-V2-only
  *                        runtime profile (package.json version matches isCoreV2OnlyVersion, the
  *                        flag wires that predicate to InstallationVersion, and the production
@@ -129,6 +133,7 @@ export type Requirement =
   | { readonly kind: "bodyChain"; readonly chain: string }
   | { readonly kind: "noBodyChain"; readonly chain: string }
   | { readonly kind: "noReach"; readonly pathSuffix: string }
+  | { readonly kind: "delegatesTo"; readonly targetId: string }
   | { readonly kind: "productionProfile" }
 
 /** A declared, machine-checked ownership claim for one entry. */

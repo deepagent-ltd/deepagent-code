@@ -11,6 +11,7 @@ import ts from "typescript"
 import { existsSync, readFileSync } from "node:fs"
 import type { HandlerSite, Requirement } from "./types"
 import { declarationNodes, moduleAnchorLine, parseModule, refsInSubtree, rootRepoPath } from "./ast"
+import { DELEGATION_REFERENCE_MODULE, DELEGATION_SPAWN_BINDINGS, DELEGATION_TARGET_MODULE } from "./authority"
 
 const repoRoot = () => rootRepoPath()
 
@@ -460,6 +461,65 @@ function tailMatchHit(
 }
 
 /**
+ * Static process/CLI/client delegation edge: scan this entry's own module (and its resolved handler
+ * modules) for a spawn/fork/exec/fork call whose first STRING-LITERAL argument (or a client endpoint
+ * string) resolves, via DELEGATION_SPAWN_BINDINGS, to the target inventory entry id. Returns the
+ * call site so the delegation edge is attributed to a real file:line.
+ */
+function delegationSpawnHit(entryFile: string, extraRoots: readonly string[], targetId: string): VerifiedHit | undefined {
+  const roots = [entryFile, ...extraRoots]
+  for (const file of roots) {
+    if (!existsSync(file)) continue
+    const mod = parseModule(file)
+    const sf = mod.sourceFile
+    let found: VerifiedHit | undefined
+    // Collect string fragments a spawn/fork argument could resolve to (string literal directly, or
+    // the string literals inside a const initializer like join(dirname(...), "sidecar.js")).
+    const stringFragments = (expr: ts.Expression): string[] => {
+      const out: string[] = []
+      const collect = (node: ts.Node): void => {
+        if (ts.isStringLiteralLike(node)) out.push(node.text)
+        ts.forEachChild(node, collect)
+      }
+      collect(expr)
+      if (ts.isIdentifier(expr)) {
+        for (const decl of declarationNodes(mod, expr.text)) collect(decl)
+      }
+      return out
+    }
+    const visit = (node: ts.Node): void => {
+      if (found) return
+      if (ts.isCallExpression(node)) {
+        const callee = ts.isPropertyAccessExpression(node.expression) ? node.expression.name.text
+          : ts.isIdentifier(node.expression) ? node.expression.text : undefined
+        if (
+          ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword &&
+          ts.isStringLiteralLike(node.arguments[0]) &&
+          DELEGATION_SPAWN_BINDINGS[node.arguments[0].text] === targetId
+        ) {
+          found = { marker: `delegates:${targetId}`, file, line: sf.getLineAndCharacterOfPosition(node.getStart()).line + 1 }
+          return
+        }
+        if (callee && ["fork", "spawn", "exec", "execFile", "execSync", "forkFile", "forkChild"].includes(callee)) {
+          const first = node.arguments[0]
+          if (first) {
+            const fragments = stringFragments(first)
+            if (fragments.some((fragment) => DELEGATION_SPAWN_BINDINGS[fragment] === targetId)) {
+              found = { marker: `delegates:${targetId}`, file, line: sf.getLineAndCharacterOfPosition(node.getStart()).line + 1 }
+              return
+            }
+          }
+        }
+      }
+      ts.forEachChild(node, visit)
+    }
+    visit(sf)
+    if (found) return found
+  }
+  return undefined
+}
+
+/**
  * Verify a claim's requirements entirely inside the entry's real import-graph closure
  * plus its own handler-body scope:
  * injected probe files are unreachable modules, so no requirement can ever be satisfied
@@ -483,6 +543,29 @@ export function verifyRequirements(
   const files = [...reachMap.keys()]
   const scopeChains = scope?.bodies && scope.bodies.length > 0 ? bodyScopes(scope.bodies) : { chains: new Map() }
   const results = requirements.map((requirement): RequirementResult => {
+    if (requirement.kind === "delegatesTo") {
+      // Delegation edge: a static spawn/fork/exec/client call (or a reach-of-the-target-module)
+      // attributes this flow to the target inventory entry; the gate inherits the target verdict.
+      const targetModule = DELEGATION_TARGET_MODULE[requirement.targetId]
+      if (targetModule) {
+        const target = files.find((file) => normalizePath(file).endsWith(normalizePath(targetModule)))
+        if (target) {
+          return { requirement, hit: { marker: `delegates:${requirement.targetId}`, file: target, line: moduleAnchorLine(parseModule(target)) } }
+        }
+      }
+      // Reference-module delegation: the entry reaches a module that owns/provides the delegated
+      // authority (e.g. the lildax Daemon service refers the daemon runtime, or a service layer that
+      // binds the legacy executor). Cite the reference module itself.
+      for (const [refModule, refTarget] of Object.entries(DELEGATION_REFERENCE_MODULE)) {
+        if (refTarget !== requirement.targetId) continue
+        const ref = files.find((file) => normalizePath(file).endsWith(normalizePath(refModule)))
+        if (ref) {
+          return { requirement, hit: { marker: `delegates:${requirement.targetId}`, file: ref, line: moduleAnchorLine(parseModule(ref)) } }
+        }
+      }
+      const spawnHit = delegationSpawnHit(entryFile, extraRoots, requirement.targetId)
+      return { requirement, hit: spawnHit }
+    }
     if (requirement.kind === "reach") {
       const target = files.find((file) => normalizePath(file).endsWith(normalizePath(requirement.pathSuffix)))
       if (!target) return { requirement, hit: undefined }

@@ -17,6 +17,7 @@
 import type { Dimension, Requirement, Verdict } from "./types"
 import { DIMENSIONS } from "./types"
 import { AUTHORITY } from "./authority"
+import { DELEGATION_RULE_PACKS } from "./delegation"
 
 export type VerdictRule = {
   readonly verdict: Exclude<Verdict, "unclassified">
@@ -152,6 +153,13 @@ const EVENT_CONSUMER_READONLY: readonly Requirement[] = [
 const LEGACY_READONLY_REST: readonly Requirement[] = [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish")]
 
 export const RULE_PACKS: readonly RulePack[] = [
+  // ===========================================================================
+  // Delegation model (production-grade closure): entries that delegate authority to a statically-
+  // provable receiver inherit that receiver's verdict. Must be FIRST so they win over the generic
+  // legacy/read_only providers below, and so build.ts pass-2 can resolve the inherited verdict.
+  // ===========================================================================
+  ...DELEGATION_RULE_PACKS,
+
   // ===========================================================================
   // NEW-P3-F: genuine reader/loader/schema/query/event/recovery entries whose OWN module IS their
   // reader. Their non-owner dimensions are read_only with the entry's own module as the (reachable)

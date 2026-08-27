@@ -30,6 +30,10 @@ function repoRelative(hit: { readonly file: string; readonly line: number; reado
   return { repoFile: hit.file.slice(root.length + 1).replaceAll("\\", "/"), line: hit.line, marker: hit.marker, distance: 0 }
 }
 
+/** Pending delegation edges recorded per entry/dimension during pass-1 classification. */
+type PendingDelegation = { readonly targetId: string; readonly edge: Evidence }
+const pendingDelegations = new Map<string, Partial<Record<Dimension, PendingDelegation>>>()
+
 function classifyOne(item: EntryWithHandlers): ClassifiedEntry {
   const rules = rulesForEntry(item.entry.id)
   const roles: RoleClassification[] = []
@@ -49,7 +53,20 @@ function classifyOne(item: EntryWithHandlers): ClassifiedEntry {
       ...(extraRoots.length > 0 ? { extraRoots } : {}),
       ...(item.handlers.length > 0 ? { bodies: item.handlers } : {}),
     })
+    const delegationReq = rule.requirements.find((requirement): requirement is { kind: "delegatesTo"; targetId: string } => requirement.kind === "delegatesTo")
     if (verified.satisfied) {
+      if (delegationReq) {
+        // Record a pending delegation edge; buildInventory resolves the inherited verdict in pass 2.
+        const edge = verified.evidence
+          .map(repoRelative)
+          .find((proof) => proof.marker.startsWith("delegates:")) ?? verified.evidence.map(repoRelative)[0]
+        const per = pendingDelegations.get(item.entry.id) ?? {}
+        per[dimension] = { targetId: delegationReq.targetId, edge }
+        pendingDelegations.set(item.entry.id, per)
+        roles.push({ dimension, verdict: "unclassified", evidence: [] })
+        openOwners[dimension] = `delegates to ${delegationReq.targetId} (resolved in pass 2)`
+        continue
+      }
       roles.push({ dimension, verdict: rule.verdict, evidence: verified.evidence.map(repoRelative) })
       continue
     }
@@ -79,9 +96,51 @@ export function buildInventory(): Inventory {
     throw new Error("production universe extraction produced an empty or HTTP-less universe")
   }
 
+  pendingDelegations.clear()
   const classified = entries
     .map(classifyOne)
     .sort((a, b) => (a.entry.id < b.entry.id ? -1 : a.entry.id > b.entry.id ? 1 : 0))
+
+  // Pass 2 (delegation model): an entry with a verified delegatesTo edge inherits the TARGET entry's
+  // verdict on that dimension (rollup evidence = delegation edge + target's own proof chain). The gate
+  // refuses a delegation to an unknown or unclassified target (a finding, never a guess).
+  const byId = new Map(classified.map((entry) => [entry.entry.id, entry]))
+  // Fixed-point: delegation chains (app-main -> spawn-local-server -> dacode-cli-entry) require
+  // resolving receivers before their dependents. Repeat until no entry changes in a full pass.
+  let progress = true
+  while (progress) {
+    progress = false
+  for (const entry of classified) {
+    const per = pendingDelegations.get(entry.entry.id)
+    if (!per) continue
+    let un = entry.unclassifiedCount
+    let entryChanged = false
+    const ownOpen = entry.openOwners as Record<string, string> | undefined
+    for (const [dimension, pending] of Object.entries(per)) {
+      const dim = dimension as Dimension
+      const target = byId.get(pending.targetId)
+      const targetRole = target?.roles.find((role) => role.dimension === dim)
+      if (!target || !targetRole || targetRole.verdict === "unclassified") {
+        if (ownOpen) ownOpen[dim] = "delegation target " + pending.targetId + " is unclassified/unknown on " + dim
+        continue
+      }
+      const role = entry.roles.find((candidate) => candidate.dimension === dim)
+      if (role && role.verdict === "unclassified") {
+        const mutable = role as { verdict: string; evidence: typeof role.evidence }
+        mutable.verdict = targetRole.verdict
+        mutable.evidence = [pending.edge, ...targetRole.evidence]
+        if (ownOpen) delete ownOpen[dim]
+        un -= 1
+        entryChanged = true
+      }
+    }
+    if (entryChanged) {
+      ;(entry as { unclassifiedCount: number }).unclassifiedCount = un
+      if (un === 0 && entry.openOwners) (entry as { openOwners?: undefined }).openOwners = undefined
+      progress = true
+    }
+  }
+  }
 
   const byVerdict = Object.fromEntries(VERDICTS.map((verdict) => [verdict, 0])) as Record<Verdict, number>
   const bySurface = Object.fromEntries(SURFACE_IDS.map((surface) => [surface, 0])) as Record<SurfaceId, number>
