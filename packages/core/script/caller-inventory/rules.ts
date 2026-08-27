@@ -540,4 +540,3 @@ export const RULE_PACKS: readonly RulePack[] = [
     rules: withReadOnlyRest({ recovery_owner: adapter([{ kind: "reach", pathSuffix: "packages/deepagent-code/src/context-federation/provider-owner-runtime.ts" }]) }, [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish")], "packages/deepagent-code/src/context-federation/query-authorization.ts"),
   },
 ];
-
