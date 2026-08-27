@@ -255,7 +255,9 @@ function extractErrorPath(error: unknown): string[] {
   const message = error instanceof Error ? error.message : String(error)
   const atIndex = message.indexOf("\n  at ")
   if (atIndex === -1) return []
-  const tail = message.slice(atIndex + 6)
+  const lineStart = atIndex + 6
+  const lineEnd = message.indexOf("\n", lineStart)
+  const tail = lineEnd === -1 ? message.slice(lineStart) : message.slice(lineStart, lineEnd)
   const segments: string[] = []
   const re = /\[([^\]]*)\]/g
   let current: RegExpExecArray | null
