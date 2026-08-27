@@ -11,7 +11,7 @@ import { contentDigest } from "./digest"
 /** Version matrix for the event envelope contract. `schema` is the envelope schema version. */
 export const EventVersion = {
   schema: "event.v1",
-  workEnvelope: 1,
+  workEnvelope: "event-work.v1",
   kind: 1,
   risk: 1,
   sourceKind: 1,
@@ -163,8 +163,8 @@ export class ObservationEvent extends Schema.Class<ObservationEvent>("EventEnvel
   observation: ObservationBody,
 }) {}
 
-/** The event envelope: a discriminated union of command | fact | observation. */
-export const EventEnvelope = Schema.Union([CommandEvent, FactEvent, ObservationEvent])
+/** The event envelope: a discriminated union of command | fact | observation (design §8.2). */
+export const EventEnvelope = Schema.Union([CommandEvent, FactEvent, ObservationEvent]).pipe(Schema.toTaggedUnion("kind"))
 export type EventEnvelope = typeof EventEnvelope.Type
 
 // ---- EventWorkEnvelope (design §8.4, §8.8) --------------------------------
@@ -193,11 +193,17 @@ export const WorkContextQuery = Schema.Struct({
 })
 export type WorkContextQuery = typeof WorkContextQuery.Type
 
-/** Per-work budget (design §8.8): bounded by workspace/agent/event root/hour. */
+/**
+ * Per-work budget (design §8.8). Bounded by workspace / agent / event root and,
+ * per design line 385, by hour: hourTokensMax limits tokens within
+ * hourWindowMinutes (a rolling hour window).
+ */
 export const WorkBudget = Schema.Struct({
   maxTokens: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   maxToolCalls: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   maxDurationMs: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).pipe(Schema.optional),
+  hourTokensMax: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  hourWindowMinutes: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),
   workspaceBudgetId: Schema.String.pipe(Schema.optional),
   agentBudgetId: Schema.String.pipe(Schema.optional),
   eventRoot: Schema.String.pipe(Schema.optional),
@@ -224,7 +230,7 @@ export type EventDelivery = typeof EventDelivery.Type
  * content trimming (§8.8) before it may influence the model.
  */
 export class EventWorkEnvelope extends Schema.Class<EventWorkEnvelope>("EventEnvelope.EventWorkEnvelope")({
-  schemaVersion: Schema.Literal(EventVersion.schema),
+  schemaVersion: Schema.Literal(EventVersion.workEnvelope),
   eventRef: Schema.String,
   eventType: Schema.String,
   objective: Schema.String,

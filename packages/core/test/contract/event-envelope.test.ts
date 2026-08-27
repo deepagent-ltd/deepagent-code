@@ -48,7 +48,7 @@ function makeEvent(kind: "command" | "fact" | "observation"): EventEnvelope {
 
 function makeWorkEnvelope(): EventWorkEnvelope {
   return decodeEventWorkEnvelope({
-    schemaVersion: "event.v1",
+    schemaVersion: "event-work.v1",
     eventRef: "event://e1",
     eventType: "goal.tick.requested",
     objective: "advance the goal",
@@ -62,7 +62,7 @@ function makeWorkEnvelope(): EventWorkEnvelope {
     risk: "medium",
     autonomyCeiling: "medium",
     contextQuery: { intent: "related", query: "advance" },
-    budget: { maxTokens: 8000, maxToolCalls: 4, maxDurationMs: 60000, workspaceBudgetId: "wb-1", eventRoot: "goal://1" },
+    budget: { maxTokens: 8000, maxToolCalls: 4, maxDurationMs: 60000, hourTokensMax: 4000, hourWindowMinutes: 60, workspaceBudgetId: "wb-1", eventRoot: "goal://1" },
     correlationId: "c-1",
     delivery: {
       consumerGroupId: "grp-1",
@@ -182,6 +182,46 @@ describe("event envelope negative shapes", () => {
     const input = { ...baseEvent(), schemaVersion: "event.v2", kind: "command", command: { action: "x" } }
     const error = evError(input)
     expect(error.path).toEqual(["schemaVersion"])
+  })
+})
+
+describe("per-member event envelope nested negatives (toTaggedUnion precise paths)", () => {
+  test("fact rejects a wrong-typed nested field at its precise path", () => {
+    const input = makeEvent("fact") as unknown as Record<string, unknown>
+    ;(input.fact as { outcome: unknown }).outcome = 123
+    expect(evError(input).path).toEqual(["fact"])
+  })
+
+  test("observation rejects a wrong-typed nested field at its precise path", () => {
+    const input = makeEvent("observation") as unknown as Record<string, unknown>
+    ;(input.observation as { observedMetric: unknown }).observedMetric = 123
+    expect(evError(input).path).toEqual(["observation"])
+  })
+
+  test("command rejects a wrong-typed nested field at its precise path", () => {
+    const input = makeEvent("command") as unknown as Record<string, unknown>
+    ;(input.command as { action: unknown }).action = 123
+    expect(evError(input).path).toEqual(["command", "action"])
+  })
+})
+
+describe("event work envelope budget hour dimension", () => {
+  test("a valid work envelope carries the hour budget fields", () => {
+    const envelope = makeWorkEnvelope()
+    expect(envelope.budget.hourTokensMax).toEqual(4000)
+    expect(envelope.budget.hourWindowMinutes).toEqual(60)
+  })
+
+  test("missing hourTokensMax is rejected with an exact path", () => {
+    const input = makeWorkEnvelope() as unknown as { budget: { hourTokensMax?: unknown } }
+    delete input.budget!.hourTokensMax
+    expect(workError(input).path).toEqual(["budget", "hourTokensMax"])
+  })
+
+  test("missing hourWindowMinutes is rejected with an exact path", () => {
+    const input = makeWorkEnvelope() as unknown as { budget: { hourWindowMinutes?: unknown } }
+    delete input.budget!.hourWindowMinutes
+    expect(workError(input).path).toEqual(["budget", "hourWindowMinutes"])
   })
 })
 
