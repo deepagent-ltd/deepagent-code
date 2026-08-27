@@ -15,6 +15,7 @@
  * EventV2+legacy GlobalBus bridge. adapter marks bridges that translate between planes.
  */
 import type { Dimension, Requirement, Verdict } from "./types"
+import { DIMENSIONS } from "./types"
 import { AUTHORITY } from "./authority"
 
 export type VerdictRule = {
@@ -24,13 +25,32 @@ export type VerdictRule = {
 export type EntryRules = Readonly<Partial<Record<Dimension, VerdictRule>>>
 export type RulePack = { readonly match: (id: string) => boolean; readonly rules: EntryRules }
 
-const LEGACY_PROMPT: Requirement = { kind: "reach", pathSuffix: AUTHORITY.LEGACY_PROMPT }
-const V2_EXEC_LOCAL: Requirement = { kind: "reach", pathSuffix: AUTHORITY.V2_EXECUTION_LOCAL }
+const LEGACY_PROMPT_PATH = AUTHORITY.LEGACY_PROMPT_CORE
+const V2_EXEC_LOCAL_PATH = AUTHORITY.V2_EXECUTION_LOCAL
+
+const LEGACY_PROMPT: Requirement = { kind: "reach", pathSuffix: LEGACY_PROMPT_PATH }
+const V2_EXEC_LOCAL: Requirement = { kind: "reach", pathSuffix: V2_EXEC_LOCAL_PATH }
 const V2_TOOL_REGISTRY: Requirement = { kind: "reach", pathSuffix: AUTHORITY.V2_TOOL_REGISTRY }
 const V2_EVENT_BUS: Requirement = { kind: "reach", pathSuffix: AUTHORITY.V2_EVENT_BUS }
+const V2_EVENT_ROUTER: Requirement = { kind: "reach", pathSuffix: AUTHORITY.V2_EVENT_ROUTER }
 const EVENT_V2_BRIDGE: Requirement = { kind: "reach", pathSuffix: AUTHORITY.EVENT_V2_BRIDGE }
 const PROJECTOR: Requirement = { kind: "reach", pathSuffix: AUTHORITY.PROJECTOR }
 const RECOVERY_BINDING: Requirement = { kind: "reach", pathSuffix: AUTHORITY.RECOVERY_BINDING }
+const GOAL_MANAGER: Requirement = { kind: "reach", pathSuffix: AUTHORITY.GOAL_MANAGER }
+const LEGACY_CANONICALIZER: Requirement = { kind: "reach", pathSuffix: AUTHORITY.LEGACY_CANONICALIZER }
+const LEGACY_PROVIDER_RESOLUTION: Requirement = { kind: "reach", pathSuffix: AUTHORITY.LEGACY_PROVIDER_RESOLUTION }
+
+const AUTHORITY_WRITERS: readonly string[] = [
+  AUTHORITY.LEGACY_PROMPT,
+  AUTHORITY.V2_EXECUTION_LOCAL,
+  AUTHORITY.V2_EXECUTION_RESTART,
+  AUTHORITY.V2_TOOL_REGISTRY,
+  AUTHORITY.V2_EVENT_BUS,
+  AUTHORITY.V2_EVENT_ROUTER,
+  AUTHORITY.EVENT_V2_BRIDGE,
+  AUTHORITY.PROJECTOR,
+  AUTHORITY.RECOVERY_BINDING,
+]
 
 function legacy(requirements: readonly Requirement[]): VerdictRule {
   return { verdict: "legacy", requirements }
@@ -47,40 +67,40 @@ function readOnly(requirements: readonly Requirement[]): VerdictRule {
 function doubleWrite(requirements: readonly Requirement[]): VerdictRule {
   return { verdict: "double_write", requirements }
 }
-
-/** Body chains that prove an operation's own handler drives the legacy SessionPrompt turn. */
-const LEGACY_EXEC_BODY = "promptSvc.loop"
-const LEGACY_STEER_BODY = "promptSvc.promptOrSteer"
-
-/** Body-chain presence/absence requirements. */
 function body(chain: string): Requirement {
   return { kind: "bodyChain", chain }
 }
 function notBody(chain: string): Requirement {
   return { kind: "noBodyChain", chain }
 }
+function noReachPath(suffix: string): Requirement {
+  return { kind: "noReach", pathSuffix: suffix }
+}
+function call(chain: string, fileSuffix?: string): Requirement {
+  return fileSuffix ? { kind: "callChain", chain, fileSuffix } : { kind: "callChain", chain }
+}
 
-/**
- * The authority writer chains whose ABSENCE in an entry's own handler body proves it only
- * reads the corresponding dimension (honest read_only). These are the chain symbols the
- * alpha pipeline uses to write each §2.1 authority; an entry whose body never touches them
- * cannot be the writer, so read_only is the provable verdict.
- */
-const READ_ONLY_NOBODY: readonly Requirement[] = [
+function all7(claim: VerdictRule): EntryRules {
+  const result: Record<Dimension, VerdictRule> = {} as Record<Dimension, VerdictRule>
+  for (const dimension of DIMENSIONS) result[dimension] = claim
+  return result as EntryRules
+}
+function legacyAll7(requirements: readonly Requirement[]): EntryRules {
+  return all7(legacy(requirements))
+}
+
+const READ_ONLY_NOBODY_REQS: readonly Requirement[] = [
   notBody("promptSvc.promptOrSteer"),
   notBody("promptSvc.loop"),
   notBody("promptSvc.promptAsync"),
   notBody("promptSvc.command"),
   notBody("promptSvc.shell"),
   notBody("promptSvc.cancel"),
+  notBody("promptSvc.latestSuggestion"),
   notBody("SessionV2.prompt"),
-  notBody("SessionV2.NotFoundError"),
   notBody("SessionExecution.wake"),
-  notBody("SessionExecution.run"),
   notBody("events.publish"),
   notBody("eventBus.tryPublish"),
-  notBody("eventBus.publish"),
-  notBody("bus.publish"),
   notBody("EventV2.Cursor"),
   notBody("EventV2.LEGACY_ARTIFACT_BATCH_EVENTS"),
   notBody("ToolRegistry.register"),
@@ -89,82 +109,217 @@ const READ_ONLY_NOBODY: readonly Requirement[] = [
   notBody("consultPanel"),
   notBody("PanelTurnRunner"),
 ]
-
-/** All seven dimensions are read_only: the entry only reads, owns no §2.1 authority. */
-function readOnlyAll7(): EntryRules {
-  const r = readOnly(READ_ONLY_NOBODY)
-  return {
-    admission_owner: r,
-    execution_owner: r,
-    context_writer: r,
-    provider_tool_writer: r,
-    event_producer_consumer: r,
-    projector: r,
-    recovery_owner: r,
-  }
+function readOnlyNoBody(): EntryRules {
+  return all7(readOnly(READ_ONLY_NOBODY_REQS))
+}
+function readOnlyNoReach(): EntryRules {
+  return all7(readOnly(AUTHORITY_WRITERS.map(noReachPath)))
 }
 
-/**
- * A session-execution entry whose handler drives the legacy SessionPrompt pipeline: it is
- * the legacy owner across all seven §2.1 dimensions (design.md §1/§16 at alpha).
- */
-function legacyExecAll7(chain: string, extraBody?: string): EntryRules {
-  const reqs: readonly Requirement[] = [
-    LEGACY_PROMPT,
-    body(chain),
-    ...(extraBody ? [body(extraBody)] : []),
-  ]
-  const r = legacy(reqs)
-  return {
-    admission_owner: r,
-    execution_owner: r,
-    context_writer: r,
-    provider_tool_writer: r,
-    event_producer_consumer: r,
-    projector: r,
-    recovery_owner: r,
+/** Same verdict on owned dims; EVERY other dimension read_only via the given requirements. */
+function withReadOnlyRest(
+  owned: Readonly<Partial<Record<Dimension, VerdictRule>>>,
+  readOnlyReqs: readonly Requirement[],
+): EntryRules {
+  const result: Record<Dimension, VerdictRule> = {} as Record<Dimension, VerdictRule>
+  for (const dimension of DIMENSIONS) {
+    result[dimension] = owned[dimension] ?? readOnly(readOnlyReqs)
   }
+  return result as EntryRules
 }
+
+/** Non-bus authority writels an event-plane consumer does not reach (so read_only rest is provable). */
+const EVENT_CONSUMER_READONLY: readonly Requirement[] = [
+  noReachPath(AUTHORITY.LEGACY_PROMPT),
+  noReachPath(AUTHORITY.V2_EXECUTION_LOCAL),
+  noReachPath(AUTHORITY.V2_EXECUTION_RESTART),
+  noReachPath(AUTHORITY.V2_TOOL_REGISTRY),
+  noReachPath(AUTHORITY.PROJECTOR),
+  noReachPath(AUTHORITY.RECOVERY_BINDING),
+]
+
+const LEGACY_READONLY_REST: readonly Requirement[] = [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish")]
 
 export const RULE_PACKS: readonly RulePack[] = [
-  // -----------------------------------------------------------------------------
-  // HTTP surface — session-execution operations that drive the legacy SessionPrompt
-  // turn (prompt / loop / steer / command / shell / abort / summary / init).
-  // -----------------------------------------------------------------------------
+  // ===========================================================================
+  // HTTP — session-execution operations driving the legacy SessionPrompt turn
+  // ===========================================================================
   {
-    match: (id) => id === "http.instance.session.prompt" || id === "http.instance.session.promptAsync",
-    rules: legacyExecAll7(LEGACY_STEER_BODY, "promptSvc.promptAsync"),
+    match: (id) =>
+      id.startsWith("http.instance.session.") &&
+      ["prompt", "promptAsync", "promptPrepare", "promptPrepareStream", "promptSuggestion", "command", "shell", "abort", "summarize", "init", "contextAttemptResolve", "continuationResolutionResolve"].includes(id.slice("http.instance.session.".length)),
+    rules: legacyAll7([LEGACY_PROMPT, body("promptSvc")]),
+  },
+  // ---- session create/fork (legacy Session session-lifecycle writers) ----
+  {
+    match: (id) => id === "http.instance.session.create",
+    rules: legacyAll7([LEGACY_PROMPT, body("Session.CreateInput")]),
   },
   {
-    match: (id) => id === "http.instance.session.promptPrepare" || id === "http.instance.session.promptPrepareStream" || id === "http.instance.session.promptSuggestion",
-    rules: legacyExecAll7("promptSvc.refineIntelligenceDraft"),
+    match: (id) => id === "http.instance.session.fork",
+    rules: legacyAll7([LEGACY_PROMPT, body("session.fork")]),
   },
   {
-    match: (id) => id === "http.instance.session.command",
-    rules: legacyExecAll7("promptSvc.command"),
+    match: (id) =>
+      id.startsWith("http.instance.session.") &&
+      ["get", "list", "status", "messages", "message", "plan", "diff", "todo", "exportSnapshot", "importSnapshot", "remove", "revert", "unrevert", "share", "unshare", "update", "deleteMessage", "deletePart", "updatePart", "permissionRespond", "contextCohort", "contextDiagnostics", "continuationResolutionList", "diffArtifactFile", "diffArtifactMaintenance", "diffArtifactManifest", "children"].includes(id.slice("http.instance.session.".length)),
+    rules: readOnlyNoBody(),
   },
   {
-    match: (id) => id === "http.instance.session.shell",
-    rules: legacyExecAll7("promptSvc.shell"),
+    match: (id) => id === "http.instance.session.providerResolutionResolve" || id === "http.instance.session.providerResolutionList",
+    rules: withReadOnlyRest(
+      { provider_tool_writer: legacy([LEGACY_PROVIDER_RESOLUTION, body("providerResolutionSvc")]) },
+      [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish")],
+    ),
+  },
+
+  // ---- deepagent goal/panel/knowledge/pack pipeline (legacy) ----
+  {
+    match: (id) =>
+      id.startsWith("http.instance.deepagent.") &&
+      ["goalEditPlan", "goalPause", "goalResume", "goalStart", "goalStop"].includes(id.slice("http.instance.deepagent.".length)),
+    rules: legacyAll7([LEGACY_PROMPT, body("experimentalGoalLoop")]),
   },
   {
-    match: (id) => id === "http.instance.session.abort",
-    rules: legacyExecAll7("promptSvc.cancel"),
+    match: (id) => id === "http.instance.deepagent.panelArm" || id === "http.instance.deepagent.panelStatus",
+    rules: legacyAll7([LEGACY_PROMPT, body("AgentGateway.DeepAgentSessionState")]),
   },
   {
-    match: (id) => id === "http.instance.session.summarize",
-    rules: legacyExecAll7("promptSvc.latestSuggestion"),
+    match: (id) => id === "http.instance.deepagent.panelConsult",
+    rules: legacyAll7([LEGACY_PROMPT, body("consultPanel")]),
   },
   {
-    match: (id) => id === "http.instance.session.init" || id === "http.instance.session.contextAttemptResolve" || id === "http.instance.session.continuationResolutionResolve",
-    rules: legacyExecAll7("SessionPrompt.Service"),
+    match: (id) =>
+      id.startsWith("http.instance.deepagent.") &&
+      ["knowledgeRejectIds", "knowledgeReleaseBaseline", "knowledgeShipGate"].includes(id.slice("http.instance.deepagent.".length)),
+    rules: legacyAll7([LEGACY_PROMPT, body("AgentGateway.DeepAgentKnowledgeSource")]),
   },
-  // -----------------------------------------------------------------------------
-  // HTTP surface — read-only query / infra operations (they read authority state but
-  // own nothing; the noBodyChain proofs must all verify against their own bodies).
-  // -----------------------------------------------------------------------------
   {
-    match: (id) => id.startsWith("http.instance.config.") || id.startsWith("http.instance.control.") ||
+    match: (id) =>
+      id.startsWith("http.instance.deepagent.") &&
+      ["packsActive", "packsAll"].includes(id.slice("http.instance.deepagent.".length)),
+    rules: legacyAll7([LEGACY_PROMPT, body("AgentGateway.DeepAgentDomainPackRegistry")]),
+  },
+  {
+    match: (id) =>
+      id.startsWith("http.instance.deepagent.") &&
+      ["packsPin", "packsUnpin"].includes(id.slice("http.instance.deepagent.".length)),
+    rules: legacyAll7([LEGACY_PROMPT, body("bus.publish")]),
+  },
+  {
+    match: (id) =>
+      id.startsWith("http.instance.deepagent.") &&
+      ["goalStartable", "goalStatus", "envFacts", "envFactsDecide", "envFactsModify", "knowledgeApprove", "knowledgePending", "knowledgeReviewSummary", "promote", "reject", "reviews", "wikiEdit", "wikiExecutionArchive", "wikiPage", "wikiPages", "wikiSearch"].includes(id.slice("http.instance.deepagent.".length)),
+    rules: readOnlyNoBody(),
+  },
+
+  // ---- global ----
+  {
+    match: (id) => id === "http.instance.global.capabilities",
+    rules: legacyAll7([LEGACY_PROMPT, body("experimentalExpertPanel")]),
+  },
+  {
+    match: (id) => id === "http.instance.global.event",
+    rules: withReadOnlyRest(
+      { event_producer_consumer: doubleWrite([body("EventV2"), body("GlobalBus")]) },
+      [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt")],
+    ),
+  },
+  {
+    match: (id) => id.startsWith("http.instance.global."),
+    rules: readOnlyNoBody(),
+  },
+
+  // ---- im ----
+  {
+    match: (id) => id === "http.instance.im.createMessage",
+    rules: withReadOnlyRest(
+      {
+        admission_owner: legacy([LEGACY_PROMPT, body("eventBus.tryPublish")]),
+        execution_owner: legacy([LEGACY_PROMPT, body("eventBus.tryPublish")]),
+        event_producer_consumer: legacy([V2_EVENT_BUS, body("eventBus.tryPublish")]),
+      },
+      [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt")],
+    ),
+  },
+  {
+    match: (id) => id.startsWith("http.instance.im."),
+    rules: readOnlyNoBody(),
+  },
+
+  // ---- tui ----
+  {
+    match: (id) => id.startsWith("http.instance.tui.") && id !== "http.instance.tui.controlNext" && id !== "http.instance.tui.controlResponse",
+    rules: legacyAll7([LEGACY_PROMPT, body("events.publish")]),
+  },
+  {
+    match: (id) => id === "http.instance.tui.controlNext" || id === "http.instance.tui.controlResponse" || id === "http.instance.im.createGroup" || id === "http.instance.im-websocket.connect",
+    rules: readOnlyNoBody(),
+  },
+
+  // ---- webhook ----
+  {
+    match: (id) => id.startsWith("http.instance.webhook."),
+    rules: legacyAll7([LEGACY_PROMPT, body("eventBus.tryPublish")]),
+  },
+
+  // ---- sync (EventV2 projection writers) ----
+  {
+    match: (id) =>
+      id.startsWith("http.instance.sync.") &&
+      ["artifacts", "checkpointCompact", "checkpointDiscard", "checkpointFinalize", "checkpointPrepare", "checkpointStage", "fileArtifacts", "snapshotRows"].includes(id.slice("http.instance.sync.".length)),
+    rules: withReadOnlyRest(
+      {
+        event_producer_consumer: v2([PROJECTOR, body("EventV2")]),
+        projector: v2([PROJECTOR, body("EventV2")]),
+      },
+      [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish")],
+    ),
+  },
+  {
+    match: (id) => id.startsWith("http.instance.sync."),
+    rules: readOnlyNoBody(),
+  },
+
+  // ---- controlPlane.moveSession (V2 session authority) ----
+  {
+    match: (id) => id === "http.instance.controlPlane.moveSession",
+    rules: withReadOnlyRest(
+      {
+        admission_owner: v2([V2_EXEC_LOCAL, body("SessionV2")]),
+        execution_owner: v2([V2_EXEC_LOCAL, body("SessionV2")]),
+      },
+      [notBody("promptSvc.promptOrSteer"), notBody("events.publish")],
+    ),
+  },
+
+  // ---- event subscribe (legacy event-plane consumer, no handler body) ----
+  {
+    match: (id) => id === "http.instance.event.subscribe" || id === "http.server.server.event.event.subscribe",
+    rules: legacyAll7([LEGACY_PROMPT]),
+  },
+
+  // ---- legacy server session/message planes (old server: reaches the legacy prompt) ----
+  {
+    match: (id) =>
+      id.startsWith("http.server.server.session.") ||
+      id === "http.server.server.message.session.messages",
+    rules: legacyAll7([LEGACY_PROMPT]),
+  },
+
+  // ---- server read-only catalog / provider / skill ----
+  {
+    match: (id) =>
+      id.startsWith("http.server.server.model.") ||
+      id.startsWith("http.server.server.provider.") ||
+      id.startsWith("http.server.server.skill."),
+    rules: readOnlyNoBody(),
+  },
+
+  // ---- HTTP infra read-only groups ----
+  {
+    match: (id) =>
+      id.startsWith("http.instance.config.") || id.startsWith("http.instance.control.") ||
       id.startsWith("http.instance.debug.") || id.startsWith("http.instance.file.") ||
       id.startsWith("http.instance.mcp.") || id.startsWith("http.instance.pty.") ||
       id.startsWith("http.instance.pty-connect.") || id.startsWith("http.instance.question.") ||
@@ -172,14 +327,137 @@ export const RULE_PACKS: readonly RulePack[] = [
       id.startsWith("http.instance.oversight.") || id.startsWith("http.instance.profile.") ||
       id.startsWith("http.instance.project.") || id.startsWith("http.instance.projectCopy.") ||
       id.startsWith("http.instance.workspace.") || id.startsWith("http.instance.workspaceConfig.") ||
-      id.startsWith("http.instance.instance.") || id.startsWith("http.instance.experimental.console") ||
-      id.startsWith("http.instance.experimental.resource") || id.startsWith("http.instance.experimental.session") ||
-      id.startsWith("http.instance.experimental.toolIDs") === false && id.startsWith("http.instance.experimental.tool") ||
-      id.startsWith("http.instance.experimental.worktree") || id.startsWith("http.instance.experimental.consoleSwitch") ||
-      id.startsWith("http.instance.experimental.consoleOrgs") ||
+      id.startsWith("http.instance.instance.") || id.startsWith("http.instance.experimental.") ||
+      id.startsWith("http.instance.provider.") ||
       id.startsWith("http.server.server.fs.") || id.startsWith("http.server.server.health.") ||
       id.startsWith("http.server.server.permission.") || id.startsWith("http.server.server.question.") ||
       id.startsWith("http.server.server.command.") || id.startsWith("http.server.server.agent."),
-    rules: readOnlyAll7(),
+    rules: readOnlyNoBody(),
+  },
+
+  // ===========================================================================
+  // ACP protocol handlers (drive the legacy SessionPrompt session pipeline)
+  // ===========================================================================
+  {
+    match: (id) => id.startsWith("acp."),
+    rules: legacyAll7([LEGACY_PROMPT]),
+  },
+
+  // ===========================================================================
+  // dacode CLI (legacy composition entry; every command runs under the legacy CLI layer)
+  // ===========================================================================
+  {
+    match: (id) => id.startsWith("cli.dacode."),
+    rules: legacyAll7([LEGACY_PROMPT]),
+  },
+
+  // ===========================================================================
+  // Composition roots
+  // ===========================================================================
+  {
+    match: (id) =>
+      id === "composition.app-runtime-layers" || id === "composition.dacode-cli-entry" ||
+      id === "composition.instance-httpapi-stack" || id === "composition.server-web-handler",
+    rules: legacyAll7([LEGACY_PROMPT]),
+  },
+
+  // Panel / IM components that are not wired to any authority writer -> read_only.
+  {
+    match: (id) => id === "panel.orchestrator" || id === "panel.arbiter" || id === "im.agent-orchestrator" || id === "im.agent-reply-sink",
+    rules: readOnlyNoReach(),
+  },
+
+  // ===========================================================================
+  // Task / Goal / Panel pipelines (legacy AgentGateway goal/panel runtime)
+  // ===========================================================================
+  {
+    match: (id) =>
+      id === "task.goal-manager" || id === "task.goal-driver" || id === "task.goal-loop-wiring" ||
+      id === "task.task-run-admission" || id === "background.job" ||
+      id === "panel.consult" || id === "panel.panelist-runner",
+    rules: legacyAll7([LEGACY_PROMPT]),
+  },
+
+  // ===========================================================================
+  // IM server-side pipeline (legacy SessionPrompt)
+  // ===========================================================================
+  {
+    match: (id) => id === "im.agent-executor" || id === "im.agent-progress-stream" || id === "im.agent-orchestrator" || id === "im.agent-reply-sink",
+    rules: legacyAll7([LEGACY_PROMPT]),
+  },
+
+  // ===========================================================================
+  // Event plane (durable V2 bus / router / consumers / bridge)
+  // ===========================================================================
+  {
+    match: (id) => id === "event.deepagent-bus",
+    rules: withReadOnlyRest({ event_producer_consumer: v2([V2_EVENT_BUS]) }, EVENT_CONSUMER_READONLY),
+  },
+  {
+    match: (id) => id === "event.event-router",
+    rules: withReadOnlyRest({ event_producer_consumer: v2([V2_EVENT_ROUTER]) }, EVENT_CONSUMER_READONLY),
+  },
+  {
+    match: (id) => id === "event.goal-tick-consumer" || id === "event.panel-convene-consumer" || id === "event.wiki-event-driven-archiver",
+    rules: withReadOnlyRest({ event_producer_consumer: v2([V2_EVENT_BUS]) }, EVENT_CONSUMER_READONLY),
+  },
+  {
+    match: (id) => id === "event.legacy-canonicalizer-daemon",
+    rules: withReadOnlyRest({ event_producer_consumer: adapter([LEGACY_CANONICALIZER]) }, EVENT_CONSUMER_READONLY),
+  },
+  {
+    match: (id) => id === "event.v2-bridge",
+    rules: withReadOnlyRest({}, [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish")]),
+  },
+
+  // ===========================================================================
+  // Desktop & lildax lifecycle entry points (reach no authority writer -> read_only)
+  // ===========================================================================
+  {
+    match: (id) => id.startsWith("desktop.") || id.startsWith("cli.lildax.") ||
+      id === "composition.desktop-sidecar-start" || id === "composition.lildax-runtime",
+    rules: readOnlyNoReach(),
+  },
+
+  // ===========================================================================
+  // Tools & Provider & Recovery planes (single authoritative dimension; rest read_only)
+  // ===========================================================================
+  {
+    match: (id) => id === "tools.dacode-registry",
+    rules: withReadOnlyRest(
+      { provider_tool_writer: legacy([LEGACY_PROMPT, V2_TOOL_REGISTRY, call("register")]) },
+      [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish")],
+    ),
+  },
+  {
+    match: (id) => id === "tools.v2-registry",
+    rules: withReadOnlyRest(
+      { provider_tool_writer: v2([V2_TOOL_REGISTRY, call("register")]) },
+      [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish")],
+    ),
+  },
+  {
+    match: (id) => id.startsWith("provider."),
+    rules: withReadOnlyRest(
+      { provider_tool_writer: readOnly(AUTHORITY_WRITERS.map(noReachPath)) },
+      [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish")],
+    ),
+  },
+  {
+    match: (id) => id === "recovery.database-binding",
+    rules: withReadOnlyRest({ recovery_owner: readOnly([RECOVERY_BINDING]) }, [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish")]),
+  },
+  {
+    match: (id) => id === "recovery.session-execution-restart",
+    rules: withReadOnlyRest({ recovery_owner: v2([{ kind: "reach", pathSuffix: AUTHORITY.V2_EXECUTION_RESTART }]) }, [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish")]),
+  },
+  {
+    match: (id) => id === "recovery.task-recovery-tool",
+    rules: withReadOnlyRest({ recovery_owner: legacy([{ kind: "reach", pathSuffix: "packages/deepagent-code/src/tool/task_recovery.ts" }]) }, [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish")]),
+  },
+  {
+    match: (id) => id === "recovery.provider-owner-runtime",
+    rules: withReadOnlyRest({ recovery_owner: adapter([{ kind: "reach", pathSuffix: "packages/deepagent-code/src/context-federation/provider-owner-runtime.ts" }]) }, [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish")]),
   },
 ];
+

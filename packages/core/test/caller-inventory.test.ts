@@ -148,6 +148,18 @@ describe("C0-01 caller inventory gate", () => {
   test("surface coverage constants stay frozen", () => {
     expect([...INVENTORY_SURFACE_IDS].sort()).toEqual([...SURFACE_IDS].sort())
   })
+
+  test("C0-01 exit condition: every production caller is classified on all seven authority dimensions", () => {
+    // The freeze is complete only when the honest classification leaves no unproven owner.
+    // unclassified=0 is reached by machine-verified requirements, never by declaring a
+    // guessed category; a dimension that cannot be proven stays unclassified by design.
+    expect(inventory.totals.unclassifiedRoles).toBe(0)
+    expect(inventory.totals.unclassifiedEntries).toBe(0)
+    for (const entry of inventory.entries) {
+      expect(entry.unclassifiedCount).toBe(0)
+      expect(entry.roles.length).toBe(DIMENSIONS.length)
+    }
+  })
 })
 
 function sortedJson(_key: string, value: unknown): unknown {

@@ -165,7 +165,7 @@ function handleCallAtLine(mod: ReturnType<typeof parseModule>, line: number): ts
     if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
       const callee = node.expression
       if (
-        callee.name.text === "handle" &&
+        (callee.name.text === "handle" || callee.name.text === "handleRaw") &&
         // Anchor to this call's OWN .handle property access, not node.getStart() (which returns
         // the start of the whole receiver chain for chained .handle(op, fn) expressions).
         sf.getLineAndCharacterOfPosition(callee.name.getStart()).line + 1 === line &&

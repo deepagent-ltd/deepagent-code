@@ -10,6 +10,8 @@
 export const AUTHORITY = {
   /** Legacy SessionPrompt pipeline — the execution/admission authority for most surfaces today. */
   LEGACY_PROMPT: "packages/deepagent-code/src/session/prompt.ts",
+  /** Core legacy SessionPrompt service definition (the authoritative legacy prompt module). */
+  LEGACY_PROMPT_CORE: "packages/core/src/session/prompt.ts",
   /** Legacy explicit provider resolution (prepared attempt / model route). */
   LEGACY_PROVIDER_RESOLUTION: "packages/deepagent-code/src/session/legacy-provider-resolution.ts",
   /** V2 SessionExecution local coordinator — the V2 execution authority. */

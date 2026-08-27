@@ -20,7 +20,6 @@ export type EntryRules = Readonly<Partial<Record<Dimension, VerdictRule>>>
 const PROMPT_PATH_SUFFIX = "packages/deepagent-code/src/session/prompt.ts"
 
 const RULES: ReadonlyArray<{ readonly match: (id: string) => boolean; readonly rules: EntryRules }> = [
-  ...RULE_PACKS,
   // Known double-write production path: every core event persists through EventV2 AND
   // mirrors onto the legacy GlobalBus channel inside the bridge layer.
   {
@@ -41,7 +40,7 @@ const RULES: ReadonlyArray<{ readonly match: (id: string) => boolean; readonly r
   // Known legacy-only production path: IM server-side agents execute strictly through
   // the legacy SessionPrompt service (its own source documents this contract).
   {
-    match: (id) => id.startsWith("im."),
+    match: (id) => id === "im.agent-executor",
     rules: {
       execution_owner: {
         verdict: "legacy",
@@ -154,6 +153,7 @@ const RULES: ReadonlyArray<{ readonly match: (id: string) => boolean; readonly r
       },
     },
   },
+  ...RULE_PACKS,
 ]
 
 /** Rules matching a given entry id (first match wins per dimension across all packs). */

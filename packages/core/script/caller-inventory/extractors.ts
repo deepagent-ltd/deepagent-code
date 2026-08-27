@@ -113,7 +113,7 @@ function visitWithHttpContext(
         const op = unquote(node.arguments[0]?.getText(sf))
         if (op !== undefined && context !== undefined) visitEndpoint(node, method, op, context)
       }
-      if (method === "handle") {
+      if (method === "handle" || method === "handleRaw") {
         const op = unquote(node.arguments[0]?.getText(sf))
         if (op !== undefined && context !== undefined) visitHandle(node, op, context)
       }
