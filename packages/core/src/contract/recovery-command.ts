@@ -9,6 +9,7 @@ import { contentDigest } from "./digest"
 // discriminant union, the evidence schema and the rule that free text is never
 // acceptable as evidence (typed fields only).
 
+/** Version matrix for the recovery command contract. */
 export const RecoveryVersion = {
   command: "recovery-command.v1",
   descriptor: "recovery-descriptor.v1",
@@ -106,6 +107,7 @@ const descriptorCommon = {
   casTokens: RecoveryCasTokens,
 }
 
+/** Descriptor: everything about an attempt is verifiable (design §9.1 resolvable_exact). */
 export class ExactDescriptor extends Schema.Class<ExactDescriptor>("Recovery.ExactDescriptor")({
   ...descriptorCommon,
   descriptorKind: Schema.Literal("exact"),
@@ -118,6 +120,7 @@ export class ExactDescriptor extends Schema.Class<ExactDescriptor>("Recovery.Exa
   }),
 }) {}
 
+/** Descriptor: baseline is corrupt/missing but a trusted snapshot can be rebuilt (design §9.1 repairable_exact). */
 export class RepairableDescriptor extends Schema.Class<RepairableDescriptor>("Recovery.RepairableDescriptor")({
   ...descriptorCommon,
   descriptorKind: Schema.Literal("repairable"),
@@ -128,6 +131,7 @@ export class RepairableDescriptor extends Schema.Class<RepairableDescriptor>("Re
   }),
 }) {}
 
+/** Descriptor: the original turn is unrecoverable but a safe boundary exists (design §9.1 fork_only). */
 export class ForkDescriptor extends Schema.Class<ForkDescriptor>("Recovery.ForkDescriptor")({
   ...descriptorCommon,
   descriptorKind: Schema.Literal("fork"),
@@ -139,6 +143,7 @@ export class ForkDescriptor extends Schema.Class<ForkDescriptor>("Recovery.ForkD
   }),
 }) {}
 
+/** Descriptor: local resolution is not provable and needs admin/external coordination (design §9.1). */
 export class CoordinationDescriptor extends Schema.Class<CoordinationDescriptor>("Recovery.CoordinationDescriptor")({
   ...descriptorCommon,
   descriptorKind: Schema.Literal("coordination"),
@@ -149,6 +154,7 @@ export class CoordinationDescriptor extends Schema.Class<CoordinationDescriptor>
   }),
 }) {}
 
+/** Descriptor: a resolution/bridge/terminal is complete (design §9.1 resolved). */
 export class ResolvedDescriptor extends Schema.Class<ResolvedDescriptor>("Recovery.ResolvedDescriptor")({
   ...descriptorCommon,
   descriptorKind: Schema.Literal("resolved"),
@@ -202,6 +208,7 @@ const commandCommon = {
   commandCreatedAt: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
 }
 
+/** Command: inspect or resolve following a descriptor. */
 export class RecoverCommand extends Schema.Class<RecoverCommand>("Recovery.RecoverCommand")({
   ...commandCommon,
   commandKind: Schema.Literal("recover"),
@@ -211,6 +218,7 @@ export class RecoverCommand extends Schema.Class<RecoverCommand>("Recovery.Recov
   }),
 }) {}
 
+/** Command: abandon the exact attempt (design §9.2). */
 export class AbandonExactCommand extends Schema.Class<AbandonExactCommand>("Recovery.AbandonExactCommand")({
   ...commandCommon,
   commandKind: Schema.Literal("abandon_exact"),
@@ -221,6 +229,7 @@ export class AbandonExactCommand extends Schema.Class<AbandonExactCommand>("Reco
   }),
 }) {}
 
+/** Command: rebuild the baseline and abandon (design §9.2). */
 export class RepairBaselineCommand extends Schema.Class<RepairBaselineCommand>("Recovery.RepairBaselineCommand")({
   ...commandCommon,
   commandKind: Schema.Literal("repair_baseline_and_abandon"),
@@ -231,6 +240,7 @@ export class RepairBaselineCommand extends Schema.Class<RepairBaselineCommand>("
   }),
 }) {}
 
+/** Command: fork from a proven safe boundary (design §9.2). */
 export class ForkFromSafeBoundaryCommand extends Schema.Class<ForkFromSafeBoundaryCommand>(
   "Recovery.ForkFromSafeBoundaryCommand",
 )({
@@ -243,6 +253,7 @@ export class ForkFromSafeBoundaryCommand extends Schema.Class<ForkFromSafeBounda
   }),
 }) {}
 
+/** Command: confirm settled with external provider evidence (design §9.2, C1B-08). */
 export class ConfirmSettledCommand extends Schema.Class<ConfirmSettledCommand>("Recovery.ConfirmSettledCommand")({
   ...commandCommon,
   commandKind: Schema.Literal("confirm_settled"),
@@ -252,6 +263,7 @@ export class ConfirmSettledCommand extends Schema.Class<ConfirmSettledCommand>("
   }),
 }) {}
 
+/** Command: query a prior command by reference without creating a new one (design §9.2). */
 export class QueryCommand extends Schema.Class<QueryCommand>("Recovery.QueryCommand")({
   ...commandCommon,
   commandKind: Schema.Literal("query_command"),

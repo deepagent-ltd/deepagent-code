@@ -7,6 +7,7 @@ import { contentDigest } from "./digest"
 // Design authority: docs/core-v2.0-beta/design.md §6 (four-graph federation).
 // Pure-new contract module: not imported by any production module this wave.
 
+/** Version matrix for the selection contract. `schema` is the envelope schema version. */
 export const SelectionVersion = {
   schema: "context-selection.v1",
   graphStatus: 1,
@@ -82,6 +83,7 @@ export const GraphStatus = Schema.Struct({
 })
 export type GraphStatus = typeof GraphStatus.Type
 
+/** Session/activity/input membership the resolver is scoped to. */
 export const SelectionMembership = Schema.Struct({
   sessionId: Schema.String,
   activityId: Schema.String,
@@ -89,35 +91,41 @@ export const SelectionMembership = Schema.Struct({
 })
 export type SelectionMembership = typeof SelectionMembership.Type
 
+/** Location identity; workspace is optional and implies local placement. */
 export const SelectionLocation = Schema.Struct({
   locationKey: Schema.String,
   workspaceId: Schema.String.pipe(Schema.optional),
 })
 export type SelectionLocation = typeof SelectionLocation.Type
 
+/** Acting principal identity and its authorization epoch. */
 export const SelectionPrincipal = Schema.Struct({
   principalId: Schema.String,
   authorizationEpoch: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
 })
 export type SelectionPrincipal = typeof SelectionPrincipal.Type
 
+/** Workspace / tenant identity used for isolation and egress policy. */
 export const SelectionWorkspace = Schema.Struct({
   workspaceId: Schema.String,
   tenantId: Schema.String.pipe(Schema.optional),
 })
 export type SelectionWorkspace = typeof SelectionWorkspace.Type
 
+/** Security namespace the request is evaluated in. */
 export const SelectionSecurityNamespace = Schema.Struct({
   securityNamespaceId: Schema.String,
 })
 export type SelectionSecurityNamespace = typeof SelectionSecurityNamespace.Type
 
+/** Project scope the four graphs are queried against. */
 export const SelectionProjectScope = Schema.Struct({
   projectScopeKey: Schema.String,
   projectId: Schema.String.pipe(Schema.optional),
 })
 export type SelectionProjectScope = typeof SelectionProjectScope.Type
 
+/** Egress policy bound to the request. */
 export const SelectionEgress = Schema.Struct({
   policyId: Schema.String,
   epoch: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
@@ -126,6 +134,7 @@ export const SelectionEgress = Schema.Struct({
 })
 export type SelectionEgress = typeof SelectionEgress.Type
 
+/** Agent policy governing whether degraded/denied retrieval may continue. */
 export const SelectionAgentPolicy = Schema.Struct({
   agentId: Schema.String,
   autonomyCeiling: Schema.Literals(["low", "medium", "high", "critical"]),
@@ -133,6 +142,7 @@ export const SelectionAgentPolicy = Schema.Struct({
 })
 export type SelectionAgentPolicy = typeof SelectionAgentPolicy.Type
 
+/** Model capability snapshot bound to the request. */
 export const SelectionModelCapability = Schema.Struct({
   modelId: Schema.String,
   providerId: Schema.String,
@@ -147,6 +157,7 @@ export const SelectionModelCapability = Schema.Struct({
 })
 export type SelectionModelCapability = typeof SelectionModelCapability.Type
 
+/** Released knowledge snapshot binding. */
 export const SelectionReleasedKnowledge = Schema.Struct({
   snapshotId: Schema.String,
   binding: Schema.Literal("current"),
@@ -170,6 +181,7 @@ export const SelectionIdentity = Schema.Struct({
 })
 export type SelectionIdentity = typeof SelectionIdentity.Type
 
+/** Freshness / outcome of the selection validation for this attempt. */
 export const SelectionValidation = Schema.Struct({
   validationId: Schema.String,
   outcome: Schema.Literals(["valid", "invalidated", "denied", "timeout"]),
@@ -177,6 +189,7 @@ export const SelectionValidation = Schema.Struct({
 })
 export type SelectionValidation = typeof SelectionValidation.Type
 
+/** A selected reference projected into the attempt prompt. */
 export const SelectionRef = Schema.Struct({
   graph: GraphKindSchema,
   ref: Schema.String,
@@ -188,18 +201,21 @@ export const SelectionRef = Schema.Struct({
 })
 export type SelectionRef = typeof SelectionRef.Type
 
+/** Artifact binding: an available projection artifact. */
 export const SelectionArtifactAvailable = Schema.Struct({
   status: Schema.Literal("available"),
   ref: Schema.String,
 })
 export type SelectionArtifactAvailable = typeof SelectionArtifactAvailable.Type
 
+/** Artifact binding: a degraded inline audit. */
 export const SelectionArtifactDegraded = Schema.Struct({
   status: Schema.Literal("degraded_unavailable"),
   inlineAudit: Schema.String,
 })
 export type SelectionArtifactDegraded = typeof SelectionArtifactDegraded.Type
 
+/** Discriminated union for the artifact binding (available | degraded_unavailable). */
 export const SelectionArtifactBinding = Schema.Union([SelectionArtifactAvailable, SelectionArtifactDegraded])
 export type SelectionArtifactBinding = typeof SelectionArtifactBinding.Type
 

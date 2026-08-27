@@ -8,6 +8,7 @@ import { contentDigest } from "./digest"
 // in particular §8.2 (event classes), §8.4 (work envelope), §8.6 (delivery),
 // §8.8 (bounded/anti-noise) and §14 (correlation chain).
 
+/** Version matrix for the event envelope contract. `schema` is the envelope schema version. */
 export const EventVersion = {
   schema: "event.v1",
   workEnvelope: 1,
@@ -98,6 +99,7 @@ export const EventConsumerRegistry = Schema.Struct({
 })
 export type EventConsumerRegistry = typeof EventConsumerRegistry.Type
 
+/** Command-specific payload: the requested action and its references. */
 export const CommandBody = Schema.Struct({
   action: Schema.String,
   targetRef: Schema.String.pipe(Schema.optional),
@@ -106,6 +108,7 @@ export const CommandBody = Schema.Struct({
 })
 export type CommandBody = typeof CommandBody.Type
 
+/** Fact-specific payload: the committed outcome and its authority refs. */
 export const FactBody = Schema.Struct({
   outcome: Schema.String,
   terminalHash: Schema.String.pipe(Schema.optional),
@@ -113,6 +116,7 @@ export const FactBody = Schema.Struct({
 })
 export type FactBody = typeof FactBody.Type
 
+/** Observation-specific payload: the observed metric / severity / external ref. */
 export const ObservationBody = Schema.Struct({
   observedMetric: Schema.String.pipe(Schema.optional),
   severity: EventRisk.pipe(Schema.optional),

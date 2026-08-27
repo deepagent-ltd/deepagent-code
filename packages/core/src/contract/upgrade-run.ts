@@ -8,6 +8,7 @@ import { contentDigest } from "./digest"
 // addressed migration receipt), plus worklist C1A-03 and C1A-04 notes (skip
 // migration must be illegal in the contract).
 
+/** Version matrix for the upgrade run contract. `run`/`receipt` are the schema versions. */
 export const UpgradeRunVersion = {
   run: "upgrade-run.v1",
   receipt: "migration-receipt.v1",
