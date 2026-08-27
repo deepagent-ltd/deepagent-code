@@ -72,7 +72,7 @@ const RULES: ReadonlyArray<{ readonly match: (id: string) => boolean; readonly r
     rules: {
       provider_tool_writer: {
         verdict: "read_only",
-        requirements: [{ kind: "reach", pathSuffix: "packages/core/src/model.ts" }, { kind: "reach", pathSuffix: "packages/core/src/session/schema.ts" }],
+        requirements: [{ kind: "reach", pathSuffix: "packages/core/src/model.ts" }],
       },
     },
   },
@@ -81,7 +81,7 @@ const RULES: ReadonlyArray<{ readonly match: (id: string) => boolean; readonly r
     rules: {
       provider_tool_writer: {
         verdict: "read_only",
-        requirements: [{ kind: "reach", pathSuffix: "packages/core/src/provider.ts" }, { kind: "reach", pathSuffix: "packages/core/src/session/schema.ts" }],
+        requirements: [{ kind: "reach", pathSuffix: "packages/core/src/provider.ts" }],
       },
     },
   },
@@ -90,7 +90,7 @@ const RULES: ReadonlyArray<{ readonly match: (id: string) => boolean; readonly r
     rules: {
       provider_tool_writer: {
         verdict: "read_only",
-        requirements: [{ kind: "reach", pathSuffix: "packages/core/src/catalog.ts" }, { kind: "reach", pathSuffix: "packages/core/src/session/schema.ts" }],
+        requirements: [{ kind: "reach", pathSuffix: "packages/core/src/catalog.ts" }],
       },
     },
   },
@@ -99,7 +99,7 @@ const RULES: ReadonlyArray<{ readonly match: (id: string) => boolean; readonly r
     rules: {
       provider_tool_writer: {
         verdict: "read_only",
-        requirements: [{ kind: "reach", pathSuffix: "packages/core/src/model-request.ts" }, { kind: "reach", pathSuffix: "packages/core/src/session/schema.ts" }],
+        requirements: [{ kind: "reach", pathSuffix: "packages/core/src/model-request.ts" }],
       },
     },
   },

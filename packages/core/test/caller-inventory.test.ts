@@ -31,6 +31,34 @@ describe("C0-01 caller inventory gate", () => {
     expect(covered.size).toBe(SURFACE_IDS.length)
   })
 
+  test("NEW-P3-G regression: exact universe count and frozen lildax leaf-command set", () => {
+    // Universe is frozen at 379 (NEW-P2-A removed the 8 spurious bare-nested lildax entries).
+    expect(inventory.entries.length).toBe(379)
+    const lildax = inventory.entries
+      .filter((entry) => entry.entry.surface === "cli-lildax")
+      .map((entry) => entry.entry.id)
+      .sort()
+    expect(lildax.length).toBe(12)
+    // The exact leaf set doubles as the nested-double-count negative: any bare top-level entry
+    // produced from a nested Spec.make (e.g. cli.lildax.agents instead of cli.lildax.debug.agents,
+    // cli.lildax.list instead of cli.lildax.workspace.list) would break that this exact set, and any
+    // standalone <cliName> root would break the surface count.
+    expect(lildax).toEqual([
+      "cli.lildax.debug.agents",
+      "cli.lildax.login",
+      "cli.lildax.logout",
+      "cli.lildax.migrate",
+      "cli.lildax.service.password",
+      "cli.lildax.service.restart",
+      "cli.lildax.service.start",
+      "cli.lildax.service.status",
+      "cli.lildax.service.stop",
+      "cli.lildax.workspace.list",
+      "cli.lildax.workspace.use",
+      "cli.lildax.serve",
+    ].sort())
+  })
+
   test("every entry is fully classified along the seven authority dimensions with legal verdicts and evidence", () => {
     for (const classified of inventory.entries) {
       const roles = new Map(classified.roles.map((role) => [role.dimension, role]))
@@ -156,13 +184,16 @@ describe("C0-01 caller inventory gate", () => {
     for (const entry of inventory.entries) {
       for (const role of entry.roles) {
         if (role.verdict !== "read_only") continue
-        // A genuine read fact is a non-absence marker to a module that is NOT the entry's own
-        // repoFile. "positives" therefore already excludes both absent:<...> and the synthetic
-        // reach:<own-repoFile> self-reach; requiring at least one means read_only is never
-        // absence-only and never satisfied by a self-reach alone.
-        const positives = role.evidence.filter(
-          (proof) => !proof.marker.startsWith("absent:") && !proof.marker.endsWith(entry.entry.repoFile),
-        )
+        // R1 NEW-P3-F: a read_only verdict must carry at least one POSITIVE read fact (a reach to a
+        // documented reader module the entry reads from, which MAY be the entry's own reader/loader/
+        // schema/query/event/recovery module, or a body/call marker). The old synthetic
+        // always-succeeds build.ts self-reach injection was removed; absence-only is still rejected,
+        // and a bare always-on self-reach (reach:<entry.repoFile> that would have been injected on
+        // every read_only dim) is flagged.
+        const positives = role.evidence.filter((proof) => !proof.marker.startsWith("absent:"))
+        // Reject ABSENCE-ONLY read_only. A documented reader may be the entry's own reader/loader/
+        // schema/query/event/recovery module (NEW-P3-F), so a reach to the entry's own module is a
+        // legitimate read fact; the removed always-succeeds build.ts injection is no longer present.
         expect(positives.length).toBeGreaterThan(0)
       }
     }

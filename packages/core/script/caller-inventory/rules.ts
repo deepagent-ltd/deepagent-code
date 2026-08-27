@@ -153,6 +153,49 @@ const LEGACY_READONLY_REST: readonly Requirement[] = [notBody("promptSvc.promptO
 
 export const RULE_PACKS: readonly RulePack[] = [
   // ===========================================================================
+  // NEW-P3-F: genuine reader/loader/schema/query/event/recovery entries whose OWN module IS their
+  // reader. Their non-owner dimensions are read_only with the entry's own module as the (reachable)
+  // read fact — these are documented readers, not the removed always-succeeds synthetic self-reach.
+  // These must come FIRST so they win over the generic event/provider/recovery rules below.
+  // ===========================================================================
+  {
+    match: (id) => id === "provider.model-catalog-parse",
+    rules: withReadOnlyRest({}, [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish"), notBody("EventV2.Cursor")], "packages/core/src/model.ts"),
+  },
+  {
+    match: (id) => id === "provider.provider-v2-schema",
+    rules: withReadOnlyRest({}, [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish"), notBody("EventV2.Cursor")], "packages/core/src/provider.ts"),
+  },
+  {
+    match: (id) => id === "provider.model-request-resolver",
+    rules: withReadOnlyRest({}, [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish"), notBody("EventV2.Cursor")], "packages/core/src/model-request.ts"),
+  },
+  {
+    match: (id) => id === "event.deepagent-bus",
+    rules: withReadOnlyRest({ event_producer_consumer: v2([V2_EVENT_BUS]) }, EVENT_CONSUMER_READONLY, "packages/core/src/deepagent/deepagent-event-bus.ts"),
+  },
+  {
+    match: (id) => id === "event.event-router",
+    rules: withReadOnlyRest({ event_producer_consumer: v2([V2_EVENT_ROUTER]) }, EVENT_CONSUMER_READONLY, "packages/core/src/deepagent/event-router.ts"),
+  },
+  {
+    match: (id) => id === "event.goal-tick-consumer",
+    rules: withReadOnlyRest({ event_producer_consumer: v2([V2_EVENT_BUS]) }, EVENT_CONSUMER_READONLY, "packages/deepagent-code/src/session/goal-tick-consumer.ts"),
+  },
+  {
+    match: (id) => id === "event.panel-convene-consumer",
+    rules: withReadOnlyRest({ event_producer_consumer: v2([V2_EVENT_BUS]) }, EVENT_CONSUMER_READONLY, "packages/deepagent-code/src/panel/panel-convene-consumer.ts"),
+  },
+  {
+    match: (id) => id === "recovery.session-execution-restart",
+    rules: withReadOnlyRest({ recovery_owner: v2([{ kind: "reach", pathSuffix: AUTHORITY.V2_EXECUTION_RESTART }]) }, [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish"), notBody("EventV2.Cursor")], "packages/core/src/session/execution/restart.ts"),
+  },
+  {
+    match: (id) => id === "recovery.provider-owner-runtime",
+    rules: withReadOnlyRest({ recovery_owner: adapter([{ kind: "reach", pathSuffix: "packages/deepagent-code/src/context-federation/provider-owner-runtime.ts" }]) }, [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish"), notBody("EventV2.Cursor")], "packages/deepagent-code/src/context-federation/provider-owner-runtime.ts"),
+  },
+
+  // ===========================================================================
   // HTTP — session-execution operations driving the legacy SessionPrompt turn
   // ===========================================================================
   {
