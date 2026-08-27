@@ -479,6 +479,16 @@ export function verifyRequirements(
         hit: { marker: `reach:${normalizePath(target)}`, file: target, line: enteredLine },
       }
     }
+    if (requirement.kind === "noReach") {
+      // Absence proof: the requirement is met only when NO reachable module's path ends with
+      // the suffix. A hit (satisfied) is anchored to the entry module itself, since the claim
+      // is about the whole import closure being unable to bring the authority into the flow.
+      const present = files.some((file) => normalizePath(file).endsWith(normalizePath(requirement.pathSuffix)))
+      return {
+        requirement,
+        hit: present ? undefined : { marker: `absent:${requirement.pathSuffix}`, file: entryFile, line: 1 },
+      }
+    }
     if (requirement.kind === "importOf") {
       return {
         requirement,

@@ -8,6 +8,7 @@
  * dimensions without provable requirements stay open by design (C0-01 freeze).
  */
 import type { Dimension, Requirement } from "./types"
+import { RULE_PACKS } from "./rules"
 
 export type VerdictRule = {
   readonly verdict: Exclude<import("./types").Verdict, "unclassified">
@@ -19,6 +20,7 @@ export type EntryRules = Readonly<Partial<Record<Dimension, VerdictRule>>>
 const PROMPT_PATH_SUFFIX = "packages/deepagent-code/src/session/prompt.ts"
 
 const RULES: ReadonlyArray<{ readonly match: (id: string) => boolean; readonly rules: EntryRules }> = [
+  ...RULE_PACKS,
   // Known double-write production path: every core event persists through EventV2 AND
   // mirrors onto the legacy GlobalBus channel inside the bridge layer.
   {

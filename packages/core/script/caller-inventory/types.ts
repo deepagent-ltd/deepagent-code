@@ -113,6 +113,10 @@ export type EntryWithHandlers = {
  *   - noBodyChain      : the opposite structural fact — the chain does not occur anywhere in
  *                        this entry's handler-body scope, proving the flow cannot invoke that
  *                        writer family;
+ *   - noReach          : the module with this normalized-path suffix is NOT reachable from the
+ *                        entry roots — the entry's import closure cannot bring the writer
+ *                        authority into its own flow, supporting an honest read_only / non-owner
+ *                        verdict for entries that never touch the authority module;
  *   - productionProfile: three-site proof that THIS packaged build force-selects the Core-V2-only
  *                        runtime profile (package.json version matches isCoreV2OnlyVersion, the
  *                        flag wires that predicate to InstallationVersion, and the production
@@ -124,6 +128,7 @@ export type Requirement =
   | { readonly kind: "callChain"; readonly fileSuffix?: string; readonly chain: string }
   | { readonly kind: "bodyChain"; readonly chain: string }
   | { readonly kind: "noBodyChain"; readonly chain: string }
+  | { readonly kind: "noReach"; readonly pathSuffix: string }
   | { readonly kind: "productionProfile" }
 
 /** A declared, machine-checked ownership claim for one entry. */
