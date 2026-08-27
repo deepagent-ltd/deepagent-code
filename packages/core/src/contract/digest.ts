@@ -29,6 +29,8 @@ const VOLATILE_KEYS = new Set([
   "recordedAt",
   "validUntil",
   "expiresAt",
+  "commandCreatedAt",
+  "verifiedAt",
   "leaseUntil",
   "leaseExpiresAt",
   "absolutePath",
