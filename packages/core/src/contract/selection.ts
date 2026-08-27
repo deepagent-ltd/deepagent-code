@@ -296,6 +296,13 @@ export const validateSelection = (input: unknown): SelectionValidationResult => 
 }
 
 /**
+ * Alias of `validateSelection` (non-throwing validation). Exposed under this
+ * stable name so downstream lanes can import it as `validate` from
+ * `@deepagent-code/core/contract/selection`.
+ */
+export const validate = validateSelection
+
+/**
  * Byte-stable canonical content digest (SHA-256) of a SelectionEnvelope.
  * Canonical over key order and independent of timestamps and absolute paths.
  */
