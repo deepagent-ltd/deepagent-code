@@ -145,7 +145,14 @@ function httpSurface(trees: readonly HttpExtractionTree[]): EntryWithHandlers[] 
             group,
             op,
             repoFile: repoFile(file),
-            line: mod.sourceFile.getLineAndCharacterOfPosition(node.getStart()).line + 1,
+            // A chained `handlers.handle(op, fn).handle(op2, fn2)` expression makes node.getStart()
+            // return the START of the whole receiver chain, so every .handle() in the chain would
+            // share one line and bodyScopes would resolve all ops to the first handler. Anchor the
+            // site to this specific .handle call's own property access instead (each call gets its
+            // own line), which is what lets bodyChain verify each op's true handler body.
+            line: mod.sourceFile.getLineAndCharacterOfPosition(
+              (node.expression as ts.PropertyAccessExpression).name.getStart(),
+            ).line + 1,
             ...(bodyDecl ? { bodyDecl } : {}),
           }
           const key = `${tree.tag}\u0000${group}\u0000${op}`
