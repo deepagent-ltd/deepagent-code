@@ -17,9 +17,7 @@
     "upgrade-opentui": "bun run script/upgrade-opentui.ts",
     "postinstall": "bun run --cwd packages/core fix-node-pty",
     "prepare": "husky",
-    "random": "echo 'Random script'",
-    "sso": "aws sso login --sso-session=deepagent-code --no-browser",
-    "test": "bun run --cwd packages/app test && bun run --cwd packages/ui test",
+    "test": "bun turbo test",
     "test:llm:all": "bun run script/run-live-llm-all.ts"
   },
   "workspaces": {
@@ -117,7 +115,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/lessweb/deepagent-code"
+    "url": "https://github.com/deepagent-ltd/deepagent-code"
   },
   "license": "AGPL-3.0-or-later",
   "prettier": {
