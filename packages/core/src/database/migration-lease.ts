@@ -297,7 +297,7 @@ export function acquire(
   return Effect.gen(function* () {
     const token = randomUUID()
     let osHandle: OsHandle | undefined
-    if (dbPath) {
+    if (dbPath && dbPath !== ":memory:") {
       const lockDir = options.dir ?? `${dbPath}.migration.lock`
       osHandle = yield* Effect.tryPromise({
         try: () => acquireOsLock(lockDir, options),

@@ -21,6 +21,12 @@ type DatabaseShape = Effect.Success<typeof makeDatabase>
 export const SupportedReaderProtocol = 3
 export const SupportedWriterProtocol = 3
 
+/** The database file path used to derive the OS migration lock (skipped for in-memory databases). */
+export const CurrentDatabaseFile = Context.Reference<{ filename?: string }>(
+  "@deepagent-code/v2/storage/CurrentDatabaseFile",
+  { defaultValue: () => ({}) },
+)
+
 export interface Interface {
   db: DatabaseShape
 }
@@ -42,7 +48,12 @@ export const layer = Layer.effect(
     // Removed the blocking wal_checkpoint(PASSIVE) call (was 1-3s on large DBs); frequent small
     // autocheckpoints are a better long-term strategy.
     yield* db.run("PRAGMA wal_autocheckpoint = 200")
-    yield* DatabaseMigration.apply(db)
+    const file = yield* CurrentDatabaseFile
+    yield* DatabaseMigration.apply(db, {
+      filename: file.filename,
+      readerProtocol: String(SupportedReaderProtocol),
+      writerProtocol: String(SupportedWriterProtocol),
+    })
 
     const capabilities = yield* db.all<{
       capability: string
@@ -63,7 +74,10 @@ export const layer = Layer.effect(
 )
 
 export function layerFromPath(filename: string) {
-  return layer.pipe(Layer.provide(sqliteLayer({ filename })))
+  return layer.pipe(
+    Layer.provide(Layer.effect(CurrentDatabaseFile, Effect.succeed({ filename }))),
+    Layer.provide(sqliteLayer({ filename })),
+  )
 }
 
 export function path() {
