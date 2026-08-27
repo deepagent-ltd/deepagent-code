@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { Database } from "bun:sqlite"
 import { Backup } from "@deepagent-code/core/database/backup"
+import { Effect } from "effect"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { tmpdir } from "../fixture/tmpdir"
@@ -55,6 +56,27 @@ describe("Backup (C1A-06)", () => {
       expect((await fs.stat(manifest.backup.filePath)).mode & 0o777).toBe(0o600)
       const manifestText = await fs.readFile(manifest.backup.filePath + ".manifest.json", "utf8")
       expect(JSON.parse(manifestText)).toEqual(manifest)
+    } finally {
+      live.close()
+    }
+  })
+
+  test("refuses to overwrite an existing backup file, keeping the known-good intact", async () => {
+    await using tmp = await tmpdir()
+    const filename = path.join(tmp.path, "app.db")
+    const live = makeFixture(filename)
+    try {
+      const first = await run(
+        Backup.create({ sourcePath: filename, destDir: tmp.path, buildId: "build-x", fileName: "unique" }),
+      )
+      const second = await Effect.runPromise(
+        Backup.create({ sourcePath: filename, destDir: tmp.path, buildId: "build-x", fileName: "unique" }).pipe(
+          Effect.exit,
+        ),
+      )
+      expect(second._tag).toBe("Failure")
+      // The known-good copy is untouched and still present.
+      expect((await fs.stat(first.backup.filePath)).isFile()).toBe(true)
     } finally {
       live.close()
     }

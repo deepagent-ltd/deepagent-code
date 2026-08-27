@@ -31,6 +31,7 @@ export type BackupErrorCode =
   | "dir_fsync_failed"
   | "manifest_write_failed"
   | "registry_digest_failed"
+  | "backup_exists"
 
 export class BackupError extends Data.TaggedError("Backup.BackupError")<{
   readonly code: BackupErrorCode
@@ -105,12 +106,27 @@ export const create = Effect.fn("Backup.create")(function* (options: BackupOptio
   const destDir = path.resolve(options.destDir)
 
   const sourceStat = yield* statFile(sourcePath)
-  yield* isDirectory(destDir)
+  if (!sourceStat.isFile())
+    return yield* Effect.fail(
+      new BackupError({ code: "source_not_file", detail: `source is not a regular file: ${sourcePath}` }),
+    )
+  const destStat = yield* isDirectory(destDir)
+  if (!destStat.isDirectory())
+    return yield* Effect.fail(
+      new BackupError({ code: "dest_not_directory", detail: `destination is not a directory: ${destDir}` }),
+    )
 
   const baseName = options.fileName ?? `backup-${options.buildId}-${Date.now()}`
   const tmpPath = path.join(destDir, `.${baseName}.tmp-${Math.random().toString(36).slice(2)}`)
   const finalName = `${baseName}.db`
   const finalPath = path.join(destDir, finalName)
+  // Never clobber an existing backup file: an installed known-good or incident copy is kept until a
+  // verified successor commits. A collision therefore fails fast without creating a temp snapshot.
+  const existing = yield* Effect.tryPromise(() => fs.stat(finalPath)).pipe(Effect.orElseSucceed(() => null))
+  if (existing !== null)
+    return yield* Effect.fail(
+      new BackupError({ code: "backup_exists", detail: `backup target already exists: ${finalPath}` }),
+    )
 
   // Introspect the source on a separate, read-only connection and produce the snapshot. VACUUM
   // INTO reads a consistent snapshot (including committed WAL frames) and never mutates the
