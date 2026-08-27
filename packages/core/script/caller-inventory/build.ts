@@ -45,17 +45,7 @@ function classifyOne(item: EntryWithHandlers): ClassifiedEntry {
       openOwners[dimension] = OPEN_OWNER_REASON
       continue
     }
-    // C0-01 honesty (F5): read_only may never be absence-only. Prepend a POSITIVE read-side
-    // requirement: the entry's own reader/query/schema module (its repoFile) must be reachable,
-    // so a read_only verdict always carries a positive read fact in addition to the absence
-    // proofs of the writer families declared by the rule. This keeps delegators/spawners honest
-    // too — a spawner whose own module merely launches a process is not a reader and must instead
-    // be classified by delegation or left unclassified.
-    const requirementsFor =
-      rule.verdict === "read_only"
-        ? [{ kind: "reach" as const, pathSuffix: item.entry.repoFile }, ...rule.requirements]
-        : rule.requirements
-    const verified = verifyRequirements(entryFile, requirementsFor, {
+    const verified = verifyRequirements(entryFile, rule.requirements, {
       ...(extraRoots.length > 0 ? { extraRoots } : {}),
       ...(item.handlers.length > 0 ? { bodies: item.handlers } : {}),
     })

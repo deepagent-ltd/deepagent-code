@@ -9,6 +9,7 @@
  * because every anchor below is an AST node (call, declaration or export statement).
  */
 import ts from "typescript"
+import { existsSync } from "node:fs"
 import { join } from "node:path"
 import {
   declarationLine,
@@ -265,10 +266,45 @@ function lildaxCliSurface(): EntryWithHandlers[] {
     for (const child of nested) emit(child, path, out)
   }
 
+  // NEW-P2-A: the commands tree is rooted at Spec.make(cliName, config) whose OWN name is the CLI
+  // invocation name, not a command. Emit each DIRECT child of the root config's commands array with
+  // an EMPTY prefix, letting emit() itself recurse into each child's nested sub-commands. Never emit
+  // the root name and never double-emit nested commands as bare top-level entries.
+  const emitNodeRoot = (root: ts.CallExpression, output: EntryWithHandlers[]): void => {
+    const container = root.arguments[1]
+    const direct: ts.CallExpression[] = []
+    if (container && ts.isObjectLiteralExpression(container)) {
+      let commandsProp: ts.PropertyAssignment | undefined
+      for (const property of container.properties) {
+        if (
+          ts.isPropertyAssignment(property) &&
+          (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name)) &&
+          property.name.text === "commands"
+        ) {
+          commandsProp = property
+          break
+        }
+      }
+      if (commandsProp && ts.isArrayLiteralExpression(commandsProp.initializer)) {
+        for (const element of commandsProp.initializer.elements) {
+          if (ts.isCallExpression(element)) direct.push(element)
+        }
+      }
+    }
+    if (direct.length > 0) {
+      for (const child of direct) emit(child, [], output)
+    } else {
+      emit(root, [], output)
+    }
+  }
+
   const out: EntryWithHandlers[] = []
   for (const statement of mod.sourceFile.statements) {
     const visit = (node: ts.Node): void => {
-      if (isSpecMake(node)) emit(node, [], out)
+      if (isSpecMake(node)) {
+        emitNodeRoot(node, out)
+        return
+      }
       ts.forEachChild(node, visit)
     }
     visit(statement)
@@ -295,7 +331,36 @@ function lildaxCliSurface(): EntryWithHandlers[] {
       // Record the FULL command path (nested property keys, e.g. service.start / workspace.list),
       // not just the leaf — so each command entry can be matched to its own lazy handler.
       const key = stack.filter((frame) => frame.key).map((frame) => frame.key).join(".")
-      if (key) dynamicImports.push({ name: `lazy-handler:${key}`, repoFile: "packages/cli/src/index.ts", line })
+      if (!key) return
+      // NEW-P2-B: root each entry at its OWN lazily-resolved handler module (login.ts), NOT the
+      // shared index.ts dispatch hub. Resolving the dynamic import target here prevents the hub's
+      // reach closure (index.ts -> ALL handlers) from bleeding every lildax command into the
+      // server composition that only its serve handler actually touches.
+      // Resolve this command's lazy import spec to its ACTUAL handler module (relative to
+      // packages/cli/src/index.ts) so the reach closure starts at the handler, not the hub.
+      const specText = (() => {
+        if (ts.isImportDeclaration(node)) return indexMod.imports.get(key)?.specifier
+        // node is either an AwaitExpression (await import(...)) or the import(...) CallExpression.
+        const call = ts.isAwaitExpression(node) ? node.expression : node
+        if (ts.isCallExpression(call)) {
+          const arg = call.arguments[0]
+          if (arg && ts.isStringLiteralLike(arg)) return arg.text
+        }
+        return undefined
+      })()
+      let handlerRepoFile = "packages/cli/src/index.ts"
+      if (specText && specText.startsWith(".")) {
+        const url = new URL(specText, `file://${indexMod.file}`)
+        const base = url.pathname
+        const stem = base.replace(/\.ts$/, "")
+        const candidates = [base, `${stem}/index.ts`, `${stem}.ts`]
+        const cliRoot = /\/packages\/cli\/src\//
+        for (const candidate of candidates) {
+          if (!cliRoot.test(candidate)) continue
+          try { if (existsSync(candidate)) { handlerRepoFile = repoFile(candidate); break } } catch { /* ignore */ }
+        }
+      }
+      dynamicImports.push({ name: `lazy-handler:${key}`, repoFile: handlerRepoFile, line })
     }
     ts.forEachChild(node, walkBindings)
   }

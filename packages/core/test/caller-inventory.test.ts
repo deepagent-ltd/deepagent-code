@@ -149,13 +149,20 @@ describe("C0-01 caller inventory gate", () => {
     }
   })
 
-  test("F5 regression: read_only is never absence-only (always has a positive read-side fact)", () => {
-    // A read_only verdict must carry at least one POSITIVE evidence fact (a reach marker that is a
-    // real module, or a body/call marker) — not only "absent:<chain>" / "noBodyChain" negatives.
+  test("F5 regression: read_only carries a GENUINE read-side fact, never a synthetic self-reach", () => {
+    // A read_only verdict must carry at least one POSITIVE read fact (a reach marker to a REAL
+    // reader module the entry reads from, or a body/call marker) — never only "absent:<chain>"
+    // negatives, and never a synthetic self-reach to the entry's OWN repoFile.
     for (const entry of inventory.entries) {
       for (const role of entry.roles) {
         if (role.verdict !== "read_only") continue
-        const positives = role.evidence.filter((proof) => !proof.marker.startsWith("absent:"))
+        // A genuine read fact is a non-absence marker to a module that is NOT the entry's own
+        // repoFile. "positives" therefore already excludes both absent:<...> and the synthetic
+        // reach:<own-repoFile> self-reach; requiring at least one means read_only is never
+        // absence-only and never satisfied by a self-reach alone.
+        const positives = role.evidence.filter(
+          (proof) => !proof.marker.startsWith("absent:") && !proof.marker.endsWith(entry.entry.repoFile),
+        )
         expect(positives.length).toBeGreaterThan(0)
       }
     }

@@ -269,5 +269,15 @@ export function selfExportLine(mod: ParsedModule): number | undefined {
  */
 export function moduleAnchorLine(mod: ParsedModule, preferredName?: string): number {
   const declared = preferredName ? declarationLine(mod, preferredName) : undefined
-  return declared ?? selfExportLine(mod) ?? 1
+  if (declared !== undefined) return declared
+  const selfExport = selfExportLine(mod)
+  if (selfExport !== undefined) return selfExport
+  // NEW-P3-E: never fall back to synthetic line 1 (which only proves the file exists). Anchor to the
+  // module's first real top-level declaration/export so the cited line is a genuine AST fact.
+  for (const statement of mod.sourceFile.statements) {
+    if (statement.getStart() < 0) continue
+    if (ts.isImportDeclaration(statement) || ts.isImportEqualsDeclaration(statement)) continue
+    return lineOf(mod.sourceFile, statement)
+  }
+  return 1
 }

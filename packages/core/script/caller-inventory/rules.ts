@@ -40,6 +40,7 @@ const GOAL_MANAGER: Requirement = { kind: "reach", pathSuffix: AUTHORITY.GOAL_MA
 const LEGACY_CANONICALIZER: Requirement = { kind: "reach", pathSuffix: AUTHORITY.LEGACY_CANONICALIZER }
 const LEGACY_PROVIDER_RESOLUTION: Requirement = { kind: "reach", pathSuffix: AUTHORITY.LEGACY_PROVIDER_RESOLUTION }
 const LEGACY_SESSION_CORE: Requirement = { kind: "reach", pathSuffix: AUTHORITY.LEGACY_SESSION_CORE }
+const INSTANCE_STATE: Requirement = { kind: "reach", pathSuffix: "packages/deepagent-code/src/effect/instance-state.ts" }
 
 const AUTHORITY_WRITERS: readonly string[] = [
   AUTHORITY.LEGACY_PROMPT,
@@ -110,8 +111,12 @@ const READ_ONLY_NOBODY_REQS: readonly Requirement[] = [
   notBody("consultPanel"),
   notBody("PanelTurnRunner"),
 ]
-function readOnlyNoBody(): EntryRules {
-  return all7(readOnly(READ_ONLY_NOBODY_REQS))
+// A genuine read-side requirement for a query/reader op: the entry must reach a reader module it
+// actually reads from, so read_only is never absence-only / self-reach-only (NEW-P2-C). Optional.
+function readOnlyNoBody(readReach: string = "packages/deepagent-code/src/effect/instance-state.ts"): EntryRules {
+  // NEW-P2-C: read_only requires a GENUINE reader module the entry reads from (default: the
+  // instance/workspace context reader all instance HTTP handlers use), never a self-reach.
+  return all7(readOnly([{ kind: "reach" as const, pathSuffix: readReach }, ...READ_ONLY_NOBODY_REQS]))
 }
 function readOnlyNoReach(): EntryRules {
   return all7(readOnly(AUTHORITY_WRITERS.map(noReachPath)))
@@ -121,10 +126,15 @@ function readOnlyNoReach(): EntryRules {
 function withReadOnlyRest(
   owned: Readonly<Partial<Record<Dimension, VerdictRule>>>,
   readOnlyReqs: readonly Requirement[],
+  readReach: string = "packages/deepagent-code/src/effect/instance-state.ts",
 ): EntryRules {
+  // NEW-P2-C: the read_only rest must carry a GENUINE read fact (reach the entry's actual reader
+  // module), never absence-only. Default reader for instance-plane entries is the instance/workspace
+  // context reader that all instance HTTP handlers use.
   const result: Record<Dimension, VerdictRule> = {} as Record<Dimension, VerdictRule>
+  const restReqs = [{ kind: "reach" as const, pathSuffix: readReach }, ...readOnlyReqs]
   for (const dimension of DIMENSIONS) {
-    result[dimension] = owned[dimension] ?? readOnly(readOnlyReqs)
+    result[dimension] = owned[dimension] ?? readOnly(restReqs)
   }
   return result as EntryRules
 }
@@ -320,7 +330,16 @@ export const RULE_PACKS: readonly RulePack[] = [
       id.startsWith("http.server.server.model.") ||
       id.startsWith("http.server.server.provider.") ||
       id.startsWith("http.server.server.skill."),
-    rules: readOnlyNoBody(),
+    rules: readOnlyNoBody("packages/core/src/catalog.ts"),
+  },
+  // Old packages/server read-only query ops: they read server-side state via the core
+  // model/catalog/session-schema modules (a genuine reader), never the instance middleware.
+  {
+    match: (id) =>
+      id.startsWith("http.server.server.fs.") || id.startsWith("http.server.server.health.") ||
+      id.startsWith("http.server.server.permission.") || id.startsWith("http.server.server.question.") ||
+      id.startsWith("http.server.server.command.") || id.startsWith("http.server.server.agent."),
+    rules: readOnlyNoBody("packages/core/src/session/schema.ts"),
   },
 
   // ---- HTTP infra read-only groups ----
@@ -335,10 +354,7 @@ export const RULE_PACKS: readonly RulePack[] = [
       id.startsWith("http.instance.project.") || id.startsWith("http.instance.projectCopy.") ||
       id.startsWith("http.instance.workspace.") || id.startsWith("http.instance.workspaceConfig.") ||
       id.startsWith("http.instance.instance.") || id.startsWith("http.instance.experimental.") ||
-      id.startsWith("http.instance.provider.") ||
-      id.startsWith("http.server.server.fs.") || id.startsWith("http.server.server.health.") ||
-      id.startsWith("http.server.server.permission.") || id.startsWith("http.server.server.question.") ||
-      id.startsWith("http.server.server.command.") || id.startsWith("http.server.server.agent."),
+      id.startsWith("http.instance.provider."),
     rules: readOnlyNoBody(),
   },
 
@@ -414,33 +430,28 @@ export const RULE_PACKS: readonly RulePack[] = [
   // ===========================================================================
   {
     match: (id) => id === "event.deepagent-bus",
-    rules: withReadOnlyRest({ event_producer_consumer: v2([V2_EVENT_BUS]) }, EVENT_CONSUMER_READONLY),
+    rules: withReadOnlyRest({ event_producer_consumer: v2([V2_EVENT_BUS]) }, EVENT_CONSUMER_READONLY, "packages/core/src/event.ts"),
   },
   {
     match: (id) => id === "event.event-router",
-    rules: withReadOnlyRest({ event_producer_consumer: v2([V2_EVENT_ROUTER]) }, EVENT_CONSUMER_READONLY),
+    rules: withReadOnlyRest({ event_producer_consumer: v2([V2_EVENT_ROUTER]) }, EVENT_CONSUMER_READONLY, "packages/core/src/event.ts"),
   },
   {
     match: (id) => id === "event.goal-tick-consumer" || id === "event.panel-convene-consumer" || id === "event.wiki-event-driven-archiver",
-    rules: withReadOnlyRest({ event_producer_consumer: v2([V2_EVENT_BUS]) }, EVENT_CONSUMER_READONLY),
+    rules: withReadOnlyRest({ event_producer_consumer: v2([V2_EVENT_BUS]) }, EVENT_CONSUMER_READONLY, "packages/core/src/event.ts"),
   },
   {
     match: (id) => id === "event.legacy-canonicalizer-daemon",
-    rules: withReadOnlyRest({ event_producer_consumer: adapter([LEGACY_CANONICALIZER]) }, EVENT_CONSUMER_READONLY),
+    rules: withReadOnlyRest({ event_producer_consumer: adapter([LEGACY_CANONICALIZER]) }, EVENT_CONSUMER_READONLY, "packages/core/src/event.ts"),
   },
   {
     match: (id) => id === "event.v2-bridge",
-    rules: withReadOnlyRest({}, [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish")]),
+    rules: withReadOnlyRest({}, [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish")], "packages/core/src/event.ts"),
   },
 
-  // ===========================================================================
-  // Desktop & lildax lifecycle entry points (reach no authority writer -> read_only)
-  // ===========================================================================
-  {
-    match: (id) => id.startsWith("desktop.") || id.startsWith("cli.lildax.") ||
-      id === "composition.desktop-sidecar-start" || id === "composition.lildax-runtime",
-    rules: readOnlyNoReach(),
-  },
+  // Desktop / lildax lifecycle entry points are spawner/sidecar launchers whose authority receiver
+  // is an external process that is NOT statically bound to them at this freeze point (NEW-P2-C).
+  // They are intentionally left UNCLASSIFIED (never guessed read_only / legacy).
 
   // ===========================================================================
   // Tools & Provider & Recovery planes (single authoritative dimension; rest read_only)
@@ -450,6 +461,7 @@ export const RULE_PACKS: readonly RulePack[] = [
     rules: withReadOnlyRest(
       { provider_tool_writer: legacy([LEGACY_PROMPT]) },
       [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish")],
+      "packages/core/src/tool/registry.ts",
     ),
   },
   {
@@ -457,6 +469,7 @@ export const RULE_PACKS: readonly RulePack[] = [
     rules: withReadOnlyRest(
       { provider_tool_writer: v2([V2_TOOL_REGISTRY, call("register", "packages/core/src/tool/registry.ts")]) },
       [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish")],
+      "packages/core/src/session/schema.ts",
     ),
   },
   {
@@ -464,23 +477,24 @@ export const RULE_PACKS: readonly RulePack[] = [
     rules: withReadOnlyRest(
       { provider_tool_writer: readOnly(AUTHORITY_WRITERS.map(noReachPath)) },
       [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish")],
+      "packages/core/src/session/schema.ts",
     ),
   },
   {
     match: (id) => id === "recovery.database-binding",
-    rules: withReadOnlyRest({ recovery_owner: readOnly([RECOVERY_BINDING]) }, [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish")]),
+    rules: withReadOnlyRest({ recovery_owner: readOnly([RECOVERY_BINDING]) }, [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish")], "packages/core/src/database/database.ts"),
   },
   {
     match: (id) => id === "recovery.session-execution-restart",
-    rules: withReadOnlyRest({ recovery_owner: v2([{ kind: "reach", pathSuffix: AUTHORITY.V2_EXECUTION_RESTART }]) }, [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish")]),
+    rules: withReadOnlyRest({ recovery_owner: v2([{ kind: "reach", pathSuffix: AUTHORITY.V2_EXECUTION_RESTART }]) }, [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish")], "packages/core/src/session/execution/local.ts"),
   },
   {
     match: (id) => id === "recovery.task-recovery-tool",
-    rules: withReadOnlyRest({ recovery_owner: legacy([{ kind: "reach", pathSuffix: "packages/deepagent-code/src/tool/task_recovery.ts" }]) }, [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish")]),
+    rules: withReadOnlyRest({ recovery_owner: legacy([{ kind: "reach", pathSuffix: "packages/deepagent-code/src/tool/task_recovery.ts" }]) }, [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish")], "packages/deepagent-code/src/tool/task.ts"),
   },
   {
     match: (id) => id === "recovery.provider-owner-runtime",
-    rules: withReadOnlyRest({ recovery_owner: adapter([{ kind: "reach", pathSuffix: "packages/deepagent-code/src/context-federation/provider-owner-runtime.ts" }]) }, [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish")]),
+    rules: withReadOnlyRest({ recovery_owner: adapter([{ kind: "reach", pathSuffix: "packages/deepagent-code/src/context-federation/provider-owner-runtime.ts" }]) }, [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish")], "packages/deepagent-code/src/context-federation/query-authorization.ts"),
   },
 ];
 
