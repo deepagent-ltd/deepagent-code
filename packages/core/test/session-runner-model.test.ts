@@ -266,17 +266,18 @@ describe("SessionRunnerModel", () => {
     }),
   )
 
-  it.effect("rejects catalog APIs without a native route", () =>
+  it.effect("rejects catalog models whose protocol source is unknown (no silent Chat fallback)", () =>
     Effect.gen(function* () {
       const failure = yield* SessionRunnerModel.fromCatalogModel(
         model({ type: "aisdk", package: "@ai-sdk/google", url: "https://google.example/v1" }),
       ).pipe(Effect.flip)
 
       expect(failure).toMatchObject({
-        _tag: "SessionRunnerModel.UnsupportedApiError",
+        _tag: "SessionRunnerModel.ModelProtocolDisabledError",
         providerID: "test-provider",
         modelID: "test-model",
-        api: "aisdk:@ai-sdk/google",
+        reason: "model_protocol_selection_required",
+        selectionState: "disabled",
       })
     }),
   )

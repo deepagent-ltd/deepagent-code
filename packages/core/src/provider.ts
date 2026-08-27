@@ -1,5 +1,6 @@
 export * as ProviderV2 from "./provider"
 
+import { ModelProtocol } from "./contract/model-protocol"
 import { withStatics } from "./schema"
 import { Schema } from "effect"
 
@@ -44,12 +45,17 @@ export const AISDK = Schema.Struct({
   package: Schema.String,
   url: Schema.String.pipe(Schema.optional),
   settings: Schema.Record(Schema.String, Schema.Unknown).pipe(Schema.optional),
+  // Explicit provider protocol (design §5.1). Optional so old config migrates:
+  // an absent protocol is derived by the source classification. Declared here so
+  // it flows to both the provider api and the derived model api.
+  protocol: ModelProtocol.pipe(Schema.optional),
 })
 
 export const Native = Schema.Struct({
   type: Schema.Literal("native"),
   url: Schema.String.pipe(Schema.optional),
   settings: Schema.Record(Schema.String, Schema.Unknown),
+  protocol: ModelProtocol.pipe(Schema.optional),
 })
 
 export const Api = Schema.Union([AISDK, Native]).pipe(Schema.toTaggedUnion("type"))

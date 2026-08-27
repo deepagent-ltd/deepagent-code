@@ -1,6 +1,7 @@
 export * as ConfigProvider from "./provider"
 
 import { Schema } from "effect"
+import { ModelProtocol, ModelProtocolCapabilities } from "../contract/model-protocol"
 import { ProviderV2 } from "../provider"
 import { ModelV2 } from "../model"
 
@@ -34,13 +35,18 @@ const ModelApi = Schema.Union([
   Schema.Struct({
     id: ModelV2.ID.pipe(Schema.optional),
     ...ProviderV2.AISDK.fields,
+    protocolCapabilities: ModelProtocolCapabilities.pipe(Schema.optional),
   }),
   Schema.Struct({
     id: ModelV2.ID.pipe(Schema.optional),
     ...ProviderV2.Native.fields,
+    protocolCapabilities: ModelProtocolCapabilities.pipe(Schema.optional),
   }),
   Schema.Struct({
     id: ModelV2.ID,
+    // A model may pin an explicit protocol without restating the provider api.
+    protocol: ModelProtocol.pipe(Schema.optional),
+    protocolCapabilities: ModelProtocolCapabilities.pipe(Schema.optional),
   }),
 ])
 
