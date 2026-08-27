@@ -121,6 +121,9 @@ export type EntryWithHandlers = {
  *                        the target entry's module proves THIS entry delegates authority to the
  *                        inventory entry {@link targetId}; the gate inherits the target's verdict per
  *                        dimension (and asserts the target exists & is classified non-unclassified);
+ *   - portBoundTo       : the entry imports an Effect service port whose canonical production provider
+ *                        (authority.ts PORTS registry) is a Layer.effect in a provider module wired by a
+ *                        production composition; the consumer inherits the provider entry's verdict;
  *   - productionProfile: three-site proof that THIS packaged build force-selects the Core-V2-only
  *                        runtime profile (package.json version matches isCoreV2OnlyVersion, the
  *                        flag wires that predicate to InstallationVersion, and the production
@@ -134,6 +137,7 @@ export type Requirement =
   | { readonly kind: "noBodyChain"; readonly chain: string }
   | { readonly kind: "noReach"; readonly pathSuffix: string }
   | { readonly kind: "delegatesTo"; readonly targetId: string }
+  | { readonly kind: "portBoundTo"; readonly portModule: string }
   | { readonly kind: "productionProfile" }
 
 /** A declared, machine-checked ownership claim for one entry. */

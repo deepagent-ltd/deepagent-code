@@ -29,7 +29,32 @@ function delAll(targetId: string): EntryRules {
   return result as EntryRules
 }
 
+function portAll(portModule: string): EntryRules {
+  const reqs: readonly Requirement[] = [{ kind: "portBoundTo", portModule }]
+  const result: Record<Dimension, VerdictRule> = {} as Record<Dimension, VerdictRule>
+  for (const dimension of DIMENSIONS) result[dimension] = { verdict: "legacy", requirements: reqs }
+  return result as EntryRules
+}
+
 export const DELEGATION_RULE_PACKS: readonly RulePack[] = [
+  // ---- DI/service-layer orchestrators bound to their canonical Effect port provider (legacy IM). ----
+  {
+    match: (id) => id === "im.agent-orchestrator",
+    rules: portAll("packages/core/src/im/agent-executor.ts"),
+  },
+  {
+    // The reply sink is part of the legacy IM pipeline, wired in the server composition alongside the
+    // legacy AgentExecutor (ServerAgentReplySinkLive providing AgentReplySinkService); it inherits the
+    // legacy IM pipeline's verdict via the reference binding to im.agent-executor.
+    match: (id) => id === "im.agent-reply-sink",
+    rules: delAll("im.agent-executor"),
+  },
+  // Panel orchestration is part of the legacy panel pipeline; it orchestrates agent executions via the
+  // legacy agent executor, and the arbiter is the panel verdict engine — both inherit legacy authority.
+  {
+    match: (id) => id === "panel.orchestrator" || id === "panel.arbiter",
+    rules: delAll("im.agent-executor"),
+  },
   // ---- Spawner/sidecar launchers: their subprocess runs the dacode server (dacode-cli-entry). ----
   {
     match: (id) =>

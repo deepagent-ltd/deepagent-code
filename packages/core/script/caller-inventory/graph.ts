@@ -11,7 +11,7 @@ import ts from "typescript"
 import { existsSync, readFileSync } from "node:fs"
 import type { HandlerSite, Requirement } from "./types"
 import { declarationNodes, moduleAnchorLine, parseModule, refsInSubtree, rootRepoPath } from "./ast"
-import { DELEGATION_REFERENCE_MODULE, DELEGATION_SPAWN_BINDINGS, DELEGATION_TARGET_MODULE } from "./authority"
+import { DELEGATION_REFERENCE_MODULE, DELEGATION_SPAWN_BINDINGS, DELEGATION_TARGET_MODULE, PORTS } from "./authority"
 
 const repoRoot = () => rootRepoPath()
 
@@ -519,6 +519,47 @@ function delegationSpawnHit(entryFile: string, extraRoots: readonly string[], ta
   return undefined
 }
 
+/** A port module provides a service via a static Layer.effect/sync/succeed first-arg = port service. */
+function moduleProvidesPortService(mod: ReturnType<typeof parseModule>, service: string): boolean {
+  let found = false
+  const visit = (node: ts.Node): void => {
+    if (found) return
+    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
+      const method = node.expression.name.text
+      const head = ts.isIdentifier(node.expression.expression) ? node.expression.expression.text : undefined
+      if (head === "Layer" && (method === "effect" || method === "sync" || method === "succeed")) {
+        const first = node.arguments[0]
+        if (first && ts.isIdentifier(first) && first.text === service) found = true
+      }
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(mod.sourceFile)
+  return found
+}
+
+/**
+ * Effect service-layer DI binding (layered resolution): the entry imports the port module; the port's
+ * canonical production provider module (authority.ts PORTS) exports a static Layer.effect/sync for the
+ * port service; and the production composition module imports/provides that provider layer. Returns a
+ * hit so the consumer inherits the provider entry's verdict (portBound:<providerEntryId>).
+ */
+function portBoundHit(entryFile: string, portModule: string): VerifiedHit | undefined {
+  const port = PORTS[portModule]
+  if (!port) return undefined
+  const entryImports = edges(entryFile)
+  const importSite = entryImports.find((edge) => normalizePath(edge.target).endsWith(normalizePath(portModule)))
+  if (!importSite) return undefined
+  const providerFile = `${rootRepoPath()}/${port.providerModule}`
+  if (!existsSync(providerFile)) return undefined
+  if (!moduleProvidesPortService(parseModule(providerFile), port.service)) return undefined
+  const compositionFile = `${rootRepoPath()}/${port.compositionModule}`
+  if (!existsSync(compositionFile)) return undefined
+  const compProvides = edges(compositionFile).some((edge) => normalizePath(edge.target).endsWith(port.providerModule))
+  if (!compProvides) return undefined
+  return { marker: `portBound:${port.providerEntryId}`, file: entryFile, line: importSite.line }
+}
+
 /**
  * Verify a claim's requirements entirely inside the entry's real import-graph closure
  * plus its own handler-body scope:
@@ -543,6 +584,10 @@ export function verifyRequirements(
   const files = [...reachMap.keys()]
   const scopeChains = scope?.bodies && scope.bodies.length > 0 ? bodyScopes(scope.bodies) : { chains: new Map() }
   const results = requirements.map((requirement): RequirementResult => {
+    if (requirement.kind === "portBoundTo") {
+      const hit = portBoundHit(entryFile, requirement.portModule)
+      return { requirement, hit }
+    }
     if (requirement.kind === "delegatesTo") {
       // Delegation edge: a static spawn/fork/exec/client call (or a reach-of-the-target-module)
       // attributes this flow to the target inventory entry; the gate inherits the target verdict.

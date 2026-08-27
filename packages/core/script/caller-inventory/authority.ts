@@ -96,10 +96,33 @@ export const DELEGATION_SPAWN_BINDINGS: Readonly<Record<string, string>> = {
 export const DELEGATION_REFERENCE_MODULE: Readonly<Record<string, string>> = {
   // lildax CLI commands drive the daemon through the Daemon service, which manages the daemon runtime.
   "packages/cli/src/services/daemon.ts": "composition.lildax-runtime",
-  // panel orchestration is provided by the panel orchestrator module the panel engine is built on.
-  "packages/deepagent-code/src/panel/orchestrator.ts": "panel.orchestrator",
   // IM orchestration runs under the legacy AgentExecutor service provided by the server composition.
   "packages/deepagent-code/src/session/legacy-execution-zero.ts": "im.agent-executor",
   "packages/desktop/src/main/server.ts": "desktop.spawn-local-server",
   "packages/desktop/src/main/wsl/runtime.ts": "composition.dacode-cli-entry",
+  "packages/deepagent-code/src/im/agent-reply-sink-server.ts": "im.agent-executor",
+  "packages/deepagent-code/src/panel/orchestrator.ts": "im.agent-executor",
+  "packages/deepagent-code/src/panel/arbiter.ts": "im.agent-executor",
+}
+
+/**
+ * Effect service-layer port bindings (DI resolution, static code). Each port module's service
+ * has exactly ONE canonical production provider: a Layer.effect/sync in providerModule that
+ * provides the port service, plus a production composition module that imports/provides that
+ * layer (so test-only layers never count). providerEntryId is the inventoried authority entry
+ * whose repoFile is providerModule and whose verdict the consumer inherits (portBound).
+ */
+export const PORTS: Readonly<Record<string, { service: string; providerModule: string; providerEntryId: string; compositionModule: string }>> = {
+  "packages/core/src/im/agent-executor.ts": {
+    service: "AgentExecutorService",
+    providerModule: "packages/deepagent-code/src/im/agent-executor-server.ts",
+    providerEntryId: "im.agent-executor",
+    compositionModule: "packages/deepagent-code/src/server/routes/instance/httpapi/server.ts",
+  },
+  "packages/core/src/im/agent-reply-sink.ts": {
+    service: "AgentReplySinkService",
+    providerModule: "packages/deepagent-code/src/im/agent-executor-server.ts",
+    providerEntryId: "im.agent-executor",
+    compositionModule: "packages/deepagent-code/src/server/routes/instance/httpapi/server.ts",
+  },
 }

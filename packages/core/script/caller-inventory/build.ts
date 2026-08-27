@@ -10,6 +10,7 @@ import { join } from "node:path"
 import { rootRepoPath } from "./ast"
 import { OPEN_OWNER_REASON, rulesForEntry, type VerdictRule } from "./declarations"
 import { verifyRequirements } from "./graph"
+import { PORTS } from "./authority"
 import { extractAllEntries } from "./extractors"
 import {
   DIMENSIONS,
@@ -54,17 +55,21 @@ function classifyOne(item: EntryWithHandlers): ClassifiedEntry {
       ...(item.handlers.length > 0 ? { bodies: item.handlers } : {}),
     })
     const delegationReq = rule.requirements.find((requirement): requirement is { kind: "delegatesTo"; targetId: string } => requirement.kind === "delegatesTo")
+    const portReq = rule.requirements.find((requirement): requirement is { kind: "portBoundTo"; portModule: string } => requirement.kind === "portBoundTo")
+    const portTargetId = portReq ? PORTS[portReq.portModule]?.providerEntryId : undefined
     if (verified.satisfied) {
-      if (delegationReq) {
-        // Record a pending delegation edge; buildInventory resolves the inherited verdict in pass 2.
+      if (delegationReq || portReq) {
+        // Record a pending delegation/port edge; buildInventory resolves the inherited verdict in pass 2.
+        const targetId = delegationReq ? delegationReq.targetId : portTargetId!
+        const marker = delegationReq ? ("delegates:" + targetId) : ("portBound:" + targetId)
         const edge = verified.evidence
           .map(repoRelative)
-          .find((proof) => proof.marker.startsWith("delegates:")) ?? verified.evidence.map(repoRelative)[0]
+          .find((proof) => proof.marker === marker) ?? verified.evidence.map(repoRelative)[0]
         const per = pendingDelegations.get(item.entry.id) ?? {}
-        per[dimension] = { targetId: delegationReq.targetId, edge }
+        per[dimension] = { targetId, edge }
         pendingDelegations.set(item.entry.id, per)
         roles.push({ dimension, verdict: "unclassified", evidence: [] })
-        openOwners[dimension] = `delegates to ${delegationReq.targetId} (resolved in pass 2)`
+        openOwners[dimension] = "port-bound/delegates to " + targetId + " (resolved in pass 2)"
         continue
       }
       roles.push({ dimension, verdict: rule.verdict, evidence: verified.evidence.map(repoRelative) })

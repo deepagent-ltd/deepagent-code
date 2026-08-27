@@ -252,8 +252,10 @@ describe("C0-01 caller inventory gate", () => {
     for (const entry of inventory.entries) {
       for (const role of entry.roles) {
         for (const proof of role.evidence) {
-          if (!proof.marker.startsWith("delegates:")) continue
-          const targetId = proof.marker.slice("delegates:".length)
+          const isDel = proof.marker.startsWith("delegates:")
+          const isPort = proof.marker.startsWith("portBound:")
+          if (!isDel && !isPort) continue
+          const targetId = proof.marker.slice((isDel ? "delegates:" : "portBound:").length)
           // (a) edge is real: the marker is anchored at a genuine file:line in an owned source file.
           expect(proof.repoFile.endsWith(".ts")).toBe(true)
           expect(proof.line).toBeGreaterThan(0)
@@ -284,6 +286,39 @@ describe("C0-01 caller inventory gate", () => {
       visited.add(node)
     }
     for (const node of graph.keys()) visit(node)
+  })
+
+  test("C0-01 strict exit condition: every production caller classified on all seven dimensions (unclassified=0)", () => {
+    // Revived as the PRIMARY oracle once the honest classification reached unclassified=0.
+    expect(inventory.totals.unclassifiedRoles).toBe(0)
+    expect(inventory.totals.unclassifiedEntries).toBe(0)
+    for (const entry of inventory.entries) {
+      expect(entry.unclassifiedCount).toBe(0)
+      expect(entry.roles.length).toBe(DIMENSIONS.length)
+    }
+  })
+
+  test("portBound gate: port edge real, provider entry classified, single canonical provider, test-only layers excluded", () => {
+    const byId = new Map(inventory.entries.map((e) => [e.entry.id, e]))
+    const provided = new Set<string>()
+    for (const entry of inventory.entries) {
+      for (const role of entry.roles) {
+        for (const proof of role.evidence) {
+          if (!proof.marker.startsWith("portBound:")) continue
+          const providerId = proof.marker.slice("portBound:".length)
+          // provider entry must be inventoried and classified non-unclassified.
+          const provider = byId.get(providerId)
+          expect(provider).toBeDefined()
+          expect(provider!.roles.find((x) => x.dimension === role.dimension)?.verdict).not.toBe("unclassified")
+          // port edge anchored at a real file:line.
+          expect(proof.repoFile.endsWith(".ts")).toBe(true)
+          expect(proof.line).toBeGreaterThan(0)
+          provided.add(providerId)
+        }
+      }
+    }
+    // Each provider entry is a legacy IM authority (single canonical provider, no conflicting port provider).
+    expect([...provided]).toEqual(["im.agent-executor"])
   })
 })
 
