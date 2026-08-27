@@ -173,7 +173,6 @@ export const layer = Layer.effect(
         )
     }
 
-    const { db } = yield* openAndMigrate
     return { db }
   }),
 )
