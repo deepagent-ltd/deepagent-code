@@ -69,7 +69,9 @@ export type GraphStatusReasonCode = typeof GraphStatusReasonCode.Type
  * ready | empty | degraded_unavailable | denied | timeout (design §6.2), so a V2 attempt can
  * never fall back to the legacy v2-none value: an absent or unknown graph must
  * be represented explicitly with one of these five states, and an unknown value
- * is rejected with a typed decode error.
+ * is rejected with a typed decode error. Every status also carries a required
+ * bounded reasonCode (design §6.2: revision / adapter version / observed
+ * mutation epoch / latency / candidate count / bounded reason code).
  */
 export const GraphStatus = Schema.Struct({
   graph: GraphKindSchema,
@@ -79,7 +81,7 @@ export const GraphStatus = Schema.Struct({
   observedMutationEpoch: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   latencyMs: Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0)),
   candidateCount: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
-  reasonCode: GraphStatusReasonCode.pipe(Schema.optional),
+  reasonCode: GraphStatusReasonCode,
 })
 export type GraphStatus = typeof GraphStatus.Type
 
@@ -157,10 +159,14 @@ export const SelectionModelCapability = Schema.Struct({
 })
 export type SelectionModelCapability = typeof SelectionModelCapability.Type
 
-/** Released knowledge snapshot binding. */
+/**
+ * Released knowledge snapshot binding. Uses the production released-snapshot
+ * lexicon (deepagent/released-snapshot.ts Binding.state): 'bound' when a
+ * released snapshot is bound to the request, 'unavailable' when none is.
+ */
 export const SelectionReleasedKnowledge = Schema.Struct({
   snapshotId: Schema.String,
-  binding: Schema.Literal("current"),
+  binding: Schema.Literals(["bound", "unavailable"]),
   supersedes: Schema.String.pipe(Schema.optional),
 })
 export type SelectionReleasedKnowledge = typeof SelectionReleasedKnowledge.Type

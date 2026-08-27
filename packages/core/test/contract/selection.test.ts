@@ -35,7 +35,7 @@ function makeEnvelope(): SelectionEnvelope {
       contextWindow: 128000,
       structuredOutput: true,
     },
-    releasedKnowledge: { snapshotId: "snap-1", binding: "current" },
+    releasedKnowledge: { snapshotId: "snap-1", binding: "bound" },
     queryIntent: "search",
     identity: {
       selectionId: "sel-1",
@@ -56,6 +56,7 @@ function makeEnvelope(): SelectionEnvelope {
         observedMutationEpoch: 0,
         latencyMs: 5,
         candidateCount: 3,
+        reasonCode: "none",
       },
       documents: {
         graph: "documents",
@@ -65,6 +66,7 @@ function makeEnvelope(): SelectionEnvelope {
         observedMutationEpoch: 0,
         latencyMs: 2,
         candidateCount: 0,
+        reasonCode: "none",
       },
       knowledge: {
         graph: "knowledge",
@@ -211,6 +213,12 @@ describe("selection contract negative shapes", () => {
     const input = { ...(makeEnvelope() as unknown as Record<string, unknown>), schemaVersion: "context-selection.v2" }
     const error = decodeError(input)
     expect(error.path).toEqual(["schemaVersion"])
+  })
+
+  test("missing reasonCode -> typed error with exact path", () => {
+    const input = makeEnvelope() as unknown as { graphStatuses: { code: { reasonCode?: unknown } } }
+    delete input.graphStatuses.code.reasonCode
+    expect(decodeError(input).path).toEqual(["graphStatuses", "code", "reasonCode"])
   })
 
   test("unknown reason code -> typed error", () => {
