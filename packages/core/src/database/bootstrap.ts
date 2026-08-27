@@ -222,11 +222,12 @@ export const describeBootstrap = (input: BootstrapInput, options: DescribeOption
     if (blocked) return state("blocked_schema", "blocked_schema", options, issue.message, issue)
   }
 
-  // 2. Recovery signals: compatible binary, but not safe to write yet.
+  // 2. Recovery signals: compatible binary, but not safe to write yet. The phase
+  //    reflects whether we are still reconciling a prior run or awaiting post-verify.
   for (const issue of issues) {
     if (RECOVERY_ISSUE_CODES.has(issue.code)) {
-      const recovery = input.recoveryComplete ? "post_verify" : "recovery_reconciling"
-      return state("read_only_recovery", "read_only_recovery", options, issue.message, issue)
+      const recoveryPhase = input.recoveryComplete ? "post_verify" : "recovery_reconciling"
+      return state(recoveryPhase, "read_only_recovery", options, issue.message, issue)
     }
   }
 

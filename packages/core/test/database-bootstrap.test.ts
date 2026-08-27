@@ -96,14 +96,21 @@ describe("DatabaseBootstrap state machine", () => {
   })
 
   test("unfinished upgrade run -> read_only_recovery (browse/export, no write)", () => {
-    const result = DatabaseBootstrap.describeBootstrap(input({ preflight: failed("unfinished_upgrade_run") }), opts)
-    expect(result.phase).toBe("read_only_recovery")
+    const result = DatabaseBootstrap.describeBootstrap(
+      input({ preflight: failed("unfinished_upgrade_run"), recoveryComplete: false }),
+      opts,
+    )
+    expect(result.phase).toBe("recovery_reconciling")
     expect(result.mode).toBe("read_only_recovery")
     expect(result.ready).toBe(false)
   })
 
   test("another active process -> read_only_recovery (two-window race)", () => {
-    const result = DatabaseBootstrap.describeBootstrap(input({ preflight: failed("another_process_active") }), opts)
+    const result = DatabaseBootstrap.describeBootstrap(
+      input({ preflight: failed("another_process_active"), recoveryComplete: false }),
+      opts,
+    )
+    expect(result.phase).toBe("recovery_reconciling")
     expect(result.mode).toBe("read_only_recovery")
     expect(result.ready).toBe(false)
   })
