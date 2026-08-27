@@ -1,8 +1,10 @@
 import * as fs from "node:fs"
 import * as path from "node:path"
 import { Effect, Layer, Schema, Stream } from "effect"
+import { eq, sql } from "drizzle-orm"
 import { Database } from "@deepagent-code/core/database/database"
 import { EventV2 } from "@deepagent-code/core/event"
+import { EventTable } from "@deepagent-code/core/event/sql"
 import { tempRoot, summarizeGroups, timeEffect, Recorder, type ScenarioOutcome } from "../lib"
 
 // Harness-side durable definitions exercising the production bus mechanics
@@ -40,6 +42,7 @@ export const runEventBus = async (options: EventBusOptions): Promise<ScenarioOut
 
   const program = Effect.gen(function* () {
     const events = yield* EventV2.Service
+    const database = yield* Database.Service
     const recorder = new Recorder()
     const key = "ses_perf_bus_probe"
     let logicalBytes = 0
@@ -70,8 +73,17 @@ export const runEventBus = async (options: EventBusOptions): Promise<ScenarioOut
     // Journal replay of the probe aggregate: the drain side of hydration.
     // aggregateEvents is a persistent stream (initial drain then an unterminated live tail —
     // see streamEvents in packages/core/src/event.ts), so every collect is bounded by
-    // Stream.take on the exact number of durable rows written to this aggregate.
-    const expectedEvents = options.warmup + options.measured * 2
+    // Stream.take on the exact number of durable rows written to THIS aggregate. Only the
+    // SyncProbe events carry that aggregate (aggregate = "key"); LocalProbe events are not
+    // part of it, so the bound is read from the DB rather than assumed from a publish-count
+    // formula (bounding by a too-large count would spin forever on the unterminated live tail).
+    const counted = yield* database.db
+      .select({ n: sql<number>`count(*)` })
+      .from(EventTable)
+      .where(eq(EventTable.aggregate_id, key))
+      .all()
+      .pipe(Effect.orDie)
+    const expectedEvents = Number(counted[0]!.n)
     const drainOnce = () =>
       Stream.runCollect(Stream.take(events.aggregateEvents({ aggregateID: key }), expectedEvents)).pipe(
         Effect.map((chunk) => Array.from(chunk).length),
