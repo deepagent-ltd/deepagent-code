@@ -4,15 +4,28 @@ import {
   PreparedProviderTurn,
   PreparedTurnDecodeError,
   PreparedTurnMismatchError,
+  PreparedTurnState,
   PreparedTurnStateLiterals,
+  PreparedTurnProviderTerminalEvidence,
+  PreparedTurnPrepared,
+  PreparedTurnDispatching,
+  PreparedTurnStreaming,
+  PreparedTurnSettled,
+  PreparedTurnFailedTerminal,
+  PreparedTurnIndeterminate,
+  PreparedTurnAbandonedBeforeDispatch,
+  PreparedTurnResolvedAbandoned,
+  PreparedTurnResolvedSettled,
+  PreparedTurnFrozenForked,
   decodePreparedProviderTurn,
   encodePreparedProviderTurn,
   validatePreparedProviderTurn,
   assertPreparedTurnExactRetry,
   preparedTurnDigest,
 } from "../../src/contract/prepared-turn"
-import { RecoveryAttemptState } from "../../src/contract/recovery-command"
-import { decodeSelectionEnvelope } from "../../src/contract/selection"
+import { ModelProtocol } from "../../src/contract/model-protocol"
+import { RecoveryAttemptState, RecoveryProviderEvidenceState } from "../../src/contract/recovery-command"
+import { SelectionModelCapability, decodeSelectionEnvelope } from "../../src/contract/selection"
 
 function makeSelection() {
   return decodeSelectionEnvelope({
@@ -351,5 +364,88 @@ describe("cross-lane consistency of the state vocabulary", () => {
     const result = validatePreparedProviderTurn({ ...(makeTurn("settled", details.settled) as Record<string, unknown>), schemaVersion: "nope" })
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.error.path).toEqual(["schemaVersion"])
+  })
+})
+
+describe("F1: digest strips state-detail timestamps", () => {
+  test("prepared turn digest ignores sealedAt", () => {
+    const a = decodePreparedProviderTurn(makeTurn("prepared", { prepared: { wireHash: "w", sealedAt: "t1" } }))
+    const b = decodePreparedProviderTurn(makeTurn("prepared", { prepared: { wireHash: "w", sealedAt: "t2" } }))
+    expect(preparedTurnDigest(a)).toEqual(preparedTurnDigest(b))
+  })
+
+  test("dispatching turn digest ignores dispatchedAt", () => {
+    const a = decodePreparedProviderTurn(
+      makeTurn("dispatching", { dispatching: { wireHash: "w", transportKey: "http_sse", dispatchEpoch: 1, dispatchedAt: "t1" } }),
+    )
+    const b = decodePreparedProviderTurn(
+      makeTurn("dispatching", { dispatching: { wireHash: "w", transportKey: "http_sse", dispatchEpoch: 1, dispatchedAt: "t2" } }),
+    )
+    expect(preparedTurnDigest(a)).toEqual(preparedTurnDigest(b))
+  })
+})
+
+describe("F2: cross-lane set equality", () => {
+  function sameSet(a: readonly string[], b: readonly string[]): boolean {
+    const sa = new Set(a)
+    const sb = new Set(b)
+    return sa.size === sb.size && [...sa].every((x) => sb.has(x)) && [...sb].every((x) => sa.has(x))
+  }
+
+  test("reverse: every RecoveryAttemptState literal decodes as a prepared-turn state", () => {
+    for (const s of (RecoveryAttemptState as unknown as { literals: string[] }).literals) {
+      expect(() => Schema.decodeUnknownSync(PreparedTurnState)(s)).not.toThrow()
+    }
+  })
+
+  test("PreparedTurnState == RecoveryAttemptState (exact set, both directions)", () => {
+    expect(
+      sameSet(
+        (PreparedTurnState as unknown as { literals: string[] }).literals,
+        (RecoveryAttemptState as unknown as { literals: string[] }).literals,
+      ),
+    ).toBe(true)
+  })
+
+  test("ModelProtocol == SelectionModelCapability.protocol (exact protocol set)", () => {
+    expect(
+      sameSet(
+        (ModelProtocol as unknown as { literals: string[] }).literals,
+        (SelectionModelCapability as unknown as { fields: { protocol: { literals: string[] } } }).fields.protocol.literals,
+      ),
+    ).toBe(true)
+  })
+
+  test("PreparedTurnProviderTerminalEvidence == RecoveryProviderEvidenceState (exact set)", () => {
+    expect(
+      sameSet(
+        (PreparedTurnProviderTerminalEvidence as unknown as { literals: string[] }).literals,
+        (RecoveryProviderEvidenceState as unknown as { literals: string[] }).literals,
+      ),
+    ).toBe(true)
+  })
+})
+
+describe("F4: triple state-representation guard", () => {
+  test("schema, array and member-class state literals are exactly equal (order-insensitive)", () => {
+    const schemaLs = (PreparedTurnState as unknown as { literals: string[] }).literals
+    const members = [
+      PreparedTurnPrepared,
+      PreparedTurnDispatching,
+      PreparedTurnStreaming,
+      PreparedTurnSettled,
+      PreparedTurnFailedTerminal,
+      PreparedTurnIndeterminate,
+      PreparedTurnAbandonedBeforeDispatch,
+      PreparedTurnResolvedAbandoned,
+      PreparedTurnResolvedSettled,
+      PreparedTurnFrozenForked,
+    ]
+    const memberLs = members.map(
+      (c) => (c as unknown as { fields: { state: { ast: { literal: string } } } }).fields.state.ast.literal,
+    )
+    const sortSet = (arr: readonly string[]) => [...new Set(arr)].sort()
+    expect(sortSet(memberLs)).toEqual(sortSet(PreparedTurnStateLiterals))
+    expect(sortSet(memberLs)).toEqual(sortSet(schemaLs))
   })
 })

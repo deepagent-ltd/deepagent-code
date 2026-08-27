@@ -256,3 +256,76 @@ describe("capability load: exact retry + typed violations", () => {
     if (!result.ok) expect(result.error.path).toEqual(["level"])
   })
 })
+
+describe("F1: receipt digest strips loadedAt", () => {
+  test("capability receipt digest ignores loadedAt", () => {
+    const a = decodeCapabilityLoadReceipt({
+      ...common({ state: "loaded", bodyRef: "cap://1", tokenCount: 10, byteCount: 100 }),
+      loadedAt: 1,
+    })
+    const b = decodeCapabilityLoadReceipt({
+      ...common({ state: "loaded", bodyRef: "cap://1", tokenCount: 10, byteCount: 100 }),
+      loadedAt: 999999,
+    })
+    expect(capabilityLoadReceiptDigest(a)).toEqual(capabilityLoadReceiptDigest(b))
+  })
+
+  test("domain-pack receipt digest ignores loadedAt", () => {
+    const a = decodeDomainPackLoadReceipt({
+      ...common({ state: "loaded", bodyRef: "po://p", tokenCount: 10, byteCount: 100 }, "domain_pack"),
+      packSnapshotRef: "ps",
+      activePackSnapshotHash: "h",
+      refBelongsToActiveSnapshot: true,
+      loadedAt: 1,
+    })
+    const b = decodeDomainPackLoadReceipt({
+      ...common({ state: "loaded", bodyRef: "po://p", tokenCount: 10, byteCount: 100 }, "domain_pack"),
+      packSnapshotRef: "ps",
+      activePackSnapshotHash: "h",
+      refBelongsToActiveSnapshot: true,
+      loadedAt: 999999,
+    })
+    expect(domainPackLoadReceiptDigest(a)).toEqual(domainPackLoadReceiptDigest(b))
+  })
+})
+
+describe("F3: SessionContentLoad per-member negatives", () => {
+  test("capability member decodes", () => {
+    expect(() => decodeSessionContentLoad(makeReceipt())).not.toThrow()
+  })
+
+  test("wrong contentKind discriminant -> exact path", () => {
+    const input = { ...(makeReceipt() as unknown as Record<string, unknown>), contentKind: "bogus" }
+    let path: readonly string[] = []
+    try {
+      decodeSessionContentLoad(input)
+    } catch (error) {
+      if (error instanceof CapabilityLoadDecodeError) path = error.path
+    }
+    expect(path).toEqual(["contentKind"])
+  })
+
+  test("domain-pack member missing packSnapshotRef -> exact path", () => {
+    const input = makeDomainPack() as unknown as Record<string, unknown>
+    delete input.packSnapshotRef
+    let path: readonly string[] = []
+    try {
+      decodeSessionContentLoad(input)
+    } catch (error) {
+      if (error instanceof CapabilityLoadDecodeError) path = error.path
+    }
+    expect(path).toEqual(["packSnapshotRef"])
+  })
+
+  test("capability member missing required common field -> exact path", () => {
+    const input = makeReceipt() as unknown as Record<string, unknown>
+    delete input.bodyHash
+    let path: readonly string[] = []
+    try {
+      decodeSessionContentLoad(input)
+    } catch (error) {
+      if (error instanceof CapabilityLoadDecodeError) path = error.path
+    }
+    expect(path).toEqual(["bodyHash"])
+  })
+})

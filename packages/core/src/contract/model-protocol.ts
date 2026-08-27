@@ -8,6 +8,17 @@ import { contentDigest } from "./digest"
 // protocol), plus worklist C2-01/C2-04 (protocol/route/origin/capability/
 // lowering fields that feed the prepared attempt identity).
 // Pure-new contract module: not imported by any production module this wave.
+//
+// Cross-field coherence: this contract freezes the shape and the versioned enums,
+// not cross-field rules. Coherence between fields (e.g. a `selectionState` of
+// `disabled` implies a `disabledReason`; a `conflict` selection implies
+// `model_protocol_selection_required`) is enforced by consumers / refinements
+// on the V2 request path, NOT by the frozen shape.
+//
+// Invariant literals: fields frozen to an always-true literal (e.g.
+// `noLocalSummaryFallback`, `historyStaysReadable`) are deliberate invariants.
+// Changing their truth value is a semantic change that requires a schema-version
+// successor per the C0-02 successor rule; it must not be re-frozen in place.
 
 /**
  * Version matrix for the model protocol contract. `config` is the provider
@@ -149,6 +160,13 @@ export type ModelProtocolDisabledReason = typeof ModelProtocolDisabledReason.Typ
  * state (selectionState) and an optional disabled reason — a disabled config is
  * never silently mapped to a guessed protocol. Route/origin and version
  * bindings feed the prepared attempt identity.
+ *
+ * Probe evidence is NOT carried on the config: a capability probe is a
+ * configuration action bound to endpoint origin, model id, time and response
+ * fingerprint, and its evidence lives at the turn level
+ * (PreparedModelCapabilityEvidence in prepared-turn.ts). The config carries only
+ * the resolved outcome (selectionState) and the capability set it resolved
+ * against.
  */
 export class ModelProviderConfig extends Schema.Class<ModelProviderConfig>("ModelProtocol.ModelProviderConfig")({
   schemaVersion: Schema.Literal(ModelProtocolVersion.config),
@@ -323,21 +341,41 @@ function extractErrorPath(error: unknown): string[] {
   const message = error instanceof Error ? error.message : String(error)
   const atIndex = message.indexOf("\n  at ")
   if (atIndex === -1) return []
-  // Effect may emit several "at [...]" lines for a nested union member (e.g. an
-  // unexpected-key sub-error followed by the deeper missing-key path). The most
-  // specific reported path is the one with the most segments, so we return that
-  // rather than the first line.
-  let best: string[] = []
-  for (const line of message.slice(atIndex).split("\n")) {
+  const lines = message.slice(atIndex).split("\n")
+  // Effect may emit several "at [...]" lines for a union member: an
+  // "Unexpected key" aggregation artifact plus the genuine location. The real
+  // required-field absence is the line preceded by "Missing key", so we prefer
+  // that so a missing member field reports its own path (e.g. ["packSnapshotRef"])
+  // and not the artifact path. When there is no "Missing key" line we return the
+  // most specific (most segments) reported path.
+  type Entry = { seg: string[]; kind: "missing" | "other" }
+  const entries: Entry[] = []
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!
     if (!line.includes("[")) continue
-    const segments: string[] = []
+    const segs: string[] = []
     const re = /\[([^\]]*)\]/g
     let current: RegExpExecArray | null
     while ((current = re.exec(line)) !== null) {
       const raw = current[1]!
-      segments.push(raw.startsWith('"') && raw.endsWith('"') ? raw.slice(1, -1) : raw)
+      segs.push(raw.startsWith('"') && raw.endsWith('"') ? raw.slice(1, -1) : raw)
     }
-    if (segments.length > best.length) best = segments
+    if (segs.length === 0) continue
+    let kind: "missing" | "other" = "other"
+    for (let j = i - 1; j >= 0; j--) {
+      const upper = lines[j]!
+      if (upper.startsWith("  at ") || upper.includes("[")) continue
+      if (upper.includes("Missing key")) kind = "missing"
+      break
+    }
+    entries.push({ seg: segs, kind })
+  }
+  if (entries.length === 0) return []
+  const pool = entries.filter((e) => e.kind === "missing")
+  const chosen = pool.length > 0 ? pool : entries
+  let best = chosen[0]!.seg
+  for (const e of chosen) {
+    if (e.seg.length > best.length) best = e.seg
   }
   return best
 }

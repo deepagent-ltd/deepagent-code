@@ -12,6 +12,19 @@ import { SelectionEnvelope, SelectionIdentity, selectionDigest } from "./selecti
 // selectionDigest) — the selection snapshot is exactly the SelectionEnvelope
 // bound to this attempt.
 // Pure-new contract module: not imported by any production module this wave.
+//
+// Cross-field coherence: this contract freezes the identity shape and the
+// versioned enums, not cross-field rules. Coherence between fields (e.g. a
+// `failed_terminal` state implies the `noLateResultProof` predicate proves a
+// terminal reject; an `indeterminate_after_crash` state implies
+// `networkUnknown`; `settled` implies a real `responseHash`) is enforced by
+// consumers / refinements on the V2 request path, NOT by the frozen shape.
+//
+// Invariant literals: fields frozen to an always-true literal (e.g.
+// `noLateResultProof`, `networkUnknown`, `originalSessionReadOnly`) are
+// deliberate invariants. Changing their truth value is a semantic change that
+// requires a schema-version successor per the C0-02 successor rule; it must not
+// be re-frozen in place.
 
 /**
  * Version matrix for the prepared provider turn contract. `schema` is the
@@ -401,21 +414,41 @@ function extractErrorPath(error: unknown): string[] {
   const message = error instanceof Error ? error.message : String(error)
   const atIndex = message.indexOf("\n  at ")
   if (atIndex === -1) return []
-  // Effect may emit several "at [...]" lines for a nested union member (e.g. an
-  // unexpected-key sub-error followed by the deeper missing-key path). The most
-  // specific reported path is the one with the most segments, so we return that
-  // rather than the first line.
-  let best: string[] = []
-  for (const line of message.slice(atIndex).split("\n")) {
+  const lines = message.slice(atIndex).split("\n")
+  // Effect may emit several "at [...]" lines for a union member: an
+  // "Unexpected key" aggregation artifact plus the genuine location. The real
+  // required-field absence is the line preceded by "Missing key", so we prefer
+  // that so a missing member field reports its own path (e.g. ["packSnapshotRef"])
+  // and not the artifact path. When there is no "Missing key" line we return the
+  // most specific (most segments) reported path.
+  type Entry = { seg: string[]; kind: "missing" | "other" }
+  const entries: Entry[] = []
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!
     if (!line.includes("[")) continue
-    const segments: string[] = []
+    const segs: string[] = []
     const re = /\[([^\]]*)\]/g
     let current: RegExpExecArray | null
     while ((current = re.exec(line)) !== null) {
       const raw = current[1]!
-      segments.push(raw.startsWith('"') && raw.endsWith('"') ? raw.slice(1, -1) : raw)
+      segs.push(raw.startsWith('"') && raw.endsWith('"') ? raw.slice(1, -1) : raw)
     }
-    if (segments.length > best.length) best = segments
+    if (segs.length === 0) continue
+    let kind: "missing" | "other" = "other"
+    for (let j = i - 1; j >= 0; j--) {
+      const upper = lines[j]!
+      if (upper.startsWith("  at ") || upper.includes("[")) continue
+      if (upper.includes("Missing key")) kind = "missing"
+      break
+    }
+    entries.push({ seg: segs, kind })
+  }
+  if (entries.length === 0) return []
+  const pool = entries.filter((e) => e.kind === "missing")
+  const chosen = pool.length > 0 ? pool : entries
+  let best = chosen[0]!.seg
+  for (const e of chosen) {
+    if (e.seg.length > best.length) best = e.seg
   }
   return best
 }
@@ -479,11 +512,40 @@ export const assertPreparedTurnExactRetry = (
   if (candidate.selectionHash !== recorded.selectionHash) throw new PreparedTurnMismatchError({ cause: "selection" })
 }
 
-/** Byte-stable canonical content digest of a PreparedProviderTurn (timestamp-independent). */
-export const preparedTurnDigest = (value: PreparedProviderTurn): string => contentDigest(value)
+// ---------------------------------------------------------------------------
+// Module-local volatile strip: the state-detail timestamps `sealedAt`
+// (prepared) and `dispatchedAt` (dispatching) are audit-only and must not
+// participate in the turn content digest. The shared `contentDigest` (frozen
+// digest.ts) does not include them in its VOLATILE_KEYS, so `preparedTurnDigest`
+// strips them here first, keeping the digest byte-stable and
+// timestamp-independent over those fields.
+const PREPARED_TURN_VOLATILE_KEYS = new Set(["sealedAt", "dispatchedAt"])
+
+/** Recursively drop a set of volatile keys (module-local analogue of digest.ts stripVolatile). */
+function stripVolatileKeys(input: unknown, keys: ReadonlySet<string>, seen: WeakSet<object>): unknown {
+  if (Array.isArray(input)) return input.map((item) => stripVolatileKeys(item, keys, seen))
+  if (input !== null && typeof input === "object" && !(input instanceof Date)) {
+    if (seen.has(input)) throw new TypeError("Contract digest cannot encode cyclic values")
+    seen.add(input)
+    const out: Record<string, unknown> = {}
+    for (const key of Object.keys(input)) {
+      if (keys.has(key)) continue
+      out[key] = stripVolatileKeys((input as Record<string, unknown>)[key], keys, seen)
+    }
+    seen.delete(input)
+    return out
+  }
+  return input
+}
+
+/** Strip the audit-only `sealedAt` / `dispatchedAt` keys before hashing a turn. */
+const stripPreparedTurnVolatile = (value: unknown): unknown => stripVolatileKeys(value, PREPARED_TURN_VOLATILE_KEYS, new WeakSet())
+
+/** Byte-stable canonical content digest of a PreparedProviderTurn. `sealedAt`/`dispatchedAt` are stripped. */
+export const preparedTurnDigest = (value: PreparedProviderTurn): string => contentDigest(stripPreparedTurnVolatile(value))
 
 /** Derive the selection hash of a turn's frozen SelectionEnvelope snapshot. */
 export const preparedSelectionDigest = (selection: SelectionEnvelope): string => selectionDigest(selection)
 
-/** Byte-stable canonical content digest of a PreparedValidationIdentity (timestamp-independent). */
+/** Byte-stable canonical content digest of a PreparedValidationIdentity (no volatile timestamp field). */
 export const preparedValidationDigest = (value: PreparedValidationIdentity): string => contentDigest(value)

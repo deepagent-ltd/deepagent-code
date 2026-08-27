@@ -9,6 +9,19 @@ import { contentDigest } from "./digest"
 // (durable receipt + exact retry). Plus design §13 hard budgets: L0 <=4096
 // bytes/700 tokens, L2 single <=1200 tokens, per turn <=2 new / 2400 tokens.
 // Pure-new contract module: not imported by any production module this wave.
+//
+// Cross-field coherence: this contract freezes the shape and the versioned enums,
+// not cross-field rules. Coherence between fields (e.g. a `denied`/`disabled`
+// state implies a matching `reasonCode`; `budget_exceeded` implies
+// `newThisTurn` > `limitNewPerTurn`; an uncertainty `timeout` implies
+// `network_unknown`) is enforced by consumers / refinements on the V2 request
+// path, NOT by the frozen shape.
+//
+// Invariant literals: fields frozen to an always-true literal (e.g.
+// `refBelongsToActiveSnapshot`, `historyStaysReadable`,
+// `noLocalSummaryFallback`) are deliberate invariants. Changing their truth
+// value is a semantic change that requires a schema-version successor per the
+// C0-02 successor rule; it must not be re-frozen in place.
 
 /**
  * Version matrix for the capability-load contract. `receipt` is the durable
@@ -225,8 +238,10 @@ const contentLoadCommon = {
  * Carries the load/session/activity/turn identity, catalog snapshot, body /
  * runtime / permission hashes, permission + runtime binding, request/result
  * hash (so an exact retry returns the same receipt + body hash), the tagged
- * state and the budget state. `loadedAt` is audit-only and excluded from the
- * content digest.
+ * state and the budget state. `loadedAt` is audit-only: it is excluded from the
+ * content digest by the module-local `stripContentLoadVolatile` (applied in
+ * `capabilityLoadReceiptDigest` / `domainPackLoadReceiptDigest` /
+ * `sessionContentLoadDigest` before the shared `contentDigest`).
  */
 export class CapabilityLoadReceipt extends Schema.Class<CapabilityLoadReceipt>("CapabilityLoad.Receipt")({
   ...contentLoadCommon,
@@ -291,21 +306,41 @@ function extractErrorPath(error: unknown): string[] {
   const message = error instanceof Error ? error.message : String(error)
   const atIndex = message.indexOf("\n  at ")
   if (atIndex === -1) return []
-  // Effect may emit several "at [...]" lines for a nested union member (e.g. an
-  // unexpected-key sub-error followed by the deeper missing-key path). The most
-  // specific reported path is the one with the most segments, so we return that
-  // rather than the first line.
-  let best: string[] = []
-  for (const line of message.slice(atIndex).split("\n")) {
+  const lines = message.slice(atIndex).split("\n")
+  // Effect may emit several "at [...]" lines for a union member: an
+  // "Unexpected key" aggregation artifact plus the genuine location. The real
+  // required-field absence is the line preceded by "Missing key", so we prefer
+  // that so a missing member field reports its own path (e.g. ["packSnapshotRef"])
+  // and not the artifact path. When there is no "Missing key" line we return the
+  // most specific (most segments) reported path.
+  type Entry = { seg: string[]; kind: "missing" | "other" }
+  const entries: Entry[] = []
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!
     if (!line.includes("[")) continue
-    const segments: string[] = []
+    const segs: string[] = []
     const re = /\[([^\]]*)\]/g
     let current: RegExpExecArray | null
     while ((current = re.exec(line)) !== null) {
       const raw = current[1]!
-      segments.push(raw.startsWith('"') && raw.endsWith('"') ? raw.slice(1, -1) : raw)
+      segs.push(raw.startsWith('"') && raw.endsWith('"') ? raw.slice(1, -1) : raw)
     }
-    if (segments.length > best.length) best = segments
+    if (segs.length === 0) continue
+    let kind: "missing" | "other" = "other"
+    for (let j = i - 1; j >= 0; j--) {
+      const upper = lines[j]!
+      if (upper.startsWith("  at ") || upper.includes("[")) continue
+      if (upper.includes("Missing key")) kind = "missing"
+      break
+    }
+    entries.push({ seg: segs, kind })
+  }
+  if (entries.length === 0) return []
+  const pool = entries.filter((e) => e.kind === "missing")
+  const chosen = pool.length > 0 ? pool : entries
+  let best = chosen[0]!.seg
+  for (const e of chosen) {
+    if (e.seg.length > best.length) best = e.seg
   }
   return best
 }
@@ -431,17 +466,44 @@ export const assertContentLoadBudget = (
   }
 }
 
-/** Byte-stable canonical content digest of a CapabilityLoadReceipt (timestamp-independent). */
-export const capabilityLoadReceiptDigest = (value: CapabilityLoadReceipt): string => contentDigest(value)
+// ---------------------------------------------------------------------------
+// Module-local volatile strip: `loadedAt` is audit-only and must not participate
+// in the content digest. The shared `contentDigest` (frozen digest.ts) strips only
+// its own VOLATILE_KEYS (time/createdAt/.../absolutePath), NOT `loadedAt`, so the
+// three load-receipt digests strip it here first via `stripContentLoadVolatile`.
+const CONTENT_LOAD_VOLATILE_KEYS = new Set(["loadedAt"])
 
-/** Byte-stable canonical content digest of a DomainPackLoadReceipt (timestamp-independent). */
-export const domainPackLoadReceiptDigest = (value: DomainPackLoadReceipt): string => contentDigest(value)
+/** Recursively drop a set of volatile keys (module-local analogue of digest.ts stripVolatile). */
+function stripVolatileKeys(input: unknown, keys: ReadonlySet<string>, seen: WeakSet<object>): unknown {
+  if (Array.isArray(input)) return input.map((item) => stripVolatileKeys(item, keys, seen))
+  if (input !== null && typeof input === "object" && !(input instanceof Date)) {
+    if (seen.has(input)) throw new TypeError("Contract digest cannot encode cyclic values")
+    seen.add(input)
+    const out: Record<string, unknown> = {}
+    for (const key of Object.keys(input)) {
+      if (keys.has(key)) continue
+      out[key] = stripVolatileKeys((input as Record<string, unknown>)[key], keys, seen)
+    }
+    seen.delete(input)
+    return out
+  }
+  return input
+}
 
-/** Byte-stable canonical content digest of a SessionContentLoad (timestamp-independent). */
-export const sessionContentLoadDigest = (value: SessionContentLoad): string => contentDigest(value)
+/** Strip the audit-only `loadedAt` key before hashing a content-load value. */
+const stripContentLoadVolatile = (value: unknown): unknown => stripVolatileKeys(value, CONTENT_LOAD_VOLATILE_KEYS, new WeakSet())
 
-/** Byte-stable canonical content digest of a ContentLoadState (tagged, timestamp-independent). */
+/** Byte-stable canonical content digest of a CapabilityLoadReceipt. `loadedAt` is stripped. */
+export const capabilityLoadReceiptDigest = (value: CapabilityLoadReceipt): string => contentDigest(stripContentLoadVolatile(value))
+
+/** Byte-stable canonical content digest of a DomainPackLoadReceipt. `loadedAt` is stripped. */
+export const domainPackLoadReceiptDigest = (value: DomainPackLoadReceipt): string => contentDigest(stripContentLoadVolatile(value))
+
+/** Byte-stable canonical content digest of a SessionContentLoad. `loadedAt` is stripped. */
+export const sessionContentLoadDigest = (value: SessionContentLoad): string => contentDigest(stripContentLoadVolatile(value))
+
+/** Byte-stable canonical content digest of a ContentLoadState (no volatile timestamp field). */
 export const contentLoadStateDigest = (value: ContentLoadState): string => contentDigest(value)
 
-/** Byte-stable canonical content digest of a CapabilityLoadRequest (timestamp-independent). */
+/** Byte-stable canonical content digest of a CapabilityLoadRequest (no volatile timestamp field). */
 export const capabilityLoadRequestDigest = (value: CapabilityLoadRequest): string => contentDigest(value)
