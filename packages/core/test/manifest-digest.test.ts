@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { isAbsolute } from "node:path"
 import {
   ManifestVersion,
   assertManifestMatches,
@@ -99,5 +100,52 @@ describe("generateManifest (live tree)", () => {
         expect(key).not.toContain("core-v2-beta-w2-digest")
       }
     }
+  })
+})
+
+describe("C0-05 requirement coverage", () => {
+  test("handles absent input categories deterministically (missing dirs + non-existent repo)", () => {
+    const manifest = generateManifest()
+    // The C0-01/C0-06 evidence groups are absent in a clean checkout -> stable marker digests.
+    expect(serializeManifest(manifest)).toBe(serializeManifest(generateManifest()))
+    expect(Object.keys(manifest.inputs["c0-01-inventory-report"] ?? {})).toEqual([
+      "packages/core/.artifacts/caller-inventory/report.json",
+    ])
+    expect(Object.keys(manifest.inputs["c0-06-perf-manifest"] ?? {})).toEqual([
+      "packages/core/.artifacts/perf-baseline",
+    ])
+
+    // A repo root with none of the input categories present must not throw and stays byte-stable.
+    const absent = generateManifest({ repoRoot: "/definitely/not/a/real/repo" })
+    const absentAgain = generateManifest({ repoRoot: "/definitely/not/a/real/repo" })
+    expect(serializeManifest(absent)).toBe(serializeManifest(absentAgain))
+    expect(absent.schemaVersion).toBe(ManifestVersion.schema)
+  })
+
+  test("detects a migration-registry change", () => {
+    const base = generateManifest()
+    const changed = generateManifest({
+      extraInputs: {
+        "migration-registry": {
+          "packages/core/src/database/migration.gen.ts": "export const migrations = []",
+        },
+      },
+    })
+    expect(changed.overallDigest).not.toBe(base.overallDigest)
+    expect(changed.setTreeDigest).not.toBe(base.setTreeDigest)
+  })
+
+  test("output contains no timestamps or absolute paths", () => {
+    const manifest = generateManifest()
+    // Only the canonical manifest fields may appear at the top level (no time/absolute-path keys).
+    expect(Object.keys(manifest).sort()).toEqual(["inputs", "overallDigest", "schemaVersion", "setTreeDigest"])
+    const HEX64 = /^[0-9a-f]{64}$/
+    for (const group of Object.values(manifest.inputs)) {
+      for (const [key, digest] of Object.entries(group)) {
+        expect(isAbsolute(key)).toBe(false)
+        expect(digest).toMatch(HEX64)
+      }
+    }
+    expect(serializeManifest(manifest)).not.toContain("/Users/")
   })
 })
