@@ -522,23 +522,35 @@ function delegationSpawnHit(entryFile: string, extraRoots: readonly string[], ta
 /** Machine-checked positive body-shape fact: an entry whose own module performs NO authority/business
  * call — its only calls are log/no-op/registration statements (a no-op lifecycle command). */
 const BUSINESS_CALLEES = new Set(["prompt", "promptOrSteer", "loop", "publish", "tryPublish", "register", "materialize", "wake", "executor", "registry", "steer", "resume", "admit", "run", "fork", "spawn", "replay", "snapshotRows"])
-function bodyLogsOnlyHit(entryFile: string): VerifiedHit | undefined {
-  if (!existsSync(entryFile)) return undefined
-  const mod = parseModule(entryFile)
-  const sf = mod.sourceFile
-  let businessFound = false
-  const visit = (node: ts.Node): void => {
-    if (businessFound) return
-    if (ts.isCallExpression(node)) {
-      const callee = ts.isPropertyAccessExpression(node.expression) ? node.expression.name.text
-        : ts.isIdentifier(node.expression) ? node.expression.text : undefined
-      if (callee && BUSINESS_CALLEES.has(callee)) businessFound = true
+export function bodyLogsOnlyHit(entryFile: string, extraRoots: readonly string[] = []): VerifiedHit | undefined {
+  // Scan the entry's OWN handler modules (the resolved lazy handler, e.g. migrate.ts), NOT the
+  // command-tree registration file (commands.ts, whose Spec.make tree would trivially satisfy).
+  // A no-op handler body performs only log/no-op/registration calls; any business callee fails it.
+  const roots = [entryFile, ...extraRoots]
+  let anchorLine = 1
+  let anchorFile = entryFile
+  for (const file of roots) {
+    if (!existsSync(file)) continue
+    const mod = parseModule(file)
+    const sf = mod.sourceFile
+    let businessFound = false
+    const visit = (node: ts.Node): void => {
+      if (businessFound) return
+      if (ts.isCallExpression(node)) {
+        const callee = ts.isPropertyAccessExpression(node.expression) ? node.expression.name.text
+          : ts.isIdentifier(node.expression) ? node.expression.text : undefined
+        if (callee && BUSINESS_CALLEES.has(callee)) businessFound = true
+      }
+      ts.forEachChild(node, visit)
     }
-    ts.forEachChild(node, visit)
+    visit(sf)
+    if (businessFound) return undefined
   }
-  visit(sf)
-  if (businessFound) return undefined
-  return { marker: "bodyLogsOnly", file: entryFile, line: 1 }
+  // Anchor the marker at the resolved handler module (or the entry if none) — its first statement.
+  const firstHandler = extraRoots.find((file) => existsSync(file)) ?? entryFile
+  anchorFile = firstHandler
+  anchorLine = 1
+  return { marker: "bodyLogsOnly", file: anchorFile, line: anchorLine }
 }
 
 /** A client/service INVOCATION call site in the entry's own handler body: a body chain that performs a
@@ -654,7 +666,7 @@ export function verifyRequirements(
       return { requirement, hit }
     }
     if (requirement.kind === "bodyLogsOnly") {
-      return { requirement, hit: bodyLogsOnlyHit(entryFile) }
+      return { requirement, hit: bodyLogsOnlyHit(entryFile, extraRoots) }
     }
     if (requirement.kind === "delegatesTo") {
       // NEW-P6-B: delegation is CALL-PATH-ONLY. A delegation edge is sound only when the entry's flow

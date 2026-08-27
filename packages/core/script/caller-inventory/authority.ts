@@ -139,7 +139,6 @@ export const DELEGATION_CLIENT_BINDINGS: Readonly<Record<string, string>> = {
   "daemon.client": "composition.lildax-runtime",
   "client.v2.agent.list": "composition.lildax-runtime",
   "Daemon.Service": "composition.lildax-runtime",
-  "opts.runPanelist": "im.agent-executor",
   "spawnLocalServer": "desktop.spawn-local-server",
 }
 /**

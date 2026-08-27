@@ -12,10 +12,12 @@
  *     production path are classified as non-v2.
  */
 import { describe, expect, test } from "bun:test"
-import { mkdirSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { buildInventory } from "../script/caller-inventory/build"
 import { INVENTORY_SURFACE_IDS, SURFACE_IDS } from "../script/caller-inventory/types"
+import { DELEGATION_CLIENT_BINDINGS } from "../script/caller-inventory/authority"
+import { bodyLogsOnlyHit } from "../script/caller-inventory/graph"
 import { DIMENSIONS, VERDICTS } from "../script/caller-inventory/types"
 
 const ROOT = new URL("../", import.meta.url).pathname.replace(/\/$/, "")
@@ -366,6 +368,46 @@ describe("C0-01 caller inventory gate", () => {
       if (!entry.externalReceiver) continue
       expect(entry.roles.every((rr) => rr.verdict === "read_only")).toBe(true)
       expect(entry.roles.flatMap((rr) => rr.evidence).some((pr) => pr.marker.includes("server-mode"))).toBe(true)
+    }
+  })
+
+  test("NEW-P7-A: bodyLogsOnly scans the resolved handler, not the command-tree registration", () => {
+    // bodyLogsOnlyHit must scan the entry's handler module for business callees. A probe handler that
+    // performs a business call must NOT satisfy bodyLogsOnly; the real no-op handler (migrate.ts) must.
+    const REPO = new URL("../../../", import.meta.url).pathname.replace(/\/$/, "")
+    const probe = join(PROBE_DIR, "probe-biz-handler.ts")
+    try {
+      mkdirSync(PROBE_DIR, { recursive: true })
+      writeFileSync(
+        probe,
+        [
+          "import { SessionPrompt } from '@deepagent-code/core/session/prompt'",
+          "export default function handler() {",
+          "  const promptSvc = null",
+          "  promptSvc.loop({ sessionID: 'x' }).pipe(() => {})",
+          "}",
+        ].join("\n"),
+      )
+      expect(bodyLogsOnlyHit(probe)).toBeUndefined()
+      const migrate = join(REPO, "packages/cli/src/commands/handlers/migrate.ts")
+      expect(existsSync(migrate)).toBe(true)
+      expect(bodyLogsOnlyHit(migrate)).toBeDefined()
+    } finally {
+      rmSync(PROBE_DIR, { recursive: true, force: true })
+    }
+  })
+
+  test("NEW-P7-B: no dead DELEGATION_CLIENT_BINDINGS (every target is exercised by a delegation edge)", () => {
+    const used = new Set<string>()
+    for (const entry of inventory.entries) {
+      for (const role of entry.roles) {
+        for (const proof of role.evidence) {
+          if (proof.marker.startsWith("delegates:")) used.add(proof.marker.slice("delegates:".length))
+        }
+      }
+    }
+    for (const [, target] of Object.entries(DELEGATION_CLIENT_BINDINGS)) {
+      expect(used.has(target)).toBe(true)
     }
   })
 })
