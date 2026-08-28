@@ -34,6 +34,8 @@ import { Api } from "@deepagent-code/server/api"
 // GlobalEventSchema snapshots the registry after event-producing groups register their variants.
 import { GlobalApi } from "./groups/global"
 import { MaintenanceApi } from "./groups/maintenance"
+import { CapabilityApi } from "./groups/capability"
+import { SystemContextApi } from "./groups/system-context"
 import { Authorization } from "./middleware/authorization"
 import { SchemaErrorMiddleware } from "./middleware/schema-error"
 
@@ -70,6 +72,8 @@ export const InstanceHttpApi = HttpApi.make("deepagent-code-instance")
   .addHttpApi(IMApi)
   .addHttpApi(InstanceApi)
   .addHttpApi(MaintenanceApi)
+  .addHttpApi(CapabilityApi)
+  .addHttpApi(SystemContextApi)
   .addHttpApi(McpApi)
   .addHttpApi(ProjectApi)
   .addHttpApi(ProjectCopyApi)

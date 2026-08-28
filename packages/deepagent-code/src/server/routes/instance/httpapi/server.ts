@@ -144,6 +144,8 @@ import { schemaErrorLayer } from "./middleware/schema-error"
 import { syncReplayBodyLimitLayer } from "./middleware/sync-replay-body-limit"
 import { maintenanceHandlers } from "./handlers/maintenance"
 import { layer as maintenanceRegistryLayer } from "./maintenance-registry"
+import { capabilityHandlers } from "./handlers/capability"
+import { systemContextHandlers } from "./handlers/system-context"
 
 export const context = Context.makeUnsafe<unknown>(new Map())
 
@@ -271,6 +273,8 @@ const instanceApiRoutes = HttpApiBuilder.layer(InstanceHttpApi).pipe(
     workspaceHandlers,
     workspaceConfigHandlers,
     maintenanceHandlers,
+    capabilityHandlers,
+    systemContextHandlers,
   ]),
 )
 
