@@ -420,7 +420,7 @@ export function createRoutes(
     // SessionV2.defaultLayer (no-op execution) inside its own subtree; re-provide the live layer at
     // the very end so the route graph as a whole runs V2 sessions on the local execution coordinator.
     Layer.provide(SessionV2.liveLayer),
-  )
+  ).pipe(Layer.orDie)
 }
 
 export const routes = createRoutes()

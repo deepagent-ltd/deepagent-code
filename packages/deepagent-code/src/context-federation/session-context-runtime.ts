@@ -755,7 +755,7 @@ export const defaultLayer: Layer.Layer<Service> = layer.pipe(
       queryLayer,
     ),
   ),
-)
+).pipe(Layer.orDie)
 
 function envelopeFor(input: {
   readonly session: Session.Info
