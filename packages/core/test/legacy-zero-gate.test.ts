@@ -188,12 +188,9 @@ describe("C0-08 legacy-zero gate real inventory (actual frozen numbers)", () => 
     expect(counters.unclassifiedDims).toBe(inventory.totals.byVerdict.unclassified)
   })
 
-  test("selection-bridge usages are the canonical-turn v2-none fallback (4 graph revisions)", () => {
-    expect(countSelectionBridgeUsages(bridgeSites)).toBe(4)
-    for (const site of bridgeSites) {
-      expect(site.repoFile).toBe("packages/core/src/session/runner/canonical-turn.ts")
-      expect(site.line).toBe(37)
-    }
+  test("selection-bridge usages are ZERO after C3-08 (v2-none fallback removed)", () => {
+    expect(countSelectionBridgeUsages(bridgeSites)).toBe(0)
+    expect(bridgeSites).toEqual([])
   })
 
   test("the known double-write path is event.v2-bridge :: event_producer_consumer", () => {
@@ -220,7 +217,7 @@ describe("C0-08 legacy-zero gate real inventory (actual frozen numbers)", () => 
     expect(error.counters.legacyDims).toBe(903)
     expect(error.counters.doubleWrite).toBe(1)
     expect(error.counters.adapterDims).toBe(3)
-    expect(error.selectionBridgeSites.length).toBe(4)
+    expect(error.selectionBridgeSites.length).toBe(0)
     expect(error.message).toContain("legacy dims=903")
     expect(error.message).toContain("event.v2-bridge :: event_producer_consumer :: double_write")
     expect(error.violations.length).toBe(903 + 1 + 3)
@@ -260,7 +257,7 @@ describe("C0-08 legacy-zero gate snapshot (byte-stable)", () => {
     expect(snapshot.counters.v2Dims).toBe(25)
     expect(snapshot.entries).toBe(379)
     expect(snapshot.roles).toBe(2653)
-    expect(snapshot.selectionBridgeUsages).toBe(4)
+    expect(snapshot.selectionBridgeUsages).toBe(0)
   })
 
   test("redOracle prints the same byte-stable snapshot digest as buildSnapshot", () => {
