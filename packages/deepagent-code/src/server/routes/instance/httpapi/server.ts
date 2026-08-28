@@ -326,9 +326,7 @@ type RouteRequirements =
   | HttpRouter.Request<"Requires", unknown>
   | HttpRouter.Request<"GlobalRequires", never>
 
-export function createRoutes(
-  corsOptions?: CorsOptions,
-): Layer.Layer<never, EffectConfig.ConfigError, RouteRequirements> {
+export function createRoutes(corsOptions?: CorsOptions) {
   const baseRoutes = Layer.mergeAll(
     rootApiRoutes,
     eventApiRoutes,

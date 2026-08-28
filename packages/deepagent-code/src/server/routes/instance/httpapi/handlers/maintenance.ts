@@ -8,6 +8,7 @@ import { Backup } from "@deepagent-code/core/database/backup"
 import { BackupVerify } from "@deepagent-code/core/database/backup-verify"
 import { DatabaseUpgradeRun } from "@deepagent-code/core/database/upgrade-run"
 import { SessionProviderRecovery } from "@deepagent-code/core/session/runner"
+import { InstanceHttpApi } from "../api"
 import { MaintenanceApi } from "../groups/maintenance"
 import { makeApiError, type ApiTypedError } from "../typed-error"
 import { Service as MaintenanceRegistryService } from "../maintenance-registry"
@@ -76,7 +77,7 @@ const toReceiptRow = (row: DatabaseUpgradeRun.ReceiptRow) => ({
   completedAt: row.completed_at,
 })
 
-export const maintenanceHandlers = HttpApiBuilder.group(MaintenanceApi, "maintenance", (handlers) =>
+export const maintenanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "maintenance", (handlers) =>
   Effect.gen(function* () {
     const database = yield* Database.Service
     const registry: MaintenanceRegistry = yield* MaintenanceRegistryService
