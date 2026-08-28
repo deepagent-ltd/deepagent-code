@@ -33,6 +33,7 @@ import { IMWebSocketApi } from "./groups/im-websocket"
 import { Api } from "@deepagent-code/server/api"
 // GlobalEventSchema snapshots the registry after event-producing groups register their variants.
 import { GlobalApi } from "./groups/global"
+import { MaintenanceApi } from "./groups/maintenance"
 import { Authorization } from "./middleware/authorization"
 import { SchemaErrorMiddleware } from "./middleware/schema-error"
 
@@ -68,6 +69,7 @@ export const InstanceHttpApi = HttpApi.make("deepagent-code-instance")
   .addHttpApi(FileApi)
   .addHttpApi(IMApi)
   .addHttpApi(InstanceApi)
+  .addHttpApi(MaintenanceApi)
   .addHttpApi(McpApi)
   .addHttpApi(ProjectApi)
   .addHttpApi(ProjectCopyApi)

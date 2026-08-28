@@ -142,6 +142,8 @@ import { errorLayer } from "./middleware/error"
 import { fenceLayer } from "./middleware/fence"
 import { schemaErrorLayer } from "./middleware/schema-error"
 import { syncReplayBodyLimitLayer } from "./middleware/sync-replay-body-limit"
+import { maintenanceHandlers } from "./handlers/maintenance"
+import { layer as maintenanceRegistryLayer } from "./maintenance-registry"
 
 export const context = Context.makeUnsafe<unknown>(new Map())
 
@@ -268,6 +270,7 @@ const instanceApiRoutes = HttpApiBuilder.layer(InstanceHttpApi).pipe(
     tuiHandlers,
     workspaceHandlers,
     workspaceConfigHandlers,
+    maintenanceHandlers,
   ]),
 )
 
@@ -275,6 +278,7 @@ const instanceRoutes = instanceApiRoutes.pipe(
   Layer.provide([httpApiAuthLayer, workspaceRoutingLive, instanceContextLayer, schemaErrorLayer]),
   Layer.provide(imRuntimeLayer),
   Layer.provide(oversightServicesLayer),
+  Layer.provide(maintenanceRegistryLayer),
   // §B1 — the IM handler double-writes im.message.created onto the bus (flag-gated). Provide the bus
   // service to the instance route graph.
   Layer.provide(DeepAgentEventBus.defaultLayer),
