@@ -52,6 +52,9 @@ export interface PreflightIssue {
   expected?: unknown
   actual?: unknown
   sqliteExtendedCode?: number
+  /** C1A-14: constraint/trigger identity when the failure came from a constraint or trigger. */
+  constraint?: string
+  trigger?: boolean
 }
 
 export interface PreflightOptions {
