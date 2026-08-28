@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:cass:write-a-cql-table-for-a-query",
+  "type": "skill",
+  "title": "Write a CQL table for a specific query",
+  "description": "Translate a read query into a CREATE TABLE with the right PRIMARY KEY partition and clustering structure.",
+  "body": "Use when implementing a table to serve one known query. Actions: take the query's equality filter as the partition key and its ordering columns as clustering columns inside the PRIMARY KEY ((partition_cols), clustering_cols), add a WITH CLUSTERING ORDER BY clause for the sort direction, and confirm the query selects by the full partition key. Verify the SELECT runs without ALLOW FILTERING. Validation signals include the query planner doing a single-partition seek and rows returned in the declared clustering order. Risk boundary: putting too much in the partition key forces clients to know all of it on every read, while too little widens the partition, so balance the key against both the read shape and the size budget.",
+  "domain": "cassandra",
+  "scope_hint": "code.database.cassandra:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.cassandra",
+  "pack_id": "code.database.cassandra"
+}

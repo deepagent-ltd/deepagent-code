@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:privacy:privacy-preserving-debugging",
+  "type": "strategy",
+  "title": "Privacy-preserving debugging",
+  "description": "Debugging should use synthetic, minimized, redacted, or locally generated data instead of copying real personal data into tools or prompts.",
+  "body": "Use when reproducing bugs, building fixtures, requesting logs, or creating support bundles. Do not use to block all investigation; use safer evidence first. Actions: ask for structure and error signals rather than raw records, replace identifiers with stable fakes, and keep real data out of model context unless explicitly authorized. Validation signals include synthetic fixtures, redacted logs, and reproduction without personal payloads. Risk boundary: real customer records, PHI, PCI, or secret-adjacent data require human approval and handling controls.",
+  "domain": "privacy",
+  "scope_hint": "risk.privacy:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.privacy",
+  "pack_id": "risk.privacy"
+}

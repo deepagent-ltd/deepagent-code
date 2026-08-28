@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:cli:detect-tty-vs-pipe",
+  "type": "strategy",
+  "title": "Detect TTY vs pipe before formatting",
+  "description": "Check whether stdout/stdin is a terminal and disable color, spinners, and interactive prompts when output is piped or redirected.",
+  "body": "Use when a CLI uses color, progress, or prompts. Do not unconditionally emit ANSI color or block on a prompt, and do not assume a human is watching. Actions: test isatty on the relevant stream; enable color/spinners/prompts only on a TTY, fall back to plain output and sensible defaults (or fail with a clear message) when piped, and honor NO_COLOR and a --no-color flag. Validation signals include piped output containing no escape codes and the tool not hanging for input when stdin is not a terminal. Risk boundary: a prompt on a non-interactive stdin hangs scripts and CI forever — never block on input without a TTY check or an explicit non-interactive mode.",
+  "domain": "cli",
+  "scope_hint": "code.cli:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.cli",
+  "pack_id": "code.cli"
+}

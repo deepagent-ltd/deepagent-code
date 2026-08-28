@@ -1,0 +1,11 @@
+{
+  "ref_id": "knowledge:database:ddl-may-lock-or-rewrite",
+  "type": "knowledge",
+  "description": "DDL statements may lock, rewrite, or validate large tables even when the SQL text is short.",
+  "body": "Apply this when altering columns, adding constraints, creating indexes, changing defaults, renaming objects, or modifying table storage. The operational cost depends on engine, version, table size, and existing data, not only syntax. This knowledge is database-generic and should defer to a concrete engine pack when available. Execution impact: inspect generated SQL, check whether the operation scans or rewrites existing rows, estimate table size, and look for online or staged alternatives. Validation signals include dry-run timing, schema diff, lock notes from the engine or migration tool, and successful concurrent-read/write smoke where feasible. Risk boundary: production-sized DDL with unknown lock behavior requires human gate and rollback or maintenance-window planning. Use when Database Engineering work touches schema deltas, query shape, transaction ownership, constraints, locks, and data volume. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: use the fact to constrain the change and test plan; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include migration dry-runs, rollback checks, EXPLAIN output, constraint tests, and fixture data comparisons. Risk boundary: escalate or stop when the task involves data loss, long locks, non-rollbackable writes, silent query-plan regressions, and unsafe backfills, missing owner evidence, or live external state.",
+  "domain": "sql",
+  "scope_hint": "code.database:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database:ddl_operational_semantics",
+  "pack_id": "code.database"
+}

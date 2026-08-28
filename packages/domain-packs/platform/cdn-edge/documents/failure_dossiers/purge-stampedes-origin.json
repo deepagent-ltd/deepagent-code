@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:edge:purge-stampedes-origin",
+  "type": "failure_dossier",
+  "description": "A broad cache purge invalidates hot objects everywhere at once with no origin shield, stampeding the origin.",
+  "body": "Failure mode: a full-zone or wildcard purge drops popular objects from every PoP simultaneously, and with no shield each PoP refetches from origin, overloading it. Detection signals: origin request spike right after a purge; elevated origin latency/errors; purge scope wider than the changed content. Do not wildcard-purge hot content without protection. Safer fallback: purge by surrogate key for only changed objects, use soft-purge (serve stale while revalidating), and enable origin shield/tiered caching to coalesce refetches.",
+  "domain": "cdn",
+  "scope_hint": "platform.cdn-edge:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cdn-edge:human_authored",
+  "pack_id": "platform.cdn-edge"
+}

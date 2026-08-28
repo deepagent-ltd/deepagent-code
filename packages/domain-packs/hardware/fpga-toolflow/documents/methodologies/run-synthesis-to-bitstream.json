@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:fpgatf:run-synthesis-to-bitstream",
+  "type": "methodology",
+  "title": "Run the synthesis-to-bitstream flow with checkpoints",
+  "description": "Execute synthesis, place-and-route, STA, and bitstream as gated stages, validating each before proceeding.",
+  "body": "Use when implementing a design through the full vendor toolflow. Do not push to bitstream while earlier stages report unresolved warnings, since problems compound downstream. Actions: run synthesis and review utilization and inferred logic, run place-and-route and check congestion, then run STA before generating the bitstream. Validation signals include each stage completing without critical warnings and STA passing before bitstream. Risk boundary: a bitstream built over failing timing can behave unpredictably on hardware, so deny bitstream generation until STA is clean.",
+  "domain": "fpga_toolflow",
+  "scope_hint": "hardware.fpga-toolflow:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.fpga-toolflow",
+  "pack_id": "hardware.fpga-toolflow"
+}

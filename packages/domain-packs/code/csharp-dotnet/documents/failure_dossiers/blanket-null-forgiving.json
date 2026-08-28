@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:csharp_dotnet:blanket-null-forgiving",
+  "type": "failure_dossier",
+  "description": "Blanket null-forgiving operator",
+  "body": "Adding ! to nullable warnings without proving the invariant preserves runtime NRE risk. Safer path: fix constructor, validation, annotation, or producer contract.\n\nUse only as a diagnostic do-not-use signal; do not expose this as positive strategy, methodology, knowledge, skill, or memory.",
+  "domain": "csharp_dotnet",
+  "scope_hint": "code.csharp-dotnet:failure_dossiers",
+  "evidence_strength": "medium",
+  "provenance_tag": "code.csharp-dotnet:failure_seed:paraphrased_common_failures",
+  "pack_id": "code.csharp-dotnet"
+}

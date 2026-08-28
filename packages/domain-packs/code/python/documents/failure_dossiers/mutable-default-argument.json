@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:python:mutable-default-argument",
+  "type": "failure_dossier",
+  "description": "Using a mutable default argument (list/dict/set) so the single shared default object accumulates state across calls.",
+  "body": "Failure mode: a function signature like def add(item, bucket=[]) creates one list at definition time that every call without an explicit bucket shares, so values leak between unrelated calls. Detection signals: a function returns data from a previous invocation; results depend on call history; a linter (ruff B006, pylint W0102) flags 'dangerous default value'. Do not use mutable literals as default arguments. Safer fallback: default to None and create the container inside the body (bucket = [] if bucket is None else bucket), then add a test that calls the function twice and asserts independence.",
+  "domain": "python",
+  "scope_hint": "code.python:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.python:human_authored",
+  "pack_id": "code.python"
+}

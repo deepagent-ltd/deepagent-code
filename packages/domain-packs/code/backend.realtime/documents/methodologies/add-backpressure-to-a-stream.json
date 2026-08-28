@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:rt:add-backpressure-to-a-stream",
+  "type": "methodology",
+  "title": "Add backpressure to a push stream",
+  "description": "Bound per-connection buffers and define a slow-consumer policy so server memory stays flat under load.",
+  "body": "Steps: 1. Give each connection a bounded outbound queue. 2. Measure write latency / queue depth per connection. 3. Define the slow-consumer policy: block the producer, coalesce to latest-state, or disconnect with resync. 4. Apply it when the queue crosses a high-water mark. 5. Emit a metric on drops/disconnects. Rollback point: revert to a larger but still bounded buffer. Validation: a slow-consumer load test shows server memory flat, the slow client coalesced or shed, and fast clients unaffected.",
+  "domain": "realtime",
+  "scope_hint": "code.backend.realtime:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.realtime",
+  "pack_id": "code.backend.realtime"
+}

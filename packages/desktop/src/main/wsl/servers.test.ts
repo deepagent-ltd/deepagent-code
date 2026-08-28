@@ -1,0 +1,194 @@
+import { expect, test } from "bun:test"
+import { clearWslDistroState, requireWslIpcString, wslServerIdToRestart, wslTerminalArgs } from "./policy"
+import {
+  expectDeepagentCodeVersion,
+  pendingRestartAfterWslInstall,
+  pollWslHealth,
+  wslServerIdsToStartOnInitialize,
+} from "./startup"
+import { createWslServersController, type WslServerConfig } from "./servers"
+
+let persistedServers: WslServerConfig[] = []
+let releaseDeepagentCodeResolve: (() => void) | undefined
+
+test("starts every configured WSL server on initialization", () => {
+  expect(
+    wslServerIdsToStartOnInitialize([
+      { id: "wsl:Debian", distro: "Debian" },
+      { id: "wsl:Ubuntu-24.04", distro: "Ubuntu-24.04" },
+    ]),
+  ).toEqual(["wsl:Debian", "wsl:Ubuntu-24.04"])
+})
+
+test("rejects an update that did not install the desktop version", () => {
+  expect(() => expectDeepagentCodeVersion("1.16.2", "1.16.2")).not.toThrow()
+  expect(() => expectDeepagentCodeVersion("1.14.35", "1.16.2")).toThrow(
+    "DeepAgent Code update finished but Debian still reports 1.14.35; expected 1.16.2",
+  )
+})
+
+test("restarts an existing distro server after updating DeepAgent Code", () => {
+  expect(
+    wslServerIdToRestart(
+      [
+        {
+          config: { id: "wsl:Debian", distro: "Debian" },
+          runtime: { kind: "ready", url: "", username: null, password: null },
+        },
+      ],
+      "Debian",
+    ),
+  ).toBe("wsl:Debian")
+  expect(wslServerIdToRestart([], "Debian")).toBeUndefined()
+})
+
+test("clears cached distro probes when removing a WSL server", () => {
+  expect(
+    clearWslDistroState(
+      { Debian: { name: "Debian", canExecute: true, hasBash: true, hasCurl: true, error: null } },
+      {
+        Debian: {
+          distro: "Debian",
+          resolvedPath: "/home/luke/.deepagent/code/bin/deepagent-code",
+          version: "1.16.2",
+          expectedVersion: "1.16.2",
+          matchesDesktop: true,
+          error: null,
+        },
+      },
+      "Debian",
+    ),
+  ).toEqual({ distroProbes: {}, deepagentCodeChecks: {} })
+})
+
+test("opens terminals for distro names containing spaces", () => {
+  expect(wslTerminalArgs("Ubuntu Preview")).toEqual(["/c", "start", "", "wsl", "-d", "Ubuntu Preview"])
+})
+
+test("stops health polling when sidecar startup settles", async () => {
+  const abort = new AbortController()
+  let checks = 0
+  const polling = pollWslHealth(
+    async () => {
+      checks++
+      return false
+    },
+    abort.signal,
+    1,
+  )
+
+  await new Promise((resolve) => setTimeout(resolve, 5))
+  abort.abort()
+  await polling
+  const settled = checks
+  await new Promise((resolve) => setTimeout(resolve, 5))
+  expect(checks).toBe(settled)
+})
+
+test("validates WSL IPC identifiers at the module boundary", () => {
+  expect(requireWslIpcString("distro", "Debian")).toBe("Debian")
+  expect(() => requireWslIpcString("distro", "")).toThrow("Invalid distro")
+  expect(() => requireWslIpcString("server id", undefined)).toThrow("Invalid server id")
+})
+
+test("derives a required Windows restart from the post-install runtime probe", () => {
+  expect(pendingRestartAfterWslInstall({ available: false, version: null, error: "WSL unavailable" })).toBe(true)
+  expect(pendingRestartAfterWslInstall({ available: true, version: "WSL version: 2.6.1", error: null })).toBe(false)
+})
+
+test("refuses to start a persisted WSL1 server", async () => {
+  persistedServers = [{ id: "wsl:Debian", distro: "Debian" }]
+  let spawns = 0
+  const controller = createWslServersController(
+    "1.16.2",
+    async () => {
+      spawns++
+      throw new Error("must not spawn")
+    },
+    {
+      ...testControllerOptions(),
+      listInstalledDistros: async () => [{ name: "Debian", version: 1, isDefault: true }],
+      resolveDeepagentCode: async () => null,
+    },
+  )
+
+  await controller.initialize()
+  await waitFor(() => controller.getState().servers[0]?.runtime.kind === "failed")
+
+  expect(spawns).toBe(0)
+  expect(controller.getState().servers[0]?.runtime).toEqual({
+    kind: "failed",
+    message: "Debian uses WSL1; DeepAgent Code requires WSL2",
+  })
+})
+
+test("ignores stale background DeepAgent Code checks after removing a WSL server", async () => {
+  persistedServers = []
+  releaseDeepagentCodeResolve = undefined
+  const controller = createWslServersController(
+    "1.16.2",
+    async () => ({
+      listener: {
+        stop: () => undefined,
+        onExit: () => undefined,
+      },
+      url: "http://127.0.0.1:4096",
+      username: "deepagent-code",
+      password: "secret",
+    }),
+    testControllerOptions(),
+  )
+
+  await controller.addServer("Debian")
+  await waitFor(() => !!releaseDeepagentCodeResolve)
+  await controller.removeServer("wsl:Debian")
+  releaseDeepagentCodeResolve?.()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+
+  expect(controller.getState().servers).toEqual([])
+  expect(controller.getState().deepagentCodeChecks).toEqual({})
+})
+
+test("ignores stale startup DeepAgent Code checks after removing a WSL server", async () => {
+  persistedServers = [{ id: "wsl:Debian", distro: "Debian" }]
+  releaseDeepagentCodeResolve = undefined
+  const controller = createWslServersController(
+    "1.16.2",
+    async () => new Promise<never>(() => undefined),
+    testControllerOptions(),
+  )
+
+  await controller.initialize()
+  await waitFor(() => !!releaseDeepagentCodeResolve)
+  await controller.removeServer("wsl:Debian")
+  releaseDeepagentCodeResolve?.()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+
+  expect(controller.getState().servers).toEqual([])
+  expect(controller.getState().deepagentCodeChecks).toEqual({})
+})
+
+async function waitFor(check: () => boolean) {
+  for (let attempt = 0; attempt < 20; attempt++) {
+    if (check()) return
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  }
+  throw new Error("Timed out waiting for condition")
+}
+
+function testControllerOptions() {
+  return {
+    readServers: () => persistedServers,
+    writeServers: (servers: WslServerConfig[]) => {
+      persistedServers = servers
+    },
+    readCommandVersion: async () => "1.16.2",
+    listInstalledDistros: async () => [{ name: "Debian", version: 2, isDefault: true }],
+    resolveDeepagentCode: async () => {
+      await new Promise<void>((resolve) => {
+        releaseDeepagentCodeResolve = resolve
+      })
+      return "/home/me/.deepagent/code/bin/deepagent-code"
+    },
+  }
+}

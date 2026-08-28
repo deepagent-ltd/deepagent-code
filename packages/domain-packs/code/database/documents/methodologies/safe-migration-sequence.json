@@ -1,0 +1,11 @@
+{
+  "ref_id": "methodology:database:safe-migration-sequence",
+  "type": "methodology",
+  "description": "Plan additive schema, compatible code, backfill, switch, and cleanup.",
+  "body": "Steps: add backward-compatible schema; deploy dual-read/write code; backfill in batches; verify counts and constraints; switch reads; remove old schema later. Rollback point: before destructive cleanup.\n\nEvidence boundary: apply only when current task, repository, or validation evidence matches this pack boundary. Do not override a more specific pack or explicit project contract. Use when Database Engineering work touches schema deltas, query shape, transaction ownership, constraints, locks, and data volume. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: follow the ordered review, edit, and validation sequence; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include migration dry-runs, rollback checks, EXPLAIN output, constraint tests, and fixture data comparisons. Risk boundary: escalate or stop when the task involves data loss, long locks, non-rollbackable writes, silent query-plan regressions, and unsafe backfills, missing owner evidence, or live external state.",
+  "domain": "sql",
+  "scope_hint": "code.database:methodologies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.database",
+  "pack_id": "code.database"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "knowledge:backend_api:request-validation-is-boundary",
+  "type": "knowledge",
+  "description": "Request validation defines which untrusted inputs can enter backend behavior.",
+  "body": "Apply this when adding or changing body, query, params, headers, file upload metadata, GraphQL variables, or RPC inputs. Validation belongs at the API boundary so downstream code can rely on typed and normalized inputs. This knowledge does not define security authorization policy or database constraints. Execution impact: inspect parser order, unknown-field handling, coercion, required fields, max lengths or collection limits, and consistent validation error shapes. Validation signals include invalid requests failing before business side effects, clear field-level errors when the API contract supports them, no raw stack traces, and unchanged behavior for compatible clients. Risk boundary: tightening validation on an existing public field can be a breaking change; require compatibility or versioning evidence. Use when Backend API work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: use the fact to constrain the change and test plan; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "api",
+  "scope_hint": "code.backend.api:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.api:input_validation_practice",
+  "pack_id": "code.backend.api"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:frontend_react:overuse-memoization",
+  "type": "failure_dossier",
+  "description": "Wrapping nearly every value and callback in useMemo/useCallback, adding overhead and masking stale-dependency bugs without a measured win.",
+  "body": "Failure mode: memoization is applied as a blanket default, so the app pays comparison/allocation cost on every render and incorrect dependency arrays silently freeze stale values. Detection signals: useMemo/useCallback around trivial values; dependency lint disabled; no profiler evidence of a prior hotspot; stale data after props change. Do not memoize without a measured render cost or identity requirement. Safer fallback: remove speculative memoization, profile to find the real hotspot, memoize only that path with an exhaustive dependency array, and confirm via a render trace.",
+  "domain": "react",
+  "scope_hint": "code.frontend.react:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.react:human_authored",
+  "pack_id": "code.frontend.react"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:refactor:extract-or-inline-safely",
+  "type": "methodology",
+  "title": "Extract or inline a function safely",
+  "description": "Perform an extract/inline by moving code without altering behavior, checking captured state, side effects, and all call sites.",
+  "body": "Steps: 1. Identify the exact code block and the variables it reads and writes. 2. For extraction, pass reads as parameters and return writes; preserve side-effect order and early returns. 3. For inlining, substitute the body at each call site, watching for shared mutable state and naming collisions. 4. Run the behavior/characterization tests. 5. Confirm no change to outputs, exceptions, or ordering. Rollback point: before touching the first call site. Validation: tests are green before and after with identical behavior; an extraction that changes evaluation order or drops a side effect is not behavior-preserving and must be reverted.",
+  "domain": "code",
+  "scope_hint": "code.refactor:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.refactor",
+  "pack_id": "code.refactor"
+}

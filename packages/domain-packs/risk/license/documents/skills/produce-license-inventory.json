@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:lic:produce-license-inventory",
+  "type": "skill",
+  "title": "Produce a license inventory report",
+  "description": "Read the lockfile and emit a component-to-SPDX inventory, flagging unknowns and license deltas.",
+  "body": "Use when asked what licenses a project ships. Actions: read the resolved lockfile, run or trace the ecosystem license tool, and produce a table of component, version, declared license, and resolved SPDX identifier; compare declared metadata to the bundled LICENSE text and mark mismatches. Do not infer a license from the package name or assume the root license covers transitive deps. Report and record each unknown, NOASSERTION, and multi-license component as a finding. This skill is read-only and must not edit dependency manifests without runtime permission. Validation signals include an inventory whose row count matches the lockfile with zero silent unknowns. Risk boundary: report any unresolved or source-available license as a blocking finding and recommend escalation.",
+  "domain": "license",
+  "scope_hint": "risk.license:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.license",
+  "pack_id": "risk.license"
+}

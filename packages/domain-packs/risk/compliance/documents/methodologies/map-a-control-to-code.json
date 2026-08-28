@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:comp:map-a-control-to-code",
+  "type": "methodology",
+  "title": "Map a framework control to its code enforcement",
+  "description": "Trace each abstract control requirement to the concrete code or config that enforces it and the test that proves it.",
+  "body": "Steps: 1. Take the control statement (e.g. 'access is reviewed quarterly', 'changes are approved'). 2. Locate the code/config that implements it (the approval gate, the access-review job). 3. Identify the test or attestation that proves it ran for the period. 4. Mark controls with no enforcing code as gaps and controls with no test as unverified. 5. Produce a control-to-code-to-test matrix. Rollback point: before asserting coverage in the report. Validation: every claimed control has both an enforcement location and an attestation; gaps are listed explicitly rather than hidden.",
+  "domain": "compliance",
+  "scope_hint": "risk.compliance:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.compliance",
+  "pack_id": "risk.compliance"
+}

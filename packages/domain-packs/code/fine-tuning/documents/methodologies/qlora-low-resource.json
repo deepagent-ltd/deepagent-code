@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:finetune:qlora-low-resource",
+  "type": "methodology",
+  "title": "Run QLoRA for low-resource fine-tuning",
+  "description": "Fine-tune a quantized base with low-rank adapters to fit limited GPU memory while preserving quality.",
+  "body": "Use when GPU memory cannot hold a full-precision base for tuning. Do not full-fine-tune in fp16 on undersized hardware — it OOMs or forces tiny batches that destabilize training. Actions: load the base quantized (e.g. int4 via bitsandbytes), attach LoRA adapters in higher precision, tune adapters only, then evaluate the dequantized-plus-adapter model against the base. Validation signals include a run that fits the memory budget and a task metric matching a full-precision LoRA baseline within tolerance. Risk boundary: low-bit base quantization can cap achievable quality; if the QLoRA result lags the budget, escalate to more memory or higher precision before shipping.",
+  "domain": "fine_tuning",
+  "scope_hint": "code.fine-tuning:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.fine-tuning",
+  "pack_id": "code.fine-tuning"
+}

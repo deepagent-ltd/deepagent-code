@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:sdk:idempotent-retry-policy",
+  "type": "strategy",
+  "title": "Retry only idempotent calls with backoff and keys",
+  "description": "Retry safe/idempotent requests with bounded exponential backoff and idempotency keys, never blindly replaying non-idempotent writes.",
+  "body": "Use when adding retry behavior to a generated or hand-written client. Do not retry non-idempotent writes (e.g. a create without an idempotency key) on timeout, since the first call may have succeeded and a retry duplicates the effect. Actions: classify each operation, attach idempotency keys to mutating requests, retry only idempotent ones with capped exponential backoff plus jitter, and honor Retry-After. Validation signals include a test that injects a timeout-then-success and asserts exactly one server-side effect. Risk boundary: blind retries on payments or order creation cause double-charges; deny retry on unkeyed mutations and escalate the design instead.",
+  "domain": "sdk",
+  "scope_hint": "code.sdk:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.sdk",
+  "pack_id": "code.sdk"
+}

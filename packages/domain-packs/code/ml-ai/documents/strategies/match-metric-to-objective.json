@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:mlai:match-metric-to-objective",
+  "type": "strategy",
+  "title": "Choose metrics that match the real objective",
+  "description": "Pick evaluation metrics that reflect the decision the model drives, especially under class imbalance, rather than defaulting to accuracy.",
+  "body": "Use when defining how success is measured. Do not report accuracy on an imbalanced problem — a model predicting the majority class scores high while being useless. Actions: identify the costly error type, choose precision/recall/F1, ROC-AUC, or a cost-weighted metric accordingly, and report the confusion matrix alongside the headline number. Validation signals include a metric that moves when the model's useful behavior changes and per-class breakdowns that expose minority-class failure. Risk boundary: optimizing the wrong metric ships a model that looks good and harms the actual decision; confirm the metric with the stakeholder before tuning.",
+  "domain": "ml",
+  "scope_hint": "code.ml-ai:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.ml-ai",
+  "pack_id": "code.ml-ai"
+}

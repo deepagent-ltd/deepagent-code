@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:net:idempotency-and-http-method-semantics",
+  "type": "knowledge",
+  "title": "HTTP method semantics and idempotency",
+  "description": "GET/PUT/DELETE are defined idempotent and POST is not; safe retries depend on this plus idempotency keys for POST.",
+  "body": "Use when deciding whether a request is safe to retry. HTTP defines GET and HEAD as safe (no side effects) and GET/PUT/DELETE as idempotent (repeating yields the same server state), while POST is neither safe nor idempotent. A timeout is ambiguous: the request may have succeeded before the response was lost, so retrying a POST can duplicate the effect. Do not assume a failed-looking call did not happen on the server. Actions: prefer idempotent methods, and for POST send a client-generated idempotency key the server deduplicates on, or make the operation conditional (If-Match/ETag). Validation signals include a retried request with the same key applying exactly once. Risk boundary: retrying a non-idempotent request without dedup risks double charges/creates and is a correctness defect.",
+  "domain": "networking",
+  "scope_hint": "code.networking:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.networking",
+  "pack_id": "code.networking"
+}

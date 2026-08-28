@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:security:dangerous-sink-inventory",
+  "type": "strategy",
+  "title": "Inventory dangerous sinks",
+  "description": "Treat command execution, SQL, template rendering, deserialization, file paths, redirects, SSRF-capable fetches, and dynamic code as sink-specific risks.",
+  "body": "Use when user-controlled input reaches interpreters, query builders, shells, filesystem APIs, network clients, renderers, archives, or plugin loading. Do not use as a generic ban on all dynamic behavior; evaluate the exact sink and its safe API. Actions: trace the data flow into the sink, choose parameterization or structured APIs, and reject ad hoc escaping unless the sink contract explicitly defines it. Validation signals include malicious input tests, unchanged safe cases, and code evidence that the sink receives structured values rather than concatenated text. Risk boundary: adding a new dangerous sink, especially network or command execution, requires human review.",
+  "domain": "injection",
+  "scope_hint": "risk.security:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.security",
+  "pack_id": "risk.security"
+}

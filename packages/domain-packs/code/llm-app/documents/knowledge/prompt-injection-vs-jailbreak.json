@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:llm:prompt-injection-vs-jailbreak",
+  "type": "knowledge",
+  "title": "Prompt injection vs jailbreak",
+  "description": "Injection smuggles instructions through data the app trusts; jailbreak coaxes the model past its own guardrails. They need different defenses.",
+  "body": "Use when reasoning about adversarial input to a model call. Prompt injection hides instructions inside content the application feeds the model (a document, a web page, a tool result) so the model follows attacker text as if it were the system; jailbreak is the user directly trying to bypass the model's safety policy. Do not conflate the two, and avoid assuming provider safety tuning stops injection. Actions: for injection, isolate and label untrusted data, strip instruction-like payloads, and gate privileged tools; for jailbreak, rely on policy plus output checks. Validation signals include an injection test where embedded 'ignore instructions' text fails to change behavior. Risk boundary: injection that can reach a side-effecting tool or exfiltrate data must be denied and escalated.",
+  "domain": "llm_app",
+  "scope_hint": "code.llm-app:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.llm-app",
+  "pack_id": "code.llm-app"
+}

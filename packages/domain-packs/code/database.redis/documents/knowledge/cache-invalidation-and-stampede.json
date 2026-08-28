@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:redis:cache-invalidation-and-stampede",
+  "type": "knowledge",
+  "title": "Cache invalidation and stampede",
+  "description": "Stale reads and thundering-herd rebuilds are the two hard cache problems; TTL jitter and single-flight mitigate them.",
+  "body": "Use when designing or debugging cache freshness and load. Two failure shapes dominate: stale data when a write does not invalidate the cached copy, and a stampede when a hot key expires and many requests simultaneously miss and rebuild from the source. Do not rely on TTL alone for freshness, and do not give many keys the same expiry. Actions: invalidate keys on write (delete), add random jitter to TTLs so they don't expire together, and use single-flight/a short lock so one request rebuilds a hot key while others wait or serve a stale-but-acceptable value. Validation signals include a load test where a hot-key expiry causes one source load, not thousands. Risk boundary: an un-jittered mass expiry can hammer the source into an outage.",
+  "domain": "redis",
+  "scope_hint": "code.database.redis:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.redis",
+  "pack_id": "code.database.redis"
+}

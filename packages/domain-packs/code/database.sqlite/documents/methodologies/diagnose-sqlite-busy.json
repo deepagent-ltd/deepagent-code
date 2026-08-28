@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:sqlite:diagnose-sqlite-busy",
+  "type": "methodology",
+  "title": "Diagnose SQLITE_BUSY errors",
+  "description": "Trace busy/locked errors to the writer contention or long transaction causing them and fix the root cause.",
+  "body": "Steps: 1. Confirm whether the error is SQLITE_BUSY (lock contention) or SQLITE_LOCKED (table-level, often same-connection). 2. Check busy_timeout is set and non-zero on the failing connection. 3. Find long-held write transactions (a BEGIN that does slow work or waits on I/O before COMMIT). 4. Look for the read-to-write upgrade deadlock where two connections hold read locks and both try to upgrade — switch to BEGIN IMMEDIATE. 5. Shorten and batch write transactions. Rollback point: revert transaction-mode changes. Validation: under a concurrency test, contended writes wait briefly and succeed instead of returning SQLITE_BUSY.",
+  "domain": "sqlite",
+  "scope_hint": "code.database.sqlite:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.sqlite",
+  "pack_id": "code.database.sqlite"
+}

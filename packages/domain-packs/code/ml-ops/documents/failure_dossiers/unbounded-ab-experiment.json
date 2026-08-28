@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:mlops:unbounded-ab-experiment",
+  "type": "failure_dossier",
+  "description": "An A/B model split runs without guardrails or an end condition, harming the routed user segment.",
+  "body": "Failure mode: a model A/B test launches without predefined guardrail metrics or a stopping rule, so a clearly worse variant keeps serving a traffic share for days while harming those users. Detection signals: an experiment with no recorded primary metric or power calculation, and a guardrail metric trending down on the variant arm with no auto-stop. Do not keep the test running to reach significance while users are harmed. Safer fallback: define guardrails and a stopping rule before launch, cap the exposed share, and wire an automatic stop that halts the variant on guardrail breach and reverts traffic to the incumbent.",
+  "domain": "mlops",
+  "scope_hint": "code.mlops:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mlops:human_authored",
+  "pack_id": "code.mlops"
+}

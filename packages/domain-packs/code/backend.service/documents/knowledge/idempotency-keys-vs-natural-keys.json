@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:svc:idempotency-keys-vs-natural-keys",
+  "type": "knowledge",
+  "title": "Idempotency keys vs natural keys",
+  "description": "A client idempotency key dedups retries of the same intent; a natural key dedups by business uniqueness.",
+  "body": "Use when choosing how to dedup an operation. A client-supplied idempotency key (header/UUID per attempt) collapses retries of one intent and is best for create-style calls where no natural uniqueness exists. A natural key (order number, email+date) enforces business uniqueness regardless of client. Do not mix them or rely on timestamps that differ per retry. Actions: pick the key, back it with a unique index written in the same transaction as the effect, and return the stored result on conflict. Validation signals include a concurrent duplicate test resolving to one row. Risk boundary: a TTL that expires keys faster than clients retry reopens the double-effect window.",
+  "domain": "backend_service",
+  "scope_hint": "code.backend.service:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.service",
+  "pack_id": "code.backend.service"
+}

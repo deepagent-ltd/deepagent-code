@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:shell:silence-diagnostic",
+  "type": "failure_dossier",
+  "description": "Suppressing a shell compiler/linter diagnostic without fixing the underlying contract hides a real defect.",
+  "body": "Failure mode: a shell diagnostic (compiler error, type/lint warning) is silenced with a suppression directive or cast instead of fixing the cause, so the underlying contract violation ships. Detection signals: new suppression annotations or ignore directives appear near the change; the warning count drops without a logic fix; the same class of error recurs. Do not suppress a shell diagnostic to make the gate pass. Safer fallback: fix the contract the diagnostic points to, or, if suppression is genuinely correct, record why with evidence and keep it narrowly scoped.",
+  "domain": "shell",
+  "scope_hint": "code.shell:failure_dossiers",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.shell:skill_survey",
+  "pack_id": "code.shell"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:refactor:rename-misses-dynamic-reference",
+  "type": "failure_dossier",
+  "description": "A rename that updates static call sites but misses string-keyed or reflective references, breaking at runtime.",
+  "body": "Failure mode: a symbol is renamed and all compiler-visible uses are updated, but references via reflection, dependency-injection keys, serialized field names, or config strings are not, so the build passes and the code fails at runtime. Detection signals: green compile but runtime 'not found'/missing-key errors; serialized data no longer deserializes; DI resolution fails. Do not trust the compiler alone for renames of string-addressed symbols. Safer fallback: enumerate dynamic and string-based references before renaming, update them together, and run the integration tests that exercise the dynamic paths.",
+  "domain": "code",
+  "scope_hint": "code.refactor:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.refactor:human_authored",
+  "pack_id": "code.refactor"
+}

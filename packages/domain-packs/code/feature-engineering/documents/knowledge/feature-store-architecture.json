@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:feat:feature-store-architecture",
+  "type": "knowledge",
+  "title": "Offline and online stores in a feature platform",
+  "description": "How a feature store splits a batch offline store for training from a low-latency online store for serving, synced from one definition.",
+  "body": "Use when deciding whether a feature store fits a workload. A feature store keeps a columnar offline store for point-in-time backfills and a key-value online store for millisecond reads, materialized from one feature definition to keep them consistent. Do not treat it as a generic cache — its value is the offline/online contract and point-in-time joins. Actions: model entities and features, configure materialization cadence, and confirm online freshness meets the serving SLO. Validation signals include matching offline/online values and an online read latency within budget. Risk boundary: a stale online store serves outdated features; if materialization lags the freshness SLO, escalate before relying on online reads.",
+  "domain": "feature_engineering",
+  "scope_hint": "code.feature-engineering:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.feature-engineering",
+  "pack_id": "code.feature-engineering"
+}

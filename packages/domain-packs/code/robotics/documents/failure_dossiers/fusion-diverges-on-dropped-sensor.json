@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:robot:fusion-diverges-on-dropped-sensor",
+  "type": "failure_dossier",
+  "description": "A sensor-fusion estimator that diverges or freezes when a measurement is dropped or delayed because it lacks timeout and outlier handling.",
+  "body": "Failure mode: the state estimator assumes measurements always arrive on time, so when a sensor drops out or sends a stale/outlier reading the estimate either keeps integrating a bad value or stops correcting and drifts, then feeds a wrong state into control. Detection signals: the estimate diverges from ground truth after a dropped packet; covariance does not grow when measurements stop; an outlier reading jerks the estimate. Do not assume measurements are timely or valid. Safer fallback: weight each measurement by its covariance and timestamp, widen uncertainty when a sensor times out instead of trusting stale data, reject outliers, and test that a dropped measurement degrades the estimate gracefully rather than corrupting it.",
+  "domain": "robotics",
+  "scope_hint": "code.robotics:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.robotics:human_authored",
+  "pack_id": "code.robotics"
+}

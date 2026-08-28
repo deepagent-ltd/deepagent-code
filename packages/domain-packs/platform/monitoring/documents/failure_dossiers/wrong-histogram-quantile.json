@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:mon:wrong-histogram-quantile",
+  "type": "failure_dossier",
+  "description": "histogram_quantile is computed on non-rated or poorly bucketed data, reporting wrong latency percentiles.",
+  "body": "Failure mode: histogram_quantile is applied without rating the buckets first or against buckets whose boundaries miss the SLO latency, so the reported percentile is wrong and the latency SLO is mismeasured. Detection signals: percentile values that jump implausibly; a p99 that never crosses an obviously breached threshold; buckets clustered far from the target latency. Do not trust quantiles from unrated or ill-placed buckets. Safer fallback: rate the _bucket series over an adequate window and align bucket boundaries to the SLO latency.",
+  "domain": "monitoring",
+  "scope_hint": "platform.monitoring:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.monitoring:human_authored",
+  "pack_id": "platform.monitoring"
+}

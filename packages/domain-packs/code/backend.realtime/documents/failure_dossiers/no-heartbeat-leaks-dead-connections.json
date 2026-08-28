@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:rt:no-heartbeat-leaks-dead-connections",
+  "type": "failure_dossier",
+  "description": "Without heartbeats, half-open connections accumulate until file-descriptor or memory limits cause a slow outage.",
+  "body": "Failure mode: clients drop without a clean close (NAT timeout, crash, lost mobile signal), TCP does not notice for minutes, and the server keeps the connection and its state alive, leaking descriptors and memory over time. Detection signals: connection count and memory climb with no matching active clients; FD-exhaustion errors after hours/days; no ping/pong or activity timeout. Do not rely on TCP to detect dead peers. Safer fallback: send periodic heartbeats, close connections that miss the pong within a timeout, and have clients reconnect on missed heartbeats.",
+  "domain": "realtime",
+  "scope_hint": "code.backend.realtime:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.realtime:human_authored",
+  "pack_id": "code.backend.realtime"
+}

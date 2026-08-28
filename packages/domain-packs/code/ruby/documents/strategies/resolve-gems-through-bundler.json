@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:ruby:resolve-gems-through-bundler",
+  "type": "strategy",
+  "title": "Resolve gems through Bundler and commit the lock",
+  "description": "Declare gems in the Gemfile and pin the resolved graph in Gemfile.lock so every environment runs identical versions.",
+  "body": "Use when adding or upgrading a gem in an application. Do not gem install ad hoc or run bundle update on deploy. Actions: declare the dependency in the Gemfile with a pessimistic constraint (~>) matching your support policy, let bundler resolve and write Gemfile.lock, commit both files, and run bundle install (honoring the lock) in CI and deploy. Validation signals include a CI step that runs bundle install --deployment and verifies no lock drift. Risk boundary: resolving at deploy time runs untested gem versions in production; an uncommitted Gemfile.lock for an application is a reproducibility defect. A gem library intentionally omits the lock so consumers resolve fresh.",
+  "domain": "ruby",
+  "scope_hint": "code.ruby:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.ruby",
+  "pack_id": "code.ruby"
+}

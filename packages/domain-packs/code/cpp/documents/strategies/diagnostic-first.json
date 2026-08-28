@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:cpp:diagnostic-first",
+  "type": "strategy",
+  "description": "In C++, read the first template/overload-resolution error and the instantiation backtrace before making speculative edits.",
+  "body": "In C++, the toolchain already points at the real problem, so the first template/overload-resolution error and the instantiation backtrace should guide the edit rather than a guess. Use when the compiler at the project's -std (e.g. -std=c++20) with -Wall -Wextra or clang-tidy, include-what-you-use, and -Wpedantic diagnostics reports an error or warning. Do not start editing before reading the diagnostic, and avoid changing code you have not confirmed is implicated. Actions: read the first actionable diagnostic and the owned frame, inspect that location, make the smallest fix, then rerun the ctest suite plus a sanitized build of the touched target. Validation signals include the resolved diagnostic, a passing focused test, and no new warnings from clang-tidy, include-what-you-use, and -Wpedantic diagnostics. Risk boundary: if the diagnostic exposes a deeper design fault, escalate rather than papering over it.",
+  "domain": "cpp",
+  "scope_hint": "code.cpp:strategies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.cpp:skill_survey",
+  "pack_id": "code.cpp"
+}

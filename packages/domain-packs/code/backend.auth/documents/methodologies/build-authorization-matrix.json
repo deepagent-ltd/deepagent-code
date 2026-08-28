@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:auth:build-authorization-matrix",
+  "type": "methodology",
+  "title": "Build and test an authorization matrix",
+  "description": "Enumerate (role × resource × action) cells and back each allowed and denied cell with a test before changing policy.",
+  "body": "Steps: 1. List roles, resources, and actions in scope. 2. Fill the matrix marking each cell allow/deny per intended policy. 3. For each ALLOW cell write a positive test; for representative DENY cells write a negative test asserting refusal. 4. Run the suite, then make the policy change, then re-run. 5. Diff which cells changed and confirm none widened unintentionally. Rollback point: before editing the policy engine or middleware. Validation: the matrix tests are the gate; a policy change with no matrix delta test is unverified.",
+  "domain": "backend_auth",
+  "scope_hint": "code.backend.auth:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.auth",
+  "pack_id": "code.backend.auth"
+}

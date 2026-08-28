@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:rust:benchmark-with-criterion",
+  "type": "skill",
+  "title": "Benchmark with criterion and detect regressions",
+  "description": "Run criterion benchmarks with black_box, and report the statistical estimate and whether a change is a real regression or noise.",
+  "body": "Use when validating a performance-sensitive Rust change. Actions: place benches under benches/ using criterion's Criterion::benchmark_group, wrap inputs and outputs in std::hint::black_box so the optimizer cannot fold them away, run `cargo bench`, and read criterion's report (point estimate, confidence interval, and its 'change: improved/regressed/no change' verdict against the saved baseline). Report the ns/iter, the CI, and the verdict. Do not benchmark a debug build or trust a single noisy iteration. This skill exposes capability only and must not run on a busy machine without runtime permission. Validation signals include criterion reporting a statistically significant change outside the noise threshold and a flat baseline on no-op reruns. Risk boundary: without black_box the compiler may optimize the work away yielding fake speedups; flag suspiciously near-zero times rather than reporting them as wins.",
+  "domain": "rust",
+  "scope_hint": "code.rust:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.rust",
+  "pack_id": "code.rust"
+}

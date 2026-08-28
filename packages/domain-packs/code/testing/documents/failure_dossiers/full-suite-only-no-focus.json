@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:testing:full-suite-only-no-focus",
+  "type": "failure_dossier",
+  "description": "Running only a broad suite without a focused reproduction hides which behavior was actually validated.",
+  "body": "Failure mode: a large suite passes or fails, but the agent cannot connect the result to the changed behavior. This wastes time, obscures flaky or unrelated failures, and can let the actual regression remain untested. Diagnostic signal: final report names only a broad command with no affected test file, assertion, or selection rationale. Do not use broad pass as strong evidence when a targeted behavior changed and no focused or mapped test was identified. Recovery is to build a test-selection map, run or name the closest focused test, then expand to package gates when shared code requires it. Use when a proposed approach skips test runner output, fixture intent, coverage boundaries, flake history, and negative paths or claims success without domain evidence. Do not use this dossier as a positive implementation strategy; it is a do-not-use signal. Actions: block the shortcut, name the missing evidence, and switch to a safer methodology or ask for human approval. Validation signals include absence or contradiction in focused test output, regression tests, fixture assertions, and rerun evidence. Risk boundary: treat repeated recurrence as a blocker when it can cause testing implementation details only, masking flakes, and claiming coverage without behavior proof.",
+  "domain": "testing",
+  "scope_hint": "code.testing:failure_dossiers",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.testing:human_authored",
+  "pack_id": "code.testing"
+}

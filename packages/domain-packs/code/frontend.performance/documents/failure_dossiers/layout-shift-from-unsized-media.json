@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:frontend_performance:layout-shift-from-unsized-media",
+  "type": "failure_dossier",
+  "description": "Inserting images, ads, or async content without reserved space, causing cumulative layout shift as it loads in.",
+  "body": "Failure mode: media or injected content has no width/height or aspect-ratio, so when it loads the surrounding content jumps, inflating CLS and causing misclicks. Detection signals: CLS above budget in a trace; visible content jump on load; img/iframe without dimensions; late-injected banners. Do not insert content without reserving its space. Safer fallback: set explicit dimensions or aspect-ratio, reserve a placeholder box for async/third-party content, and verify CLS stays within budget after the change.",
+  "domain": "frontend",
+  "scope_hint": "code.frontend.performance:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.performance:human_authored",
+  "pack_id": "code.frontend.performance"
+}

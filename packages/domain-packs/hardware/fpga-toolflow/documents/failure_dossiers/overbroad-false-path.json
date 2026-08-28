@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:fpgatf:overbroad-false-path",
+  "type": "failure_dossier",
+  "description": "A real failing path goes undetected because an over-broad false-path exception accidentally excluded it from analysis.",
+  "body": "Failure mode: a wildcard or loosely scoped set_false_path covers more than the intended static path, so a genuine functional path is never timed. Detection signals: optimistic slack that contradicts hardware behavior, an exception whose scope matches many paths, and failures that vanish when the exception is removed. Do not keep a broad exception to maintain a clean report. Safer fallback: rewrite the exception with explicit from and to points covering only the static path, then rerun STA and fix any newly exposed violations.",
+  "domain": "fpga_toolflow",
+  "scope_hint": "hardware.fpga-toolflow:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.fpga-toolflow:human_authored",
+  "pack_id": "hardware.fpga-toolflow"
+}

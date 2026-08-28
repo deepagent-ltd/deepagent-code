@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:mysql:do-not-rely-on-the-query-cache",
+  "type": "strategy",
+  "title": "Do not architect around the removed query cache",
+  "description": "MySQL 8 deleted the query cache entirely, so designs that lean on it must move caching to the application layer.",
+  "body": "Use when porting a MySQL 5.x design to 8.x or reviewing code that assumes server-side result caching. Do not set or tune query_cache_size or expect repeated identical SELECTs to be served from a built-in cache; the feature was removed in MySQL 8 because its global mutex serialised writes. Actions: remove query_cache settings from my.cnf, move read caching to an explicit application or Redis layer with clear invalidation, and verify the server starts without unknown-variable warnings. Validation signals include the server log showing no query_cache references and a benchmark showing the app cache absorbing repeated reads. Risk boundary: leaning on the cache for correctness rather than as an optimisation is a design smell, so flag any code that assumes cached freshness.",
+  "domain": "mysql",
+  "scope_hint": "code.database.mysql:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.mysql",
+  "pack_id": "code.database.mysql"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "skill:java_jvm:run-language-gate",
+  "type": "skill",
+  "description": "In Java/JVM, run the package-local validation gate (the Maven/Gradle module task (mvn -pl / gradle :module:test) with the right JDK toolchain) and summarize the diagnostics.",
+  "body": "In Java/JVM, this capability runs the owning package's gate and reports the outcome so the next action is obvious. Use when you need an authoritative pass/fail for a Java/JVM package before or after a change. Do not run a root or generic command that bypasses the package's real config, and avoid reporting success without the exit code. Actions: take the package path, run javac at the configured --release with -Xlint warnings then SpotBugs, Error Prone, and Checkstyle reports and the module's JUnit suite on the affected classpath, and record the command, exit code, the first javac error or the root-cause stack-trace frame in your package, and the recommended next step. Validation signals include the captured command log, the exit code, and the first diagnostics with file and line. Risk boundary: surface, do not auto-fix; escalate when the gate requires network access, credentials, or a toolchain change.",
+  "domain": "java_jvm",
+  "scope_hint": "code.java-jvm:skills",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.java-jvm:skill_survey",
+  "pack_id": "code.java-jvm"
+}

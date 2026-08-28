@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:sls:right-size-memory-and-timeout",
+  "type": "methodology",
+  "title": "Right-size memory and timeout",
+  "description": "Use load measurements to pick memory (which scales CPU) and a timeout above worst-case downstream latency, not defaults.",
+  "body": "Steps: 1. Profile the function across memory settings; on Lambda CPU scales with memory, so more memory can be faster and cheaper per invocation. 2. Pick the memory that minimizes duration*price for the workload. 3. Measure worst-case downstream call latency under load. 4. Set timeout above that with margin, but not so high that a hung call burns budget. 5. Re-test under peak load. Rollback point: before changing production config. Validation: functions finish before timeout under peak and the chosen memory minimizes cost-latency; a timeout shorter than a real downstream call causes truncated work and retries.",
+  "domain": "serverless",
+  "scope_hint": "code.backend.serverless:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.serverless",
+  "pack_id": "code.backend.serverless"
+}

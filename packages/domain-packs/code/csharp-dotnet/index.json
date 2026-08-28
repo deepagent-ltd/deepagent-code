@@ -1,0 +1,698 @@
+[
+  {
+    "ref_id": "knowledge:csharp_dotnet:aspnet-cancellation-token-is-request-scope",
+    "type": "knowledge",
+    "title": "Aspnet Cancellation Token Is Request Scope",
+    "summary": "HttpContext.RequestAborted and action CancellationToken represent client/request cancellation.",
+    "domains": [
+      "csharp_dotnet",
+      "code",
+      "csharp",
+      "dotnet",
+      "aspnet",
+      "nuget"
+    ],
+    "triggers": [
+      "httpcontext",
+      "requestaborted",
+      "action",
+      "cancellationtoken",
+      "represent",
+      "client",
+      "request",
+      "cancellation"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.csharp-dotnet"
+  },
+  {
+    "ref_id": "knowledge:csharp_dotnet:async-void-is-event-only",
+    "type": "knowledge",
+    "title": "Async Void Is Event Only",
+    "summary": "async void should normally be limited to event handlers because callers cannot await or catch it.",
+    "domains": [
+      "csharp_dotnet",
+      "code",
+      "csharp",
+      "dotnet",
+      "aspnet",
+      "nuget"
+    ],
+    "triggers": [
+      "async",
+      "void",
+      "should",
+      "normally",
+      "limited",
+      "event",
+      "handlers",
+      "because"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.csharp-dotnet"
+  },
+  {
+    "ref_id": "knowledge:csharp_dotnet:csproj-controls-target-frameworks",
+    "type": "knowledge",
+    "title": "Csproj Controls Target Frameworks",
+    "summary": "The project file defines target frameworks, nullable mode, implicit usings, analyzers, and package references.",
+    "domains": [
+      "csharp_dotnet",
+      "code",
+      "csharp",
+      "dotnet",
+      "aspnet",
+      "nuget"
+    ],
+    "triggers": [
+      "project",
+      "file",
+      "defines",
+      "target",
+      "frameworks",
+      "nullable",
+      "mode",
+      "implicit"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.csharp-dotnet"
+  },
+  {
+    "ref_id": "knowledge:csharp_dotnet:directory-build-props-imports",
+    "type": "knowledge",
+    "title": "Directory Build Props Imports",
+    "summary": "Directory.Build.props/targets can set analyzers, warnings, package versions, and build behavior for many projects.",
+    "domains": [
+      "csharp_dotnet",
+      "code",
+      "csharp",
+      "dotnet",
+      "aspnet",
+      "nuget"
+    ],
+    "triggers": [
+      "directory",
+      "build",
+      "props",
+      "targets",
+      "analyzers",
+      "warnings",
+      "package",
+      "versions"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.csharp-dotnet"
+  },
+  {
+    "ref_id": "knowledge:csharp_dotnet:global-json-pins-sdk",
+    "type": "knowledge",
+    "title": "Global Json Pins Sdk",
+    "summary": "global.json can select the .NET SDK version used by dotnet commands.",
+    "domains": [
+      "csharp_dotnet",
+      "code",
+      "csharp",
+      "dotnet",
+      "aspnet",
+      "nuget"
+    ],
+    "triggers": [
+      "global",
+      "json",
+      "select",
+      "version",
+      "used",
+      "dotnet",
+      "commands",
+      "when"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.csharp-dotnet"
+  },
+  {
+    "ref_id": "knowledge:csharp_dotnet:ienumerable-vs-iqueryable",
+    "type": "knowledge",
+    "title": "Ienumerable Vs Iqueryable",
+    "summary": "IEnumerable executes in memory; IQueryable may translate expression trees to a remote provider.",
+    "domains": [
+      "csharp_dotnet",
+      "code",
+      "csharp",
+      "dotnet",
+      "aspnet",
+      "nuget"
+    ],
+    "triggers": [
+      "ienumerable",
+      "executes",
+      "memory",
+      "iqueryable",
+      "translate",
+      "expression",
+      "trees",
+      "remote"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.csharp-dotnet"
+  },
+  {
+    "ref_id": "knowledge:csharp_dotnet:nuget-config-can-use-private-feeds",
+    "type": "knowledge",
+    "title": "Nuget Config Can Use Private Feeds",
+    "summary": "Restore may depend on repository or user NuGet.config sources and credentials.",
+    "domains": [
+      "csharp_dotnet",
+      "code",
+      "csharp",
+      "dotnet",
+      "aspnet",
+      "nuget"
+    ],
+    "triggers": [
+      "restore",
+      "depend",
+      "repository",
+      "user",
+      "nuget",
+      "config",
+      "sources",
+      "credentials"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.csharp-dotnet"
+  },
+  {
+    "ref_id": "knowledge:csharp_dotnet:nullable-context-can-vary",
+    "type": "knowledge",
+    "title": "Nullable Context Can Vary",
+    "summary": "Nullable reference analysis may be enabled, disabled, warnings, or annotations per project/file.",
+    "domains": [
+      "csharp_dotnet",
+      "code",
+      "csharp",
+      "dotnet",
+      "aspnet",
+      "nuget"
+    ],
+    "triggers": [
+      "nullable",
+      "reference",
+      "analysis",
+      "enabled",
+      "disabled",
+      "warnings",
+      "annotations",
+      "project"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.csharp-dotnet"
+  },
+  {
+    "ref_id": "methodology:csharp_dotnet:aspnet-route-smoke",
+    "type": "methodology",
+    "title": "Aspnet Route Smoke",
+    "summary": "Validate changed ASP.NET endpoints through request, model binding, status, and body evidence.",
+    "domains": [
+      "csharp_dotnet",
+      "code",
+      "csharp",
+      "dotnet",
+      "aspnet",
+      "nuget"
+    ],
+    "triggers": [
+      "validate",
+      "changed",
+      "endpoints",
+      "through",
+      "request",
+      "model",
+      "binding",
+      "status"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.csharp-dotnet"
+  },
+  {
+    "ref_id": "methodology:csharp_dotnet:dotnet-build-test-loop",
+    "type": "methodology",
+    "title": "Dotnet Build Test Loop",
+    "summary": "Run restore/build/test at the narrow project or solution scope, widening after evidence.",
+    "domains": [
+      "csharp_dotnet",
+      "code",
+      "csharp",
+      "dotnet",
+      "aspnet",
+      "nuget"
+    ],
+    "triggers": [
+      "restore",
+      "build",
+      "test",
+      "narrow",
+      "project",
+      "solution",
+      "scope",
+      "widening"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.csharp-dotnet"
+  },
+  {
+    "ref_id": "methodology:csharp_dotnet:nuget-change-check",
+    "type": "methodology",
+    "title": "Nuget Change Check",
+    "summary": "Validate dependency edits through restore, central version ownership, and target framework compatibility.",
+    "domains": [
+      "csharp_dotnet",
+      "code",
+      "csharp",
+      "dotnet",
+      "aspnet",
+      "nuget"
+    ],
+    "triggers": [
+      "validate",
+      "dependency",
+      "edits",
+      "through",
+      "restore",
+      "central",
+      "version",
+      "ownership"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.csharp-dotnet"
+  },
+  {
+    "ref_id": "methodology:csharp_dotnet:nullable-warning-triage",
+    "type": "methodology",
+    "title": "Nullable Warning Triage",
+    "summary": "Classify nullable diagnostics by initialization, flow analysis, external input, or API contract.",
+    "domains": [
+      "csharp_dotnet",
+      "code",
+      "csharp",
+      "dotnet",
+      "aspnet",
+      "nuget"
+    ],
+    "triggers": [
+      "classify",
+      "nullable",
+      "diagnostics",
+      "initialization",
+      "flow",
+      "analysis",
+      "external",
+      "input"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.csharp-dotnet"
+  },
+  {
+    "ref_id": "skill:csharp_dotnet:aspnet-endpoint-smoke",
+    "type": "skill",
+    "title": "Aspnet Endpoint Smoke",
+    "summary": "Validate changed endpoint behavior through status, body, headers, logs, and cancellation when available.",
+    "domains": [
+      "csharp_dotnet",
+      "code",
+      "csharp",
+      "dotnet",
+      "aspnet",
+      "nuget"
+    ],
+    "triggers": [
+      "validate",
+      "changed",
+      "endpoint",
+      "behavior",
+      "through",
+      "status",
+      "body",
+      "headers"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.csharp-dotnet"
+  },
+  {
+    "ref_id": "skill:csharp_dotnet:run-dotnet-project-gate",
+    "type": "skill",
+    "title": "Run Dotnet Project Gate",
+    "summary": "Run cross-platform dotnet restore/build/test for the owning project or solution.",
+    "domains": [
+      "csharp_dotnet",
+      "code",
+      "csharp",
+      "dotnet",
+      "aspnet",
+      "nuget"
+    ],
+    "triggers": [
+      "cross",
+      "platform",
+      "dotnet",
+      "restore",
+      "build",
+      "test",
+      "owning",
+      "project"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.csharp-dotnet"
+  },
+  {
+    "ref_id": "skill:csharp_dotnet:triage-csharp-nullable-warning",
+    "type": "skill",
+    "title": "Triage Csharp Nullable Warning",
+    "summary": "Classify and fix nullable diagnostics without blanket suppressions.",
+    "domains": [
+      "csharp_dotnet",
+      "code",
+      "csharp",
+      "dotnet",
+      "aspnet",
+      "nuget"
+    ],
+    "triggers": [
+      "classify",
+      "nullable",
+      "diagnostics",
+      "without",
+      "blanket",
+      "suppressions",
+      "inputs",
+      "compiler"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.csharp-dotnet"
+  },
+  {
+    "ref_id": "strategy:lang_csharp_dotnet:aspnet-boundary-validation",
+    "type": "strategy",
+    "title": "Aspnet Boundary Validation",
+    "summary": "Keep request validation, model binding, cancellation, and error shape aligned with existing API contracts.",
+    "domains": [
+      "csharp_dotnet",
+      "code",
+      "csharp",
+      "dotnet",
+      "aspnet",
+      "nuget"
+    ],
+    "triggers": [
+      "keep",
+      "request",
+      "validation",
+      "model",
+      "binding",
+      "cancellation",
+      "error",
+      "shape"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.csharp-dotnet"
+  },
+  {
+    "ref_id": "strategy:lang_csharp_dotnet:async-all-the-way",
+    "type": "strategy",
+    "title": "Async All The Way",
+    "summary": "Preserve async flow without blocking on Task.Result or Wait in request or UI paths.",
+    "domains": [
+      "csharp_dotnet",
+      "code",
+      "csharp",
+      "dotnet",
+      "aspnet",
+      "nuget"
+    ],
+    "triggers": [
+      "preserve",
+      "async",
+      "flow",
+      "without",
+      "blocking",
+      "task",
+      "result",
+      "wait"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.csharp-dotnet"
+  },
+  {
+    "ref_id": "strategy:lang_csharp_dotnet:linq-query-shape-awareness",
+    "type": "strategy",
+    "title": "Linq Query Shape Awareness",
+    "summary": "Treat LINQ differently for in-memory collections and provider-translated queries.",
+    "domains": [
+      "csharp_dotnet",
+      "code",
+      "csharp",
+      "dotnet",
+      "aspnet",
+      "nuget"
+    ],
+    "triggers": [
+      "treat",
+      "linq",
+      "differently",
+      "memory",
+      "collections",
+      "provider",
+      "translated",
+      "queries"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.csharp-dotnet"
+  },
+  {
+    "ref_id": "strategy:lang_csharp_dotnet:nuget-restore-determinism",
+    "type": "strategy",
+    "title": "Nuget Restore Determinism",
+    "summary": "Respect NuGet.config, lock files, central package management, and target framework constraints.",
+    "domains": [
+      "csharp_dotnet",
+      "code",
+      "csharp",
+      "dotnet",
+      "aspnet",
+      "nuget"
+    ],
+    "triggers": [
+      "respect",
+      "nuget",
+      "config",
+      "lock",
+      "files",
+      "central",
+      "package",
+      "management"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.csharp-dotnet"
+  },
+  {
+    "ref_id": "strategy:lang_csharp_dotnet:nullable-contract-owner",
+    "type": "strategy",
+    "title": "Nullable Contract Owner",
+    "summary": "Fix nullable reference warnings at the API or data boundary rather than suppressing them locally.",
+    "domains": [
+      "csharp_dotnet",
+      "code",
+      "csharp",
+      "dotnet",
+      "aspnet",
+      "nuget"
+    ],
+    "triggers": [
+      "nullable",
+      "reference",
+      "warnings",
+      "data",
+      "boundary",
+      "rather",
+      "than",
+      "suppressing"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.csharp-dotnet"
+  },
+  {
+    "ref_id": "strategy:lang_csharp_dotnet:solution-project-boundary",
+    "type": "strategy",
+    "title": "Solution Project Boundary",
+    "summary": "Locate the owning .sln/.csproj before running broad dotnet commands.",
+    "domains": [
+      "csharp_dotnet",
+      "code",
+      "csharp",
+      "dotnet",
+      "aspnet",
+      "nuget"
+    ],
+    "triggers": [
+      "locate",
+      "owning",
+      "csproj",
+      "before",
+      "running",
+      "broad",
+      "dotnet",
+      "commands"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.csharp-dotnet"
+  }
+]

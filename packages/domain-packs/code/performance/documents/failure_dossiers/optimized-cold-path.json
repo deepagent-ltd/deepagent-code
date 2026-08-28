@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:performance:optimized-cold-path",
+  "type": "failure_dossier",
+  "description": "Spending effort optimizing code that the profiler shows is a negligible fraction of runtime, yielding no measurable gain.",
+  "body": "Failure mode: a function that looks inefficient is rewritten for speed, but it accounts for a tiny share of total time, so end-to-end performance is unchanged while complexity rises. Detection signals: post-change profile shows the same total time; the targeted frame was already <1% of the profile; benchmarks show no delta beyond noise. Do not optimize by intuition before profiling. Safer fallback: capture a representative profile, optimize the dominant frame, estimate the Amdahl ceiling first, and verify the share dropped after the change.",
+  "domain": "code",
+  "scope_hint": "code.performance:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.performance:human_authored",
+  "pack_id": "code.performance"
+}

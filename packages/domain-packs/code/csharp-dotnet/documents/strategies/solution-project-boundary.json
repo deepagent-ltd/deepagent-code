@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:lang_csharp_dotnet:solution-project-boundary",
+  "type": "strategy",
+  "description": "Locate the owning .sln/.csproj before running broad dotnet commands.",
+  "body": "Use when editing C# source, project files, or tests. Do not assume repository root is the build unit. Inspect nearest .csproj, solution membership, target frameworks, and Directory.Build.* files, then run the narrow dotnet build/test command. Verify with the command path and target framework. Risk boundary: multi-target projects can pass one TFM and fail another. Use when C# / .NET Engineering work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: choose the smallest direction that preserves the domain contract; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "csharp_dotnet",
+  "scope_hint": "code.csharp-dotnet:strategys",
+  "evidence_strength": "medium",
+  "provenance_tag": "code.csharp-dotnet:seed:dotnet_cli_csharp_docs:paraphrased",
+  "pack_id": "code.csharp-dotnet"
+}

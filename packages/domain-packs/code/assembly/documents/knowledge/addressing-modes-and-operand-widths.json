@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:asm:addressing-modes-and-operand-widths",
+  "type": "knowledge",
+  "title": "Addressing modes and operand widths",
+  "description": "Instructions compute effective addresses from base/index/scale/displacement and operate on specific widths; mismatches read or write the wrong bytes.",
+  "body": "Use when accessing memory or choosing operand sizes in assembly. x86-64 supports rich addressing (base + index*scale + displacement) while AArch64 uses simpler register/offset forms; each instruction also operates on a specific width (byte/word/dword/qword), and using the wrong width or sub-register reads/writes the wrong bytes or leaves high bits stale. Do not mix operand widths carelessly or assume a sub-register write zeroes the rest (it does on x86-64 for 32-bit writes, not 8/16-bit). Actions: match the addressing mode and operand width to the data type. Validation signals include loaded/stored values matching a reference and the disassembly showing the intended width. Risk boundary: a width or addressing mismatch corrupts adjacent data subtly; verify by stepping and comparing the loaded bytes.",
+  "domain": "assembly",
+  "scope_hint": "code.assembly:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.assembly",
+  "pack_id": "code.assembly"
+}

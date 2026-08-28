@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:cache:plan-invalidation-strategy",
+  "type": "methodology",
+  "title": "Plan the invalidation strategy",
+  "description": "Map every write path to an invalidation mechanism so reads reflect writes within a bound.",
+  "body": "Steps: 1. Enumerate every write path that mutates cached data. 2. For each, choose invalidate-on-write (explicit delete), TTL expiry, or versioned-key swap. 3. Map which keys each write touches, including derived and aggregate keys. 4. Use explicit invalidation for low-staleness-tolerance data and TTL for the rest. 5. Add a backstop TTL even on explicitly-invalidated keys to bound drift from missed events. Rollback point: before switching a key to explicit-only invalidation. Validation: write then read returns the new value within the documented bound.",
+  "domain": "caching",
+  "scope_hint": "code.caching:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.caching",
+  "pack_id": "code.caching"
+}

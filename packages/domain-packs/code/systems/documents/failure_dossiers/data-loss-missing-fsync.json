@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:sys:data-loss-missing-fsync",
+  "type": "failure_dossier",
+  "description": "Writes are not fsynced (or the directory is not synced after rename), so a crash loses or truncates the file.",
+  "body": "Failure mode: code writes a file and returns, trusting that a successful write() means the data is on disk, or it renames a temp file without fsyncing the directory, so a crash or power loss before the page cache flushes leaves the file missing, truncated, or torn. Detection signals: data present before a crash is gone or partial after reboot; the bug only appears on hard power loss, not clean shutdown; no fsync in the write path. Do not equate a returned write with durability. Safer fallback: write to a temp file, fsync it, atomically rename over the target, fsync the containing directory, and verify with a crash-consistency test that injects a kill at each step.",
+  "domain": "systems",
+  "scope_hint": "code.systems:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.systems:human_authored",
+  "pack_id": "code.systems"
+}

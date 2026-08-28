@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:sls:design-an-event-driven-fanout",
+  "type": "methodology",
+  "title": "Design an event-driven fan-out",
+  "description": "Decompose a workload into a producer plus parallel consumers via a queue/topic, with idempotency and backpressure, instead of synchronous chaining.",
+  "body": "Steps: 1. Identify the unit of work and whether order matters. 2. Have the producer publish events to a queue/topic rather than synchronously invoking consumers. 3. Make each consumer idempotent and independently retryable. 4. Apply backpressure: batch size, reserved concurrency, and a DLQ for failures. 5. Add tracing so a single logical request is followable across functions. Rollback point: before switching a synchronous path to async (changes the consistency model). Validation: load tests show consumers scale without throttling downstreams and duplicates cause one effect; synchronous fan-out that fans into concurrency limits is the anti-pattern this replaces.",
+  "domain": "serverless",
+  "scope_hint": "code.backend.serverless:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.serverless",
+  "pack_id": "code.backend.serverless"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:aws:iam-access-denied-triage",
+  "type": "methodology",
+  "title": "Triage an IAM AccessDenied from CloudTrail to the precise gap",
+  "description": "Walk evaluation logic from explicit deny, to SCP/permission boundary, to identity vs resource policy, to condition-key mismatch before touching any grant.",
+  "body": "Use when an API call fails with AccessDenied and you must find the minimal fix. Do not react by adding a wildcard grant. Actions: read the CloudTrail event for the exact action, resource ARN, and principal; check for an explicit Deny in identity policy, SCP, or permission boundary; confirm whether a resource policy (S3/KMS) must also allow the principal; then compare condition keys (aws:SourceArn, aws:PrincipalTag) against the request context. Validation signals include iam simulate-principal-policy reproducing the Deny and then Allow after the targeted statement, with CloudTrail clean on retry. Risk boundary: if the fix requires widening a boundary or SCP, stop and escalate to a human owner.",
+  "domain": "aws",
+  "scope_hint": "platform.cloud.aws:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.aws",
+  "pack_id": "platform.cloud.aws"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:architecture:enforce-dependency-acyclicity",
+  "type": "strategy",
+  "title": "Keep the module dependency graph acyclic",
+  "description": "Prevent and break import cycles between modules so build, test, and reasoning stay tractable and ownership stays clear.",
+  "body": "Use when adding a dependency between modules or reviewing the import graph. Do not introduce a back-edge that makes two modules import each other directly or transitively. Actions: inspect the dependency graph for cycles, break a cycle by extracting the shared abstraction into a lower layer or inverting the dependency with an interface, and verify the graph is a DAG after the change. Validation signals include a cycle-detection tool reporting zero cycles and modules building independently. Risk boundary: cycles cause fragile builds, hidden coupling, and untestable units; if a cycle cannot be cleanly broken, escalate the boundary design rather than papering over it with lazy imports.",
+  "domain": "code",
+  "scope_hint": "code.architecture:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.architecture",
+  "pack_id": "code.architecture"
+}

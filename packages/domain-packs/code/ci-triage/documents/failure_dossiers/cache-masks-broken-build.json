@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:ci_triage:cache-masks-broken-build",
+  "type": "failure_dossier",
+  "description": "A stale CI cache serves old artifacts so a build that should fail passes, until a cache miss exposes the real breakage later.",
+  "body": "Failure mode: a too-broad cache key reuses old dependencies or build artifacts, so a change that actually breaks the build keeps passing on cached content, then fails unexpectedly on a fresh runner or after cache eviction. Detection signals: builds pass locally with cache but fail on clean runners; failures appear after cache rotation unrelated to recent commits; lockfile changes not reflected in the cache key. Do not trust a green build that depends on a stale cache. Safer fallback: scope cache keys to the right invalidation inputs, periodically run cache-cleared builds, and confirm the build passes from a clean cache before trusting it.",
+  "domain": "code",
+  "scope_hint": "code.ci-triage:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.ci-triage:human_authored",
+  "pack_id": "code.ci-triage"
+}

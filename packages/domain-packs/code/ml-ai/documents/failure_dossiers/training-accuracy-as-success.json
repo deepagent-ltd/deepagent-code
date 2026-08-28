@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:mlai:training-accuracy-as-success",
+  "type": "failure_dossier",
+  "description": "Reporting or optimizing training accuracy as if it measured real-world performance, masking severe overfitting.",
+  "body": "Failure mode: success is judged by training-set performance, which a high-capacity model can drive arbitrarily high by memorizing, so the model fails on any new input. Detection signals: training accuracy near perfect while validation lags badly; the train/validation gap widens with more epochs; production results collapse. Do not use training metrics to judge generalization. Safer fallback: report validation and held-out test metrics, monitor the train/val gap, and add regularization or data when the gap grows.",
+  "domain": "ml",
+  "scope_hint": "code.ml-ai:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.ml-ai:human_authored",
+  "pack_id": "code.ml-ai"
+}

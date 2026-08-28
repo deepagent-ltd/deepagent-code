@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:backend_api:entry-validation",
+  "type": "strategy",
+  "description": "Validate untrusted request data at the API boundary.",
+  "body": "Params, query, headers, body, and route-derived identifiers should be decoded before business logic. Internal code should receive trusted shapes.\n\nEvidence boundary: apply only when current task, repository, or validation evidence matches this pack boundary. Do not override a more specific pack or explicit project contract. Use when Backend API work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: choose the smallest direction that preserves the domain contract; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "api",
+  "scope_hint": "code.backend.api:strategies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.backend.api",
+  "pack_id": "code.backend.api"
+}

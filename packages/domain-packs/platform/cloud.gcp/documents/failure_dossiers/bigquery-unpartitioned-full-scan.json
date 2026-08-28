@@ -1,0 +1,11 @@
+{
+  "ref_id": "fail:gcp:bigquery-unpartitioned-full-scan",
+  "type": "failure_dossier",
+  "description": "A scheduled query repeatedly full-scans an unpartitioned table, burning cost.",
+  "body": "Failure mode: a query selects from a large unpartitioned table without column pruning, so every run scans the whole table and the on-demand bill climbs. Detection signals: dry-run reports terabytes scanned, INFORMATION_SCHEMA.JOBS shows high total_bytes_billed, and LIMIT in the query gives a false sense of cost savings. Do not rely on LIMIT or assume small results mean small scans. Safer fallback: partition the table on a date/ingestion column, require a partition filter, select only needed columns, and set maximum_bytes_billed as a guardrail.",
+  "domain": "gcp",
+  "scope_hint": "platform.cloud.gcp:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.gcp:human_authored",
+  "pack_id": "platform.cloud.gcp"
+}

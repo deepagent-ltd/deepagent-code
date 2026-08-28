@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:glci:scope-cache-and-artifacts",
+  "type": "strategy",
+  "title": "Scope cache by key and artifacts by path with expiry",
+  "description": "Key caches on the lockfile, scope artifacts:paths to real outputs, and set expire_in so storage and staleness stay bounded.",
+  "body": "Use when passing build state between jobs or speeding installs. Do not use a single static cache key (serves stale dependencies) and do not upload broad artifacts:paths with no expire_in (storage balloons, secrets may be captured). Actions: set cache:key to include the lockfile (files: or prefix+hash), list artifacts:paths to only the needed outputs, set expire_in, and use dependencies:/needs: to control which artifacts a job receives. Validation signals include the cache busting on lockfile change and artifacts containing only intended files with a set expiry. Risk boundary: artifacts that capture a secret file or .env are a leak; scope paths tightly and verify contents.",
+  "domain": "ci_gitlab",
+  "scope_hint": "platform.ci-gitlab:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.ci-gitlab",
+  "pack_id": "platform.ci-gitlab"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:local_dev:bootstrap-depends-on-undocumented-global",
+  "type": "failure_dossier",
+  "description": "A setup that silently relies on a globally-installed tool or env var present only on the original author's machine.",
+  "body": "Failure mode: bootstrap appears to work for the author but fails on a fresh machine because it assumes a global CLI, a specific runtime version, or an env var that was never documented or provisioned. Detection signals: fresh-clone setup fails with 'command not found' or missing-config errors; steps work for one person only; no prerequisite check. Do not assume the author's environment on a new machine. Safer fallback: have bootstrap check and report missing prerequisites with install guidance, pin tool versions, and document required env vars with safe defaults. Risk boundary: never auto-install or default a real secret to make bootstrap pass; require the human to supply credentials deliberately.",
+  "domain": "platform",
+  "scope_hint": "platform.local-dev:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.local-dev:human_authored",
+  "pack_id": "platform.local-dev"
+}

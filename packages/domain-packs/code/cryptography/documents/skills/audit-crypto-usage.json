@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:crypto:audit-crypto-usage",
+  "type": "skill",
+  "title": "Audit a codebase for crypto usage",
+  "description": "Locate all cryptographic calls and report the construction, parameters, and any misuse pattern with file locations.",
+  "body": "Use when assessing how a codebase uses cryptography. Actions: search for crypto API calls, hashing, key handling, and random-number use; for each, record the construction, mode, parameters, nonce/IV source, and randomness source with file and line. Flag unauthenticated modes, fast/unsalted password hashes, non-CSPRNG secrets, hardcoded keys, and non-constant-time secret comparisons. Report findings ranked by severity with the safer named construction for each. Do not modify secrets or keys during the audit. This skill exposes capability only and must not exfiltrate or print key material; reference keys by name, never value. Validation signals include an inventory mapping each call to a verdict. Risk boundary: surface weak-mode, nonce-reuse, and password-hash findings as blocking and recommend escalation.",
+  "domain": "cryptography",
+  "scope_hint": "code.cryptography:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.cryptography",
+  "pack_id": "code.cryptography"
+}

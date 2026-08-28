@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:k8s:rolling-update-with-surge-and-budget",
+  "type": "strategy",
+  "title": "Roll out with controlled surge and disruption budget",
+  "description": "Use maxSurge/maxUnavailable and a PodDisruptionBudget so a rollout never drops capacity below the serving floor.",
+  "body": "Use when changing a Deployment's image, env, or replica count on a service that takes live traffic. Do not use the Recreate strategy for a stateless service that must stay available, and do not leave maxUnavailable at a value that drops below the capacity the service needs. Actions: set spec.strategy.rollingUpdate.maxSurge and maxUnavailable to keep healthy replicas above the floor; add a PodDisruptionBudget; run kubectl rollout status to watch the new revision become available. Validation signals include rollout status reaching the target replicas with the new revision while error rate and latency stay flat. Risk boundary: a rollout that can drop below the serving floor on a production service requires a human gate and a tested rollback.",
+  "domain": "kubernetes",
+  "scope_hint": "platform.kubernetes:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.kubernetes",
+  "pack_id": "platform.kubernetes"
+}

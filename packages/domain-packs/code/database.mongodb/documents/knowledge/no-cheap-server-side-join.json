@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:mongo:no-cheap-server-side-join",
+  "type": "knowledge",
+  "title": "MongoDB has no cheap server-side join",
+  "description": "$lookup is a per-document left-outer join that behaves like a nested loop, so it is not a substitute for relational joins.",
+  "body": "Reference for cross-collection queries. $lookup performs a left-outer join by running a lookup against the foreign collection for each input document, so without an index on the joined field it degrades like a nested-loop join. Use when a combined view genuinely spans two collections. Do not lean on $lookup as a routine join the way SQL does; if data is almost always read together, the model should embed it instead. Validation signals include explain showing the $lookup's foreign-field query served by an IXSCAN and a bounded executionTimeMillis. Risk boundary: a $lookup across large collections without an indexed foreign field can scan the foreign collection per row, so confirm the join key is indexed or reconsider the model.",
+  "domain": "mongodb",
+  "scope_hint": "code.database.mongodb:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.mongodb",
+  "pack_id": "code.database.mongodb"
+}

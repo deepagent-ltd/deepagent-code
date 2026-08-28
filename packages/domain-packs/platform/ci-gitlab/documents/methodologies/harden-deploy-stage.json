@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:glci:harden-deploy-stage",
+  "type": "methodology",
+  "title": "Harden a deploy stage in the pipeline",
+  "description": "Gate deployment behind protected refs, environments, manual approval, and least-privilege credentials.",
+  "body": "Steps: 1. Move deploy jobs to a dedicated stage gated by rules to protected branches/tags only. 2. Bind the job to a GitLab environment with a deployment approval/protected-environment rule. 3. Set when: manual for production so a human triggers it. 4. Scope deploy credentials to protected, environment-scoped variables and the minimal access needed. 5. Record the deployed commit and produce a provenance trail. Rollback point: a documented rollback job or prior environment deployment. Validation: production deploy requires a protected ref plus manual approval and uses credentials unavailable to non-protected pipelines.",
+  "domain": "ci_gitlab",
+  "scope_hint": "platform.ci-gitlab:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.ci-gitlab",
+  "pack_id": "platform.ci-gitlab"
+}

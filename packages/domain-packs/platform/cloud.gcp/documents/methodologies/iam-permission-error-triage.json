@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:gcp:iam-permission-error-triage",
+  "type": "methodology",
+  "title": "Triage a GCP permission error through inheritance and conditions",
+  "description": "Use Policy Troubleshooter and the resource hierarchy to find the missing role at the right node before granting anything.",
+  "body": "Use when a GCP API call returns PERMISSION_DENIED and you need the minimal grant. Do not add roles/editor to move on. Actions: identify the exact permission in the error, run Policy Troubleshooter for the principal and resource, walk the inheritance chain (org->folder->project->resource) to see where access is or isn't granted, and check whether an IAM condition or VPC-SC perimeter blocks it. Validation signals include the troubleshooter showing the principal gains access after the targeted predefined role at the intended node, with a clean retry. Risk boundary: if the fix requires a broad role or org-level binding, stop and escalate.",
+  "domain": "gcp",
+  "scope_hint": "platform.cloud.gcp:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.gcp",
+  "pack_id": "platform.cloud.gcp"
+}

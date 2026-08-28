@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:game:nondeterministic-sim-breaks-netcode",
+  "type": "failure_dossier",
+  "description": "Leaving non-deterministic sources (unseeded RNG, hash iteration order, wall-clock, variable dt) in the simulation, causing replay and lockstep desyncs.",
+  "body": "Failure mode: the simulation uses unseeded randomness, hash-map iteration order, wall-clock timing, or variable timestep, so the same inputs produce different states on different runs or machines. Detection signals: replays diverge from the original; lockstep multiplayer desyncs after a while, often only on certain hardware; per-tick state checksums differ. Do not rely on an accidentally-deterministic sim. Safer fallback: fix the timestep, seed and advance RNG deterministically, use stable iteration order, avoid wall-clock and platform-divergent float math, and validate with per-tick checksums across machines.",
+  "domain": "game",
+  "scope_hint": "code.game:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.game:human_authored",
+  "pack_id": "code.game"
+}

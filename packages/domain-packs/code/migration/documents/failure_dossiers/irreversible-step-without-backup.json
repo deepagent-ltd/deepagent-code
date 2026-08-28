@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:migration:irreversible-step-without-backup",
+  "type": "failure_dossier",
+  "description": "Running a destructive, irreversible migration step (drop/truncate/transform) with no tested backup or rollback path.",
+  "body": "Failure mode: a migration drops a column, truncates a table, or transforms data in place with no backup and no down migration, so a bug or bad assumption causes permanent data loss. Detection signals: the migration has no reverse step; no fresh backup precedes it; the change is applied directly to production without a rehearsal. Do not run an irreversible destructive step unguarded. Safer fallback: take and verify a backup, prefer expand-contract so the old data survives until proven unneeded, rehearse on a production-like copy, and gate the destructive step behind explicit human approval and a confirmed point-of-no-return.",
+  "domain": "code",
+  "scope_hint": "code.migration:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.migration:human_authored",
+  "pack_id": "code.migration"
+}

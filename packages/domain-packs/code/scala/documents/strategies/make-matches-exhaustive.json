@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:scala:make-matches-exhaustive",
+  "type": "strategy",
+  "title": "Make pattern matches exhaustive over sealed types",
+  "description": "Match on sealed traits/enums so the compiler enforces every case, turning missing branches into compile errors not MatchErrors.",
+  "body": "Use when branching on an algebraic data type (a sealed trait with case class/object children or a Scala 3 enum). Do not add a catch-all _ case that hides new variants or leave a match the compiler warns is non-exhaustive. Actions: declare the hierarchy sealed so the compiler knows all subtypes, match each case explicitly, and treat the non-exhaustiveness warning as an error (-Wconf or -Xfatal-warnings). Validation signals include a clean compile with no exhaustiveness warning and a test covering each variant. Risk boundary: a swallowed non-exhaustive warning becomes a runtime MatchError when a new variant is added later; a blanket _ on a domain ADT silently mishandles future cases and should be replaced with explicit branches.",
+  "domain": "scala",
+  "scope_hint": "code.scala:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.scala",
+  "pack_id": "code.scala"
+}

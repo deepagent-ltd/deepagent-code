@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:finetune:merge-and-verify-adapter",
+  "type": "methodology",
+  "title": "Merge an adapter and verify parity",
+  "description": "Fold a trained adapter into base weights for serving, then confirm the merged model matches the adapter-on-base reference.",
+  "body": "Use when collapsing a LoRA adapter into the base to simplify serving. Do not assume merge is lossless or base-agnostic — merging onto the wrong revision or at the wrong scale shifts outputs. Actions: confirm the adapter's recorded base/tokenizer, merge at the trained scaling, then run a parity check comparing merged outputs to the runtime adapter-on-base on a reference set. Validation signals include a parity report with negligible output divergence and merge metadata naming the exact base. Risk boundary: a silently corrupted merge degrades every request; if parity fails, deny the merged artifact and serve the adapter at runtime instead while escalating.",
+  "domain": "fine_tuning",
+  "scope_hint": "code.fine-tuning:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.fine-tuning",
+  "pack_id": "code.fine-tuning"
+}

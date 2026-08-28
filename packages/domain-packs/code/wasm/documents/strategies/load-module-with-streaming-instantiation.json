@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:wasm:load-module-with-streaming-instantiation",
+  "type": "strategy",
+  "title": "Load the module with streaming instantiation",
+  "description": "Fetch and compile the .wasm with instantiateStreaming and the correct MIME/import object so loading is fast and correct.",
+  "body": "Use when loading a WASM module in the browser or bundling it. Do not block on fetching the whole file then instantiate, and do not serve the .wasm with the wrong content type, because WebAssembly.instantiateStreaming requires the application/wasm MIME type and falls back poorly otherwise. Actions: use instantiateStreaming(fetch(url), importObject) so compile overlaps download, ensure the server sends Content-Type: application/wasm, and configure the bundler to emit the .wasm as an asset with the binding glue. Validation signals include the module instantiating successfully with the import object satisfied and no MIME/streaming fallback warning. Risk boundary: a missing import or wrong MIME aborts instantiation; verify the import object matches the module's declared imports against the actual deployment.",
+  "domain": "wasm",
+  "scope_hint": "code.wasm:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.wasm",
+  "pack_id": "code.wasm"
+}

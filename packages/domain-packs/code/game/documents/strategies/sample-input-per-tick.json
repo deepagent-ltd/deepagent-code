@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:game:sample-input-per-tick",
+  "type": "strategy",
+  "title": "Sample and apply input per simulation tick",
+  "description": "Capture input and apply it within the simulation step it belongs to, buffering events so none are lost between frames.",
+  "body": "Use when player actions drive simulation. Do not read input only at render time, and do not drop events that arrive between frames. Actions: buffer raw input events as they arrive, then consume them inside the fixed-timestep update so each action maps to a definite tick; account for the input-to-photon latency budget. Validation signals include every quick tap registering (no missed inputs) and consistent action timing regardless of frame rate. Risk boundary: reading input at render time couples actions to frame rate and can miss fast inputs or add a frame of lag — in competitive or deterministic games this corrupts both feel and replay correctness.",
+  "domain": "game",
+  "scope_hint": "code.game:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.game",
+  "pack_id": "code.game"
+}

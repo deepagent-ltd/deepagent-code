@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:docker:multi-stage-separates-build-from-run",
+  "type": "knowledge",
+  "title": "Multi-stage builds separate build-time from runtime",
+  "description": "A multi-stage Dockerfile compiles in a fat builder stage and copies only the produced artifacts into a lean runtime stage, so toolchains and secrets never reach the shipped image.",
+  "body": "Use when reasoning about why an image is large or leaks build secrets. In a multi-stage build, the first stage holds compilers, dev dependencies, and build credentials; the final stage starts from a minimal base and uses COPY --from to take only the runtime artifacts, so build tooling and any secrets used during build are left behind in a discarded stage. Do not assume a secret used only in the builder stays out of the image if you collapse stages. Actions: keep build and runtime stages separate and copy only artifacts forward. Validation signals include the final image lacking compilers and a layer scan showing no build secrets. Risk boundary: a secret passed via ARG can still persist in intermediate layers; treat build-time secrets as requiring BuildKit secret mounts, not ARG.",
+  "domain": "platform",
+  "scope_hint": "platform.docker:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.docker",
+  "pack_id": "platform.docker"
+}

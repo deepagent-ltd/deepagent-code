@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:vsearch:hybrid-fuse-lexical-and-vector",
+  "type": "strategy",
+  "title": "Fuse lexical and vector retrieval",
+  "description": "Combine BM25 and dense retrieval so exact-term matches and semantic matches both surface, improving recall over either alone.",
+  "body": "Use when queries mix exact terms (codes, names, IDs) with semantic intent. Do not rely on dense vectors alone — they miss rare exact tokens, while BM25 alone misses paraphrase. Actions: run BM25 and vector retrieval, fuse with reciprocal rank fusion or a weighted score, and tune the fusion weight on a labeled set. Validation signals include hybrid recall exceeding both lexical-only and vector-only on the eval, and a fusion weight chosen by benchmark. Risk boundary: a badly weighted fusion can underperform either component; if hybrid does not beat both baselines, treat the fusion as misconfigured and re-tune before shipping.",
+  "domain": "vector_search",
+  "scope_hint": "code.vector-search:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.vector-search",
+  "pack_id": "code.vector-search"
+}

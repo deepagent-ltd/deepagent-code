@@ -1,0 +1,11 @@
+{
+  "ref_id": "methodology:review:severity-ladder",
+  "type": "methodology",
+  "description": "Construct review severity from impact, likelihood, reachability, and recoverability before writing findings.",
+  "body": "Use this methodology after a suspected issue has concrete code evidence. First identify the changed behavior and the entry point that reaches it. Next estimate impact: data corruption, security/privacy exposure, crash, build break, contract regression, user-facing incorrectness, or maintainability risk. Then estimate likelihood from reachable inputs, default configuration, migration path, and test coverage. Finally decide recoverability: can users retry, roll back, or repair data? Do not use this ladder for subjective style preferences or pure naming comments. Verification signals include failing or absent tests, schema/API diffs, line-level evidence, and known caller paths. The output should be a severity label plus one sentence explaining why it is blocking or residual. Use when Code Review work touches diff hunks, line evidence, tests, contracts, and blast radius. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: follow the ordered review, edit, and validation sequence; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include file/line citations, failing or missing tests, reproduced behavior, and residual-risk notes. Risk boundary: escalate or stop when the task involves unsupported findings, severity inflation, hidden fixes, and ignoring user constraints, missing owner evidence, or live external state.",
+  "domain": "review",
+  "scope_hint": "code.review:methodologies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.review:human_authored",
+  "pack_id": "code.review"
+}

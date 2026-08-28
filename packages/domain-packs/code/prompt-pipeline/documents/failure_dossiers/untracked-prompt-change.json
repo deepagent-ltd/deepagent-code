@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:prompt:untracked-prompt-change",
+  "type": "failure_dossier",
+  "description": "A prompt template is edited inline with no versioning, so a quality regression cannot be attributed or rolled back.",
+  "body": "Failure mode: someone tweaks a prompt string directly in code with no version record or eval, quality drops in production, and there is no diff to review or version to revert to. Detection signals: prompt strings edited in place; no version stamped on responses; no eval run on the change; no diff in review. Do not ship prompt edits without versioning. Safer fallback: store templates as versioned artifacts, create a new version rather than editing in place, diff and review the change, run the eval suite with a significance gate, and stamp the version on stored and production responses.",
+  "domain": "prompt_pipeline",
+  "scope_hint": "code.prompt-pipeline:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.prompt-pipeline:human_authored",
+  "pack_id": "code.prompt-pipeline"
+}

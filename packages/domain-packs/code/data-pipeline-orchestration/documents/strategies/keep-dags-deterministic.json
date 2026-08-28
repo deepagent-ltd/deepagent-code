@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:orch:keep-dags-deterministic",
+  "type": "strategy",
+  "title": "Keep DAG structure deterministic and parse-light",
+  "description": "Build dynamic DAGs from stable inputs and keep top-level parse code cheap so the scheduler stays fast and reproducible.",
+  "body": "Use when generating tasks dynamically from a config or dataset. Do not query a live, changing source at DAG-parse time — the graph then changes shape unpredictably and the scheduler slows or breaks. Actions: generate dynamic tasks from a stable, versioned input, keep top-level parsing lightweight (no heavy I/O), and ensure the same input yields the same graph. Validation signals include a DAG whose task set is reproducible from its input and a parse time well within the scheduler budget. Risk boundary: heavy or nondeterministic parse code degrades the whole scheduler, not just one DAG; if parse time spikes, treat it as a platform risk and escalate to move work out of parse time.",
+  "domain": "orchestration",
+  "scope_hint": "code.data-pipeline-orchestration:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-pipeline-orchestration",
+  "pack_id": "code.data-pipeline-orchestration"
+}

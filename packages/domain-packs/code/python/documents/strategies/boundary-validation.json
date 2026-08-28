@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:python:boundary-validation",
+  "type": "strategy",
+  "description": "In Python, validate external input at the argparse parsing, json/pickle decoding, and encoding on file/network IO before internal use.",
+  "body": "In Python, parsing, environment, CLI, and network inputs reach the program through argparse parsing, json/pickle decoding, and encoding on file/network IO and must be checked before they are trusted. Use when handling untrusted or external input crossing into Python code. Do not pass raw external values into internal logic, and avoid assuming well-formed input. Actions: validate at the boundary, reject or normalize malformed values, verify the rejection path with a test, and record the accepted contract. Validation signals include tests on malformed input, a logged/trace rejection, and a defined schema for the boundary. Risk boundary: escalate when input feeds security-sensitive or non-reversible operations; deny by default rather than guessing intent.",
+  "domain": "python",
+  "scope_hint": "code.python:strategies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.python:skill_survey",
+  "pack_id": "code.python"
+}

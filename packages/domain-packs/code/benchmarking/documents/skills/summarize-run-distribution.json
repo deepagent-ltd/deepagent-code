@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:benchmarking:summarize-run-distribution",
+  "type": "skill",
+  "title": "Summarize a benchmark run distribution",
+  "description": "Aggregate repeated benchmark samples into median, spread, and outlier counts with the environment recorded for comparison.",
+  "body": "Use when turning raw benchmark samples into a comparable result. Actions: collect the repeated samples, compute median and percentiles plus a spread measure, count and flag outliers, and attach the environment manifest and sample size to the summary. Do not report a single best-of run as the result. This skill exposes capability only and must not run benchmark workloads without runtime permission. Validation signals include a distribution summary with sample count and variance recorded. Risk boundary: if variance is high or samples are few, report the result as inconclusive rather than claiming a regression or win.",
+  "domain": "code",
+  "scope_hint": "code.benchmarking:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.benchmarking",
+  "pack_id": "code.benchmarking"
+}

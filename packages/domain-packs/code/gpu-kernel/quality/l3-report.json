@@ -1,0 +1,35 @@
+{
+  "schema_version": "domain_pack_quality.v1",
+  "pack_id": "code.gpu-kernel",
+  "maturity": "L3",
+  "counts": {
+    "strategy": 3,
+    "methodology": 1,
+    "knowledge": 0,
+    "skill": 0,
+    "memory": 0,
+    "failure_dossier": 0
+  },
+  "quality": {
+    "duplicate_ref": 0,
+    "weak_evidence": 0,
+    "failure_indexed": 0,
+    "thin_docs": 0
+  },
+  "l3_evidence": {
+    "activation_smoke": "evals/smoke/l3-smoke.json",
+    "retrieval_smoke": "pack-scoped activePackIds retrieval",
+    "validation_smoke": "GPU Kernel L3 validation smoke",
+    "diagnosis_smoke": "GPU Kernel diagnosis smoke"
+  },
+  "source_refs": [
+    "source:official-tooling-docs:paraphrased",
+    "source:engineering-practice:paraphrased"
+  ],
+  "structure_l3": true,
+  "validated_l3": true,
+  "activation_precision_checked": false,
+  "cross_pack_negative_checked": false,
+  "scaffold_ratio": 0,
+  "ablation_checked": false
+}

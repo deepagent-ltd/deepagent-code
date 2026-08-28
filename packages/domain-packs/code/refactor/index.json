@@ -1,0 +1,456 @@
+[
+  {
+    "ref_id": "knowledge:refactor:abstraction-cost",
+    "type": "knowledge",
+    "title": "Abstraction Cost",
+    "summary": "Every abstraction adds navigation and naming cost.",
+    "domains": [
+      "refactor",
+      "code"
+    ],
+    "triggers": [
+      "every",
+      "abstraction",
+      "adds",
+      "navigation",
+      "naming",
+      "cost",
+      "only"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.refactor"
+  },
+  {
+    "ref_id": "knowledge:refactor:refactor-can-change-behavior",
+    "type": "knowledge",
+    "title": "Refactor Can Change Behavior",
+    "summary": "Structural edits can accidentally change timing, identity, ordering, or errors.",
+    "domains": [
+      "refactor",
+      "code"
+    ],
+    "triggers": [
+      "structural",
+      "edits",
+      "accidentally",
+      "change",
+      "timing",
+      "identity",
+      "ordering",
+      "errors"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.refactor"
+  },
+  {
+    "ref_id": "knowledge:refactor:tests-define-refactor-safety",
+    "type": "knowledge",
+    "title": "Tests Define Refactor Safety",
+    "summary": "Refactor confidence depends on behavior tests around the changed surface.",
+    "domains": [
+      "refactor",
+      "code"
+    ],
+    "triggers": [
+      "refactor",
+      "confidence",
+      "depends",
+      "behavior",
+      "tests",
+      "around",
+      "changed",
+      "surface"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.refactor"
+  },
+  {
+    "ref_id": "methodology:refactor:caller-impact-scan",
+    "type": "methodology",
+    "title": "Caller Impact Scan",
+    "summary": "Scan direct and indirect callers before changing shared API.",
+    "domains": [
+      "refactor",
+      "code"
+    ],
+    "triggers": [
+      "scan",
+      "direct",
+      "indirect",
+      "callers",
+      "before",
+      "changing",
+      "shared",
+      "steps"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.refactor"
+  },
+  {
+    "ref_id": "methodology:refactor:refactor-safety-loop",
+    "type": "methodology",
+    "title": "Refactor Safety Loop",
+    "summary": "Capture behavior, change structure, verify unchanged outputs.",
+    "domains": [
+      "refactor",
+      "code"
+    ],
+    "triggers": [
+      "capture",
+      "behavior",
+      "change",
+      "structure",
+      "verify",
+      "unchanged",
+      "outputs",
+      "steps"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.refactor"
+  },
+  {
+    "ref_id": "methodology:refactor:rename-move-check",
+    "type": "methodology",
+    "title": "Rename Move Check",
+    "summary": "Validate imports, generated artifacts, docs, and package exports after moves.",
+    "domains": [
+      "refactor",
+      "code"
+    ],
+    "triggers": [
+      "validate",
+      "imports",
+      "generated",
+      "artifacts",
+      "docs",
+      "package",
+      "exports",
+      "after"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.refactor"
+  },
+  {
+    "ref_id": "skill:refactor:scan-refactor-callers",
+    "type": "skill",
+    "title": "Scan Refactor Callers",
+    "summary": "Find callers and behavior surfaces for a proposed refactor.",
+    "domains": [
+      "refactor",
+      "code"
+    ],
+    "triggers": [
+      "find",
+      "callers",
+      "behavior",
+      "surfaces",
+      "proposed",
+      "refactor",
+      "inputs",
+      "symbol"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.refactor"
+  },
+  {
+    "ref_id": "strategy:refactor:behavior-preserving-contract",
+    "type": "strategy",
+    "title": "Behavior Preserving Contract",
+    "summary": "A refactor must keep externally visible behavior stable unless stated otherwise.",
+    "domains": [
+      "refactor",
+      "code"
+    ],
+    "triggers": [
+      "refactor",
+      "must",
+      "keep",
+      "externally",
+      "visible",
+      "behavior",
+      "stable",
+      "unless"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.refactor"
+  },
+  {
+    "ref_id": "strategy:refactor:call-graph-before-move",
+    "type": "strategy",
+    "title": "Call Graph Before Move",
+    "summary": "Inspect callers before moving or renaming shared code.",
+    "domains": [
+      "refactor",
+      "code"
+    ],
+    "triggers": [
+      "inspect",
+      "callers",
+      "before",
+      "moving",
+      "renaming",
+      "shared",
+      "code"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.refactor"
+  },
+  {
+    "ref_id": "strategy:refactor:name-real-concept",
+    "type": "strategy",
+    "title": "Name Real Concept",
+    "summary": "Extract helpers only when they name a reusable concept or hide real complexity.",
+    "domains": [
+      "refactor",
+      "code"
+    ],
+    "triggers": [
+      "extract",
+      "helpers",
+      "only",
+      "when",
+      "they",
+      "name",
+      "reusable",
+      "concept"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.refactor"
+  },
+  {
+    "ref_id": "strategy:refactor:small-batch-refactor",
+    "type": "strategy",
+    "title": "Small Batch Refactor",
+    "summary": "Refactor in small batches with validation between them.",
+    "domains": [
+      "refactor",
+      "code"
+    ],
+    "triggers": [
+      "refactor",
+      "small",
+      "batches",
+      "with",
+      "validation",
+      "between",
+      "them",
+      "large"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.refactor"
+  },
+  {
+    "ref_id": "strategy:refactor:characterize-before-changing",
+    "type": "strategy",
+    "title": "Pin behavior with characterization tests first",
+    "summary": "Capture current observable behavior in tests before refactoring legacy code that lacks coverage, so regressions surface immediately.",
+    "domains": [
+      "code",
+      "refactor"
+    ],
+    "triggers": [
+      "characterization",
+      "golden",
+      "legacy",
+      "coverage",
+      "pin",
+      "snapshot"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.refactor"
+  },
+  {
+    "ref_id": "strategy:refactor:bound-the-blast-radius",
+    "type": "strategy",
+    "title": "Bound the blast radius of a refactor",
+    "summary": "Scope each refactor so its reach is known and reviewable, splitting wide-impact changes from behavior changes and from each other.",
+    "domains": [
+      "code",
+      "refactor"
+    ],
+    "triggers": [
+      "blast radius",
+      "scope",
+      "wide change",
+      "atomic",
+      "review",
+      "split"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.refactor"
+  },
+  {
+    "ref_id": "methodology:refactor:extract-or-inline-safely",
+    "type": "methodology",
+    "title": "Extract or inline a function safely",
+    "summary": "Perform an extract/inline by moving code without altering behavior, checking captured state, side effects, and all call sites.",
+    "domains": [
+      "code",
+      "refactor"
+    ],
+    "triggers": [
+      "extract",
+      "inline",
+      "function",
+      "side effect",
+      "closure",
+      "parameters"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.refactor"
+  },
+  {
+    "ref_id": "knowledge:refactor:small-steps-keep-bisectability",
+    "type": "knowledge",
+    "title": "Small steps keep refactors bisectable",
+    "summary": "A sequence of small, individually-green refactor commits lets a regression be located by bisection, unlike one large mixed commit.",
+    "domains": [
+      "code",
+      "refactor"
+    ],
+    "triggers": [
+      "small steps",
+      "bisect",
+      "incremental",
+      "commit",
+      "regression",
+      "green"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.refactor"
+  },
+  {
+    "ref_id": "skill:refactor:map-symbol-references",
+    "type": "skill",
+    "title": "Map all references to a symbol before moving it",
+    "summary": "Find every definition and use of a symbol across source, tests, docs, and generated artifacts before a rename or move.",
+    "domains": [
+      "code",
+      "refactor"
+    ],
+    "triggers": [
+      "references",
+      "rename",
+      "usages",
+      "call sites",
+      "find",
+      "symbol"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.refactor"
+  }
+]

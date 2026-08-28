@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:dq:profile-and-diff-distributions",
+  "type": "skill",
+  "title": "Profile data and diff against a baseline",
+  "description": "Profile a dataset and compare distributions, null rates, and counts to a baseline, reporting drift and anomalies with magnitudes.",
+  "body": "Use when investigating a suspected quality or drift issue. Actions: profile the current dataset (types, null rates, ranges, cardinality, row counts) and diff it against a stored baseline, reporting each metric's shift with magnitude and whether it exceeds tolerance. Distinguish likely pipeline bugs (count drops, new nulls) from genuine distribution shifts. Do not report a shift as drift without ruling out a load defect. This skill exposes capability only and does not modify data. Validation signals include a per-feature diff against the baseline. Risk boundary: a count or null-rate cliff usually signals a pipeline bug, not drift; flag it for source investigation before any retraining.",
+  "domain": "data_quality",
+  "scope_hint": "code.data-quality:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-quality",
+  "pack_id": "code.data-quality"
+}

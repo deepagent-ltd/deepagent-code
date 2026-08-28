@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:evt:publish-via-transactional-outbox",
+  "type": "strategy",
+  "title": "Publish via a transactional outbox",
+  "description": "Write the event to an outbox table in the same transaction as the state change, then relay it to the broker separately.",
+  "body": "Use when a state change must reliably produce an event (order placed -> OrderPlaced). Do not write to the database and then publish to the broker as two independent steps (a dual write that can half-fail). Actions: insert the event row into an outbox table inside the same DB transaction as the business write; a separate relay (poller or CDC) reads unpublished rows, publishes, and marks them sent at-least-once. Validation signals include a test that a committed write always yields exactly one eventually-published event and a rolled-back write yields none. Risk boundary: a dual write with no outbox can silently lose or fabricate events and is a blocking correctness finding.",
+  "domain": "event_driven",
+  "scope_hint": "code.backend.event-driven:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.event-driven",
+  "pack_id": "code.backend.event-driven"
+}

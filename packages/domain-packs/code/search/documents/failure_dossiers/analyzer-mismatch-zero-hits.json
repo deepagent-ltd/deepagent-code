@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:search:analyzer-mismatch-zero-hits",
+  "type": "failure_dossier",
+  "description": "Using a different analyzer at query time than at index time, so obviously-present terms return zero hits.",
+  "body": "Failure mode: the query is analyzed differently (or not at all) compared to the indexed field, so their tokens never match and a term clearly present in documents returns no results. Detection signals: an exact-looking query yields zero hits while the document visibly contains the term; the analyze API shows different tokens for index vs query; case or stemming differences. Do not assume zero hits means missing data. Safer fallback: align the search_analyzer with the index analyzer, confirm token alignment via the analyze API, and re-query.",
+  "domain": "search",
+  "scope_hint": "code.search:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.search:human_authored",
+  "pack_id": "code.search"
+}

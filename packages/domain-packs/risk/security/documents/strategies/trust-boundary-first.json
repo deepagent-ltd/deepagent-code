@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:security:trust-boundary-first",
+  "type": "strategy",
+  "title": "Trust boundary first",
+  "description": "Identify assets, actors, trust boundaries, and attacker-controlled inputs before proposing a security-sensitive change.",
+  "body": "Use when a task touches authentication, authorization, parsing, rendering, command execution, network calls, dependency loading, or secret handling. Do not use as a substitute for framework-specific implementation rules or a full threat model for a new product. Actions: map actor, asset, entry point, transformation, sink, and enforcement point before editing; refuse to treat trusted UI state or client claims as authority. Validation signals include negative tests at the boundary, log or trace evidence showing server-side enforcement, and review notes identifying the denied path. Risk boundary: if the change expands access, crosses tenants, or introduces a new externally reachable sink, require human approval before accepting the design.",
+  "domain": "security",
+  "scope_hint": "risk.security:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.security",
+  "pack_id": "risk.security"
+}

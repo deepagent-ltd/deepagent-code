@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:cpp:generic-root-command",
+  "type": "failure_dossier",
+  "description": "Running a global build/test command for C++ instead of CMake/CTest and a C++ compiler misses the project-local config and reports misleading results.",
+  "body": "Failure mode: a generic root-level command is run for C++ work instead of CMake/CTest and a C++ compiler, so project-local configuration, lockfiles, and scripts are ignored and the output does not reflect the real build. Detection signals: the command ignores the project manifest; results differ from CI; tooling versions or flags do not match the repo. Do not run a global or default command when the project declares its own C++ toolchain. Safer fallback: detect and run CMake/CTest and a C++ compiler from the project root, verify the version matches the repo, and record the exact command and exit code.",
+  "domain": "cpp",
+  "scope_hint": "code.cpp:failure_dossiers",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.cpp:skill_survey",
+  "pack_id": "code.cpp"
+}

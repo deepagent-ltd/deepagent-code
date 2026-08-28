@@ -1,0 +1,70 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.os-kernel",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "kernel",
+      "syscall",
+      "driver"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.os-kernel: Linux device driver with ioctl, syscall implementation, copy_from_user validation, page table and virtual memory, scheduler class, spinlock vs mutex in interrupt context"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "style a mobile app onboarding screen with animations and gradients"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "kernel module syscall device driver ioctl page table virtual memory scheduler spinlock mutex interrupt handler copy_from_user user space privilege paging",
+  "expected_pack_id": "code.os-kernel",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "code.os-kernel L3 validation smoke",
+    "signals": [
+      "copy_from_user / copy_to_user return checked and pointers validated",
+      "no sleep-in-atomic warnings (lockdep / might_sleep clean)",
+      "lockdep reports no deadlock or inversion under stress",
+      "kmemleak / KASAN clean across the test workload",
+      "fault injection (ENOMEM, EFAULT) handled without panic"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "code.os-kernel diagnosis smoke",
+    "signals": [
+      "user pointer dereferenced directly instead of via copy_from_user",
+      "sleeping allocation or mutex taken while holding a spinlock",
+      "reference count or allocation leaked on an error path",
+      "missing bounds check on an ioctl argument size",
+      "interrupt handler doing long work or taking a sleeping lock"
+    ]
+  },
+  "source_refs": [
+    "source:linux-kernel-development-practice:paraphrased",
+    "source:ldd3-device-drivers:paraphrased"
+  ]
+}
