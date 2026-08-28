@@ -16,6 +16,9 @@ export * as SessionProviderRecovery from "./recovery"
 // mapped onto the frozen contract vocabulary (resolvable_exact / repairable_exact /
 // fork_only / coordination_required / resolved), each with the user exit + least-privilege
 // permission requirement.
+// C1B-04: `abandonExact` — abandon a classified `exact` attempt in ONE transaction with
+// the command/evidence store's CAS semantics, with the network-unknown query-command-first
+// refusal and same-tx-or-nothing crash behavior.
 //
 // Command / evidence store semantics live in ./recovery-store (C1B-03); this service owns
 // the single-writer serialize + classify + authorize + command-record path.
@@ -23,15 +26,43 @@ export * as SessionProviderRecovery from "./recovery"
 import { Context, Effect, Layer, Ref, Schema, Semaphore } from "effect"
 import { RecoveryCommandContract } from "../../contract/recovery-command"
 import type {
+  AbandonRecord,
+  AbandonTransactionOutcome,
   AttemptIdentity,
+  BaselineEvidence,
+  BaselineFragment,
+  BaselineRecord,
+  BaselineReconstruction,
+  BaselineVerificationOutcome,
   CommandRecord,
   CommandWriteOutcome,
   EvidenceRecord,
+  RecoveryStoreState,
+  RepairAndAbandonOutcome,
 } from "./recovery-store"
-import { commandCas, recoveryCommandContentAddress } from "./recovery-store"
+import {
+  abandonAttemptKey,
+  abandonTransaction,
+  baselinesOf,
+  commandCas,
+  commandsOf,
+  emptyRecoveryStoreState,
+  evidenceOf,
+  recoveryCommandContentAddress,
+  repairAndAbandonTransaction,
+  verifyBaselineReconstruction,
+} from "./recovery-store"
 
 // Re-export the store's value functions so consumers reach them through the service namespace.
-export { commandCas, recoveryCommandContentAddress } from "./recovery-store"
+export {
+  abandonAttemptKey,
+  abandonTransaction,
+  commandCas,
+  emptyRecoveryStoreState,
+  recoveryCommandContentAddress,
+  repairAndAbandonTransaction,
+  verifyBaselineReconstruction,
+} from "./recovery-store"
 
 // ---------------------------------------------------------------------------
 // Attempt identity (C2-04 protocol identity where present)
@@ -108,6 +139,26 @@ export class RecoveryDecodeError extends Schema.TaggedErrorClass<RecoveryDecodeE
   "SessionProviderRecovery.RecoveryDecodeError",
   { message: Schema.String },
 ) {}
+/**
+ * Typed refusal for the network-unknown abandon path: a settled/terminal
+ * provider evidence already exists for the request, so the attempt may have
+ * dispatched and produced a result — the user is NOT offered abandon and is
+ * pointed to confirm-settled instead (design §9.1 / §11.3 query-command-first).
+ */
+export class RefuseAbandonWithTerminalEvidenceError extends Schema.TaggedErrorClass<RefuseAbandonWithTerminalEvidenceError>()(
+  "SessionProviderRecovery.RefuseAbandonWithTerminalEvidenceError",
+  { evidenceRef: Schema.String, requestHash: Schema.String },
+) {}
+/** Typed refusal for a transaction that was torn by a crash/simulated fault: no state was committed. */
+export class RecoveryTransactionAbortedError extends Schema.TaggedErrorClass<RecoveryTransactionAbortedError>()(
+  "SessionProviderRecovery.RecoveryTransactionAbortedError",
+  { operation: Schema.String },
+) {}
+/** Typed refusal: a reconstructed baseline failed C1B-05 verification. */
+export class BaselineVerifyRefusedError extends Schema.TaggedErrorClass<BaselineVerifyRefusedError>()(
+  "SessionProviderRecovery.BaselineVerifyRefusedError",
+  { reason: Schema.String },
+) {}
 
 export type Error =
   | NotFoundError
@@ -116,8 +167,24 @@ export type Error =
   | PermissionDeniedError
   | AdapterOutOfAuthorityError
   | RecoveryDecodeError
+  | RefuseAbandonWithTerminalEvidenceError
+  | RecoveryTransactionAbortedError
+  | BaselineVerifyRefusedError
 
-export type { CommandRecord, CommandWriteOutcome, EvidenceRecord }
+export type {
+  AbandonRecord,
+  AbandonTransactionOutcome,
+  BaselineEvidence,
+  BaselineFragment,
+  BaselineRecord,
+  BaselineReconstruction,
+  BaselineVerificationOutcome,
+  CommandRecord,
+  CommandWriteOutcome,
+  EvidenceRecord,
+  RecoveryStoreState,
+  RepairAndAbandonOutcome,
+}
 
 // ---------------------------------------------------------------------------
 // Evidence store statuses — typed (pending / external / settled)
@@ -363,6 +430,29 @@ export type ResolveOutcome = {
   readonly author: { readonly actorType: "user" | "administrator" | "system"; readonly actorId: string }
 }
 
+/** C1B-04 input: abandon a classified `exact` attempt. */
+export type AbandonExactInput = {
+  readonly actor: { readonly type: "user" | "administrator" | "system"; readonly id: string }
+  readonly requestHash: string
+  readonly attemptIdentity: AttemptIdentity
+  readonly reasonCode: RecoveryCommandContract.RecoveryReasonCode
+  /** Test seam: inject a crash at a commit boundary to prove same-tx or nothing. */
+  readonly fault?: { readonly at: "after_command_stage" }
+}
+
+/** C1B-06 input: repair the baseline rows AND abandon the attempt atomically. */
+export type RepairBaselineAndAbandonInput = {
+  readonly actor: { readonly type: "user" | "administrator" | "system"; readonly id: string }
+  readonly requestHash: string
+  readonly attemptIdentity: AttemptIdentity
+  readonly baselineRef: string
+  readonly evidence: BaselineEvidence
+  readonly fragments: readonly BaselineFragment[]
+  readonly reasonCode: RecoveryCommandContract.RecoveryReasonCode
+  /** Test seam: inject a crash between the repair and abandon stages. */
+  readonly fault?: { readonly at: "after_repair_stage" }
+}
+
 export interface Interface {
   /** Classify a single attempt into the five-class frozen descriptor (pure). */
   readonly classify: (input: ClassifyInput) => RecoveryCommandContract.RecoveryDescriptor
@@ -379,6 +469,48 @@ export interface Interface {
   }) => Effect.Effect<CommandWriteOutcome, Error>
   /** Read a command record by content address. */
   readonly getCommand: (commandId: string) => Effect.Effect<CommandRecord | undefined>
+  /**
+   * Query a prior command / evidence by exact request hash + attempt identity
+   * WITHOUT creating a new command (design §9.2 query_command). The network
+   * unknown flow's FIRST step: if a settled/terminal evidence exists for the
+   * request, abandon is refused (see `abandonExact`).
+   */
+  readonly queryCommand: (input: {
+    readonly requestHash: string
+    readonly attemptIdentity: AttemptIdentity
+  }) => Effect.Effect<{ readonly command?: CommandRecord; readonly evidence: readonly EvidenceRecord[] }>
+  /** Read the abandon record for an attempt (typed absent/undefined if never abandoned). */
+  readonly queryAbandon: (attemptIdentity: AttemptIdentity) => Effect.Effect<AbandonRecord | undefined>
+  /**
+   * C1B-04: abandon a classified `exact` attempt, recording the abandon decision,
+   * the terminal receipt and the command — ALL in one transaction with the
+   * store's CAS semantics (one command wins; CAS-lost -> typed existing/conflict).
+   * Same-transaction or nothing: a crash mid-abandon commits no half-state. An
+   * already-abandoned attempt with the same request hash -> typed `existing`
+   * (exact retry never duplicates / no double effect). The network-unknown path
+   * is refused when a settled/terminal evidence already exists.
+   */
+  readonly abandonExact: (input: AbandonExactInput) => Effect.Effect<AbandonTransactionOutcome, Error>
+  /**
+   * C1B-05: verify a reconstructed baseline. Pure and deterministic; only an
+   * exact match against a committed hash with unbroken provenance is accepted.
+   * A missing hash/provenance, a hash mismatch or a broken parent chain is a
+   * typed refusal — history is never fabricated from current state.
+   */
+  readonly verifyBaselineReconstruction: (input: {
+    readonly reconstruction: BaselineReconstruction
+    readonly evidence?: BaselineEvidence
+  }) => BaselineVerificationOutcome
+  /** Read a repaired baseline record by its ref. */
+  readonly queryBaseline: (baselineRef: string) => Effect.Effect<BaselineRecord | undefined>
+  /**
+   * C1B-06: repair the baseline rows AND abandon the attempt in ONE atomic
+   * transaction. C1B-05 verification MUST pass first (else no repair and no
+   * abandon); the repair write is hash-committed; a CAS-lost baseline with
+   * legally-different data is never clobbered; a crash between the repair and
+   * abandon stages rolls back both.
+   */
+  readonly repairBaselineAndAbandon: (input: RepairBaselineAndAbandonInput) => Effect.Effect<RepairAndAbandonOutcome, Error>
   /** Evidence store: typed statuses (pending / external / settled); body is C1B-08. */
   readonly evidence: {
     readonly recordStatus: (input: {
@@ -404,12 +536,13 @@ export class Service extends Context.Service<Service, Interface>()("@deepagent-c
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
-    // Single-writer CAS authority for the command slot: one permit serializes every
-    // command write and every resolve (design §2.1 — no distributed owner before clustering).
-    const commandSlot = yield* Ref.make(new Map<string, CommandRecord>())
+    // Single-writer CAS authority over the composite recovery store. One permit
+    // serializes every command write, resolve and recovery transaction (design §2.1 —
+    // no distributed owner before clustering). All domains a transaction mutates
+    // (commands, evidence, abandons) live in one state so a crash commits all-or-nothing.
+    const store = yield* Ref.make(emptyRecoveryStoreState())
     const lock = yield* Semaphore.make(1)
     const resolveCache = yield* Ref.make(new Map<string, ResolveOutcome>())
-    const evidenceStore = yield* Ref.make(new Map<string, EvidenceRecord>())
 
     const resolve = Effect.fn("SessionProviderRecovery.resolve")(function* (input: ResolveInput) {
       const key = `${input.sessionId}:${input.attemptId}`
@@ -423,6 +556,12 @@ export const layer = Layer.effect(
         }),
       )
     })
+
+    // Immutable-command write helper. All mutation of the composite store is
+    // serialized by `lock`, and a transaction commits by swapping a fully-built
+    // next state (see abandonExact) so a crash can never leave a torn half-application.
+    const setCommand = (state: RecoveryStoreState, commandId: string, record: CommandRecord): Effect.Effect<void> =>
+      Ref.set(store, { ...state, commands: new Map(state.commands).set(commandId, record) })
 
     const resolveOnce = (input: ResolveInput): Effect.Effect<ResolveOutcome, Error> =>
       Effect.gen(function* () {
@@ -440,12 +579,12 @@ export const layer = Layer.effect(
           permissionIncomplete: input.permissionIncomplete ?? false,
           workspaceConflict: input.workspaceConflict ?? false,
         })
-        const write = commandCas(yield* Ref.get(commandSlot), {
+        const state = yield* Ref.get(store)
+        const write = commandCas(commandsOf(state), {
           requestHash: input.requestHash,
           attemptIdentity: input.attemptIdentity,
         })
-        if (write.status === "recorded")
-          yield* Ref.update(commandSlot, (map) => new Map(map).set(write.commandId, write.record))
+        if (write.status === "recorded") yield* setCommand(state, write.commandId, write.record)
         return {
           descriptor,
           commandId: write.commandId,
@@ -459,16 +598,17 @@ export const layer = Layer.effect(
     }) {
       return yield* Semaphore.withPermits(lock, 1)(
         Effect.gen(function* () {
-          const write = commandCas(yield* Ref.get(commandSlot), input)
-          if (write.status === "recorded")
-            yield* Ref.update(commandSlot, (map) => new Map(map).set(write.commandId, write.record))
+          const state = yield* Ref.get(store)
+          const write = commandCas(commandsOf(state), input)
+          if (write.status === "recorded") yield* setCommand(state, write.commandId, write.record)
           return write
         }),
       )
     })
 
     const getCommand = Effect.fn("SessionProviderRecovery.getCommand")(function* (commandId: string) {
-      return yield* Ref.get(commandSlot).pipe(Effect.map((map) => map.get(commandId)))
+      const state = yield* Ref.get(store)
+      return commandsOf(state).get(commandId)
     })
 
     const evidence = {
@@ -487,9 +627,10 @@ export const layer = Layer.effect(
           ...(input.payloadHash ? { payloadHash: input.payloadHash } : {}),
           recordedAt: Date.now(),
         }
-        yield* Ref.update(evidenceStore, (map) => new Map(map).set(input.evidenceRef, record))
+        const state = yield* Ref.get(store)
+        yield* Ref.set(store, { ...state, evidence: new Map(state.evidence).set(input.evidenceRef, record) })
       }),
-      getStatus: (evidenceRef: string) => Effect.map(Ref.get(evidenceStore), (map) => map.get(evidenceRef)),
+      getStatus: (evidenceRef: string) => Effect.map(Ref.get(store), (state) => evidenceOf(state).get(evidenceRef)),
     }
 
     const adapter: { readonly classifyLegacy: (input: { readonly receiptId: string }) => {
@@ -527,11 +668,125 @@ export const layer = Layer.effect(
       },
     }
 
+    const queryCommand = Effect.fn("SessionProviderRecovery.queryCommand")(function* (input: {
+      readonly requestHash: string
+      readonly attemptIdentity: AttemptIdentity
+    }) {
+      const state = yield* Ref.get(store)
+      const address = recoveryCommandContentAddress({
+        requestHash: input.requestHash,
+        attemptIdentity: input.attemptIdentity,
+      })
+      return {
+        command: commandsOf(state).get(address),
+        // Evidence is matched by exact request hash (query-by-hash). A settled/terminal
+        // evidence is the "may have dispatched" signal that blocks abandon (design §9.1).
+        evidence: [...evidenceOf(state).values()].filter((e) => e.requestHash === input.requestHash),
+      }
+    })
+
+    const queryAbandon = Effect.fn("SessionProviderRecovery.queryAbandon")(function* (attemptIdentity: AttemptIdentity) {
+      const state = yield* Ref.get(store)
+      return state.abandons.get(abandonAttemptKey(attemptIdentity))
+    })
+
+    const abandonExact = Effect.fn("SessionProviderRecovery.abandonExact")(function* (input: AbandonExactInput) {
+      return yield* Semaphore.withPermits(lock, 1)(
+        Effect.gen(function* () {
+          // Least-privilege exit: abandon of a verifiable attempt is user-grade.
+          yield* assertPermission(input.actor, requiredPermissionFor("resolvable_exact"))
+          const state = yield* Ref.get(store)
+          // Network-unknown-after-dispatch: the FIRST step is query-command. If a
+          // settled/terminal provider evidence exists the attempt may have dispatched and
+          // produced a result, so the user is NOT offered abandon (design §11.3 / §9.2).
+          const terminal = [...evidenceOf(state).values()].find(
+            (e) => e.requestHash === input.requestHash && e.status === "settled",
+          )
+          if (terminal) {
+            return yield* Effect.fail(
+              new RefuseAbandonWithTerminalEvidenceError({
+                evidenceRef: terminal.evidenceRef,
+                requestHash: input.requestHash,
+              }),
+            )
+          }
+          const tx = abandonTransaction(
+            state,
+            {
+              requestHash: input.requestHash,
+              attemptIdentity: input.attemptIdentity,
+              actorType: input.actor.type,
+              actorId: input.actor.id,
+              reasonCode: input.reasonCode,
+            },
+            input.fault,
+          )
+          if (tx.status === "aborted") {
+            return yield* Effect.fail(new RecoveryTransactionAbortedError({ operation: "abandon_exact" }))
+          }
+          // Same-transaction or nothing: only a committed transaction swaps the store.
+          yield* Ref.set(store, tx.state)
+          return tx.outcome
+        }),
+      )
+    })
+
+    const queryBaseline = Effect.fn("SessionProviderRecovery.queryBaseline")(function* (baselineRef: string) {
+      const state = yield* Ref.get(store)
+      return baselinesOf(state).get(baselineRef)
+    })
+
+    const repairBaselineAndAbandon = Effect.fn("SessionProviderRecovery.repairBaselineAndAbandon")(function* (
+      input: RepairBaselineAndAbandonInput,
+    ) {
+      return yield* Semaphore.withPermits(lock, 1)(
+        Effect.gen(function* () {
+          // Repair writes a reconstructed baseline — administrator-grade exit.
+          yield* assertPermission(input.actor, requiredPermissionFor("repairable_exact"))
+          // C1B-05 MUST pass first: never repair without a committed hash/provenance.
+          const verified = verifyBaselineReconstruction({
+            reconstruction: { fragments: input.fragments },
+            evidence: input.evidence,
+          })
+          if (verified.status !== "verified") {
+            return yield* Effect.fail(new BaselineVerifyRefusedError({ reason: verified.reason }))
+          }
+          const state = yield* Ref.get(store)
+          const tx = repairAndAbandonTransaction(
+            state,
+            {
+              requestHash: input.requestHash,
+              attemptIdentity: input.attemptIdentity,
+              baselineRef: input.baselineRef,
+              evidence: input.evidence,
+              fragments: input.fragments,
+              actorType: input.actor.type,
+              actorId: input.actor.id,
+              reasonCode: input.reasonCode,
+            },
+            input.fault,
+          )
+          if (tx.status === "aborted") {
+            return yield* Effect.fail(new RecoveryTransactionAbortedError({ operation: "repair_baseline_and_abandon" }))
+          }
+          // Repair + abandon + command are committed together (no torn third state).
+          yield* Ref.set(store, tx.state)
+          return tx.outcome
+        }),
+      )
+    })
+
     return Service.of({
       classify,
       resolve,
       recordCommand,
       getCommand,
+      queryCommand,
+      queryAbandon,
+      abandonExact,
+      verifyBaselineReconstruction,
+      queryBaseline,
+      repairBaselineAndAbandon,
       evidence,
       adapter,
     })

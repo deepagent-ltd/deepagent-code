@@ -12,6 +12,7 @@ export * as SessionProviderRecoveryStore from "./recovery-store"
 // semantics so that a durable sink can be wired behind the same contract.
 
 import { contentDigest } from "../../contract/digest"
+import { RecoveryCommandContract } from "../../contract/recovery-command"
 
 // ---------------------------------------------------------------------------
 // Attempt identity (C2-04 protocol identity where present)
@@ -108,4 +109,374 @@ export type EvidenceRecord = {
   readonly requestHash?: string
   readonly payloadHash?: string
   readonly recordedAt: number
+}
+
+// ---------------------------------------------------------------------------
+// Abandon transaction store (C1B-04)
+// ---------------------------------------------------------------------------
+
+/**
+ * The durable terminal receipt of an abandoned attempt. Records the abandon
+ * decision, the terminal outcome (`abandoned`), the actor, the reason code and
+ * the attempt identity — written atomically with the command that authorized it
+ * (design §9.2: one local transaction). As with the command slot (C1B-03) there is
+ * no dedicated V2 table in the 20260812/13/23 migrations, so it lives in-memory
+ * behind the same contract (reported to the main agent).
+ */
+export type AbandonRecord = {
+  readonly commandId: string
+  readonly requestHash: string
+  readonly attempt: AttemptIdentity
+  readonly decision: "abandoned"
+  readonly terminal: RecoveryCommandContract.RecoveryTerminal
+  readonly reasonCode: RecoveryCommandContract.RecoveryReasonCode
+  readonly actorType: "user" | "administrator" | "system"
+  readonly actorId: string
+  readonly abandonedAt: number
+}
+
+/**
+ * The composite single-writer store state. All domains that a recovery transaction
+ * mutates live together so a crash mid-transaction cannot leave a torn half-application
+ * across them (design §9.2).
+ */
+export type RecoveryStoreState = {
+  readonly commands: ReadonlyMap<string, CommandRecord>
+  readonly evidence: ReadonlyMap<string, EvidenceRecord>
+  readonly abandons: ReadonlyMap<string, AbandonRecord>
+  readonly baselines: ReadonlyMap<string, BaselineRecord>
+}
+
+export function emptyRecoveryStoreState(): RecoveryStoreState {
+  return {
+    commands: new Map<string, CommandRecord>(),
+    evidence: new Map<string, EvidenceRecord>(),
+    abandons: new Map<string, AbandonRecord>(),
+    baselines: new Map<string, BaselineRecord>(),
+  }
+}
+
+export const commandsOf = (state: RecoveryStoreState): ReadonlyMap<string, CommandRecord> => state.commands
+export const evidenceOf = (state: RecoveryStoreState): ReadonlyMap<string, EvidenceRecord> => state.evidence
+export const abandonsOf = (state: RecoveryStoreState): ReadonlyMap<string, AbandonRecord> => state.abandons
+export const baselinesOf = (state: RecoveryStoreState): ReadonlyMap<string, BaselineRecord> => state.baselines
+
+/** The attempt slot key for a recovery transaction (same attempt -> same slot). */
+export const abandonAttemptKey = (attempt: AttemptIdentity): string => `${attempt.sessionId}:${attempt.attemptId}`
+
+function set<K, V>(map: ReadonlyMap<K, V>, key: K, value: V): ReadonlyMap<K, V> {
+  return new Map(map).set(key, value)
+}
+
+export type AbandonTransactionInput = {
+  readonly requestHash: string
+  readonly attemptIdentity: AttemptIdentity
+  readonly actorType: "user" | "administrator" | "system"
+  readonly actorId: string
+  readonly reasonCode: RecoveryCommandContract.RecoveryReasonCode
+}
+
+export type AbandonTransactionOutcome =
+  | { readonly status: "abandoned"; readonly commandId: string; readonly abandon: AbandonRecord }
+  | { readonly status: "existing"; readonly commandId: string; readonly abandon: AbandonRecord }
+  | { readonly status: "conflict"; readonly commandId: string; readonly reason: "abandon_mismatch" | "request_hash_mismatch" }
+
+/** A transaction result: a NEW state to commit, or `aborted` (commit nothing). */
+export type CommitResult<S, O> =
+  | { readonly status: "committed"; readonly state: S; readonly outcome: O }
+  | { readonly status: "aborted" }
+
+/** Stage the abandon decision for an attempt (pure; committed atomically by the caller). */
+function stageAbandon(
+  state: RecoveryStoreState,
+  input: AbandonTransactionInput,
+): { readonly outcome: AbandonTransactionOutcome; readonly key: string; readonly command?: CommandRecord } {
+  const address = recoveryCommandContentAddress({
+    requestHash: input.requestHash,
+    attemptIdentity: input.attemptIdentity,
+  })
+  const key = abandonAttemptKey(input.attemptIdentity)
+  const existing = state.abandons.get(key)
+  if (existing) {
+    if (existing.requestHash === input.requestHash) {
+      return { outcome: { status: "existing", commandId: existing.commandId, abandon: existing }, key }
+    }
+    return {
+      outcome: { status: "conflict", commandId: address, reason: "abandon_mismatch" },
+      key,
+    }
+  }
+  const cas = commandCas(state.commands, { requestHash: input.requestHash, attemptIdentity: input.attemptIdentity })
+  if (cas.status === "mismatch") {
+    return { outcome: { status: "conflict", commandId: address, reason: "request_hash_mismatch" }, key }
+  }
+  const abandon: AbandonRecord = {
+    commandId: cas.commandId,
+    requestHash: input.requestHash,
+    attempt: input.attemptIdentity,
+    decision: "abandoned",
+    terminal: "abandoned",
+    reasonCode: input.reasonCode,
+    actorType: input.actorType,
+    actorId: input.actorId,
+    abandonedAt: Date.now(),
+  }
+  return {
+    outcome: { status: "abandoned", commandId: cas.commandId, abandon },
+    key,
+    command: cas.status === "recorded" ? cas.record : undefined,
+  }
+}
+
+/**
+ * Abandon an attempt in ONE transaction with the store's CAS semantics (C1B-04):
+ *   - the abandon decision + terminal receipt + command are written together;
+ *   - one command wins (CAS-lost -> typed existing/conflict, never a defect);
+ *   - an already-abandoned attempt with the same request hash -> `existing`
+ *     (idempotent; no second terminal row, no double effect);
+ *   - an injected fault (`fault.at`) models a crash mid-transaction and returns
+ *     `aborted` so NOTHING is committed (same-transaction or nothing).
+ */
+export function abandonTransaction(
+  state: RecoveryStoreState,
+  input: AbandonTransactionInput,
+  fault?: { readonly at: "after_command_stage" },
+): CommitResult<RecoveryStoreState, AbandonTransactionOutcome> {
+  const stage = stageAbandon(state, input)
+  if (stage.outcome.status === "conflict" || stage.outcome.status === "existing") {
+    return { status: "committed", state, outcome: stage.outcome }
+  }
+  if (fault?.at === "after_command_stage") return { status: "aborted" }
+  const next: RecoveryStoreState = {
+    commands: stage.command ? set(state.commands, stage.command.commandId, stage.command) : state.commands,
+    evidence: state.evidence,
+    abandons: set(state.abandons, stage.key, stage.outcome.abandon),
+    baselines: state.baselines,
+  }
+  return { status: "committed", state: next, outcome: stage.outcome }
+}
+
+// ---------------------------------------------------------------------------
+// Baseline reconstruction evidence + verifier (C1B-05, design §9.1)
+// ---------------------------------------------------------------------------
+
+/** Provenance of a committed baseline: source, committed-at, parent-hash root. */
+export type BaselineProvenance = {
+  readonly source: string
+  readonly committedAt: number
+  readonly parentHash: string
+}
+
+/** One reconstructed baseline row/fragment with its provenance-chain hash. */
+export type BaselineFragment = {
+  readonly ref: string
+  readonly content: string
+  readonly hash: string
+  readonly parentHash?: string
+}
+
+/** Committed baseline evidence a reconstruction must match. */
+export type BaselineEvidence = {
+  readonly baselineHash: string
+  readonly provenance: BaselineProvenance
+}
+
+/**
+ * A reconstructed baseline: the ordered set of fragments rebuilt from a trusted
+ * source snapshot. The verifier accepts it ONLY when its recomputed content hash
+ * exactly matches the committed hash AND its parent-hash chain is unbroken. There
+ * is deliberately no "current world state" here — a reconstruction that lacks a
+ * committed hash/provenance is always refused, so history is never fabricated from
+ * current rows.
+ */
+export type BaselineReconstruction = {
+  readonly fragments: readonly BaselineFragment[]
+}
+
+/**
+ * A committed baseline row that was repaired (C1B-06). It is hash-committed: both
+ * the committed evidence AND the reconstructed fragments are retained so re-verify
+ * and CAS comparison are deterministic.
+ */
+export type BaselineRecord = {
+  readonly baselineRef: string
+  readonly evidence: BaselineEvidence
+  readonly fragments: readonly BaselineFragment[]
+  readonly repairedAt: number
+}
+
+/** Result of verifying a reconstructed baseline (C1B-05). */
+export type BaselineVerificationOutcome =
+  | { readonly status: "verified"; readonly hash: string }
+  | {
+      readonly status: "refused"
+      readonly reason: "baseline_missing_hash_provenance" | "hash_mismatch" | "provenance_chain_broken"
+    }
+
+/**
+ * Verify a reconstructed baseline against committed evidence. This is the single
+ * gate a repair may pass (C1B-06 step 1) and it accepts a reconstruction ONLY when:
+ *   1. a committed content hash AND provenance (source / committed-at / parent
+ *      chain root) are present — otherwise `baseline_missing_hash_provenance`
+ *      (history is never fabricated from current rows);
+ *   2. the recomputed hash over the reconstructed content exactly matches the
+ *      committed hash — otherwise `hash_mismatch`;
+ *   3. the provenance parent-hash chain is unbroken (each fragment's parentHash
+ *      links to the prior fragment, rooted at the committed parent) — otherwise
+ *      `provenance_chain_broken` (a baseline is never partially rebuilt).
+ * Pure and deterministic: the same reconstruction + evidence always yields the
+ * same verdict.
+ */
+export function verifyBaselineReconstruction(input: {
+  readonly reconstruction: BaselineReconstruction
+  readonly evidence?: BaselineEvidence
+}): BaselineVerificationOutcome {
+  const { fragments } = input.reconstruction
+  const evidence = input.evidence
+  if (!evidence) return { status: "refused", reason: "baseline_missing_hash_provenance" }
+  const { baselineHash, provenance } = evidence
+  const hasProvenance =
+    provenance != null &&
+    provenance.source.length > 0 &&
+    provenance.committedAt > 0 &&
+    provenance.parentHash.length > 0
+  if (baselineHash.length === 0 || !hasProvenance) {
+    return { status: "refused", reason: "baseline_missing_hash_provenance" }
+  }
+  const reconstructedHash = contentDigest({ fragments: fragments.map((f) => ({ ref: f.ref, content: f.content })) })
+  if (reconstructedHash !== baselineHash) return { status: "refused", reason: "hash_mismatch" }
+  let previousHash: string = provenance.parentHash
+  for (const fragment of fragments) {
+    if (fragment.parentHash === undefined || fragment.parentHash !== previousHash) {
+      return { status: "refused", reason: "provenance_chain_broken" }
+    }
+    previousHash = fragment.hash
+  }
+  return { status: "verified", hash: reconstructedHash }
+}
+
+// ---------------------------------------------------------------------------
+// Baseline repair + abandon atomic transaction (C1B-06, design §9.2)
+// ---------------------------------------------------------------------------
+
+export type RepairBaselineInput = {
+  readonly requestHash: string
+  readonly attemptIdentity: AttemptIdentity
+  readonly baselineRef: string
+  readonly evidence: BaselineEvidence
+  readonly fragments: readonly BaselineFragment[]
+}
+
+export type RepairBaselineOutcome =
+  | { readonly status: "repaired"; readonly record: BaselineRecord }
+  | { readonly status: "existing"; readonly record: BaselineRecord }
+  | { readonly status: "conflict"; readonly reason: "legally_different_data" }
+
+/**
+ * Baseline repair CAS. One baseline slot wins the write (design §2.1). A slot
+ * that already holds the SAME committed hash + provenance is `existing`
+ * (idempotent); a slot that holds legally-different data from a different
+ * provenance is `conflict` and is never clobbered (C1B-06: never overwrite
+ * legally-different data). Deterministic and pure.
+ */
+export function repairBaselineCas(
+  existing: ReadonlyMap<string, BaselineRecord>,
+  input: RepairBaselineInput,
+): RepairBaselineOutcome {
+  const prior = existing.get(input.baselineRef)
+  if (!prior) {
+    return {
+      status: "repaired",
+      record: {
+        baselineRef: input.baselineRef,
+        evidence: input.evidence,
+        fragments: input.fragments,
+        repairedAt: Date.now(),
+      },
+    }
+  }
+  const same =
+    prior.evidence.baselineHash === input.evidence.baselineHash &&
+    prior.evidence.provenance.source === input.evidence.provenance.source &&
+    prior.evidence.provenance.committedAt === input.evidence.provenance.committedAt &&
+    prior.evidence.provenance.parentHash === input.evidence.provenance.parentHash
+  if (same) return { status: "existing", record: prior }
+  return { status: "conflict", reason: "legally_different_data" }
+}
+
+export type RepairAndAbandonInput = {
+  readonly requestHash: string
+  readonly attemptIdentity: AttemptIdentity
+  readonly baselineRef: string
+  readonly evidence: BaselineEvidence
+  readonly fragments: readonly BaselineFragment[]
+  readonly actorType: "user" | "administrator" | "system"
+  readonly actorId: string
+  readonly reasonCode: RecoveryCommandContract.RecoveryReasonCode
+}
+
+export type RepairAndAbandonOutcome =
+  | { readonly status: "complete"; readonly repair: BaselineRecord; readonly abandon: AbandonRecord }
+  | { readonly status: "existing"; readonly repair: BaselineRecord; readonly abandon: AbandonRecord }
+  | { readonly status: "conflict"; readonly reason: "repair_conflict" | "abandon_conflict" }
+
+/**
+ * Verify-then-repair-then-abandon as ONE atomic transaction (C1B-06). The
+ * repair CAS runs first (never clobber legally-different data), then the
+ * abandon CAS, and both writes are committed together — a crash injected
+ * between the repair stage and the abandon stage (`fault.at`) returns `aborted`
+ * and commits neither, so a torn "repaired without abandon" or "abandoned
+ * without repair" state is impossible (crash-consistency converges to the
+ * original state, or both).
+ *
+ * NOTE: C1B-05 verification is the CALLER's gate and runs before this
+ * transaction; this function only guards the write CAS.
+ */
+export function repairAndAbandonTransaction(
+  state: RecoveryStoreState,
+  input: RepairAndAbandonInput,
+  fault?: { readonly at: "after_repair_stage" },
+): CommitResult<RecoveryStoreState, RepairAndAbandonOutcome> {
+  const repair = repairBaselineCas(state.baselines, {
+    requestHash: input.requestHash,
+    attemptIdentity: input.attemptIdentity,
+    baselineRef: input.baselineRef,
+    evidence: input.evidence,
+    fragments: input.fragments,
+  })
+  if (repair.status === "conflict") {
+    return { status: "committed", state, outcome: { status: "conflict", reason: "repair_conflict" } }
+  }
+  if (fault?.at === "after_repair_stage") return { status: "aborted" }
+  const stage = stageAbandon(state, {
+    requestHash: input.requestHash,
+    attemptIdentity: input.attemptIdentity,
+    actorType: input.actorType,
+    actorId: input.actorId,
+    reasonCode: input.reasonCode,
+  })
+  if (stage.outcome.status === "conflict") {
+    return { status: "committed", state, outcome: { status: "conflict", reason: "abandon_conflict" } }
+  }
+  if (repair.status === "existing" && stage.outcome.status === "existing") {
+    return {
+      status: "committed",
+      state,
+      outcome: { status: "existing", repair: repair.record, abandon: stage.outcome.abandon },
+    }
+  }
+  let next: RecoveryStoreState = state
+  if (repair.status === "repaired") next = { ...next, baselines: set(next.baselines, input.baselineRef, repair.record) }
+  if (stage.outcome.status === "abandoned") {
+    next = {
+      ...next,
+      commands: stage.command ? set(next.commands, stage.command.commandId, stage.command) : next.commands,
+      abandons: set(next.abandons, stage.key, stage.outcome.abandon),
+    }
+  }
+  return {
+    status: "committed",
+    state: next,
+    outcome: { status: "complete", repair: repair.record, abandon: stage.outcome.abandon },
+  }
 }
