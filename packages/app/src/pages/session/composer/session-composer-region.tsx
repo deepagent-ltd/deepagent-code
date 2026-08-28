@@ -21,6 +21,9 @@ import { GoalStartButton } from "@/components/deepagent/goal-start-button"
 import type { FollowupDraft } from "@/components/prompt-input/submit"
 import { createResizeObserver } from "@solid-primitives/resize-observer"
 import { SessionProviderRecoveryDock } from "@/pages/session/composer/session-provider-recovery-dock"
+import { useServer } from "@/context/server"
+import { RecoveryDock } from "@/recovery/RecoveryDock"
+import { createMaintenanceClientForServer } from "@/maintenance/maintenance-client-server"
 
 export function SessionComposerRegion(props: {
   state: SessionComposerState
@@ -61,7 +64,14 @@ export function SessionComposerRegion(props: {
   const language = useLanguage()
   const route = useSessionKey()
   const sync = useSync()
+  const server = useServer()
   const view = layout.view(route.sessionKey)
+
+  // C6-06: a maintenance client against the active server, for the recovery dock.
+  const maintenanceClient = createMemo(() => {
+    const conn = server.current
+    return conn ? createMaintenanceClientForServer(conn.http) : undefined
+  })
 
   const handoffPrompt = createMemo(() => getSessionHandoff(route.sessionKey())?.prompt)
   // V4.1 §S1 — when the session is WORKING, a message the user sends is absorbed as a steer for the
@@ -203,6 +213,17 @@ export function SessionComposerRegion(props: {
         <Show when={route.params.id}>
           <SessionProviderRecoveryDock
             sessionID={route.params.id!}
+            onPendingChange={(pending) => {
+              if (recoveryStore.sessionID !== route.params.id) return
+              setRecoveryStore("pending", pending)
+            }}
+          />
+        </Show>
+
+        <Show when={route.params.id && maintenanceClient()}>
+          <RecoveryDock
+            sessionId={route.params.id!}
+            client={maintenanceClient()!}
             onPendingChange={(pending) => {
               if (recoveryStore.sessionID !== route.params.id) return
               setRecoveryStore("pending", pending)
