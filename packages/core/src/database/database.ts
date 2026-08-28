@@ -34,6 +34,12 @@ export const CurrentDatabaseFile = Context.Reference<{ filename?: string }>(
 
 export interface Interface {
   db: DatabaseShape
+  /**
+   * C1A-12: the bootstrap state that produced this layer. `mode` is present for the ready layer and
+   * for the read-only maintenance opener; a bare `{ db }` (e.g. `openAndMigrate`) omits it. Business
+   * write paths consult `DatabaseMode.assertWritable(DatabaseMode.snapshotOf(mode))` BEFORE writing.
+   */
+  mode?: BootstrapState
 }
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/v2/storage/Database") {}
@@ -139,8 +145,10 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const native = (yield* Sqlite.Native) as { filename?: string } | null
     const filename = native?.filename ?? ""
+    let mode: BootstrapState | undefined
     if (filename !== "" && filename !== ":memory:") {
       const bootState = yield* Effect.tryPromise(() => bootstrap(filename))
+      mode = bootState
       if (!bootState.ready) return yield* Effect.fail(new DatabaseBootstrapError(bootState))
     }
     const db = yield* makeDatabase
@@ -179,7 +187,7 @@ export const layer = Layer.effect(
         )
     }
 
-    return { db }
+    return { db, mode }
   }),
 )
 
@@ -187,6 +195,36 @@ export function layerFromPath(filename: string) {
   return layer.pipe(
     Layer.provide(Layer.effect(CurrentDatabaseFile, Effect.succeed({ filename }))),
     Layer.provide(sqliteLayer({ filename })),
+  )
+}
+
+/**
+ * C1A-12 read-only maintenance opener. Opens the business DB READ-ONLY (query_only-fenced) for the
+ * browse/search/export/backup/descriptor surface available in `read_only_recovery` and `blocked_schema`
+ * (design §10.8) — it NEVER runs migrations or writes, and it never opens the business DB writable.
+ * The `layer` (writable) fails closed for any non-ready mode; this is the ONLY read path into a
+ * non-ready store. A ready store should use the normal `layer`; opening it here is a caller defect.
+ */
+export function readOnlyLayerFromPath(filename: string) {
+  return Layer.effect(
+    Service,
+    Effect.gen(function* () {
+      const bootState = yield* Effect.tryPromise(() => bootstrap(filename))
+      if (bootState.mode === "ready")
+        return yield* Effect.die(
+          new Error(
+            "readOnlyLayer must only be used for a read_only_recovery / blocked_schema store; a ready store should go through the writable layer",
+          ),
+        )
+      const db = yield* makeDatabase
+      // Fence every write at the SQLite level so a read-only maintenance browse can never mutate.
+      yield* db.run("PRAGMA query_only = ON")
+      yield* db.run("PRAGMA busy_timeout = 5000")
+      return { db, mode: bootState }
+    }),
+  ).pipe(
+    Layer.provide(Layer.effect(CurrentDatabaseFile, Effect.succeed({ filename }))),
+    Layer.provide(sqliteLayer({ filename, readonly: true })),
   )
 }
 
