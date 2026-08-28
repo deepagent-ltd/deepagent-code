@@ -14,6 +14,7 @@ import { Scheduler } from "@deepagent-code/core/deepagent/scheduler"
 import { ModelV2 } from "@deepagent-code/core/model"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { SessionV2 } from "@deepagent-code/core/session"
+import { Database } from "@deepagent-code/core/database/database"
 import { Session } from "./session"
 import { Snapshot } from "../snapshot"
 import { SessionPrompt } from "./prompt"
@@ -25,6 +26,7 @@ import { InstanceRef, WorkspaceRef } from "@/effect/instance-ref"
 import { WorkspaceV2 } from "@deepagent-code/core/workspace"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { MultiAgentRuntime } from "./multi-agent-runtime"
+import { makeV2AdmissionBridge } from "./v2-admission-bridge"
 import { EventDispatcher, DISPATCH_GROUP } from "./event-dispatcher"
 import { AgentHandoffConsumer, HANDOFF_GROUP } from "./agent-handoff-consumer"
 import { HandoffAdmission } from "@deepagent-code/core/deepagent/handoff-admission"
@@ -507,6 +509,16 @@ const runtimeLayer = Layer.unwrap(
     // §C3.1 — the process-wide file-lock service (a Layer.succeed singleton; the SAME instance the file
     // HTTP handlers use, so a human editing a file blocks an agent subtask from touching it).
     const fileLock = yield* FileLock.Service
+    // C5-12 — the production V2 admission bridge provider wired into the `eventV2Admission` seam. Built
+    // here (the production seam construction site) so that when `isEventV2AdmissionEnabled()` is ON the
+    // runtime routes the event through the durable V2 admission path (SessionV2) instead of §C
+    // coordination. The bridge is typed against the runtime's seam and reads the SessionV2 stack + the V2
+    // Database from the shared graph directly; an absent SessionV2 stack is an inert provider (admit fails
+    // closed at dispatch time, matching the default-off discipline). The security namespace is resolved by
+    // the bridge (deterministic workspace-scoped default; ContextLocationIdentity upgrade is a follow-on).
+    const db = (yield* Database.Service).db
+    const v2Session = Option.getOrUndefined(yield* Effect.serviceOption(SessionV2.Service))
+    const eventV2Admission = makeV2AdmissionBridge({ db, ...(v2Session ? { v2Session } : {}) })
     const runner = makeEventTurnRunner({
       sessions,
       agents,
@@ -528,6 +540,8 @@ const runtimeLayer = Layer.unwrap(
       concurrency,
       execution,
       fileLock,
+      // C5-12 — the production seam: when the V2 admission flag is ON the runtime uses this bridge.
+      eventV2Admission,
       onEventCompleted: makeV4PRCollaboration({ sessions, instanceStore, git, queue, bus, approvalQueue }),
       // §C3.3 — feed the arbiter from the Location-owned CodeGraph snapshot. This is best-effort:
       // a cold/disabled index or any query failure resolves to [] so file-level conflict detection holds.
