@@ -1,0 +1,331 @@
+export * as SelectionContract from "./selection"
+
+import { Schema } from "effect"
+import { contentDigest } from "./digest"
+
+// C0-02 Phase 1 - Selection contract (freeze base)
+// Design authority: docs/core-v2.0-beta/design.md §6 (four-graph federation).
+// Pure-new contract module: not imported by any production module this wave.
+
+/** Version matrix for the selection contract. `schema` is the envelope schema version. */
+export const SelectionVersion = {
+  schema: "context-selection.v1",
+  graphStatus: 1,
+  graphKind: 1,
+  queryIntent: 1,
+  reasonCode: 1,
+} as const
+
+/** The four federated graphs in authority order (design §6.1). */
+export const GraphKindSchema = Schema.Literals(["code", "documents", "knowledge", "memory"])
+export type GraphKind = typeof GraphKindSchema.Type
+
+/**
+ * Query intent for the context resolver. Bounded set: an unknown intent is a
+ * typed decode error, never silently treated as a default.
+ */
+export const SelectionQueryIntent = Schema.Literals([
+  "search",
+  "recall",
+  "related",
+  "trace_evidence",
+  "explain_decision",
+  "find_conflicts",
+])
+export type SelectionQueryIntent = typeof SelectionQueryIntent.Type
+
+/**
+ * Bounded per-graph reason code carried by a graph that is not fully ready.
+ * Frozen explicit closed union so consumers branch on a small set, not free text.
+ */
+export const GraphStatusReasonCode = Schema.Literals([
+  "none",
+  "cold_start",
+  "bootstrap_complete_no_match",
+  "bootstrap_budget_exhausted",
+  "bootstrap_timeout",
+  "fresh_timeout",
+  "refresh_failed",
+  "parser_unsupported",
+  "lsp_unavailable",
+  "overlay_unavailable",
+  "scope_denied",
+  "security_namespace_denied",
+  "project_scope_denied",
+  "agent_policy_denied",
+  "model_capability_denied",
+  "provider_egress_denied",
+  "source_timeout",
+  "source_error",
+  "partial_sources",
+  "source_disabled",
+  "link_refresh_pending",
+  "released_snapshot_unavailable",
+])
+export type GraphStatusReasonCode = typeof GraphStatusReasonCode.Type
+
+/**
+ * Per-graph status. The `status` field is a closed union
+ * ready | empty | degraded_unavailable | denied | timeout (design §6.2), so a V2 attempt can
+ * never fall back to the legacy v2-none value: an absent or unknown graph must
+ * be represented explicitly with one of these five states, and an unknown value
+ * is rejected with a typed decode error. Every status also carries a required
+ * bounded reasonCode (design §6.2: revision / adapter version / observed
+ * mutation epoch / latency / candidate count / bounded reason code).
+ */
+export const GraphStatus = Schema.Struct({
+  graph: GraphKindSchema,
+  status: Schema.Literals(["ready", "empty", "degraded_unavailable", "denied", "timeout"]),
+  revision: Schema.String,
+  adapterVersion: Schema.String,
+  observedMutationEpoch: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  latencyMs: Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0)),
+  candidateCount: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  reasonCode: GraphStatusReasonCode,
+})
+export type GraphStatus = typeof GraphStatus.Type
+
+/** Session/activity/input membership the resolver is scoped to. */
+export const SelectionMembership = Schema.Struct({
+  sessionId: Schema.String,
+  activityId: Schema.String,
+  inputIds: Schema.Array(Schema.String),
+})
+export type SelectionMembership = typeof SelectionMembership.Type
+
+/** Location identity; workspace is optional and implies local placement. */
+export const SelectionLocation = Schema.Struct({
+  locationKey: Schema.String,
+  workspaceId: Schema.String.pipe(Schema.optional),
+})
+export type SelectionLocation = typeof SelectionLocation.Type
+
+/** Acting principal identity and its authorization epoch. */
+export const SelectionPrincipal = Schema.Struct({
+  principalId: Schema.String,
+  authorizationEpoch: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+})
+export type SelectionPrincipal = typeof SelectionPrincipal.Type
+
+/** Workspace / tenant identity used for isolation and egress policy. */
+export const SelectionWorkspace = Schema.Struct({
+  workspaceId: Schema.String,
+  tenantId: Schema.String.pipe(Schema.optional),
+})
+export type SelectionWorkspace = typeof SelectionWorkspace.Type
+
+/** Security namespace the request is evaluated in. */
+export const SelectionSecurityNamespace = Schema.Struct({
+  securityNamespaceId: Schema.String,
+})
+export type SelectionSecurityNamespace = typeof SelectionSecurityNamespace.Type
+
+/** Project scope the four graphs are queried against. */
+export const SelectionProjectScope = Schema.Struct({
+  projectScopeKey: Schema.String,
+  projectId: Schema.String.pipe(Schema.optional),
+})
+export type SelectionProjectScope = typeof SelectionProjectScope.Type
+
+/** Egress policy bound to the request. */
+export const SelectionEgress = Schema.Struct({
+  policyId: Schema.String,
+  epoch: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  graphs: Schema.Array(GraphKindSchema),
+  sensitivities: Schema.Array(Schema.String),
+})
+export type SelectionEgress = typeof SelectionEgress.Type
+
+/** Agent policy governing whether degraded_unavailable/denied retrieval may continue. */
+export const SelectionAgentPolicy = Schema.Struct({
+  agentId: Schema.String,
+  autonomyCeiling: Schema.Literals(["low", "medium", "high", "critical"]),
+  permitDegraded: Schema.Boolean,
+})
+export type SelectionAgentPolicy = typeof SelectionAgentPolicy.Type
+
+/** Model capability snapshot bound to the request. */
+export const SelectionModelCapability = Schema.Struct({
+  modelId: Schema.String,
+  providerId: Schema.String,
+  protocol: Schema.Literals([
+    "openai.responses",
+    "openai-compatible.responses",
+    "openai-compatible.chat",
+    "anthropic.messages",
+  ]),
+  contextWindow: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  structuredOutput: Schema.Boolean,
+})
+export type SelectionModelCapability = typeof SelectionModelCapability.Type
+
+/**
+ * Released knowledge snapshot binding. Uses the production released-snapshot
+ * lexicon (deepagent/released-snapshot.ts Binding.state): 'bound' when a
+ * released snapshot is bound to the request, 'unavailable' when none is.
+ */
+export const SelectionReleasedKnowledge = Schema.Struct({
+  snapshotId: Schema.String,
+  binding: Schema.Literals(["bound", "unavailable"]),
+  supersedes: Schema.String.pipe(Schema.optional),
+})
+export type SelectionReleasedKnowledge = typeof SelectionReleasedKnowledge.Type
+
+/**
+ * Deterministic selection + validation identity for exact-retry binding
+ * (design §2.3, §4.1 step 8). Only stable fields (no wall-clock timestamp, no
+ * absolute path), so a retry re-derives it and hashes it to a stable digest.
+ */
+export const SelectionIdentity = Schema.Struct({
+  selectionId: Schema.String,
+  revision: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  queryFingerprint: Schema.String,
+  authorizationFingerprint: Schema.String,
+  executionFingerprint: Schema.String,
+  observedLocationMutationEpoch: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  selectedSourceFingerprint: Schema.String,
+})
+export type SelectionIdentity = typeof SelectionIdentity.Type
+
+/** Freshness / outcome of the selection validation for this attempt. */
+export const SelectionValidation = Schema.Struct({
+  validationId: Schema.String,
+  outcome: Schema.Literals(["valid", "invalidated", "denied", "timeout"]),
+  validUntil: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+})
+export type SelectionValidation = typeof SelectionValidation.Type
+
+/** A selected reference projected into the attempt prompt. */
+export const SelectionRef = Schema.Struct({
+  graph: GraphKindSchema,
+  ref: Schema.String,
+  token: Schema.String,
+  score: Schema.Finite,
+  freshness: Schema.Literals(["current", "historical", "expired", "superseded", "conflict", "unknown"]),
+  sensitivity: Schema.String,
+  reason: Schema.String,
+})
+export type SelectionRef = typeof SelectionRef.Type
+
+/** Artifact binding: an available projection artifact. */
+export const SelectionArtifactAvailable = Schema.Struct({
+  status: Schema.Literal("available"),
+  ref: Schema.String,
+})
+export type SelectionArtifactAvailable = typeof SelectionArtifactAvailable.Type
+
+/** Artifact binding: a degraded inline audit. */
+export const SelectionArtifactDegraded = Schema.Struct({
+  status: Schema.Literal("degraded_unavailable"),
+  inlineAudit: Schema.String,
+})
+export type SelectionArtifactDegraded = typeof SelectionArtifactDegraded.Type
+
+/** Discriminated union for the artifact binding (available | degraded_unavailable). */
+export const SelectionArtifactBinding = Schema.Union([SelectionArtifactAvailable, SelectionArtifactDegraded])
+export type SelectionArtifactBinding = typeof SelectionArtifactBinding.Type
+
+/**
+ * V2 context selection envelope (design §6.1-6.3), the root contract Phase 2
+ * Lane P references as `SelectionEnvelope`. `selectionMode` is the single
+ * literal "v2": a V2 attempt must always be backed by a real four-graph
+ * selection, and the legacy v2-none fallback is not a legal value here. Absence
+ * of a graph is expressed per graph (empty / degraded_unavailable / denied / timeout),
+ * never as a default "none" at the envelope level.
+ */
+export class SelectionEnvelope extends Schema.Class<SelectionEnvelope>("ContextSelection.SelectionEnvelope")({
+  schemaVersion: Schema.Literal(SelectionVersion.schema),
+  selectionMode: Schema.Literal("v2"),
+  selectionId: Schema.String,
+  revision: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  triggerInputId: Schema.String,
+  membership: SelectionMembership,
+  location: SelectionLocation,
+  principal: SelectionPrincipal,
+  workspace: SelectionWorkspace,
+  securityNamespace: SelectionSecurityNamespace,
+  projectScope: SelectionProjectScope,
+  egress: SelectionEgress,
+  agentPolicy: SelectionAgentPolicy,
+  modelCapability: SelectionModelCapability,
+  releasedKnowledge: SelectionReleasedKnowledge,
+  queryIntent: SelectionQueryIntent,
+  identity: SelectionIdentity,
+  validation: SelectionValidation,
+  graphStatuses: Schema.Record(GraphKindSchema, GraphStatus),
+  selectedRefs: Schema.Array(SelectionRef),
+  projectionHash: Schema.String,
+  tokenCount: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  artifactBinding: SelectionArtifactBinding,
+}) {}
+
+/** Typed decode error carrying the offending JSON path (e.g. ["graphStatuses"]["code"]["status"]). */
+export class SelectionDecodeError extends Schema.TaggedErrorClass<SelectionDecodeError>()(
+  "SelectionContract.DecodeError",
+  {
+    message: Schema.String,
+    path: Schema.Array(Schema.String),
+  },
+) {}
+
+export type SelectionValidationResult =
+  | { readonly ok: true; readonly value: SelectionEnvelope }
+  | { readonly ok: false; readonly error: SelectionDecodeError }
+
+/** Extract the bracket path segments from an Effect Schema decode error message. */
+function extractErrorPath(error: unknown): string[] {
+  const message = error instanceof Error ? error.message : String(error)
+  const atIndex = message.indexOf("\n  at ")
+  if (atIndex === -1) return []
+  const lineStart = atIndex + 6
+  const lineEnd = message.indexOf("\n", lineStart)
+  const tail = lineEnd === -1 ? message.slice(lineStart) : message.slice(lineStart, lineEnd)
+  const segments: string[] = []
+  const re = /\[([^\]]*)\]/g
+  let current: RegExpExecArray | null
+  while ((current = re.exec(tail)) !== null) {
+    const raw = current[1]!
+    segments.push(raw.startsWith('"') && raw.endsWith('"') ? raw.slice(1, -1) : raw)
+  }
+  return segments
+}
+
+/**
+ * Decode a SelectionEnvelope from unknown input. Extra properties are rejected.
+ * On failure it throws a typed SelectionDecodeError carrying the exact path.
+ */
+export const decodeSelectionEnvelope = (input: unknown): SelectionEnvelope => {
+  try {
+    return Schema.decodeUnknownSync(SelectionEnvelope, { onExcessProperty: "error" })(input)
+  } catch (error) {
+    throw new SelectionDecodeError({ message: error instanceof Error ? error.message : String(error), path: extractErrorPath(error) })
+  }
+}
+
+/** Encode a SelectionEnvelope to its schema-derived JSON shape. Round-trips with decodeSelectionEnvelope. */
+export const encodeSelectionEnvelope = (value: SelectionEnvelope): SelectionEnvelope => Schema.encodeSync(SelectionEnvelope)(value)
+
+/** Non-throwing validation: ok/true+value on success, or the typed decode error. */
+export const validateSelection = (input: unknown): SelectionValidationResult => {
+  try {
+    return { ok: true, value: Schema.decodeUnknownSync(SelectionEnvelope, { onExcessProperty: "error" })(input) }
+  } catch (error) {
+    return {
+      ok: false,
+      error: new SelectionDecodeError({ message: error instanceof Error ? error.message : String(error), path: extractErrorPath(error) }),
+    }
+  }
+}
+
+/**
+ * Alias of `validateSelection` (non-throwing validation). Exposed under this
+ * stable name so downstream lanes can import it as `validate` from
+ * `@deepagent-code/core/contract/selection`.
+ */
+export const validate = validateSelection
+
+/**
+ * Byte-stable canonical content digest (SHA-256) of a SelectionEnvelope.
+ * Canonical over key order and independent of timestamps and absolute paths.
+ */
+export const selectionDigest = (value: SelectionEnvelope): string => contentDigest(value)

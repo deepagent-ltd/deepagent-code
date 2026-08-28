@@ -1,0 +1,71 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.simulation",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "simulation",
+      "numerical",
+      "physics_engine",
+      "ode_solver",
+      "monte_carlo"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.simulation: ODE solvers Euler and RK4, numerical stability, Monte Carlo, physics engines, discretization error, vectorized sim loops, reproducibility and seeds, validation against analytical solutions"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "build a React dashboard with Tailwind CSS"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "ode solver euler runge kutta rk4 numerical stability monte carlo physics engine discretization error vectorized simulation reproducibility seed analytical solution convergence",
+  "expected_pack_id": "code.simulation",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "code.simulation L3 validation smoke",
+    "signals": [
+      "the solver reproduces a known analytical solution within the expected order-of-accuracy error",
+      "a convergence study shows error shrinking at the solver's theoretical rate as the step size decreases",
+      "Monte Carlo estimates converge toward the analytical expectation with shrinking confidence intervals as samples grow",
+      "the simulation produces identical results from a fixed seed across runs and platforms"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "code.simulation diagnosis smoke",
+    "signals": [
+      "energy or magnitude growing without bound indicates an unstable step size for an explicit solver",
+      "results that change between runs at the same seed reveal nondeterminism from unordered parallel reductions",
+      "error that fails to shrink as the step size halves points to a discretization or order-of-accuracy bug",
+      "a Monte Carlo estimate that will not settle suggests too few samples or a high-variance estimator",
+      "a physics simulation gaining energy over time hints at a non-symplectic integrator for a conservative system"
+    ]
+  },
+  "source_refs": [
+    "source:hairer-ode-solvers:paraphrased",
+    "source:press-numerical-recipes:paraphrased"
+  ]
+}

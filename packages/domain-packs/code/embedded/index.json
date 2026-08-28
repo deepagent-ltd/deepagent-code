@@ -1,0 +1,484 @@
+[
+  {
+    "ref_id": "strategy:embed:keep-isrs-short-and-deferred",
+    "type": "strategy",
+    "title": "Keep ISRs short and defer work",
+    "summary": "Do the minimum in an interrupt handler — clear the source, capture data, signal a task — and push real processing to the base level.",
+    "domains": [
+      "embedded",
+      "firmware",
+      "rtos",
+      "mcu",
+      "bare_metal"
+    ],
+    "triggers": [
+      "isr",
+      "interrupt",
+      "latency",
+      "deferred",
+      "bottom half",
+      "handler"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.embedded"
+  },
+  {
+    "ref_id": "strategy:embed:no-dynamic-allocation-in-realtime",
+    "type": "strategy",
+    "title": "Avoid dynamic allocation on real-time paths",
+    "summary": "Use static or pool allocation for anything in a real-time or ISR path so timing is deterministic and the heap cannot fragment or fail.",
+    "domains": [
+      "embedded",
+      "firmware",
+      "rtos",
+      "mcu",
+      "bare_metal"
+    ],
+    "triggers": [
+      "heap",
+      "malloc",
+      "static",
+      "pool",
+      "fragmentation",
+      "deterministic"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.embedded"
+  },
+  {
+    "ref_id": "strategy:embed:guard-shared-state-from-isr",
+    "type": "strategy",
+    "title": "Guard state shared between ISR and task",
+    "summary": "Protect data touched by both an interrupt and the base level with volatile plus the right critical section or lock-free pattern.",
+    "domains": [
+      "embedded",
+      "firmware",
+      "rtos",
+      "mcu",
+      "bare_metal"
+    ],
+    "triggers": [
+      "volatile",
+      "critical section",
+      "shared",
+      "atomic",
+      "race",
+      "isr"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.embedded"
+  },
+  {
+    "ref_id": "strategy:embed:assign-rtos-priorities-by-deadline",
+    "type": "strategy",
+    "title": "Assign RTOS priorities by deadline",
+    "summary": "Set task priorities from real-time deadlines (rate-monotonic), keep high-priority tasks short, and prevent priority inversion.",
+    "domains": [
+      "embedded",
+      "firmware",
+      "rtos",
+      "mcu",
+      "bare_metal"
+    ],
+    "triggers": [
+      "rtos",
+      "priority",
+      "rate monotonic",
+      "deadline",
+      "inversion",
+      "scheduling"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.embedded"
+  },
+  {
+    "ref_id": "strategy:embed:respect-flash-and-ram-budget",
+    "type": "strategy",
+    "title": "Respect the flash and RAM budget",
+    "summary": "Track code, data, and stack against the device's tiny memory and keep margin, because there is no swap and overflow corrupts silently.",
+    "domains": [
+      "embedded",
+      "firmware",
+      "rtos",
+      "mcu",
+      "bare_metal"
+    ],
+    "triggers": [
+      "flash",
+      "ram",
+      "stack",
+      "linker map",
+      "footprint",
+      "budget"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.embedded"
+  },
+  {
+    "ref_id": "strategy:embed:design-for-low-power",
+    "type": "strategy",
+    "title": "Design for low-power operation",
+    "summary": "Drive the CPU into sleep/stop modes between events and wake on interrupt, instead of busy-waiting, to meet battery and thermal budgets.",
+    "domains": [
+      "embedded",
+      "firmware",
+      "rtos",
+      "mcu",
+      "bare_metal"
+    ],
+    "triggers": [
+      "low power",
+      "sleep",
+      "stop mode",
+      "wake",
+      "battery",
+      "tickless"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.embedded"
+  },
+  {
+    "ref_id": "methodology:embed:bring-up-a-peripheral-from-datasheet",
+    "type": "methodology",
+    "title": "Bring up a peripheral from the datasheet",
+    "summary": "Initialize a memory-mapped peripheral by following the reference manual's exact register sequence, verifying each step on hardware.",
+    "domains": [
+      "embedded",
+      "firmware",
+      "rtos",
+      "mcu",
+      "bare_metal"
+    ],
+    "triggers": [
+      "peripheral",
+      "register",
+      "datasheet",
+      "bring-up",
+      "init",
+      "clock"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.embedded"
+  },
+  {
+    "ref_id": "methodology:embed:measure-and-meet-timing-budget",
+    "type": "methodology",
+    "title": "Measure and meet the timing budget",
+    "summary": "Establish worst-case execution and latency by measurement, not estimate, and prove every deadline holds under stress.",
+    "domains": [
+      "embedded",
+      "firmware",
+      "rtos",
+      "mcu",
+      "bare_metal"
+    ],
+    "triggers": [
+      "timing",
+      "wcet",
+      "latency",
+      "deadline",
+      "jitter",
+      "logic analyzer"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.embedded"
+  },
+  {
+    "ref_id": "methodology:embed:diagnose-a-watchdog-reset",
+    "type": "methodology",
+    "title": "Diagnose a watchdog reset or hang",
+    "summary": "Find why the device resets or hangs by capturing the reset cause and tracing the path that starved the watchdog kick.",
+    "domains": [
+      "embedded",
+      "firmware",
+      "rtos",
+      "mcu",
+      "bare_metal"
+    ],
+    "triggers": [
+      "watchdog",
+      "reset",
+      "hang",
+      "lockup",
+      "reset cause",
+      "deadlock"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.embedded"
+  },
+  {
+    "ref_id": "methodology:embed:validate-low-power-current",
+    "type": "methodology",
+    "title": "Validate low-power current draw on hardware",
+    "summary": "Measure actual current in each operating and sleep mode against the battery budget, and confirm wake timing, on real hardware.",
+    "domains": [
+      "embedded",
+      "firmware",
+      "rtos",
+      "mcu",
+      "bare_metal"
+    ],
+    "triggers": [
+      "low power",
+      "current",
+      "sleep",
+      "battery",
+      "measure",
+      "wake"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.embedded"
+  },
+  {
+    "ref_id": "knowledge:embed:bare-metal-vs-rtos-tradeoffs",
+    "type": "knowledge",
+    "title": "Bare-metal vs RTOS trade-offs",
+    "summary": "A super-loop is simple and deterministic but scales poorly; an RTOS adds preemption and structure at the cost of footprint and concurrency hazards.",
+    "domains": [
+      "embedded",
+      "firmware",
+      "rtos",
+      "mcu",
+      "bare_metal"
+    ],
+    "triggers": [
+      "bare metal",
+      "super loop",
+      "rtos",
+      "preemption",
+      "scheduler",
+      "footprint"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.embedded"
+  },
+  {
+    "ref_id": "knowledge:embed:memory-mapped-io-semantics",
+    "type": "knowledge",
+    "title": "Memory-mapped I/O semantics",
+    "summary": "Peripheral registers are not normal memory: reads/writes have side effects, ordering matters, and the compiler must not cache or reorder them.",
+    "domains": [
+      "embedded",
+      "firmware",
+      "rtos",
+      "mcu",
+      "bare_metal"
+    ],
+    "triggers": [
+      "memory-mapped",
+      "register",
+      "volatile",
+      "side effect",
+      "ordering",
+      "read-modify-write"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.embedded"
+  },
+  {
+    "ref_id": "knowledge:embed:real-time-determinism",
+    "type": "knowledge",
+    "title": "Real-time means deterministic, not fast",
+    "summary": "A hard real-time system must meet the worst-case deadline every time; average speed and throughput are irrelevant if the tail violates the budget.",
+    "domains": [
+      "embedded",
+      "firmware",
+      "rtos",
+      "mcu",
+      "bare_metal"
+    ],
+    "triggers": [
+      "real-time",
+      "deterministic",
+      "worst-case",
+      "jitter",
+      "deadline",
+      "hard"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.embedded"
+  },
+  {
+    "ref_id": "knowledge:embed:power-and-clock-domains",
+    "type": "knowledge",
+    "title": "Power modes and clock domains",
+    "summary": "Sleep modes trade wake latency and retention against current; gating clocks saves power but disables peripherals that depend on them.",
+    "domains": [
+      "embedded",
+      "firmware",
+      "rtos",
+      "mcu",
+      "bare_metal"
+    ],
+    "triggers": [
+      "power mode",
+      "clock gating",
+      "sleep",
+      "retention",
+      "wake latency",
+      "pll"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.embedded"
+  },
+  {
+    "ref_id": "skill:embed:measure-isr-and-task-timing",
+    "type": "skill",
+    "title": "Measure ISR and task timing",
+    "summary": "Instrument GPIO toggles or a cycle counter and report worst-case ISR latency and task execution time under load.",
+    "domains": [
+      "embedded",
+      "firmware",
+      "rtos",
+      "mcu",
+      "bare_metal"
+    ],
+    "triggers": [
+      "timing",
+      "gpio",
+      "logic analyzer",
+      "cycle counter",
+      "latency",
+      "measure"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.embedded"
+  },
+  {
+    "ref_id": "skill:embed:inspect-linker-map-and-stack",
+    "type": "skill",
+    "title": "Inspect the linker map and stack usage",
+    "summary": "Parse the build's memory map and stack high-water marks and report flash/RAM headroom and any task near its stack guard.",
+    "domains": [
+      "embedded",
+      "firmware",
+      "rtos",
+      "mcu",
+      "bare_metal"
+    ],
+    "triggers": [
+      "linker map",
+      "stack",
+      "flash",
+      "ram",
+      "high-water",
+      "footprint"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.embedded"
+  }
+]

@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:git:interactive-rebase-cleanup",
+  "type": "methodology",
+  "title": "Clean up a branch with interactive rebase",
+  "description": "A procedure to reorder, squash, and reword commits on a private branch before review so the history reads as a deliberate sequence.",
+  "body": "Use when a private feature branch has noisy work-in-progress commits before opening it for review. Do not run this on commits others have already based work on. Steps: run git rebase -i against the base; mark commits to squash or fixup and reword messages; verify each retained commit still builds; force-with-lease only if the branch was already pushed. Validation signals include a tidy linear history and a green build at the final commit. Risk boundary: interactive rebase rewrites hashes, so confine it to unpublished work or confirm with collaborators first.",
+  "domain": "git_workflow",
+  "scope_hint": "code.git-workflow:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.git-workflow",
+  "pack_id": "code.git-workflow"
+}

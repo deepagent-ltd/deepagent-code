@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:ansible:perpetually-changed-task",
+  "type": "failure_dossier",
+  "description": "A shell/command task reports changed on every run, breaking idempotency and masking real drift.",
+  "body": "Failure mode: a task uses shell or command without guards, so it runs unconditionally and reports changed on every play, breaking idempotency and hiding whether real drift occurred. Detection signals: the same task always yellow/changed across consecutive runs; handlers firing every time; no stable converged state. Do not use raw commands where a module exists. Safer fallback: replace the command with a state-declaring module, or guard it with creates/changed_when, and confirm a second run reports zero changed.",
+  "domain": "ansible",
+  "scope_hint": "platform.ansible:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.ansible:human_authored",
+  "pack_id": "platform.ansible"
+}

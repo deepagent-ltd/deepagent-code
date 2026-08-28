@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:vsearch:default-ann-params",
+  "type": "failure_dossier",
+  "description": "An ANN index ships with library-default parameters that miss true neighbors on the actual data.",
+  "body": "Failure mode: an HNSW or IVF index is deployed with default M/ef or nprobe that under-explore the graph or probe too few clusters, so the approximate search misses relevant neighbors even though they exist. Detection signals: ANN recall well below brute-force exact recall on the same query set, and latency comfortably under budget (indicating room to search harder). Do not accept the gap as inherent to approximation. Safer fallback: sweep ef_search/nprobe against a labeled query set, plot recall versus latency, pick a setting that meets the recall floor within the latency budget, and rebuild with tuned build-time parameters if needed.",
+  "domain": "vector_search",
+  "scope_hint": "code.vector-search:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.vector-search:human_authored",
+  "pack_id": "code.vector-search"
+}

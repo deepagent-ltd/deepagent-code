@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:dataeng:partition-by-time-or-key",
+  "type": "strategy",
+  "title": "Partition data so work is bounded and replayable",
+  "description": "Partition tables by an ingestion or event date (or a stable key) so each run touches one slice and backfills target single partitions.",
+  "body": "Use when designing warehouse tables or pipeline write scope. Do not reprocess or reload the full table on every run — it does not scale, bloats cost, and makes a rerun overwrite good data with whatever the current source returns. Actions: choose a partition column (usually event/ingestion date), write one partition per run, and enable partition pruning in queries. Validation signals include queries that scan only the needed partitions and a backfill that rewrites exactly its target partition. Risk boundary: an unpartitioned full reload is expensive and unrecoverable on partial failure; treat full-table rewrites of large tables as needing review.",
+  "domain": "data_engineering",
+  "scope_hint": "code.data-engineering:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-engineering",
+  "pack_id": "code.data-engineering"
+}

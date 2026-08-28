@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:ios:prepare-an-app-store-submission",
+  "type": "methodology",
+  "title": "Prepare an App Store submission",
+  "description": "Take a build through versioning, signing, privacy declarations, and validation before uploading for review.",
+  "body": "Steps: 1. Set the version and build number and select a Release configuration. 2. Confirm distribution signing: distribution certificate and provisioning profile, matching entitlements. 3. Complete App Privacy details and ensure every sensitive API has a usage string and real justification. 4. Archive and run validation in Xcode/Transporter to catch missing assets, entitlement, or privacy issues. 5. Upload and submit, watching for review feedback on privacy and background modes. Rollback point: before submitting (a rejected/withdrawn build costs a review cycle). Validation: the archive validates clean and review accepts privacy/background declarations; submitting with a missing usage string or undeclared data collection is the common rejection this prevents.",
+  "domain": "ios",
+  "scope_hint": "code.mobile.ios:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mobile.ios",
+  "pack_id": "code.mobile.ios"
+}

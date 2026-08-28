@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:embed:measure-and-meet-timing-budget",
+  "type": "methodology",
+  "title": "Measure and meet the timing budget",
+  "description": "Establish worst-case execution and latency by measurement, not estimate, and prove every deadline holds under stress.",
+  "body": "Steps: 1. List each real-time path and its deadline (ISR latency, task period, end-to-end response). 2. Instrument with GPIO toggles or cycle counters and capture on a logic analyzer. 3. Drive worst-case load — maximum interrupt rate, all tasks active — and record max, not average, timing. 4. Compare measured worst case against each budget with margin. 5. If a deadline is missed, shorten ISRs, re-prioritize, or move work, then re-measure. Rollback point: before changing task priorities. Validation: every path's measured worst case fits its budget under stress; an average-case measurement or a single quiet-bench run does not prove a hard deadline.",
+  "domain": "embedded",
+  "scope_hint": "code.embedded:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.embedded",
+  "pack_id": "code.embedded"
+}

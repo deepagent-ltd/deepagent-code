@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:elixir:set-up-mix-and-exunit",
+  "type": "methodology",
+  "title": "Set up the Mix project and ExUnit",
+  "description": "Configure mix.exs deps and the application tree, and run tests through ExUnit with isolation.",
+  "body": "Steps: 1. Declare dependencies in mix.exs deps/0 and the supervised children in the application/0 callback's start tree. 2. Run mix deps.get (writing mix.lock) and commit mix.lock. 3. Write tests under test/ with ExUnit, using setup blocks and start_supervised! so each test gets fresh processes. 4. Use async: true only for tests with no shared global state. 5. Run mix test (and mix test --cover / credo / dialyzer as configured). Rollback point: before changing the application start tree. Validation: a fresh mix deps.get + mix test runs green and start_supervised! ensures processes are torn down between tests.",
+  "domain": "elixir",
+  "scope_hint": "code.elixir:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.elixir",
+  "pack_id": "code.elixir"
+}

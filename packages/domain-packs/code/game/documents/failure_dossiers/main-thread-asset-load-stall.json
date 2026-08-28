@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:game:main-thread-asset-load-stall",
+  "type": "failure_dossier",
+  "description": "Loading assets synchronously on the game loop, freezing the frame while disk I/O and decoding complete.",
+  "body": "Failure mode: entering a level or spawning an object triggers a synchronous file read and asset decode on the main thread, blocking the loop for tens or hundreds of milliseconds. Detection signals: a long hitch when crossing into new areas or first using an effect; frame-time graph shows a single huge spike correlated with I/O; the game momentarily freezes. Do not load assets synchronously on the main loop. Safer fallback: bake assets to engine-ready formats at build time, load asynchronously on a worker thread or via streaming, show placeholders until ready, and keep all disk I/O off the frame's critical path.",
+  "domain": "game",
+  "scope_hint": "code.game:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.game:human_authored",
+  "pack_id": "code.game"
+}

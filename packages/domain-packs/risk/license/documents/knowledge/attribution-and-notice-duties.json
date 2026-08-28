@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:lic:attribution-and-notice-duties",
+  "type": "knowledge",
+  "title": "Attribution and NOTICE duties",
+  "description": "Even permissive licenses require carrying copyright and license text into distributions, and Apache-2.0 adds a NOTICE-propagation duty.",
+  "body": "Use when shipping anything containing permissively licensed code. MIT and BSD require including the copyright notice and license text in distributions. Apache-2.0 additionally requires that any NOTICE file from upstream be propagated and that modified files be marked. Minified bundles and stripped binaries commonly drop these notices, which is a breach even though the license is 'permissive'. Do not assume permissive means you can omit attribution. Actions: collect each component's copyright line and license, propagate upstream NOTICE contents, and ship them in a THIRD-PARTY file. Validation signals include a CI diff proving the notice file matches the lockfile and that no attribution-requiring component is missing. Risk boundary: dropping required notices during minification/stripping is a fixable but blocking compliance gap.",
+  "domain": "license",
+  "scope_hint": "risk.license:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.license",
+  "pack_id": "risk.license"
+}

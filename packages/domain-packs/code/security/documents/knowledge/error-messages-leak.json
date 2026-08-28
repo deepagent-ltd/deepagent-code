@@ -1,0 +1,11 @@
+{
+  "ref_id": "knowledge:security:error-messages-leak",
+  "type": "knowledge",
+  "description": "Detailed errors can reveal secrets, identifiers, existence, or internals.",
+  "body": "Security-sensitive errors should be useful without leaking sensitive data. Use when secure coding work touches trusted boundaries, dangerous sinks, authorization checks, secret flows, and negative-path tests. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: use the fact to constrain the change and test plan; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include server-side deny tests, sink-specific payload tests, secret redaction checks, dependency evidence, and audit notes. Risk boundary: escalate or stop when the task involves client-only enforcement, secret disclosure, injection, permissive fallback, and unsafe shortcuts, missing owner evidence, or live external state.",
+  "domain": "security",
+  "scope_hint": "code.security:knowledge",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.security:skill_survey",
+  "pack_id": "code.security"
+}

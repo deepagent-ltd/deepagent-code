@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:mlops:trigger-retrain-on-drift",
+  "type": "strategy",
+  "title": "Trigger retraining from drift, not the calendar",
+  "description": "Drive retraining from measured input and label drift signals rather than a fixed schedule, so refresh tracks real distribution change.",
+  "body": "Use when deciding how often a production model should be refreshed. Avoid a pure calendar cron — it retrains when nothing changed and stays stale when the world shifts fast. Actions: monitor feature drift (PSI or KS) and label/outcome drift, set thresholds, and fire the retrain pipeline when a signal crosses; record which signal triggered each run. Validation signals include a drift dashboard with thresholds and a retrain log linking each run to the breaching metric. Risk boundary: retraining on drifted-but-corrupt data poisons the model; if drift coincides with an upstream data-quality alert, halt the trigger and escalate to a human.",
+  "domain": "mlops",
+  "scope_hint": "code.mlops:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mlops",
+  "pack_id": "code.mlops"
+}

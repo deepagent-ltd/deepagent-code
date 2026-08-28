@@ -1,0 +1,72 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.query",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "query",
+      "deterministic",
+      "read_only"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "query count list show read inspect status diff log config select explain deterministic readonly"
+    ],
+    "round_signals": [
+      "l3_validation_smoke"
+    ],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "round_signals": [],
+    "user_overrides": [],
+    "repo_signals": [
+      "implement and deploy a database migration that backfills a new column"
+    ]
+  },
+  "retrieval_query": "read-only query count list inspect status tool result authority artifact-backed answer",
+  "expected_pack_id": "code.query",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "Deterministic Query Controls L3 validation smoke",
+    "signals": [
+      "package-local checks",
+      "focused tests",
+      "build output",
+      "smoke runs",
+      "command logs",
+      "and reviewer-readable evidence"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "Deterministic Query Controls diagnosis smoke",
+    "signals": [
+      "compare expected and observed behavior",
+      "inspect the owning files",
+      "isolate the failing boundary",
+      "and record residual risk"
+    ]
+  },
+  "source_refs": [
+    "source:postgresql-docs:paraphrased",
+    "source:sqlite-docs:paraphrased"
+  ]
+}

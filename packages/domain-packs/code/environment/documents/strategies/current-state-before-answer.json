@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:environment:current-state-before-answer",
+  "type": "strategy",
+  "description": "Answer current environment, config, model, port, toolchain, and workspace questions from fresh local state.",
+  "body": "Use when a user asks what the current environment, provider, model, config value, port, runtime, dependency version, workspace path, or service status is. Do not use prior context, README examples, or old logs as the final answer when a cheap read-only check can verify the state. Actions: run or inspect the smallest read-only source, record command or file path, preserve timestamp or run context, and answer with the exact value plus scope. Validation signals include env/config file value, process status, package manager output, version command, or runtime artifact. Risk boundary: if the value cannot be read quickly or safely, state unverified rather than guessing; do not edit config, restart services, or install dependencies for a read-only state question.",
+  "domain": "environment",
+  "scope_hint": "code.environment:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.environment:docs38",
+  "pack_id": "code.environment"
+}

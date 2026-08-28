@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:ruby:safely-evolve-a-schema",
+  "type": "methodology",
+  "title": "Safely evolve a schema with migrations",
+  "description": "Change the database through reversible migrations sequenced so the app stays deployable at each step.",
+  "body": "Steps: 1. Write a migration with change (auto-reversible) or explicit up/down so it can roll back. 2. For destructive or large changes, sequence them: add nullable column, backfill in batches, add constraint, then drop the old column in a later deploy. 3. Avoid model code in migrations; use raw SQL or a local class so a later model change does not break old migrations. 4. Run db:migrate in CI and confirm schema.rb/structure.sql updates. 5. Verify rollback with db:rollback. Rollback point: the migration's down path. Validation: migrate then rollback returns the schema cleanly and the suite passes on the new schema.",
+  "domain": "ruby",
+  "scope_hint": "code.ruby:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.ruby",
+  "pack_id": "code.ruby"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:frontend_performance:long-task-blocks-interaction",
+  "type": "failure_dossier",
+  "description": "A heavy synchronous task on an interaction handler blocks the main thread, spiking INP and freezing the UI.",
+  "body": "Failure mode: an event handler runs an expensive synchronous computation or large render, monopolizing the main thread so the browser cannot paint the interaction response. Detection signals: a long task (>50ms) in the trace aligned with the interaction; high measured INP; visible freeze after click/type. Do not run heavy work synchronously on the interaction path. Safer fallback: chunk the work, yield to the scheduler, move computation off the hot path or to a worker, and confirm shorter tasks and lower INP in a trace.",
+  "domain": "frontend",
+  "scope_hint": "code.frontend.performance:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.performance:human_authored",
+  "pack_id": "code.frontend.performance"
+}

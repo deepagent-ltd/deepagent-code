@@ -1,0 +1,458 @@
+[
+  {
+    "ref_id": "knowledge:migration:codemods-overmatch",
+    "type": "knowledge",
+    "title": "Codemods Overmatch",
+    "summary": "Codemods can change syntactically similar but semantically different code.",
+    "domains": [
+      "migration",
+      "code"
+    ],
+    "triggers": [
+      "codemods",
+      "change",
+      "syntactically",
+      "similar",
+      "semantically",
+      "different",
+      "code",
+      "review"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.migration"
+  },
+  {
+    "ref_id": "knowledge:migration:migration-is-stateful",
+    "type": "knowledge",
+    "title": "Migration Is Stateful",
+    "summary": "Migration correctness depends on intermediate states, not only final code.",
+    "domains": [
+      "migration",
+      "code"
+    ],
+    "triggers": [
+      "migration",
+      "correctness",
+      "depends",
+      "intermediate",
+      "states",
+      "only",
+      "final",
+      "code"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.migration"
+  },
+  {
+    "ref_id": "knowledge:migration:version-upgrade-breaks-transitives",
+    "type": "knowledge",
+    "title": "Version Upgrade Breaks Transitives",
+    "summary": "Dependency upgrades can break transitive APIs and generated artifacts.",
+    "domains": [
+      "migration",
+      "code"
+    ],
+    "triggers": [
+      "dependency",
+      "upgrades",
+      "break",
+      "transitive",
+      "apis",
+      "generated",
+      "artifacts",
+      "lockfile"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.migration"
+  },
+  {
+    "ref_id": "methodology:migration:codemod-safety-loop",
+    "type": "methodology",
+    "title": "Codemod Safety Loop",
+    "summary": "Dry-run, sample review, apply, then run targeted tests.",
+    "domains": [
+      "migration",
+      "code"
+    ],
+    "triggers": [
+      "sample",
+      "review",
+      "apply",
+      "then",
+      "targeted",
+      "tests",
+      "steps",
+      "codemod"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.migration"
+  },
+  {
+    "ref_id": "methodology:migration:compat-cleanup-gate",
+    "type": "methodology",
+    "title": "Compat Cleanup Gate",
+    "summary": "Remove old paths only after usage and tests prove migration complete.",
+    "domains": [
+      "migration",
+      "code"
+    ],
+    "triggers": [
+      "remove",
+      "paths",
+      "only",
+      "after",
+      "usage",
+      "tests",
+      "prove",
+      "migration"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.migration"
+  },
+  {
+    "ref_id": "methodology:migration:migration-precheck-plan-execute",
+    "type": "methodology",
+    "title": "Migration Precheck Plan Execute",
+    "summary": "Precheck versions, plan changes, execute narrow batches, validate, summarize.",
+    "domains": [
+      "migration",
+      "code"
+    ],
+    "triggers": [
+      "precheck",
+      "versions",
+      "plan",
+      "changes",
+      "execute",
+      "narrow",
+      "batches",
+      "validate"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.migration"
+  },
+  {
+    "ref_id": "skill:migration:run-migration-inventory",
+    "type": "skill",
+    "title": "Run Migration Inventory",
+    "summary": "Find impacted files, APIs, generated artifacts, and tests for a migration.",
+    "domains": [
+      "migration",
+      "code"
+    ],
+    "triggers": [
+      "find",
+      "impacted",
+      "files",
+      "apis",
+      "generated",
+      "artifacts",
+      "tests",
+      "migration"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.migration"
+  },
+  {
+    "ref_id": "strategy:migration:compat-first",
+    "type": "strategy",
+    "title": "Compat First",
+    "summary": "Add compatibility before switching callers where possible.",
+    "domains": [
+      "migration",
+      "code"
+    ],
+    "triggers": [
+      "compatibility",
+      "before",
+      "switching",
+      "callers",
+      "where",
+      "possible",
+      "migrations",
+      "safer"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.migration"
+  },
+  {
+    "ref_id": "strategy:migration:deprecation-window",
+    "type": "strategy",
+    "title": "Deprecation Window",
+    "summary": "Keep user-facing or cross-package changes behind explicit deprecation windows.",
+    "domains": [
+      "migration",
+      "code"
+    ],
+    "triggers": [
+      "keep",
+      "user",
+      "facing",
+      "cross",
+      "package",
+      "changes",
+      "behind",
+      "explicit"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.migration"
+  },
+  {
+    "ref_id": "strategy:migration:inventory-before-codemod",
+    "type": "strategy",
+    "title": "Inventory Before Codemod",
+    "summary": "Inventory affected files and patterns before bulk edits.",
+    "domains": [
+      "migration",
+      "code"
+    ],
+    "triggers": [
+      "inventory",
+      "affected",
+      "files",
+      "patterns",
+      "before",
+      "bulk",
+      "edits",
+      "codemod"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.migration"
+  },
+  {
+    "ref_id": "strategy:migration:phase-upgrade",
+    "type": "strategy",
+    "title": "Phase Upgrade",
+    "summary": "Use precheck, plan, execute, summarize phases for upgrades.",
+    "domains": [
+      "migration",
+      "code"
+    ],
+    "triggers": [
+      "precheck",
+      "plan",
+      "execute",
+      "summarize",
+      "phases",
+      "upgrades",
+      "skill",
+      "survey"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.migration"
+  },
+  {
+    "ref_id": "strategy:migration:expand-contract-schema-change",
+    "type": "strategy",
+    "title": "Change schemas with expand-contract, never in place",
+    "summary": "Split a breaking schema change into an additive expand phase, a migrate/dual-read phase, and a later contract phase so old and new code coexist safely.",
+    "domains": [
+      "code",
+      "migration"
+    ],
+    "triggers": [
+      "expand contract",
+      "schema",
+      "backward compatible",
+      "additive",
+      "column",
+      "deploy"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.migration"
+  },
+  {
+    "ref_id": "strategy:migration:dual-write-with-reconciliation",
+    "type": "strategy",
+    "title": "Bridge stores with a dual-write window and reconciliation",
+    "summary": "During a data-store migration write to both old and new systems for a window, reconcile differences, then cut over reads once parity is proven.",
+    "domains": [
+      "code",
+      "migration"
+    ],
+    "triggers": [
+      "dual write",
+      "reconciliation",
+      "cutover",
+      "shadow",
+      "parity",
+      "backfill"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.migration"
+  },
+  {
+    "ref_id": "knowledge:migration:rollback-is-a-feature-not-an-afterthought",
+    "type": "knowledge",
+    "title": "Rollback must be designed, tested, and time-bounded",
+    "summary": "A migration is only safe if its rollback path is built and exercised before cutover, not improvised when production breaks.",
+    "domains": [
+      "code",
+      "migration"
+    ],
+    "triggers": [
+      "rollback",
+      "reversible",
+      "down migration",
+      "recovery",
+      "cutover",
+      "safety"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.migration"
+  },
+  {
+    "ref_id": "methodology:migration:batch-large-table-backfill",
+    "type": "methodology",
+    "title": "Backfill a large table in throttled batches",
+    "summary": "Backfill or transform a huge table in bounded, resumable batches that respect replication lag and locks instead of one massive UPDATE.",
+    "domains": [
+      "code",
+      "migration"
+    ],
+    "triggers": [
+      "backfill",
+      "batch",
+      "large table",
+      "throttle",
+      "replication lag",
+      "chunk"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.migration"
+  },
+  {
+    "ref_id": "skill:migration:dry-run-and-diff-codemod",
+    "type": "skill",
+    "title": "Dry-run a codemod and review the diff before applying",
+    "summary": "Run an automated code transformation in dry-run mode, summarize the diff scope, and surface risky or over-matched changes for review.",
+    "domains": [
+      "code",
+      "migration"
+    ],
+    "triggers": [
+      "codemod",
+      "dry run",
+      "diff",
+      "ast",
+      "transform",
+      "review"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.migration"
+  }
+]

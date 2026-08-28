@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:azure:blob-access-private-firewall",
+  "type": "strategy",
+  "title": "Keep Blob storage private with RBAC, firewall, and SAS limits",
+  "description": "Set container access to Private, restrict with the storage firewall and private endpoints, and prefer user-delegation SAS over account keys.",
+  "body": "Use when configuring an Azure Storage account or sharing blobs. Do not set container public access to Blob/Container or share data with an account-key SAS that never expires. Actions: keep container access level Private and govern reads with RBAC data roles, enable the storage firewall to allow only known networks or a private endpoint, disable shared-key access where possible, and issue short-lived user-delegation SAS for time-bound sharing. Validation signals include the container reporting Private, HTTP requests rejected, and a SAS expiring as configured. Risk boundary: enabling public blob access or disabling the firewall is human-gated.",
+  "domain": "azure",
+  "scope_hint": "platform.cloud.azure:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.azure",
+  "pack_id": "platform.cloud.azure"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "methodology:swift:language-gate-loop",
+  "type": "methodology",
+  "description": "In Swift, run the package-local gate, fix the first owned diagnostic, rerun, then broaden.",
+  "body": "In Swift, the fastest path through errors is to let the type checker, where optionals and protocol conformances must resolve and swift build -warnings-as-errors and the Xcode static analyzer drive one fix at a time rather than guessing. Use when swift build (or the Xcode scheme) for the right platform and configuration or the analyzers report multiple diagnostics. Do not batch speculative edits across files, and avoid suppressing diagnostics to move on. Actions: inspect the package, run the gate, fix only the first type-checker diagnostic and its fix-it suggestion, rerun swift test (XCTest/swift-testing) on the affected target, then widen to swift build (or the Xcode scheme) for the right platform and configuration for the whole package. Validation signals include a shrinking diagnostic count, a passing focused test, and a clean package-wide gate. Risk boundary: if a diagnostic implies a design or API change, stop and escalate instead of forcing the gate green.",
+  "domain": "swift",
+  "scope_hint": "code.swift:methodologies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.swift:skill_survey",
+  "pack_id": "code.swift"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:mt:noisy-neighbor-starves-pool",
+  "type": "failure_dossier",
+  "description": "Without per-tenant limits, one tenant's heavy load consumes shared capacity and degrades service for every other tenant.",
+  "body": "Failure mode: a tenant issues expensive queries or high request volume against a shared pool with no quota, starving connections or compute for others. Detection signals: latency rises for many tenants simultaneously; per-tenant metrics show one tenant dominating usage; the pool saturates during one tenant's activity. Do not run a shared pool without per-tenant fairness. Safer fallback: set per-tenant rate limits and resource quotas, apply fair scheduling, monitor per-tenant consumption, and promote a persistently heavy tenant to dedicated capacity rather than letting it degrade the pool.",
+  "domain": "multi_tenant",
+  "scope_hint": "code.backend.multi-tenant:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.multi-tenant:human_authored",
+  "pack_id": "code.backend.multi-tenant"
+}

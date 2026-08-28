@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:mobile:capture-device-matrix-evidence",
+  "type": "skill",
+  "title": "Capture device-matrix evidence for a flow",
+  "description": "Run a changed flow across a device/OS/state matrix and report screenshots, logs, and pass/fail per configuration.",
+  "body": "Use when validating a mobile change beyond a single device. Actions: select a representative matrix (small/large phone, tablet; min and current OS; online/offline; permission granted/denied), run the flow on each, and report per-cell screenshots, relevant logs, and pass/fail with the failing step. Do not generalize from one emulator run. This skill exposes capability only and must not launch emulators/simulators without runtime permission. Validation signals include per-configuration screenshots and a coverage table. Risk boundary: if the matrix cannot be exercised, report uncovered configurations as unverified rather than assuming parity.",
+  "domain": "mobile",
+  "scope_hint": "code.mobile:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mobile",
+  "pack_id": "code.mobile"
+}

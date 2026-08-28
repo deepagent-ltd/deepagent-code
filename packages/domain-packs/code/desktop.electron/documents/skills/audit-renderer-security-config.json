@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:electron:audit-renderer-security-config",
+  "type": "skill",
+  "title": "Audit renderer security configuration",
+  "description": "Inspect BrowserWindow/webview webPreferences and the preload bridge for isolation, nodeIntegration, and over-broad exposure.",
+  "body": "Use when reviewing an Electron app's security. Actions: read every BrowserWindow/webview creation for contextIsolation, nodeIntegration, sandbox, and webSecurity settings; inspect the preload for what contextBridge exposes; and check for remote content loaded into privileged renderers. Report each unsafe setting and over-broad exposure with file/line. Do not modify code. This skill exposes capability only and must not run the packaged app against untrusted content without runtime permission. Validation signals include all renderers isolated and a minimal preload surface. Risk boundary: nodeIntegration:true, contextIsolation:false, or a raw-ipcRenderer preload are blocking security findings; report and recommend the safe configuration rather than shipping.",
+  "domain": "electron",
+  "scope_hint": "code.desktop.electron:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.desktop.electron",
+  "pack_id": "code.desktop.electron"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "skill:backend_api:route-contract-smoke",
+  "type": "skill",
+  "description": "Exercise changed API routes locally and verify observable status, headers, body, and error shape.",
+  "body": "Inputs: route or resolver names, local server/test command, representative request payloads, and expected contract. Procedure: start the approved local server or in-process test harness; send success and negative-path requests with curl, fetch, supertest, framework client, or existing tests; record status, headers, content type, response body fields, and request ID or correlation behavior; inspect logs for unhandled errors. Do not use this skill against production or real customer data. Outputs: request matrix, observed contract, mismatches, and whether failures are handler, middleware, validation, serialization, or environment related. Failure handling: if the server cannot start, report that route smoke is blocked and provide the build/config error instead of substituting unit tests as route evidence. Use when Backend API work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: run the documented inspection and validation workflow; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "api",
+  "scope_hint": "code.backend.api:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.api:route_smoke_skill",
+  "pack_id": "code.backend.api"
+}

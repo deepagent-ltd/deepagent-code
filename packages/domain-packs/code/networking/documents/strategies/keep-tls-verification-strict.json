@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:net:keep-tls-verification-strict",
+  "type": "strategy",
+  "title": "Keep TLS certificate and hostname verification strict",
+  "description": "Verify the server certificate chain and hostname on every connection; never disable verification to silence an error.",
+  "body": "Use when configuring any TLS client connection. Do not disable certificate verification, skip the hostname check, or trust all certs to get past a handshake error, because that opens the connection to man-in-the-middle interception. Actions: keep chain and hostname verification on, point the client at the correct CA bundle (or pin where appropriate), and fix the real cause of a handshake failure (expired cert, missing intermediate, wrong SNI, clock skew). Validation signals include a successful handshake against the real CA and a rejected connection to a server presenting a wrong/expired cert. Risk boundary: disabling TLS verification anywhere it touches real traffic is a security finding requiring a human gate; fix the certificate instead.",
+  "domain": "networking",
+  "scope_hint": "code.networking:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.networking",
+  "pack_id": "code.networking"
+}

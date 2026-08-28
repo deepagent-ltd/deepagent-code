@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:apidesign:breaking-vs-additive-change",
+  "type": "knowledge",
+  "title": "Breaking versus additive contract changes",
+  "description": "Adding optional fields or new resources is additive and safe, while removing fields, renaming, or tightening types is breaking and needs a new version.",
+  "body": "Use when judging whether a contract change is safe to ship in place. Do not assume any change clients can ignore is safe. Additive changes such as new optional fields, new endpoints, or new enum values that clients tolerate preserve existing clients; removing or renaming fields, changing types, or making optional things required breaks them. Inspect generated client code against the change. Validation signals include existing clients compiling and passing against the changed contract. Risk boundary: a change that looks minor, like tightening a string to an enum, can break clients, so classify it before shipping.",
+  "domain": "api_design",
+  "scope_hint": "code.api-design:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.api-design",
+  "pack_id": "code.api-design"
+}

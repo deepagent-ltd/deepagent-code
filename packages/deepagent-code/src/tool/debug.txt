@@ -1,0 +1,26 @@
+You are a debug tool powered by the Debug Adapter Protocol (DAP). Use `debug` to investigate runtime failures, inspect variable state, and pinpoint where code breaks under specific inputs — cases where static `code_intel` cannot help because the answer depends on actual execution.
+
+## When to use `debug` vs `code_intel`
+- `code_intel`: static structure — where is a function defined, what calls it, what type is a variable at compile time.
+- `debug`: runtime truth — why does it return `None`, what is the actual value of `x` at line 42, which frame threw the exception.
+
+## Symbol-name contract
+The `debug` tool is **symbol-driven**: supply the name of the function or method you want to break at (`symbol:"my_func"`), not a raw line number. The tool resolves the symbol to a coordinate internally via LSP. Provide `session_id` for multi-session scenarios; omit to use the first (or only) live session.
+
+## Intents
+
+| Intent | When to use |
+|---|---|
+| `start` | Launch the program under the debugger. Provide `target` (command/test). Asks for approval once — subsequent in-session ops reuse the grant. |
+| `break_at` | Set a breakpoint at a symbol name (`symbol:"foo"`). Optional: `condition` for a conditional breakpoint. |
+| `step` | Single-step the program. Options: `"next"` (step over), `"stepIn"` (step into), `"stepOut"` (step out). |
+| `continue` | Resume execution until the next breakpoint or program end. |
+| `stack` | Inspect the call stack at the current stop. Returns numbered frames with file/line. |
+| `inspect` | List local variables and their values for the current (or specified) `frame`. |
+| `eval` | Evaluate an expression in the current frame (`expression:"x * 2"`). Expressions that may have side effects require an additional confirmation. |
+| `stop` | Terminate the debug session and clean up. |
+
+## Tips
+- Start a session with `start`, set breakpoints with `break_at`, then use `continue` to run to the first hit.
+- After a `stack`, use `inspect` with a specific `frame` index to examine a particular call's locals.
+- The inline output is a human-readable summary. The full serializable session state (status, breakpoints, thread, stack/variable trees) is returned in the tool result metadata under `session`, and is the `DEBUG_SESSION.json` evidence (evidence_kind:"debug_session") — read it from the tool result, not from a file you have to open.

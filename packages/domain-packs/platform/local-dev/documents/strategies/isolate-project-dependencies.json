@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:local_dev:isolate-project-dependencies",
+  "type": "strategy",
+  "title": "Isolate dependencies per project, not globally",
+  "description": "Install dependencies into a project-scoped environment (virtualenv, local node_modules, container) so projects do not share or clobber each other's versions.",
+  "body": "Use when installing dependencies for local development. Do not install project libraries globally, and avoid mutating a shared system environment that other projects rely on. Actions: use a project-local environment and a committed lockfile so installs are deterministic, install from the lockfile rather than loose ranges, and inspect that a clean install reproduces the same versions. Validation signals include a lockfile-driven install producing identical dependency versions across machines and no reliance on globally-installed packages. Risk boundary: a globally-installed dependency that one project mutates can silently break another; flag global installs and prefer isolation, escalating if a tool genuinely must be global.",
+  "domain": "platform",
+  "scope_hint": "platform.local-dev:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.local-dev",
+  "pack_id": "platform.local-dev"
+}

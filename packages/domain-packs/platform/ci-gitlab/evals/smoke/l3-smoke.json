@@ -1,0 +1,72 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "platform.ci-gitlab",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "ci_gitlab",
+      "gitlab_ci",
+      "pipeline",
+      "runner"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [
+      "supply-chain"
+    ],
+    "repo_signals": [
+      "L3 smoke for platform.ci-gitlab: gitlab ci pipeline with stages and jobs, runner tags, cache and artifacts:paths, protected variable masking, rules, and child pipeline trigger"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "plain prose note with no repository or domain signal"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "gitlab ci pipeline stages jobs runner tags cache artifacts paths protected masked variable rules only except child pipeline secret",
+  "expected_pack_id": "platform.ci-gitlab",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "platform.ci-gitlab L3 validation smoke",
+    "signals": [
+      "sensitive CI/CD variables marked protected and masked",
+      "runner tags route untrusted jobs away from privileged runners",
+      "rules govern job creation deterministically with no only/except clash",
+      "artifacts:paths scoped to real outputs with expire_in set"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "platform.ci-gitlab diagnosis smoke",
+    "signals": [
+      "protected variable exposed to unprotected branch or fork MR pipeline",
+      "untrusted merge-request code running on a shared privileged runner",
+      "rules and only/except mixed causing jobs to silently never run",
+      "unmasked secret echoed into job logs",
+      "artifacts ballooning with no expire_in or over-broad paths"
+    ]
+  },
+  "source_refs": [
+    "source:gitlab-ci-docs:paraphrased",
+    "source:slsa-framework:paraphrased"
+  ]
+}

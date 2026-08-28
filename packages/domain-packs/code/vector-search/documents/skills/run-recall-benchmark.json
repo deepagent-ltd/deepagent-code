@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:vsearch:run-recall-benchmark",
+  "type": "skill",
+  "title": "Run a recall/precision benchmark on an index",
+  "description": "Steps to score an index against a labeled query set and compare ANN recall to exact-search ground truth.",
+  "body": "Use when validating an index change before serving. Do not approve a change on a few spot queries — regressions hide in the tail. Actions: run each labeled query through the index, compute recall@k and precision@k, run brute-force exact search to establish the true-neighbor ceiling, and report ANN recall against that ceiling. Validation signals include a recall/precision table with an exact-search baseline and a before/after comparison across the change. Risk boundary: shipping an index whose recall fell silently loses relevant results; if ANN recall trails the exact ceiling past tolerance, deny the change and escalate to retune the index.",
+  "domain": "vector_search",
+  "scope_hint": "code.vector-search:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.vector-search",
+  "pack_id": "code.vector-search"
+}

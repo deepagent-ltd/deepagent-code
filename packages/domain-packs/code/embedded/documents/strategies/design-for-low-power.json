@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:embed:design-for-low-power",
+  "type": "strategy",
+  "title": "Design for low-power operation",
+  "description": "Drive the CPU into sleep/stop modes between events and wake on interrupt, instead of busy-waiting, to meet battery and thermal budgets.",
+  "body": "Use when the device is battery-powered or thermally constrained. Do not busy-wait or poll in a loop when you could sleep, and do not leave peripherals/clocks enabled when idle. Actions: use an event-driven design that enters the deepest safe sleep mode and wakes on interrupt, gate unused peripheral clocks, and use a tickless RTOS idle if available; measure current in each mode. Validation signals include a measured average current that meets the battery-life budget and correct wake latency from each sleep mode. Risk boundary: deep sleep can disable peripherals or memory retention and break wake timing; verify wake sources and state retention on hardware before relying on a sleep mode in the field.",
+  "domain": "embedded",
+  "scope_hint": "code.embedded:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.embedded",
+  "pack_id": "code.embedded"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:edge:no-cache-control-no-caching",
+  "type": "failure_dossier",
+  "description": "Static assets served without Cache-Control, so the edge applies weak heuristics or doesn't cache, hammering the origin.",
+  "body": "Failure mode: cacheable static content ships with no explicit Cache-Control, so the CDN either refuses to cache or uses short heuristic TTLs, sending most requests to origin. Detection signals: low hit ratio on static assets; high origin request rate; absent cache headers. Do not rely on heuristic caching for assets you control. Safer fallback: set explicit s-maxage (long for fingerprinted assets) and surrogate keys, and verify the edge reports HIT.",
+  "domain": "cdn",
+  "scope_hint": "platform.cdn-edge:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cdn-edge:human_authored",
+  "pack_id": "platform.cdn-edge"
+}

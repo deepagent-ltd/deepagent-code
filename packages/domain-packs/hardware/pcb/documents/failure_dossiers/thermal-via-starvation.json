@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:pcb:thermal-via-starvation",
+  "type": "failure_dossier",
+  "description": "A power component overheats because the pad lacks copper pour and thermal vias to spread heat into the planes.",
+  "body": "Failure mode: a heat-dissipating part sits on minimal pad copper with no thermal vias, so heat concentrates and the junction temperature climbs past the rating. Detection signals: a hot spot on a thermal scan, junction temperature above the limit under load, and improvement when external cooling is applied. Do not derate the part as the only fix while the layout starves it of copper. Safer fallback: add copper pour and a thermal via array under the part sized for the dissipation, then re-scan the temperature.",
+  "domain": "pcb",
+  "scope_hint": "hardware.pcb:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.pcb:human_authored",
+  "pack_id": "hardware.pcb"
+}

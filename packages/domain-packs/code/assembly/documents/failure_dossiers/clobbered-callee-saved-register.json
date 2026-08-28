@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:asm:clobbered-callee-saved-register",
+  "type": "failure_dossier",
+  "description": "Using a callee-saved register without saving/restoring it, silently corrupting the caller's value and crashing far from the cause.",
+  "body": "Failure mode: an assembly function writes to a callee-saved register (rbx, r12-r15, or x19-x28) without preserving it in the prologue/epilogue, so when it returns the caller's value in that register is gone; the caller then misbehaves or crashes somewhere unrelated. Detection signals: the caller fails after calling the asm function but the asm function itself looks correct; a debugger shows a callee-saved register changed across the call; the bug moves when caller register allocation changes. Do not clobber callee-saved registers unsaved. Safer fallback: save each callee-saved register you use in the prologue and restore it on every return path, verify balanced save/restore in the disassembly, and confirm the caller's registers survive the call.",
+  "domain": "assembly",
+  "scope_hint": "code.assembly:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.assembly:human_authored",
+  "pack_id": "code.assembly"
+}

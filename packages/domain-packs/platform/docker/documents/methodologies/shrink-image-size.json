@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:docker:shrink-image-size",
+  "type": "methodology",
+  "title": "Reduce final image size methodically",
+  "description": "Drive image size down by switching to a slim base, using multi-stage builds, and pruning build-only artifacts rather than guessing.",
+  "body": "Steps: 1. Inspect the image's layer sizes to find the largest contributors. 2. Choose a minimal base (slim/alpine/distroless) appropriate to the runtime's needs. 3. Use a multi-stage build so compilers, dev dependencies, and caches stay in the build stage and only runtime artifacts ship. 4. Remove package-manager caches and temp files within the same layer that created them. 5. Re-measure and confirm the app still runs. Rollback point: before swapping the base image. Validation: the final image is smaller, layer inspection shows no build toolchain in the runtime stage, and a smoke test confirms the app starts. Risk boundary: do not strip libraries the runtime needs to shave bytes; verify with a runtime smoke test rather than assuming, and escalate if a minimal base breaks required functionality.",
+  "domain": "platform",
+  "scope_hint": "platform.docker:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.docker",
+  "pack_id": "platform.docker"
+}

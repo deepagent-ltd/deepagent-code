@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:bazel:visibility-and-package-groups",
+  "type": "knowledge",
+  "title": "Visibility rules and package groups",
+  "description": "Visibility controls which packages may depend on a target, and package_group names a reusable set of packages to grant access to.",
+  "body": "Use when reasoning about why a dependency is allowed or denied at build time. Do not treat visibility as advisory. A target is depend-able only from packages listed in its visibility, defaulting to the package's own scope; a package_group bundles packages so multiple targets can share one allowlist. Inspect the target's visibility attribute and any referenced group. Validation signals include a build error when an unlisted package depends on a restricted target. Risk boundary: widening visibility is easy to do and hard to undo once consumers appear, so grant access deliberately.",
+  "domain": "bazel",
+  "scope_hint": "code.build.bazel:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.build.bazel",
+  "pack_id": "code.build.bazel"
+}

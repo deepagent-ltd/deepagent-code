@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:crypto:hand-rolled-crypto",
+  "type": "failure_dossier",
+  "description": "Implementing a custom cipher, MAC, or protocol that passes local tests but fails against real adaptive attackers.",
+  "body": "Failure mode: an engineer invents or modifies a cryptographic construction; it round-trips correctly in unit tests but leaks under chosen-ciphertext, timing, or padding-oracle attacks that the tests never simulate. Detection signals: a non-standard cipher/MAC/protocol with no public review; comments claiming a clever improvement over a standard; security justified by 'it decrypts our test vectors.' Do not design or tweak cryptographic algorithms. Safer fallback: replace the custom construction with a vetted library's named high-level primitive (AEAD, HMAC, Ed25519, HKDF), keep parameters current, and route any genuine novel need to a cryptography expert review before use.",
+  "domain": "cryptography",
+  "scope_hint": "code.cryptography:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.cryptography:human_authored",
+  "pack_id": "code.cryptography"
+}

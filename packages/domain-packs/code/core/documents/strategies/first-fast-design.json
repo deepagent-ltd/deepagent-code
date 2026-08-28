@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:first-fast-design",
+  "type": "strategy",
+  "description": "First round: short design, execute, validate. No upfront heavy reasoning.",
+  "body": "First round: short design, execute, validate. No upfront heavy reasoning. Save deep analysis for failure-diagnosis rounds. Use when core engineering behavior work touches repository evidence, git state, user instructions, and focused validation output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: choose the smallest direction that preserves the domain contract; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include git status, focused tests, typecheck output, command logs, and unchanged-user-work checks. Risk boundary: escalate or stop when the task involves overwriting user work, broad rewrites, stale assumptions, or unvalidated completion claims, missing owner evidence, or live external state.",
+  "domain": null,
+  "scope_hint": "activation",
+  "evidence_strength": "strong",
+  "provenance_tag": "deepagent_core",
+  "pack_id": "code.core"
+}

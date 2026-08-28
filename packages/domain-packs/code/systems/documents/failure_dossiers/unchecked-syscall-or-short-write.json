@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:sys:unchecked-syscall-or-short-write",
+  "type": "failure_dossier",
+  "description": "A syscall return or errno is ignored, so a short write or failure silently truncates or corrupts data.",
+  "body": "Failure mode: code ignores the return of write/read or assumes the full count transferred, so a partial write (write returning fewer bytes than requested) or an error like ENOSPC/EINTR goes unnoticed, leaving a file truncated or a message half-sent while the program proceeds as if it succeeded. Detection signals: files shorter than expected; corruption under disk-full or interrupted conditions; no error checking around I/O syscalls. Do not assume a syscall fully succeeded. Safer fallback: check every return, loop on short read/write until complete, retry EINTR, surface ENOSPC/EACCES as failures, and add tests injecting short writes and EINTR to confirm recovery.",
+  "domain": "systems",
+  "scope_hint": "code.systems:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.systems:human_authored",
+  "pack_id": "code.systems"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:gcp:gke-networking-identity",
+  "type": "knowledge",
+  "title": "GKE networking, metadata server, and Workload Identity plumbing",
+  "description": "Explains how GKE pods reach Google APIs via the GKE metadata server, why node pools must enable the feature, and VPC-native IP allocation.",
+  "body": "Use when a GKE pod cannot authenticate or schedule due to networking. Do not assume Workload Identity works without node-level support. Actions: know that with Workload Identity the GKE metadata server intercepts the pod's credential requests and exchanges the KSA for GSA tokens, so the node pool must have the GKE metadata server enabled; VPC-native clusters allocate pod IPs from a secondary range, so IP exhaustion blocks scheduling. Inspect node pool config and the secondary range usage. Validation signals include the pod fetching a token from the metadata endpoint and free pod IPs in the alias range. Risk boundary: resizing cluster IP ranges or node pools in production is human-gated.",
+  "domain": "gcp",
+  "scope_hint": "platform.cloud.gcp:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.gcp",
+  "pack_id": "platform.cloud.gcp"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:kernel:direct-user-pointer-dereference",
+  "type": "failure_dossier",
+  "description": "Dereferencing a user-supplied pointer directly in the kernel instead of using copy_from_user, allowing crashes or arbitrary-memory access.",
+  "body": "Failure mode: a syscall or ioctl reads through a pointer passed from user space directly, so a malicious or buggy program can pass a kernel address or an invalid one; the kernel either faults (panic) or, worse, reads/writes memory it should not, becoming an exploit primitive. Detection signals: user pointer used without copy_from_user/get_user; oops on a crafted bad pointer; security scanner flags an unchecked __user pointer. Do not dereference user pointers directly. Safer fallback: copy data in with copy_from_user/get_user, check the return for faults, validate sizes and indices before use, and add a fault-injection test passing an invalid pointer that must return -EFAULT without crashing.",
+  "domain": "kernel",
+  "scope_hint": "code.os-kernel:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.os-kernel:human_authored",
+  "pack_id": "code.os-kernel"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "fail:mesh:subset-mismatch-blackhole",
+  "type": "failure_dossier",
+  "description": "A VirtualService routes to a subset with no matching DestinationRule, blackholing traffic.",
+  "body": "Failure mode: a VirtualService references a subset name that no DestinationRule defines (typo, deleted rule, or label mismatch), so the proxy has no cluster for it and requests fail or blackhole. Detection signals: 503 with no_healthy_upstream/no_cluster response flags, the proxy config missing the cluster, and the subset name not present in any DestinationRule. Do not assume the route is the problem. Safer fallback: define the subset in a DestinationRule with labels that actually match running pods, confirm the cluster appears in the proxy config, and validate routing with a test request before shifting production weight.",
+  "domain": "service_mesh",
+  "scope_hint": "platform.service-mesh:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.service-mesh:human_authored",
+  "pack_id": "platform.service-mesh"
+}

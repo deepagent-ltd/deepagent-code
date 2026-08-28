@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:embed:register-write-before-clock-enabled",
+  "type": "failure_dossier",
+  "description": "Configuring a peripheral's registers before enabling its clock or releasing its reset, so the writes are silently ignored.",
+  "body": "Failure mode: code writes a peripheral's configuration registers following an example, but the peripheral clock was never enabled (or reset not released), so the bus drops the writes; the peripheral stays in its default state and the driver behaves erratically with no error. Detection signals: register read-back does not match what was written; peripheral does nothing despite 'correct' config code; reordering the clock-enable first makes it work. Do not write peripheral registers before clocking the peripheral. Safer fallback: follow the datasheet's exact init order — enable clock, release reset, then configure — read back status/ready bits to confirm each step, and verify bus activity on a logic analyzer.",
+  "domain": "embedded",
+  "scope_hint": "code.embedded:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.embedded:human_authored",
+  "pack_id": "code.embedded"
+}

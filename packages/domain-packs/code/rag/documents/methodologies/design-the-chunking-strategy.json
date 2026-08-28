@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:rag:design-the-chunking-strategy",
+  "type": "methodology",
+  "title": "Design the chunking strategy",
+  "description": "Choose split boundaries, size, and overlap from the document structure and embedding limits, then validate retrievability.",
+  "body": "Steps: 1. Inspect the corpus structure (headings, tables, code, prose) and the embedding model's effective length. 2. Pick boundaries that keep a unit of meaning intact and set overlap to preserve cross-boundary context. 3. Size chunks within the embedding range without diluting them. 4. Index a sample and run answer-spanning queries. 5. Adjust where answers fall across boundaries. Rollback point: before re-ingesting the full corpus. Validation: queries whose answers span boundaries still retrieve a self-contained chunk.",
+  "domain": "rag",
+  "scope_hint": "code.rag:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.rag",
+  "pack_id": "code.rag"
+}

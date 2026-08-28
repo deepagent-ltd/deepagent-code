@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:eval:isolate-one-variable-per-ablation",
+  "type": "strategy",
+  "title": "Isolate one variable per ablation",
+  "description": "Each ablation changes exactly one factor so the score delta is attributable to that factor, not a confound.",
+  "body": "Use when measuring what a change contributes. Do not change the prompt, model, and retrieval together and credit the gain to one, and avoid comparing across different datasets or judge versions. Actions: hold everything fixed except the one factor under test, keep the dataset, metric, and judge constant, and record the exact configuration of each arm. Validation signals include a recorded config diff showing a single changed variable between arms. Risk boundary: a multi-variable change makes the result uninterpretable and can ship a regression hidden by an unrelated gain; isolate variables or label the result inconclusive.",
+  "domain": "eval",
+  "scope_hint": "code.eval:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.eval",
+  "pack_id": "code.eval"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:pcb:high-speed-routing-review",
+  "type": "methodology",
+  "title": "Review high-speed routing for integrity",
+  "description": "Walk each fast net for impedance continuity, return path, length matching, and crosstalk before sign-off.",
+  "body": "Use when auditing a layout with high-speed buses or differential pairs. Do not approve high-speed routing from a visual pass alone, since integrity problems hide in plane and length detail. Actions: trace each net's reference plane, verify length-match tolerances, and inspect spacing against the crosstalk budget. Validation signals include matched lengths within the skew budget and continuous references confirmed plane by plane. Risk boundary: an unreviewed high-speed net may fail only at speed in the field, so escalate marginal margins to simulation before release.",
+  "domain": "pcb",
+  "scope_hint": "hardware.pcb:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.pcb",
+  "pack_id": "hardware.pcb"
+}

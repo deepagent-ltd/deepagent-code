@@ -1,0 +1,11 @@
+{
+  "ref_id": "methodology:javascript:package-manager-detect-run",
+  "type": "methodology",
+  "description": "Detect the package manager, run the narrow script, then widen only after local evidence.",
+  "body": "Use for JS repos with package.json scripts. Avoid root commands when the change is package-scoped in a workspace. Steps: read packageManager and lockfiles, inspect scripts, run the narrow affected script, then run the aggregate script only if needed. Verify by preserving the exact command and exit status in the report. Risk boundary is changing install state or lockfiles without being asked. Use when JavaScript Runtime and Tooling work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: follow the ordered review, edit, and validation sequence; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "javascript",
+  "scope_hint": "code.javascript:methodologys",
+  "evidence_strength": "medium",
+  "provenance_tag": "code.javascript:seed:official_docs_and_common_tooling_behavior:paraphrased",
+  "pack_id": "code.javascript"
+}

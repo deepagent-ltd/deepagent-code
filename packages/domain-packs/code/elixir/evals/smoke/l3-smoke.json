@@ -1,0 +1,75 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.elixir",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "elixir",
+      "otp",
+      "phoenix",
+      "beam"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [
+      "elixir"
+    ],
+    "frameworks": [
+      "phoenix",
+      "otp"
+    ],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.elixir: mix dependencies, OTP supervision trees and GenServer, process message passing, ExUnit tests, and Phoenix LiveView"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "plain prose note with no repository or domain signal"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "elixir mix otp supervision tree genserver process actor message passing let it crash exunit phoenix liveview pattern match beam ets",
+  "expected_pack_id": "code.elixir",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "code.elixir L3 validation smoke",
+    "signals": [
+      "mix deps.get reproduces deps from mix.lock and mix test passes",
+      "a GenServer's state transitions are exercised through its public API in ExUnit",
+      "a supervised process restart returns the system to a known state without manual intervention",
+      "LiveView mount and event handlers are tested with Phoenix.LiveViewTest"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "code.elixir diagnosis smoke",
+    "signals": [
+      "a GenServer handling slow work in handle_call so its mailbox backs up and callers time out",
+      "shared mutable state faked via process dictionary or a global instead of a process",
+      "unsupervised spawned process so a crash leaks or is never restarted",
+      "atoms created dynamically from input, risking atom-table exhaustion",
+      "blocking the LiveView process so the socket becomes unresponsive"
+    ]
+  },
+  "source_refs": [
+    "source:elixir-docs:paraphrased",
+    "source:otp-design-principles:paraphrased"
+  ]
+}

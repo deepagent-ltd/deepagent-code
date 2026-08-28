@@ -1,0 +1,113 @@
+---
+title: Windows (WSL)
+description: Ejecuta DeepAgent Code en Windows con WSL para una mejor experiencia.
+---
+
+import { Steps } from "@astrojs/starlight/components"
+
+Aunque DeepAgent Code puede ejecutarse directamente en Windows, recomendamos usar [Windows Subsystem for Linux (WSL)](https://learn.microsoft.com/en-us/windows/wsl/install) para obtener la mejor experiencia. WSL ofrece un entorno Linux que funciona perfectamente con las funciones de DeepAgent Code.
+
+:::tip[¿Por qué WSL?]
+WSL ofrece mejor rendimiento del sistema de archivos, soporte completo de terminal y compatibilidad con las herramientas de desarrollo de las que depende DeepAgent Code.
+:::
+
+---
+
+## Configuración
+
+<Steps>
+
+1. **Instala WSL**
+
+   Si aún no lo hiciste, [instala WSL](https://learn.microsoft.com/en-us/windows/wsl/install) usando la guía oficial de Microsoft.
+
+2. **Instala DeepAgent Code en WSL**
+
+   Cuando WSL esté listo, abre tu terminal de WSL e instala DeepAgent Code con uno de los [métodos de instalación](/docs/).
+
+   ```bash
+   curl -fsSL https://deepagent-code.ai/install | bash
+   ```
+
+3. **Usa DeepAgent Code desde WSL**
+
+   Ve al directorio de tu proyecto (accede a los archivos de Windows desde `/mnt/c/`, `/mnt/d/`, etc.) y ejecuta DeepAgent Code.
+
+   ```bash
+   cd /mnt/c/Users/YourName/project
+   deepagent-code
+   ```
+
+</Steps>
+
+---
+
+## Aplicación de escritorio + servidor WSL
+
+Si prefieres usar la app de escritorio de DeepAgent Code pero quieres ejecutar el servidor en WSL:
+
+1. **Inicia el servidor en WSL** con `--hostname 0.0.0.0` para permitir conexiones externas:
+
+   ```bash
+   deepagent-code serve --hostname 0.0.0.0 --port 4096
+   ```
+
+2. **Conecta la app de escritorio** a `http://localhost:4096`
+
+:::note
+Si `localhost` no funciona en tu configuración, conéctate usando la dirección IP de WSL (desde WSL: `hostname -I`) y usa `http://<wsl-ip>:4096`.
+:::
+
+:::caution
+Cuando uses `--hostname 0.0.0.0`, define `DEEPAGENT_CODE_SERVER_PASSWORD` para proteger el servidor.
+
+```bash
+DEEPAGENT_CODE_SERVER_PASSWORD=your-password deepagent-code serve --hostname 0.0.0.0
+```
+
+:::
+
+---
+
+## Cliente web + WSL
+
+Para obtener la mejor experiencia web en Windows:
+
+1. **Ejecuta `deepagent-code web` en la terminal de WSL** en lugar de PowerShell:
+
+   ```bash
+   deepagent-code web --hostname 0.0.0.0
+   ```
+
+2. **Accede desde tu navegador de Windows** en `http://localhost:<port>` (DeepAgent Code muestra la URL)
+
+Ejecutar `deepagent-code web` desde WSL garantiza acceso correcto al sistema de archivos e integración con la terminal, manteniéndolo accesible desde tu navegador de Windows.
+
+---
+
+## Acceso a archivos de Windows
+
+WSL puede acceder a todos tus archivos de Windows mediante el directorio `/mnt/`:
+
+- Unidad `C:` → `/mnt/c/`
+- Unidad `D:` → `/mnt/d/`
+- Y así sucesivamente...
+
+Ejemplo:
+
+```bash
+cd /mnt/c/Users/YourName/Documents/project
+deepagent-code
+```
+
+:::tip
+Para una experiencia más fluida, considera clonar o copiar tu repo al sistema de archivos de WSL (por ejemplo en `~/code/`) y ejecutar DeepAgent Code ahí.
+:::
+
+---
+
+## Consejos
+
+- Ejecuta DeepAgent Code en WSL para proyectos guardados en unidades de Windows: el acceso a archivos es transparente
+- Usa la [extensión WSL de VS Code](https://code.visualstudio.com/docs/remote/wsl) junto con DeepAgent Code para un flujo de desarrollo integrado
+- Tu configuración y tus sesiones de DeepAgent Code se guardan dentro del entorno WSL en `~/.deepagent/code/`

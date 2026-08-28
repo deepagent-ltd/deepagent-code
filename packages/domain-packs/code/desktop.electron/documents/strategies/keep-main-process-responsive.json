@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:electron:keep-main-process-responsive",
+  "type": "strategy",
+  "title": "Keep the main process responsive",
+  "description": "Never run heavy or blocking work on the main process, since it owns every window and the app's event loop.",
+  "body": "Use when doing CPU-heavy or synchronous work (parsing, crypto, large file I/O). Do not run synchronous/blocking calls on the main process, and do not assume one window's work is isolated. Actions: move heavy work to a utility process, worker thread, or the renderer, use async APIs, and keep the main process orchestrating only. Validation signals include all windows staying interactive during heavy operations and no main-process event-loop stalls in a profile. Risk boundary: a blocked main process freezes every window simultaneously (the whole app hangs), unlike a single renderer stall — main-process blocking is an app-wide reliability defect.",
+  "domain": "electron",
+  "scope_hint": "code.desktop.electron:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.desktop.electron",
+  "pack_id": "code.desktop.electron"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:production:monitoring-is-part-of-release",
+  "type": "knowledge",
+  "title": "Monitoring is part of release safety",
+  "description": "A production change without logs, metrics, traces, alerts, or user-impact checks has limited validation after deployment.",
+  "body": "Use when release or rollback plans omit observability. Do not invent SLOs without owner input. Actions: identify existing signals and gaps, keep alerts enabled, and include post-change checks. Validation signals include dashboards, query names, log patterns, or smoke probes. Risk boundary: disabling monitoring to ship is rejected without incident commander approval. Use when Production Change Risk Controls work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: use the fact to constrain the change and test plan; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "incident",
+  "scope_hint": "risk.production:knowledge",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:risk.production",
+  "pack_id": "risk.production"
+}

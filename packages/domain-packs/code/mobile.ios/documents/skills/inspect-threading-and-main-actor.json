@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:ios:inspect-threading-and-main-actor",
+  "type": "skill",
+  "title": "Inspect threading and main-actor usage",
+  "description": "Review code for UI mutations off the main thread and for heavy work blocking it.",
+  "body": "Use when reviewing an iOS change for threading correctness. Actions: scan for UIKit view or published-state mutations inside background closures/queues without a hop to main, for missing @MainActor on UI-driving types, and for heavy synchronous work (parsing, image decode, sync I/O) on the main thread. Report each off-main UI access and main-thread hang with location. Do not modify code. This skill exposes capability only and must not run the app against production services without runtime permission. Validation signals include UI updates confined to main and heavy work off it. Risk boundary: off-main UI mutations are blocking crash-risk findings; recommend a main-actor hop rather than leaving the timing-dependent bug in place.",
+  "domain": "ios",
+  "scope_hint": "code.mobile.ios:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mobile.ios",
+  "pack_id": "code.mobile.ios"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:ng:trace-an-injection-instance",
+  "type": "methodology",
+  "title": "Trace where an injected instance comes from",
+  "description": "Resolve which provider supplies a dependency and how many instances exist across the injector tree.",
+  "body": "Steps: 1. Find every place the service is provided (providedIn, module providers, component/route providers). 2. Determine the injector hierarchy for the consuming component (element injector up to root). 3. Identify which provider the consumer resolves against and whether that yields a shared or per-component instance. 4. If state is unexpectedly split or shared, move the provider to the correct level. 5. Confirm with a test. Rollback point: before changing provider placement. Validation: a test asserts the expected number of instances and that shared state is consistent.",
+  "domain": "angular",
+  "scope_hint": "code.frontend.angular:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.angular",
+  "pack_id": "code.frontend.angular"
+}

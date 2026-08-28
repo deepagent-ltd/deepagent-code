@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:redis:treat-cache-as-derived-and-lossy",
+  "type": "strategy",
+  "title": "Treat the cache as derived and lossy",
+  "description": "Every cache read must tolerate a miss by falling back to the source, since Redis can evict or restart anytime.",
+  "body": "Use when reading any value from Redis used as a cache. Do not treat a cache hit as the system of record or assume a key you wrote is still present. Actions: on miss, read from the source of truth, repopulate with a TTL, and return; make the source path correct on its own so a cold or flushed cache only costs latency, not correctness. Validation signals include a test that flushing the cache still yields correct results from the source and repopulates. Risk boundary: code that errors or returns wrong data on a cache miss has made the cache load-bearing for correctness — a blocking design finding, since eviction and restarts are normal.",
+  "domain": "redis",
+  "scope_hint": "code.database.redis:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.redis",
+  "pack_id": "code.database.redis"
+}

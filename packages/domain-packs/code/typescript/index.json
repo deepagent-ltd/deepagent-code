@@ -1,0 +1,778 @@
+[
+  {
+    "ref_id": "knowledge:typescript:any-is-contagious",
+    "type": "knowledge",
+    "title": "Any Is Contagious",
+    "summary": "The any type disables checking and can spread through calls.",
+    "domains": [
+      "javascript",
+      "typescript"
+    ],
+    "triggers": [
+      "type",
+      "disables",
+      "checking",
+      "spread",
+      "through",
+      "calls",
+      "removes",
+      "compiler"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.typescript"
+  },
+  {
+    "ref_id": "knowledge:typescript:esm-cjs-runtime-contract",
+    "type": "knowledge",
+    "title": "Esm Cjs Runtime Contract",
+    "summary": "ESM/CJS compatibility is both a type-level and runtime contract; declarations alone are insufficient.",
+    "domains": [
+      "typescript",
+      "javascript"
+    ],
+    "triggers": [
+      "compatibility",
+      "both",
+      "type",
+      "level",
+      "runtime",
+      "contract",
+      "declarations",
+      "alone"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.typescript"
+  },
+  {
+    "ref_id": "knowledge:typescript:exported-types-are-api",
+    "type": "knowledge",
+    "title": "Exported Types Are Api",
+    "summary": "Exported TypeScript types, declaration files, and package exports are API surface for downstream consumers.",
+    "domains": [
+      "typescript",
+      "javascript"
+    ],
+    "triggers": [
+      "exported",
+      "typescript",
+      "types",
+      "declaration",
+      "files",
+      "package",
+      "exports",
+      "surface"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.typescript"
+  },
+  {
+    "ref_id": "knowledge:typescript:generic-inference-contract",
+    "type": "knowledge",
+    "title": "Generic Inference Contract",
+    "summary": "Generic inference behavior is part of developer-facing contract when callers rely on inferred types.",
+    "domains": [
+      "typescript",
+      "javascript"
+    ],
+    "triggers": [
+      "generic",
+      "inference",
+      "behavior",
+      "part",
+      "developer",
+      "facing",
+      "contract",
+      "when"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.typescript"
+  },
+  {
+    "ref_id": "knowledge:typescript:knowledge",
+    "type": "knowledge",
+    "title": "Knowledge",
+    "summary": "Effect Source Of Truth",
+    "domains": [
+      "javascript",
+      "typescript"
+    ],
+    "triggers": [
+      "effect",
+      "source",
+      "truth",
+      "guidance",
+      "should",
+      "verified",
+      "against"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.typescript"
+  },
+  {
+    "ref_id": "knowledge:typescript:module-resolution-config",
+    "type": "knowledge",
+    "title": "Module Resolution Config",
+    "summary": "TypeScript module resolution depends on tsconfig, package.json exports/type, file extension, and runtime loader.",
+    "domains": [
+      "typescript",
+      "javascript"
+    ],
+    "triggers": [
+      "typescript",
+      "module",
+      "resolution",
+      "depends",
+      "tsconfig",
+      "package",
+      "json",
+      "exports"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.typescript"
+  },
+  {
+    "ref_id": "knowledge:typescript:non-null-assertion-risk",
+    "type": "knowledge",
+    "title": "Non Null Assertion Risk",
+    "summary": "Non-null assertions bypass nullability checks without runtime proof.",
+    "domains": [
+      "javascript",
+      "typescript"
+    ],
+    "triggers": [
+      "null",
+      "assertions",
+      "bypass",
+      "nullability",
+      "checks",
+      "without",
+      "runtime",
+      "proof"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.typescript"
+  },
+  {
+    "ref_id": "knowledge:typescript:structural-typing-contract",
+    "type": "knowledge",
+    "title": "Structural Typing Contract",
+    "summary": "TypeScript compatibility is structural, so extra-compatible shapes can still drift semantically.",
+    "domains": [
+      "javascript",
+      "typescript"
+    ],
+    "triggers": [
+      "typescript",
+      "compatibility",
+      "structural",
+      "extra",
+      "compatible",
+      "shapes",
+      "still",
+      "drift"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.typescript"
+  },
+  {
+    "ref_id": "knowledge:typescript:type-only-erased",
+    "type": "knowledge",
+    "title": "Type Only Erased",
+    "summary": "Type-only imports cannot supply runtime values.",
+    "domains": [
+      "javascript",
+      "typescript"
+    ],
+    "triggers": [
+      "type",
+      "only",
+      "imports",
+      "cannot",
+      "supply",
+      "runtime",
+      "values"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.typescript"
+  },
+  {
+    "ref_id": "methodology:typescript:boundary-decoder-flow",
+    "type": "methodology",
+    "title": "Boundary Decoder Flow",
+    "summary": "Decode untrusted values once at the boundary.",
+    "domains": [
+      "javascript",
+      "typescript"
+    ],
+    "triggers": [
+      "decode",
+      "untrusted",
+      "values",
+      "once",
+      "boundary",
+      "steps",
+      "identify"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.typescript"
+  },
+  {
+    "ref_id": "methodology:typescript:compiler-diagnostic-trace",
+    "type": "methodology",
+    "title": "Compiler Diagnostic Trace",
+    "summary": "Trace a TypeScript diagnostic from reported site to the type owner, module boundary, or generated source.",
+    "domains": [
+      "typescript",
+      "javascript"
+    ],
+    "triggers": [
+      "trace",
+      "typescript",
+      "diagnostic",
+      "from",
+      "reported",
+      "site",
+      "type",
+      "owner"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.typescript"
+  },
+  {
+    "ref_id": "methodology:typescript:generated-type-refresh-loop",
+    "type": "methodology",
+    "title": "Generated Type Refresh Loop",
+    "summary": "Validate schema or source changes by regenerating TypeScript artifacts and checking consumers.",
+    "domains": [
+      "typescript",
+      "javascript"
+    ],
+    "triggers": [
+      "validate",
+      "schema",
+      "source",
+      "changes",
+      "regenerating",
+      "typescript",
+      "artifacts",
+      "checking"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.typescript"
+  },
+  {
+    "ref_id": "methodology:typescript:methodology",
+    "type": "methodology",
+    "title": "Methodology",
+    "summary": "Effect Service Validation Loop",
+    "domains": [
+      "javascript",
+      "typescript"
+    ],
+    "triggers": [
+      "effect",
+      "service",
+      "validation",
+      "loop",
+      "inspect",
+      "local",
+      "patterns"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.typescript"
+  },
+  {
+    "ref_id": "methodology:typescript:module-change-validation",
+    "type": "methodology",
+    "title": "Module Change Validation",
+    "summary": "Validate both compiler and runtime behavior after module changes.",
+    "domains": [
+      "javascript",
+      "typescript"
+    ],
+    "triggers": [
+      "validate",
+      "both",
+      "compiler",
+      "runtime",
+      "behavior",
+      "after",
+      "module",
+      "changes"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.typescript"
+  },
+  {
+    "ref_id": "methodology:typescript:package-typecheck-loop",
+    "type": "methodology",
+    "title": "Package Typecheck Loop",
+    "summary": "Run package-local typecheck and fix diagnostics by ownership.",
+    "domains": [
+      "javascript",
+      "typescript"
+    ],
+    "triggers": [
+      "package",
+      "local",
+      "typecheck",
+      "diagnostics",
+      "ownership",
+      "steps",
+      "inspect",
+      "scripts"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.typescript"
+  },
+  {
+    "ref_id": "skill:typescript:inspect-module-contract",
+    "type": "skill",
+    "title": "Inspect Module Contract",
+    "summary": "Inspect tsconfig, package exports, emitted files, and import sites to validate module resolution and ESM/CJS boundaries.",
+    "domains": [
+      "typescript",
+      "javascript"
+    ],
+    "triggers": [
+      "inspect",
+      "tsconfig",
+      "package",
+      "exports",
+      "emitted",
+      "files",
+      "import",
+      "sites"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.typescript"
+  },
+  {
+    "ref_id": "skill:typescript:run-package-typecheck",
+    "type": "skill",
+    "title": "Run Package Typecheck",
+    "summary": "Run the package-local TypeScript validation command using the repository package manager and scripts.",
+    "domains": [
+      "typescript",
+      "javascript"
+    ],
+    "triggers": [
+      "package",
+      "local",
+      "typescript",
+      "validation",
+      "command",
+      "using",
+      "repository"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.typescript"
+  },
+  {
+    "ref_id": "skill:typescript:skill",
+    "type": "skill",
+    "title": "Skill",
+    "summary": "Run Effect Test",
+    "domains": [
+      "javascript",
+      "typescript"
+    ],
+    "triggers": [
+      "effect",
+      "test",
+      "package",
+      "local",
+      "tests",
+      "with",
+      "explicit"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.typescript"
+  },
+  {
+    "ref_id": "strategy:typescript:avoid-global-tsconfig-fix",
+    "type": "strategy",
+    "title": "Avoid Global Tsconfig Fix",
+    "summary": "Do not loosen tsconfig to solve a local diagnostic.",
+    "domains": [
+      "javascript",
+      "typescript"
+    ],
+    "triggers": [
+      "loosen",
+      "tsconfig",
+      "solve",
+      "local",
+      "diagnostic",
+      "global",
+      "compiler",
+      "settings"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.typescript"
+  },
+  {
+    "ref_id": "strategy:typescript:generated-types-contract",
+    "type": "strategy",
+    "title": "Generated Types Contract",
+    "summary": "Treat generated declarations and SDK types as contracts that must be regenerated or validated after source changes.",
+    "domains": [
+      "typescript",
+      "javascript"
+    ],
+    "triggers": [
+      "treat",
+      "generated",
+      "declarations",
+      "types",
+      "contracts",
+      "that",
+      "must",
+      "regenerated"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.typescript"
+  },
+  {
+    "ref_id": "strategy:typescript:inference-local-explicit-export",
+    "type": "strategy",
+    "title": "Inference Local Explicit Export",
+    "summary": "Use inference locally and clarity at exported surfaces.",
+    "domains": [
+      "javascript",
+      "typescript"
+    ],
+    "triggers": [
+      "inference",
+      "locally",
+      "clarity",
+      "exported",
+      "surfaces",
+      "temporary",
+      "values",
+      "infer"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.typescript"
+  },
+  {
+    "ref_id": "strategy:typescript:module-format-check",
+    "type": "strategy",
+    "title": "Module Format Check",
+    "summary": "Check ESM/CJS and package exports when imports change.",
+    "domains": [
+      "javascript",
+      "typescript"
+    ],
+    "triggers": [
+      "check",
+      "package",
+      "exports",
+      "when",
+      "imports",
+      "change",
+      "typecheck",
+      "pass"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.typescript"
+  },
+  {
+    "ref_id": "strategy:typescript:package-script-first",
+    "type": "strategy",
+    "title": "Package Script First",
+    "summary": "Prefer the package-owned script and lockfile tool when validating TypeScript changes.",
+    "domains": [
+      "typescript",
+      "javascript"
+    ],
+    "triggers": [
+      "prefer",
+      "package",
+      "owned",
+      "script",
+      "lockfile",
+      "tool",
+      "when",
+      "validating"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.typescript"
+  },
+  {
+    "ref_id": "strategy:typescript:public-export-compat",
+    "type": "strategy",
+    "title": "Public Export Compat",
+    "summary": "Preserve public export compatibility unless the task explicitly accepts a breaking TypeScript API change.",
+    "domains": [
+      "typescript",
+      "javascript"
+    ],
+    "triggers": [
+      "preserve",
+      "public",
+      "export",
+      "compatibility",
+      "unless",
+      "task",
+      "explicitly",
+      "accepts"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.typescript"
+  },
+  {
+    "ref_id": "strategy:typescript:strategy",
+    "type": "strategy",
+    "title": "Strategy",
+    "summary": "Effect Schema Boundaries",
+    "domains": [
+      "javascript",
+      "typescript"
+    ],
+    "triggers": [
+      "effect",
+      "schema",
+      "boundaries",
+      "domain"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.typescript"
+  },
+  {
+    "ref_id": "strategy:typescript:type-model-owner",
+    "type": "strategy",
+    "title": "Type Model Owner",
+    "summary": "Fix type errors at the contract owner rather than at each caller.",
+    "domains": [
+      "javascript",
+      "typescript"
+    ],
+    "triggers": [
+      "type",
+      "errors",
+      "contract",
+      "owner",
+      "rather",
+      "than",
+      "each",
+      "caller"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.typescript"
+  },
+  {
+    "ref_id": "strategy:typescript:unknown-at-boundary",
+    "type": "strategy",
+    "title": "Unknown At Boundary",
+    "summary": "Use unknown for untrusted data and narrow before internal use.",
+    "domains": [
+      "javascript",
+      "typescript"
+    ],
+    "triggers": [
+      "unknown",
+      "untrusted",
+      "data",
+      "narrow",
+      "before",
+      "internal",
+      "external",
+      "json"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.typescript"
+  }
+]

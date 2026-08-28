@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:azure:resource-group-blast-radius",
+  "type": "methodology",
+  "title": "Bound blast radius with resource-group and lock design",
+  "description": "Organize resources into lifecycle-aligned resource groups and apply CanNotDelete locks so a deletion or RBAC change cannot cascade.",
+  "body": "Use when structuring an Azure subscription or protecting critical resources. Do not lump unrelated lifecycles into one resource group or leave stateful resources unlocked. Actions: group resources that share a lifecycle and region into the same resource group, place shared/stateful resources (databases, storage) in their own group, apply a CanNotDelete or ReadOnly management lock on critical resources, and tag for ownership and cost. Validation signals include a delete attempt on a locked resource being refused and RBAC/cost scoping cleanly to the group. Risk boundary: removing a lock or deleting a resource group is human-gated since it can cascade across many resources.",
+  "domain": "azure",
+  "scope_hint": "platform.cloud.azure:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.azure",
+  "pack_id": "platform.cloud.azure"
+}

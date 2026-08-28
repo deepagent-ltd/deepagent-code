@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:refactor:map-symbol-references",
+  "type": "skill",
+  "title": "Map all references to a symbol before moving it",
+  "description": "Find every definition and use of a symbol across source, tests, docs, and generated artifacts before a rename or move.",
+  "body": "Use when preparing a rename or move of a shared symbol. Actions: resolve all definitions and references across source, tests, configuration, docs, and any generated or string-based usages (reflection, DI keys, serialized names), and report the full reference set with locations. Do not rely on a plain text grep that misses dynamic or generated references. This skill exposes capability only and must not run repo-wide refactoring tools without runtime permission. Validation signals include a complete reference list and a clean build/test after the change. Risk boundary: missed dynamic or string-keyed references break at runtime, not compile time; if references cannot be fully resolved, report the move as higher-risk.",
+  "domain": "code",
+  "scope_hint": "code.refactor:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.refactor",
+  "pack_id": "code.refactor"
+}

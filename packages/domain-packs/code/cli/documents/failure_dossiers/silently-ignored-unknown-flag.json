@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:cli:silently-ignored-unknown-flag",
+  "type": "failure_dossier",
+  "description": "Silently ignoring an unrecognized flag instead of erroring, so a mistyped option makes a command run with unintended defaults.",
+  "body": "Failure mode: ad-hoc argument handling drops any flag it does not recognize, so a typo like --dry-runn is ignored and the command runs for real with default (often destructive) behavior. Detection signals: a misspelled flag has no effect but the command proceeds; users report a safety flag 'not working'; no usage error for bad options. Do not ignore unknown flags. Safer fallback: use a real argument parser that errors on unrecognized options with a usage message and exit code 2, and add a test that an unknown flag fails rather than silently running.",
+  "domain": "cli",
+  "scope_hint": "code.cli:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.cli:human_authored",
+  "pack_id": "code.cli"
+}

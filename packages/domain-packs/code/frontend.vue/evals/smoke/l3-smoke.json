@@ -1,0 +1,78 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.frontend.vue",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "code",
+      "frontend",
+      "vue",
+      "nuxt",
+      "vite",
+      "pinia"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [
+      "vue"
+    ],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.frontend.vue: Composition API, refs/reactive state, SFC templates, Pinia, Router, Nuxt, hydration, and Vite"
+    ],
+    "round_signals": [
+      "l3_validation_smoke"
+    ],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "round_signals": [],
+    "user_overrides": [],
+    "repo_signals": [
+      "add a database migration with a unique constraint and transaction rollback"
+    ]
+  },
+  "retrieval_query": "Vue composition API reactivity ref computed template binding pinia nuxt hydration vite",
+  "expected_pack_id": "code.frontend.vue",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "Vue UI behavior L3 validation smoke",
+    "signals": [
+      "component tests",
+      "browser smoke",
+      "hydration warning checks",
+      "template state assertions",
+      "and route navigation checks"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "Vue UI behavior diagnosis smoke",
+    "signals": [
+      "separate ref unwrapping",
+      "computed ownership",
+      "template binding",
+      "store mutation",
+      "router guard",
+      "and SSR hydration causes"
+    ]
+  },
+  "source_refs": [
+    "source:mdn-web-docs:paraphrased",
+    "source:web.dev:paraphrased"
+  ]
+}

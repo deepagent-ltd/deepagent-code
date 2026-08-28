@@ -1,0 +1,753 @@
+[
+  {
+    "ref_id": "knowledge:testing:coverage-is-not-correctness",
+    "type": "knowledge",
+    "title": "Coverage Is Not Correctness",
+    "summary": "Coverage proves execution, not correctness of assertions.",
+    "domains": [
+      "testing",
+      "code"
+    ],
+    "triggers": [
+      "coverage",
+      "proves",
+      "execution",
+      "correctness",
+      "assertions",
+      "high",
+      "coexist"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.testing"
+  },
+  {
+    "ref_id": "knowledge:testing:exit-code-and-diagnostic",
+    "type": "knowledge",
+    "title": "Exit Code And Diagnostic",
+    "summary": "A test result needs command, exit code, and actionable diagnostic.",
+    "domains": [
+      "testing",
+      "code"
+    ],
+    "triggers": [
+      "test",
+      "result",
+      "needs",
+      "command",
+      "exit",
+      "code",
+      "actionable",
+      "diagnostic"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.testing"
+  },
+  {
+    "ref_id": "knowledge:testing:flake-repeatable-signal",
+    "type": "knowledge",
+    "title": "Flake Repeatable Signal",
+    "summary": "A suspected flaky test needs repeatable signal across reruns, isolation changes, or timing controls before changing code.",
+    "domains": [
+      "testing",
+      "code"
+    ],
+    "triggers": [
+      "suspected",
+      "flaky",
+      "test",
+      "needs",
+      "repeatable",
+      "signal",
+      "across",
+      "reruns"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.testing"
+  },
+  {
+    "ref_id": "knowledge:testing:mock-risk",
+    "type": "knowledge",
+    "title": "Mock Risk",
+    "summary": "Mocks can hide integration contract drift.",
+    "domains": [
+      "testing",
+      "code"
+    ],
+    "triggers": [
+      "mocks",
+      "hide",
+      "integration",
+      "contract",
+      "drift",
+      "useful",
+      "boundaries"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.testing"
+  },
+  {
+    "ref_id": "knowledge:testing:test-selection-blast-radius",
+    "type": "knowledge",
+    "title": "Test Selection Blast Radius",
+    "summary": "Test breadth should expand with the changed surface: local tests first, package gates for shared behavior.",
+    "domains": [
+      "testing",
+      "code"
+    ],
+    "triggers": [
+      "test",
+      "breadth",
+      "should",
+      "expand",
+      "with",
+      "changed",
+      "surface",
+      "local"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.testing"
+  },
+  {
+    "ref_id": "methodology:testing:acceptance-criteria-gate",
+    "type": "methodology",
+    "title": "Acceptance Criteria Gate",
+    "summary": "Acceptance Criteria Gate",
+    "domains": [
+      "testing",
+      "code"
+    ],
+    "triggers": [
+      "acceptance",
+      "criteria",
+      "gate",
+      "turn",
+      "natural",
+      "language"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.testing"
+  },
+  {
+    "ref_id": "methodology:testing:coverage-gap-review",
+    "type": "methodology",
+    "title": "Coverage Gap Review",
+    "summary": "Use coverage to find unexercised branches, then inspect assertion quality.",
+    "domains": [
+      "testing",
+      "code"
+    ],
+    "triggers": [
+      "coverage",
+      "find",
+      "unexercised",
+      "branches",
+      "then",
+      "inspect",
+      "assertion",
+      "quality"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.testing"
+  },
+  {
+    "ref_id": "methodology:testing:executable-validation-contract",
+    "type": "methodology",
+    "title": "Executable Validation Contract",
+    "summary": "Executable Validation Contract",
+    "domains": [
+      "testing",
+      "code"
+    ],
+    "triggers": [
+      "executable",
+      "validation",
+      "contract",
+      "should",
+      "runnable",
+      "expected",
+      "interpreted"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.testing"
+  },
+  {
+    "ref_id": "methodology:testing:flake-isolation-loop",
+    "type": "methodology",
+    "title": "Flake Isolation Loop",
+    "summary": "Repeat, isolate shared state, then make synchronization deterministic.",
+    "domains": [
+      "testing",
+      "code"
+    ],
+    "triggers": [
+      "repeat",
+      "isolate",
+      "shared",
+      "state",
+      "then",
+      "make",
+      "synchronization",
+      "deterministic"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.testing"
+  },
+  {
+    "ref_id": "methodology:testing:replayable-scenario-task",
+    "type": "methodology",
+    "title": "Replayable Scenario Task",
+    "summary": "Replayable Scenario Task",
+    "domains": [
+      "testing",
+      "code"
+    ],
+    "triggers": [
+      "replayable",
+      "scenario",
+      "task",
+      "convert",
+      "material",
+      "into",
+      "setup"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.testing"
+  },
+  {
+    "ref_id": "methodology:testing:reproduce-minimize-fix-verify",
+    "type": "methodology",
+    "title": "Reproduce Minimize Fix Verify",
+    "summary": "Reproduce the failure, minimize input, fix implementation, verify narrow then broad.",
+    "domains": [
+      "testing",
+      "code"
+    ],
+    "triggers": [
+      "reproduce",
+      "failure",
+      "minimize",
+      "input",
+      "implementation",
+      "verify",
+      "narrow",
+      "then"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.testing"
+  },
+  {
+    "ref_id": "methodology:testing:test-selection-map",
+    "type": "methodology",
+    "title": "Test Selection Map",
+    "summary": "Map changed code to the smallest meaningful test set.",
+    "domains": [
+      "testing",
+      "code"
+    ],
+    "triggers": [
+      "changed",
+      "code",
+      "smallest",
+      "meaningful",
+      "test",
+      "steps",
+      "identify"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.testing"
+  },
+  {
+    "ref_id": "skill:testing:parse-test-failure",
+    "type": "skill",
+    "title": "Parse Test Failure",
+    "summary": "Extract failing test identity, assertion, expected/actual values, stack location, and fixture context from runner output.",
+    "domains": [
+      "testing",
+      "code"
+    ],
+    "triggers": [
+      "extract",
+      "failing",
+      "test",
+      "identity",
+      "assertion",
+      "expected",
+      "actual",
+      "values"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.testing"
+  },
+  {
+    "ref_id": "skill:testing:run-focused-test",
+    "type": "skill",
+    "title": "Run Focused Test",
+    "summary": "Select and run the narrowest relevant test command, then report command, cwd, exit code, and diagnostic lines.",
+    "domains": [
+      "testing",
+      "code"
+    ],
+    "triggers": [
+      "select",
+      "narrowest",
+      "relevant",
+      "test",
+      "command",
+      "then",
+      "report"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.testing"
+  },
+  {
+    "ref_id": "skill:testing:skill",
+    "type": "skill",
+    "title": "Skill",
+    "summary": "Normalize Validation Result",
+    "domains": [
+      "testing",
+      "code"
+    ],
+    "triggers": [
+      "normalize",
+      "validation",
+      "result",
+      "produce",
+      "evalenvelope",
+      "like",
+      "evidence"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.testing"
+  },
+  {
+    "ref_id": "strategy:testing:behavior-over-implementation",
+    "type": "strategy",
+    "title": "Behavior Over Implementation",
+    "summary": "Assert externally visible behavior instead of private structure.",
+    "domains": [
+      "testing",
+      "code"
+    ],
+    "triggers": [
+      "assert",
+      "externally",
+      "visible",
+      "behavior",
+      "instead",
+      "private",
+      "structure",
+      "tests"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.testing"
+  },
+  {
+    "ref_id": "strategy:testing:fixture-intent",
+    "type": "strategy",
+    "title": "Fixture Intent",
+    "summary": "Fixtures should expose the causal input clearly.",
+    "domains": [
+      "testing",
+      "code"
+    ],
+    "triggers": [
+      "fixtures",
+      "should",
+      "expose",
+      "causal",
+      "input",
+      "clearly",
+      "minimal"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.testing"
+  },
+  {
+    "ref_id": "strategy:testing:fixture-minimal-realism",
+    "type": "strategy",
+    "title": "Fixture Minimal Realism",
+    "summary": "Keep fixtures minimal but realistic enough to exercise the public behavior under test.",
+    "domains": [
+      "testing",
+      "code"
+    ],
+    "triggers": [
+      "keep",
+      "fixtures",
+      "minimal",
+      "realistic",
+      "enough",
+      "exercise",
+      "public",
+      "behavior"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.testing"
+  },
+  {
+    "ref_id": "strategy:testing:flake-causality",
+    "type": "strategy",
+    "title": "Flake Causality",
+    "summary": "Treat flakes as nondeterministic defects until proven environmental.",
+    "domains": [
+      "testing",
+      "code"
+    ],
+    "triggers": [
+      "treat",
+      "flakes",
+      "nondeterministic",
+      "defects",
+      "until",
+      "proven",
+      "environmental",
+      "repeated"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.testing"
+  },
+  {
+    "ref_id": "strategy:testing:focused-first",
+    "type": "strategy",
+    "title": "Focused First",
+    "summary": "Run the narrowest relevant test before suite-wide gates.",
+    "domains": [
+      "testing",
+      "code"
+    ],
+    "triggers": [
+      "narrowest",
+      "relevant",
+      "test",
+      "before",
+      "suite",
+      "wide",
+      "gates",
+      "focused"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.testing"
+  },
+  {
+    "ref_id": "strategy:testing:negative-path-matrix",
+    "type": "strategy",
+    "title": "Negative Path Matrix",
+    "summary": "Add or select tests for invalid input, missing state, duplicate actions, permissions, retries, and rollback paths.",
+    "domains": [
+      "testing",
+      "code"
+    ],
+    "triggers": [
+      "select",
+      "tests",
+      "invalid",
+      "input",
+      "missing",
+      "state",
+      "duplicate",
+      "actions"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.testing"
+  },
+  {
+    "ref_id": "strategy:testing:regression-before-refactor",
+    "type": "strategy",
+    "title": "Regression Before Refactor",
+    "summary": "Capture the failing behavior before changing broad code.",
+    "domains": [
+      "testing",
+      "code"
+    ],
+    "triggers": [
+      "capture",
+      "failing",
+      "behavior",
+      "before",
+      "changing",
+      "broad",
+      "code",
+      "when"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.testing"
+  },
+  {
+    "ref_id": "strategy:testing:runner-output-as-evidence",
+    "type": "strategy",
+    "title": "Runner Output As Evidence",
+    "summary": "Treat exact runner command, exit code, and actionable diagnostics as the validation evidence.",
+    "domains": [
+      "testing",
+      "code"
+    ],
+    "triggers": [
+      "treat",
+      "exact",
+      "runner",
+      "command",
+      "exit",
+      "code",
+      "actionable",
+      "diagnostics"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.testing"
+  },
+  {
+    "ref_id": "strategy:testing:runner-truth-over-validation-claim",
+    "type": "strategy",
+    "title": "Runner Truth Over Validation Claim",
+    "summary": "Validation status is determined by the runner result, not by the model's statement about tests.",
+    "domains": [
+      "testing",
+      "code",
+      "deterministic"
+    ],
+    "triggers": [
+      "runner",
+      "truth",
+      "validation",
+      "claim",
+      "exit",
+      "code",
+      "unverified",
+      "tests"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.testing"
+  },
+  {
+    "ref_id": "knowledge:testing:validation-claim-is-not-runner-truth",
+    "type": "knowledge",
+    "title": "Validation Claim Is Not Runner Truth",
+    "summary": "A model validation claim has lower authority than command output, exit code, and runner metadata.",
+    "domains": [
+      "testing",
+      "code",
+      "deterministic"
+    ],
+    "triggers": [
+      "validation",
+      "claim",
+      "runner",
+      "truth",
+      "command",
+      "output",
+      "exit",
+      "code"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.testing"
+  },
+  {
+    "ref_id": "skill:testing:summarize-runner-validation-result",
+    "type": "skill",
+    "title": "Summarize Runner Validation Result",
+    "summary": "Summarize validation output into a bounded runner-truth record without adding another model call.",
+    "domains": [
+      "testing",
+      "code",
+      "deterministic"
+    ],
+    "triggers": [
+      "summarize",
+      "runner",
+      "validation",
+      "result",
+      "bounded",
+      "exit",
+      "diagnostic",
+      "unverified"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.testing"
+  }
+]

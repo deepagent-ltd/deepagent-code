@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:svelte:set-up-component-tests",
+  "type": "methodology",
+  "title": "Set up component and load tests",
+  "description": "Use Vitest with @testing-library/svelte for components and plain unit tests for load functions.",
+  "body": "Steps: 1. Configure Vitest with the svelte plugin and jsdom environment. 2. For components, render with @testing-library/svelte, drive interactions via fireEvent/user-event, and assert on the DOM. 3. For load functions, call them directly with a mocked event (params, injected fetch) and assert the returned data. 4. Add a hydration smoke by rendering server-side output and checking it matches. 5. Wire the suite into the package test script. Rollback point: before changing the test runner config. Validation: a state change re-renders in a component test and a load test asserts serializable output.",
+  "domain": "svelte",
+  "scope_hint": "code.frontend.svelte:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.svelte",
+  "pack_id": "code.frontend.svelte"
+}

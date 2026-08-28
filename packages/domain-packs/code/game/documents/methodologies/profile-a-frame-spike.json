@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:game:profile-a-frame-spike",
+  "type": "methodology",
+  "title": "Profile and fix a frame-time spike",
+  "description": "Capture frame timing, attribute the spike to CPU/GPU/GC/IO, and remove or amortize the offending work.",
+  "body": "Steps: 1. Record a frame-time graph during play and find the spikes (not the average). 2. Capture a profile around a spike and split CPU vs GPU vs GC vs I/O. 3. Identify the cause: a synchronous asset load, a GC from per-frame garbage, an O(n^2) system, or a GPU stall. 4. Apply the matching fix: stream/preload assets, pool to kill garbage, add a broad phase, or batch draw calls. 5. Re-profile to confirm the spike is gone under budget. Rollback point: before threading work off the main loop (synchronization risk). Validation: p99 frame time fits the budget with spikes eliminated; optimizing average frame time while spikes remain still produces visible hitches.",
+  "domain": "game",
+  "scope_hint": "code.game:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.game",
+  "pack_id": "code.game"
+}

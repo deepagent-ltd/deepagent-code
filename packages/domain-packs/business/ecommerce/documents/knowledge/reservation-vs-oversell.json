@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:ecom:reservation-vs-oversell",
+  "type": "knowledge",
+  "title": "Reservation versus oversell",
+  "description": "Available stock must be decremented atomically at reservation, or concurrent buyers oversell the same unit.",
+  "body": "Use when understanding how concurrent checkouts oversell. Overselling happens when two requests both read the same availability and then both decrement, each believing the unit is theirs. The fix is to make the check and decrement one atomic operation (conditional update or lock) so only one succeeds. Do not separate the availability check from the decrement. Actions: reserve atomically and treat a failed reservation as out-of-stock. Validation signals include sold-plus-reserved never exceeding on-hand. Risk boundary: oversell means promising goods you cannot ship, harming customers and finance.",
+  "domain": "ecommerce",
+  "scope_hint": "business.ecommerce:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:business.ecommerce",
+  "pack_id": "business.ecommerce"
+}

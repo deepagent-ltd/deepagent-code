@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:orch:depend-on-data-not-time",
+  "type": "strategy",
+  "title": "Gate tasks on data readiness, not a timer",
+  "description": "Trigger downstream work from the actual arrival of upstream data via sensors or task dependencies instead of a fixed schedule offset.",
+  "body": "Use when a task consumes output that another job or external source produces. Do not start it on a guessed time offset after the upstream is 'usually done' — late upstreams then feed it empty or partial data. Actions: express the dependency explicitly in the DAG, or use a sensor that polls for the data's arrival with a timeout, so the consumer runs only when its input exists. Validation signals include a sensor that blocks until the input lands and a downstream run that never reads partial data. Risk boundary: a timer-gated dependency silently processes incomplete data; if a sensor times out waiting, fail loudly and escalate rather than letting the downstream proceed on missing input.",
+  "domain": "orchestration",
+  "scope_hint": "code.data-pipeline-orchestration:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-pipeline-orchestration",
+  "pack_id": "code.data-pipeline-orchestration"
+}

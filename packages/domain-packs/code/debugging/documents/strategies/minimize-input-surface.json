@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:debugging:minimize-input-surface",
+  "type": "strategy",
+  "description": "Shrink the failing input, state, or scenario until the smallest cause-bearing reproduction remains.",
+  "body": "Use this when failures involve large fixtures, long workflows, broad logs, or multiple services. Remove unrelated data, mocks, flags, timing, and steps while preserving the failure. Do not minimize away the behavior that makes the bug real, such as permission context, encoding, ordering, or persistence state. Execution actions include reducing payload fields, isolating one test case, narrowing to one request ID, or replacing a full workflow with the smallest state transition. Verification signals are the same failure signature on the minimized case and a clear statement of what was removed. The boundary is that minimization supports diagnosis; it does not replace the final regression test against the real public behavior. Use when Code Debugging work touches reproduction steps, stack traces, logs, state transitions, and controlled hypotheses. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: choose the smallest direction that preserves the domain contract; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include minimal repro, before/after trace, regression test, and command output. Risk boundary: escalate or stop when the task involves blind retries, wrapper fixes, broad rewrites, and unproven root cause, missing owner evidence, or live external state.",
+  "domain": "debugging",
+  "scope_hint": "code.debugging:strategies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.debugging:human_authored",
+  "pack_id": "code.debugging"
+}

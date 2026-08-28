@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:vdb:reindex-on-embedding-model-change",
+  "type": "methodology",
+  "title": "Reindex when the embedding model changes",
+  "description": "Re-embed and rebuild the index whenever the model or its version changes, since vectors are model-specific.",
+  "body": "Use when upgrading or swapping the embedding model behind a vector store. Actions: treat the embedding model version as part of the index identity; on a change, re-embed the entire corpus with the new model, build a parallel index, run a recall and relevance comparison against the old index, and cut over only after the new index validates. Keep the old index until cutover completes. Verify that mixed old/new vectors never share one index. Validation signals include the parallel index passing the relevance comparison and no query spanning two model versions. Risk boundary: mixing vectors from different models in one index produces meaningless distances, so never partially re-embed in place; do a full rebuild and human-gate the cutover.",
+  "domain": "vector_db",
+  "scope_hint": "code.database.vector:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.vector",
+  "pack_id": "code.database.vector"
+}

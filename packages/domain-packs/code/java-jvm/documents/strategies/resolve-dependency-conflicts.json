@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:java_jvm:resolve-dependency-conflicts",
+  "type": "strategy",
+  "title": "Resolve transitive dependency version conflicts",
+  "description": "Read the dependency tree, understand the build tool's conflict-resolution rule, and pin versions via a BOM or constraints instead of guessing.",
+  "body": "Use when a NoSuchMethodError, NoClassDefFoundError, or duplicate class appears at runtime. Do not add random exclusions until it compiles or assume the highest version wins (Maven picks nearest-wins, Gradle picks highest). Actions: run `mvn dependency:tree -Dverbose` or `gradle dependencies` to find the conflicting versions and their paths, align them with a BOM (dependencyManagement / platform()) or an explicit constraint, and remove only the duplicate, not the API you need. Validation signals include a single resolved version per artifact in the tree and the runtime error disappearing. Risk boundary: a forced downgrade can reintroduce a security fix's absence; verify the chosen version against advisories and escalate rather than silently pinning an old release.",
+  "domain": "java",
+  "scope_hint": "code.java-jvm:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.java-jvm",
+  "pack_id": "code.java-jvm"
+}

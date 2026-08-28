@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:performance:benchmarked-without-warmup",
+  "type": "failure_dossier",
+  "description": "Reporting benchmark numbers from cold runs without warmup, so JIT/cache effects make results unstable and misleading.",
+  "body": "Failure mode: a benchmark measures the first few iterations before the JIT compiles or caches fill, so timings are dominated by warmup cost and vary wildly run to run, leading to false regressions or false wins. Detection signals: large variance between runs; results change drastically with iteration count; the first iteration is an order of magnitude slower. Do not report cold-start numbers as steady-state performance. Safer fallback: add warmup iterations, run enough measured iterations to stabilize, report percentiles, and confirm the noise band is small before claiming a delta.",
+  "domain": "code",
+  "scope_hint": "code.performance:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.performance:human_authored",
+  "pack_id": "code.performance"
+}

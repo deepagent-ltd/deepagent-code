@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:comp:type-soundness-and-inference",
+  "type": "knowledge",
+  "title": "Type soundness and inference",
+  "description": "A sound type system guarantees well-typed programs do not commit the errors it tracks (progress and preservation); inference reconstructs types via unification.",
+  "body": "Use when reasoning about a type checker's guarantees. Soundness means 'well-typed programs do not go wrong' for the tracked errors, formalized as progress (a well-typed term is a value or can step) and preservation (a step keeps the type); inference (e.g. Hindley-Milner) deduces types by generating and unifying constraints. Do not equate 'it compiles' with 'it is sound', and do not add a rule without checking it keeps progress/preservation. Actions: verify new constructs against the soundness theorems and test accept/reject behavior. Validation signals include a passing soundness-oriented test suite and rejected ill-typed samples. Risk boundary: an unsound rule voids the language's safety promise; treat it as a correctness defect, not a feature toggle.",
+  "domain": "compiler",
+  "scope_hint": "code.compiler:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.compiler",
+  "pack_id": "code.compiler"
+}

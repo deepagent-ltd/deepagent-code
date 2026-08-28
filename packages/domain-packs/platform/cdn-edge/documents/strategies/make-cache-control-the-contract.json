@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:edge:make-cache-control-the-contract",
+  "type": "strategy",
+  "title": "Make cache-control the caching contract",
+  "description": "Set explicit Cache-Control and surrogate headers on every response so edge caching is deterministic, not accidental.",
+  "body": "Use when serving any response through a CDN. Do not rely on default heuristic caching — without explicit headers the edge guesses, leading to either no caching or stale private data cached publicly. Actions: set Cache-Control (max-age, s-maxage, private/public) and surrogate keys per response class, inspect the response headers at the edge, and separate cacheable static from per-user dynamic. Validation signals include the CDN reporting HIT/MISS as intended and no private response cached publicly. Risk boundary: caching an authenticated response publicly leaks user data — treat any public-cache of private content as a blocking defect requiring escalation.",
+  "domain": "cdn",
+  "scope_hint": "platform.cdn-edge:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cdn-edge",
+  "pack_id": "platform.cdn-edge"
+}

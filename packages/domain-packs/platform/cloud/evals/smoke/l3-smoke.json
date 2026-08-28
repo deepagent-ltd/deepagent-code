@@ -1,0 +1,75 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "platform.cloud",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "operate",
+    "code_domains": [
+      "environment"
+    ],
+    "business_domains": [],
+    "platforms": [
+      "platform",
+      "cloud"
+    ],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for platform.cloud: IAM, cloud resources, Terraform/Bicep, resource groups, runtime config, service identity, and external state"
+    ],
+    "round_signals": [
+      "l3_validation_smoke"
+    ],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "round_signals": [],
+    "user_overrides": [],
+    "repo_signals": [
+      "fix a null pointer exception in the Java service layer"
+    ]
+  },
+  "retrieval_query": "cloud IAM least privilege region AZ failover managed service quota cost guardrail secrets manager VPC",
+  "expected_pack_id": "platform.cloud",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "cloud platform change safety L3 validation smoke",
+    "signals": [
+      "plan/dry-run output",
+      "least-privilege review",
+      "config diff",
+      "secret scan",
+      "environment ownership proof",
+      "and rollback notes"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "cloud platform change safety diagnosis smoke",
+    "signals": [
+      "separate identity",
+      "network",
+      "state backend",
+      "configuration",
+      "quota",
+      "and drift failures"
+    ]
+  },
+  "source_refs": [
+    "source:kubernetes-docs:paraphrased",
+    "source:github-actions-docs:paraphrased"
+  ]
+}

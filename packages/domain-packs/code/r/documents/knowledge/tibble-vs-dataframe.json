@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:rlang:tibble-vs-dataframe",
+  "type": "knowledge",
+  "title": "Tibble versus data.frame",
+  "description": "Tibbles differ from data.frames in subsetting, printing, and never coercing strings to factors.",
+  "body": "Use when choosing or mixing tibbles and base data.frames. A tibble never coerces strings to factors, never partial-matches column names, and df[, 'col'] returns a one-column tibble rather than dropping to a vector as a data.frame does by default. Do not assume identical subsetting behavior between them. Actions: rely on tibble's stricter, predictable rules and use [[ ]] or pull() when you want a vector. Validation signals include the returned object's class matching what downstream code expects. Risk boundary: a function expecting a vector but handed a one-column tibble fails or misbehaves.",
+  "domain": "r_lang",
+  "scope_hint": "code.r:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.r",
+  "pack_id": "code.r"
+}

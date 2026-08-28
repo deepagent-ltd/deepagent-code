@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:evt:delivery-semantics-tradeoffs",
+  "type": "knowledge",
+  "title": "At-least-once, at-most-once, exactly-once",
+  "description": "Brokers practically offer at-least-once; exactly-once processing is an application property built from idempotency.",
+  "body": "Use when choosing how much duplication and loss to tolerate. At-most-once acks before processing (can lose events); at-least-once processes before acking (can duplicate, the common safe default); 'exactly-once' end to end requires either transactional broker features within one system or, more portably, idempotent consumers. Do not assume a broker's exactly-once flag extends to your external side effects. Actions: default to at-least-once + idempotent consumers; reserve broker transactions for in-broker read-process-write. Validation signals include a redelivery test yielding one effect. Risk boundary: choosing at-most-once for a flow that cannot lose events is a silent data-loss risk.",
+  "domain": "event_driven",
+  "scope_hint": "code.backend.event-driven:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.event-driven",
+  "pack_id": "code.backend.event-driven"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:comp:implement-type-checking",
+  "type": "methodology",
+  "title": "Implement type checking for a construct",
+  "description": "Add type-checking for a language construct by encoding its typing rule, annotating the AST, and testing accept/reject behavior.",
+  "body": "Steps: 1. Write the construct's typing rule from the language specification (premises and conclusion). 2. Resolve names through the scoped symbol table so each reference binds to the right declaration. 3. Implement the rule: check the premises, infer/annotate the result type on the AST node, and report a precise error on mismatch. 4. Ensure the rule preserves soundness (progress/preservation) for the construct. 5. Test with well-typed programs (must accept, correct annotations) and ill-typed ones (must reject with a clear message). Rollback point: before relaxing a rule to admit a program. Validation: the test suite accepts every well-typed sample and rejects every ill-typed one with a useful diagnostic; making one program compile by weakening the rule without a soundness check is a regression.",
+  "domain": "compiler",
+  "scope_hint": "code.compiler:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.compiler",
+  "pack_id": "code.compiler"
+}

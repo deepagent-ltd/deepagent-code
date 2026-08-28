@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:sim:ensure-reproducibility",
+  "type": "methodology",
+  "title": "Ensure reproducible simulation runs",
+  "description": "Fix and record random seeds and control parallel reduction order so a run reproduces exactly.",
+  "body": "Use when a simulation uses randomness or parallelism and results must be reproducible. Do not rely on a default unseeded generator, since that makes failures impossible to reproduce. Actions: set and log an explicit seed, control the reduction order in parallel sections, and verify two runs at the same seed produce identical output. Validation signals include bit-identical or tolerance-identical results across repeated runs and a recorded seed for every result. Risk boundary: nondeterministic results undermine debugging and validation, so treat a run whose seed is not recorded as unreproducible and reject it for regression use.",
+  "domain": "simulation",
+  "scope_hint": "code.simulation:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.simulation",
+  "pack_id": "code.simulation"
+}

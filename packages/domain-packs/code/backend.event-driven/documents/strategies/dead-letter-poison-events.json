@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:evt:dead-letter-poison-events",
+  "type": "strategy",
+  "title": "Dead-letter poison events",
+  "description": "Events that fail processing after bounded attempts move to a dead-letter topic instead of blocking the partition.",
+  "body": "Use when a single unprocessable event could fail repeatedly on a partition. Do not let a poison event redeliver forever, which on an ordered partition halts every later event. Actions: bound attempts, then publish the failed event with error metadata to a dead-letter topic, commit the offset, and continue; alert and retain enough context to replay after a fix. Validation signals include a test that a permanently failing event reaches the DLT after N attempts and later events on the partition still progress. Risk boundary: no DLT on an ordered partition means one bad event stalls the whole stream; treat as a blocking design gap.",
+  "domain": "event_driven",
+  "scope_hint": "code.backend.event-driven:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.event-driven",
+  "pack_id": "code.backend.event-driven"
+}

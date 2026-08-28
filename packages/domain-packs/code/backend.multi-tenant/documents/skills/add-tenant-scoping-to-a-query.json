@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:mt:add-tenant-scoping-to-a-query",
+  "type": "skill",
+  "title": "Add tenant scoping to a data-access path",
+  "description": "Take an unscoped query and bind it to the authenticated tenant, then prove isolation with a negative cross-tenant test.",
+  "body": "Use when a read or write lacks a tenant predicate. Do not derive the tenant from request input. Actions: resolve the tenant from the authenticated principal; add the tenant predicate to the query at the data layer; centralize it so future queries inherit it; write a negative test that a foreign tenant is denied. Validation signals include the negative test passing and legitimate access unaffected. Risk boundary: an unscoped path is a cross-tenant leak, so treat the fix as high severity, add the data-layer guard, and escalate if other paths share the same gap.",
+  "domain": "multi_tenant",
+  "scope_hint": "code.backend.multi-tenant:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.multi-tenant",
+  "pack_id": "code.backend.multi-tenant"
+}

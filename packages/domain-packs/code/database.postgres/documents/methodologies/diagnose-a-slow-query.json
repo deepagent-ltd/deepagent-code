@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:pg:diagnose-a-slow-query",
+  "type": "methodology",
+  "title": "Diagnose a slow query",
+  "description": "Use EXPLAIN ANALYZE, statistics, and pg_stat views to find and fix the actual bottleneck node.",
+  "body": "Steps: 1. Capture the query and run EXPLAIN (ANALYZE, BUFFERS) on production-like data. 2. Find the dominant node by actual time and compare estimated vs actual rows (large gaps mean stale stats — run ANALYZE). 3. Check pg_stat_statements for frequency and total time to confirm it matters. 4. Apply the smallest fix: add/adjust an index, rewrite to be sargable, or raise work_mem if a sort spills. 5. Re-run EXPLAIN to confirm the node changed. Rollback point: drop the new index if the plan does not improve. Validation: the costly node is replaced (seq scan -> index scan) and total time drops on real data.",
+  "domain": "postgres",
+  "scope_hint": "code.database.postgres:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.postgres",
+  "pack_id": "code.database.postgres"
+}

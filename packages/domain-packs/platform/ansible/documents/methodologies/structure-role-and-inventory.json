@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:ansible:structure-role-and-inventory",
+  "type": "methodology",
+  "title": "Structure a role and inventory",
+  "description": "Organize tasks, handlers, defaults, and variables into a role and map hosts through a clear inventory.",
+  "body": "Steps: 1. Group related tasks into a role with the standard tasks/handlers/templates/defaults layout. 2. Put overridable values in defaults and environment-specific ones in group_vars. 3. Define inventory groups by environment and function. 4. Keep production and non-production inventories separate. 5. Verify variable precedence resolves to the intended values per host. Rollback point: before pointing the role at a new inventory group. Validation: a host resolves the expected variables and the role applies cleanly in a non-prod group first.",
+  "domain": "ansible",
+  "scope_hint": "platform.ansible:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.ansible",
+  "pack_id": "platform.ansible"
+}

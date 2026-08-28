@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:refactor:scope-creep-during-cleanup",
+  "type": "failure_dossier",
+  "description": "A refactor that quietly absorbs behavior changes and unrelated cleanups, making the diff unreviewable and regressions hard to isolate.",
+  "body": "Failure mode: what started as a structural refactor accumulates bug fixes, renames, and behavior tweaks in one commit, so reviewers cannot tell mechanical from behavioral changes and a later regression cannot be bisected to a clear cause. Detection signals: a large diff mixing logic and structure; review comments confused about intent; bisect lands on a commit doing many things. Do not bundle behavior changes into a structural refactor. Safer fallback: split the change into a pure structural step and separate behavioral commits, keep each green, and get the mechanical part reviewed on its own.",
+  "domain": "code",
+  "scope_hint": "code.refactor:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.refactor:human_authored",
+  "pack_id": "code.refactor"
+}

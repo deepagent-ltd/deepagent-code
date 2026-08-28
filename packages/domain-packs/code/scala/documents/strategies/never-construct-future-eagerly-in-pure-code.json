@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:scala:never-construct-future-eagerly-in-pure-code",
+  "type": "strategy",
+  "title": "Control Future eagerness and execution context",
+  "description": "A Future runs as soon as it is created, so defer or wrap it and pass the ExecutionContext deliberately.",
+  "body": "Use when working with scala.concurrent.Future. Do not assume a Future is lazy or rely on the global ExecutionContext for blocking work. Actions: remember a Future starts on creation, so to delay it wrap construction in a def or an effect type; choose the ExecutionContext explicitly and isolate blocking calls onto a dedicated blocking pool (or use blocking { }). Validation signals include a test that the side effect timing matches expectations and that blocking work does not run on the compute pool. Risk boundary: a blocking JDBC/IO call on the global compute EC starves the thread pool and stalls unrelated tasks; eager Future construction also makes side effects fire before you intend.",
+  "domain": "scala",
+  "scope_hint": "code.scala:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.scala",
+  "pack_id": "code.scala"
+}

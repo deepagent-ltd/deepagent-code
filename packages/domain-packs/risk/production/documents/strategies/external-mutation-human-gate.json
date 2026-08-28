@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:production:external-mutation-human-gate",
+  "type": "strategy",
+  "title": "External Mutation Human Gate",
+  "description": "External-state mutations need explicit human approval and environment proof before execution.",
+  "body": "Use when a task may deploy, migrate, delete data, rotate secrets, change cloud resources, alter production config, shift traffic, run irreversible jobs, or write to an external service. Do not use green tests, model confidence, or local success as permission to execute the external mutation. Actions: identify the target environment, classify reversibility, assemble evidence, require explicit approval, and stop before applying the change unless approval and runbook scope are present. Validation signals include deployment ticket, environment proof, dry-run result, backup/restore evidence, rollback plan, and monitoring guardrails. Risk boundary: absence of approval is not a runtime failure; it is a blocked or needs_human state that preserves user experience without silently executing high-risk work.",
+  "domain": "production",
+  "scope_hint": "risk.production:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.production:docs38",
+  "pack_id": "risk.production"
+}

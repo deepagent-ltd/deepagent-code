@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:php:request-lifecycle-and-statelessness",
+  "type": "knowledge",
+  "title": "The PHP request lifecycle and statelessness",
+  "description": "Classic PHP boots, handles one request, and tears down, so in-process state does not persist between requests.",
+  "body": "Use when reasoning about caching, singletons, or state in PHP. The traditional model is shared-nothing: PHP-FPM/mod_php boots the framework, serves a single request, and discards all in-memory state, so a static property or in-process cache does not survive to the next request and must not be relied on for cross-request state. Persistent state lives in a database, cache server (Redis), or session store. Long-running runtimes (Swoole, RoadRunner, Octane) break this assumption by keeping the app in memory, which then exposes static/singleton state leakage between requests. Do not store per-request data in static properties. Actions: keep cross-request state in external stores and audit statics when moving to a persistent runtime. Validation signals include a test that per-request state does not leak. Risk boundary: leaked static state under Octane/Swoole can mix one user's data into another's response.",
+  "domain": "php",
+  "scope_hint": "code.php:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.php",
+  "pack_id": "code.php"
+}

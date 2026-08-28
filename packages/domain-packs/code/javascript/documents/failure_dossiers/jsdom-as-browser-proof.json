@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:javascript:jsdom-as-browser-proof",
+  "type": "failure_dossier",
+  "description": "Using jsdom success as browser proof",
+  "body": "DOM-like test environments do not prove layout, navigation, canvas, network, or hydration behavior in a real browser. Treat this as insufficient evidence for user-visible changes. Safer path: add a browser smoke or dev/build verification when UI runtime behavior changed.\n\nUse only as a diagnostic do-not-use signal; do not expose this as positive strategy, methodology, knowledge, skill, or memory.",
+  "domain": "javascript",
+  "scope_hint": "code.javascript:failure_dossiers",
+  "evidence_strength": "medium",
+  "provenance_tag": "code.javascript:failure_seed:paraphrased_common_failures",
+  "pack_id": "code.javascript"
+}

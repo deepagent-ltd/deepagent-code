@@ -1,0 +1,216 @@
+name: desktop-build
+
+# Desktop packaging: builds installable packages and publishes the latest main
+# build as an auto-managed GitHub Release.
+#
+# macOS signing/notarization is opt-in: if the APPLE_* / CSC_* secrets are present it
+# signs, otherwise it builds an UNSIGNED package (testers right-click → Open to launch).
+# Windows/Linux packages are unsigned here.
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: "Build channel"
+        required: false
+        default: "prod"
+        type: choice
+        options:
+          - beta
+          - prod
+      platforms:
+        description: "Which platforms to build"
+        required: false
+        default: "all"
+        type: choice
+        options:
+          - all
+          - mac
+          - linux
+          - windows
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: desktop-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Delete previous desktop artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          gh api "repos/$REPOSITORY/actions/artifacts" --paginate \
+            --jq '.artifacts[] | select(.name | startswith("deepagent-code-desktop-")) | .id' \
+            | while read -r artifact_id; do
+                gh api -X DELETE "repos/$REPOSITORY/actions/artifacts/$artifact_id"
+              done
+
+  # Build the matrix from the `platforms` input. Job-level `if` cannot read the matrix
+  # context, so the selection happens here and the build job consumes the JSON.
+  setup:
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.gen.outputs.matrix }}
+    steps:
+      - id: gen
+        shell: bash
+        env:
+          PLATFORMS: ${{ github.event.inputs.platforms || 'all' }}
+        run: |
+          # Keep one artifact per OS to stay under the repo's tight artifact quota.
+          # macOS arm64 only - Apple Silicon covers current Macs. The Intel (macos-13)
+          # runner is queue-starved and the x64 cross-compile is unreliable, so it is dropped.
+          mac='{"host":"macos-14","target":"darwin-arm64","platform_flag":"--mac dmg zip --arm64","group":"mac"}'
+          linux='{"host":"ubuntu-24.04","target":"linux-amd64","platform_flag":"--linux deb --x64","group":"linux"}'
+          win='{"host":"windows-2025","target":"win-x64","platform_flag":"--win nsis --x64","group":"win"}'
+          case "$PLATFORMS" in
+            mac)       items="$mac" ;;
+            linux)     items="$linux" ;;
+            windows)   items="$win" ;;
+            all)       items="$mac,$linux,$win" ;;
+            *)         items="$mac,$linux,$win" ;;
+          esac
+          echo "matrix={\"include\":[$items]}" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs:
+      - cleanup
+      - setup
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.setup.outputs.matrix) }}
+    runs-on: ${{ matrix.host }}
+    env:
+      # Mapped here so step-level `if` can test them (the `secrets` context is not
+      # available in `if`, but `env` is).
+      HAS_APPLE_CERT: ${{ secrets.APPLE_CERTIFICATE != '' }}
+      # Notarization uses the Apple ID method (matches packages/desktop/signing.env), so it
+      # needs the Apple ID + app-specific password + team id. electron-builder.config.ts treats
+      # mac signing as available when all three are set.
+      HAS_APPLE_NOTARY: ${{ secrets.APPLE_ID != '' && secrets.APPLE_APP_SPECIFIC_PASSWORD != '' && secrets.APPLE_TEAM_ID != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-bun
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      # Import the Developer ID cert only when the secret is configured; otherwise the
+      # build proceeds unsigned (DEEPAGENT_CODE_ALLOW_UNSIGNED below).
+      - name: Import Apple signing certificate
+        if: matrix.group == 'mac' && env.HAS_APPLE_CERT == 'true'
+        uses: apple-actions/import-codesign-certs@v3
+        with:
+          p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
+          p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+
+      # bun run build invokes the package prebuild lifecycle before electron-vite.
+      - name: Build renderer
+        working-directory: packages/desktop
+        env:
+          DEEPAGENT_CODE_CHANNEL: ${{ github.event_name == 'push' && 'prod' || (github.event.inputs.channel || 'prod') }}
+          NODE_OPTIONS: --max-old-space-size=4096
+        run: bun run build
+
+      - name: Package
+        working-directory: packages/desktop
+        timeout-minutes: 60
+        env:
+          DEEPAGENT_CODE_CHANNEL: ${{ github.event_name == 'push' && 'prod' || (github.event.inputs.channel || 'prod') }}
+          # Sign + notarize on macOS only when BOTH the signing cert and the Apple ID
+          # notarization secrets are present; otherwise build unsigned instead of failing.
+          DEEPAGENT_CODE_ALLOW_UNSIGNED: ${{ (matrix.group == 'mac' && env.HAS_APPLE_CERT == 'true' && env.HAS_APPLE_NOTARY == 'true') && '0' || '1' }}
+          # Code-signing identity (Developer ID Application). The cert is imported into the
+          # keychain by the step above; CSC_NAME selects it by subject name.
+          CSC_NAME: ${{ secrets.APPLE_CSC_NAME }}
+          # Notarization via Apple ID (App Store Connect). electron-builder picks up these
+          # standard env vars; config.ts enables notarize when all three are set.
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: npx electron-builder ${{ matrix.platform_flag }} --publish never --config electron-builder.config.ts
+
+      - name: Smoke test packaged macOS app
+        if: matrix.group == 'mac'
+        working-directory: packages/desktop
+        run: |
+          executable=$(find dist/mac-arm64 -maxdepth 4 -type f -path '*/Contents/MacOS/DeepAgent Code*' -perm +111 -print -quit)
+          test -n "$executable"
+          DEEPAGENT_CODE_DESKTOP_EXECUTABLE="$executable" bun run test:subagents-cold-start
+
+      - name: Upload package artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: deepagent-code-desktop-${{ matrix.target }}
+          if-no-files-found: error
+          compression-level: 9
+          retention-days: 1
+          path: |
+            packages/desktop/dist/latest*.yml
+            packages/desktop/dist/*.blockmap
+            packages/desktop/dist/*.dmg
+            packages/desktop/dist/*.zip
+            packages/desktop/dist/*.deb
+            packages/desktop/dist/*.exe
+
+  release:
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: deepagent-code-desktop-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Publish latest desktop release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          version=$(node -p 'require("./packages/desktop/package.json").version.replace(/-.*/, "")')
+          tag="app-v${version}-main.${GITHUB_RUN_NUMBER}"
+
+          mapfile -t assets < <(find release-assets -type f \( -name 'latest*.yml' -o -name '*.blockmap' -o -name '*.dmg' -o -name '*.zip' -o -name '*.deb' -o -name '*.exe' \) | sort)
+          if [ "${#assets[@]}" -eq 0 ]; then
+            echo "No desktop release assets found"
+            exit 1
+          fi
+          for required in latest.yml latest-mac.yml; do
+            if ! find release-assets -type f -name "$required" | grep -q .; then
+              echo "Missing updater metadata: $required"
+              exit 1
+            fi
+          done
+
+          gh release list --repo "$REPOSITORY" --limit 100 --json tagName \
+            --jq '.[] | select(.tagName | test("^app-v[0-9]+\\.[0-9]+\\.[0-9]+-main\\.")) | .tagName' \
+            | while read -r old_tag; do
+                if [ -n "$old_tag" ]; then
+                  gh release delete "$old_tag" --repo "$REPOSITORY" --cleanup-tag -y
+                fi
+              done
+
+          gh release create "$tag" "${assets[@]}" \
+            --repo "$REPOSITORY" \
+            --latest \
+            --target "$GITHUB_SHA" \
+            --title "DeepAgent Code Desktop ${version} (${GITHUB_SHA::7})" \
+            --notes "Automated desktop build from main at ${GITHUB_SHA}."

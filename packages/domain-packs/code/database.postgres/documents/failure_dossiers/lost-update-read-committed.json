@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:pg:lost-update-read-committed",
+  "type": "failure_dossier",
+  "description": "A read-modify-write under default read-committed isolation loses one transaction's update when two run concurrently.",
+  "body": "Failure mode: two transactions read the same row (e.g. balance), each computes a new value in app code, and both write; under read-committed with no row lock the second overwrites the first, silently losing an update. Detection signals: totals drift under concurrency; the pattern is SELECT then UPDATE in app code with no FOR UPDATE; bugs reproduce only under load. Do not assume read-committed serializes read-modify-write. Safer fallback: SELECT ... FOR UPDATE to lock the row, do the update atomically in SQL, or raise to serializable and retry on serialization failures, with a concurrency test proving correctness.",
+  "domain": "postgres",
+  "scope_hint": "code.database.postgres:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.postgres:human_authored",
+  "pack_id": "code.database.postgres"
+}

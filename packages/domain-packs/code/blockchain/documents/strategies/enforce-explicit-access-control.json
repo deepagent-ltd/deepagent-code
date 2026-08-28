@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:chain:enforce-explicit-access-control",
+  "type": "strategy",
+  "title": "Guard every privileged function explicitly",
+  "description": "Apply an access-control modifier to all state-changing and admin functions, and never authorize on tx.origin.",
+  "body": "Use on any function that changes state, moves value, or alters configuration. Do not leave a privileged function unguarded, and never use tx.origin for authorization (it lets a phishing contract act as the user). Actions: apply a role/owner modifier (Ownable/AccessControl) to each privileged function, check msg.sender against the intended role, and make initialization functions callable once. Validation signals include an adversarial test where a non-owner call reverts and an attempt to re-initialize fails. Risk boundary: a missing access-control check lets anyone seize ownership or drain funds, and tx.origin auth enables phishing relays; treat either as a critical access-control defect requiring review.",
+  "domain": "blockchain",
+  "scope_hint": "code.blockchain:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.blockchain",
+  "pack_id": "code.blockchain"
+}

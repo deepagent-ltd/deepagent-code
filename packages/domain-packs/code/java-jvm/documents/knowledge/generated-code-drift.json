@@ -1,0 +1,11 @@
+{
+  "ref_id": "knowledge:java_jvm:generated-code-drift",
+  "type": "knowledge",
+  "description": "In Java/JVM, never hand-edit annotation-processor output (Lombok, Dagger, MapStruct) and generated-sources; change the source and rerun the generator.",
+  "body": "In Java/JVM, annotation-processor output (Lombok, Dagger, MapStruct) and generated-sources are derived artifacts: editing them directly drifts from the generator and is overwritten on the next run. Use when a diff touches generated files, codegen inputs, or the the JDK version, bytecode target, and JIT/GC configuration that produces them. Do not use this to justify patching generated output by hand or skipping regeneration. Actions: locate the generator and its inputs, edit the source, rerun the generation step, then run the Maven/Gradle module task (mvn -pl / gradle :module:test) with the right JDK toolchain so the regenerated output is what ships. Validation signals include a clean regeneration diff, a passing the module's JUnit suite on the affected classpath, and no manual edits left in the generated tree. Risk boundary: escalate before regenerating if the generator is pinned, vendored, or owned by another team, and roll back if regeneration changes unrelated files.",
+  "domain": "java_jvm",
+  "scope_hint": "code.java-jvm:knowledge",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.java-jvm:skill_survey",
+  "pack_id": "code.java-jvm"
+}

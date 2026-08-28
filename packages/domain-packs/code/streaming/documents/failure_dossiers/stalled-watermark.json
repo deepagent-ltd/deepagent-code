@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:stream:stalled-watermark",
+  "type": "failure_dossier",
+  "description": "Windows stop firing because an idle or lagging partition holds the watermark back.",
+  "body": "Failure mode: an event-time job stops emitting window results because one input partition is idle or far behind, and the global watermark is the minimum across partitions, so it never advances past the laggard. Detection signals: window output halts while input still flows on other partitions, and watermark metrics show one partition pinning the global watermark. Do not assume the data source dried up. Safer fallback: enable idle-partition detection so quiet partitions stop holding the watermark, investigate the lagging partition's consumer, and confirm windows resume firing once the watermark advances past the stalled source.",
+  "domain": "streaming",
+  "scope_hint": "code.streaming:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.streaming:human_authored",
+  "pack_id": "code.streaming"
+}

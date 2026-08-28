@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:flutter:dispose-widget-owned-resources",
+  "type": "strategy",
+  "title": "Dispose resources a State object owns",
+  "description": "Controllers, stream subscriptions, animations, and timers created by a State must be released in dispose().",
+  "body": "Use when a StatefulWidget's State creates a TextEditingController, AnimationController, StreamSubscription, FocusNode, or Timer. Do not create these without a matching teardown. Actions: instantiate them in initState, store them on the State, and cancel/dispose each in the dispose() override; cancel stream subscriptions and stop animations there too. Validation signals include a widget test that disposing the widget releases the resources and no 'used after dispose' or leak warning fires. Risk boundary: leaked controllers and subscriptions accumulate across navigation, growing memory and firing callbacks on dead widgets (setState-after-dispose exceptions); an undisposed AnimationController also keeps a ticker running and wastes frames.",
+  "domain": "dart",
+  "scope_hint": "code.dart-flutter:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.dart-flutter",
+  "pack_id": "code.dart-flutter"
+}

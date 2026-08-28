@@ -1,0 +1,514 @@
+[
+  {
+    "ref_id": "strategy:prompt:keep-assembly-deterministic",
+    "type": "strategy",
+    "title": "Keep prompt assembly deterministic",
+    "summary": "The same inputs always produce the same prompt; no clock, random ordering, or unstable iteration leaks into assembly.",
+    "domains": [
+      "prompt_pipeline",
+      "prompt",
+      "scrubbing",
+      "templating",
+      "locale"
+    ],
+    "triggers": [
+      "deterministic",
+      "assembly",
+      "reproducible",
+      "stable",
+      "order",
+      "prompt"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.prompt-pipeline"
+  },
+  {
+    "ref_id": "strategy:prompt:scrub-before-assembly",
+    "type": "strategy",
+    "title": "Scrub untrusted input before assembly",
+    "summary": "User and external input is sanitized and length-bounded before it is placed into the prompt, not after.",
+    "domains": [
+      "prompt_pipeline",
+      "prompt",
+      "scrubbing",
+      "templating",
+      "locale"
+    ],
+    "triggers": [
+      "scrub",
+      "sanitize",
+      "untrusted",
+      "bound",
+      "before",
+      "input"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.prompt-pipeline"
+  },
+  {
+    "ref_id": "strategy:prompt:redact-pii-before-the-model",
+    "type": "strategy",
+    "title": "Redact PII before the prompt reaches the model",
+    "summary": "Personal data is detected and redacted or tokenized during preparation so raw PII never enters the model request.",
+    "domains": [
+      "prompt_pipeline",
+      "prompt",
+      "scrubbing",
+      "templating",
+      "locale"
+    ],
+    "triggers": [
+      "pii",
+      "redact",
+      "tokenize",
+      "personal",
+      "before",
+      "privacy"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.prompt-pipeline"
+  },
+  {
+    "ref_id": "strategy:prompt:never-echo-raw-input-into-instructions",
+    "type": "strategy",
+    "title": "Never echo raw input into instruction position",
+    "summary": "Untrusted input is confined to a labeled data section and never concatenated into the system or instruction region.",
+    "domains": [
+      "prompt_pipeline",
+      "prompt",
+      "scrubbing",
+      "templating",
+      "locale"
+    ],
+    "triggers": [
+      "echo",
+      "instruction",
+      "system",
+      "data",
+      "position",
+      "confine"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.prompt-pipeline"
+  },
+  {
+    "ref_id": "strategy:prompt:inject-assumptions-explicitly",
+    "type": "strategy",
+    "title": "Inject assumptions explicitly",
+    "summary": "Implicit context the model needs (date, locale, units, persona constraints) is injected as explicit, labeled parameters, not assumed.",
+    "domains": [
+      "prompt_pipeline",
+      "prompt",
+      "scrubbing",
+      "templating",
+      "locale"
+    ],
+    "triggers": [
+      "assumption",
+      "explicit",
+      "context",
+      "inject",
+      "parameter",
+      "label"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.prompt-pipeline"
+  },
+  {
+    "ref_id": "strategy:prompt:handle-locale-and-i18n",
+    "type": "strategy",
+    "title": "Handle locale and i18n in preparation",
+    "summary": "Locale, language, and formatting are explicit inputs to assembly so the same template serves multiple locales correctly.",
+    "domains": [
+      "prompt_pipeline",
+      "prompt",
+      "scrubbing",
+      "templating",
+      "locale"
+    ],
+    "triggers": [
+      "locale",
+      "i18n",
+      "language",
+      "format",
+      "prepare",
+      "translate"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.prompt-pipeline"
+  },
+  {
+    "ref_id": "strategy:prompt:version-prompt-artifacts",
+    "type": "strategy",
+    "title": "Version prompt artifacts",
+    "summary": "Templates and prompt configuration are versioned and diffable so a prompt change is reviewable and tied to its eval result.",
+    "domains": [
+      "prompt_pipeline",
+      "prompt",
+      "scrubbing",
+      "templating",
+      "locale"
+    ],
+    "triggers": [
+      "version",
+      "artifact",
+      "diff",
+      "template",
+      "review",
+      "track"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.prompt-pipeline"
+  },
+  {
+    "ref_id": "methodology:prompt:design-the-assembly-pipeline",
+    "type": "methodology",
+    "title": "Design the assembly pipeline",
+    "summary": "Define the ordered stages from raw inputs through scrub, redact, assemble, and snapshot so preparation is auditable.",
+    "domains": [
+      "prompt_pipeline",
+      "prompt",
+      "scrubbing",
+      "templating",
+      "locale"
+    ],
+    "triggers": [
+      "pipeline",
+      "assembly",
+      "stages",
+      "design",
+      "snapshot",
+      "order"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.prompt-pipeline"
+  },
+  {
+    "ref_id": "methodology:prompt:build-the-scrubbing-stage",
+    "type": "methodology",
+    "title": "Build the input scrubbing stage",
+    "summary": "Construct normalization, length-bounding, control-stripping, and PII-redaction passes that run before assembly.",
+    "domains": [
+      "prompt_pipeline",
+      "prompt",
+      "scrubbing",
+      "templating",
+      "locale"
+    ],
+    "triggers": [
+      "scrubbing",
+      "normalize",
+      "redact",
+      "bound",
+      "stage",
+      "build"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.prompt-pipeline"
+  },
+  {
+    "ref_id": "methodology:prompt:version-and-evaluate-a-prompt-change",
+    "type": "methodology",
+    "title": "Version and evaluate a prompt change",
+    "summary": "Treat a prompt edit like a code change: branch a new version, diff it, evaluate against the suite, and gate on no regression.",
+    "domains": [
+      "prompt_pipeline",
+      "prompt",
+      "scrubbing",
+      "templating",
+      "locale"
+    ],
+    "triggers": [
+      "version",
+      "evaluate",
+      "change",
+      "diff",
+      "gate",
+      "regression"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.prompt-pipeline"
+  },
+  {
+    "ref_id": "methodology:prompt:diagnose-an-injection-leak",
+    "type": "methodology",
+    "title": "Diagnose an injection or leak",
+    "summary": "Trace a hijacked or leaking prompt back through assembly, scrubbing, and region separation to find where input escaped.",
+    "domains": [
+      "prompt_pipeline",
+      "prompt",
+      "scrubbing",
+      "templating",
+      "locale"
+    ],
+    "triggers": [
+      "diagnose",
+      "injection",
+      "leak",
+      "trace",
+      "region",
+      "escape"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.prompt-pipeline"
+  },
+  {
+    "ref_id": "knowledge:prompt:system-user-data-separation",
+    "type": "knowledge",
+    "title": "Separating system, user, and data regions",
+    "summary": "A robust prompt keeps fixed instructions, the user request, and untrusted data in distinct regions so input cannot become instruction.",
+    "domains": [
+      "prompt_pipeline",
+      "prompt",
+      "scrubbing",
+      "templating",
+      "locale"
+    ],
+    "triggers": [
+      "system",
+      "user",
+      "data",
+      "region",
+      "separation",
+      "delimiter"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.prompt-pipeline"
+  },
+  {
+    "ref_id": "knowledge:prompt:pii-redaction-strategies",
+    "type": "knowledge",
+    "title": "PII redaction strategies",
+    "summary": "PII can be removed, masked, or reversibly tokenized; reversible tokenization preserves utility but needs a protected mapping.",
+    "domains": [
+      "prompt_pipeline",
+      "prompt",
+      "scrubbing",
+      "templating",
+      "locale"
+    ],
+    "triggers": [
+      "pii",
+      "redact",
+      "mask",
+      "tokenize",
+      "reversible",
+      "strategy"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.prompt-pipeline"
+  },
+  {
+    "ref_id": "knowledge:prompt:raw-input-echo-hazards",
+    "type": "knowledge",
+    "title": "Raw-input-echo hazards",
+    "summary": "Echoing unsanitized input into the prompt enables injection, delimiter breakout, and accidental PII or secret leakage.",
+    "domains": [
+      "prompt_pipeline",
+      "prompt",
+      "scrubbing",
+      "templating",
+      "locale"
+    ],
+    "triggers": [
+      "echo",
+      "raw",
+      "injection",
+      "breakout",
+      "leak",
+      "hazard"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.prompt-pipeline"
+  },
+  {
+    "ref_id": "knowledge:prompt:locale-assumption-pitfalls",
+    "type": "knowledge",
+    "title": "Locale assumption pitfalls",
+    "summary": "Hardcoded language, date, number, and currency formats silently mis-serve other regions and break when the input locale differs.",
+    "domains": [
+      "prompt_pipeline",
+      "prompt",
+      "scrubbing",
+      "templating",
+      "locale"
+    ],
+    "triggers": [
+      "locale",
+      "assumption",
+      "format",
+      "date",
+      "currency",
+      "pitfall"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.prompt-pipeline"
+  },
+  {
+    "ref_id": "skill:prompt:review-prompt-pipeline-safety",
+    "type": "skill",
+    "title": "Review prompt pipeline safety",
+    "summary": "Read the assembly path and report whether input is scrubbed, PII redacted, instructions isolated, and assembly deterministic.",
+    "domains": [
+      "prompt_pipeline",
+      "prompt",
+      "scrubbing",
+      "templating",
+      "locale"
+    ],
+    "triggers": [
+      "review",
+      "pipeline",
+      "safety",
+      "scrub",
+      "audit",
+      "inspect"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.prompt-pipeline"
+  },
+  {
+    "ref_id": "skill:prompt:run-determinism-and-redaction-tests",
+    "type": "skill",
+    "title": "Run determinism and redaction tests",
+    "summary": "Execute or scaffold tests that assert byte-identical assembly for fixed inputs and that seeded PII is redacted before the request.",
+    "domains": [
+      "prompt_pipeline",
+      "prompt",
+      "scrubbing",
+      "templating",
+      "locale"
+    ],
+    "triggers": [
+      "determinism",
+      "redaction",
+      "snapshot",
+      "pii",
+      "test",
+      "run"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.prompt-pipeline"
+  }
+]

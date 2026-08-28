@@ -1,0 +1,11 @@
+{
+  "ref_id": "knowledge:backend_api:status-code-contract",
+  "type": "knowledge",
+  "description": "HTTP status codes are part of client-visible contract.",
+  "body": "Changing status can break retry, auth refresh, validation rendering, and not-found behavior even if the body is similar.\n\nEvidence boundary: apply only when current task, repository, or validation evidence matches this pack boundary. Do not override a more specific pack or explicit project contract. Use when Backend API work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: use the fact to constrain the change and test plan; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "api",
+  "scope_hint": "code.backend.api:knowledge",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.backend.api",
+  "pack_id": "code.backend.api"
+}

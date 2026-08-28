@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:flutter:guard-platform-channel-calls",
+  "type": "strategy",
+  "title": "Guard platform-channel calls per platform",
+  "description": "A MethodChannel only works if the native side implements it, so check platform support and handle the missing case.",
+  "body": "Use when calling native code over a MethodChannel/EventChannel. Do not assume the native handler exists on every platform the app runs on (iOS, Android, web, desktop). Actions: implement the handler on each supported native side, branch on Platform / defaultTargetPlatform or feature-detect before invoking, and catch MissingPluginException / PlatformException to degrade gracefully when a platform lacks the feature. Validation signals include a test (with a mock channel) that an unsupported platform path is handled rather than crashing, and that errors from native are surfaced. Risk boundary: an unguarded channel call throws MissingPluginException on a platform without the handler, crashing the feature; secrets or tokens passed over a channel cross into native logs, so avoid sending sensitive data unnecessarily.",
+  "domain": "dart",
+  "scope_hint": "code.dart-flutter:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.dart-flutter",
+  "pack_id": "code.dart-flutter"
+}

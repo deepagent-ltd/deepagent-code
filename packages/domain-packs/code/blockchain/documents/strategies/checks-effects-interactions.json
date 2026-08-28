@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:chain:checks-effects-interactions",
+  "type": "strategy",
+  "title": "Order code as checks, effects, interactions",
+  "description": "Validate inputs, update all state, then make external calls last so a re-entering call finds already-updated state.",
+  "body": "Use when a function makes any external call (token transfer, ETH send, call to another contract). Do not update balances or flags after the external call, and avoid sending value before recording that you did. Actions: first run all require/validation checks, then write every state change (decrement balances, set flags), and only then perform the external interaction; add a reentrancy guard for defense in depth. Validation signals include an adversarial test where a malicious callback re-enters and fails because state was already updated. Risk boundary: state changed after an external call is the classic reentrancy hole that has drained millions; treat any post-call state mutation on a value-moving path as a critical defect and require review before deploy.",
+  "domain": "blockchain",
+  "scope_hint": "code.blockchain:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.blockchain",
+  "pack_id": "code.blockchain"
+}

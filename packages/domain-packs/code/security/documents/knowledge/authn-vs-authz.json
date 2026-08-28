@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:security:authn-vs-authz",
+  "type": "knowledge",
+  "title": "Authentication is not authorization",
+  "description": "Authentication proves who a principal is; authorization decides what that principal may do — a valid session says nothing about access to a specific resource.",
+  "body": "Use when reasoning about access bugs or designing a protected endpoint. Authentication establishes identity (a valid token/session); authorization is the per-action, per-resource permission decision that must run after identity is known. Conflating them causes IDOR and privilege-escalation bugs where any logged-in user reaches another's data. Do not treat 'has a valid session' as 'may perform this action'. Actions: separate the two layers, re-check authorization on every sensitive operation, and centralize the permission model. Validation signals include tests proving an authenticated-but-unauthorized request is denied. Risk boundary: a feature that only authenticates and never authorizes per-resource must be escalated as an access-control gap.",
+  "domain": "security",
+  "scope_hint": "code.security:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.security",
+  "pack_id": "code.security"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:architecture:premature-microservice-split",
+  "type": "failure_dossier",
+  "description": "Splitting a system into services before the domain boundaries are understood, turning method calls into brittle network coupling.",
+  "body": "Failure mode: a codebase is decomposed into services or packages along guessed boundaries, so what would have been a refactor becomes cross-network changes, distributed transactions, and chatty calls along seams that turned out wrong. Detection signals: frequent lockstep deploys across services; cross-service transactions; boundaries that change often. Do not commit to hard process boundaries before the domain is stable. Safer fallback: keep boundaries as in-process modules with narrow contracts first, validate them through real change pressure, and extract a service only once the seam proves stable.",
+  "domain": "code",
+  "scope_hint": "code.architecture:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.architecture:human_authored",
+  "pack_id": "code.architecture"
+}

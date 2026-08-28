@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:search:design-the-index-mapping",
+  "type": "methodology",
+  "title": "Design the index mapping and analyzers",
+  "description": "Define field types, analyzers, and multi-fields up front from how each field will be queried, since changing them later forces a reindex.",
+  "body": "Steps: 1. List every field and how it is used (full-text search, exact filter, sort, facet, range). 2. Type accordingly: text for relevance, keyword for exact/sort/facet, numeric/date for ranges, using multi-fields where both apply. 3. Choose or build analyzers (tokenizer + filters: lowercase, stemming, synonyms, stop words) per language and use case. 4. Disable indexing on fields never searched to save space. 5. Validate tokens with the analyze API. Rollback point: keep the previous mapping/index for an alias swap. Validation: the analyze API produces expected tokens and each field supports its intended query; a mapping designed without knowing the queries usually needs a costly reindex.",
+  "domain": "search",
+  "scope_hint": "code.search:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.search",
+  "pack_id": "code.search"
+}

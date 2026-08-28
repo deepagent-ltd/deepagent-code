@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:rt:review-broadcast-fan-out",
+  "type": "skill",
+  "title": "Review broadcast fan-out for head-of-line blocking",
+  "description": "Trace how a channel event reaches subscribers and report whether a slow client can stall delivery to others.",
+  "body": "Use when validating a pub/sub or broadcast path. Actions: trace where one event is delivered to many connections; verify each connection has its own bounded queue and writer so fan-out enqueues without blocking on a slow socket; check for a shared backplane if multiple instances exist; confirm subscriptions are cleaned up on disconnect. Do not accept a synchronous subscriber loop that writes inline. Report the fan-out location and classify it as isolated/bounded or head-of-line-blocking. This skill is read-only against non-production. Validation signals include a slow-client test that does not delay others. Risk boundary: synchronous fan-out plus an unbounded buffer is a stability risk to flag.",
+  "domain": "realtime",
+  "scope_hint": "code.backend.realtime:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.realtime",
+  "pack_id": "code.backend.realtime"
+}

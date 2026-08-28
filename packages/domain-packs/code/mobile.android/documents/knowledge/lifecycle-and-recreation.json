@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:android:lifecycle-and-recreation",
+  "type": "knowledge",
+  "title": "The Android component lifecycle",
+  "description": "Activities and Fragments are created, destroyed, and recreated on configuration changes and memory pressure, so their instances are short-lived.",
+  "body": "Use when reasoning about why state vanishes or leaks. The system drives Activities/Fragments through create/start/resume/pause/stop/destroy, and recreates them on configuration changes (rotation, locale, theme) and can destroy them under memory pressure; a new instance is built each time. Do not treat an Activity instance as a stable home for state or hold long references to it. Actions: scope durable state to a ViewModel and observe it. Validation signals include state surviving recreation. Risk boundary: storing state in the Activity loses it on every config change, and capturing an Activity/Context in a long-lived object leaks it across recreation — instance lifetime is short and system-controlled, design around it.",
+  "domain": "android",
+  "scope_hint": "code.mobile.android:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mobile.android",
+  "pack_id": "code.mobile.android"
+}

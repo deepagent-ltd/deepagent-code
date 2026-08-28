@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:auth:idor-missing-object-check",
+  "type": "failure_dossier",
+  "description": "Endpoint authorizes by role but not by object ownership, letting a valid user access another user's resource by id.",
+  "body": "Failure mode: GET/PUT /resource/:id checks that the caller has a role but not that they own or may access that specific id, so changing the id reaches someone else's data. Detection signals: handler loads by id from the path with only a function-level role guard; no owner/tenant comparison; no negative test for cross-user access. Do not assume a role check covers object access. Safer fallback: compare the resource's owner/tenant to the principal at the data layer and add a negative test where a valid user requests an object they do not own.",
+  "domain": "backend_auth",
+  "scope_hint": "code.backend.auth:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.auth:human_authored",
+  "pack_id": "code.backend.auth"
+}

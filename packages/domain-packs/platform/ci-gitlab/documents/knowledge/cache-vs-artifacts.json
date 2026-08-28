@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:glci:cache-vs-artifacts",
+  "type": "knowledge",
+  "title": "Cache versus artifacts semantics",
+  "description": "Cache is a best-effort speedup keyed and reused across pipelines; artifacts are guaranteed job outputs passed downstream and expirable.",
+  "body": "Use when choosing how to move data between jobs. Cache is an optimization: keyed (ideally on the lockfile), shared opportunistically across pipelines and runners, and never guaranteed to be present, so a job must work on a cache miss. Artifacts are explicit outputs uploaded after a job and downloaded by downstream jobs per dependencies:/needs:, with expire_in controlling retention. Do not use cache for correctness-critical handoff or upload secrets as artifacts. Actions: cache dependency directories with a lockfile key; use artifacts for build outputs and reports with scoped paths and expiry. Validation signals include builds succeeding on cache miss and downstream jobs receiving only requested artifacts. Risk boundary: artifacts capturing a credential file leak it to anyone with pipeline access.",
+  "domain": "ci_gitlab",
+  "scope_hint": "platform.ci-gitlab:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.ci-gitlab",
+  "pack_id": "platform.ci-gitlab"
+}

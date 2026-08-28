@@ -1,0 +1,482 @@
+[
+  {
+    "ref_id": "strategy:hwprot:i2c-address-ack-discipline",
+    "type": "strategy",
+    "title": "Verify I2C addressing and ACK handshake first",
+    "summary": "Confirm the seven-bit device address and per-byte acknowledgement on a capture before debugging any higher-level register logic.",
+    "domains": [
+      "hw_protocols",
+      "i2c",
+      "spi",
+      "uart",
+      "can",
+      "usb",
+      "pcie"
+    ],
+    "triggers": [
+      "i2c",
+      "device address",
+      "ack",
+      "clock stretching"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.protocols"
+  },
+  {
+    "ref_id": "strategy:hwprot:spi-mode-cs-alignment",
+    "type": "strategy",
+    "title": "Align SPI clock mode and chip-select timing",
+    "summary": "Match clock polarity and phase to the peripheral and assert chip select with the timing margins the datasheet requires.",
+    "domains": [
+      "hw_protocols",
+      "i2c",
+      "spi",
+      "uart",
+      "can",
+      "usb",
+      "pcie"
+    ],
+    "triggers": [
+      "spi bus",
+      "spi mode",
+      "chip select",
+      "cpol cpha"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.protocols"
+  },
+  {
+    "ref_id": "strategy:hwprot:uart-baud-framing",
+    "type": "strategy",
+    "title": "Lock UART baud and framing before data debug",
+    "summary": "Set baud, parity, and stop bits identically on both ends and confirm framing on a scope before chasing payload bugs.",
+    "domains": [
+      "hw_protocols",
+      "i2c",
+      "spi",
+      "uart",
+      "can",
+      "usb",
+      "pcie"
+    ],
+    "triggers": [
+      "uart",
+      "baud rate",
+      "framing",
+      "parity"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.protocols"
+  },
+  {
+    "ref_id": "strategy:hwprot:can-arbitration-timing",
+    "type": "strategy",
+    "title": "Configure CAN bit timing and respect arbitration",
+    "summary": "Set the sample point and bit-timing segments consistently across all nodes so arbitration and acknowledgement work.",
+    "domains": [
+      "hw_protocols",
+      "i2c",
+      "spi",
+      "uart",
+      "can",
+      "usb",
+      "pcie"
+    ],
+    "triggers": [
+      "can bus",
+      "arbitration",
+      "bit timing",
+      "sample point"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.protocols"
+  },
+  {
+    "ref_id": "strategy:hwprot:usb-enumeration-bringup",
+    "type": "strategy",
+    "title": "Drive USB enumeration step by step",
+    "summary": "Walk reset, address assignment, and descriptor requests in order and confirm each before configuring endpoints.",
+    "domains": [
+      "hw_protocols",
+      "i2c",
+      "spi",
+      "uart",
+      "can",
+      "usb",
+      "pcie"
+    ],
+    "triggers": [
+      "usb descriptor",
+      "enumeration",
+      "set address",
+      "endpoint"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.protocols"
+  },
+  {
+    "ref_id": "strategy:hwprot:pcie-lane-link-training",
+    "type": "strategy",
+    "title": "Confirm PCIe lane width and link training",
+    "summary": "Verify negotiated link width and speed before debugging transaction-layer traffic on a PCIe endpoint.",
+    "domains": [
+      "hw_protocols",
+      "i2c",
+      "spi",
+      "uart",
+      "can",
+      "usb",
+      "pcie"
+    ],
+    "triggers": [
+      "pcie lane",
+      "link training",
+      "tlp",
+      "link width"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.protocols"
+  },
+  {
+    "ref_id": "methodology:hwprot:capture-bus-with-analyzer",
+    "type": "methodology",
+    "title": "Capture and decode a bus with a logic analyzer",
+    "summary": "Probe the actual wires and decode the protocol before trusting any software-level interpretation of a transaction.",
+    "domains": [
+      "hw_protocols",
+      "i2c",
+      "spi",
+      "uart",
+      "can",
+      "usb",
+      "pcie"
+    ],
+    "triggers": [
+      "logic analyzer",
+      "bus capture",
+      "decode",
+      "probe"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.protocols"
+  },
+  {
+    "ref_id": "methodology:hwprot:i2c-bus-scan-recovery",
+    "type": "methodology",
+    "title": "Scan an I2C bus and recover a stuck line",
+    "summary": "Enumerate responding addresses and apply a clock-pulse recovery when a slave holds the data line low.",
+    "domains": [
+      "hw_protocols",
+      "i2c",
+      "spi",
+      "uart",
+      "can",
+      "usb",
+      "pcie"
+    ],
+    "triggers": [
+      "i2c scan",
+      "bus recovery",
+      "stuck bus",
+      "sda low"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.protocols"
+  },
+  {
+    "ref_id": "methodology:hwprot:spi-loopback-bringup",
+    "type": "methodology",
+    "title": "Bring up SPI with a loopback and register read",
+    "summary": "Validate the controller with a MOSI-to-MISO loopback, then confirm a known-value register read from the real peripheral.",
+    "domains": [
+      "hw_protocols",
+      "i2c",
+      "spi",
+      "uart",
+      "can",
+      "usb",
+      "pcie"
+    ],
+    "triggers": [
+      "spi loopback",
+      "register read",
+      "device id",
+      "bringup"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.protocols"
+  },
+  {
+    "ref_id": "methodology:hwprot:usb-descriptor-validation",
+    "type": "methodology",
+    "title": "Validate USB descriptors against the spec",
+    "summary": "Check device, configuration, interface, and endpoint descriptors for consistent lengths and totals before enumeration testing.",
+    "domains": [
+      "hw_protocols",
+      "i2c",
+      "spi",
+      "uart",
+      "can",
+      "usb",
+      "pcie"
+    ],
+    "triggers": [
+      "usb descriptor",
+      "descriptor validation",
+      "configuration descriptor",
+      "compliance"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.protocols"
+  },
+  {
+    "ref_id": "knowledge:hwprot:i2c-open-drain-pullups",
+    "type": "knowledge",
+    "title": "I2C open-drain signaling and pull-up sizing",
+    "summary": "I2C lines are open-drain so both SDA and SCL need external pull-ups sized for the bus capacitance and target speed.",
+    "domains": [
+      "hw_protocols",
+      "i2c",
+      "spi",
+      "uart",
+      "can",
+      "usb",
+      "pcie"
+    ],
+    "triggers": [
+      "i2c",
+      "open drain",
+      "pull-up",
+      "rise time"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.protocols"
+  },
+  {
+    "ref_id": "knowledge:hwprot:spi-mode-matrix",
+    "type": "knowledge",
+    "title": "SPI clock polarity and phase mode matrix",
+    "summary": "The four SPI modes combine clock polarity and phase to define on which edge data is driven and sampled.",
+    "domains": [
+      "hw_protocols",
+      "i2c",
+      "spi",
+      "uart",
+      "can",
+      "usb",
+      "pcie"
+    ],
+    "triggers": [
+      "spi mode",
+      "cpol",
+      "cpha",
+      "sampling edge"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.protocols"
+  },
+  {
+    "ref_id": "knowledge:hwprot:can-differential-bus-states",
+    "type": "knowledge",
+    "title": "CAN differential signaling and bus states",
+    "summary": "CAN encodes dominant and recessive bits on a differential pair, and dominant bits win arbitration without data loss.",
+    "domains": [
+      "hw_protocols",
+      "i2c",
+      "spi",
+      "uart",
+      "can",
+      "usb",
+      "pcie"
+    ],
+    "triggers": [
+      "can bus",
+      "differential",
+      "dominant recessive",
+      "termination"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.protocols"
+  },
+  {
+    "ref_id": "knowledge:hwprot:usb-transfer-types",
+    "type": "knowledge",
+    "title": "USB transfer types and endpoint roles",
+    "summary": "USB defines control, bulk, interrupt, and isochronous transfers, each with different guarantees on bandwidth and delivery.",
+    "domains": [
+      "hw_protocols",
+      "i2c",
+      "spi",
+      "uart",
+      "can",
+      "usb",
+      "pcie"
+    ],
+    "triggers": [
+      "usb transfer",
+      "endpoint type",
+      "bulk",
+      "isochronous"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.protocols"
+  },
+  {
+    "ref_id": "skill:hwprot:compute-i2c-address-byte",
+    "type": "skill",
+    "title": "Compute the I2C address byte with R/W bit",
+    "summary": "Combine a seven-bit device address with the read or write bit to form the byte actually placed on the bus.",
+    "domains": [
+      "hw_protocols",
+      "i2c",
+      "spi",
+      "uart",
+      "can",
+      "usb",
+      "pcie"
+    ],
+    "triggers": [
+      "i2c address",
+      "address byte",
+      "read write bit"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.protocols"
+  },
+  {
+    "ref_id": "skill:hwprot:compute-uart-baud-divisor",
+    "type": "skill",
+    "title": "Compute a UART baud-rate divisor",
+    "summary": "Derive the integer divisor from the peripheral clock and target baud, then check the resulting error percentage.",
+    "domains": [
+      "hw_protocols",
+      "i2c",
+      "spi",
+      "uart",
+      "can",
+      "usb",
+      "pcie"
+    ],
+    "triggers": [
+      "uart baud",
+      "divisor",
+      "baud error"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.protocols"
+  }
+]

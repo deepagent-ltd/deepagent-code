@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:rlang:diagnose-non-reproducible-result",
+  "type": "methodology",
+  "title": "Diagnose a non-reproducible result",
+  "description": "Isolate whether a changed result comes from package versions, unset seed, or hidden state.",
+  "body": "Steps: 1. Compare renv.lock against the installed versions for drift. 2. Check whether any stochastic step runs without a set seed. 3. Render in a fresh session to expose reliance on lingering global-environment objects. 4. Diff intermediate outputs to localize where results diverge. 5. Pin the offending factor and re-run. Rollback point: before bumping package versions to match. Validation: two clean-session runs produce identical output.",
+  "domain": "r_lang",
+  "scope_hint": "code.r:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.r",
+  "pack_id": "code.r"
+}

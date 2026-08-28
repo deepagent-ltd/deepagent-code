@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:git:integrate-with-rebase-or-merge-by-context",
+  "type": "strategy",
+  "title": "Integrate with rebase locally, merge for shared history",
+  "description": "Rebase a private feature branch onto the latest base for a linear story, but use a merge when the branch is shared so no one's commits are rewritten.",
+  "body": "Use when bringing a feature branch up to date with its base. Do not rebase a branch other people have already pulled. Actions: for a private branch, rebase onto the updated base to keep history linear and easy to review; for a shared branch, merge the base in so existing commit hashes are preserved; record which branches are shared. Validation signals include a review diff free of unrelated churn and teammates whose local branches still fast-forward cleanly. Risk boundary: rebasing published commits rewrites history others depend on and must be confirmed, never done silently.",
+  "domain": "git_workflow",
+  "scope_hint": "code.git-workflow:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.git-workflow",
+  "pack_id": "code.git-workflow"
+}
