@@ -67,6 +67,7 @@ import {
   readOnlySessionsOf,
   recoveryCommandContentAddress,
   repairAndAbandonTransaction,
+  scanTerminalEvidence,
   verifyBaselineReconstruction,
 } from "./recovery-store"
 import { SessionRecoverySafeBoundary } from "./recovery-safe-boundary"
@@ -78,7 +79,6 @@ import {
   encryptEvidenceArtifact,
   evidenceArtifactAAD,
   redactedSummary,
-  terminalPayloadHashOf,
   validateConfirmSettledEvidence,
   verifyExportedArtifact,
 } from "./recovery-evidence"
@@ -184,6 +184,16 @@ export class RefuseAbandonWithTerminalEvidenceError extends Schema.TaggedErrorCl
   "SessionProviderRecovery.RefuseAbandonWithTerminalEvidenceError",
   { evidenceRef: Schema.String, requestHash: Schema.String },
 ) {}
+/**
+ * C1B-11 typed conflict: MORE than one terminal (settled) row already exists for one
+ * attempt. This is a duplicate-terminal data anomaly — the store must surface it as a
+ * typed conflict naming the canonical row and NEVER as a raw defect that kills the
+ * startup/data layer (design §10.7 "CAS lost 重读 canonical state 并返回 conflict/existing").
+ */
+export class DuplicateTerminalConflictError extends Schema.TaggedErrorClass<DuplicateTerminalConflictError>()(
+  "SessionProviderRecovery.DuplicateTerminalConflictError",
+  { evidenceRef: Schema.String, requestHash: Schema.String, duplicateRef: Schema.String },
+) {}
 /** Typed refusal for a transaction that was torn by a crash/simulated fault: no state was committed. */
 export class RecoveryTransactionAbortedError extends Schema.TaggedErrorClass<RecoveryTransactionAbortedError>()(
   "SessionProviderRecovery.RecoveryTransactionAbortedError",
@@ -256,6 +266,7 @@ export type Error =
   | AdapterOutOfAuthorityError
   | RecoveryDecodeError
   | RefuseAbandonWithTerminalEvidenceError
+  | DuplicateTerminalConflictError
   | RecoveryTransactionAbortedError
   | BaselineVerifyRefusedError
   | TextIsNotEvidenceError
@@ -855,6 +866,19 @@ export const layer = Layer.effect(
           recordedAt: Date.now(),
         }
         const state = yield* Ref.get(store)
+        // C1B-11: a status write to an existing slot is an EXACT idempotent no-op when every
+        // identity field matches; any divergence is a typed conflict (never a silent overwrite
+        // of recorded evidence / never a raw defect).
+        const prior = state.evidence.get(input.evidenceRef)
+        if (prior) {
+          const same =
+            prior.status === record.status &&
+            prior.providerId === record.providerId &&
+            prior.requestHash === record.requestHash &&
+            prior.payloadHash === record.payloadHash
+          if (same) return undefined
+          return yield* Effect.fail(new MismatchError({ reason: "evidence_status_divergence" }))
+        }
         yield* Ref.set(store, { ...state, evidence: new Map(state.evidence).set(input.evidenceRef, record) })
       }),
       getStatus: (evidenceRef: string) => Effect.map(Ref.get(store), (state) => evidenceOf(state).get(evidenceRef)),
@@ -926,13 +950,22 @@ export const layer = Layer.effect(
           // Network-unknown-after-dispatch: the FIRST step is query-command. If a
           // settled/terminal provider evidence exists the attempt may have dispatched and
           // produced a result, so the user is NOT offered abandon (design §11.3 / §9.2).
-          const terminal = [...evidenceOf(state).values()].find(
-            (e) => e.requestHash === input.requestHash && e.status === "settled",
-          )
-          if (terminal) {
+          // A duplicate terminal (two settled rows for one attempt) is a typed conflict
+          // naming the canonical row — never a raw defect (C1B-11).
+          const scan = scanTerminalEvidence(evidenceOf(state), input.requestHash)
+          if (scan.status === "duplicate") {
+            return yield* Effect.fail(
+              new DuplicateTerminalConflictError({
+                evidenceRef: scan.canonical.evidenceRef,
+                requestHash: input.requestHash,
+                duplicateRef: scan.duplicate.evidenceRef,
+              }),
+            )
+          }
+          if (scan.status === "single") {
             return yield* Effect.fail(
               new RefuseAbandonWithTerminalEvidenceError({
-                evidenceRef: terminal.evidenceRef,
+                evidenceRef: scan.canonical.evidenceRef,
                 requestHash: input.requestHash,
               }),
             )
@@ -1115,7 +1148,19 @@ export const layer = Layer.effect(
           }
           const state = yield* Ref.get(store)
           // The terminal payload hash must be verifiable against the recorded terminal receipt.
-          const terminalPayloadHash = terminalPayloadHashOf(state, input.requestHash)
+          // A duplicate terminal is surfaced as a typed conflict with the canonical row (C1B-11);
+          // the settle CAS never silently re-chooses a canonical row.
+          const scan = scanTerminalEvidence(evidenceOf(state), input.requestHash)
+          if (scan.status === "duplicate") {
+            return yield* Effect.fail(
+              new DuplicateTerminalConflictError({
+                evidenceRef: scan.canonical.evidenceRef,
+                requestHash: input.requestHash,
+                duplicateRef: scan.duplicate.evidenceRef,
+              }),
+            )
+          }
+          const terminalPayloadHash = scan.status === "single" ? scan.canonical.payloadHash : undefined
           if (terminalPayloadHash === undefined) {
             return yield* Effect.fail(new MissingTerminalEvidenceError({ requestHash: input.requestHash }))
           }
