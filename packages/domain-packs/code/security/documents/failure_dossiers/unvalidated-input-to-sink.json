@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:security:unvalidated-input-to-sink",
+  "type": "failure_dossier",
+  "description": "Untrusted input is concatenated into a SQL, shell, path, or template sink without parameterization, enabling injection.",
+  "body": "Failure mode: request data is interpolated directly into a query string, command line, file path, or template, so crafted input changes the statement's structure and executes attacker intent. Detection signals: string concatenation building SQL/shell; injection payloads in a negative test alter behavior; scanners flag a tainted-data flow to a sink. Do not rely on denylist sanitization or manual escaping. Safer fallback: validate against an allowlist at the boundary and use parameterized queries, argument arrays for subprocesses, and safe path/template APIs; verify with injection regression tests.",
+  "domain": "security",
+  "scope_hint": "code.security:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.security:human_authored",
+  "pack_id": "code.security"
+}

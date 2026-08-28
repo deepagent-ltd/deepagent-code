@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:cache:unbounded-key-space",
+  "type": "failure_dossier",
+  "description": "Keys derived from high-cardinality input create endless entries that evict useful data and crater the hit rate.",
+  "body": "Failure mode: cache keys derived from high-cardinality or unbounded input (raw URLs, per-request ids) create endless distinct entries that evict useful data and crater the hit rate. Detection signals: hit rate falls as traffic grows; eviction rate approaches insertion rate; memory pinned at the limit with low reuse. Do not key on unbounded inputs. Safer fallback: normalize and bucket keys, cap cardinality by namespacing, and only cache values with genuine reuse.",
+  "domain": "caching",
+  "scope_hint": "code.caching:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.caching:human_authored",
+  "pack_id": "code.caching"
+}

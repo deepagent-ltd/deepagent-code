@@ -1,0 +1,137 @@
+import type { DesktopMenuAction } from "@deepagent-code/app/desktop-menu"
+import type { WslServersPlatform } from "@deepagent-code/app/wsl/types"
+import type { UpdaterState } from "@deepagent-code/app/updater"
+export type {
+  WslDistroProbe,
+  WslInstalledDistro,
+  WslJob,
+  WslOnlineDistro,
+  WslDeepagentCodeCheck,
+  WslRuntimeCheck,
+  WslServerConfig,
+  WslServerItem,
+  WslServerRuntime,
+  WslServersEvent,
+  WslServersState,
+} from "@deepagent-code/app/wsl/types"
+
+export type ServerReadyData = {
+  url: string
+  username: string | null
+  password: string | null
+}
+
+export type WslServersAPI = WslServersPlatform
+export type UpdaterAPI = {
+  subscribe: (cb: (state: UpdaterState) => void) => Promise<() => void>
+  check: () => Promise<UpdaterState>
+  install: () => Promise<void>
+}
+
+export type LinuxDisplayBackend = "wayland" | "auto"
+export type TitlebarTheme = {
+  mode: "light" | "dark"
+}
+export type FatalRendererError = {
+  error: string
+  url: string
+  version?: string
+  platform: string
+  os?: string
+}
+
+export type BrowserRect = { x: number; y: number; width: number; height: number }
+export type BrowserState = { url: string; title: string; canGoBack: boolean; canGoForward: boolean; loading: boolean }
+export type BrowserAPI = {
+  show: (rect: BrowserRect) => Promise<void>
+  hide: () => Promise<void>
+  setBounds: (rect: BrowserRect) => Promise<void>
+  navigate: (url: string) => Promise<void>
+  back: () => Promise<void>
+  forward: () => Promise<void>
+  reload: () => Promise<void>
+  openExternal: () => Promise<void>
+  onState: (cb: (state: BrowserState) => void) => () => void
+}
+
+export type FileOpResult = { ok: boolean; error?: string; path?: string }
+export type FileOpsAPI = {
+  copy: (root: string, source: string, destDir: string) => Promise<FileOpResult>
+  move: (root: string, source: string, destDir: string) => Promise<FileOpResult>
+  remove: (root: string, target: string) => Promise<FileOpResult>
+  rename: (root: string, target: string, nextName: string) => Promise<FileOpResult>
+  archive: (root: string, target: string) => Promise<FileOpResult>
+  extract: (root: string, zipPath: string) => Promise<FileOpResult>
+}
+
+export type GitLogEntry = { hash: string; author: string; date: string; subject: string }
+export type GitAPI = {
+  isTracked: (workDir: string, relPath: string) => Promise<{ ok: boolean; tracked: boolean; error?: string }>
+  fileLog: (workDir: string, relPath: string) => Promise<{ ok: boolean; entries: GitLogEntry[]; error?: string }>
+}
+
+export type ElectronAPI = {
+  killSidecar: () => Promise<void>
+  installCli: () => Promise<string>
+  awaitInitialization: () => Promise<ServerReadyData>
+  browser: BrowserAPI
+  wslServers: WslServersAPI
+  updater: UpdaterAPI
+  consumeInitialDeepLinks: () => Promise<string[]>
+  getDefaultServerUrl: () => Promise<string | null>
+  setDefaultServerUrl: (url: string | null) => Promise<void>
+  getDisplayBackend: () => Promise<LinuxDisplayBackend | null>
+  setDisplayBackend: (backend: LinuxDisplayBackend | null) => Promise<void>
+  parseMarkdownCommand: (markdown: string) => Promise<string>
+  checkAppExists: (appName: string) => Promise<boolean>
+  resolveAppPath: (appName: string) => Promise<string | null>
+  storeGet: (name: string, key: string) => Promise<string | null>
+  storeSet: (name: string, key: string, value: string) => Promise<void>
+  storeDelete: (name: string, key: string) => Promise<void>
+  storeClear: (name: string) => Promise<void>
+  storeKeys: (name: string) => Promise<string[]>
+  storeLength: (name: string) => Promise<number>
+
+  getWindowCount: () => Promise<number>
+  onMenuCommand: (cb: (id: string) => void) => () => void
+  onDeepLink: (cb: (urls: string[]) => void) => () => void
+
+  openDirectoryPicker: (opts?: {
+    multiple?: boolean
+    title?: string
+    defaultPath?: string
+  }) => Promise<string | string[] | null>
+  openFilePicker: (opts?: {
+    multiple?: boolean
+    title?: string
+    defaultPath?: string
+    extensions?: string[]
+  }) => Promise<{ token: string; files: { path: string; name: string; size: number }[] } | null>
+  readPickedFile: (token: string, path: string) => Promise<ArrayBuffer>
+  releasePickedFiles: (token: string) => Promise<void>
+  saveFilePicker: (opts?: { title?: string; defaultPath?: string }) => Promise<string | null>
+  openLink: (url: string) => void
+  openPath: (path: string, app?: string) => Promise<void>
+  readClipboardImage: () => Promise<{ buffer: ArrayBuffer; width: number; height: number } | null>
+  showNotification: (title: string, body?: string) => void
+  getWindowFocused: () => Promise<boolean>
+  setWindowFocus: () => Promise<void>
+  showWindow: () => Promise<void>
+  relaunch: () => void
+  getZoomFactor: () => Promise<number>
+  setZoomFactor: (factor: number) => Promise<void>
+  getPinchZoomEnabled: () => Promise<boolean>
+  setPinchZoomEnabled: (enabled: boolean) => Promise<void>
+  onPinchZoomEnabledChanged: (cb: (enabled: boolean) => void) => () => void
+  getPreventSleepEnabled: () => Promise<boolean>
+  setPreventSleepEnabled: (enabled: boolean) => Promise<void>
+  onPreventSleepChanged: (cb: (enabled: boolean) => void) => () => void
+  onZoomFactorChanged: (cb: (factor: number) => void) => () => void
+  setTitlebar: (theme: TitlebarTheme) => Promise<void>
+  runDesktopMenuAction: (action: DesktopMenuAction) => Promise<void>
+  setBackgroundColor: (color: string) => Promise<void>
+  exportDebugLogs: (options?: { windowMs?: number; pick?: boolean }) => Promise<string | null>
+  recordFatalRendererError: (error: FatalRendererError) => Promise<void>
+  fileOps: FileOpsAPI
+  git: GitAPI
+}

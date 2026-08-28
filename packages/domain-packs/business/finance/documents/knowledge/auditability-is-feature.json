@@ -1,0 +1,11 @@
+{
+  "ref_id": "knowledge:finance:auditability-is-feature",
+  "type": "knowledge",
+  "description": "Audit records are product behavior in financial systems.",
+  "body": "Losing auditability can be a release blocker. Use when finance engineering work touches money movement, ledger entries, reconciliation output, idempotency keys, audit trails, and approval records. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: use the fact to constrain the change and test plan; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include decimal precision tests, duplicate-submit tests, reconciliation reports, immutable audit evidence, and human approval notes. Risk boundary: escalate or stop when the task involves silent balance changes, floating-point money, missing audit trails, regulatory ambiguity, and irreversible financial state, missing owner evidence, or live external state.",
+  "domain": "finance",
+  "scope_hint": "business.finance:knowledge",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:business.finance:skill_survey",
+  "pack_id": "business.finance"
+}

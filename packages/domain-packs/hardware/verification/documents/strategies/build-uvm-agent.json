@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:hwverif:build-uvm-agent",
+  "type": "strategy",
+  "title": "Build a reusable UVM agent for an interface",
+  "description": "Encapsulate driver, monitor, and sequencer in an agent so each interface is stimulated and observed consistently.",
+  "body": "Use when verifying a design with one or more standard interfaces. Do not drive signals directly from the test, since that defeats reuse and observability. Actions: build a driver that consumes sequence items, a monitor that publishes observed transactions, and a sequencer feeding the driver. Validation signals include the monitor reconstructing transactions that match the driver and the agent reusable across tests. Risk boundary: an agent that only drives but does not monitor hides failures, so deny sign-off on an interface whose monitor does not observe traffic.",
+  "domain": "hw_verification",
+  "scope_hint": "hardware.verification:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.verification",
+  "pack_id": "hardware.verification"
+}

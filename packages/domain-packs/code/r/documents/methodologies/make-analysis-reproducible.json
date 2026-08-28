@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:rlang:make-analysis-reproducible",
+  "type": "methodology",
+  "title": "Make an analysis reproducible",
+  "description": "Combine renv pinning, a seeded R Markdown render, and a clean-session check.",
+  "body": "Steps: 1. Initialize renv and snapshot dependencies to renv.lock. 2. Put the analysis in an R Markdown document so code and output render together. 3. Set a random seed before any stochastic step. 4. Render in a fresh session to catch hidden global-environment dependencies. 5. Restore on a second machine from the lockfile and re-render. Rollback point: before upgrading any pinned package. Validation: a clean-session render reproduces identical figures and tables.",
+  "domain": "r_lang",
+  "scope_hint": "code.r:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.r",
+  "pack_id": "code.r"
+}

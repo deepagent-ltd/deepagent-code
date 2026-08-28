@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:edge:normalize-cache-keys",
+  "type": "strategy",
+  "title": "Normalize cache keys to maximize hit ratio",
+  "description": "Strip irrelevant query params, headers, and cookies from the cache key so equivalent requests share a cached object.",
+  "body": "Use when hit ratio is low or objects are duplicated across keys. Do not include tracking params, volatile headers, or all cookies in the key — each variation forks a separate cached object. Actions: define the cache key from only the fields that change the response, drop marketing/query noise, and constrain Vary to meaningful headers. Validation signals include a higher hit ratio and fewer distinct cached objects for the same content. Risk boundary: over-normalizing (dropping a header that does change the response) serves wrong content — verify the response truly is invariant to dropped fields.",
+  "domain": "cdn",
+  "scope_hint": "platform.cdn-edge:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cdn-edge",
+  "pack_id": "platform.cdn-edge"
+}

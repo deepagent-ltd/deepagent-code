@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:game:make-simulation-deterministic",
+  "type": "methodology",
+  "title": "Make the simulation deterministic",
+  "description": "Remove non-determinism (variable dt, float order, unseeded RNG, wall-clock) so the same inputs reproduce the same state for replay and netcode.",
+  "body": "Steps: 1. Fix the timestep so steps are identical across machines and runs. 2. Seed all RNG explicitly and advance it deterministically. 3. Make iteration order stable (sorted/array-backed, not hash-iteration order). 4. Avoid wall-clock time, uninitialized memory, and platform-divergent float behavior in the sim. 5. Validate by replaying recorded inputs and comparing a state checksum each tick. Rollback point: before changing the float/RNG model (affects existing saves/replays). Validation: replaying the same input log yields identical per-tick checksums on the same and other machines; any checksum divergence pinpoints a remaining non-deterministic source. This is the prerequisite for lockstep netcode.",
+  "domain": "game",
+  "scope_hint": "code.game:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.game",
+  "pack_id": "code.game"
+}

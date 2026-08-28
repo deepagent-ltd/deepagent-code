@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:tsdb:downsample-before-retention",
+  "type": "strategy",
+  "title": "Downsample before dropping raw data",
+  "description": "Build continuous aggregates at coarser resolution before retention deletes raw points, so history survives at lower granularity.",
+  "body": "Use when raw data retention is shorter than the reporting horizon. Do not delete raw points without first materializing a rollup — once dropped, fine history is unrecoverable. Actions: create continuous aggregates (hourly/daily) that refresh incrementally, verify they cover the window before raw retention fires, then enable retention on raw. Validation signals include aggregate row counts matching expected buckets and dashboards reading from the rollup. Risk boundary: a retention policy that runs before the aggregate is populated causes permanent data loss — require an ordering check.",
+  "domain": "timeseries_db",
+  "scope_hint": "code.database.timeseries:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.timeseries",
+  "pack_id": "code.database.timeseries"
+}

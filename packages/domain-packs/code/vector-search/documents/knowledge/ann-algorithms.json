@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:vsearch:ann-algorithms",
+  "type": "knowledge",
+  "title": "ANN algorithms: HNSW, IVF, and PQ",
+  "description": "How graph-based HNSW, inverted-file IVF, and product quantization trade recall, memory, and build cost.",
+  "body": "Use when choosing an approximate index structure. HNSW builds a navigable small-world graph giving high recall at low latency but high memory; IVF partitions vectors into clusters and probes a subset (nprobe) trading recall for speed; product quantization compresses vectors to cut memory at some recall cost. Do not assume one fits all — memory, recall, and update patterns differ. Actions: pick HNSW for recall-critical in-memory search, IVF/PQ when memory-bound, and benchmark recall/latency. Validation signals include a recall-vs-memory comparison across structures and a chosen index meeting the budget. Risk boundary: PQ's compression can quietly cap recall; if quantized recall misses the floor, escalate to a less compressed index.",
+  "domain": "vector_search",
+  "scope_hint": "code.vector-search:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.vector-search",
+  "pack_id": "code.vector-search"
+}

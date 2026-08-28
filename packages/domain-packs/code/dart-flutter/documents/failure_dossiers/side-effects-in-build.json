@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:flutter:side-effects-in-build",
+  "type": "failure_dossier",
+  "description": "A build method starts requests, mutates state, or creates controllers, so they fire repeatedly as the framework rebuilds.",
+  "body": "Failure mode: build() contains a network call, a setState, or controller/subscription creation, but the framework may call build many times per frame and per rebuild, so the side effect fires repeatedly, duplicating requests and leaking newly-created controllers. Detection signals: duplicate network calls; controllers created inside build; setState triggered from build causing rebuild loops; counts that grow with rebuilds. Do not perform side effects or allocate resources in build. Safer fallback: keep build a pure function of state, move side effects to initState/event handlers, create controllers once in initState, and verify build is idempotent with a widget test.",
+  "domain": "dart",
+  "scope_hint": "code.dart-flutter:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.dart-flutter:human_authored",
+  "pack_id": "code.dart-flutter"
+}

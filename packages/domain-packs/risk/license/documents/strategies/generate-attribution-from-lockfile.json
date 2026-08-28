@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:lic:generate-attribution-from-lockfile",
+  "type": "strategy",
+  "title": "Generate attribution from the lockfile, not by hand",
+  "description": "Derive the NOTICE/THIRD-PARTY file mechanically from the resolved dependency set so it cannot drift from what actually ships.",
+  "body": "Use when a license requires attribution (Apache-2.0, BSD, MIT all require preserving copyright/notice text). Do not maintain a hand-edited credits file. Actions: enumerate the resolved lockfile, collect each component's copyright line and license text, and render a NOTICE/THIRD-PARTY-LICENSES file from that data on every build. Validation signals include a CI check that regenerating attribution produces no diff against the committed file, proving it matches the current lockfile. Risk boundary: shipping without the required notice text for an attribution-requiring license is a compliance breach; if a component lacks recoverable copyright text, escalate.",
+  "domain": "license",
+  "scope_hint": "risk.license:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.license",
+  "pack_id": "risk.license"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:aws:cost-anomaly-triage",
+  "type": "methodology",
+  "title": "Trace an AWS cost anomaly to a usage type",
+  "description": "Drive from the bill down to a specific usage type and resource using Cost Explorer grouping and CUR before changing architecture.",
+  "body": "Use when the AWS bill jumps unexpectedly. Do not start deleting resources blindly. Actions: open Cost Explorer, group by Service then by Usage Type to find the line item (e.g. NatGateway-Bytes, DataTransfer-Regional-Bytes, Lambda-GB-Second), pivot by linked account and tag, and confirm the offending resource in CUR. Validation signals include the anomaly isolated to one usage type, a hypothesis confirmed by the resource's own metrics, and the projected saving quantified before any change. Risk boundary: deleting or downsizing a production resource to cut cost is human-gated.",
+  "domain": "aws",
+  "scope_hint": "platform.cloud.aws:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.aws",
+  "pack_id": "platform.cloud.aws"
+}

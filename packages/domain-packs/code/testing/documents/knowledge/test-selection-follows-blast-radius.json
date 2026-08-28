@@ -1,0 +1,11 @@
+{
+  "ref_id": "knowledge:testing:test-selection-blast-radius",
+  "type": "knowledge",
+  "description": "Test breadth should expand with the changed surface: local tests first, package gates for shared behavior.",
+  "body": "Use this fact when choosing what to run before finalizing validation. A leaf-only change usually starts with the directly affected test file. Shared helpers, exported APIs, schemas, generated types, build config, or runtime boundaries require broader package or integration gates after narrow tests pass. Do not jump straight to the slowest full suite when a focused test can reproduce a failure; also do not stop at a focused pass when shared behavior changed. Verification signals are mapped changed files to test targets, exact runner commands, and a statement of why breadth was or was not expanded. The risk boundary is highest when package scripts hide generation, setup, or multi-project test matrices. Use when Code Testing work touches test runner output, fixture intent, coverage boundaries, flake history, and negative paths. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: use the fact to constrain the change and test plan; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include focused test output, regression tests, fixture assertions, and rerun evidence. Risk boundary: escalate or stop when the task involves testing implementation details only, masking flakes, and claiming coverage without behavior proof, missing owner evidence, or live external state.",
+  "domain": "testing",
+  "scope_hint": "code.testing:knowledge",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.testing:human_authored",
+  "pack_id": "code.testing"
+}

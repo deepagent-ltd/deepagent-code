@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:auth:run-negative-permission-tests",
+  "type": "skill",
+  "title": "Run negative permission tests",
+  "description": "Execute or scaffold tests that call protected endpoints as unauthorized principals and assert denial.",
+  "body": "Use when validating an access-control change. Procedure: for the changed endpoints, run tests that authenticate as a low-privilege or non-owner principal and assert 403/empty rather than success; if such tests are absent, scaffold the minimal cases (wrong role, other tenant, other owner, expired token). Report which denial cases pass and which are missing. This skill exposes capability only and must not run against production. Risk boundary: a permission change without a passing negative test is unverified and must not be reported as done.",
+  "domain": "backend_auth",
+  "scope_hint": "code.backend.auth:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.auth",
+  "pack_id": "code.backend.auth"
+}

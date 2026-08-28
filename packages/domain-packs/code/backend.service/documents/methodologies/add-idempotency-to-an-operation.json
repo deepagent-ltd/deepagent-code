@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:svc:add-idempotency-to-an-operation",
+  "type": "methodology",
+  "title": "Add idempotency to an existing operation",
+  "description": "Introduce an idempotency key and dedup store so a repeated request produces one effect and a stable response.",
+  "body": "Steps: 1. Identify the operation's natural uniqueness (client key, order id) and decide the key. 2. Add a dedup record (unique index on the key) written in the same transaction as the effect. 3. On conflict, return the stored prior result instead of re-running. 4. Add a replay test issuing the same key twice and asserting one effect. 5. Backfill/expire keys with a TTL policy. Rollback point: before enabling the unique constraint in production. Validation: concurrent duplicate requests resolve to exactly one effect, confirmed by the replay and a race test.",
+  "domain": "backend_service",
+  "scope_hint": "code.backend.service:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.service",
+  "pack_id": "code.backend.service"
+}

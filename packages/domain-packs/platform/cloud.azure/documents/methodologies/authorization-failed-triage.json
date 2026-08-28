@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:azure:authorization-failed-triage",
+  "type": "methodology",
+  "title": "Triage an Azure AuthorizationFailed to the exact scope and role",
+  "description": "Walk the scope hierarchy and use Check Access / activity log to find the missing role assignment before granting anything broad.",
+  "body": "Use when an Azure operation fails with AuthorizationFailed and you need the minimal grant. Do not assign Contributor to move on. Actions: read the error for the action and the scope it was evaluated at, use the portal Check Access or az role assignment list for the principal across management-group->subscription->RG->resource, identify the missing dataAction/action, and assign the matching built-in role at the narrowest scope. Validation signals include Check Access showing the principal gains the action and a clean retry, with no broadening at higher scopes. Risk boundary: if only a high-scope or Owner assignment seems to work, stop and escalate.",
+  "domain": "azure",
+  "scope_hint": "platform.cloud.azure:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.azure",
+  "pack_id": "platform.cloud.azure"
+}

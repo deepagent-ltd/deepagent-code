@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:gfx:write-portable-defensible-shaders",
+  "type": "strategy",
+  "title": "Write shaders that are defined on every driver",
+  "description": "Avoid undefined behavior and driver-specific assumptions in shader code so output is consistent across GPUs and APIs.",
+  "body": "Use when authoring or porting GLSL/HLSL/WGSL. Do not read uninitialized variables, take derivatives (dFdx/textureLod bias) inside non-uniform control flow, or rely on a specific NaN/precision behavior. Actions: initialize all outputs, keep derivative and dynamic-texture operations in uniform control flow, declare precision explicitly where the API requires it, and compile against the validation/SPIR-V layer. Validation signals include a clean shader-compiler/validation pass and identical output across at least two drivers. Risk boundary: undefined shader behavior can render correctly on the dev GPU and corrupt elsewhere; treat any validation warning as a portability defect to fix before shipping.",
+  "domain": "graphics",
+  "scope_hint": "code.graphics:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.graphics",
+  "pack_id": "code.graphics"
+}

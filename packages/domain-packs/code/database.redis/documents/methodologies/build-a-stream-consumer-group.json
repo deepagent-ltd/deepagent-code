@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:redis:build-a-stream-consumer-group",
+  "type": "methodology",
+  "title": "Build a stream consumer group",
+  "description": "Consume a Redis Stream with a group, ack processed entries, and reclaim entries from dead consumers.",
+  "body": "Steps: 1. Create the stream and a consumer group (XGROUP CREATE) at a starting id. 2. Read with XREADGROUP using a per-consumer name; process each entry. 3. XACK only after the effect is durable; unacked entries stay in the Pending Entries List. 4. Periodically inspect XPENDING and XCLAIM/XAUTOCLAIM entries idle past a threshold so a crashed consumer's work is reprocessed. 5. Trim the stream (XADD MAXLEN or XTRIM) to bound memory. Rollback point: revert to reading without a group (XREAD) for a single consumer. Validation: an entry whose consumer died is reclaimed and reprocessed, acked entries are not redelivered, and stream length stays bounded.",
+  "domain": "redis",
+  "scope_hint": "code.database.redis:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.redis",
+  "pack_id": "code.database.redis"
+}

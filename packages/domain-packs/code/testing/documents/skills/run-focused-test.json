@@ -1,0 +1,11 @@
+{
+  "ref_id": "skill:testing:run-focused-test",
+  "type": "skill",
+  "description": "Select and run the narrowest relevant test command, then report command, cwd, exit code, and diagnostic lines.",
+  "body": "Inputs: changed files, suspected behavior, package directory, and available scripts. Procedure: inspect package scripts and existing test names, choose the smallest test file or pattern that exercises the changed behavior, run it from the package directory, and preserve exact command, exit code, totals, skipped tests, and first actionable failure. Do not edit assertions just to pass the run. If no focused test exists, report the closest package-level command and why it is broader. Output: validation status ok, failing, or inconclusive with artifact references. Failure handling: if the runner cannot start because dependencies or environment are missing, report setup blocker separately from test failure. Use when Code Testing work touches test runner output, fixture intent, coverage boundaries, flake history, and negative paths. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: run the documented inspection and validation workflow; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include focused test output, regression tests, fixture assertions, and rerun evidence. Risk boundary: escalate or stop when the task involves testing implementation details only, masking flakes, and claiming coverage without behavior proof, missing owner evidence, or live external state.",
+  "domain": "testing",
+  "scope_hint": "code.testing:skills",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.testing:human_authored",
+  "pack_id": "code.testing"
+}

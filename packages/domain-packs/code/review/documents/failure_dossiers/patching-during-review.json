@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:review:patching-during-review",
+  "type": "failure_dossier",
+  "description": "Editing implementation during a read-only review mixes roles and can invalidate the evidence trail.",
+  "body": "Failure mode: the reviewer fixes code while supposedly auditing it, so the final report no longer reflects the submitted patch and may overwrite unrelated user work. Do not use review-mode evidence gathered after local edits as proof about the original diff unless the edits are explicitly separated and disclosed. Diagnostic signal: changed worktree files, unstaged edits, or a report that includes patch claims instead of findings. Recovery is to stop editing, re-read the original diff or saved patch, and issue findings with clear residual risk. Use when a proposed approach skips diff hunks, line evidence, tests, contracts, and blast radius or claims success without domain evidence. Do not use this dossier as a positive implementation strategy; it is a do-not-use signal. Actions: block the shortcut, name the missing evidence, and switch to a safer methodology or ask for human approval. Validation signals include absence or contradiction in file/line citations, failing or missing tests, reproduced behavior, and residual-risk notes. Risk boundary: treat repeated recurrence as a blocker when it can cause unsupported findings, severity inflation, hidden fixes, and ignoring user constraints.",
+  "domain": "review",
+  "scope_hint": "code.review:failure_dossiers",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.review:human_authored",
+  "pack_id": "code.review"
+}

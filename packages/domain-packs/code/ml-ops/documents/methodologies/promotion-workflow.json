@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:mlops:promotion-workflow",
+  "type": "methodology",
+  "title": "Run the candidate-to-production promotion workflow",
+  "description": "A staged path from logged experiment to gated production rollout with checks at each transition.",
+  "body": "Use when moving a model from experiment to production. Do not skip stages under deadline pressure — each transition catches a distinct failure class. Actions: log the experiment with full metadata, register the best candidate, run the eval gate, deploy to staging, shadow live traffic, then canary with guardrails. Validation signals include a promotion record showing every gate passed and a staging trace matching production shapes. Risk boundary: jumping straight to production skips regression and shadow checks; if a stage is bypassed, record the exception and require human approval to proceed.",
+  "domain": "mlops",
+  "scope_hint": "code.mlops:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mlops",
+  "pack_id": "code.mlops"
+}

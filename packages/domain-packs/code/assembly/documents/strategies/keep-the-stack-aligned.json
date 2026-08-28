@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:asm:keep-the-stack-aligned",
+  "type": "strategy",
+  "title": "Keep the stack aligned and the frame correct",
+  "description": "Maintain the ABI-required stack alignment at call boundaries and lay out the frame so locals, saved registers, and return address are correct.",
+  "body": "Use when setting up a function's stack frame or making calls from assembly. Do not let the stack pointer drift out of the required alignment (16-byte at the point of a call on x86-64/AArch64) and do not miscount the bytes you push. Actions: account for the return address and pushed registers when computing alignment, reserve frame space in one aligned adjustment, and restore the stack pointer exactly on exit. Validation signals include rsp/sp being 16-byte aligned at every call site (checkable in a debugger) and SSE/ABI-sensitive callees not crashing. Risk boundary: a misaligned stack causes intermittent crashes in aligned-load instructions deep in a callee; treat alignment as mandatory and verify it at call sites with the debugger.",
+  "domain": "assembly",
+  "scope_hint": "code.assembly:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.assembly",
+  "pack_id": "code.assembly"
+}

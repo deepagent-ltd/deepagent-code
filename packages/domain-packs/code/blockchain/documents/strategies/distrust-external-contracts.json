@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:chain:distrust-external-contracts",
+  "type": "strategy",
+  "title": "Treat external calls and inputs as hostile",
+  "description": "Assume any external contract can fail, re-enter, or return crafted values, and validate return data and call success.",
+  "body": "Use when calling, or accepting calls from, contracts you do not fully control (tokens, oracles, callbacks). Do not assume a token transfer returns true or that an oracle value is honest, and avoid acting on unchecked low-level call results. Actions: check the success flag and return data of every external call, use safe wrappers (SafeERC20) for non-standard tokens, validate oracle freshness/bounds, and isolate untrusted interactions. Validation signals include tests with a malicious mock token/oracle that returns false, reverts, or re-enters, all handled safely. Risk boundary: trusting an attacker-controlled contract's behavior is how price-manipulation and fake-token exploits work; treat unvalidated external return data on a value path as a high-severity gap.",
+  "domain": "blockchain",
+  "scope_hint": "code.blockchain:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.blockchain",
+  "pack_id": "code.blockchain"
+}

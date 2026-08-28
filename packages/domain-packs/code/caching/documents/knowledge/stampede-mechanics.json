@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:cache:stampede-mechanics",
+  "type": "knowledge",
+  "title": "Stampede mechanics",
+  "description": "A hot key's expiry is a synchronized burst, not a per-request event, multiplying origin load by concurrency.",
+  "body": "Use when understanding why a hot key's expiry causes a backend spike. When a popular entry expires, every concurrent request misses simultaneously and independently recomputes the value, multiplying origin load by the request concurrency. Do not treat expiry as a per-request event — under load it is a coordinated burst. Actions: serialize recompute with a single-flight lock and serve stale during refill. Validation signals include origin calls per expiry approaching one. Risk boundary: an unbounded recompute lock can stall every reader if the origin is slow.",
+  "domain": "caching",
+  "scope_hint": "code.caching:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.caching",
+  "pack_id": "code.caching"
+}

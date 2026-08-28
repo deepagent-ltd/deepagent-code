@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:hdl:blocking-assignment-in-sequential",
+  "type": "failure_dossier",
+  "description": "Using blocking (=) assignments inside a clocked always_ff block, creating simulation races and RTL/gate divergence.",
+  "body": "Failure mode: a clocked process uses = instead of <=, so the simulator's evaluation order determines results and pipeline registers collapse, while gate-level behaves differently. Detection signals: lint warns about blocking-in-sequential; RTL sim and gate-level diverge; a register stage seems to disappear. Do not use blocking assignments in always_ff. Safer fallback: use non-blocking (<=) for all sequential state, keep blocking for always_comb only, and re-run gate-level to confirm equivalence.",
+  "domain": "hdl",
+  "scope_hint": "hardware.hdl:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.hdl:human_authored",
+  "pack_id": "hardware.hdl"
+}

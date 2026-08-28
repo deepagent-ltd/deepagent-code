@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:privacy:consent-needs-specificity",
+  "type": "knowledge",
+  "title": "Consent and preference signals are purpose-specific",
+  "description": "A user preference or consent for one purpose should not be assumed to cover unrelated analytics, sharing, marketing, or model training.",
+  "body": "Use when data reuse is proposed across features or teams. Do not write legal consent language. Actions: find the stored preference, confirm the purpose it controls, and keep opt-out or missing consent as a deny for the new processing path. Validation signals include tests for opted-out users and no event emission. Risk boundary: ambiguous or missing consent requires human review. Use when Privacy Risk Controls work touches personal-data classes, sinks, retention, consent, logs, prompts, and exports. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: use the fact to constrain the change and test plan; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include data inventory, redaction tests, retention checks, export/delete tests, and approval evidence. Risk boundary: escalate or stop when the task involves PII disclosure, consent bypass, retention drift, and unapproved processor expansion, missing owner evidence, or live external state.",
+  "domain": "privacy",
+  "scope_hint": "risk.privacy:knowledge",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:risk.privacy",
+  "pack_id": "risk.privacy"
+}

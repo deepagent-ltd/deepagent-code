@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:redis:cache-stampede-on-hot-key",
+  "type": "failure_dossier",
+  "description": "A hot key expires and thousands of concurrent requests all miss and rebuild from the source at once, overloading it.",
+  "body": "Failure mode: a popular key's TTL fires; every in-flight request misses simultaneously and hits the source database to rebuild, spiking source load and sometimes cascading into an outage (thundering herd). Detection signals: periodic source load spikes aligned with TTL boundaries; many identical source queries in a burst; shared expiry across keys. Do not give hot keys plain synchronized TTLs. Safer fallback: add random jitter to TTLs, use single-flight or a short lock so one request rebuilds while others wait, and optionally serve a slightly stale value during rebuild.",
+  "domain": "redis",
+  "scope_hint": "code.database.redis:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.redis:human_authored",
+  "pack_id": "code.database.redis"
+}

@@ -1,0 +1,459 @@
+[
+  {
+    "ref_id": "knowledge:performance:cache-invalidates-complexity",
+    "type": "knowledge",
+    "title": "Cache Invalidates Complexity",
+    "summary": "Caching improves repeated reads only if invalidation and freshness are handled.",
+    "domains": [
+      "performance",
+      "code"
+    ],
+    "triggers": [
+      "caching",
+      "improves",
+      "repeated",
+      "reads",
+      "only",
+      "invalidation",
+      "freshness",
+      "handled"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.performance"
+  },
+  {
+    "ref_id": "knowledge:performance:io-bound-vs-cpu-bound",
+    "type": "knowledge",
+    "title": "Io Bound Vs Cpu Bound",
+    "summary": "Optimization depends on whether the bottleneck is CPU, IO, lock, network, or allocation.",
+    "domains": [
+      "performance",
+      "code"
+    ],
+    "triggers": [
+      "optimization",
+      "depends",
+      "whether",
+      "bottleneck",
+      "lock",
+      "network",
+      "allocation",
+      "different"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.performance"
+  },
+  {
+    "ref_id": "knowledge:performance:microbench-not-product",
+    "type": "knowledge",
+    "title": "Microbench Not Product",
+    "summary": "Microbenchmarks do not replace product workload validation.",
+    "domains": [
+      "performance",
+      "code"
+    ],
+    "triggers": [
+      "microbenchmarks",
+      "replace",
+      "product",
+      "workload",
+      "validation",
+      "isolate",
+      "mechanism"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.performance"
+  },
+  {
+    "ref_id": "methodology:performance:allocation-regression-check",
+    "type": "methodology",
+    "title": "Allocation Regression Check",
+    "summary": "Inspect allocation and memory pressure for changes in hot paths.",
+    "domains": [
+      "performance",
+      "code"
+    ],
+    "triggers": [
+      "inspect",
+      "allocation",
+      "memory",
+      "pressure",
+      "changes",
+      "paths",
+      "steps",
+      "identify"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.performance"
+  },
+  {
+    "ref_id": "methodology:performance:latency-budget-review",
+    "type": "methodology",
+    "title": "Latency Budget Review",
+    "summary": "Break end-to-end latency into component budgets.",
+    "domains": [
+      "performance",
+      "code"
+    ],
+    "triggers": [
+      "break",
+      "latency",
+      "into",
+      "component",
+      "budgets",
+      "steps",
+      "split",
+      "request"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.performance"
+  },
+  {
+    "ref_id": "methodology:performance:profile-baseline-patch-compare",
+    "type": "methodology",
+    "title": "Profile Baseline Patch Compare",
+    "summary": "Capture baseline, identify hotspot, patch minimally, and compare results.",
+    "domains": [
+      "performance",
+      "code"
+    ],
+    "triggers": [
+      "capture",
+      "baseline",
+      "identify",
+      "hotspot",
+      "patch",
+      "minimally",
+      "compare",
+      "results"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.performance"
+  },
+  {
+    "ref_id": "skill:performance:compare-performance-result",
+    "type": "skill",
+    "title": "Compare Performance Result",
+    "summary": "Compare before/after benchmark or profile evidence with variance.",
+    "domains": [
+      "performance",
+      "code"
+    ],
+    "triggers": [
+      "compare",
+      "before",
+      "after",
+      "benchmark",
+      "profile",
+      "evidence",
+      "with",
+      "variance"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.performance"
+  },
+  {
+    "ref_id": "skill:performance:run-profile-pass",
+    "type": "skill",
+    "title": "Run Profile Pass",
+    "summary": "Collect baseline and profiler evidence for a suspected performance path.",
+    "domains": [
+      "performance",
+      "code"
+    ],
+    "triggers": [
+      "collect",
+      "baseline",
+      "profiler",
+      "evidence",
+      "suspected",
+      "performance",
+      "path",
+      "inputs"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.performance"
+  },
+  {
+    "ref_id": "strategy:performance:hot-path-minimality",
+    "type": "strategy",
+    "title": "Hot Path Minimality",
+    "summary": "Keep hot-path changes small and measurable.",
+    "domains": [
+      "performance",
+      "code"
+    ],
+    "triggers": [
+      "keep",
+      "path",
+      "changes",
+      "small",
+      "measurable",
+      "large",
+      "refactors",
+      "obscure"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.performance"
+  },
+  {
+    "ref_id": "strategy:performance:measure-before-optimizing",
+    "type": "strategy",
+    "title": "Measure Before Optimizing",
+    "summary": "Optimize only after establishing baseline and bottleneck evidence.",
+    "domains": [
+      "performance",
+      "code"
+    ],
+    "triggers": [
+      "optimize",
+      "only",
+      "after",
+      "establishing",
+      "baseline",
+      "bottleneck",
+      "evidence",
+      "performance"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.performance"
+  },
+  {
+    "ref_id": "strategy:performance:tail-latency-awareness",
+    "type": "strategy",
+    "title": "Tail Latency Awareness",
+    "summary": "Check p95/p99 behavior when user experience depends on worst cases.",
+    "domains": [
+      "performance",
+      "code"
+    ],
+    "triggers": [
+      "check",
+      "behavior",
+      "when",
+      "user",
+      "experience",
+      "depends",
+      "worst",
+      "cases"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.performance"
+  },
+  {
+    "ref_id": "strategy:performance:tradeoff-explicitness",
+    "type": "strategy",
+    "title": "Tradeoff Explicitness",
+    "summary": "Record latency, throughput, memory, correctness, and complexity tradeoffs.",
+    "domains": [
+      "performance",
+      "code"
+    ],
+    "triggers": [
+      "record",
+      "latency",
+      "throughput",
+      "memory",
+      "correctness",
+      "complexity",
+      "tradeoffs",
+      "performance"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.performance"
+  },
+  {
+    "ref_id": "strategy:performance:set-regression-thresholds",
+    "type": "strategy",
+    "title": "Gate merges on explicit regression thresholds",
+    "summary": "Define quantitative latency/throughput/allocation budgets and fail the change when a benchmark crosses them, rather than eyeballing numbers.",
+    "domains": [
+      "code",
+      "performance"
+    ],
+    "triggers": [
+      "regression threshold",
+      "budget",
+      "benchmark gate",
+      "ci",
+      "throughput",
+      "slo"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.performance"
+  },
+  {
+    "ref_id": "strategy:performance:profile-guided-targeting",
+    "type": "strategy",
+    "title": "Let the profile choose the optimization target",
+    "summary": "Optimize the function the profiler proves dominates cost, not the code that looks slow, so effort lands on the actual bottleneck.",
+    "domains": [
+      "code",
+      "performance"
+    ],
+    "triggers": [
+      "profile",
+      "hotspot",
+      "bottleneck",
+      "flame graph",
+      "sampling",
+      "target"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.performance"
+  },
+  {
+    "ref_id": "methodology:performance:run-perf-test-harness",
+    "type": "methodology",
+    "title": "Stand up a repeatable performance test harness",
+    "summary": "Build a benchmark that fixes inputs, warms up, runs enough iterations, and reports stable percentiles so results are comparable across runs.",
+    "domains": [
+      "code",
+      "performance"
+    ],
+    "triggers": [
+      "harness",
+      "benchmark",
+      "warmup",
+      "percentile",
+      "repeatable",
+      "load"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.performance"
+  },
+  {
+    "ref_id": "knowledge:performance:tail-latency-dominates-ux",
+    "type": "knowledge",
+    "title": "Tail latency dominates user-visible performance",
+    "summary": "At scale a request often fans out to many backends, so the slow p99 of each component compounds and the tail, not the mean, defines what users feel.",
+    "domains": [
+      "code",
+      "performance"
+    ],
+    "triggers": [
+      "tail latency",
+      "p99",
+      "fan-out",
+      "percentile",
+      "amplification",
+      "mean"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.performance"
+  }
+]

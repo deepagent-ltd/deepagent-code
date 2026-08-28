@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:mt:contain-noisy-neighbors",
+  "type": "strategy",
+  "title": "Contain noisy neighbors with per-tenant limits",
+  "description": "Apply per-tenant quotas and fairness so one tenant's heavy load cannot starve the others sharing the pool.",
+  "body": "Use when tenants share compute, connections, or a database in a pooled model. Do not let unbounded per-tenant usage consume shared capacity. Actions: set per-tenant rate limits and resource quotas; use fair scheduling or separate pools for heavy tenants; monitor per-tenant consumption. Validation signals include one tenant's spike not degrading another tenant's latency in a load test. Risk boundary: an unbounded tenant can turn a shared pool into an outage for everyone, so enforce per-tenant limits and consider promoting a persistently heavy tenant to a dedicated resource.",
+  "domain": "multi_tenant",
+  "scope_hint": "code.backend.multi-tenant:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.multi-tenant",
+  "pack_id": "code.backend.multi-tenant"
+}

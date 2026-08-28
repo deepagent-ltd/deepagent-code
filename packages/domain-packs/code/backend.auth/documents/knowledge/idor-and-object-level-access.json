@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:auth:idor-and-object-level-access",
+  "type": "knowledge",
+  "title": "IDOR and object-level access",
+  "description": "Checking that a user is authenticated and has a role is not enough; access to a specific object must verify ownership/scope.",
+  "body": "Use when an endpoint loads a resource by an id from the request. IDOR occurs when access is authorized by role but not by the specific object requested, so a valid user reaches another user's resource by changing an id (horizontal privilege escalation). Do not assume a function-level role check ('is editor') prevents this. Actions: tie the decision to the resource (owner id, tenant id, ACL) at the data layer, and inspect every resource-scoped endpoint for the check. Validation signals include a negative test where a valid principal requests an object they do not own and is denied. Risk boundary: a missing object-level check on user data is a blocking finding.",
+  "domain": "backend_auth",
+  "scope_hint": "code.backend.auth:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.auth",
+  "pack_id": "code.backend.auth"
+}

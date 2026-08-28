@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:frontend_vue:copy-react-hook-mental-model",
+  "type": "failure_dossier",
+  "description": "Copying React hook mental model into Vue",
+  "body": "Adding hook-like watcher chains or dependency-array reasoning can make Vue code harder and wrong. Treat as a do-not-use signal when computed/event flow would solve derived state. Safer path: follow Vue refs, computed, watch, and lifecycle semantics.\n\nUse only as a diagnostic do-not-use signal; do not expose this as positive strategy, methodology, knowledge, skill, or memory.",
+  "domain": "frontend_vue",
+  "scope_hint": "code.frontend.vue:failure_dossiers",
+  "evidence_strength": "medium",
+  "provenance_tag": "code.frontend.vue:failure_seed:paraphrased_common_failures",
+  "pack_id": "code.frontend.vue"
+}

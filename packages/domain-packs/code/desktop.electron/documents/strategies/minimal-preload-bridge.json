@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:electron:minimal-preload-bridge",
+  "type": "strategy",
+  "title": "Expose a minimal API through preload",
+  "description": "Use contextBridge in a preload script to expose only specific, named functions to the renderer, never the raw ipcRenderer or Node modules.",
+  "body": "Use when the renderer needs privileged capability (file access, IPC, OS calls). Do not expose ipcRenderer, require, or whole modules to the page, and do not pass a generic 'invoke any channel' function. Actions: in preload, use contextBridge.exposeInMainWorld to publish a small set of purpose-specific functions (e.g. saveDocument, getSettings) that internally call fixed IPC channels; keep the surface auditable. Validation signals include the page accessing only the named API and no raw ipcRenderer/require reachable from window. Risk boundary: exposing ipcRenderer.send/invoke with arbitrary channels lets a compromised renderer call any main-process handler — the preload surface is the security boundary, keep it narrow and explicit.",
+  "domain": "electron",
+  "scope_hint": "code.desktop.electron:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.desktop.electron",
+  "pack_id": "code.desktop.electron"
+}

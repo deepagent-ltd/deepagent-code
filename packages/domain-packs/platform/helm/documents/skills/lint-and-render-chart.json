@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:helm:lint-and-render-chart",
+  "type": "skill",
+  "title": "Lint and render a chart against multiple value sets",
+  "description": "Run helm lint and helm template with default and override values plus schema validation so packaging issues surface before release.",
+  "body": "Use when authoring or reviewing a chart before it ships. Do not assume a chart that installs once is correct for all environments. Actions: run helm lint to catch Chart.yaml and template issues, helm template with the default values and each environment -f override, validate against values.schema.json, and review the rendered YAML for required keys and indentation. Validation signals include lint passing, every value set rendering valid manifests, and schema rejecting bad inputs. Risk boundary: none for local lint/render; deploying still goes through the upgrade gate.",
+  "domain": "helm",
+  "scope_hint": "platform.helm:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.helm",
+  "pack_id": "platform.helm"
+}

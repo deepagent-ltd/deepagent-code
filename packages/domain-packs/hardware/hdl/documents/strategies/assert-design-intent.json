@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:hdl:assert-design-intent",
+  "type": "strategy",
+  "title": "Encode design intent as assertions",
+  "description": "Capture protocol and invariant expectations as SystemVerilog assertions so violations fail at the cycle they occur, not in downstream waveforms.",
+  "body": "Use when verifying control logic, handshakes, or interface protocols. Do not rely on eyeballing waveforms or only checking final outputs. Actions: write immediate assertions for combinational invariants and concurrent (property/sequence) assertions for temporal protocols (e.g. req must be followed by ack within N cycles); bind them to the DUT. Validation signals include assertion pass/fail counts in the sim log and coverage of each protocol rule. Risk boundary: an interface change without updated assertions can pass tests yet violate the protocol; require assertion review on protocol edits.",
+  "domain": "hdl",
+  "scope_hint": "hardware.hdl:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.hdl",
+  "pack_id": "hardware.hdl"
+}

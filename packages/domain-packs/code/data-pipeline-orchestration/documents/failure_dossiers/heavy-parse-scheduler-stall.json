@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:orch:heavy-parse-scheduler-stall",
+  "type": "failure_dossier",
+  "description": "Top-level DAG code does heavy I/O at parse time, slowing the scheduler for every DAG.",
+  "body": "Failure mode: a DAG file performs expensive work at module top level (querying a database or API to build tasks) on every parse, so the scheduler's repeated parsing becomes slow and all DAGs' scheduling latency degrades, not just the offending one. Detection signals: rising DAG parse times and scheduler heartbeat lag, with the slow parse traced to top-level I/O in one DAG file. Do not scale the scheduler to brute-force through it. Safer fallback: move heavy work out of parse time into task execution, generate dynamic tasks from a stable cached/versioned input, keep top-level code lightweight, and confirm parse time returns within the scheduler budget.",
+  "domain": "orchestration",
+  "scope_hint": "code.data-pipeline-orchestration:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-pipeline-orchestration:human_authored",
+  "pack_id": "code.data-pipeline-orchestration"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "fail:mesh:missing-sidecar-policy-bypass",
+  "type": "failure_dossier",
+  "description": "A workload skips mesh policy because the sidecar was never injected.",
+  "body": "Failure mode: a pod runs without the injected proxy (namespace not labeled, injection annotation set to false, or pod predates the label), so mTLS, routing, and authorization policy silently don't apply to it. Detection signals: the pod has only one container, istioctl proxy-status omits it, and traffic to/from it bypasses policy. Do not assume an unmeshed pod is protected. Safer fallback: label the namespace (or set the revision label) for injection, restart the workload so the proxy attaches, verify two containers and a SYNCED proxy, and treat re-injection on production as a controlled rollout.",
+  "domain": "service_mesh",
+  "scope_hint": "platform.service-mesh:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.service-mesh:human_authored",
+  "pack_id": "platform.service-mesh"
+}

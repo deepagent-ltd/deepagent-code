@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:crypto:never-reuse-a-nonce",
+  "type": "strategy",
+  "title": "Never reuse a nonce under one key",
+  "description": "Guarantee each (key, nonce) pair is used once, because nonce reuse with AEAD/stream ciphers is catastrophic for confidentiality and integrity.",
+  "body": "Use whenever you call an AEAD or stream cipher. Do not derive nonces from low-entropy or repeating sources, and avoid a fixed/zero nonce or a counter that resets when the process restarts. Actions: use a strictly increasing counter persisted per key, or random nonces only when the nonce width is large enough to make collision negligible; rotate the key well before the nonce space is exhausted; consider a misuse-resistant mode (AES-GCM-SIV) when uniqueness is hard to guarantee. Validation signals include a test asserting no nonce repeats across restarts and a key-rotation trigger before exhaustion. Risk boundary: a single nonce reuse can leak plaintext XOR and forge tags; treat any path that can repeat a nonce as a release blocker.",
+  "domain": "cryptography",
+  "scope_hint": "code.cryptography:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.cryptography",
+  "pack_id": "code.cryptography"
+}

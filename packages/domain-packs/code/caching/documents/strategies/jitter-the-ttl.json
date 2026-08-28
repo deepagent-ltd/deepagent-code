@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:cache:jitter-the-ttl",
+  "type": "strategy",
+  "title": "Add jitter to TTLs",
+  "description": "Randomize per-entry TTLs so bulk-populated keys do not all expire on the same tick.",
+  "body": "Use when many entries are populated together (cold start, bulk warm-up). Do not assign every entry an identical TTL — synchronized expiry creates a coordinated stampede when they all lapse at once. Actions: add randomized jitter (for example base ± 10-20%) to each TTL so expirations spread across a window, and record the chosen base and spread. Validation signals include expiry timestamps distributed across the window rather than clustered on one boundary. Risk boundary: too-short TTLs raise origin load while too-long ones extend staleness — verify the base against the data's tolerated freshness before rollout.",
+  "domain": "caching",
+  "scope_hint": "code.caching:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.caching",
+  "pack_id": "code.caching"
+}

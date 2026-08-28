@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:eval:metric-selection-pitfalls",
+  "type": "knowledge",
+  "title": "Metric selection pitfalls",
+  "description": "Exact-match, BLEU/ROUGE overlap, and accuracy can each diverge from real quality and be gamed without improving the system.",
+  "body": "Use when picking a scoring metric. Exact-match penalizes correct paraphrases; n-gram overlap (BLEU/ROUGE) rewards surface similarity over meaning; raw accuracy hides class imbalance and severity. Each can be optimized while user-facing quality stagnates or drops. Do not pick a metric for convenience, and avoid a single blended number that hides segment failures. Actions: choose metrics that correlate with the goal, pair automatic metrics with human spot-checks, and report per-segment. Validation signals include a measured correlation between the metric and human judgment. Risk boundary: optimizing a gameable metric ships a hidden regression; when metric and human disagree, trust the human.",
+  "domain": "eval",
+  "scope_hint": "code.eval:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.eval",
+  "pack_id": "code.eval"
+}

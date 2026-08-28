@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:sim:converge-monte-carlo",
+  "type": "methodology",
+  "title": "Assess Monte Carlo convergence and error",
+  "description": "Track the running estimate and its standard error to decide when enough samples have been drawn.",
+  "body": "Use when running a Monte Carlo estimate to a target precision. Do not stop at a fixed sample count without checking the error, since variance determines how many samples are truly needed. Actions: accumulate the running mean and variance, compute the standard error, and continue until the confidence interval meets the target. Validation signals include a standard error shrinking with the square root of sample count and the estimate stabilizing within the interval. Risk boundary: stopping early reports a falsely precise answer, so escalate sample count or variance reduction when the interval is still too wide.",
+  "domain": "simulation",
+  "scope_hint": "code.simulation:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.simulation",
+  "pack_id": "code.simulation"
+}

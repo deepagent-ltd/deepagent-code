@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:chain:transactions-wallets-and-signing",
+  "type": "knowledge",
+  "title": "Transactions, wallets, and signing",
+  "description": "A transaction is a signed message ordered by an account nonce; the private key holder authorizes everything, and signatures must be replay-protected.",
+  "body": "Use when handling transaction submission or off-chain signatures. An account is a key pair; a transaction is signed with the private key and carries a per-account nonce that enforces order and prevents replay on the same chain. Off-chain signatures (EIP-712 typed data) authorize actions without a transaction but must include a domain separator, nonce, and deadline or they can be replayed. Do not reuse a signature without replay protection, and never expose or hardcode a private key. Actions: include nonce/deadline and chain id in signed messages and verify the recovered signer. Validation signals include a replay test where a reused signature is rejected. Risk boundary: a missing nonce or domain separator lets attackers replay a signature to drain approval; treat unprotected signatures as a critical defect.",
+  "domain": "blockchain",
+  "scope_hint": "code.blockchain:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.blockchain",
+  "pack_id": "code.blockchain"
+}

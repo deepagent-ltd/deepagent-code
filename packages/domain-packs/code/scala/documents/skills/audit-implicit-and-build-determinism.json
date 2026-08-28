@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:scala:audit-implicit-and-build-determinism",
+  "type": "skill",
+  "title": "Audit implicit scope and build determinism",
+  "description": "Check for ambiguous/surprising implicits and unpinned sbt/dependency versions.",
+  "body": "Use when validating predictability of a Scala project. Procedure: trace key implicit/given instances to their defining scope and flag any type class with competing instances importable into the same scope, then read build.sbt, project/build.properties, and plugins.sbt for dynamic version ranges (latest.release, +) or a floating sbt/Scala version. Report which implicits risk ambiguity and which versions are unpinned, with location. This skill exposes findings only and must not change versions or instance placement without runtime permission. Validation signals include confirming a fresh resolve produces a stable dependency tree. Risk boundary: flag a dynamic dependency version as a non-reproducible-build defect and a duplicate type-class instance as a silent-behavior-change risk.",
+  "domain": "scala",
+  "scope_hint": "code.scala:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.scala",
+  "pack_id": "code.scala"
+}

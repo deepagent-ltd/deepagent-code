@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:sqlite:sqlite-busy-no-timeout",
+  "type": "failure_dossier",
+  "description": "Concurrent writes fail immediately with SQLITE_BUSY because busy_timeout is left at the default of zero.",
+  "body": "Failure mode: two connections try to write; SQLite allows only one writer, and with busy_timeout=0 the second call returns SQLITE_BUSY instantly instead of waiting for the lock. Detection signals: intermittent SQLITE_BUSY under concurrency; no busy_timeout pragma in the connection setup; errors disappear when traffic is single-threaded. Do not paper over it with ad-hoc app-level retry loops alone. Safer fallback: set a non-zero busy_timeout on every connection, keep write transactions short, and use BEGIN IMMEDIATE for read-then-write to avoid the upgrade deadlock.",
+  "domain": "sqlite",
+  "scope_hint": "code.database.sqlite:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.sqlite:human_authored",
+  "pack_id": "code.database.sqlite"
+}

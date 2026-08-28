@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:feat:contract-normalization-stats",
+  "type": "strategy",
+  "title": "Version normalization statistics as a contract",
+  "description": "Persist and version the means, scales, and vocabularies used to normalize features so serving applies the exact training-time transform.",
+  "body": "Use when features are scaled, standardized, or vocabulary-encoded before the model. Do not recompute normalization statistics at serving time from live data — the serving distribution differs and the transform no longer matches training. Actions: fit statistics on the training fold, persist them as a versioned artifact bound to the model, and apply them unchanged online; verify the served transform reads the pinned stats. Validation signals include a normalization artifact versioned with the model and identical scaled values offline and online. Risk boundary: a mismatched transform is silent train/serve skew; if serving recomputes stats, treat it as a defect and bind the pinned artifact before release.",
+  "domain": "feature_engineering",
+  "scope_hint": "code.feature-engineering:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.feature-engineering",
+  "pack_id": "code.feature-engineering"
+}

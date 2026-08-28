@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:robot:state-estimation-fundamentals",
+  "type": "knowledge",
+  "title": "State estimation and sensor fusion basics",
+  "description": "Real sensors are noisy and partial, so a state estimator (Kalman/EKF) combines a motion model with measurements weighted by uncertainty to track true state.",
+  "body": "Use when turning noisy sensor data into a usable state. No sensor gives the full true state cleanly: each is noisy, partial, and arrives at its own rate. A Kalman/EKF-style estimator predicts state forward with a motion model and corrects it with each measurement, weighting prediction versus measurement by their covariances, and tracks how confident it is. Do not treat the latest single reading as truth, and do not ignore measurement timestamps. Actions: model process and measurement noise, fuse on timestamps, and watch the covariance for divergence. Validation signals include the estimate tracking ground truth within its reported covariance. Risk boundary: an estimator fed wrong noise models or stale timestamps can diverge silently and feed bad state to control; monitor covariance and reject outliers.",
+  "domain": "robotics",
+  "scope_hint": "code.robotics:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.robotics",
+  "pack_id": "code.robotics"
+}

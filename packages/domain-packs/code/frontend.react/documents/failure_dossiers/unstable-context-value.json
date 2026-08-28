@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:frontend_react:unstable-context-value",
+  "type": "failure_dossier",
+  "description": "Passing a fresh object/array literal as a Context provider value, forcing every consumer to rerender on each provider render.",
+  "body": "Failure mode: the provider's value is constructed inline (e.g. value={{user, setUser}}) so its reference changes every render and all consumers rerender regardless of what they read. Detection signals: profiler shows unrelated consumers committing on each provider render; janky typing or scrolling; value built without useMemo. Do not pass inline literals as context values for high-fan-out contexts. Safer fallback: memoize the value on its real dependencies, split frequently-changing state into a separate context, and verify consumers commit only when their slice changes.",
+  "domain": "react",
+  "scope_hint": "code.frontend.react:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.react:human_authored",
+  "pack_id": "code.frontend.react"
+}

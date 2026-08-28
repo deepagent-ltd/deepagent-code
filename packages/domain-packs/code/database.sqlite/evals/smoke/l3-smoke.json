@@ -1,0 +1,69 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.database.sqlite",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "sqlite",
+      "embedded",
+      "database"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.database.sqlite: WAL mode, busy_timeout pragma, single-writer concurrency, type affinity, FTS5 full-text search, and single-file online backup with better-sqlite3"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "plain prose note with no repository or domain signal"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "sqlite wal mode pragma busy_timeout single writer concurrency type affinity fts5 full text search backup integrity_check foreign_keys synchronous better-sqlite3",
+  "expected_pack_id": "code.database.sqlite",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "code.database.sqlite L3 validation smoke",
+    "signals": [
+      "WAL mode and busy_timeout set per connection test",
+      "concurrent readers proceed while one writer commits (WAL) test",
+      "FTS5 query returns ranked matches test",
+      "online backup produces a consistent copy test"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "code.database.sqlite diagnosis smoke",
+    "signals": [
+      "SQLITE_BUSY under concurrency with no busy_timeout",
+      "default rollback journal blocking readers during writes",
+      "foreign_keys pragma off so FK constraints silently ignored",
+      "copying a live .db file producing a corrupt backup",
+      "type affinity storing a string where a number was expected"
+    ]
+  },
+  "source_refs": [
+    "source:sqlite-docs-wal:paraphrased",
+    "source:sqlite-docs-datatypes:paraphrased"
+  ]
+}

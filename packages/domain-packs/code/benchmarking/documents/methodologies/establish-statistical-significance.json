@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:benchmarking:establish-statistical-significance",
+  "type": "methodology",
+  "title": "Establish statistical significance of a delta",
+  "description": "Decide whether a baseline-vs-candidate difference is real by comparing distributions, not single means, accounting for variance.",
+  "body": "Steps: 1. Collect multiple independent samples for baseline and candidate after warmup. 2. Summarize each with median and a spread measure (IQR/stddev), not just the mean. 3. Compare distributions (e.g. confidence interval on the difference or a nonparametric test) rather than two point values. 4. Reject deltas smaller than the measured noise floor. 5. Record sample count, summary stats, and the decision. Rollback point: before declaring a regression or improvement. Validation: the delta exceeds the noise band with a stated confidence and repeats across runs; a single faster run inside the variance is not evidence of improvement.",
+  "domain": "code",
+  "scope_hint": "code.benchmarking:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.benchmarking",
+  "pack_id": "code.benchmarking"
+}

@@ -1,0 +1,468 @@
+[
+  {
+    "ref_id": "knowledge:finance:auditability-is-feature",
+    "type": "knowledge",
+    "title": "Auditability Is Feature",
+    "summary": "Audit records are product behavior in financial systems.",
+    "domains": [
+      "finance",
+      "business",
+      "risk"
+    ],
+    "triggers": [
+      "audit",
+      "records",
+      "product",
+      "behavior",
+      "financial",
+      "systems",
+      "losing",
+      "auditability"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "business.finance"
+  },
+  {
+    "ref_id": "knowledge:finance:money-values-need-precision",
+    "type": "knowledge",
+    "title": "Money Values Need Precision",
+    "summary": "Financial code should avoid binary floating point for money.",
+    "domains": [
+      "finance",
+      "business",
+      "risk"
+    ],
+    "triggers": [
+      "financial",
+      "code",
+      "should",
+      "avoid",
+      "binary",
+      "floating",
+      "point",
+      "money"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "business.finance"
+  },
+  {
+    "ref_id": "methodology:finance:financial-change-review",
+    "type": "methodology",
+    "title": "Financial Change Review",
+    "summary": "Review ledger invariants, idempotency, rounding, authz, audit, and reconciliation tests.",
+    "domains": [
+      "finance",
+      "business",
+      "risk"
+    ],
+    "triggers": [
+      "review",
+      "ledger",
+      "invariants",
+      "idempotency",
+      "rounding",
+      "authz",
+      "audit",
+      "reconciliation"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "business.finance"
+  },
+  {
+    "ref_id": "methodology:finance:payment-idempotency-check",
+    "type": "methodology",
+    "title": "Payment Idempotency Check",
+    "summary": "Verify duplicate requests, retries, and partial failures for payment-like flows.",
+    "domains": [
+      "finance",
+      "business",
+      "risk"
+    ],
+    "triggers": [
+      "verify",
+      "duplicate",
+      "requests",
+      "retries",
+      "partial",
+      "failures",
+      "payment",
+      "like"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "business.finance"
+  },
+  {
+    "ref_id": "skill:finance:finance-risk-review",
+    "type": "skill",
+    "title": "Finance Risk Review",
+    "summary": "Produce engineering risk review for financial code changes.",
+    "domains": [
+      "finance",
+      "business",
+      "risk"
+    ],
+    "triggers": [
+      "produce",
+      "engineering",
+      "risk",
+      "review",
+      "financial",
+      "code",
+      "changes",
+      "inputs"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "business.finance"
+  },
+  {
+    "ref_id": "strategy:finance:audit-trail-first",
+    "type": "strategy",
+    "title": "Audit Trail First",
+    "summary": "Financial workflows need durable audit trails for state-changing actions.",
+    "domains": [
+      "finance",
+      "business",
+      "risk"
+    ],
+    "triggers": [
+      "financial",
+      "workflows",
+      "need",
+      "durable",
+      "audit",
+      "trails",
+      "state",
+      "changing"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "business.finance"
+  },
+  {
+    "ref_id": "strategy:finance:human-gate-money-risk",
+    "type": "strategy",
+    "title": "Human Gate Money Risk",
+    "summary": "Escalate money movement, irreversible state, and regulated ambiguity.",
+    "domains": [
+      "finance",
+      "business",
+      "risk"
+    ],
+    "triggers": [
+      "escalate",
+      "money",
+      "movement",
+      "irreversible",
+      "state",
+      "regulated",
+      "ambiguity",
+      "automation"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "business.finance"
+  },
+  {
+    "ref_id": "strategy:finance:reconciliation-before-confidence",
+    "type": "strategy",
+    "title": "Reconciliation Before Confidence",
+    "summary": "Use reconciliation against source of truth before trusting balances or reports.",
+    "domains": [
+      "finance",
+      "business",
+      "risk"
+    ],
+    "triggers": [
+      "reconciliation",
+      "against",
+      "source",
+      "truth",
+      "before",
+      "trusting",
+      "balances",
+      "reports"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "business.finance"
+  },
+  {
+    "ref_id": "strategy:finance:money-as-integer-minor-units",
+    "type": "strategy",
+    "title": "Represent money as integer minor units",
+    "summary": "Store and compute monetary amounts as integers in the currency's smallest unit with an explicit currency code, never as binary floating point.",
+    "domains": [
+      "finance",
+      "business",
+      "risk"
+    ],
+    "triggers": [
+      "minor units",
+      "cents",
+      "integer money",
+      "currency",
+      "decimal",
+      "representation"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "business.finance"
+  },
+  {
+    "ref_id": "strategy:finance:idempotent-money-movement",
+    "type": "strategy",
+    "title": "Make money movement idempotent by key",
+    "summary": "Require a caller-supplied idempotency key on payment and transfer operations so a retry settles the transaction at most once.",
+    "domains": [
+      "finance",
+      "business",
+      "risk"
+    ],
+    "triggers": [
+      "idempotency key",
+      "exactly once",
+      "retry",
+      "payment",
+      "double charge",
+      "deduplication"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "business.finance"
+  },
+  {
+    "ref_id": "strategy:finance:two-person-control-for-disbursement",
+    "type": "strategy",
+    "title": "Require two-person control for outbound disbursement",
+    "summary": "Gate any code path that moves money out (payouts, refunds, transfers) behind separation of duties and explicit human authorization, not automated approval.",
+    "domains": [
+      "finance",
+      "business",
+      "risk"
+    ],
+    "triggers": [
+      "four eyes",
+      "separation of duties",
+      "disbursement",
+      "payout",
+      "authorization",
+      "approval gate"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "business.finance"
+  },
+  {
+    "ref_id": "methodology:finance:design-immutable-ledger",
+    "type": "methodology",
+    "title": "Design an append-only financial ledger",
+    "summary": "Model balances as the projection of an immutable, append-only sequence of entries with reversals, never as a mutable in-place balance field.",
+    "domains": [
+      "finance",
+      "business",
+      "risk"
+    ],
+    "triggers": [
+      "ledger",
+      "append-only",
+      "double-entry",
+      "immutable",
+      "reversal",
+      "balance"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "business.finance"
+  },
+  {
+    "ref_id": "methodology:finance:reconcile-against-source-of-truth",
+    "type": "methodology",
+    "title": "Reconcile internal records against the external source of truth",
+    "summary": "Compare internal ledger state against the processor or bank statement on a schedule, classifying every discrepancy before trusting internal balances.",
+    "domains": [
+      "finance",
+      "business",
+      "risk"
+    ],
+    "triggers": [
+      "reconciliation",
+      "settlement",
+      "processor",
+      "bank statement",
+      "discrepancy",
+      "matching"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "business.finance"
+  },
+  {
+    "ref_id": "knowledge:finance:rounding-must-be-deterministic",
+    "type": "knowledge",
+    "title": "Rounding rules must be explicit and consistent",
+    "summary": "Monetary rounding mode and the point at which it is applied are business decisions that change totals; applying them inconsistently creates penny discrepancies that fail reconciliation.",
+    "domains": [
+      "finance",
+      "business",
+      "risk"
+    ],
+    "triggers": [
+      "rounding",
+      "bankers rounding",
+      "half-even",
+      "allocation",
+      "penny",
+      "precision"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "business.finance"
+  },
+  {
+    "ref_id": "knowledge:finance:eventual-settlement-vs-authorization",
+    "type": "knowledge",
+    "title": "Authorization is not settlement",
+    "summary": "A payment authorization reserves funds but is not final money movement; settlement happens later and can fail or differ, so internal state must model both phases.",
+    "domains": [
+      "finance",
+      "business",
+      "risk"
+    ],
+    "triggers": [
+      "authorization",
+      "settlement",
+      "capture",
+      "pending",
+      "clearing",
+      "lifecycle"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "business.finance"
+  },
+  {
+    "ref_id": "skill:finance:audit-money-arithmetic",
+    "type": "skill",
+    "title": "Audit a change for unsafe money arithmetic",
+    "summary": "Inspect a diff for float money types, missing currency, non-idempotent charges, and in-place balance mutation, reporting each with its risk.",
+    "domains": [
+      "finance",
+      "business",
+      "risk"
+    ],
+    "triggers": [
+      "money audit",
+      "float",
+      "currency",
+      "idempotency",
+      "balance mutation",
+      "review"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "business.finance"
+  }
+]

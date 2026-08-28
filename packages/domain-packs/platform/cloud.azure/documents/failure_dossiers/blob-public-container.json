@@ -1,0 +1,11 @@
+{
+  "ref_id": "fail:azure:blob-public-container",
+  "type": "failure_dossier",
+  "description": "Setting a Blob container's public access level to Blob/Container to share a file.",
+  "body": "Failure mode: to share one blob, a container's public access is set to Blob or Container, exposing its contents to anonymous reads. Detection signals: container access level reports Blob/Container, anonymous GET succeeds, and Defender for Cloud flags public storage. Do not enable public container access for a one-off share. Safer fallback: keep the container Private, issue a short-lived user-delegation SAS for the specific blob, or front public assets with a CDN, and treat any genuine public-container need as human-gated.",
+  "domain": "azure",
+  "scope_hint": "platform.cloud.azure:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.azure:human_authored",
+  "pack_id": "platform.cloud.azure"
+}

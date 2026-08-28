@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:mlops:wire-drift-alert",
+  "type": "skill",
+  "title": "Wire a drift alert to a retrain trigger",
+  "description": "Steps to compute drift on a schedule, threshold it, and fire a guarded retrain or investigation.",
+  "body": "Use when a live model needs automatic refresh tied to real distribution change. Do not page on raw drift scores without thresholds — noise floods responders and trust erodes. Actions: schedule PSI/KS computation against a stored baseline, set thresholds per feature, fire a retrain job on breach, and gate that job behind a data-quality check. Validation signals include an alert that fired on a seeded shift and a retrain log naming the breaching feature. Risk boundary: auto-retraining on corrupt data poisons the model; if drift coincides with a quality alert, halt the trigger and escalate rather than retrain.",
+  "domain": "mlops",
+  "scope_hint": "code.mlops:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mlops",
+  "pack_id": "code.mlops"
+}

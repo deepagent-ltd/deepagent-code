@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:mlai:diagnose-a-non-converging-model",
+  "type": "methodology",
+  "title": "Diagnose a model that will not converge",
+  "description": "Isolate why loss stays flat or explodes by checking data, learning rate, and a tiny-overfit sanity test before touching architecture.",
+  "body": "Steps: 1. Verify inputs and labels are aligned and normalized; print a batch. 2. Overfit a single batch — a healthy model should drive that loss near zero; if it cannot, the bug is in data or the loss, not capacity. 3. Sweep learning rate by orders of magnitude (flat loss often means too low, NaN means too high). 4. Check for exploding gradients and add clipping if needed. 5. Only then adjust architecture. Rollback point: before architecture changes. Validation: the single-batch overfit reaches near-zero loss and full training then descends; skipping the overfit test wastes hours tuning the wrong thing.",
+  "domain": "ml",
+  "scope_hint": "code.ml-ai:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.ml-ai",
+  "pack_id": "code.ml-ai"
+}

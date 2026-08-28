@@ -1,0 +1,11 @@
+{
+  "ref_id": "fail:gcp:cloud-run-cold-start-storm",
+  "type": "failure_dossier",
+  "description": "Cloud Run latency spikes because minScale is 0 and container init is heavy.",
+  "body": "Failure mode: a latency-sensitive Cloud Run service runs with minScale 0, so each scale-from-zero pays a slow container init and users see sporadic multi-second responses. Detection signals: request logs flag cold starts, p99 latency spikes correlate with instance count dropping to zero, and startup time is dominated by app init. Do not mask it by overprovisioning maxScale. Safer fallback: set minScale to keep warm instances, enable startup CPU boost, slim the container image and init path, and confirm cold-start rate drops in the logs.",
+  "domain": "gcp",
+  "scope_hint": "platform.cloud.gcp:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.gcp:human_authored",
+  "pack_id": "platform.cloud.gcp"
+}

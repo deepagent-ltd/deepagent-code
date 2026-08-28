@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:aws:cloudwatch-metric-model",
+  "type": "knowledge",
+  "title": "CloudWatch metric resolution, dimensions, and math",
+  "description": "Covers standard vs high-resolution metrics, dimension cardinality, percentile (extended) statistics, and metric-math expressions.",
+  "body": "Use when designing CloudWatch metrics or alarms. Do not assume sub-minute granularity by default or explode dimensions without cost awareness. Actions: know standard metrics are 1-minute and high-resolution can be 1-second at extra cost; each unique dimension combination is a billable metric so control cardinality; use extended statistics for percentiles and metric math to derive ratios and fill gaps. Inspect the metric's period and dimensions before alarming. Validation signals include the alarm period matching the metric resolution and metric-math expressions returning expected ratios. Risk boundary: high-cardinality custom metrics can inflate cost; large dimension sets warrant review.",
+  "domain": "aws",
+  "scope_hint": "platform.cloud.aws:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.aws",
+  "pack_id": "platform.cloud.aws"
+}

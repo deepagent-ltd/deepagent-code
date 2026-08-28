@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:rag:hallucination-from-missing-grounding",
+  "type": "failure_dossier",
+  "description": "The model answers from parametric memory when retrieval returned nothing relevant, inventing facts the corpus does not support.",
+  "body": "Failure mode: retrieval returns empty or low-relevance passages but the system still answers, so the model fills the gap from its own training, producing confident facts with no corpus support. Detection signals: no relevance threshold or abstention path; answers appear even when top passages are off-topic; no test for a no-result query. Do not fall back to parametric knowledge while implying the corpus backed it. Safer fallback: set a relevance threshold, detect empty/low-confidence retrieval, return an explicit 'no grounded answer', and test that a query with no relevant content abstains rather than fabricates.",
+  "domain": "rag",
+  "scope_hint": "code.rag:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.rag:human_authored",
+  "pack_id": "code.rag"
+}

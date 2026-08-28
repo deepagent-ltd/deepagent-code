@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:asm:debug-a-corruption-from-asm",
+  "type": "methodology",
+  "title": "Debug state corruption from assembly",
+  "description": "Trace a crash or wrong result caused by low-level code by checking register preservation, stack balance, and ABI compliance in the debugger.",
+  "body": "Steps: 1. Reproduce and note where it crashes — often far from the real cause. 2. In the debugger, check the stack pointer is balanced and aligned across the suspect call. 3. Verify each callee-saved register is unchanged across the call (set a watch before/after). 4. Confirm arguments landed in the ABI's registers and the inline-asm clobber list is complete. 5. Single-step the suspect block watching the first divergence. Rollback point: swap in the high-level fallback to confirm the asm is the cause. Validation: registers and stack match the ABI at every boundary and the corruption disappears once the violation is fixed; never paper over it by adding unrelated saves until it happens to work.",
+  "domain": "assembly",
+  "scope_hint": "code.assembly:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.assembly",
+  "pack_id": "code.assembly"
+}

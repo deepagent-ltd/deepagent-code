@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:lic:resolve-an-spdx-expression",
+  "type": "methodology",
+  "title": "Resolve and validate an SPDX expression",
+  "description": "Parse compound SPDX expressions (AND/OR/WITH) and pick the operative license for the project's use.",
+  "body": "Steps: 1. Read the declared SPDX expression for the component. 2. For an OR expression, choose the disjunct that best fits the distribution model and record the choice (e.g. pick MIT over GPL in 'MIT OR GPL-2.0'). 3. For an AND expression, treat every term's obligations as cumulative. 4. Resolve WITH-exception clauses (e.g. GPL-2.0-with-classpath-exception) and note how the exception changes linking obligations. 5. Validate each identifier against the current SPDX list, flagging deprecated ones. Rollback point: before recording a chosen disjunct. Validation: the expression parses, every identifier is current, and the recorded choice is justified in the inventory.",
+  "domain": "license",
+  "scope_hint": "risk.license:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.license",
+  "pack_id": "risk.license"
+}

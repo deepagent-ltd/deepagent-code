@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:agent:react-vs-plan-execute",
+  "type": "knowledge",
+  "title": "ReAct vs plan-and-execute agents",
+  "description": "ReAct interleaves reasoning and acting step by step; plan-and-execute drafts a full plan first then runs it. They fail differently.",
+  "body": "Use when choosing an agent architecture. ReAct interleaves a thought, an action, and an observation each step, adapting as results arrive; plan-and-execute produces a multi-step plan up front and then executes it, optionally replanning. ReAct is flexible but can wander or loop; plan-execute is auditable but brittle if early observations invalidate the plan. Do not assume one pattern suits every task, and avoid running plan-execute without replanning hooks. Actions: pick by task predictability and add a no-progress guard either way. Validation signals include tests that ReAct halts on a stall and that plan-execute replans when an early step fails. Risk boundary: a rigid plan that keeps executing after a failed precondition can cause harm; require replanning or a gate.",
+  "domain": "agent",
+  "scope_hint": "code.agent:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.agent",
+  "pack_id": "code.agent"
+}

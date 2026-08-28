@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:search:reindex-with-zero-downtime",
+  "type": "methodology",
+  "title": "Reindex with zero downtime via aliases",
+  "description": "Migrate to a new mapping by reindexing into a new index and swapping a read alias atomically, with verification before cutover.",
+  "body": "Steps: 1. Create the target index with the new mapping/analyzers. 2. Reindex existing documents into it (and dual-write or catch up new writes). 3. Verify document counts and run the judgment set against the new index. 4. Swap the read alias from old to new atomically. 5. Keep the old index until the new one is confirmed healthy, then drop it. Rollback point: swap the alias back to the old index instantly if results regress. Validation: counts match, relevance holds or improves, and the alias swap causes no query downtime; reindexing without an alias forces application changes and risks an inconsistent window.",
+  "domain": "search",
+  "scope_hint": "code.search:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.search",
+  "pack_id": "code.search"
+}

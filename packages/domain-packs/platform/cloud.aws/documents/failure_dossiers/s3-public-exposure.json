@@ -1,0 +1,11 @@
+{
+  "ref_id": "fail:aws:s3-public-exposure",
+  "type": "failure_dossier",
+  "description": "Disabling S3 Block Public Access to share an object and exposing the whole bucket.",
+  "body": "Failure mode: to share one file an engineer turns off Block Public Access or adds Principal:* to the bucket policy, making objects world-readable. Detection signals: s3api get-bucket-policy-status returns IsPublic true, Access Analyzer flags public access, and unexpected GET traffic appears. Do not disable account/bucket Block Public Access for a one-off share. Safer fallback: generate a time-limited presigned URL or use CloudFront with Origin Access Control, keep Block Public Access on, and treat any genuine public-bucket need as a human-gated decision.",
+  "domain": "aws",
+  "scope_hint": "platform.cloud.aws:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.aws:human_authored",
+  "pack_id": "platform.cloud.aws"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:comp:build-a-lexer-and-parser",
+  "type": "methodology",
+  "title": "Build a lexer and parser to an AST",
+  "description": "Implement tokenization and parsing for a grammar, producing a well-formed AST with source locations and useful errors.",
+  "body": "Steps: 1. Define the lexical grammar and write a lexer producing tokens with source positions. 2. Define the syntactic grammar and choose a strategy (recursive descent / Pratt for expressions, or a generated LR parser). 3. Build AST nodes that carry source spans for diagnostics. 4. Add error recovery so one bad token does not abort the parse. 5. Test with valid programs (correct AST) and malformed ones (accurate diagnostics). Rollback point: before changing the grammar, which ripples through every later stage. Validation: round-trip parse/print is idempotent on valid programs and malformed inputs yield precise located errors; a parser that only handles the happy path is not done.",
+  "domain": "compiler",
+  "scope_hint": "code.compiler:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.compiler",
+  "pack_id": "code.compiler"
+}

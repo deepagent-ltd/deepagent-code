@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:kernel:run-kernel-sanitizers",
+  "type": "skill",
+  "title": "Run kernel sanitizers and lockdep",
+  "description": "Build with KASAN/kmemleak/lockdep, run the workload in a VM, and report memory errors, leaks, and locking violations with their traces.",
+  "body": "Use when validating a kernel change for memory and locking safety. Actions: build the kernel/module with KASAN, kmemleak, and lockdep enabled, run the target workload and stress in a VM, and report any use-after-free, leak, or lock-order violation with the offending stack trace. Do not declare a kernel change safe from a single boot without sanitizers. This skill exposes capability only and must not load modules into a production or non-disposable host without runtime permission. Validation signals include a clean KASAN/kmemleak/lockdep run across the stress workload. Risk boundary: if sanitizers cannot be enabled or only a production host is available, report the change as unverified and recommend a disposable VM rather than testing in place.",
+  "domain": "kernel",
+  "scope_hint": "code.os-kernel:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.os-kernel",
+  "pack_id": "code.os-kernel"
+}

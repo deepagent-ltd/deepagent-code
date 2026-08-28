@@ -1,0 +1,72 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "risk.compliance",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "compliance",
+      "audit",
+      "regulated",
+      "approval"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [
+      "regulated"
+    ],
+    "repo_signals": [
+      "L3 smoke for risk.compliance: tamper-evident audit trail, change approval gate, segregation of duties, SOC2/GDPR evidence retention, and control attestation"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "plain prose note with no repository or domain signal"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "compliance audit trail change approval gate segregation of duties SOC2 GDPR evidence retention attestation control regulated workflow human gate",
+  "expected_pack_id": "risk.compliance",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "risk.compliance L3 validation smoke",
+    "signals": [
+      "every controlled action emits an immutable audit record with actor, time, and before/after state",
+      "each merged change carries an approval by a principal other than the author",
+      "evidence for each in-scope control is retained for the required period and retrievable",
+      "an attestation test proves the control executed on a representative transaction"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "risk.compliance diagnosis smoke",
+    "signals": [
+      "controlled action with no corresponding audit record",
+      "author able to approve their own change",
+      "audit log mutable or lacking integrity protection",
+      "evidence purged before its retention period",
+      "control marked passing with no attestation that it actually ran"
+    ]
+  },
+  "source_refs": [
+    "source:soc2-trust-criteria:paraphrased",
+    "source:nist-800-53-au:paraphrased"
+  ]
+}

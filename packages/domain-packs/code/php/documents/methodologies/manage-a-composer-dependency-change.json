@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:php:manage-a-composer-dependency-change",
+  "type": "methodology",
+  "title": "Manage a Composer dependency change",
+  "description": "Add or upgrade a dependency deliberately, regenerating the lock and verifying constraints and platform requirements.",
+  "body": "Steps: 1. Add the package with composer require using a caret/tilde constraint that matches your support policy. 2. Let Composer resolve and regenerate composer.lock, reviewing the diff for transitive changes. 3. Check platform requirements (php version, ext-*) resolve on your targets. 4. Run the PHPUnit suite and any static analysis (PHPStan/Psalm). 5. Commit composer.json and composer.lock together. Rollback point: before committing the lock, since reverting both files restores the prior graph. Validation: composer install reproduces the same vendor/ on a clean checkout and the suite stays green.",
+  "domain": "php",
+  "scope_hint": "code.php:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.php",
+  "pack_id": "code.php"
+}

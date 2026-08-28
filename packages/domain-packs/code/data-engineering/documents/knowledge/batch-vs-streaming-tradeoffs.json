@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:dataeng:batch-vs-streaming-tradeoffs",
+  "type": "knowledge",
+  "title": "Batch vs streaming tradeoffs",
+  "description": "Batch is simple, cheap, and trivially replayable; streaming gives low latency at the cost of stateful operators, watermarks, and harder backfills.",
+  "body": "Use when choosing or explaining a processing model. Batch reprocesses a bounded input and is easy to reason about and backfill, but latency is the schedule interval. Streaming processes unbounded data with low latency but introduces windowing, watermarks for late/out-of-order events, large operator state, and backfills that must replay through the same stateful logic. Do not treat streaming as batch with a smaller interval. Actions: pick batch unless freshness demands streaming. Validation signals include meeting the freshness SLO with the simpler model. Risk boundary: underestimating streaming's state and backfill complexity leads to fragile pipelines; size the operational cost first.",
+  "domain": "data_engineering",
+  "scope_hint": "code.data-engineering:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-engineering",
+  "pack_id": "code.data-engineering"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:analytics:incremental-only-when-correct",
+  "type": "strategy",
+  "title": "Make a model incremental only when it stays correct",
+  "description": "Adopt incremental materialization with a late-arriving window and idempotent merge so it matches a full refresh.",
+  "body": "Use when a full refresh of a large fact table is too slow or costly. Do not switch to incremental without handling late-arriving and updated rows — a naive append misses backdated data and drifts from a full refresh. Actions: define the incremental predicate with a lookback window covering late arrivals, use a merge/upsert on a stable key for idempotency, and periodically reconcile against a full refresh. Validation signals include an incremental build matching a full refresh on the same input and a reconciliation job that detects drift. Risk boundary: a drifting incremental model silently reports wrong totals; if reconciliation finds a gap, treat the model as untrustworthy and full-refresh while widening the window.",
+  "domain": "analytics",
+  "scope_hint": "code.analytics:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.analytics",
+  "pack_id": "code.analytics"
+}

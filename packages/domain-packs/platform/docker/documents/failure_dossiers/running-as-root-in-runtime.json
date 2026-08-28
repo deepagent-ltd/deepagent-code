@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:docker:running-as-root-in-runtime",
+  "type": "failure_dossier",
+  "description": "Shipping a container whose process runs as root because no non-root USER was set, widening the blast radius of any escape.",
+  "body": "Failure mode: the Dockerfile never adds a USER directive, so the application runs as root inside the container; a vulnerability or escape then has root in the container and an easier path to the host. Detection signals: the running container's process is UID 0; no USER instruction in the Dockerfile; volume files are created root-owned. Do not run application code as root for convenience. Safer fallback: create and switch to a non-root user, ensure needed paths are owned/writable by it, and verify the process runs unprivileged. Risk boundary: for workloads needing root capabilities, scope them explicitly and escalate rather than running fully privileged by default.",
+  "domain": "platform",
+  "scope_hint": "platform.docker:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.docker:human_authored",
+  "pack_id": "platform.docker"
+}

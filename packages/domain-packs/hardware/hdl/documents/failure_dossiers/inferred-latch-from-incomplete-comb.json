@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:hdl:inferred-latch-from-incomplete-comb",
+  "type": "failure_dossier",
+  "description": "An always_comb / always block that omits an output on some path, causing synthesis to infer a latch that holds stale data.",
+  "body": "Failure mode: combinational logic with an if/case that does not assign every output on every branch, so synthesis infers a latch instead of pure logic, holding old values and breaking timing. Detection signals: synthesis/lint reports 'inferred latch'; output retains stale value in sim; unexpected timing path through a latch. Do not leave outputs unassigned on any branch. Safer fallback: default-assign every output at the top of always_comb or assign in all branches, add a case default, and confirm zero inferred latches.",
+  "domain": "hdl",
+  "scope_hint": "hardware.hdl:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.hdl:human_authored",
+  "pack_id": "hardware.hdl"
+}

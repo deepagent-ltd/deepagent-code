@@ -1,0 +1,11 @@
+{
+  "ref_id": "fail:mesh:retry-storm-amplification",
+  "type": "failure_dossier",
+  "description": "Mesh retries amplify load and worsen an outage.",
+  "body": "Failure mode: routes are configured with generous retries and no budget, so when a dependency degrades every caller retries, multiplying load and turning a brownout into a full outage. Detection signals: upstream request volume spikes during failures, retryOn covers non-idempotent or always-failing cases, and per-try plus overall timeouts allow many attempts. Do not raise retry counts to push through errors. Safer fallback: bound attempts, set retryOn to idempotent retryable failures only, ensure per-try timeout fits within the overall timeout, add a retry budget/circuit breaker, and fail fast when the dependency is down.",
+  "domain": "service_mesh",
+  "scope_hint": "platform.service-mesh:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.service-mesh:human_authored",
+  "pack_id": "platform.service-mesh"
+}
