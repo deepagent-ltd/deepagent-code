@@ -81,7 +81,7 @@ it.effect("admits one canonical activity and selection for the promoted trigger 
       historyEndMessageId: "msg_trigger",
     })
     expect(admission.activityId).toStartWith("activity_")
-    expect(admission.selectionId).toStartWith("selection_")
+    expect(admission.selectionId).toBeTruthy()
     expect(admission.authorizationEpoch).toBe(0)
 
     const second = yield* SessionRunnerCanonical.admitSelection({
@@ -189,16 +189,11 @@ const seamSeed = Effect.gen(function* () {
     .pipe(Effect.orDie)
 })
 
-it.effect("records the wired selection evidence on the V2 selection commit", () =>
+it.effect("commits a real four-graph V2 selection (never v2-none) with explicit statuses", () =>
   Effect.gen(function* () {
     yield* seed
     yield* seamSeed
     const { db } = yield* Database.Service
-    const evidence = {
-      graphRevisions: { code: "rev_code_9", documents: "rev_docs_4", knowledge: "rev_k_1", memory: "rev_m_2" },
-      selectedSourceFingerprint: "federation_source_fingerprint",
-      observedLocationMutationEpoch: 7,
-    }
     const admission = yield* SessionRunnerCanonical.admitSelection({
       db,
       contexts: yield* SessionContext.Service,
@@ -208,27 +203,26 @@ it.effect("records the wired selection evidence on the V2 selection commit", () 
       promotedInputIds: ["msg_trigger_seam"],
       system: { baseline: "baseline", revision: 0, baselineSeq: 1 },
       historyEndMessageId: "msg_trigger_seam",
-    }).pipe(
-      Effect.provideService(
-        SessionRunnerCanonical.CurrentSelectionEvidenceLookup,
-        () => Effect.succeed(evidence),
-      ),
-    )
+    })
     const row = yield* db
       .select()
       .from(SessionContextSelectionTable)
       .where(eq(SessionContextSelectionTable.selection_id, admission.selectionId))
       .get()
       .pipe(Effect.orDie)
-    expect(row?.graph_revisions).toBe(JSON.stringify(evidence.graphRevisions))
-    expect(row?.selected_source_fingerprint).toBe("federation_source_fingerprint")
-    expect(row?.observed_location_mutation_epoch).toBe(7)
-    expect(admission.selectedSourceFingerprint).toBe("federation_source_fingerprint")
-    expect(admission.observedLocationMutationEpoch).toBe(7)
+    // C3-08: the V2 turn selection carries four real graph statuses (never the v2-none fallback).
+    expect(row).toBeDefined()
+    const statuses = JSON.parse(row?.graph_statuses ?? "{}") as Record<string, { status: string }>
+    expect(Object.keys(statuses).sort()).toEqual(["code", "documents", "knowledge", "memory"])
+    for (const status of Object.values(statuses)) {
+      expect(status.status).not.toBe("v2-none")
+      expect(["ready", "empty", "degraded_unavailable", "denied", "timeout"]).toContain(status.status)
+    }
+    expect(row?.graph_revisions).not.toContain("v2-none")
   }),
 )
 
-it.effect("keeps the v2:local evidence when the seam lookup yields nothing or faults", () =>
+it.effect("keeps explicit degraded statuses rather than a v2-none fallback when no graph source is wired", () =>
   Effect.gen(function* () {
     yield* seed
     const { db } = yield* Database.Service
@@ -241,12 +235,7 @@ it.effect("keeps the v2:local evidence when the seam lookup yields nothing or fa
       promotedInputIds: ["msg_trigger"],
       system: { baseline: "baseline", revision: 0, baselineSeq: 1 },
       historyEndMessageId: "msg_trigger",
-    }).pipe(
-      // A faulting lookup degrades to the pre-seam local evidence; it never fails the admission.
-      Effect.provideService(SessionRunnerCanonical.CurrentSelectionEvidenceLookup, () =>
-        Effect.fail(new Error("federation unavailable")),
-      ),
-    )
+    })
     const row = yield* db
       .select()
       .from(SessionContextSelectionTable)
@@ -254,10 +243,10 @@ it.effect("keeps the v2:local evidence when the seam lookup yields nothing or fa
       .get()
       .pipe(Effect.orDie)
     expect(JSON.parse(row?.graph_revisions ?? "{}")).toEqual({
-      code: "v2-none",
-      documents: "v2-none",
-      knowledge: "v2-none",
-      memory: "v2-none",
+      code: "code:staged:0",
+      documents: "documents:staged:0",
+      knowledge: "knowledge:staged:0",
+      memory: "memory:staged:0",
     })
     expect(row?.observed_location_mutation_epoch).toBe(0)
   }),

@@ -49,11 +49,9 @@ describe("selection-bridge matcher precision", () => {
     expect(isCommittedValueLiteral(literals[0]!)).toBe(false)
   })
 
-  test("real tree: the only committed sites are the canonical-turn four-revision fallback", () => {
+  test("real tree: zero committed v2-none bridge sites after C3-08 migration", () => {
     const sites = selectionBridgeSites()
-    expect(sites.length).toBe(4)
-    expect(sites.every((site) => site.repoFile.endsWith("src/session/runner/canonical-turn.ts"))).toBe(true)
-    expect(sites.map((site) => site.line)).toEqual([37, 37, 37, 37])
+    expect(sites.length).toBe(0)
     // The defensive solution-side references (selection-writer status === "v2-none") must NOT appear.
     expect(sites.some((site) => site.repoFile.includes("context-federation/selection-writer"))).toBe(false)
   })
