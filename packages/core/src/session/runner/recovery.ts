@@ -23,8 +23,11 @@ export * as SessionProviderRecovery from "./recovery"
 // Command / evidence store semantics live in ./recovery-store (C1B-03); this service owns
 // the single-writer serialize + classify + authorize + command-record path.
 
+import { randomUUID } from "node:crypto"
 import { Context, Effect, Layer, Ref, Schema, Semaphore } from "effect"
 import { RecoveryCommandContract } from "../../contract/recovery-command"
+import { contentDigest } from "../../contract/digest"
+import { Hash } from "../../util/hash"
 import type {
   AbandonRecord,
   AbandonTransactionOutcome,
@@ -36,7 +39,13 @@ import type {
   BaselineVerificationOutcome,
   CommandRecord,
   CommandWriteOutcome,
+  EncryptedEvidenceArtifact,
+  EvidenceExportManifest,
   EvidenceRecord,
+  EvidenceSettleOutcome,
+  ForkManifest,
+  ForkRecord,
+  ForkTransactionOutcome,
   RecoveryStoreState,
   RepairAndAbandonOutcome,
 } from "./recovery-store"
@@ -46,12 +55,33 @@ import {
   baselinesOf,
   commandCas,
   commandsOf,
+  DefaultEvidenceExportTtlMs,
   emptyRecoveryStoreState,
   evidenceOf,
+  evidenceSettleCas,
+  exportsOf,
+  evidenceArtifactsOf,
+  forkManifestRef,
+  forkTransaction,
+  forksOf,
+  readOnlySessionsOf,
   recoveryCommandContentAddress,
   repairAndAbandonTransaction,
   verifyBaselineReconstruction,
 } from "./recovery-store"
+import { SessionRecoverySafeBoundary } from "./recovery-safe-boundary"
+import {
+  buildExportManifest,
+  canonicalEvidenceExportPayload,
+  confirmSettledEvidenceRef,
+  decryptEvidenceArtifact,
+  encryptEvidenceArtifact,
+  evidenceArtifactAAD,
+  redactedSummary,
+  terminalPayloadHashOf,
+  validateConfirmSettledEvidence,
+  verifyExportedArtifact,
+} from "./recovery-evidence"
 
 // Re-export the store's value functions so consumers reach them through the service namespace.
 export {
@@ -59,10 +89,15 @@ export {
   abandonTransaction,
   commandCas,
   emptyRecoveryStoreState,
+  evidenceSettleCas,
+  forkManifestRef,
   recoveryCommandContentAddress,
   repairAndAbandonTransaction,
   verifyBaselineReconstruction,
 } from "./recovery-store"
+
+export * as SessionRecoverySafeBoundary from "./recovery-safe-boundary"
+export * as SessionRecoveryEvidence from "./recovery-evidence"
 
 // ---------------------------------------------------------------------------
 // Attempt identity (C2-04 protocol identity where present)
@@ -159,6 +194,59 @@ export class BaselineVerifyRefusedError extends Schema.TaggedErrorClass<Baseline
   "SessionProviderRecovery.BaselineVerifyRefusedError",
   { reason: Schema.String },
 ) {}
+/** Typed refusal: free text is never acceptable as external evidence (design §9.2, C1B-08). */
+export class TextIsNotEvidenceError extends Schema.TaggedErrorClass<TextIsNotEvidenceError>()(
+  "SessionProviderRecovery.TextIsNotEvidenceError",
+  { reason: Schema.Literal("text_is_not_evidence") },
+) {}
+/** Typed refusal: no safe boundary exists before the first indeterminate turn (C1B-07). */
+export class SafeBoundaryNoneError extends Schema.TaggedErrorClass<SafeBoundaryNoneError>()(
+  "SessionProviderRecovery.SafeBoundaryNoneError",
+  { reason: Schema.Literal("safe_boundary_none") },
+) {}
+/** Typed refusal: the original session is fenced read-only after a fork (C1B-07). */
+export class SessionReadOnlyError extends Schema.TaggedErrorClass<SessionReadOnlyError>()(
+  "SessionProviderRecovery.SessionReadOnlyError",
+  { sessionId: Schema.String, reason: Schema.Literal("fork_fence") },
+) {}
+/** Typed refusal: an external evidence binding failed to verify (C1B-08). */
+export class EvidenceBindingError extends Schema.TaggedErrorClass<EvidenceBindingError>()(
+  "SessionProviderRecovery.EvidenceBindingError",
+  {
+    reason: Schema.Union([
+      Schema.Literal("terminal_state_not_settled"),
+      Schema.Literal("request_hash_mismatch"),
+      Schema.Literal("idempotency_key_mismatch"),
+      Schema.Literal("terminal_payload_hash_mismatch"),
+      Schema.Literal("provider_provenance_incomplete"),
+    ]),
+  },
+) {}
+/** Typed refusal: no recorded terminal receipt payload hash to verify against (C1B-08). */
+export class MissingTerminalEvidenceError extends Schema.TaggedErrorClass<MissingTerminalEvidenceError>()(
+  "SessionProviderRecovery.MissingTerminalEvidenceError",
+  { requestHash: Schema.String },
+) {}
+/** Typed refusal: an export manifest/artifact is unknown (C1B-09). */
+export class ExportNotFoundError extends Schema.TaggedErrorClass<ExportNotFoundError>()(
+  "SessionProviderRecovery.ExportNotFoundError",
+  { exportId: Schema.String },
+) {}
+/** Typed refusal: a cross-session unlock of an evidence export (C1B-09). */
+export class ExportCrossSessionDeniedError extends Schema.TaggedErrorClass<ExportCrossSessionDeniedError>()(
+  "SessionProviderRecovery.ExportCrossSessionDeniedError",
+  { exportId: Schema.String, requestedSessionId: Schema.String, ownerSessionId: Schema.String },
+) {}
+/** Typed refusal: an evidence export has passed its expiry (C1B-09). */
+export class ExportExpiredError extends Schema.TaggedErrorClass<ExportExpiredError>()(
+  "SessionProviderRecovery.ExportExpiredError",
+  { exportId: Schema.String, expiredAt: Schema.Int },
+) {}
+/** Typed refusal: a tampered export manifest/artifact (C1B-09). */
+export class ExportTamperError extends Schema.TaggedErrorClass<ExportTamperError>()(
+  "SessionProviderRecovery.ExportTamperError",
+  { exportId: Schema.String, reason: Schema.String },
+) {}
 
 export type Error =
   | NotFoundError
@@ -170,6 +258,15 @@ export type Error =
   | RefuseAbandonWithTerminalEvidenceError
   | RecoveryTransactionAbortedError
   | BaselineVerifyRefusedError
+  | TextIsNotEvidenceError
+  | SafeBoundaryNoneError
+  | SessionReadOnlyError
+  | EvidenceBindingError
+  | MissingTerminalEvidenceError
+  | ExportNotFoundError
+  | ExportCrossSessionDeniedError
+  | ExportExpiredError
+  | ExportTamperError
 
 export type {
   AbandonRecord,
@@ -181,7 +278,13 @@ export type {
   BaselineVerificationOutcome,
   CommandRecord,
   CommandWriteOutcome,
+  EncryptedEvidenceArtifact,
+  EvidenceExportManifest,
   EvidenceRecord,
+  EvidenceSettleOutcome,
+  ForkManifest,
+  ForkRecord,
+  ForkTransactionOutcome,
   RecoveryStoreState,
   RepairAndAbandonOutcome,
 }
@@ -453,6 +556,83 @@ export type RepairBaselineAndAbandonInput = {
   readonly fault?: { readonly at: "after_repair_stage" }
 }
 
+/** C1B-07 input: fork a new session from a proven safe boundary. */
+export type ForkFromSafeBoundaryInput = {
+  readonly actor: { readonly type: "user" | "administrator" | "system"; readonly id: string }
+  readonly sourceSessionId: string
+  readonly requestHash: string
+  readonly attemptIdentity: AttemptIdentity
+  readonly history: readonly SessionRecoverySafeBoundary.SafeBoundaryMessage[]
+  /** Optional cross-check: if provided and not the found safe boundary, a typed refusal. */
+  readonly boundaryMessageId?: string
+  /** Caller-supplied fork session id (converges an exact retry on the SAME fork). */
+  readonly forkSessionId?: string
+  readonly now?: number
+}
+
+/** C1B-07 outcome: forked, existing (exact retry, no second fork), or a typed conflict. */
+export type ForkFromSafeBoundaryOutcome =
+  | { readonly status: "forked"; readonly forkRef: string; readonly manifest: ForkManifest; readonly forkSessionId: string; readonly commandId: string }
+  | { readonly status: "existing"; readonly forkRef: string; readonly manifest: ForkManifest; readonly forkSessionId: string }
+  | { readonly status: "conflict"; readonly reason: "already_forked" | "fork_mismatch" | "boundary_mismatch" }
+
+/** C1B-08 input: confirm an attempt settled with external provider evidence. */
+export type ConfirmSettledInput = {
+  readonly actor: { readonly type: "user" | "administrator" | "system"; readonly id: string }
+  readonly requestHash: string
+  readonly attemptIdentity: AttemptIdentity
+  /** Decoded as a frozen `RecoveryEvidence`; free text is refused (typed). */
+  readonly evidence: unknown
+  readonly now?: number
+}
+
+/** C1B-08 outcome: settled, existing (idempotent verdict), or a typed conflict. */
+export type ConfirmSettledOutcome =
+  | { readonly status: "settled"; readonly evidenceRef: string }
+  | { readonly status: "existing"; readonly evidenceRef: string }
+  | { readonly status: "conflict"; readonly evidenceRef: string; readonly reason: "evidence_request_hash_mismatch" | "evidence_payload_mismatch" }
+
+/** C1B-09 input: export the recovery evidence set as an encrypted artifact + manifest. */
+export type ExportRecoveryEvidenceInput = {
+  readonly actor: { readonly type: "user" | "administrator" | "system"; readonly id: string }
+  readonly sessionId: string
+  readonly attemptIdentity: AttemptIdentity
+  readonly requestHash: string
+  readonly classifyInput: ClassifyInput
+  /** AES-256-GCM key (32 bytes) and its keyId (the production caller owns the key material). */
+  readonly encryptionKey: Uint8Array
+  readonly keyId: string
+  readonly exportId?: string
+  readonly now?: number
+  readonly ttlMs?: number
+}
+
+/** C1B-09 outcome: the export manifest + artifact reference. */
+export type ExportRecoveryEvidenceOutcome = {
+  readonly exportId: string
+  readonly artifactRef: string
+  readonly contentHash: string
+  readonly manifest: EvidenceExportManifest
+}
+
+/** C1B-09 input: unlock a previously-exported evidence artifact. */
+export type UnlockRecoveryEvidenceInput = {
+  readonly actor: { readonly type: "user" | "administrator" | "system"; readonly id: string }
+  /** The requesting session — must be the SAME session that owns the export. */
+  readonly sessionId: string
+  readonly exportId: string
+  readonly encryptionKey: Uint8Array
+  readonly now?: number
+}
+
+/** C1B-09 outcome: unlocked payload (evidence set), or a typed redaction/expiry/tamper. */
+export type UnlockRecoveryEvidenceOutcome = {
+  readonly exportId: string
+  readonly contentHash: string
+  readonly payload: string
+  readonly manifest: EvidenceExportManifest
+}
+
 export interface Interface {
   /** Classify a single attempt into the five-class frozen descriptor (pure). */
   readonly classify: (input: ClassifyInput) => RecoveryCommandContract.RecoveryDescriptor
@@ -522,6 +702,53 @@ export interface Interface {
     }) => Effect.Effect<void, Error>
     readonly getStatus: (evidenceRef: string) => Effect.Effect<EvidenceRecord | undefined>
   }
+  /**
+   * C1B-07: find the safe boundary in a session history. Pure and deterministic;
+   * an unknown-result assistant/tool turn is never a boundary and the boundary is
+   * always BEFORE the first indeterminate turn.
+   */
+  readonly findSafeBoundary: (history: readonly SessionRecoverySafeBoundary.SafeBoundaryMessage[]) => SessionRecoverySafeBoundary.SafeBoundary
+  /**
+   * C1B-07: fork a new session from a proven safe boundary. The new session's
+   * history is the messages THROUGH the boundary ONLY (never copies an
+   * unknown-result assistant/tool turn); the original session is fenced READ-ONLY
+   * (write/tool/providing ops are refused through `assertSessionWritable`); the
+   * fork manifest is complete and deterministic. An exact retry for the same
+   * boundary -> typed `existing`, no second fork.
+   */
+  readonly forkFromSafeBoundary: (input: ForkFromSafeBoundaryInput) => Effect.Effect<ForkFromSafeBoundaryOutcome, Error>
+  /** Read a fork record by its source session (the read-only fence evidence). */
+  readonly queryFork: (sourceSessionId: string) => Effect.Effect<ForkRecord | undefined>
+  /** Whether a session is fenced read-only after a fork. */
+  readonly isSessionReadOnly: (sessionId: string) => Effect.Effect<boolean>
+  /**
+   * C1B-07 guard: refuse a write/tool/providing op on a forked (read-only) session.
+   * After a fork the original session may be read but not written. No mutation on refusal.
+   */
+  readonly assertSessionWritable: (sessionId: string) => Effect.Effect<void, Error>
+  /**
+   * C1B-08: confirm an attempt settled with EXTERNAL provider evidence. The verdict
+   * is valid only when the authoritative request hash, idempotency key and terminal
+   * payload hash all match the attempt binding AND a provider provenance pointer is
+   * present; free text is refused (typed). The verdict persists in the evidence
+   * store with a typed status transition via the store's CAS (CAS-lost -> existing).
+   */
+  readonly confirmSettled: (input: ConfirmSettledInput) => Effect.Effect<ConfirmSettledOutcome, Error>
+  /**
+   * C1B-09: export the recovery evidence set as an ENCRYPTED artifact (AES-256-GCM,
+   * fresh random IV per export) + a DEFAULT-REDACTED export manifest (hash/size/
+   * type/reason only; the body is behind a permission gate: same-session actor,
+   * bounded default 7-day expiry). Hash/refs are auditable — see `unlockRecoveryEvidence`.
+   */
+  readonly exportRecoveryEvidence: (input: ExportRecoveryEvidenceInput) => Effect.Effect<ExportRecoveryEvidenceOutcome, Error>
+  /** Read an export manifest by export id (redacted; the body stays behind the gate). */
+  readonly queryExport: (exportId: string) => Effect.Effect<EvidenceExportManifest | undefined>
+  /**
+   * C1B-09: unlock a previously-exported evidence artifact. Decrypt + recompute +
+   * compare for auditability; a cross-session unlock, an expired export or a
+   * tampered manifest/artifact is a typed refusal.
+   */
+  readonly unlockRecoveryEvidence: (input: UnlockRecoveryEvidenceInput) => Effect.Effect<UnlockRecoveryEvidenceOutcome, Error>
   /** Legacy adapter: read-only historical reader, never a successor-epoch writer. */
   readonly adapter: {
     readonly classifyLegacy: (input: { readonly receiptId: string }) => {
@@ -776,6 +1003,295 @@ export const layer = Layer.effect(
       )
     })
 
+    // C1B-07: safe-boundary finder (pure) + fork.
+    const findSafeBoundary = (history: readonly SessionRecoverySafeBoundary.SafeBoundaryMessage[]) =>
+      SessionRecoverySafeBoundary.findSafeBoundary(history)
+
+    const forkFromSafeBoundary = Effect.fn("SessionProviderRecovery.forkFromSafeBoundary")(function* (
+      input: ForkFromSafeBoundaryInput,
+    ) {
+      return yield* Semaphore.withPermits(lock, 1)(
+        Effect.gen(function* () {
+          // Least-privilege: fork creates a NEW session (no source side effect) and fences the
+          // source read-only — user-grade exit (design §9.3 "安全新会话").
+          yield* assertPermission(input.actor, requiredPermissionFor("fork_only"))
+          const safe = SessionRecoverySafeBoundary.findSafeBoundary(input.history)
+          if (safe.status === "none") {
+            return yield* Effect.fail(new SafeBoundaryNoneError({ reason: "safe_boundary_none" }))
+          }
+          if (input.boundaryMessageId !== undefined && input.boundaryMessageId !== safe.boundaryMessageId) {
+            return yield* Effect.fail(new MismatchError({ reason: "boundary_mismatch" }))
+          }
+          const boundary = safe.confirmedThrough
+          const boundaryHash = contentDigest({ id: boundary.id, seq: boundary.seq, kind: boundary.kind })
+          const forkSessionId = input.forkSessionId ?? `fork_${randomUUID()}`
+          const state = yield* Ref.get(store)
+          const tx = forkTransaction(state, {
+            sourceSessionId: input.sourceSessionId,
+            requestHash: input.requestHash,
+            attemptIdentity: input.attemptIdentity,
+            boundaryMessageId: safe.boundaryMessageId,
+            boundaryIndex: safe.boundaryIndex,
+            boundaryHash,
+            copiedMessageIds: safe.copiedMessages.map((message) => message.id),
+            excludedIndeterminateTurns: safe.excludedTurns,
+            copiedWindowHash: safe.hashedWindow,
+            actorType: input.actor.type,
+            actorId: input.actor.id,
+            permission: requiredPermissionFor("fork_only"),
+            forkSessionId,
+            now: input.now,
+          })
+          if (tx.status === "aborted") {
+            return yield* Effect.fail(new RecoveryTransactionAbortedError({ operation: "fork_from_safe_boundary" }))
+          }
+          // Fork + read-only fence + command are committed together (no torn half-state).
+          yield* Ref.set(store, tx.state)
+          if (tx.outcome.status === "conflict") return tx.outcome
+          const commandId = recoveryCommandContentAddress({
+            requestHash: input.requestHash,
+            attemptIdentity: input.attemptIdentity,
+          })
+          if (tx.outcome.status === "existing") {
+            const existing: ForkFromSafeBoundaryOutcome = {
+              status: "existing",
+              forkRef: tx.outcome.forkRef,
+              manifest: tx.outcome.manifest,
+              forkSessionId: tx.outcome.manifest.forkSessionId,
+            }
+            return existing
+          }
+          const forked: ForkFromSafeBoundaryOutcome = {
+            status: "forked",
+            forkRef: tx.outcome.forkRef,
+            manifest: tx.outcome.manifest,
+            forkSessionId: tx.outcome.manifest.forkSessionId,
+            commandId,
+          }
+          return forked
+        }),
+      )
+    })
+
+    const queryFork = Effect.fn("SessionProviderRecovery.queryFork")(function* (sourceSessionId: string) {
+      const state = yield* Ref.get(store)
+      const fence = readOnlySessionsOf(state).get(sourceSessionId)
+      if (!fence) return undefined
+      return forksOf(state).get(fence.forkRef)
+    })
+
+    const isSessionReadOnly = Effect.fn("SessionProviderRecovery.isSessionReadOnly")(function* (sessionId: string) {
+      const state = yield* Ref.get(store)
+      return readOnlySessionsOf(state).has(sessionId)
+    })
+
+    const assertSessionWritable = Effect.fn("SessionProviderRecovery.assertSessionWritable")(function* (sessionId: string) {
+      const state = yield* Ref.get(store)
+      if (readOnlySessionsOf(state).has(sessionId)) {
+        return yield* Effect.fail(new SessionReadOnlyError({ sessionId, reason: "fork_fence" }))
+      }
+      return undefined
+    })
+
+    // C1B-08: confirm settled with external provider evidence.
+    const confirmSettled = Effect.fn("SessionProviderRecovery.confirmSettled")(function* (input: ConfirmSettledInput) {
+      return yield* Semaphore.withPermits(lock, 1)(
+        Effect.gen(function* () {
+          // Confirm-settled is the other resolvable_exact exit (with provider evidence), so it is
+          // user-grade like abandon (design §9.1, §9.3).
+          yield* assertPermission(input.actor, requiredPermissionFor("resolvable_exact"))
+          // Free text is never evidence (design §9.2): decode the typed RecoveryEvidence (rejects
+          // excess free-text keys) and assert the typed-fields-only rule. Either failure is refused.
+          let evidence: RecoveryCommandContract.RecoveryEvidence
+          try {
+            evidence = RecoveryCommandContract.decodeRecoveryEvidence(input.evidence)
+          } catch {
+            return yield* Effect.fail(new TextIsNotEvidenceError({ reason: "text_is_not_evidence" }))
+          }
+          try {
+            RecoveryCommandContract.assertEvidenceTyped(evidence)
+          } catch {
+            return yield* Effect.fail(new TextIsNotEvidenceError({ reason: "text_is_not_evidence" }))
+          }
+          const state = yield* Ref.get(store)
+          // The terminal payload hash must be verifiable against the recorded terminal receipt.
+          const terminalPayloadHash = terminalPayloadHashOf(state, input.requestHash)
+          if (terminalPayloadHash === undefined) {
+            return yield* Effect.fail(new MissingTerminalEvidenceError({ requestHash: input.requestHash }))
+          }
+          const verification = validateConfirmSettledEvidence(evidence, {
+            requestHash: input.requestHash,
+            providerId: input.attemptIdentity.providerId,
+            idempotencyKey: input.attemptIdentity.idempotencyKey,
+            terminalPayloadHash,
+          })
+          if (!verification.ok) {
+            return yield* Effect.fail(new EvidenceBindingError({ reason: verification.reason }))
+          }
+          const evidenceRef = confirmSettledEvidenceRef({
+            requestHash: input.requestHash,
+            attempt: input.attemptIdentity,
+            evidence,
+          })
+          const cas = evidenceSettleCas(evidenceOf(state), {
+            evidenceRef,
+            requestHash: input.requestHash,
+            payloadHash: evidence.payloadHash,
+            providerId: evidence.providerId,
+          })
+          if (cas.status === "conflict") return yield* Effect.fail(new MismatchError({ reason: cas.reason }))
+          if (cas.status === "existing") {
+            const existing: ConfirmSettledOutcome = { status: "existing", evidenceRef: cas.evidenceRef }
+            return existing
+          }
+          const record: EvidenceRecord = {
+            evidenceRef,
+            status: "settled",
+            providerId: evidence.providerId,
+            requestHash: input.requestHash,
+            payloadHash: evidence.payloadHash,
+            recordedAt: input.now ?? Date.now(),
+          }
+          yield* Ref.set(store, { ...state, evidence: new Map(state.evidence).set(evidenceRef, record) })
+          const settled: ConfirmSettledOutcome = { status: "settled", evidenceRef: cas.evidenceRef }
+          return settled
+        }),
+      )
+    })
+
+    // C1B-09: encrypted evidence export + unlock.
+    const exportRecoveryEvidence = Effect.fn("SessionProviderRecovery.exportRecoveryEvidence")(function* (
+      input: ExportRecoveryEvidenceInput,
+    ) {
+      return yield* Semaphore.withPermits(lock, 1)(
+        Effect.gen(function* () {
+          // Export creates a read-only, evidence-preserving artifact for the session owner
+          // (design §9.3 "导出事故上下文") — user-grade. Cross-session unlock is refused on read.
+          yield* assertPermission(input.actor, "user")
+          if (input.encryptionKey.byteLength !== 32) {
+            return yield* Effect.fail(new MismatchError({ reason: "invalid_export_key" }))
+          }
+          const descriptor = classify(input.classifyInput)
+          const state = yield* Ref.get(store)
+          const commands = [...commandsOf(state).values()].filter(
+            (command) =>
+              command.requestHash === input.requestHash &&
+              command.attemptIdentity.attemptId === input.attemptIdentity.attemptId,
+          )
+          const evidenceRecords = [...evidenceOf(state).values()].filter(
+            (record) => record.requestHash === input.requestHash,
+          )
+          const payload = canonicalEvidenceExportPayload({
+            requestHash: input.requestHash,
+            attempt: input.attemptIdentity,
+            descriptor,
+            commands,
+            evidence: evidenceRecords,
+          })
+          const contentHash = Hash.sha256(Buffer.from(payload))
+          const exportId = input.exportId ?? `exp_${randomUUID()}`
+          const now = input.now ?? Date.now()
+          const ttlMs = input.ttlMs ?? DefaultEvidenceExportTtlMs
+          const artifactRef = `artifact_${contentDigest({ exportId, sessionId: input.sessionId, contentHash })}`
+          const summary = redactedSummary({
+            requestHash: input.requestHash,
+            commands,
+            evidence: evidenceRecords,
+            descriptor,
+          })
+          const manifest = buildExportManifest({
+            exportId,
+            sessionId: input.sessionId,
+            attemptIds: [input.attemptIdentity.attemptId],
+            artifactRef,
+            contentHash,
+            actorType: input.actor.type,
+            actorId: input.actor.id,
+            summary,
+            now,
+            ttlMs,
+          })
+          const sealed = encryptEvidenceArtifact({
+            key: input.encryptionKey,
+            plaintext: Buffer.from(payload),
+            aad: evidenceArtifactAAD({ exportId, sessionId: input.sessionId, artifactRef, contentHash }),
+          })
+          const artifact: EncryptedEvidenceArtifact = {
+            artifactRef,
+            exportId,
+            contentHash,
+            keyId: input.keyId,
+            iv: sealed.iv,
+            ciphertext: sealed.ciphertext,
+            authTag: sealed.authTag,
+            expiresAt: now + ttlMs,
+          }
+          yield* Ref.set(store, {
+            ...state,
+            exports: new Map(state.exports).set(exportId, manifest),
+            evidenceArtifacts: new Map(state.evidenceArtifacts).set(artifactRef, artifact),
+          })
+          return { exportId, artifactRef, contentHash, manifest }
+        }),
+      )
+    })
+
+    const queryExport = Effect.fn("SessionProviderRecovery.queryExport")(function* (exportId: string) {
+      const state = yield* Ref.get(store)
+      return exportsOf(state).get(exportId)
+    })
+
+    const unlockRecoveryEvidence = Effect.fn("SessionProviderRecovery.unlockRecoveryEvidence")(function* (
+      input: UnlockRecoveryEvidenceInput,
+    ) {
+      const state = yield* Ref.get(store)
+      const manifest = exportsOf(state).get(input.exportId)
+      if (!manifest) return yield* Effect.fail(new ExportNotFoundError({ exportId: input.exportId }))
+      // Permission gate: the body is readable ONLY by the same session actor.
+      if (
+        input.sessionId !== manifest.permission.unlockSessionId ||
+        input.actor.type !== manifest.permission.unlockActorType ||
+        input.actor.id !== manifest.permission.unlockActorId
+      ) {
+        return yield* Effect.fail(
+          new ExportCrossSessionDeniedError({
+            exportId: input.exportId,
+            requestedSessionId: input.sessionId,
+            ownerSessionId: manifest.target.sessionId,
+          }),
+        )
+      }
+      const artifact = evidenceArtifactsOf(state).get(manifest.artifactRef)
+      if (!artifact) return yield* Effect.fail(new ExportNotFoundError({ exportId: input.exportId }))
+      const now = input.now ?? Date.now()
+      if (now > manifest.expiresAt || now > artifact.expiresAt) {
+        return yield* Effect.fail(
+          new ExportExpiredError({
+            exportId: input.exportId,
+            expiredAt: Math.min(manifest.expiresAt, artifact.expiresAt),
+          }),
+        )
+      }
+      // Auditability: decrypt + recompute + compare; a tampered manifest/artifact is a mismatch.
+      const verification = verifyExportedArtifact({ manifest, artifact, key: input.encryptionKey, now })
+      if (!verification.ok) {
+        return yield* Effect.fail(new ExportTamperError({ exportId: input.exportId, reason: verification.reason }))
+      }
+      const plaintext = decryptEvidenceArtifact({
+        key: input.encryptionKey,
+        iv: artifact.iv,
+        ciphertext: artifact.ciphertext,
+        authTag: artifact.authTag,
+        aad: evidenceArtifactAAD({
+          exportId: manifest.exportId,
+          sessionId: manifest.target.sessionId,
+          artifactRef: manifest.artifactRef,
+          contentHash: manifest.contentHash,
+        }),
+      })
+      return { exportId: input.exportId, contentHash: manifest.contentHash, payload: plaintext, manifest }
+    })
+
     return Service.of({
       classify,
       resolve,
@@ -788,6 +1304,15 @@ export const layer = Layer.effect(
       queryBaseline,
       repairBaselineAndAbandon,
       evidence,
+      findSafeBoundary,
+      forkFromSafeBoundary,
+      queryFork,
+      isSessionReadOnly,
+      assertSessionWritable,
+      confirmSettled,
+      exportRecoveryEvidence,
+      queryExport,
+      unlockRecoveryEvidence,
       adapter,
     })
   }),

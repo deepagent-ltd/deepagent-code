@@ -145,6 +145,12 @@ export type RecoveryStoreState = {
   readonly evidence: ReadonlyMap<string, EvidenceRecord>
   readonly abandons: ReadonlyMap<string, AbandonRecord>
   readonly baselines: ReadonlyMap<string, BaselineRecord>
+  // C1B-07: fork records + the read-only fence that a completed fork imposes on its source session.
+  readonly forks: ReadonlyMap<string, ForkRecord>
+  readonly readOnlySessions: ReadonlyMap<string, ReadOnlyFence>
+  // C1B-09: encrypting export manifests (redacted) + the encrypted evidence artifacts they reference.
+  readonly exports: ReadonlyMap<string, EvidenceExportManifest>
+  readonly evidenceArtifacts: ReadonlyMap<string, EncryptedEvidenceArtifact>
 }
 
 export function emptyRecoveryStoreState(): RecoveryStoreState {
@@ -153,6 +159,10 @@ export function emptyRecoveryStoreState(): RecoveryStoreState {
     evidence: new Map<string, EvidenceRecord>(),
     abandons: new Map<string, AbandonRecord>(),
     baselines: new Map<string, BaselineRecord>(),
+    forks: new Map<string, ForkRecord>(),
+    readOnlySessions: new Map<string, ReadOnlyFence>(),
+    exports: new Map<string, EvidenceExportManifest>(),
+    evidenceArtifacts: new Map<string, EncryptedEvidenceArtifact>(),
   }
 }
 
@@ -160,6 +170,11 @@ export const commandsOf = (state: RecoveryStoreState): ReadonlyMap<string, Comma
 export const evidenceOf = (state: RecoveryStoreState): ReadonlyMap<string, EvidenceRecord> => state.evidence
 export const abandonsOf = (state: RecoveryStoreState): ReadonlyMap<string, AbandonRecord> => state.abandons
 export const baselinesOf = (state: RecoveryStoreState): ReadonlyMap<string, BaselineRecord> => state.baselines
+export const forksOf = (state: RecoveryStoreState): ReadonlyMap<string, ForkRecord> => state.forks
+export const readOnlySessionsOf = (state: RecoveryStoreState): ReadonlyMap<string, ReadOnlyFence> => state.readOnlySessions
+export const exportsOf = (state: RecoveryStoreState): ReadonlyMap<string, EvidenceExportManifest> => state.exports
+export const evidenceArtifactsOf = (state: RecoveryStoreState): ReadonlyMap<string, EncryptedEvidenceArtifact> =>
+  state.evidenceArtifacts
 
 /** The attempt slot key for a recovery transaction (same attempt -> same slot). */
 export const abandonAttemptKey = (attempt: AttemptIdentity): string => `${attempt.sessionId}:${attempt.attemptId}`
@@ -252,6 +267,10 @@ export function abandonTransaction(
     evidence: state.evidence,
     abandons: set(state.abandons, stage.key, stage.outcome.abandon),
     baselines: state.baselines,
+    forks: state.forks,
+    readOnlySessions: state.readOnlySessions,
+    exports: state.exports,
+    evidenceArtifacts: state.evidenceArtifacts,
   }
   return { status: "committed", state: next, outcome: stage.outcome }
 }
@@ -480,3 +499,224 @@ export function repairAndAbandonTransaction(
     outcome: { status: "complete", repair: repair.record, abandon: stage.outcome.abandon },
   }
 }
+
+// ---------------------------------------------------------------------------
+// Fork from a safe boundary (C1B-07, design §9.1 `fork_only`)
+// ---------------------------------------------------------------------------
+
+/** A fork manifest: the complete, auditable record of a `fork_from_safe_boundary`. */
+export type ForkManifest = {
+  readonly schemaVersion: "recovery-fork-manifest.v1"
+  readonly forkSessionId: string
+  readonly sourceSessionId: string
+  readonly boundaryMessageId: string
+  readonly boundaryIndex: number
+  readonly boundaryHash: string
+  readonly copiedMessageIds: readonly string[]
+  readonly excludedIndeterminateTurns: readonly { readonly id: string; readonly kind: string; readonly reason: string }[]
+  readonly copiedWindowHash: string
+  readonly createdBy: { readonly actorType: "user" | "administrator" | "system"; readonly actorId: string }
+  readonly permission: "user" | "administrator"
+  readonly forkedAt: number
+}
+
+/** A recorded fork, keyed by its deterministic manifest ref. */
+export type ForkRecord = {
+  readonly forkRef: string
+  readonly manifest: ForkManifest
+}
+
+/** The one-way read-only fence a completed fork imposes on its source session. */
+export type ReadOnlyFence = {
+  readonly sessionId: string
+  readonly forkRef: string
+  readonly forkedAt: number
+  readonly reason: "fork"
+}
+
+/**
+ * Deterministic fork ref: a content digest over the (source session, boundary)
+ * identity only. The same source + boundary always maps to the same ref, so an
+ * exact retry of the fork command converges on the SAME fork (no second fork)
+ * instead of creating a duplicate (design §2.3).
+ */
+export function forkManifestRef(input: {
+  readonly sourceSessionId: string
+  readonly boundaryMessageId: string
+  readonly boundaryHash: string
+}): string {
+  return `fork_${contentDigest({
+    sourceSessionId: input.sourceSessionId,
+    boundaryMessageId: input.boundaryMessageId,
+    boundaryHash: input.boundaryHash,
+  })}`
+}
+
+export type ForkTransactionInput = {
+  readonly sourceSessionId: string
+  readonly requestHash: string
+  readonly attemptIdentity: AttemptIdentity
+  readonly boundaryMessageId: string
+  readonly boundaryIndex: number
+  readonly boundaryHash: string
+  readonly copiedMessageIds: readonly string[]
+  readonly excludedIndeterminateTurns: readonly { readonly id: string; readonly kind: string; readonly reason: string }[]
+  readonly copiedWindowHash: string
+  readonly actorType: "user" | "administrator" | "system"
+  readonly actorId: string
+  readonly permission: "user" | "administrator"
+  readonly forkSessionId: string
+  readonly now?: number
+}
+
+export type ForkTransactionOutcome =
+  | { readonly status: "forked"; readonly forkRef: string; readonly manifest: ForkManifest }
+  | { readonly status: "existing"; readonly forkRef: string; readonly manifest: ForkManifest }
+  | { readonly status: "conflict"; readonly reason: "fork_mismatch" | "already_forked" }
+
+/**
+ * Fork from a safe boundary in ONE transaction (C1B-07):
+ *   - records the fork manifest (content-addressed by source + boundary) AND
+ *     fences the source session read-only together (a crash commits neither);
+ *   - an exact retry for the SAME boundary -> typed `existing` (no second fork);
+ *   - a different boundary / a different request-hash against an already-forked
+ *     source -> typed `conflict` (never clobber a prior fork);
+ *   - the fork command (bound to request hash + attempt identity) is recorded
+ *     with the same CAS semantics as the other recovery commands.
+ * Pure and deterministic. The caller commits the returned state atomically.
+ */
+export function forkTransaction(
+  state: RecoveryStoreState,
+  input: ForkTransactionInput,
+): CommitResult<RecoveryStoreState, ForkTransactionOutcome> {
+  const forkRef = forkManifestRef({
+    sourceSessionId: input.sourceSessionId,
+    boundaryMessageId: input.boundaryMessageId,
+    boundaryHash: input.boundaryHash,
+  })
+  const prior = state.forks.get(forkRef)
+  if (prior) return { status: "committed", state, outcome: { status: "existing", forkRef, manifest: prior.manifest } }
+  const sourceFence = state.readOnlySessions.get(input.sourceSessionId)
+  if (sourceFence) return { status: "committed", state, outcome: { status: "conflict", reason: "already_forked" } }
+  const cas = commandCas(state.commands, { requestHash: input.requestHash, attemptIdentity: input.attemptIdentity })
+  if (cas.status === "mismatch") {
+    return { status: "committed", state, outcome: { status: "conflict", reason: "fork_mismatch" } }
+  }
+  const now = input.now ?? Date.now()
+  const manifest: ForkManifest = {
+    schemaVersion: "recovery-fork-manifest.v1",
+    forkSessionId: input.forkSessionId,
+    sourceSessionId: input.sourceSessionId,
+    boundaryMessageId: input.boundaryMessageId,
+    boundaryIndex: input.boundaryIndex,
+    boundaryHash: input.boundaryHash,
+    copiedMessageIds: input.copiedMessageIds,
+    excludedIndeterminateTurns: input.excludedIndeterminateTurns,
+    copiedWindowHash: input.copiedWindowHash,
+    createdBy: { actorType: input.actorType, actorId: input.actorId },
+    permission: input.permission,
+    forkedAt: now,
+  }
+  const next: RecoveryStoreState = {
+    commands: cas.status === "recorded" ? set(state.commands, cas.commandId, cas.record) : state.commands,
+    evidence: state.evidence,
+    abandons: state.abandons,
+    baselines: state.baselines,
+    forks: set(state.forks, forkRef, { forkRef, manifest }),
+    readOnlySessions: set(state.readOnlySessions, input.sourceSessionId, {
+      sessionId: input.sourceSessionId,
+      forkRef,
+      forkedAt: now,
+      reason: "fork",
+    }),
+    exports: state.exports,
+    evidenceArtifacts: state.evidenceArtifacts,
+  }
+  return { status: "committed", state: next, outcome: { status: "forked", forkRef, manifest } }
+}
+
+// ---------------------------------------------------------------------------
+// Confirm settled (C1B-08, design §9.1 resolvable_exact confirm with external evidence)
+// ---------------------------------------------------------------------------
+
+/** Outcome of the evidence-settle CAS. */
+export type EvidenceSettleOutcome =
+  | { readonly status: "settled"; readonly evidenceRef: string }
+  | { readonly status: "existing"; readonly evidenceRef: string }
+  | { readonly status: "conflict"; readonly reason: "evidence_request_hash_mismatch" | "evidence_payload_mismatch" }
+
+/**
+ * CAS for the external-provider settled verdict (C1B-08). The evidence slot is
+ * keyed by the content-addressed `evidenceRef`; the winner wins, and:
+ *   - an empty slot -> `settled` (caller inserts the settled record);
+ *   - a slot already settled with the SAME request hash + payload hash -> `existing`
+ *     (exact retry is idempotent, no second terminal row);
+ *   - a slot holding a DIFFERENT request hash or payload -> typed `conflict`
+ *     (never clobber a different verdict).
+ * Pure and deterministic.
+ */
+export function evidenceSettleCas(
+  existing: ReadonlyMap<string, EvidenceRecord>,
+  input: { readonly evidenceRef: string; readonly requestHash: string; readonly payloadHash: string; readonly providerId: string },
+): EvidenceSettleOutcome {
+  const prior = existing.get(input.evidenceRef)
+  if (!prior) return { status: "settled", evidenceRef: input.evidenceRef }
+  const sameIdentity = prior.requestHash === input.requestHash && prior.payloadHash === input.payloadHash
+  if (prior.status === "settled") {
+    return sameIdentity
+      ? { status: "existing", evidenceRef: input.evidenceRef }
+      : { status: "conflict", reason: "evidence_payload_mismatch" }
+  }
+  if (!sameIdentity) return { status: "conflict", reason: "evidence_request_hash_mismatch" }
+  return { status: "settled", evidenceRef: input.evidenceRef }
+}
+
+// ---------------------------------------------------------------------------
+// Encrypted evidence export (C1B-09, design §9.2 / §12 sensitive body)
+// ---------------------------------------------------------------------------
+
+/** One redacted summary item in an export manifest (never the payload body). */
+export type EvidenceExportSummaryItem = {
+  readonly kind: "command" | "evidence" | "descriptor" | "manifest"
+  readonly ref: string
+  readonly size: number
+  readonly sha256: string
+  readonly reason: string
+}
+
+/**
+ * The export manifest. DEFAULT-REDACTED: it carries only hash/size/type/reason
+ * per item — never a prompt, tool payload or credential — and the body is only
+ * reachable through the decrypt-and-verify permission gate.
+ */
+export type EvidenceExportManifest = {
+  readonly schemaVersion: "recovery-export-manifest.v1"
+  readonly exportId: string
+  readonly target: { readonly sessionId: string; readonly attemptIds: readonly string[] }
+  readonly artifactRef: string
+  readonly contentHash: string
+  readonly permission: {
+    readonly unlockActorType: "user" | "administrator" | "system"
+    readonly unlockActorId: string
+    readonly unlockSessionId: string
+    readonly crossSessionDenied: true
+  }
+  readonly redacted: true
+  readonly summary: readonly EvidenceExportSummaryItem[]
+  readonly issuedAt: number
+  readonly expiresAt: number
+}
+
+/** The encrypted evidence artifact stored behind the export manifest. */
+export type EncryptedEvidenceArtifact = {
+  readonly artifactRef: string
+  readonly exportId: string
+  readonly contentHash: string
+  readonly keyId: string
+  readonly iv: Uint8Array
+  readonly ciphertext: Uint8Array
+  readonly authTag: Uint8Array
+  readonly expiresAt: number
+}
+
+export const DefaultEvidenceExportTtlMs = 7 * 24 * 60 * 60_000
