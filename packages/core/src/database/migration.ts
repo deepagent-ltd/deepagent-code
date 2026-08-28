@@ -7,6 +7,7 @@ import { migrations } from "./migration.gen"
 import { MigrationIdentity } from "./migration-identity"
 import { DatabaseUpgradeRun } from "./upgrade-run"
 import { DatabaseMigrationLease as MigrationLease, type MigrationLease as MigrationLeaseHandle } from "./migration-lease"
+import { PostVerify } from "./post-verify"
 import type { UpgradeRun } from "../contract/upgrade-run"
 import { InstallationVersion, InstallationCommit } from "../installation/version"
 
@@ -84,6 +85,12 @@ export type ApplyOptions = {
   timeoutMs?: number
   staleMs?: number
   leaseMs?: number
+  /**
+   * C1A-11 override of the post-migration gate. When omitted the real deterministic gate
+   * (post-verify: DataIntegrity + RecoveryBinding + unclassified-inventory stub) runs; tests
+   * inject a failable verdict to prove the gate runs BEFORE the run advances to 'ready'.
+   */
+  postVerify?: (db: Database, runId: string) => Effect.Effect<void, unknown>
 }
 
 export function apply(db: Database, opts: ApplyOptions = {}) {
@@ -106,6 +113,17 @@ export function apply(db: Database, opts: ApplyOptions = {}) {
           yield* applyMigrations(db, migrations, true, { run, lease, opts })
           yield* DatabaseUpgradeRun.advanceRun(db, run.runId, "verifying")
         }
+        // C1A-11 post-migration gate: BEFORE the run may advance 'verifying' → 'ready' (business
+        // admission) verify the applied set is physically + structurally sound, the applied migration
+        // set equals the registry, and the recovery binding is intact. A failing verdict routes the
+        // run to recovery_required with its stable code and never admits business SQL (design §10.7).
+        const verify = opts.postVerify ?? ((target, runId) =>
+          PostVerify.run(target, {
+            runId,
+            registryIds: migrations.map((migration) => migration.id),
+            canonicalize: (id) => historicalAliases.get(id) ?? id,
+          }))
+        yield* verify(db, run.runId)
         yield* DatabaseUpgradeRun.advanceRun(db, run.runId, "ready")
         return yield* DatabaseUpgradeRun.loadRun(db, run.runId)
       }).pipe(
@@ -118,6 +136,14 @@ export function apply(db: Database, opts: ApplyOptions = {}) {
             const root = Cause.findErrorOption(cause).pipe(Option.getOrUndefined)
             if (root && root instanceof DatabaseUpgradeRun.OldBinaryFenceError) {
               // Non-mutating: this binary cannot resume the run; leave it for a capable binary.
+              return yield* Effect.failCause(cause)
+            }
+            if (root && root instanceof PostVerify.PostVerifyError) {
+              // A post-migration-gate verdict routes the run to recovery_required under its stable
+              // code. failRun is idempotent for a terminal recovery_required run, so this is a no-op
+              // when the gate already wrote it (and sets the code when an injected gate did not).
+              const active = yield* DatabaseUpgradeRun.loadActiveRun(db).pipe(Effect.orDie)
+              if (active) yield* DatabaseUpgradeRun.failRun(db, active.runId, root.code).pipe(Effect.ignore)
               return yield* Effect.failCause(cause)
             }
             if (root && root instanceof DatabaseUpgradeRun.ResumeValidationError) {
