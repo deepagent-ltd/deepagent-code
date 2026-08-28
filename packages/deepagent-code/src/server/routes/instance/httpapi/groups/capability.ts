@@ -1,7 +1,5 @@
 import { Schema } from "effect"
 import { HttpApi, HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
-import { CapabilityCatalog } from "@deepagent-code/core/system-context/capability-catalog"
-import { CapabilityLoader } from "@deepagent-code/core/system-context/capability-loader"
 import { CapabilityManifest } from "@deepagent-code/core/system-context/capability-manifest"
 import { CapabilitySearch } from "@deepagent-code/core/system-context/capability-search"
 import { Authorization } from "../middleware/authorization"
