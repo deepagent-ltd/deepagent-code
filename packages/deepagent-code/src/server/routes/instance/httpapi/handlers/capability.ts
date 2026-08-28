@@ -3,6 +3,7 @@ import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { CapabilityCatalog } from "@deepagent-code/core/system-context/capability-catalog"
 import { CapabilityLoader } from "@deepagent-code/core/system-context/capability-loader"
 import { CapabilityRuntimeSearch } from "@deepagent-code/core/system-context/capability-runtime-search"
+import { InstanceHttpApi } from "../api"
 import { CapabilityApi } from "../groups/capability"
 
 // C6-02 capability handlers (design §11.1 + §7.3). Every endpoint surfaces identity /
@@ -10,7 +11,7 @@ import { CapabilityApi } from "../groups/capability"
 // derived from the runtime-feature registry (C4-07) and the product permission
 // inventory, so a denied/disabled capability is excluded before it can appear.
 
-export const capabilityHandlers = HttpApiBuilder.group(CapabilityApi, "capability", (handlers) =>
+export const capabilityHandlers = HttpApiBuilder.group(InstanceHttpApi, "capability", (handlers) =>
   Effect.gen(function* () {
     const snapshot = CapabilityCatalog.capabilityCatalogSnapshot
     const catalog = CapabilityCatalog.capabilityCatalog
