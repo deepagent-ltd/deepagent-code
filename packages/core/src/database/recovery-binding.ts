@@ -2,7 +2,9 @@ export * as RecoveryBinding from "./recovery-binding"
 
 import { Effect } from "effect"
 import { sql } from "drizzle-orm"
-import type { Database } from "./database"
+import type { EffectDrizzleSqlite } from "@deepagent-code/effect-drizzle-sqlite"
+
+type Database = EffectDrizzleSqlite.EffectSQLiteDatabase
 
 // §16.4 DATA-AND-RECOVERY D-5 — recovery binding audit. Every recovery chain (provider turn,
 // tool effect, task run) must bind to the SAME owner/generation and history/context identity as
@@ -19,7 +21,7 @@ export type Problem = {
 
 export type Verdict = { readonly ok: boolean; readonly problems: readonly Problem[] }
 
-export const audit = Effect.fn("RecoveryBinding.audit")(function* (db: Database.Interface["db"]) {
+export const audit = Effect.fn("RecoveryBinding.audit")(function* (db: Database) {
   const problems: Problem[] = []
 
   // provider_turn: a receipt bound to an attempt must agree on session/activity/turn/owner.

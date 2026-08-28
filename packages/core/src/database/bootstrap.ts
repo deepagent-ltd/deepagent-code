@@ -72,6 +72,9 @@ export interface BootstrapDiagnostics {
   migrationId?: string
   table?: string
   key?: string
+  /** C1A-14: constraint/trigger identity when the failure came from a constraint or trigger. */
+  constraint?: string
+  trigger?: boolean
   buildDigest: string
   correlationId: string
   message: string
@@ -182,6 +185,8 @@ const buildDiagnostics = (
   migrationId: extras?.migrationId,
   table: extras?.table,
   key: extras?.key,
+  constraint: issue?.constraint ?? extras?.constraint,
+  trigger: issue?.trigger ?? extras?.trigger,
   buildDigest: options.buildDigest,
   correlationId: options.correlationId ?? randomUUID(),
   message,
