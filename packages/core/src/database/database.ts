@@ -98,7 +98,10 @@ const openAndMigrate = Effect.gen(function* () {
   const db = yield* makeDatabase
 
   yield* db.run("PRAGMA journal_mode = WAL")
-  yield* db.run("PRAGMA synchronous = NORMAL")
+  // Beta authority DB durability (design §10.6): WAL + synchronous=FULL is the default. FULL fsyncs
+  // every commit to the WAL so a power-loss/crash cannot lose an acknowledged receipt or migration
+  // (C1A-10). NORMAL is intentionally NOT used for any write path to the authority DB.
+  yield* db.run("PRAGMA synchronous = FULL")
   yield* db.run("PRAGMA busy_timeout = 5000")
   yield* db.run("PRAGMA cache_size = -64000")
   yield* db.run("PRAGMA foreign_keys = ON")
@@ -143,7 +146,10 @@ export const layer = Layer.effect(
     const db = yield* makeDatabase
 
     yield* db.run("PRAGMA journal_mode = WAL")
-    yield* db.run("PRAGMA synchronous = NORMAL")
+    // Beta authority DB durability (design §10.6): WAL + synchronous=FULL is the default. FULL fsyncs
+    // every commit to the WAL so a power-loss/crash cannot lose an acknowledged receipt or migration
+    // (C1A-10). NORMAL is intentionally NOT used for any write path to the authority DB.
+    yield* db.run("PRAGMA synchronous = FULL")
     yield* db.run("PRAGMA busy_timeout = 5000")
     yield* db.run("PRAGMA cache_size = -64000")
     yield* db.run("PRAGMA foreign_keys = ON")
