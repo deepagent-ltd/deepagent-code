@@ -27,11 +27,16 @@ const makeDb = EffectDrizzleSqlite.makeWithDefaults()
 /** Minimal copies of the recovery tables RecoveryBinding.audit reads (empty => the audit passes). */
 const createRecoveryTables = (db: EffectDrizzleSqlite.EffectSQLiteDatabase) =>
   Effect.gen(function* () {
-    yield* db.run(sql`CREATE TABLE session_provider_attempt (attempt_id TEXT PRIMARY KEY, session_id TEXT, activity_id TEXT, provider_turn_seq INTEGER, owner_token TEXT)`)
+    yield* db.run(sql`CREATE TABLE session_provider_attempt (attempt_id TEXT PRIMARY KEY, session_id TEXT, activity_id TEXT, provider_turn_seq INTEGER, owner_token TEXT, state TEXT)`)
     yield* db.run(sql`CREATE TABLE session_v2_provider_turn_receipt (receipt_id TEXT PRIMARY KEY, session_id TEXT, activity_id TEXT, provider_turn_seq INTEGER, provider_attempt_id TEXT, owner_token TEXT)`)
-    yield* db.run(sql`CREATE TABLE session_v2_tool_effect (effect_id TEXT PRIMARY KEY, session_id TEXT, receipt_id TEXT, provider_attempt_id TEXT, grant_receipt_id TEXT, grant_owner_id TEXT, grant_state TEXT, grant_version TEXT)`)
-    yield* db.run(sql`CREATE TABLE session_v2_task_run_receipt (receipt_id TEXT PRIMARY KEY, run_id TEXT, generation INTEGER, owner_token TEXT)`)
-    yield* db.run(sql`CREATE TABLE task_run (run_id TEXT PRIMARY KEY, generation INTEGER, execution_owner TEXT)`)
+    yield* db.run(sql`CREATE TABLE session_v2_tool_effect (effect_id TEXT PRIMARY KEY, session_id TEXT, receipt_id TEXT, provider_attempt_id TEXT, grant_receipt_id TEXT, grant_owner_id TEXT, grant_state TEXT, grant_version TEXT, state TEXT)`)
+    yield* db.run(sql`CREATE TABLE session_v2_task_run_receipt (receipt_id TEXT PRIMARY KEY, run_id TEXT, generation INTEGER, owner_token TEXT, state TEXT)`)
+    yield* db.run(sql`CREATE TABLE task_run (run_id TEXT PRIMARY KEY, generation INTEGER, execution_owner TEXT, state TEXT, lease_expires_at INTEGER)`)
+    // C1B-10 startup inventory surfaces (real implementation wired into post-verify): compaction +
+    // session activity — a clean fixture creates the inventory's tables so classifyStartup is total.
+    yield* db.run(sql`CREATE TABLE event_snapshot_attempt (snapshot_id TEXT PRIMARY KEY, state TEXT)`)
+    yield* db.run(sql`CREATE TABLE event_compaction_receipt (aggregate_id TEXT PRIMARY KEY, state TEXT)`)
+    yield* db.run(sql`CREATE TABLE session_facade_activity (activity_id TEXT PRIMARY KEY, state TEXT)`)
   })
 
 const setup = Effect.gen(function* () {

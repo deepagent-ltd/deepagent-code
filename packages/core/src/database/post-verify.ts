@@ -5,6 +5,7 @@ import type { EffectDrizzleSqlite } from "@deepagent-code/effect-drizzle-sqlite"
 import { DataIntegrity } from "./data-integrity"
 import { RecoveryBinding } from "./recovery-binding"
 import { DatabaseUpgradeRun } from "./upgrade-run"
+import { StartupInventory } from "../session/runner/startup-inventory"
 
 type Database = EffectDrizzleSqlite.EffectSQLiteDatabase
 
@@ -102,17 +103,27 @@ export const run = Effect.fn("PostVerify.run")(function* (
 })
 
 /**
- * C1A-11 "unclassified inventory" typed stub hook.
+ * C1A-11 "unclassified inventory" — real implementation (C1B-10, wired by the main agent).
  *
- * Handoff note (authority: worklist C1A-11 + manifest §7 A5): the deterministic C0-01 inventory /
- * legacy-zero gate is a SCRIPT-level AST gate (script/legacy-zero-gate/*, script/caller-inventory/
- * build.ts) — it builds an inventory over the full source tree and cannot be called in-process here
- * without a full AST build. So the startup-side "unclassified inventory" of C1A-11 is represented by
- * the DataIntegrity + RecoveryBinding binding checks above, plus this hook which asserts no known
- * unclassified risk for the surfaces the migrated DB can already classify. The unified startup
- * inventory (provider/tool/permission/TaskRun/compaction/activity, `unclassified=0`) is C1B-10 — a
- * LATER wave; this lane deliberately does NOT build it.
+ * Authority: worklist C1A-11 + C1B-10. The full startup inventory (Provider attempt / V2 tool
+ * receipt / TaskRun / compaction / Session activity, `unclassified=0`) is
+ * {@link StartupInventory.verifyStartupInventory}; it reads only durable rows (the process holds
+ * the migration lease, no live-authority mutation) and is TOTAL — any item whose classification
+ * cannot be proven is surfaced as `unclassified`, routing the run to recovery_required so the
+ * boot stays in read_only_recovery until an operator reconciles it (design §10.7 step 7).
  */
-function postVerifyUnclassifiedInventory(_db: Database) {
-  return Effect.void
+function postVerifyUnclassifiedInventory(db: Database) {
+  return StartupInventory.verifyStartupInventory(db).pipe(
+    Effect.flatMap((verdict) =>
+      verdict.ok
+        ? Effect.void
+        : Effect.fail(
+            new PostVerifyError({
+              code: "post_verify_unclassified_inventory",
+              detail: `${verdict.unclassifiedItems.length} unclassified startup item(s)`,
+              rows: verdict.unclassifiedItems as unknown as Record<string, unknown>[],
+            }),
+          ),
+    ),
+  )
 }
