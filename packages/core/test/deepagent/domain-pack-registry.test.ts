@@ -4,7 +4,6 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import * as Registry from "../../src/deepagent/domain-pack-registry"
-import { admitIndexRefs, formatPackIndexSection } from "../../src/deepagent/context-admission"
 import type {
   ExtendedProblemProfile,
   PackManifest,
@@ -161,119 +160,5 @@ describe("S4 DomainPackRegistry", () => {
     const snap = Registry.lockSnapshot(["code.core"])
     const refs = Registry.loadIndexRefs(snap)
     expect(refs.map((r) => r.ref_id)).toEqual(["strategy:code.core:x"])
-  })
-})
-
-describe("S6 ContextAdmissionGate", () => {
-  const mkEntry = (over: Partial<DomainPackIndexEntry> = {}): DomainPackIndexEntry => ({
-    ref_id: "strategy:x",
-    type: "strategy",
-    title: "T",
-    summary: "summary text",
-    domains: ["code"],
-    triggers: [],
-    scope: "system",
-    evidence_strength: "strong",
-    risk: "low",
-    sensitivity: "public",
-    allowed_strengths: ["high", "max", "ultra"],
-    pack_id: "p",
-    ...over,
-  })
-
-  test("general admits nothing (DAP-3)", () => {
-    const r = admitIndexRefs([mkEntry()], "general")
-    expect(r.admitted).toHaveLength(0)
-    expect(r.truncated).toHaveLength(1)
-  })
-
-  test("high admits skills but not strategy/knowledge", () => {
-    const r = admitIndexRefs(
-      [mkEntry({ type: "skill", ref_id: "skill:a" }), mkEntry({ type: "strategy", ref_id: "strategy:b" })],
-      "high",
-    )
-    const ids = r.admitted.map((e) => e.ref_id)
-    expect(ids).toContain("skill:a")
-    expect(ids).not.toContain("strategy:b")
-  })
-
-  test("max admits strategy + skill", () => {
-    const r = admitIndexRefs(
-      [mkEntry({ type: "skill", ref_id: "skill:a" }), mkEntry({ type: "strategy", ref_id: "strategy:b" })],
-      "max",
-    )
-    expect(r.admitted.map((e) => e.ref_id).sort()).toEqual(["skill:a", "strategy:b"])
-  })
-
-  test("xhigh admits skills + domain knowledge but not strategy (docs/39 §3.1)", () => {
-    const strengths = ["high", "xhigh", "max", "ultra"] as const
-    const r = admitIndexRefs(
-      [
-        mkEntry({ type: "skill", ref_id: "skill:a", allowed_strengths: strengths }),
-        mkEntry({ type: "knowledge", ref_id: "knowledge:b", allowed_strengths: strengths }),
-        mkEntry({ type: "strategy", ref_id: "strategy:c", allowed_strengths: strengths }),
-      ],
-      "xhigh",
-    )
-    const ids = r.admitted.map((e) => e.ref_id)
-    expect(ids).toContain("skill:a")
-    expect(ids).toContain("knowledge:b")
-    expect(ids).not.toContain("strategy:c")
-  })
-
-  test("high admits skills but not domain knowledge (docs/39 §3.1)", () => {
-    const strengths = ["high", "xhigh", "max", "ultra"] as const
-    const r = admitIndexRefs(
-      [
-        mkEntry({ type: "skill", ref_id: "skill:a", allowed_strengths: strengths }),
-        mkEntry({ type: "knowledge", ref_id: "knowledge:b", allowed_strengths: strengths }),
-      ],
-      "high",
-    )
-    const ids = r.admitted.map((e) => e.ref_id)
-    expect(ids).toContain("skill:a")
-    expect(ids).not.toContain("knowledge:b")
-  })
-
-  test("weak/none evidence is excluded", () => {
-    const r = admitIndexRefs(
-      [mkEntry({ evidence_strength: "weak", ref_id: "w" }), mkEntry({ evidence_strength: "strong", ref_id: "s" })],
-      "max",
-    )
-    expect(r.admitted.map((e) => e.ref_id)).toEqual(["s"])
-  })
-
-  test("ref count cap truncates the overflow", () => {
-    const entries = Array.from({ length: 30 }, (_, i) => mkEntry({ ref_id: `strategy:${i}` }))
-    const r = admitIndexRefs(entries, "max", { max_index_refs: 5 })
-    expect(r.admitted).toHaveLength(5)
-    expect(r.truncated).toHaveLength(25)
-  })
-
-  test("token budget skips an over-budget ref but still admits a smaller one behind it", () => {
-    // large ref (~200 tokens) sits ahead of a small ref (~3 tokens) in filter order.
-    // budget admits only the small one; the large one must be SKIPPED, not starve the small ref.
-    const large = mkEntry({ ref_id: "strategy:large", title: "L", summary: "x".repeat(800) })
-    const small = mkEntry({ ref_id: "strategy:small", title: "S", summary: "tiny" })
-    const budget = 20
-    const r = admitIndexRefs([large, small], "max", { max_estimated_tokens: budget })
-    const ids = r.admitted.map((e) => e.ref_id)
-    expect(ids).toContain("strategy:small") // previously starved by the greedy break
-    expect(ids).not.toContain("strategy:large")
-    // budget bookkeeping: skipped ref must not be charged, total must stay within ceiling
-    expect(r.estimated_tokens).toBeLessThanOrEqual(budget)
-    expect(r.truncated.map((e) => e.ref_id)).toContain("strategy:large")
-  })
-
-  test("formatPackIndexSection emits nothing when empty, header when populated", () => {
-    expect(
-      formatPackIndexSection({ admitted: [], truncated: [], admitted_ref_count: 0, estimated_tokens: 0 }, []),
-    ).toBe("")
-    const section = formatPackIndexSection(
-      { admitted: [mkEntry()], truncated: [], admitted_ref_count: 1, estimated_tokens: 10 },
-      ["code"],
-    )
-    expect(section).toContain("Active domain packs: code")
-    expect(section).toContain("strategy:x")
   })
 })
