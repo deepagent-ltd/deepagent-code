@@ -1,5 +1,6 @@
 export * as ModelProtocol from "./model-protocol"
 
+import { Schema } from "effect"
 import { contentDigest } from "./contract/digest"
 import * as Contract from "./contract/model-protocol"
 import { ModelV2 } from "./model"
@@ -289,4 +290,233 @@ export function resolvedProtocolConfigDigest(model: ModelV2.Info, provider?: Pro
 export function resolvedCatalogEntryDigest(model: ModelV2.Info, provider?: ProviderV2.Info): string {
   const selection = resolveModelProtocol(model, provider)
   return Contract.modelCatalogEntryDigest(catalogEntryFor(model, provider, selection))
+}
+
+// ===========================================================================
+// C2-03 — side-effect-free capability probe + persistent config evidence
+// ===========================================================================
+//
+// design §5.2: the capability probe is an independent, side-effect-free,
+// auditable configuration action. Its result binds endpoint origin, model id,
+// version and a response fingerprint; it is NEVER run inside a business turn
+// ("业务 turn 不探测"). An unknown/conflicting selection resolves to an explicit
+// `not_applicable` (`model_protocol_selection_required`) state and is never
+// silently coerced to a guessed compatible.
+//
+// Probe realization decision (divergence note for the main agent): the design
+// text leaves open whether the probe reaches the wire (a zero-token request). A
+// live wire/SENTINEL probe belongs to the wave's live-sentinel items (C2-09 /
+// C7-03) and requires user authority; this lane therefore realizes the probe as
+// a pure, deterministically DERIVED/DECLARED probe over the frozen protocol +
+// the declared/vendored feature matrix. There is deliberately no fetch/fs/db in
+// any probe body, so a business turn can never depend on network reachability.
+// The C2-09/C7-03 live-sentinel probe, when landed, must plug into
+// `refreshConfigEvidence`'s hook (setProbeHook) and keep the deterministic
+// identity/evidence contract below unchanged.
+
+/** Whether the probe is applicable for a resolved protocol or explicitly not. */
+export type CapabilityProbeState = "applicable" | "not_applicable"
+
+/** The bounded, derived/declared result of a capability probe for a model config. */
+export interface CapabilityProbeResult {
+  readonly state: CapabilityProbeState
+  readonly protocol: ModelProtocol | null
+  readonly capabilities: ModelProtocolCapabilities | null
+  readonly disabledReason?: ModelProtocolDisabledReason
+  /** Deterministic, content-addressed identity of the probe input (never a wall-clock). */
+  readonly probeRef: string
+  /** Deterministic fingerprint of the derived capability outcome. */
+  readonly probeResponseFingerprint: string
+}
+
+/** Typed violation: a capability probe is not applicable (disabled/unknown/conflict selection). */
+export class CapabilityProbeNotApplicableError extends Schema.TaggedErrorClass<CapabilityProbeNotApplicableError>()(
+  "ModelProtocol.CapabilityProbeNotApplicableError",
+  { providerId: Schema.String, modelId: Schema.String, disabledReason: Contract.ModelProtocolDisabledReason },
+) {}
+
+/**
+ * Bounded capability set a resolved model/endpoint supports (design §5.2). The
+ * probe is pure: it derives the set from the frozen protocol plus any declared
+ * `protocolCapabilities`, applying the protocol defaults for the closed union.
+ */
+export function probeCapabilities(model: ModelV2.Info, provider?: ProviderV2.Info): CapabilityProbeResult {
+  const selection = resolveModelProtocol(model, provider)
+  if (!selection.protocol || selection.selectionState === "disabled") {
+    const disabledReason = selection.disabledReason ?? "model_protocol_selection_required"
+    return {
+      state: "not_applicable",
+      protocol: null,
+      capabilities: null,
+      disabledReason,
+      probeRef: contentDigest({
+        providerId: model.providerID,
+        modelId: model.id,
+        endpoint: endpointUrl(model, provider) ?? model.providerID,
+      }),
+      probeResponseFingerprint: contentDigest({ state: "not_applicable", disabledReason }),
+    }
+  }
+  const capabilities = declaredCapabilities(model, selection.protocol)
+  return {
+    state: "applicable",
+    protocol: selection.protocol,
+    capabilities,
+    probeRef: contentDigest({
+      providerId: model.providerID,
+      modelId: model.id,
+      endpoint: endpointUrl(model, provider) ?? model.providerID,
+      protocol: selection.protocol,
+    }),
+    probeResponseFingerprint: contentDigest({ hashed: contentDigest(capabilities), protocol: selection.protocol }),
+  }
+}
+
+/**
+ * PERSISTENT config evidence binding endpoint/model/origin/version + protocol +
+ * capability set + the derived identity hash (design §5.2 C2-03). Every field
+ * that contributes to the attempt identity is included so a drift in ANY bound
+ * field changes `configIdentityHash` and therefore evicts the cached evidence.
+ */
+export interface CapabilityConfigEvidence {
+  readonly configIdentityHash: string
+  readonly providerId: string
+  readonly modelId: string
+  readonly protocol: ModelProtocol
+  readonly routeId: string
+  readonly originId: string
+  readonly endpointRef: string
+  readonly originVersion: string
+  readonly capabilityVersion: string
+  readonly loweringVersion: number
+  readonly capabilities: ModelProtocolCapabilities
+  readonly capabilityFingerprint: string
+  readonly probeRef: string
+  readonly probeResponseFingerprint: string
+  readonly selectionState: ModelProtocolSelectionState
+}
+
+/**
+ * Deterministic identity of the bound config (endpoint/model/origin/version +
+ * protocol). Any bound-field change -> a different hash -> the old evidence is
+ * evicted on lookup.
+ */
+export function configIdentityHash(model: ModelV2.Info, provider?: ProviderV2.Info): string {
+  const selection = resolveModelProtocol(model, provider)
+  return contentDigest({
+    providerId: model.providerID,
+    modelId: model.id,
+    endpoint: endpointUrl(model, provider) ?? model.providerID,
+    originId: provider ? provider.id : model.providerID,
+    protocol: selection.protocol ?? "disabled",
+    originVersion: contentDigest({ providerId: model.providerID, modelId: model.id, endpoint: endpointUrl(model, provider) ?? model.providerID }),
+  })
+}
+
+function evidenceFromProbe(model: ModelV2.Info, provider: ProviderV2.Info | undefined, probe: CapabilityProbeResult): CapabilityConfigEvidence {
+  if (probe.state === "not_applicable" || !probe.protocol || !probe.capabilities) {
+    const reason = probe.disabledReason ?? "model_protocol_selection_required"
+    throw new CapabilityProbeNotApplicableError({ providerId: model.providerID, modelId: model.id, disabledReason: reason })
+  }
+  const protocol = probe.protocol
+  const capabilities = probe.capabilities
+  const originId = provider ? provider.id : model.providerID
+  const endpoint = endpointUrl(model, provider) ?? model.providerID
+  return {
+    configIdentityHash: configIdentityHash(model, provider),
+    providerId: model.providerID,
+    modelId: model.id,
+    protocol,
+    routeId: protocolRouteId(protocol),
+    originId,
+    endpointRef: contentDigest(endpoint),
+    originVersion: contentDigest({ providerId: model.providerID, modelId: model.id, endpoint }),
+    capabilityVersion: contentDigest(capabilities),
+    loweringVersion: 1,
+    capabilities,
+    capabilityFingerprint: contentDigest({ hashed: contentDigest(capabilities), protocol }),
+    probeRef: probe.probeRef,
+    probeResponseFingerprint: probe.probeResponseFingerprint,
+    selectionState: resolveModelProtocol(model, provider).selectionState,
+  }
+}
+
+/** Pure evidence builder: derives the persistent evidence object without touching the cache. */
+export function buildCapabilityEvidence(model: ModelV2.Info, provider?: ProviderV2.Info): CapabilityConfigEvidence {
+  return evidenceFromProbe(model, provider, probeCapabilities(model, provider))
+}
+
+// Module-scoped evidence cache keyed by config identity hash. This is the
+// in-process persistence home for the evidence; durable DB persistence in a
+// `session_*` table is a C1A/other-lane integration decision (see boundary note).
+const evidenceCache = new Map<string, CapabilityConfigEvidence>()
+
+export function getConfigEvidence(configIdentity: string): CapabilityConfigEvidence | undefined {
+  return evidenceCache.get(configIdentity)
+}
+
+/** Number of cached evidence entries (test/inspection seam). */
+export function configEvidenceCount(): number {
+  return evidenceCache.size
+}
+
+/**
+ * BUSINESS-TURN consumption path: look up existing evidence by config identity
+ * and NEVER run the probe (design §5.2 "业务 turn 不探测"). A missing entry
+ * yields `no_evidence` (an explicit state, never a silent compatible guess) and
+ * is a signal that an explicit configuration action must refresh it first.
+ */
+export function configEvidenceForTurn(
+  model: ModelV2.Info,
+  provider?: ProviderV2.Info,
+): CapabilityConfigEvidence | "no_evidence" {
+  return evidenceCache.get(configIdentityHash(model, provider)) ?? "no_evidence"
+}
+
+/** Explicit invalidation on config drift: drop the entry for a config identity. */
+export function invalidateConfigEvidence(model: ModelV2.Info, provider?: ProviderV2.Info): boolean {
+  return evidenceCache.delete(configIdentityHash(model, provider))
+}
+
+/** Clear the whole in-process evidence cache (tests / config reload). */
+export function clearConfigEvidenceCache(): void {
+  evidenceCache.clear()
+  configEvidenceCacheResetProbeCallCount()
+}
+
+/**
+ * EXPLICIT configuration action (the only place the probe hook runs): derive +
+ * cache the evidence. This is what a real C2-09/C7-03 live-sentinel probe would
+ * invoke; the default hook is the pure declared/derived probe, so refreshing is
+ * still side-effect-free in this wave.
+ */
+export function refreshConfigEvidence(model: ModelV2.Info, provider?: ProviderV2.Info): CapabilityConfigEvidence {
+  configProbeCallCount += 1
+  const evidence = evidenceFromProbe(model, provider, probeHook(model, provider))
+  evidenceCache.set(evidence.configIdentityHash, evidence)
+  return evidence
+}
+
+/** Injectable probe hook (default = pure derived probe). Test seam injects a counting spy. */
+export type ProbeHook = (model: ModelV2.Info, provider?: ProviderV2.Info) => CapabilityProbeResult
+
+let probeHook: ProbeHook = (model, provider) => probeCapabilities(model, provider)
+let configProbeCallCount = 0
+
+function configEvidenceCacheResetProbeCallCount() {
+  configProbeCallCount = 0
+}
+
+export function setProbeHook(hook: ProbeHook): void {
+  probeHook = hook
+}
+
+export function resetProbeHook(): void {
+  probeHook = (model, provider) => probeCapabilities(model, provider)
+  configProbeCallCount = 0
+}
+
+/** Count of probe-hook invocations through `refreshConfigEvidence`. */
+export function probeHookCalls(): number {
+  return configProbeCallCount
 }
