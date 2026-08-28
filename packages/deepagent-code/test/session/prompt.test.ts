@@ -445,7 +445,10 @@ function makePrompt(input?: PromptLayerOptions) {
 }
 
 function makeHttp(input?: PromptLayerOptions) {
-  return Layer.mergeAll(TestLLMServer.layer, makePrompt(input))
+  // The composed test-layer chain carries an `unknown` error channel from its dependency graph
+  // (pre-existing variance); the test harness requires a never-error layer — composition failures
+  // here are test defects, so orDie is the correct boundary.
+  return Layer.mergeAll(TestLLMServer.layer, makePrompt(input)).pipe(Layer.orDie)
 }
 
 function makeHttpNoLLMServer(input?: PromptLayerOptions) {
@@ -5846,7 +5849,8 @@ const v2OwnerStubLayer = Layer.merge(
     }),
   ),
   SessionProjector.defaultLayer,
-)
+)  .pipe(Layer.orDie)
+
 const v2Owner = testEffect(makeHttp({ flags: { coreV2ExecutionOwner: true }, sessionV2: v2OwnerStubLayer }))
 
 const v2Only = testEffect(
@@ -6241,7 +6245,7 @@ const r0V2Stub = SessionV2.Service.of({
     }),
   interrupt: () => Effect.void,
 })
-const r0V2StubLayer = Layer.merge(Layer.succeed(SessionV2.Service, r0V2Stub), SessionProjector.defaultLayer)
+const r0V2StubLayer = Layer.merge(Layer.succeed(SessionV2.Service, r0V2Stub), SessionProjector.defaultLayer).pipe(Layer.orDie)
 
 // REAL-STACK harness: SessionV2.layer over the SAME module-level Database.defaultLayer constant the
 // prompt harness uses, with the LOCAL execution (real runner) + the harness's LLM transport
@@ -6254,7 +6258,7 @@ const realV2Layer = SessionV2.layer.pipe(
   Layer.provide(SessionProjector.defaultLayer),
   Layer.provide(SessionExecutionLocal.liveLayer),
   Layer.provide(Database.defaultLayer),
-)
+).pipe(Layer.orDie)
 const v2Real = testEffect(
   makeHttp({ flags: { coreV2Only: true, coreV2ExecutionOwner: true }, sessionV2: realV2Layer }).pipe(
     Layer.provide(Layer.succeed(CurrentOwnerCampaign, r0Campaign)),

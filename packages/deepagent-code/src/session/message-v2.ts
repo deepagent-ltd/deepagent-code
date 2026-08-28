@@ -1581,7 +1581,10 @@ function readHistorySnapshotInTransaction(
         .map((artifact) => artifact.message_id),
     )
     const physical = (yield* promptStream(sessionID).pipe(
-      Effect.provideService(Database.Service, { db: tx }),
+      // A transaction exposes the same query surface the stream uses (select/execute); the
+      // provided service is the tx narrowed to the DB interface at this boundary (pre-existing
+      // typing variance between a transaction and the full database shape).
+      Effect.provideService(Database.Service, { db: tx as unknown as Database.Interface["db"] }),
     )).reverse()
     const visible = physical.filter(
       (message) => message.info.id === ignoredCompactionMarkerID || !hidden.has(message.info.id),

@@ -104,4 +104,4 @@ const dependencies = Layer.mergeAll(
   }),
 )
 
-export const defaultLayer: Layer.Layer<Service> = layer.pipe(Layer.provide(dependencies))
+export const defaultLayer: Layer.Layer<Service> = layer.pipe(Layer.provide(dependencies)).pipe(Layer.orDie)

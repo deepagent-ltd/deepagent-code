@@ -4,7 +4,7 @@ import { Catalog } from "@deepagent-code/core/catalog"
 import { LocationServiceMap } from "@deepagent-code/core/location-layer"
 import { PluginBoot } from "@deepagent-code/core/plugin/boot"
 import { AbsolutePath } from "@deepagent-code/core/schema"
-import { effectCmd } from "../../effect-cmd"
+import { CliError, effectCmd } from "../../effect-cmd"
 
 export const V2Command = effectCmd({
   command: "v2",
@@ -42,5 +42,7 @@ export const V2Command = effectCmd({
         }),
       ),
       Effect.provide(LocationServiceMap.layer),
+    ).pipe(
+      Effect.mapError((e) => (e instanceof CliError ? e : new CliError({ message: String((e as { message?: string })?.message ?? e), exitCode: 1 }))),
     ),
 })

@@ -4,7 +4,7 @@ import { FileSystem } from "@deepagent-code/core/filesystem"
 import { LocationServiceMap } from "@deepagent-code/core/location-layer"
 import { Search } from "@deepagent-code/core/filesystem/search"
 import { AbsolutePath, RelativePath } from "@deepagent-code/core/schema"
-import { effectCmd } from "../../effect-cmd"
+import { CliError, effectCmd } from "../../effect-cmd"
 import { cmd } from "../cmd"
 
 const filesystem = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
@@ -22,10 +22,13 @@ const FileSearchCommand = effectCmd({
       demandOption: true,
       description: "Search query",
     }),
-  handler: Effect.fn("Cli.debug.file.search")(function* (args) {
+  handler: (args) =>
+    Effect.fn("Cli.debug.file.search")(function* () {
     const results = yield* filesystem(FileSystem.Service.use((svc) => svc.find({ query: args.query })))
     process.stdout.write(results.map((item) => item.path).join(EOL) + EOL)
-  }),
+  })().pipe(
+    Effect.mapError((e) => (e instanceof CliError ? e : new CliError({ message: String((e as { message?: string })?.message ?? e), exitCode: 1 }))),
+  ),
 })
 
 const FileReadCommand = effectCmd({
@@ -37,10 +40,13 @@ const FileReadCommand = effectCmd({
       demandOption: true,
       description: "File path to read",
     }),
-  handler: Effect.fn("Cli.debug.file.read")(function* (args) {
+  handler: (args) =>
+    Effect.fn("Cli.debug.file.read")(function* () {
     const content = yield* filesystem(FileSystem.Service.use((svc) => svc.read({ path: RelativePath.make(args.path) })))
     process.stdout.write(JSON.stringify(content, null, 2) + EOL)
-  }),
+  })().pipe(
+    Effect.mapError((e) => (e instanceof CliError ? e : new CliError({ message: String((e as { message?: string })?.message ?? e), exitCode: 1 }))),
+  ),
 })
 
 const FileListCommand = effectCmd({
@@ -52,10 +58,13 @@ const FileListCommand = effectCmd({
       demandOption: true,
       description: "File path to list",
     }),
-  handler: Effect.fn("Cli.debug.file.list")(function* (args) {
+  handler: (args) =>
+    Effect.fn("Cli.debug.file.list")(function* () {
     const files = yield* filesystem(FileSystem.Service.use((svc) => svc.list({ path: RelativePath.make(args.path) })))
     process.stdout.write(JSON.stringify(files, null, 2) + EOL)
-  }),
+  })().pipe(
+    Effect.mapError((e) => (e instanceof CliError ? e : new CliError({ message: String((e as { message?: string })?.message ?? e), exitCode: 1 }))),
+  ),
 })
 
 const FileTreeCommand = effectCmd({
