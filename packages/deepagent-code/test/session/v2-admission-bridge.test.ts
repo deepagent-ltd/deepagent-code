@@ -84,13 +84,21 @@ const request = (): EventDispatcher.DispatchRequest => ({
   targets: [],
 })
 
+/** A normalized record of the SessionV2.prompt call the adapter issues. */
+type V2PromptCall = { readonly sessionID: string; readonly prompt: { readonly text: string }; readonly delivery: string; readonly resume?: boolean }
+
 /** A fake SessionV2 whose `prompt` records each admission and returns a minimal `Admitted`. Verifies the
  * adapter really drives SessionV2.prompt without needing a live session stack. */
-const fakeV2Session = (calls: Array<Record<string, unknown>>): SessionV2.Interface =>
+const fakeV2Session = (calls: V2PromptCall[]): SessionV2.Interface =>
   ({
     prompt: (input: Parameters<SessionV2.Interface["prompt"]>[0]) =>
       Effect.sync(() => {
-        calls.push({ ...input })
+        calls.push({
+          sessionID: input.sessionID,
+          prompt: { text: input.prompt.text },
+          delivery: input.delivery ?? "steer",
+          ...(input.resume === undefined ? {} : { resume: input.resume }),
+        })
         return { id: SessionMessage.ID.make("msg_fake") }
       }),
   }) as unknown as SessionV2.Interface
@@ -154,7 +162,7 @@ describe("C5-12 V2 admission bridge provider", () => {
 
   test("provider.admit translates V4 → validated C5 envelope and drives the SessionV2 adapter", async () => {
     const req = request()
-    const v2Calls: Array<Record<string, unknown>> = []
+    const v2Calls: V2PromptCall[] = []
     await runWithDb((db) =>
       Effect.gen(function* () {
         const provider = makeV2AdmissionBridge({ db, v2Session: fakeV2Session(v2Calls) })
@@ -162,7 +170,7 @@ describe("C5-12 V2 admission bridge provider", () => {
       }),
     )
     expect(v2Calls.length).toBe(1)
-    const admitted = v2Calls[0] as { sessionID: string; prompt: { text: string }; delivery: string }
+    const admitted = v2Calls[0]
     expect(admitted.sessionID).toBe(parentSessionIDFor(req.event.id))
     expect(admitted.delivery).toBe("steer")
     // The prompt is the bounded envelope (never the raw payload): it references the event id + the
@@ -214,7 +222,7 @@ describe("C5-12 V2 admission bridge provider", () => {
   test("flag ON + production provider: the runtime routes through the V2 admission path and skips §C", async () => {
     setRegistry([agent("fixer", ["code_edit", "test_run"], "level_2")])
     resetRunner()
-    const v2Calls: Array<Record<string, unknown>> = []
+    const v2Calls: V2PromptCall[] = []
     await runWithDb((db) => {
       const provider = makeV2AdmissionBridge({ db, v2Session: fakeV2Session(v2Calls) })
       return providerRuntimeEffect(provider)
