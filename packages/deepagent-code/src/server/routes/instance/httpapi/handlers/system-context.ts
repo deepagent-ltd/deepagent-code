@@ -3,6 +3,7 @@ import { Effect } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { CapabilityCatalog } from "@deepagent-code/core/system-context/capability-catalog"
 import { CapabilityLoader } from "@deepagent-code/core/system-context/capability-loader"
+import { InstanceHttpApi } from "../api"
 import { SystemContextApi } from "../groups/system-context"
 
 // C6-02 system-context snapshot diagnostics (design §11.1 + §7.5). The endpoint
@@ -12,7 +13,7 @@ import { SystemContextApi } from "../groups/system-context"
 
 const sha256 = (input: string) => createHash("sha256").update(input).digest("hex")
 
-export const systemContextHandlers = HttpApiBuilder.group(SystemContextApi, "system-context", (handlers) =>
+export const systemContextHandlers = HttpApiBuilder.group(InstanceHttpApi, "system-context", (handlers) =>
   Effect.gen(function* () {
     const snapshot = CapabilityCatalog.capabilityCatalogSnapshot
     const recomputedDigest = CapabilityCatalog.capabilityCatalogDigestValue
