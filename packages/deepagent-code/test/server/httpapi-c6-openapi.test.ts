@@ -10,9 +10,23 @@ import { SystemContextApi, SystemContextPaths } from "../../src/server/routes/in
 
 type Operation = { responses: Record<string, { description?: string }> }
 
+type JsonSchema = {
+  type?: string
+  properties?: Record<string, JsonSchema>
+  items?: JsonSchema
+  $ref?: string
+}
+
 const opOf = (doc: unknown, path: string, method: string): Operation | undefined => {
   const p = (doc as { paths: Record<string, Record<string, Operation>> }).paths?.[path]
   return p?.[method]
+}
+
+const schemaOf = (op: Operation, status: string): JsonSchema | undefined => {
+  const content = JSON.parse(JSON.stringify(op.responses[status])) as {
+    content: { "application/json": { schema: JsonSchema } }
+  }
+  return content.content?.["application/json"]?.schema
 }
 
 describe("C6-01 maintenance OpenAPI route table", () => {
@@ -60,25 +74,21 @@ describe("C6-02 capability + system-context OpenAPI route table", () => {
 
   test("the search response schema never declares a procedure body", () => {
     const search = opOf(cap, CapabilityPaths.search, "post")!
-    const schema = JSON.parse(JSON.stringify(search.responses["200"])) as {
-      content: { "application/json": { schema: { properties?: Record<string, unknown>; items?: { properties?: Record<string, unknown> } } } }
-    }
-    const root = schema.content["application/json"].schema
+    const root = schemaOf(search, "200")!
     // The card item shape is under the `cards` array items.
     const cardProps = root.properties?.cards?.items?.properties ?? root.properties
-    expect(cardProps.body).toBeUndefined()
-    expect(cardProps.body_ref).toBeDefined()
+    expect(cardProps?.body).toBeUndefined()
+    expect(cardProps?.body_ref).toBeDefined()
   })
 
   test("the catalog response schema never declares a procedure body", () => {
     const catalog = opOf(cap, CapabilityPaths.catalog, "get")!
-    const raw = JSON.parse(JSON.stringify(catalog.responses["200"])) as {
-      content: { "application/json": { schema: { $ref?: string; properties?: Record<string, unknown> } } }
-    }
-    const root = raw.content["application/json"].schema
+    const root = schemaOf(catalog, "200")!
     if (root.$ref) {
       // Resolve the $ref to the components schema so we can inspect the entry shape.
-      const capDoc = JSON.parse(JSON.stringify(cap)) as { components: { schemas: Record<string, { properties?: Record<string, unknown> }> } }
+      const capDoc = JSON.parse(JSON.stringify(cap)) as {
+        components: { schemas: Record<string, JsonSchema> }
+      }
       const refName = root.$ref.split("/").pop()!
       const schema = capDoc.components.schemas[refName]
       expect(schema.properties?.capabilities).toBeDefined()
