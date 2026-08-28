@@ -12,7 +12,10 @@ import { migrations } from "../src/database/migration.gen"
 // migration's executable body.
 // Re-pinned after five incident-labelled migration identities were canonicalized while retaining
 // their released database IDs as compatibility aliases.
-const PINNED_DIGEST = "882f0b13601199ff9d4e3579371590bef9139608be873f1ef56c205a6b875605"
+// Successor pin (2026-08-28): the event-ledger wiring migration body
+// (20260829030000_wire_event_ledgers) joined the registry, so the ordered
+// registry digest moved. The pin tracks the current release candidate.
+const PINNED_DIGEST = "c1762b0df77600e7fb84e238aaa4f8e10629629b50792169eb05fd06dbb537c7"
 
 const digest = (entries: readonly { readonly id: string; readonly hash: string }[]) =>
   createHash("sha256").update(JSON.stringify(entries)).digest("hex")

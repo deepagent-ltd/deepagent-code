@@ -169,5 +169,6 @@ export const migrations = (
     import("./migration/20260825120000_v2_tool_effect_permission_grant"),
     import("./migration/20260825150000_v2_task_run_receipt"),
     import("./migration/20260826090000_recovery_terminal_idempotent_trigger"),
+    import("./migration/20260829030000_wire_event_ledgers"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]
