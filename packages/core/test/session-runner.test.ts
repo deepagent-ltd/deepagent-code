@@ -181,7 +181,11 @@ const echo = Layer.effectDiscard(
 let modelResolveHook = Effect.void
 let currentModel = model
 const models = SessionRunnerModel.layerWith((session) =>
-  modelResolveHook.pipe(Effect.as(session.model?.id === "replacement" ? replacementModel : currentModel)),
+  modelResolveHook.pipe(
+    Effect.as({
+      model: session.model?.id === "replacement" ? replacementModel : currentModel,
+    }),
+  ),
 )
 const systemContextKey = SystemContext.Key.make("test/context")
 let systemBaseline = "Initial context"

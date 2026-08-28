@@ -44,6 +44,12 @@ import { V2ProviderTurn } from "./v2-provider-turn"
 import { V2ProviderTurnReceiptTable } from "./v2-provider-turn.sql"
 import { CanonicalJson } from "../../util/canonical-json"
 import { Hash } from "../../util/hash"
+import {
+  configDrift,
+  configEvidenceForTurn,
+  protocolAttemptIdentityFor,
+  protocolAttemptIdentityHash,
+} from "../../model-protocol"
 
 /**
  * Runs one durable coding-agent Session until it settles.
@@ -258,7 +264,26 @@ export const layer = Layer.effect(
       const current = yield* getSession(sessionID)
       if ((yield* agents.select(current.agent)).id !== agent.id || !sameModel(current.model, session.model))
         return yield* Effect.die(rebuildPreparedTurn(undefined, currentStep))
-      const model = yield* models.resolve(session)
+      const { model, info: modelInfo, provider: modelProvider } = yield* models.resolve(session)
+      // C2-04/B2 residual — bind the protocol attempt identity (route/protocol/origin/capability/
+      // lowering) onto the prepared attempt from the already-resolved catalog config, so an exact
+      // retry never changes the model protocol/context/capability body mid-attempt (design §2.3,
+      // §4.1 step 8). The business turn consumes cached evidence only (design §5.2: never runs the
+      // probe); a missing entry is `no_evidence` and the identity still derives from the protocol
+      // defaults (capability fingerprint is identical either way, so binding stays deterministic).
+      const protocolIdentity =
+        modelInfo === undefined
+          ? undefined
+          : protocolAttemptIdentityFor(
+              modelInfo,
+              modelProvider,
+              (() => {
+                const evidence = configEvidenceForTurn(modelInfo, modelProvider)
+                return evidence === "no_evidence" ? undefined : evidence
+              })(),
+            )
+      const protocolIdentityHash =
+        protocolIdentity === undefined ? undefined : protocolAttemptIdentityHash(protocolIdentity)
       const entries = yield* SessionHistory.entriesForRunner(db, session.id, system.baselineSeq)
       const context = entries.map((entry) => entry.message)
       const currentUserMessageID = context.findLast((message) => message.type === "user")?.id
@@ -503,6 +528,20 @@ export const layer = Layer.effect(
         yield* terminalizePreDispatch("epoch_mismatch_rebuild")
         return yield* Effect.die(rebuildPreparedTurn(undefined, currentStep))
       }
+      // C2-04/B2 residual dispatch seam: never dispatch a drifted attempt. When the receipt already
+      // carries a bound protocol attempt identity (an exact-retry re-seal), the CURRENT config must
+      // still resolve to the SAME identity; a mismatch means route/protocol/origin/capability/lowering
+      // changed after the attempt was bound, so a dispatch would violate design §2.3. Rebuild from the
+      // current config (the established turnaround) and leave the stale attempt un-dispatched.
+      const boundIdentityHash = providerReceipt.preparedTurn?.protocol_attempt_identity_hash
+      if (
+        protocolIdentity !== undefined &&
+        boundIdentityHash !== undefined &&
+        configDrift(protocolIdentity, boundIdentityHash)
+      ) {
+        yield* terminalizePreDispatch("config_drift_rebuild_required")
+        return yield* Effect.die(rebuildPreparedTurn(undefined, currentStep))
+      }
       const providerStream = V2ProviderTurn.stream({
         service: providerTurns,
         receipt: providerReceipt,
@@ -532,6 +571,8 @@ export const layer = Layer.effect(
               providerTurnSeq: providerReceipt.providerTurnSeq,
               contextSelectionID: selectionAdmission.selectionId,
               contextProjectionHash: selectionAdmission.projectionHash,
+              ...(protocolIdentity === undefined ? {} : { protocolAttemptIdentity: protocolIdentity }),
+              ...(protocolIdentityHash === undefined ? {} : { protocolAttemptIdentityHash: protocolIdentityHash }),
             },
             wireRequestHash,
           ),

@@ -52,8 +52,23 @@ export type Error =
   | UnsupportedApiError
   | ModelProtocolDisabledError
 
+/**
+ * A resolved model plus the `ModelV2.Info`/`ProviderV2.Info` it was resolved
+ * from. The runner needs the catalog `Info` (not just the lowered llm `Model`)
+ * to bind the C2-04 protocol attempt identity (route/protocol/origin/
+ * capability/lowering) onto the prepared attempt, per design §4.1 step 8 —
+ * built only from the already-resolved config, never from a business-turn probe.
+ * `info`/`provider` are optional so embedded resolvers that only lower a bare
+ * llm `Model` (test stubs) leave the identity unbound rather than synthesizing one.
+ */
+export interface ResolvedModel {
+  readonly model: Model
+  readonly info?: ModelV2.Info
+  readonly provider?: ProviderV2.Info
+}
+
 export interface Interface {
-  readonly resolve: (session: SessionSchema.Info) => Effect.Effect<Model, Error>
+  readonly resolve: (session: SessionSchema.Info) => Effect.Effect<ResolvedModel, Error>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/v2/SessionRunnerModel") {}
@@ -190,7 +205,8 @@ export const locationLayer = Layer.effect(
           : (Option.getOrUndefined((yield* catalog.model.default()).pipe(Option.filter(supported))) ??
             (yield* catalog.model.available()).find(supported))
         if (!selected) return yield* new ModelNotSelectedError({ sessionID: session.id })
-        return yield* resolve(session, selected, yield* catalog.provider.get(selected.providerID))
+        const provider = yield* catalog.provider.get(selected.providerID)
+        return { model: yield* resolve(session, selected, provider), info: selected, provider }
       }),
     })
   }),
