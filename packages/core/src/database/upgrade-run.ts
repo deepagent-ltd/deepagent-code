@@ -36,6 +36,45 @@ export class RunNotFound extends Error {
   }
 }
 
+/**
+ * Deterministic failure reasons for a resume that cannot be proven safe (design §10.5:
+ * "重启读取 upgrade run，从最后一个已验证 receipt forward resume"). Each divergence is typed and
+ * routes the run to recovery_required rather than silently skipping it. `old_binary_protocol_unsupported`
+ * is intentionally NOT in this set: the old-binary fence is a non-mutating refusal, not a recovery.
+ */
+export type ResumeFailureCode =
+  | "stale_run_target_digest"
+  | "resume_receipt_without_journal"
+  | "resume_journal_without_receipt"
+  | "resume_receipt_content_mismatch"
+  | "resume_receipt_ordinal_mismatch"
+  | "resume_receipt_unknown_migration"
+  | "resume_receipt_failed_result"
+
+/** Typed, deterministic failure used to route a divergent active run to recovery_required. */
+export class ResumeValidationError extends Error {
+  readonly _tag = "UpgradeRun.ResumeValidationError"
+  readonly code: ResumeFailureCode
+  readonly detail: string
+  constructor(input: { code: ResumeFailureCode; detail: string }) {
+    super(`database upgrade run resume validation failed (${input.code}): ${input.detail}`)
+    this.code = input.code
+    this.detail = input.detail
+  }
+}
+
+/**
+ * Non-mutating refusal when the active run targets a reader/writer protocol the running binary
+ * does not support. Distinct from {@link ResumeValidationError}: the run is left untouched (no
+ * recovery_required write) because the binary simply cannot proceed; a capable binary must resume it.
+ */
+export class OldBinaryFenceError extends Error {
+  readonly _tag = "UpgradeRun.OldBinaryFence"
+  constructor(readonly detail: string) {
+    super(`database upgrade run requires a newer binary: ${detail}`)
+  }
+}
+
 export class RunAlreadyTerminal extends Error {
   readonly _tag = "UpgradeRun.RunAlreadyTerminal"
   constructor(readonly runId: string, readonly state: UpgradeRunState) {
@@ -85,6 +124,18 @@ type RunRow = {
   failure_code: string | null
   applied_ordinal: number
   total_migrations: number
+  started_at: number
+  completed_at: number
+}
+
+/** Shape of a `database_migration_receipt` row (the resume source of truth, design §10.5). */
+export type ReceiptRow = {
+  receipt_id: string
+  migration_id: string
+  content_hash: string
+  ordinal: number
+  run_id: string
+  result: string
   started_at: number
   completed_at: number
 }
@@ -247,6 +298,21 @@ export function loadActiveRun(db: Database): Effect.Effect<UpgradeRun | undefine
       ORDER BY started_at DESC LIMIT 1
     `).pipe(Effect.orDie)
     return row === undefined ? undefined : toContract(row)
+  })
+}
+
+/**
+ * All receipts recorded under a run, ordered by ordinal. The resume source of truth (design §10.5):
+ * a prior crash must resume from the last VERIFIED receipt, not the legacy `migration` journal alone.
+ */
+export function loadReceiptsForRun(db: Database, runId: string): Effect.Effect<ReceiptRow[]> {
+  return Effect.gen(function* () {
+    return yield* db.all<ReceiptRow>(sql`
+      SELECT receipt_id, migration_id, content_hash, ordinal, run_id, result, started_at, completed_at
+      FROM database_migration_receipt
+      WHERE run_id = ${runId}
+      ORDER BY ordinal ASC
+    `).pipe(Effect.orDie)
   })
 }
 
