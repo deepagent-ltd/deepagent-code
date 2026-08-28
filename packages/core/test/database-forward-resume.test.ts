@@ -36,7 +36,7 @@ const ensureStateTables = (db: EffectDrizzleSqlite.EffectSQLiteDatabase) =>
     yield* db.run(sql`CREATE TABLE IF NOT EXISTS migration (id TEXT PRIMARY KEY, time_completed INTEGER NOT NULL)`)
   })
 
-const defaultReceipt = (runId: string, migrationId: string, ordinal: number) => ({
+const defaultReceipt = (runId: string, migrationId: string, ordinal: number): DatabaseUpgradeRun.ReceiptInput => ({
   runId,
   migrationId,
   contentHash: DatabaseUpgradeRun.migrationContentHash(migrations[ordinal - 1]!),
@@ -105,7 +105,7 @@ const seedStatePrefix = (
   db: EffectDrizzleSqlite.EffectSQLiteDatabase,
   runId: string,
   count: number,
-  overrideAt?: { index: number; receipt: Record<string, unknown> },
+  overrideAt?: { index: number; receipt: Partial<DatabaseUpgradeRun.ReceiptInput> },
 ) =>
   Effect.gen(function* () {
     for (let i = 0; i < count; i++) {
