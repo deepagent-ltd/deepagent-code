@@ -21,6 +21,13 @@ import type {
   AuthRemoveResponses,
   AuthSetErrors,
   AuthSetResponses,
+  CapabilityCatalogErrors,
+  CapabilityCatalogResponses,
+  CapabilityLoadReceiptsErrors,
+  CapabilityLoadReceiptsResponses,
+  CapabilitySearchErrors,
+  CapabilitySearchInput,
+  CapabilitySearchResponses,
   CommandListErrors,
   CommandListResponses,
   Config as Config3,
@@ -30,6 +37,12 @@ import type {
   ConfigProvidersResponses,
   ConfigUpdateErrors,
   ConfigUpdateResponses,
+  ContextEventsCursorErrors,
+  ContextEventsCursorResponses,
+  ContextEventsErrors,
+  ContextEventsResponses,
+  ContextReadinessErrors,
+  ContextReadinessResponses,
   DebugBreakpointsBody,
   DebugBreakpointsErrors,
   DebugBreakpointsResponses,
@@ -126,6 +139,7 @@ import type {
   EventTuiPromptAppend,
   EventTuiSessionSelect,
   EventTuiToastShow,
+  EvidenceExportInput,
   ExperimentalConsoleGetErrors,
   ExperimentalConsoleGetResponses,
   ExperimentalConsoleListOrgsErrors,
@@ -264,6 +278,26 @@ import type {
   LspRenameResponses,
   LspStatusErrors,
   LspStatusResponses,
+  MaintenanceBackupListErrors,
+  MaintenanceBackupListResponses,
+  MaintenanceBackupRestoreErrors,
+  MaintenanceBackupRestoreResponses,
+  MaintenanceBackupVerifyErrors,
+  MaintenanceBackupVerifyResponses,
+  MaintenanceBootstrapStatusErrors,
+  MaintenanceBootstrapStatusResponses,
+  MaintenanceRecoveryCommandErrors,
+  MaintenanceRecoveryCommandGetErrors,
+  MaintenanceRecoveryCommandGetResponses,
+  MaintenanceRecoveryCommandResponses,
+  MaintenanceRecoveryEvidenceExportCreateErrors,
+  MaintenanceRecoveryEvidenceExportCreateResponses,
+  MaintenanceRecoveryEvidenceExportErrors,
+  MaintenanceRecoveryEvidenceExportResponses,
+  MaintenanceRecoveryListErrors,
+  MaintenanceRecoveryListResponses,
+  MaintenanceUpgradeStatusErrors,
+  MaintenanceUpgradeStatusResponses,
   McpAddErrors,
   McpAddResponses,
   McpAuthAuthenticateErrors,
@@ -371,8 +405,10 @@ import type {
   QuestionReplyErrors,
   QuestionReplyResponses,
   QuestionV2Reply,
+  RecoveryCommandInput,
   ReferenceListErrors,
   ReferenceListResponses,
+  RestoreInput,
   SessionAbortErrors,
   SessionAbortResponses,
   SessionChildrenErrors,
@@ -466,6 +502,8 @@ import type {
   SyncSnapshotRowsResponses,
   SyncStartErrors,
   SyncStartResponses,
+  SystemContextSnapshotErrors,
+  SystemContextSnapshotResponses,
   TextPartInput,
   ToolIdsErrors,
   ToolIdsResponses,
@@ -5833,6 +5871,406 @@ export class Formatter extends HeyApiClient {
   }
 }
 
+export class Bootstrap extends HeyApiClient {
+  /**
+   * Bootstrap health/status
+   *
+   * Reports the current database bootstrap phase/mode/diagnostics. 200 when ready; a typed 423/503 when in read_only_recovery or blocked_schema.
+   */
+  public status<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+    return (options?.client ?? this.client).get<
+      MaintenanceBootstrapStatusResponses,
+      MaintenanceBootstrapStatusErrors,
+      ThrowOnError
+    >({ url: "/bootstrap/status", ...options })
+  }
+}
+
+export class Backup extends HeyApiClient {
+  /**
+   * List backup manifests
+   *
+   * Lists available consistency backups and their manifest identity fields.
+   */
+  public list<ThrowOnError extends boolean = false>(
+    parameters?: {
+      dir?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "dir" }] }])
+    return (options?.client ?? this.client).get<
+      MaintenanceBackupListResponses,
+      MaintenanceBackupListErrors,
+      ThrowOnError
+    >({
+      url: "/backup/list",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Verify a backup
+   *
+   * Runs the §10.4/§10.9 recoverability verification against a backup manifest.
+   */
+  public verify<ThrowOnError extends boolean = false>(
+    parameters: {
+      manifest_path: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "manifest_path" }] }])
+    return (options?.client ?? this.client).get<
+      MaintenanceBackupVerifyResponses,
+      MaintenanceBackupVerifyErrors,
+      ThrowOnError
+    >({
+      url: "/backup/verify",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Restore (dry-run/status)
+   *
+   * Fixture-gated restore status surface: reports whether a restore could proceed and whether one is in progress. The actual restore install is a service call, not this endpoint (this lane).
+   */
+  public restore<ThrowOnError extends boolean = false>(
+    parameters?: {
+      restoreInput?: RestoreInput
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ key: "restoreInput", map: "body" }] }])
+    return (options?.client ?? this.client).post<
+      MaintenanceBackupRestoreResponses,
+      MaintenanceBackupRestoreErrors,
+      ThrowOnError
+    >({
+      url: "/backup/restore",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
+export class Upgrade extends HeyApiClient {
+  /**
+   * Upgrade run status
+   *
+   * Reports the active upgrade run state and the migration receipts recorded under it.
+   */
+  public status<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+    return (options?.client ?? this.client).get<
+      MaintenanceUpgradeStatusResponses,
+      MaintenanceUpgradeStatusErrors,
+      ThrowOnError
+    >({ url: "/upgrade/status", ...options })
+  }
+}
+
+export class EvidenceExport extends HeyApiClient {
+  /**
+   * Export recovery evidence manifest
+   *
+   * Records an evidence export manifest for a session (default-redacted; the body stays behind the permission gate).
+   */
+  public create<ThrowOnError extends boolean = false>(
+    parameters?: {
+      evidenceExportInput?: EvidenceExportInput
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ key: "evidenceExportInput", map: "body" }] }])
+    return (options?.client ?? this.client).post<
+      MaintenanceRecoveryEvidenceExportCreateResponses,
+      MaintenanceRecoveryEvidenceExportCreateErrors,
+      ThrowOnError
+    >({
+      url: "/recovery/evidenceExport",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
+export class Recovery extends HeyApiClient {
+  /**
+   * List recovery descriptors
+   *
+   * Lists the C1B recovery descriptors recorded for a session.
+   */
+  public list<ThrowOnError extends boolean = false>(
+    parameters: {
+      session_id: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "session_id" }] }])
+    return (options?.client ?? this.client).get<
+      MaintenanceRecoveryListResponses,
+      MaintenanceRecoveryListErrors,
+      ThrowOnError
+    >({
+      url: "/recovery/list",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Classify + record a recovery command
+   *
+   * Classifies an attempt into the frozen RecoveryDescriptor and records the command.
+   */
+  public command<ThrowOnError extends boolean = false>(
+    parameters?: {
+      recoveryCommandInput?: RecoveryCommandInput
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ key: "recoveryCommandInput", map: "body" }] }])
+    return (options?.client ?? this.client).post<
+      MaintenanceRecoveryCommandResponses,
+      MaintenanceRecoveryCommandErrors,
+      ThrowOnError
+    >({
+      url: "/recovery/command",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Get a recovery command
+   *
+   * Reads a single recovery command/descriptor record by command id.
+   */
+  public commandGet<ThrowOnError extends boolean = false>(
+    parameters: {
+      command_id: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "command_id" }] }])
+    return (options?.client ?? this.client).get<
+      MaintenanceRecoveryCommandGetResponses,
+      MaintenanceRecoveryCommandGetErrors,
+      ThrowOnError
+    >({
+      url: "/recovery/commandGet",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Read an evidence export manifest
+   *
+   * Reads a redacted evidence export manifest by export id; a settled/expired export is a typed 410.
+   */
+  public evidenceExport<ThrowOnError extends boolean = false>(
+    parameters: {
+      export_id: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "export_id" }] }])
+    return (options?.client ?? this.client).get<
+      MaintenanceRecoveryEvidenceExportResponses,
+      MaintenanceRecoveryEvidenceExportErrors,
+      ThrowOnError
+    >({
+      url: "/recovery/evidenceExport",
+      ...options,
+      ...params,
+    })
+  }
+
+  private _evidenceExport?: EvidenceExport
+  get evidenceExport2(): EvidenceExport {
+    return (this._evidenceExport ??= new EvidenceExport({ client: this.client }))
+  }
+}
+
+export class Maintenance extends HeyApiClient {
+  private _bootstrap?: Bootstrap
+  get bootstrap(): Bootstrap {
+    return (this._bootstrap ??= new Bootstrap({ client: this.client }))
+  }
+
+  private _backup?: Backup
+  get backup(): Backup {
+    return (this._backup ??= new Backup({ client: this.client }))
+  }
+
+  private _upgrade?: Upgrade
+  get upgrade(): Upgrade {
+    return (this._upgrade ??= new Upgrade({ client: this.client }))
+  }
+
+  private _recovery?: Recovery
+  get recovery(): Recovery {
+    return (this._recovery ??= new Recovery({ client: this.client }))
+  }
+}
+
+export class Capability extends HeyApiClient {
+  /**
+   * Capability catalog snapshot
+   *
+   * Returns the capability catalog snapshot identity (id/digest) and per-manifest identity fields. Never serializes a procedure body; a body is only reachable through the load path (behind the permission gate).
+   */
+  public catalog<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+    return (options?.client ?? this.client).get<CapabilityCatalogResponses, CapabilityCatalogErrors, ThrowOnError>({
+      url: "/capability/catalog",
+      ...options,
+    })
+  }
+
+  /**
+   * Search the capability catalog
+   *
+   * Returns at most 5 authorized capability cards (summary + entry tools + body_ref), ranked by intent. Denied/disabled capabilities are excluded; no procedure body is ever present.
+   */
+  public search<ThrowOnError extends boolean = false>(
+    parameters?: {
+      capabilitySearchInput?: CapabilitySearchInput
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ key: "capabilitySearchInput", map: "body" }] }])
+    return (options?.client ?? this.client).post<CapabilitySearchResponses, CapabilitySearchErrors, ThrowOnError>({
+      url: "/capability/search",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Capability load receipts
+   *
+   * Returns the recorded capability load receipts (identity/bodyHash/tokenCount, never the body). A body is never serialized here.
+   */
+  public loadReceipts<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+    return (options?.client ?? this.client).get<
+      CapabilityLoadReceiptsResponses,
+      CapabilityLoadReceiptsErrors,
+      ThrowOnError
+    >({ url: "/capability/loadReceipts", ...options })
+  }
+}
+
+export class Context extends HeyApiClient {
+  /**
+   * Context readiness for a session
+   *
+   * Reports the four-graph status (code/documents/knowledge/memory) from the C3 resolver for a session. Returns per-graph GraphStatus (ready/empty/degraded_unavailable/denied/timeout) — never a context body; an unauthorized graph is only surfaced as its status.
+   */
+  public readiness<ThrowOnError extends boolean = false>(
+    parameters: {
+      session_id: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "session_id" }] }])
+    return (options?.client ?? this.client).get<ContextReadinessResponses, ContextReadinessErrors, ThrowOnError>({
+      url: "/context/readiness",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Read the durable event cursor for a session
+   *
+   * Returns { watermark, cursor, floor } for a session's durable event aggregate. A client hydrates its snapshot at `watermark`, then drains `after=cursor`. The durable store is the only authority.
+   */
+  public eventsCursor<ThrowOnError extends boolean = false>(
+    parameters: {
+      session_id: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "session_id" }] }])
+    return (options?.client ?? this.client).get<ContextEventsCursorResponses, ContextEventsCursorErrors, ThrowOnError>({
+      url: "/context/eventsCursor",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Drain durable session events after a cursor
+   *
+   * Drains durable events after `after` up to `limit` (bounded page). Returns { events, nextCursor, floor }. A cursor below the retained floor is a typed 410 (cursor_gap_exceeded); an over-limit request is a typed 400. Never falls back to a volatile stream.
+   */
+  public events<ThrowOnError extends boolean = false>(
+    parameters: {
+      session_id: string
+      after?: string
+      limit?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "session_id" },
+            { in: "query", key: "after" },
+            { in: "query", key: "limit" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<ContextEventsResponses, ContextEventsErrors, ThrowOnError>({
+      url: "/context/events",
+      ...options,
+      ...params,
+    })
+  }
+}
+
+export class SystemContext extends HeyApiClient {
+  /**
+   * System context snapshot diagnostics
+   *
+   * Reports whether the capability catalog snapshot digest is still consistent with the frozen catalog, the L0 catalog line count/hash, and the recorded capability load receipts (identity/metrics only, never a body).
+   */
+  public snapshot<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+    return (options?.client ?? this.client).get<
+      SystemContextSnapshotResponses,
+      SystemContextSnapshotErrors,
+      ThrowOnError
+    >({ url: "/system-context/snapshot", ...options })
+  }
+}
+
 export class Auth2 extends HeyApiClient {
   /**
    * Remove MCP OAuth
@@ -10668,6 +11106,26 @@ export class DeepAgentCodeClient extends HeyApiClient {
   private _formatter?: Formatter
   get formatter(): Formatter {
     return (this._formatter ??= new Formatter({ client: this.client }))
+  }
+
+  private _maintenance?: Maintenance
+  get maintenance(): Maintenance {
+    return (this._maintenance ??= new Maintenance({ client: this.client }))
+  }
+
+  private _capability?: Capability
+  get capability(): Capability {
+    return (this._capability ??= new Capability({ client: this.client }))
+  }
+
+  private _context?: Context
+  get context(): Context {
+    return (this._context ??= new Context({ client: this.client }))
+  }
+
+  private _systemContext?: SystemContext
+  get systemContext(): SystemContext {
+    return (this._systemContext ??= new SystemContext({ client: this.client }))
   }
 
   private _mcp?: Mcp
