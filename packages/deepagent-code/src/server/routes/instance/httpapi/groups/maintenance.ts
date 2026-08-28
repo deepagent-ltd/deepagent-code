@@ -38,10 +38,11 @@ const BootstrapStateSchema = Schema.Struct({
   mode: BootstrapModeLiteral,
   ready: Schema.Boolean,
   diagnostics: BootstrapDiagnosticsSchema,
-  next: Schema.Union(
-    Schema.Struct({ action: Schema.Literal("proceed"), to: BootstrapPhaseLiteral }),
-    Schema.Struct({ action: Schema.Literal("pause"), to: BootstrapPhaseLiteral }),
-    Schema.Null,
+  next: Schema.NullOr(
+    Schema.Union([
+      Schema.Struct({ action: Schema.Literal("proceed"), to: BootstrapPhaseLiteral }),
+      Schema.Struct({ action: Schema.Literal("pause"), to: BootstrapPhaseLiteral }),
+    ]),
   ),
 }).annotate({ identifier: "BootstrapState" })
 
@@ -68,7 +69,7 @@ const BackupVerifyOkSchema = Schema.Struct({
   capabilityCount: Schema.Int,
   migrationCount: Schema.Int,
   sqliteMasterCount: Schema.Int,
-  sessionCount: Schema.Union(Schema.Null, Schema.Int),
+  sessionCount: Schema.NullOr(Schema.Int),
   hashMatch: Schema.Literal(true),
   schemaDigestMatch: Schema.Literal(true),
 })
@@ -79,7 +80,7 @@ const BackupVerifyFailureSchema = Schema.Struct({
   detail: Schema.String,
 })
 
-const BackupVerifySchema = Schema.Union(BackupVerifyOkSchema, BackupVerifyFailureSchema).annotate({
+const BackupVerifySchema = Schema.Union([BackupVerifyOkSchema, BackupVerifyFailureSchema]).annotate({
   identifier: "BackupVerify",
 })
 

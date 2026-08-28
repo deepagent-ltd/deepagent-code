@@ -10,7 +10,8 @@ import { DatabaseUpgradeRun } from "@deepagent-code/core/database/upgrade-run"
 import { SessionProviderRecovery } from "@deepagent-code/core/session/runner"
 import { MaintenanceApi } from "../groups/maintenance"
 import { makeApiError, type ApiTypedError } from "../typed-error"
-import { MaintenanceRegistry, Service as MaintenanceRegistryService } from "../maintenance-registry"
+import { Service as MaintenanceRegistryService } from "../maintenance-registry"
+import type { MaintenanceRegistry } from "../maintenance-registry"
 
 // C6-01 maintenance handlers (design §11.1). Domain services stay free of HttpApi
 // types: expected domain outcomes are translated at the handler boundary into the
@@ -55,10 +56,30 @@ export function mapRestoreModeToError(state: BootstrapState, resource: string): 
   })
 }
 
+/** Read + structurally validate a backup manifest, mapping ANY problem to a typed 404. */
+const readManifestOrMissing = (manifestPath: string): Effect.Effect<Backup.BackupManifest, ApiTypedError, never> =>
+  Backup.readManifest(manifestPath).pipe(
+    Effect.catchCause(() =>
+      Effect.fail(makeApiError("backup_manifest_missing", { resource: manifestPath })),
+    ),
+  )
+
+/** Map the snake_case DB receipt rows to the camelCase wire schema. */
+const toReceiptRow = (row: DatabaseUpgradeRun.ReceiptRow) => ({
+  receiptId: row.receipt_id,
+  migrationId: row.migration_id,
+  contentHash: row.content_hash,
+  ordinal: row.ordinal,
+  runId: row.run_id,
+  result: row.result,
+  startedAt: row.started_at,
+  completedAt: row.completed_at,
+})
+
 export const maintenanceHandlers = HttpApiBuilder.group(MaintenanceApi, "maintenance", (handlers) =>
   Effect.gen(function* () {
     const database = yield* Database.Service
-    const registry = yield* MaintenanceRegistryService
+    const registry: MaintenanceRegistry = yield* MaintenanceRegistryService
 
     const readState = (): BootstrapState | undefined => database.mode
 
@@ -66,7 +87,10 @@ export const maintenanceHandlers = HttpApiBuilder.group(MaintenanceApi, "mainten
       const state = readState()
       if (!state) {
         const filename = Database.path()
-        const boot = yield* Effect.tryPromise(() => Database.bootstrap(filename))
+        const boot = yield* Effect.tryPromise({
+          try: () => Database.bootstrap(filename),
+          catch: () => makeApiError("internal_error", { resource: "database" }),
+        })
         const error = mapBootstrapStateToError(boot, "database")
         if (error) return yield* Effect.fail(error)
         return boot
@@ -78,25 +102,23 @@ export const maintenanceHandlers = HttpApiBuilder.group(MaintenanceApi, "mainten
 
     const listBackups = Effect.fn("MaintenanceHttpApi.backupList")(function* (ctx: { query: { dir?: string } }) {
       const dir = ctx.query.dir ?? path.join(path.dirname(Database.path()), "backups")
-      const entries = yield* Effect.tryPromise(() => fs.readdir(dir)).pipe(Effect.orElseSucceed(() => []))
+      const entries = yield* Effect.tryPromise(() => fs.readdir(dir)).pipe(Effect.orElseSucceed(() => [] as string[]))
       const backups = yield* Effect.forEach(
         entries
           .filter((entry) => entry.endsWith(".manifest.json"))
           .map((entry) => path.join(dir, entry)),
         (manifestPath) =>
-          Backup.readManifest(manifestPath).pipe(
-            Effect.catchAllCause(() => Effect.succeed(undefined)),
-            Effect.map((manifest): { fileName: string; filePath: string; sizeBytes: number; sha256: string; createdAt: number } | undefined =>
-              manifest
-                ? {
-                    fileName: manifest.backup.fileName,
-                    filePath: manifest.backup.filePath,
-                    sizeBytes: manifest.backup.sizeBytes,
-                    sha256: manifest.backup.sha256,
-                    createdAt: manifest.backup.createdAt,
-                  }
-                : undefined,
-            ),
+          readManifestOrMissing(manifestPath).pipe(
+            Effect.match({
+              onFailure: () => undefined,
+              onSuccess: (manifest) => ({
+                fileName: manifest.backup.fileName,
+                filePath: manifest.backup.filePath,
+                sizeBytes: manifest.backup.sizeBytes,
+                sha256: manifest.backup.sha256,
+                createdAt: manifest.backup.createdAt,
+              }),
+            }),
           ),
         { concurrency: "unbounded" },
       )
@@ -108,9 +130,7 @@ export const maintenanceHandlers = HttpApiBuilder.group(MaintenanceApi, "mainten
       query: { manifest_path: string }
     }) {
       const { manifest_path: manifestPath } = ctx.query
-      const manifest = yield* Backup.readManifest(manifestPath).pipe(
-        Effect.mapError(() => makeApiError("backup_manifest_missing", { resource: manifestPath })),
-      )
+      const manifest = yield* readManifestOrMissing(manifestPath)
       return yield* BackupVerify.verify(manifest)
     })
 
@@ -162,7 +182,7 @@ export const maintenanceHandlers = HttpApiBuilder.group(MaintenanceApi, "mainten
       const receipts = active
         ? yield* DatabaseUpgradeRun.loadReceiptsForRun(database.db, active.runId)
         : []
-      return { active: active !== undefined, run: active ?? undefined, receipts, count: receipts.length }
+      return { active: active !== undefined, run: active ?? undefined, receipts: receipts.map(toReceiptRow), count: receipts.length }
     })
 
     const recoveryList = Effect.fn("MaintenanceHttpApi.recoveryList")(function* (ctx: {
