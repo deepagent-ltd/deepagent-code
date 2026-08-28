@@ -256,10 +256,12 @@ describe("SessionRunner identity binding (C2-04/B2 residual)", () => {
   it.effect("binds the protocol attempt identity on the live-runner prepared attempt", () =>
     Effect.gen(function* () {
       // Explicit config action: refresh (derive + cache) the capability evidence. The business turn
-      // must consume this cached evidence and never run the probe.
+      // must consume this cached evidence and never run the probe. The probe-counter is module-global,
+      // so assert the DELTA rather than an absolute count (other files may have probed).
+      const probeBefore = ModelProtocol.probeHookCalls()
       const evidence = ModelProtocol.refreshConfigEvidence(openAIInfo, openAIProvider)
       expect(ModelProtocol.configEvidenceForTurn(openAIInfo, openAIProvider)).toEqual(evidence)
-      expect(ModelProtocol.probeHookCalls()).toBe(1)
+      expect(ModelProtocol.probeHookCalls()).toBe(probeBefore + 1)
 
       yield* seedSession
       const session = yield* SessionV2.Service

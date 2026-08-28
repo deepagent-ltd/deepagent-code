@@ -11,6 +11,7 @@ import {
 } from "@deepagent-code/llm"
 import { AgentGateway } from "../src/agent-gateway"
 import * as OpenAIChat from "@deepagent-code/llm/protocols/openai-chat"
+import * as OpenAIResponses from "@deepagent-code/llm/protocols/openai-responses"
 import { Database } from "@deepagent-code/core/database/database"
 import { EventV2 } from "@deepagent-code/core/event"
 import { Hash } from "@deepagent-code/core/util/hash"
@@ -127,6 +128,13 @@ const recoveryModel = Model.make({
   id: "recovery",
   provider: "fake",
   route: OpenAIChat.route.with({ limits: { context: 20_000, output: 1_000 } }),
+})
+// design §5.3 (C2-05): remote compact is a Responses-only feature, so the remote-compaction tests
+// drive a Responses-route recovery model (the fake transport returns the same events regardless).
+const responsesRecoveryModel = Model.make({
+  id: "responses-recovery",
+  provider: "fake",
+  route: OpenAIResponses.route.with({ limits: { context: 20_000, output: 1_000 } }),
 })
 const authorizations: Tool.Context[] = []
 const executions: string[] = []
@@ -298,13 +306,13 @@ const historyEpochLookupLayer = Layer.succeedContext(
   ),
 )
 // §16.3 order 5 F3 — remote compaction seam. remoteCompactionMode: undefined = unwired (local
-// dispatch), "summary" = remote authority produces the summary, "fault" = remote faults (degrade to
-// the V2-native local dispatch).
+// dispatch), "summary" = remote authority produces the summary, "fault" = remote faults (design §5.3:
+// enters compact recovery — the remote result is unknown and is NEVER disguised as a local success).
 let remoteCompactionMode: "summary" | "fault" | undefined
 const remoteCompactionLayer = Layer.succeedContext(
   Context.make(SessionCompaction.CurrentRemoteCompaction, (_input) =>
     remoteCompactionMode === "summary"
-      ? Effect.succeed({ summary: "## Remote\n- remote summary" })
+      ? Effect.succeed({ kind: "compacted", summary: "## Remote\n- remote summary" })
       : Effect.fail(new Error("remote compaction unavailable")),
   ),
 )
@@ -2031,6 +2039,7 @@ describe("SessionRunnerLLM", () => {
     Effect.gen(function* () {
       const session = yield* setupOverflowRecovery
       remoteCompactionMode = "summary"
+      currentModel = responsesRecoveryModel
       yield* Effect.addFinalizer(() =>
         Effect.sync(() => {
           remoteCompactionMode = undefined
@@ -2056,10 +2065,11 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
-  it.effect("degrades to the local summary dispatch when the remote compaction faults", () =>
+  it.effect("does not disguise a remote compact fault as a local success (design §5.3, C2-05)", () =>
     Effect.gen(function* () {
       const session = yield* setupOverflowRecovery
       remoteCompactionMode = "fault"
+      currentModel = responsesRecoveryModel
       yield* Effect.addFinalizer(() =>
         Effect.sync(() => {
           remoteCompactionMode = undefined
@@ -2070,18 +2080,49 @@ describe("SessionRunnerLLM", () => {
           LLMEvent.stepStart({ index: 0 }),
           LLMEvent.providerError({ message: "prompt too long", classification: "context-overflow" }),
         ],
-        // Three requests: the remote fault degrades to the LOCAL summary dispatch, then the retry.
+        // The remote compact FAULTED and its result is unknown. Design §5.3: the turn must NOT invent
+        // a local summary success — there is no /responses compact dispatch and no Compaction.Ended.
+        // The original history stays readable; only the errant first request went out.
+        fragmentFixture("text", "text-final", ["Recovered local"]).completeEvents,
+      ]
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Continue" }), resume: false })
+      yield* session.resume(sessionID)
+
+      // Exactly one physical request: the remote compact never dispatched a fake local summary.
+      expect(requests).toHaveLength(1)
+      // No compaction marker was fabricated (history stays readable, no disguised success).
+      const context = yield* (yield* SessionStore.Service).context(sessionID)
+      expect(context.some((message) => message.type === "compaction")).toBe(false)
+    }),
+  )
+
+  it.effect("never routes a non-Responses route to a /responses compact (Responses-only gate, C2-05)", () =>
+    Effect.gen(function* () {
+      const session = yield* setupOverflowRecovery
+      // Wire the remote seam but keep the CHAT recovery model: the gate must reject the remote attempt
+      // and fall through to the legitimate LOCAL summary — never a `/responses` request.
+      remoteCompactionMode = "summary"
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          remoteCompactionMode = undefined
+        }),
+      )
+      responses = [
+        [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.providerError({ message: "prompt too long", classification: "context-overflow" }),
+        ],
         fragmentFixture("text", "text-summary", ["## Goal\n- Local fallback"]).completeEvents,
         fragmentFixture("text", "text-final", ["Recovered local"]).completeEvents,
       ]
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Continue" }), resume: false })
       yield* session.resume(sessionID)
 
-      expect(requests).toHaveLength(3)
-      expect((yield* (yield* SessionStore.Service).context(sessionID))[0]).toMatchObject({
-        type: "compaction",
-        summary: "## Goal\n- Local fallback",
-      })
+      // Zero requests carried a /responses route: the chat model was never routed to a remote compact.
+      expect(requests.every((request) => request.model.route.id !== "openai-responses")).toBe(true)
+      // The local summary ran (legitimate local compaction, not a disguised remote success).
+      const context = yield* (yield* SessionStore.Service).context(sessionID)
+      expect(context.some((message) => message.type === "compaction")).toBe(true)
     }),
   )
 
