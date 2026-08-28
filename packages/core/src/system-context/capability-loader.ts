@@ -69,6 +69,50 @@ export class CapabilityBodyHashMismatchError extends Error {
   }
 }
 
+/** Typed violation: the L2 single-body budget is exceeded (a body is never loaded over-budget). */
+export class CapabilityL2BudgetExceededError extends Error {
+  readonly _tag = "capability_l2_budget_exceeded"
+  override readonly name = "CapabilityL2BudgetExceededError"
+  readonly level: CapabilityLevel
+  readonly limitTokens: number
+  readonly requestedTokens: number
+
+  constructor(input: { readonly level: CapabilityLevel; readonly limitTokens: number; readonly requestedTokens: number }) {
+    super(`Capability L2 budget exceeded: requested ${input.requestedTokens} tokens, limit ${input.limitTokens}`)
+    this.level = input.level
+    this.limitTokens = input.limitTokens
+    this.requestedTokens = input.requestedTokens
+  }
+}
+
+/** Typed violation: the per-turn content budget is exceeded (2 bodies / 2400 new tokens). */
+export class CapabilityTurnBudgetExceededError extends Error {
+  readonly _tag = "capability_turn_budget_exceeded"
+  override readonly name = "CapabilityTurnBudgetExceededError"
+  readonly level: CapabilityLevel
+  readonly newLoads: number
+  readonly limitNew: number
+  readonly newTokens: number
+  readonly limitTokens: number
+
+  constructor(input: {
+    readonly level: CapabilityLevel
+    readonly newLoads: number
+    readonly limitNew: number
+    readonly newTokens: number
+    readonly limitTokens: number
+  }) {
+    super(
+      `Capability turn budget exceeded: new loads ${input.newLoads}/${input.limitNew}, new tokens ${input.newTokens}/${input.limitTokens}`,
+    )
+    this.level = input.level
+    this.newLoads = input.newLoads
+    this.limitNew = input.limitNew
+    this.newTokens = input.newTokens
+    this.limitTokens = input.limitTokens
+  }
+}
+
 /** A durable load receipt recorded against an identity (design §7.5). */
 export interface CapabilityLoadReceipt {
   readonly identity: string
@@ -118,9 +162,10 @@ export interface CapabilityLoadGrounds {
 // --- deterministic in-module receipt store (C1A boundary: DB persistence is later) ---
 const receiptStore = new Map<string, CapabilityLoadReceipt>()
 
-/** Clear the in-module receipt store (test isolation / fresh environment). */
+/** Clear the in-module receipt store + per-turn budget (test isolation / fresh environment). */
 export function resetCapabilityLoader(): void {
   receiptStore.clear()
+  turnBudgets.clear()
 }
 
 /** Snapshot of the currently-recorded receipts (test/observability only). */
@@ -192,4 +237,140 @@ export function loadCapabilityBody(
   }
   receiptStore.set(identity, receipt)
   return { state: "available", body, tokenCount, byteCount, receipt }
+}
+
+// --- per-turn budget accounting (design §7.3 / §13; C4-05) ---------------------
+const L2_SINGLE_MAX_TOKENS = CapabilityBudget.l2SingleMaxTokens
+const L2_TURN_MAX_NEW = CapabilityBudget.l2PerTurnMaxNew
+const L2_TURN_MAX_NEW_TOKENS = CapabilityBudget.l2PerTurnMaxNewTokens
+
+/** Mutable per-turn budget state (module-level; reset by `resetCapabilityLoader`). */
+const turnBudgets = new Map<string, { newLoads: number; newTokens: number; charged: Set<string> }>()
+
+/** Snapshot of the per-turn budget state for a (session, turn) identity. */
+export function turnBudgetView(sessionIdentity: string, turnIdentity: string): { newLoads: number; newTokens: number } {
+  const state = turnBudgets.get(`${sessionIdentity}::${turnIdentity}`)
+  if (!state) return { newLoads: 0, newTokens: 0 }
+  return { newLoads: state.newLoads, newTokens: state.newTokens }
+}
+
+/**
+ * Record a body load against a session+turn budget (design §7.5 idempotent
+ * accounting). The exact same load identity within the same turn is a no-op — a
+ * retry never double-charges. A load that would exceed either the per-turn new
+ * body count or the per-turn new token ceiling throws the typed
+ * `capability_turn_budget_exceeded` (the caller must not proceed).
+ */
+export function recordCapabilityTurnLoad(
+  sessionIdentity: string,
+  turnIdentity: string,
+  loadIdentity: string,
+  tokenCount: number,
+): void {
+  const key = `${sessionIdentity}::${turnIdentity}`
+  let state = turnBudgets.get(key)
+  if (!state) {
+    state = { newLoads: 0, newTokens: 0, charged: new Set<string>() }
+    turnBudgets.set(key, state)
+  }
+  if (state.charged.has(loadIdentity)) return
+  const nextNewLoads = state.newLoads + 1
+  const nextNewTokens = state.newTokens + tokenCount
+  if (nextNewLoads > L2_TURN_MAX_NEW || nextNewTokens > L2_TURN_MAX_NEW_TOKENS) {
+    throw new CapabilityTurnBudgetExceededError({
+      level: "L2",
+      newLoads: nextNewLoads,
+      limitNew: L2_TURN_MAX_NEW,
+      newTokens: nextNewTokens,
+      limitTokens: L2_TURN_MAX_NEW_TOKENS,
+    })
+  }
+  state.newLoads = nextNewLoads
+  state.newTokens = nextNewTokens
+  state.charged.add(loadIdentity)
+}
+
+/**
+ * The L2 single-body + per-turn gate (C4-05, the DISABLED `capability_load` entry).
+ * Enforces the frozen L2 budget over a real character-based estimate, then charges
+ * the per-turn counter idempotently. An over-budget L2 body or an over-limit turn
+ * throws a typed error and never returns a loadable body.
+ */
+export function capabilityLoad(args: {
+  readonly capabilityId: string
+  readonly version: string
+  readonly bodyHash: string
+  readonly runtimeHash: string
+  readonly permissionHash: string
+  readonly bodyRef: string
+  readonly sessionIdentity: string
+  readonly turnIdentity: string
+  readonly body: string | undefined
+  readonly declaredDigest: string | undefined
+  readonly supersedingRef?: string
+  readonly deniedReason?: CapabilityLoadDeniedReason
+}): CapabilityLoadResult {
+  const identity = capabilityLoaderIdentity(
+    args.capabilityId,
+    args.version,
+    args.bodyHash,
+    args.runtimeHash,
+    args.permissionHash,
+  )
+
+  // Fail-closed on the L2 single-body ceiling before touching the turn budget.
+  const tokenCount = args.body === undefined ? 0 : Token.estimate(args.body)
+  if (tokenCount > L2_SINGLE_MAX_TOKENS) {
+    throw new CapabilityL2BudgetExceededError({
+      level: "L2",
+      limitTokens: L2_SINGLE_MAX_TOKENS,
+      requestedTokens: tokenCount,
+    })
+  }
+
+  // Pre-admission turn-budget check (idempotent): a retry of an already-charged
+  // load identity is allowed without charging again, but a NEW load that would
+  // exceed the per-turn ceiling is rejected BEFORE the kernel records a receipt,
+  // so a rejected load never leaves a spurious `existing` receipt behind.
+  const key = `${args.sessionIdentity}::${args.turnIdentity}`
+  const current = turnBudgets.get(key) ?? { newLoads: 0, newTokens: 0, charged: new Set<string>() }
+  if (!current.charged.has(identity)) {
+    const nextNewLoads = current.newLoads + 1
+    const nextNewTokens = current.newTokens + tokenCount
+    if (nextNewLoads > L2_TURN_MAX_NEW || nextNewTokens > L2_TURN_MAX_NEW_TOKENS) {
+      throw new CapabilityTurnBudgetExceededError({
+        level: "L2",
+        newLoads: nextNewLoads,
+        limitNew: L2_TURN_MAX_NEW,
+        newTokens: nextNewTokens,
+        limitTokens: L2_TURN_MAX_NEW_TOKENS,
+      })
+    }
+  }
+
+  const result = loadCapabilityBody(identity, { body: args.body, declaredDigest: args.declaredDigest }, {
+    bodyRef: args.bodyRef,
+    capabilityId: args.capabilityId,
+    version: args.version,
+    runtimeHash: args.runtimeHash,
+    permissionHash: args.permissionHash,
+    supersedingRef: args.supersedingRef,
+    deniedReason: args.deniedReason,
+  })
+
+  if (result.state === "budget_exceeded") {
+    throw new CapabilityL2BudgetExceededError({
+      level: result.level,
+      limitTokens: result.limitTokens,
+      requestedTokens: result.requestedTokens,
+    })
+  }
+
+  // Charge only an actually-loaded body; an exact retry (`existing`) is idempotent
+  // (the same turn + same load identity is already charged, so it is a no-op).
+  if (result.state === "available") {
+    recordCapabilityTurnLoad(args.sessionIdentity, args.turnIdentity, identity, tokenCount)
+  }
+
+  return result
 }
