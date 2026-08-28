@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:lic:gpl-linked-into-proprietary-binary",
+  "type": "failure_dossier",
+  "description": "GPL/AGPL code is statically linked into a closed-source distributed binary, triggering source-disclosure obligations that were never met.",
+  "body": "Failure mode: a GPL or AGPL component is statically linked into a proprietary binary or a hosted service, so conveying the binary or serving the network triggers a whole-work source-disclosure obligation that the project never satisfied. Detection signals: a strong/network-copyleft identifier appears in an artifact distributed under closed terms; the component is statically linked or invoked in the same process; no source offer exists. Do not link strong-copyleft code into closed distribution and assume 'internal use' covers a hosted service (AGPL counts network use as distribution). Safer fallback: replace the dependency, isolate it behind a process or service boundary that is mere aggregation, or comply by disclosing source, and route the decision to counsel.",
+  "domain": "license",
+  "scope_hint": "risk.license:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.license:human_authored",
+  "pack_id": "risk.license"
+}

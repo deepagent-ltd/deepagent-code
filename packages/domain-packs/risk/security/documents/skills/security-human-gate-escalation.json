@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:risk.security:security-human-gate-escalation",
+  "type": "skill",
+  "title": "Security Human Gate Escalation",
+  "description": "Prepare a concise escalation when automation cannot prove a security-sensitive change is conservative.",
+  "body": "Inputs: proposed change, risk evidence, blocked tests, and safer alternatives. Use for permission expansion, data exposure, production security posture changes, secret incidents, or unresolved policy ambiguity. Do not continue by silently weakening controls. Procedure: state what would change, why it is risky, what evidence is missing, what safer option exists, and what explicit approval is needed. Output: approval request or blocked finding with file and command evidence. Validation signal: a human decision is recorded before proceeding. Use when Security Risk Controls work touches trust boundaries, authorization decisions, dangerous sinks, secrets, and dependency execution. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: run the documented inspection and validation workflow; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include negative security tests, server-side checks, sink payload tests, and secret scans. Risk boundary: escalate or stop when the task involves client-only controls, injection, credential leakage, permissive fallback, and unsafe dependency changes, missing owner evidence, or live external state.",
+  "domain": "security",
+  "scope_hint": "risk.security:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.security",
+  "pack_id": "risk.security"
+}

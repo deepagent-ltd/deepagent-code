@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:healthcare:phi-leaks-through-incidental-channels",
+  "type": "knowledge",
+  "title": "PHI leaks through logs, URLs, and error messages",
+  "description": "Patient data commonly escapes not through the database but through debug logs, URL query strings, stack traces, analytics, and third-party scripts.",
+  "body": "Use when reviewing where PHI might unintentionally surface. Even with a secured datastore, PHI leaks via request logs, identifiers in URLs (which land in browser history and proxy logs), verbose error/stack traces, third-party analytics or telemetry, and screenshots. Do not assume securing the database secures the data. Actions: keep PHI out of URLs and logs, redact it from errors and telemetry, and audit third-party scripts on PHI-bearing pages. Validation signals include log/trace scans showing no PHI and a check that identifiers are not passed in URLs. Risk boundary: advisory only; a confirmed PHI leak into logs or a third party is a reportable disclosure to escalate to a human, not a quiet log scrub.",
+  "domain": "healthcare",
+  "scope_hint": "business.healthcare:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:business.healthcare",
+  "pack_id": "business.healthcare"
+}

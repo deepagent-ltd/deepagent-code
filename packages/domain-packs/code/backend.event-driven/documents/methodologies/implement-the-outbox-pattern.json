@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:evt:implement-the-outbox-pattern",
+  "type": "methodology",
+  "title": "Implement the transactional outbox",
+  "description": "Add an outbox table, write events within the business transaction, and relay them to the broker at-least-once.",
+  "body": "Steps: 1. Create an outbox table (id, aggregate, type, payload, created_at, published_at). 2. In each command's transaction, insert the outbox row alongside the state change. 3. Build a relay (polling worker or CDC like Debezium) that reads unpublished rows in order, publishes to the broker, and marks published. 4. Make the relay idempotent so a crash between publish and mark re-publishes safely (consumers dedup). 5. Add cleanup/retention for published rows. Rollback point: disable the relay; events queue safely in the table. Validation: a committed write yields one published event, a rolled-back write yields none, confirmed by tests.",
+  "domain": "event_driven",
+  "scope_hint": "code.backend.event-driven:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.event-driven",
+  "pack_id": "code.backend.event-driven"
+}

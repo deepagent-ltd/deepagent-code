@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:hdl:separate-comb-from-seq",
+  "type": "strategy",
+  "title": "Separate combinational from sequential logic",
+  "description": "Model sequential state in always_ff with non-blocking assignments and combinational logic in always_comb with blocking, never mixing the two.",
+  "body": "Use when writing or reviewing any RTL block. Do not mix blocking (=) and non-blocking (<=) in the same clocked process, and do not compute next-state logic inside a flip-flop block. Actions: put register updates in always_ff with <=, put next-state/output logic in always_comb with =, and inspect each block to confirm exactly one driver per signal. Validation signals include a lint pass with no blocking-in-sequential warnings and matching RTL vs gate-level simulation. Risk boundary: a blocking assignment in sequential logic creates a simulation race that can diverge in silicon; treat it as a blocking defect, not a style nit.",
+  "domain": "hdl",
+  "scope_hint": "hardware.hdl:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.hdl",
+  "pack_id": "hardware.hdl"
+}

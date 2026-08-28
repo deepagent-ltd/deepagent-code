@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:fpgatf:unsynchronized-cdc",
+  "type": "failure_dossier",
+  "description": "A design works intermittently because an asynchronous clock-domain crossing lacks a synchronizer and goes metastable.",
+  "body": "Failure mode: a signal crosses between unrelated clock domains through a single flip-flop, so it occasionally samples a transitioning value and propagates a metastable state. Detection signals: rare nondeterministic glitches, failures that change with temperature or voltage, and a CDC report flagging an unsynchronized crossing. Do not dismiss intermittent faults as noise while a bare crossing exists. Safer fallback: insert a multi-flop synchronizer or handshake on the crossing, apply asynchronous constraints, and re-run CDC analysis.",
+  "domain": "fpga_toolflow",
+  "scope_hint": "hardware.fpga-toolflow:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.fpga-toolflow:human_authored",
+  "pack_id": "hardware.fpga-toolflow"
+}

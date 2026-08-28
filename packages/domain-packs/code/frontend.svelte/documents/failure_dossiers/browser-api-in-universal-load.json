@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:svelte:browser-api-in-universal-load",
+  "type": "failure_dossier",
+  "description": "A universal load calls a browser-only API, crashing during server-side rendering.",
+  "body": "Failure mode: a +page.js universal load references window, document, or localStorage, which are undefined on the server, so SSR throws and the route fails to render. Detection signals: an SSR error referencing an undefined browser global; the route works in the SPA but errors on full reload; browser objects appear in a universal (non-.server) load. Do not access browser APIs in code that runs during SSR. Safer fallback: move browser-only work to onMount or a client-guarded branch, keep universal loads to serializable data fetched via the injected fetch, and use +page.server.js for anything server-bound.",
+  "domain": "svelte",
+  "scope_hint": "code.frontend.svelte:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.svelte:human_authored",
+  "pack_id": "code.frontend.svelte"
+}

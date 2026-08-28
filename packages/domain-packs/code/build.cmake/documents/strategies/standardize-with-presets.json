@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:cmake:standardize-with-presets",
+  "type": "strategy",
+  "title": "Standardize configurations with CMakePresets",
+  "description": "Capture common configure and build settings in CMakePresets.json so contributors and CI use identical, reproducible invocations.",
+  "body": "Use when the project needs consistent builds across people and CI, or when configure commands have grown long and error-prone. Do not rely on each contributor remembering a string of -D flags. Actions: define configurePresets and buildPresets with the cache variables, generator, and toolchain; invoke with cmake --preset; reference the same presets from CI. Validation signals include cmake --preset reproducing the intended build on a fresh checkout. Risk boundary: undocumented ad hoc flags drift between environments, so move them into versioned presets rather than personal scripts.",
+  "domain": "cmake",
+  "scope_hint": "code.build.cmake:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.build.cmake",
+  "pack_id": "code.build.cmake"
+}

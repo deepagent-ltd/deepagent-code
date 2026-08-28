@@ -1,0 +1,78 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.javascript",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "code",
+      "javascript",
+      "node",
+      "browser",
+      "runtime",
+      "tooling"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [
+      "java",
+      "javascript"
+    ],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.javascript: Node/browser runtime, ESM/CJS, package scripts, lockfiles, bundlers, async behavior, and test runners"
+    ],
+    "round_signals": [
+      "l3_validation_smoke"
+    ],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "round_signals": [],
+    "user_overrides": [],
+    "repo_signals": [
+      "write a CUDA kernel and tune shared memory bank conflicts"
+    ]
+  },
+  "retrieval_query": "JavaScript ESM CJS module package scripts node browser runtime async errors bundling",
+  "expected_pack_id": "code.javascript",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "JavaScript runtime and package behavior L3 validation smoke",
+    "signals": [
+      "package-manager command output",
+      "runtime smoke",
+      "import/require checks",
+      "bundler output",
+      "and unhandled rejection tests"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "JavaScript runtime and package behavior diagnosis smoke",
+    "signals": [
+      "separate module format",
+      "conditional exports",
+      "script runner",
+      "browser/Node divergence",
+      "and package-manager lockfile causes"
+    ]
+  },
+  "source_refs": [
+    "source:typescript-handbook:paraphrased",
+    "source:nodejs-docs:paraphrased"
+  ]
+}

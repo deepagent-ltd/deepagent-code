@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:hdl:review-fsm-safety",
+  "type": "methodology",
+  "title": "Review FSM encoding and safety",
+  "description": "Check a state machine for a defined reset state, no unreachable/illegal states, and safe handling of undefined inputs.",
+  "body": "Steps: 1. Extract the state set and transition table. 2. Confirm a defined reset/initial state and that every state is reachable. 3. Add a default/others branch routing illegal states back to a safe state. 4. Choose encoding (binary vs one-hot) per timing/area needs and recovery requirements. 5. Add assertions that the FSM never enters an undefined state. Rollback point: before re-encoding states. Validation: simulation/assertions show no illegal-state entry and recovery from injected upsets; a one-hot FSM with no illegal-state recovery is unsafe in noisy environments.",
+  "domain": "hdl",
+  "scope_hint": "hardware.hdl:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.hdl",
+  "pack_id": "hardware.hdl"
+}

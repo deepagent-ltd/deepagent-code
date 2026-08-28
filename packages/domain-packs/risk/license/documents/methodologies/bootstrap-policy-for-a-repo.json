@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:lic:bootstrap-policy-for-a-repo",
+  "type": "methodology",
+  "title": "Bootstrap a license policy for a repository",
+  "description": "Define an allowlist/denylist of licenses and wire it into CI so new dependencies are gated.",
+  "body": "Steps: 1. Decide the distribution model (proprietary binary, SaaS, OSS library) since it sets which classes are acceptable. 2. Write an allowlist (typically permissive + weak-copyleft for proprietary) and a denylist (strong/network copyleft, source-available). 3. Encode it in a tool config (cargo-deny, license-checker policy, FOSSA). 4. Wire the check into CI so a denied or unknown license fails the build. 5. Document an exception path that requires human sign-off. Rollback point: before enabling the CI gate. Validation: adding a known-denied dependency fails CI; adding an allowlisted one passes.",
+  "domain": "license",
+  "scope_hint": "risk.license:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.license",
+  "pack_id": "risk.license"
+}

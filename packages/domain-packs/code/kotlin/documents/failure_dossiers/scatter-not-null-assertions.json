@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:kotlin:scatter-not-null-assertions",
+  "type": "failure_dossier",
+  "description": "Scattering !! assertions",
+  "body": "Using !! at every compiler error can turn compile-time nullability evidence into runtime crashes. Treat as do-not-use unless an invariant is proven at the boundary and covered by tests. Safer path: fix owner type, validate input, or narrow locally.\n\nUse only as a diagnostic do-not-use signal; do not expose this as positive strategy, methodology, knowledge, skill, or memory.",
+  "domain": "kotlin",
+  "scope_hint": "code.kotlin:failure_dossiers",
+  "evidence_strength": "medium",
+  "provenance_tag": "code.kotlin:failure_seed:paraphrased_common_failures",
+  "pack_id": "code.kotlin"
+}

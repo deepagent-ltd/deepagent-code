@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:shell:diagnostic-first",
+  "type": "strategy",
+  "description": "In shell, read the first line from bash -x trace or shellcheck's SC code before making speculative edits.",
+  "body": "In shell, the toolchain already points at the real problem, so the first line from bash -x trace or shellcheck's SC code should guide the edit rather than a guess. Use when bash -n / sh -n syntax checks before execution or shellcheck warnings (especially SC2086 word-splitting and SC2046) reports an error or warning. Do not start editing before reading the diagnostic, and avoid changing code you have not confirmed is implicated. Actions: read the first actionable diagnostic and the owned frame, inspect that location, make the smallest fix, then rerun bats tests or a guarded dry-run with set -euo pipefail. Validation signals include the resolved diagnostic, a passing focused test, and no new warnings from shellcheck warnings (especially SC2086 word-splitting and SC2046). Risk boundary: if the diagnostic exposes a deeper design fault, escalate rather than papering over it.",
+  "domain": "shell",
+  "scope_hint": "code.shell:strategies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.shell:skill_survey",
+  "pack_id": "code.shell"
+}

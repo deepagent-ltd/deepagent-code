@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:kernel:sleep-while-holding-spinlock",
+  "type": "failure_dossier",
+  "description": "Calling a sleeping function (mutex, GFP_KERNEL allocation, copy_from_user) while holding a spinlock or in interrupt context, deadlocking the CPU.",
+  "body": "Failure mode: code holds a spinlock (which disables preemption) and then calls something that can sleep — a mutex, a GFP_KERNEL allocation, or copy_from_user — so the CPU tries to schedule with no safe point and deadlocks or panics. Detection signals: lockdep/might_sleep emits 'scheduling while atomic' or 'sleeping function called from invalid context'; hard lockups under load; works until the allocation actually blocks. Do not sleep while atomic. Safer fallback: shrink the critical section, switch to a mutex if the path may sleep, use GFP_ATOMIC for allocations under a spinlock, and confirm a clean lockdep run under stress.",
+  "domain": "kernel",
+  "scope_hint": "code.os-kernel:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.os-kernel:human_authored",
+  "pack_id": "code.os-kernel"
+}

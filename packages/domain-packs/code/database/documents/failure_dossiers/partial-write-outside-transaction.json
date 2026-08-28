@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:database:partial-write-outside-transaction",
+  "type": "failure_dossier",
+  "description": "Dependent writes outside a transaction can leave inconsistent state.",
+  "body": "Use one transaction for atomic state changes.\n\nUse only as a diagnostic do-not-use signal; do not expose this as positive strategy, methodology, or memory. Use when a proposed approach skips schema deltas, query shape, transaction ownership, constraints, locks, and data volume or claims success without domain evidence. Do not use this dossier as a positive implementation strategy; it is a do-not-use signal. Actions: block the shortcut, name the missing evidence, and switch to a safer methodology or ask for human approval. Validation signals include absence or contradiction in migration dry-runs, rollback checks, EXPLAIN output, constraint tests, and fixture data comparisons. Risk boundary: treat repeated recurrence as a blocker when it can cause data loss, long locks, non-rollbackable writes, silent query-plan regressions, and unsafe backfills.",
+  "domain": "sql",
+  "scope_hint": "code.database:failure_dossiers",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.database",
+  "pack_id": "code.database"
+}

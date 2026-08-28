@@ -1,0 +1,70 @@
+#!/usr/bin/env bun
+
+import { Script } from "@deepagent-code/script"
+import path from "path"
+import { fileURLToPath } from "url"
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
+const dir = path.resolve(__dirname, "..")
+
+process.chdir(dir)
+
+const generated = await import("./generate.ts")
+
+const result = await Bun.build({
+  target: "node",
+  entrypoints: ["./src/node.ts"],
+  outdir: "./dist/node",
+  format: "esm",
+  sourcemap: "linked",
+  external: ["@lydell/node-pty", "jsonc-parser"],
+  define: {
+    DEEPAGENT_CODE_MODELS_DEV: generated.modelsData,
+    DEEPAGENT_CODE_CHANNEL: `'${Script.channel}'`,
+  },
+  files: {
+    "deepagent-code-web-ui.gen.ts": "",
+  },
+})
+if (!result.success) throw new AggregateError(result.logs, "Failed to build the Node server")
+await Bun.file("./dist/node/models-dev.build.json").write(
+  JSON.stringify(
+    {
+      source: generated.modelsSource,
+      sha256: generated.modelsSha256,
+    },
+    null,
+    2,
+  ),
+)
+
+// Bun preserves CommonJS __dirname/__filename values for bundled dependencies. Those values point
+// at the build machine and are unusable after installation, so make the bundle reproducible and
+// keep local usernames/workspace paths out of release artifacts.
+const buildRoot = path.resolve(dir, "../..")
+const bundle = Bun.file("./dist/node/node.js")
+const source = await bundle.text()
+// The plugin context exposes Bun.$ only behind a `typeof Bun` guard. Every other direct Bun API
+// in this Node-targeted bundle is an unreviewed runtime dependency and must fail the desktop build.
+const unsupportedBunAPIs = [...new Set(source.match(/\bBun\.[A-Za-z_$][A-Za-z0-9_$]*/g) ?? [])].filter(
+  (api) => api !== "Bun.$",
+)
+if (unsupportedBunAPIs.length > 0) {
+  throw new Error(`Node server bundle contains Bun-only runtime APIs: ${unsupportedBunAPIs.join(", ")}`)
+}
+if (!source.includes('from "@lydell/node-pty"')) {
+  throw new Error("Node server bundle does not import the node-pty platform selector")
+}
+if (!source.includes('from "jsonc-parser"')) {
+  throw new Error("Node server bundle does not import the external jsonc-parser runtime dependency")
+}
+await Bun.write(
+  bundle,
+  source
+    .replaceAll(buildRoot, "/__deepagent_build__")
+    .replaceAll(buildRoot.replaceAll("\\", "/"), "/__deepagent_build__")
+    .replaceAll(buildRoot.replaceAll("\\", "\\\\"), "/__deepagent_build__"),
+)
+
+console.log("Build complete")

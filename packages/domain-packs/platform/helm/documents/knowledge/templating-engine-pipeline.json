@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:helm:templating-engine-pipeline",
+  "type": "knowledge",
+  "title": "How Helm's Go-template pipeline renders a chart",
+  "description": "Explains the values context (.Values/.Release/.Chart), pipelines, the difference between template and include, and whitespace control.",
+  "body": "Use when reasoning about how a chart turns into manifests. Do not confuse template (renders, not pipeable) with include (returns a string you can pipe to nindent/indent). Actions: know that Helm builds a context (.Values from merged values, .Release, .Chart, .Capabilities), evaluates Go templates with Sprig functions, and that {{- / -}} trim whitespace while nindent fixes block indentation. Inspect with helm template --debug. Validation signals include the rendered YAML being well-formed and indentation matching the manifest structure. Risk boundary: none for rendering; the rendered output is what the cluster receives.",
+  "domain": "helm",
+  "scope_hint": "platform.helm:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.helm",
+  "pack_id": "platform.helm"
+}

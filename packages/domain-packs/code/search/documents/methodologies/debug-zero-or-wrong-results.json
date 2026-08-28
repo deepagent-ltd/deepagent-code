@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:search:debug-zero-or-wrong-results",
+  "type": "methodology",
+  "title": "Debug zero-result or wrong-result queries",
+  "description": "Use the analyze and explain APIs to localize a missing or mis-ranked result to analysis, mapping, or query structure.",
+  "body": "Steps: 1. Reproduce the failing query and check whether matching documents actually exist. 2. Run the analyze API on the field and the query string to see if their tokens align. 3. Inspect the mapping — a text field expected to be keyword (or vice versa) changes matching. 4. Use the explain API on a document to see why it did or didn't match/score. 5. Fix the root cause (analyzer, mapping, or query DSL clause). Rollback point: revert query/mapping changes that don't help. Validation: analyze shows aligned tokens and explain shows the expected match; assuming the data is missing before checking analysis wastes the investigation.",
+  "domain": "search",
+  "scope_hint": "code.search:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.search",
+  "pack_id": "code.search"
+}

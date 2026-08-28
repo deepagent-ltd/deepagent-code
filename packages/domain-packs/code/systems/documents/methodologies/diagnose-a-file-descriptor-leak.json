@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:sys:diagnose-a-file-descriptor-leak",
+  "type": "methodology",
+  "title": "Diagnose a file-descriptor or handle leak",
+  "description": "Track fd counts over time, list open fds, and bisect the code path that opens without closing.",
+  "body": "Steps: 1. Confirm the symptom: 'too many open files'/EMFILE errors or a climbing fd count. 2. Sample the process's open descriptors over time (lsof, /proc/<pid>/fd) and watch the count trend. 3. Categorize what is leaking (regular files, sockets, pipes) to localize the subsystem. 4. Trace the code paths that open that resource and find the missing close on an error/early-return branch. 5. Add deterministic cleanup and re-measure. Rollback point: diagnostic and read-only. Validation: the fd count is flat across repeated runs of the path after the fix, not merely lower.",
+  "domain": "systems",
+  "scope_hint": "code.systems:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.systems",
+  "pack_id": "code.systems"
+}

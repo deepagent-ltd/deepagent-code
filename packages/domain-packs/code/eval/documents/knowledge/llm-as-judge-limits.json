@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:eval:llm-as-judge-limits",
+  "type": "knowledge",
+  "title": "Limits of LLM-as-judge",
+  "description": "LLM judges exhibit position, verbosity, and self-preference bias and can agree with humans on easy cases but not hard ones.",
+  "body": "Use when relying on a model to score outputs. Known biases: position bias (favoring the first or second option), verbosity bias (preferring longer answers), self-preference (favoring its own family's style), and inconsistency on borderline cases. Agreement with humans is often high on clear cases and low exactly where the decision matters. Do not treat judge scores as ground truth, and avoid unrandomized A-vs-B prompts. Actions: randomize order, control length, calibrate against human labels, and reserve human review for borderline cases. Validation signals include a measured judge-human agreement and a bias probe. Risk boundary: a quality claim resting on an uncalibrated judge is unsupported; verify with humans where it counts.",
+  "domain": "eval",
+  "scope_hint": "code.eval:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.eval",
+  "pack_id": "code.eval"
+}

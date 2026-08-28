@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:cli:stream-buffering-modes",
+  "type": "knowledge",
+  "title": "Stream buffering modes",
+  "description": "Standard libraries line-buffer stdout to a TTY but fully buffer it to a pipe, which can delay or reorder output unexpectedly.",
+  "body": "Use when piped output appears late, out of order, or only at exit. Many runtimes line-buffer stdout when it is a TTY but switch to full (block) buffering when it is a pipe or file, so output can be withheld until the buffer fills or the program exits; stderr is often unbuffered. This explains why `tool | tee` may show nothing until completion. Do not assume immediate output in pipes. Actions: flush explicitly at logical boundaries or set line buffering when interactivity matters. Validation signals include timely output in a pipe after flushing. Risk boundary: interleaving unflushed stdout and stderr can reorder a log relative to the data it describes — flush at boundaries when ordering matters.",
+  "domain": "cli",
+  "scope_hint": "code.cli:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.cli",
+  "pack_id": "code.cli"
+}

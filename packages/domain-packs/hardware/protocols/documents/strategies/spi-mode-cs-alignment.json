@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:hwprot:spi-mode-cs-alignment",
+  "type": "strategy",
+  "title": "Align SPI clock mode and chip-select timing",
+  "description": "Match clock polarity and phase to the peripheral and assert chip select with the timing margins the datasheet requires.",
+  "body": "Use when SPI data reads back shifted, inverted, or unstable. Do not leave the controller at its default mode without checking the peripheral's required polarity and phase. Actions: read the datasheet for CPOL and CPHA, set the controller to match, and verify on a capture that data is sampled on the specified edge. Validation signals include a loopback or known-register read returning the expected value and chip select framing each transaction cleanly. Risk boundary: an off-by-one bit from a mode mismatch can silently corrupt configuration writes, so verify a read-back before trusting any write.",
+  "domain": "hw_protocols",
+  "scope_hint": "hardware.protocols:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.protocols",
+  "pack_id": "hardware.protocols"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:supply_chain:verify-lockfile-integrity-hashes",
+  "type": "strategy",
+  "title": "Verify lockfile integrity hashes on install",
+  "description": "Install from a committed lockfile with integrity hashes enforced so a tampered or substituted package fails the build instead of installing silently.",
+  "body": "Use when installing dependencies in CI or a reproducible build. Do not run an install that ignores or regenerates the lockfile, and avoid disabling integrity checks to make an install pass. Actions: use the frozen/locked install mode (npm ci, pnpm --frozen-lockfile, pip --require-hashes, cargo --locked), confirm the lockfile carries integrity hashes, and inspect that a hash mismatch aborts the install; record the resolved versions. Validation signals include a frozen install that fails on any hash or version drift and an unchanged lockfile after install. Risk boundary: a hash mismatch means the package content differs from what was reviewed; treat it as potential tampering, deny the install, and escalate rather than regenerating the lockfile to move past it.",
+  "domain": "security",
+  "scope_hint": "risk.supply-chain:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.supply-chain",
+  "pack_id": "risk.supply-chain"
+}

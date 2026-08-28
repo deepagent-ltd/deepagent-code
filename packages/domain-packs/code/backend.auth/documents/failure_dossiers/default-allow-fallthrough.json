@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:auth:default-allow-fallthrough",
+  "type": "failure_dossier",
+  "description": "A permission engine whose unmatched path falls through to allow, silently granting access to new or unlisted resources.",
+  "body": "Failure mode: the policy's final branch is allow (or a missing rule means access), so any resource not explicitly denied is reachable, and new resources are exposed by default. Detection signals: policy code ends in a permissive default; a newly added endpoint is accessible with no rule; tests only cover allow cases. Do not rely on listing what to deny. Safer fallback: make the fallthrough deny, add each resource explicitly to the matrix, and add a test asserting an undefined permission resolves to deny.",
+  "domain": "backend_auth",
+  "scope_hint": "code.backend.auth:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.auth:human_authored",
+  "pack_id": "code.backend.auth"
+}

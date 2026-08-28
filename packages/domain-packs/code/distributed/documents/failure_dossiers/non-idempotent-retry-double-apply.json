@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:dist:non-idempotent-retry-double-apply",
+  "type": "failure_dossier",
+  "description": "A client retry after a timeout re-applies a non-idempotent operation, doubling its effect because the first attempt actually succeeded.",
+  "body": "Failure mode: a mutating request succeeds on the server but the acknowledgement is lost, the client times out and retries, and without a dedup key the server applies the operation a second time, double-charging or double-incrementing. Detection signals: duplicate effects correlated with elevated latency or packet loss; counts higher than client request counts; no idempotency key on mutating endpoints. Do not treat a timeout as proof the operation did not happen. Safer fallback: attach a stable idempotency key to every mutation, persist applied keys, and return the original result on a duplicate so the effect occurs exactly once despite at-least-once delivery.",
+  "domain": "distributed",
+  "scope_hint": "code.distributed:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.distributed:human_authored",
+  "pack_id": "code.distributed"
+}

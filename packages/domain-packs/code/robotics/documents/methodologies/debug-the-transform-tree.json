@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:robot:debug-the-transform-tree",
+  "type": "methodology",
+  "title": "Debug a broken transform tree",
+  "description": "Diagnose a missing, disconnected, or stale tf transform before trusting any pose that depends on it.",
+  "body": "Steps: 1. Dump the tf tree and confirm it is fully connected to a single root with no orphan frames. 2. For a failing lookup, check whether the frames are connected and whether a transform exists at the requested time. 3. Distinguish causes: a static transform never published, a dynamic transform publisher stopped (stale), or a request outside the available time window (extrapolation). 4. Fix the publisher or buffer the data and look up at the correct timestamp. 5. Re-verify a known pose transforms to the expected value. Rollback point: before re-rooting or renaming frames. Validation: the tree is connected, lookups succeed at the data's timestamp, and a ground-truth pose transforms correctly; a transform from the wrong time is as dangerous as a missing one.",
+  "domain": "robotics",
+  "scope_hint": "code.robotics:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.robotics",
+  "pack_id": "code.robotics"
+}

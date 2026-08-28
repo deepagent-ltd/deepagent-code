@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:frontend_performance:analyze-bundle-composition",
+  "type": "skill",
+  "title": "Analyze bundle composition for a change",
+  "description": "Run a bundle analyzer for the changed build and report the largest modules, duplicates, and the initial-path size delta.",
+  "body": "Use when a dependency or import change may grow the shipped JavaScript. Actions: build with source-map/bundle analysis enabled, report the largest contributing modules, any duplicated dependencies, and the initial-route transfer-size delta versus baseline. Do not estimate bundle impact from package size alone; tree-shaking and dedup change the real cost. This skill exposes capability only and must not run an arbitrary build without runtime permission. Validation signals include an analyzer report and a measured size diff. Risk boundary: if the analyzer cannot run, report bundle impact as unverified rather than asserting it is negligible.",
+  "domain": "frontend",
+  "scope_hint": "code.frontend.performance:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.performance",
+  "pack_id": "code.frontend.performance"
+}

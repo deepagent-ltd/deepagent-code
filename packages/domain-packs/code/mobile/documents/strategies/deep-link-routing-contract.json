@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:mobile:deep-link-routing-contract",
+  "type": "strategy",
+  "title": "Treat deep links as a routing contract",
+  "description": "Validate and authorize every deep link and universal link target, handling cold start, logged-out state, and unknown paths safely.",
+  "body": "Use when adding or changing deep links, universal/app links, or custom URL schemes. Do not assume the app is warm, the user is authenticated, or the path is valid when a link opens the app. Actions: validate and sanitize link parameters, gate protected destinations behind auth, handle cold-start navigation, and route unknown paths to a safe fallback. Validation signals include tests opening each link from cold start, logged-out, and tampered-parameter states. Risk boundary: an unauthenticated or unvalidated deep link can expose protected screens or be used for injection; deny navigation to protected targets until auth and parameter checks pass.",
+  "domain": "mobile",
+  "scope_hint": "code.mobile:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mobile",
+  "pack_id": "code.mobile"
+}

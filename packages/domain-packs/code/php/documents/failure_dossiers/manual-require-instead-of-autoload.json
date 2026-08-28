@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:php:manual-require-instead-of-autoload",
+  "type": "failure_dossier",
+  "description": "Classes are pulled in with require/include by path, creating fragile load ordering and duplicate-definition errors.",
+  "body": "Failure mode: code loads classes with require_once '../src/Foo.php' instead of relying on Composer's PSR-4 autoloader, so adding files or reordering includes causes class-not-found or cannot-redeclare errors and the namespace map is bypassed. Detection signals: require/include of class files in application code; fatal redeclare errors; a new class not found until a require is added by hand. Do not hand-manage class loading. Safer fallback: declare the namespace under autoload.psr-4 in composer.json, name files to match their class, run composer dump-autoload, and let the autoloader resolve classes lazily with a test confirming it.",
+  "domain": "php",
+  "scope_hint": "code.php:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.php:human_authored",
+  "pack_id": "code.php"
+}

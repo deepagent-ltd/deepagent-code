@@ -1,0 +1,803 @@
+[
+  {
+    "ref_id": "knowledge:frontend_web:accessible-name-required",
+    "type": "knowledge",
+    "title": "Accessible Name Required",
+    "summary": "Interactive controls need accessible names.",
+    "domains": [
+      "web",
+      "frontend",
+      "browser",
+      "css",
+      "accessibility"
+    ],
+    "triggers": [
+      "interactive",
+      "controls",
+      "need",
+      "accessible",
+      "names",
+      "support"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.web"
+  },
+  {
+    "ref_id": "knowledge:frontend_web:browser-network-failures-change-ui-state",
+    "type": "knowledge",
+    "title": "Browser Network Failures Change Ui State",
+    "summary": "Failed browser requests often explain blank, stale, or partially rendered UI states.",
+    "domains": [
+      "web",
+      "frontend",
+      "browser",
+      "css",
+      "accessibility"
+    ],
+    "triggers": [
+      "failed",
+      "browser",
+      "requests",
+      "often",
+      "explain",
+      "blank",
+      "stale",
+      "partially"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.web"
+  },
+  {
+    "ref_id": "knowledge:frontend_web:console-errors-break-confidence",
+    "type": "knowledge",
+    "title": "Console Errors Break Confidence",
+    "summary": "Runtime console errors reduce confidence even when screenshots look acceptable.",
+    "domains": [
+      "web",
+      "frontend",
+      "browser",
+      "css",
+      "accessibility"
+    ],
+    "triggers": [
+      "runtime",
+      "console",
+      "errors",
+      "reduce",
+      "confidence",
+      "even",
+      "when",
+      "screenshots"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.web"
+  },
+  {
+    "ref_id": "knowledge:frontend_web:css-overflow-is-visible-state",
+    "type": "knowledge",
+    "title": "Css Overflow Is Visible State",
+    "summary": "CSS overflow, clipping, stacking, and containment can make correct DOM unusable.",
+    "domains": [
+      "web",
+      "frontend",
+      "browser",
+      "css",
+      "accessibility"
+    ],
+    "triggers": [
+      "overflow",
+      "clipping",
+      "stacking",
+      "containment",
+      "make",
+      "correct",
+      "unusable",
+      "apply"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.web"
+  },
+  {
+    "ref_id": "knowledge:frontend_web:focus-visible-and-tab-order-are-behavior",
+    "type": "knowledge",
+    "title": "Focus Visible And Tab Order Are Behavior",
+    "summary": "Focus visibility and tab order are observable behavior for keyboard and assistive users.",
+    "domains": [
+      "web",
+      "frontend",
+      "browser",
+      "css",
+      "accessibility"
+    ],
+    "triggers": [
+      "focus",
+      "visibility",
+      "order",
+      "observable",
+      "behavior",
+      "keyboard",
+      "assistive",
+      "users"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.web"
+  },
+  {
+    "ref_id": "knowledge:frontend_web:keyboard-is-primary-input",
+    "type": "knowledge",
+    "title": "Keyboard Is Primary Input",
+    "summary": "Keyboard operation is a core browser interaction path.",
+    "domains": [
+      "web",
+      "frontend",
+      "browser",
+      "css",
+      "accessibility"
+    ],
+    "triggers": [
+      "keyboard",
+      "operation",
+      "core",
+      "browser",
+      "interaction",
+      "path",
+      "interactive",
+      "should"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.web"
+  },
+  {
+    "ref_id": "knowledge:frontend_web:overflow-can-hide-correct-dom",
+    "type": "knowledge",
+    "title": "Overflow Can Hide Correct Dom",
+    "summary": "Correct DOM state can still be unusable when CSS clips or overlaps it.",
+    "domains": [
+      "web",
+      "frontend",
+      "browser",
+      "css",
+      "accessibility"
+    ],
+    "triggers": [
+      "correct",
+      "state",
+      "still",
+      "unusable",
+      "when",
+      "clips",
+      "overlaps",
+      "visual"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.web"
+  },
+  {
+    "ref_id": "knowledge:frontend_web:viewport-units-and-safe-areas-vary",
+    "type": "knowledge",
+    "title": "Viewport Units And Safe Areas Vary",
+    "summary": "Viewport units, browser chrome, and safe areas vary across devices and can break fixed layouts.",
+    "domains": [
+      "web",
+      "frontend",
+      "browser",
+      "css",
+      "accessibility"
+    ],
+    "triggers": [
+      "viewport",
+      "units",
+      "browser",
+      "chrome",
+      "safe",
+      "areas",
+      "vary",
+      "across"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.web"
+  },
+  {
+    "ref_id": "methodology:frontend_web:asset-render-pass",
+    "type": "methodology",
+    "title": "Asset Render Pass",
+    "summary": "Verify images, fonts, and media render in the actual browser path.",
+    "domains": [
+      "web",
+      "frontend",
+      "browser",
+      "css",
+      "accessibility"
+    ],
+    "triggers": [
+      "verify",
+      "images",
+      "fonts",
+      "media",
+      "render",
+      "actual",
+      "browser",
+      "path"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.web"
+  },
+  {
+    "ref_id": "methodology:frontend_web:browser-smoke",
+    "type": "methodology",
+    "title": "Browser Smoke",
+    "summary": "Run, inspect, interact, and screenshot the affected route.",
+    "domains": [
+      "web",
+      "frontend",
+      "browser",
+      "css",
+      "accessibility"
+    ],
+    "triggers": [
+      "inspect",
+      "interact",
+      "screenshot",
+      "affected",
+      "route",
+      "steps",
+      "start",
+      "server"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.web"
+  },
+  {
+    "ref_id": "methodology:frontend_web:keyboard-pass",
+    "type": "methodology",
+    "title": "Keyboard Pass",
+    "summary": "Verify focus order, activation, names, and modal containment.",
+    "domains": [
+      "web",
+      "frontend",
+      "browser",
+      "css",
+      "accessibility"
+    ],
+    "triggers": [
+      "verify",
+      "focus",
+      "order",
+      "activation",
+      "names",
+      "modal",
+      "containment",
+      "steps"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.web"
+  },
+  {
+    "ref_id": "methodology:frontend_web:layout-overflow-pass",
+    "type": "methodology",
+    "title": "Layout Overflow Pass",
+    "summary": "Inspect text wrapping, overflow, z-index, and absolute positioning.",
+    "domains": [
+      "web",
+      "frontend",
+      "browser",
+      "css",
+      "accessibility"
+    ],
+    "triggers": [
+      "inspect",
+      "text",
+      "wrapping",
+      "overflow",
+      "index",
+      "absolute",
+      "positioning",
+      "steps"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.web"
+  },
+  {
+    "ref_id": "methodology:frontend_web:viewport-interaction-matrix",
+    "type": "methodology",
+    "title": "Viewport Interaction Matrix",
+    "summary": "Run a viewport matrix that combines size, interaction state, and diagnostics.",
+    "domains": [
+      "web",
+      "frontend",
+      "browser",
+      "css",
+      "accessibility"
+    ],
+    "triggers": [
+      "viewport",
+      "matrix",
+      "that",
+      "combines",
+      "size",
+      "interaction",
+      "state",
+      "diagnostics"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.web"
+  },
+  {
+    "ref_id": "skill:frontend_web:browser-smoke-with-diagnostics",
+    "type": "skill",
+    "title": "Browser Smoke With Diagnostics",
+    "summary": "Open the changed route, interact with it, and collect browser console plus network evidence.",
+    "domains": [
+      "web",
+      "frontend",
+      "browser",
+      "css",
+      "accessibility"
+    ],
+    "triggers": [
+      "open",
+      "changed",
+      "route",
+      "interact",
+      "with",
+      "collect",
+      "browser",
+      "console"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.web"
+  },
+  {
+    "ref_id": "skill:frontend_web:keyboard-and-role-smoke",
+    "type": "skill",
+    "title": "Keyboard And Role Smoke",
+    "summary": "Verify keyboard reachability, activation, focus visibility, and accessible names for changed controls.",
+    "domains": [
+      "web",
+      "frontend",
+      "browser",
+      "css",
+      "accessibility"
+    ],
+    "triggers": [
+      "verify",
+      "keyboard",
+      "reachability",
+      "activation",
+      "focus",
+      "visibility",
+      "accessible",
+      "names"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.web"
+  },
+  {
+    "ref_id": "skill:frontend_web:media-canvas-render-check",
+    "type": "skill",
+    "title": "Media Canvas Render Check",
+    "summary": "Check that image, video, SVG, and canvas outputs render actual visible pixels in browser viewports.",
+    "domains": [
+      "web",
+      "frontend",
+      "browser",
+      "css",
+      "accessibility"
+    ],
+    "triggers": [
+      "check",
+      "that",
+      "image",
+      "video",
+      "canvas",
+      "outputs",
+      "render",
+      "actual"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.web"
+  },
+  {
+    "ref_id": "skill:frontend_web:viewport-overlap-audit",
+    "type": "skill",
+    "title": "Viewport Overlap Audit",
+    "summary": "Audit changed UI for clipping, overlapping text, unstable boxes, and unreachable controls across viewports.",
+    "domains": [
+      "web",
+      "frontend",
+      "browser",
+      "css",
+      "accessibility"
+    ],
+    "triggers": [
+      "audit",
+      "changed",
+      "clipping",
+      "overlapping",
+      "text",
+      "unstable",
+      "boxes",
+      "unreachable"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.web"
+  },
+  {
+    "ref_id": "strategy:frontend_web:a11y-state-parity",
+    "type": "strategy",
+    "title": "A11y State Parity",
+    "summary": "Accessible state should match visual and interactive state.",
+    "domains": [
+      "web",
+      "frontend",
+      "browser",
+      "css",
+      "accessibility"
+    ],
+    "triggers": [
+      "accessible",
+      "state",
+      "should",
+      "match",
+      "visual",
+      "interactive",
+      "disabled"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.web"
+  },
+  {
+    "ref_id": "strategy:frontend_web:browser-console-is-signal",
+    "type": "strategy",
+    "title": "Browser Console Is Signal",
+    "summary": "Console and network errors are validation failures for affected UI.",
+    "domains": [
+      "web",
+      "frontend",
+      "browser",
+      "css",
+      "accessibility"
+    ],
+    "triggers": [
+      "console",
+      "network",
+      "errors",
+      "validation",
+      "failures",
+      "affected",
+      "that",
+      "looks"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.web"
+  },
+  {
+    "ref_id": "strategy:frontend_web:media-and-canvas-trust-but-verify",
+    "type": "strategy",
+    "title": "Media And Canvas Trust But Verify",
+    "summary": "Images, video, SVG, and canvas must be verified as rendered pixels, not only referenced assets.",
+    "domains": [
+      "web",
+      "frontend",
+      "browser",
+      "css",
+      "accessibility"
+    ],
+    "triggers": [
+      "images",
+      "video",
+      "canvas",
+      "must",
+      "verified",
+      "rendered",
+      "pixels",
+      "only"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.web"
+  },
+  {
+    "ref_id": "strategy:frontend_web:semantic-controls",
+    "type": "strategy",
+    "title": "Semantic Controls",
+    "summary": "Prefer native semantic controls before custom interaction code.",
+    "domains": [
+      "web",
+      "frontend",
+      "browser",
+      "css",
+      "accessibility"
+    ],
+    "triggers": [
+      "prefer",
+      "native",
+      "semantic",
+      "controls",
+      "before",
+      "custom",
+      "interaction",
+      "code"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.web"
+  },
+  {
+    "ref_id": "strategy:frontend_web:stable-boxes",
+    "type": "strategy",
+    "title": "Stable Boxes",
+    "summary": "Constrain fixed-format UI so text and hover states do not shift layout.",
+    "domains": [
+      "web",
+      "frontend",
+      "browser",
+      "css",
+      "accessibility"
+    ],
+    "triggers": [
+      "constrain",
+      "fixed",
+      "format",
+      "text",
+      "hover",
+      "states",
+      "shift",
+      "layout"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.web"
+  },
+  {
+    "ref_id": "strategy:frontend_web:text-fit-is-contract",
+    "type": "strategy",
+    "title": "Text Fit Is Contract",
+    "summary": "Text fitting and non-overlap are part of the UI contract, not cosmetic polish.",
+    "domains": [
+      "web",
+      "frontend",
+      "browser",
+      "css",
+      "accessibility"
+    ],
+    "triggers": [
+      "text",
+      "fitting",
+      "overlap",
+      "part",
+      "contract",
+      "cosmetic",
+      "polish",
+      "apply"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.web"
+  },
+  {
+    "ref_id": "strategy:frontend_web:viewport-matrix",
+    "type": "strategy",
+    "title": "Viewport Matrix",
+    "summary": "Validate changed UI at representative mobile and desktop sizes.",
+    "domains": [
+      "web",
+      "frontend",
+      "browser",
+      "css",
+      "accessibility"
+    ],
+    "triggers": [
+      "validate",
+      "changed",
+      "representative",
+      "mobile",
+      "desktop",
+      "sizes",
+      "single",
+      "width"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.web"
+  },
+  {
+    "ref_id": "strategy:frontend_web:visible-first-validation",
+    "type": "strategy",
+    "title": "Visible First Validation",
+    "summary": "Treat the rendered browser view as the primary evidence for UI changes.",
+    "domains": [
+      "web",
+      "frontend",
+      "browser",
+      "css",
+      "accessibility"
+    ],
+    "triggers": [
+      "treat",
+      "rendered",
+      "browser",
+      "view",
+      "primary",
+      "evidence",
+      "changes",
+      "this"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.frontend.web"
+  }
+]

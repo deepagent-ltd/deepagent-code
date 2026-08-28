@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:sls:tame-cold-starts",
+  "type": "strategy",
+  "title": "Measure and tame cold starts",
+  "description": "Quantify cold-start latency, then reduce it by shrinking the package, reusing connections, and using provisioned concurrency only where it matters.",
+  "body": "Use when latency-sensitive functions show tail spikes. Do not guess; and do not slap provisioned concurrency on everything to mask the issue. Actions: measure p99 init duration, trim dependencies and package size, move heavy init out of the request path (initialize clients in module scope so warm instances reuse them), pick a faster runtime if needed, and apply provisioned concurrency only to latency-critical paths. Validation signals include measured cold vs warm p99 and a reduced init duration after changes. Risk boundary: provisioned concurrency costs money continuously; escalate before enabling it broadly, and confirm the latency requirement actually justifies it.",
+  "domain": "serverless",
+  "scope_hint": "code.backend.serverless:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.serverless",
+  "pack_id": "code.backend.serverless"
+}

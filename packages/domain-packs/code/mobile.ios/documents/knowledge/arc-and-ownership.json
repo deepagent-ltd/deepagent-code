@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:ios:arc-and-ownership",
+  "type": "knowledge",
+  "title": "ARC and ownership semantics",
+  "description": "Automatic Reference Counting frees an object when its strong reference count hits zero; cycles of strong references never reach zero and leak.",
+  "body": "Use when reasoning about memory. ARC deallocates an object when no strong references remain; there is no tracing garbage collector, so two objects that strongly reference each other (or a closure capturing its owner) form a cycle that is never freed. weak references become nil when the target deallocates; unowned assume the target outlives the reference. Do not assume leaks get collected later. Actions: use weak/unowned to break ownership cycles. Validation signals include deallocation occurring at the expected time. Risk boundary: because nothing reclaims cycles, a single strong cycle in a frequently-created view controller leaks unboundedly until the app is killed — ownership must be designed, not left to chance.",
+  "domain": "ios",
+  "scope_hint": "code.mobile.ios:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mobile.ios",
+  "pack_id": "code.mobile.ios"
+}

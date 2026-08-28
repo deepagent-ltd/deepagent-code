@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:ng:rxjs-flattening-operators",
+  "type": "knowledge",
+  "title": "RxJS flattening operators and their semantics",
+  "description": "switchMap, mergeMap, concatMap, and exhaustMap differ in how they handle overlapping inner subscriptions.",
+  "body": "Use when composing dependent async streams. switchMap cancels the previous inner observable when a new source value arrives (ideal for typeahead/search where stale results must be dropped). mergeMap runs inner subscriptions concurrently with no ordering guarantee. concatMap queues them and preserves order, waiting for each to complete. exhaustMap ignores new source values while an inner is active (ideal for de-duplicating rapid submit clicks). Do not default to mergeMap when you need cancellation or ordering. Actions: pick the operator by the concurrency and cancellation semantics the use case requires. Validation signals include a marble test asserting the chosen operator's cancellation/ordering behavior. Risk boundary: the wrong operator causes race conditions where an older response overwrites a newer one or duplicate side effects fire.",
+  "domain": "angular",
+  "scope_hint": "code.frontend.angular:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.angular",
+  "pack_id": "code.frontend.angular"
+}

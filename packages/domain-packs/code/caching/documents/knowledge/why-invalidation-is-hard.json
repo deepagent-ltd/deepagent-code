@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:cache:why-invalidation-is-hard",
+  "type": "knowledge",
+  "title": "Why invalidation is hard",
+  "description": "TTL, explicit invalidation, and versioned keys trade staleness, coupling, and race-safety differently.",
+  "body": "Use when deciding how cached entries become stale. TTL expiry is simple with bounded staleness and no write coupling; explicit invalidation gives low staleness but must catch every write path; versioned keys bump a version on write so old keys are abandoned, sidestepping races. Do not rely on explicit invalidation alone — a single missed write path leaves a permanently stale entry. Actions: combine explicit invalidation with a backstop TTL. Validation signals include reads reflecting writes within the bound. Risk boundary: derived and aggregate keys are the ones most often forgotten when invalidating.",
+  "domain": "caching",
+  "scope_hint": "code.caching:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.caching",
+  "pack_id": "code.caching"
+}

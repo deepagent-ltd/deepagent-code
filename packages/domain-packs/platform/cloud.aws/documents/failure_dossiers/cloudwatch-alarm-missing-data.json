@@ -1,0 +1,11 @@
+{
+  "ref_id": "fail:aws:cloudwatch-alarm-missing-data",
+  "type": "failure_dossier",
+  "description": "An alarm sitting in INSUFFICIENT_DATA because the metric stops publishing during the failure.",
+  "body": "Failure mode: an alarm is configured with treatMissingData:missing on a metric that goes silent exactly when the system breaks, so the alarm never fires. Detection signals: alarm stuck in INSUFFICIENT_DATA during an incident, no notification despite user-visible failure, gaps in the metric graph. Do not assume no alarm means no problem. Safer fallback: set treatMissingData:breaching for liveness-style metrics, add a complementary alarm on a metric that is always emitted (e.g. invocation count hitting zero), and verify with a fault injection.",
+  "domain": "aws",
+  "scope_hint": "platform.cloud.aws:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.aws:human_authored",
+  "pack_id": "platform.cloud.aws"
+}

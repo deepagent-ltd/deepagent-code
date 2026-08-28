@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:evt:dual-write-problem",
+  "type": "knowledge",
+  "title": "The dual-write problem",
+  "description": "Writing to the database and publishing to a broker as two steps cannot be made atomic and will eventually diverge.",
+  "body": "Use when code commits a DB change and then publishes an event (or vice versa). The two systems have no shared transaction, so a crash between them leaves either a committed change with no event or a published event with no change. Do not try to fix this with try/catch ordering or a distributed transaction across DB and broker. Actions: use the outbox pattern (event row in the same transaction, relayed separately) or change-data-capture so a single commit is the source of truth. Validation signals include a crash-injection test showing no orphaned event or lost event. Risk boundary: a dual write on a critical flow guarantees eventual divergence and is a blocking correctness finding.",
+  "domain": "event_driven",
+  "scope_hint": "code.backend.event-driven:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.event-driven",
+  "pack_id": "code.backend.event-driven"
+}

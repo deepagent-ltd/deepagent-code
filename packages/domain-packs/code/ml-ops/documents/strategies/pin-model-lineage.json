@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:mlops:pin-model-lineage",
+  "type": "strategy",
+  "title": "Pin full lineage on every registered model",
+  "description": "Record the training run, dataset snapshot hash, code commit, and hyperparameters with each model version so any served prediction is reproducible.",
+  "body": "Use when promoting a model into a registry such as MLflow or W&B. Do not register a model as a bare weights blob — without the training run id, dataset snapshot hash, code commit, and resolved hyperparameters you cannot reproduce or audit it later. Actions: capture the run id, immutable dataset hash, git commit, and config into the registry metadata; verify a fresh checkout plus the recorded artifacts rebuilds the same model. Validation signals include a registry entry whose lineage fields resolve to a real run and a reproduced model matching the logged eval metric. Risk boundary: an unlineaged production model is unauditable; if lineage is missing, deny promotion and escalate before serving traffic.",
+  "domain": "mlops",
+  "scope_hint": "code.mlops:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mlops",
+  "pack_id": "code.mlops"
+}

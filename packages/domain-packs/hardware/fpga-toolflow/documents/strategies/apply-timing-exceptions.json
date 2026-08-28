@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:fpgatf:apply-timing-exceptions",
+  "type": "strategy",
+  "title": "Apply false and multicycle path exceptions carefully",
+  "description": "Declare false and multicycle paths only where the design semantics truly allow, scoping each exception narrowly.",
+  "body": "Use when a reported path is genuinely not a single-cycle timing constraint. Do not paste broad exceptions to silence violations, because an over-broad false path can hide a real failing path. Actions: confirm the path is truly static or multicycle from the design intent, write the exception with specific from and to points, and verify only the intended paths are affected. Validation signals include the exception narrowing exactly the intended paths and remaining real paths still constrained. Risk boundary: an over-broad exception ships an untimed path, so escalate any wide exception to review before applying.",
+  "domain": "fpga_toolflow",
+  "scope_hint": "hardware.fpga-toolflow:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.fpga-toolflow",
+  "pack_id": "hardware.fpga-toolflow"
+}

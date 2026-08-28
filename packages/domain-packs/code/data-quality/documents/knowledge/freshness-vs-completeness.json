@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:dq:freshness-vs-completeness",
+  "type": "knowledge",
+  "title": "Freshness and completeness are independent",
+  "description": "Recent data can still be incomplete (partial load) and complete data can be stale; both must be checked separately, and neither follows from job success.",
+  "body": "Use when reasoning about whether a dataset is trustworthy. A pipeline reporting success guarantees neither: it can land a fresh-but-partial partition (timely, incomplete) or process nothing new while old data looks complete (complete, stale). Freshness measures recency of the newest data; completeness measures whether all expected rows arrived. Do not infer either from a green run. Actions: check freshness via latest-timestamp age and completeness via count reconciliation, independently. Validation signals include both a freshness and a reconciliation check passing. Risk boundary: assuming success implies good data is the classic silent-quality failure.",
+  "domain": "data_quality",
+  "scope_hint": "code.data-quality:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-quality",
+  "pack_id": "code.data-quality"
+}

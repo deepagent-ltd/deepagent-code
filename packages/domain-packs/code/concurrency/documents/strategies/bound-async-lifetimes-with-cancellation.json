@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:conc:bound-async-lifetimes-with-cancellation",
+  "type": "strategy",
+  "title": "Bound async task lifetimes and honor cancellation",
+  "description": "Tie spawned tasks to a parent scope and propagate cancellation so no task outlives or ignores its caller.",
+  "body": "Use when spawning async tasks, awaiting with timeouts, or handling shutdown. Do not fire-and-forget tasks that keep running after the request is cancelled, and do not swallow a cancellation signal in a long loop. Actions: use structured concurrency (a scope that joins/cancels its children), check the cancellation token at await points and loop iterations, and release resources on cancel via finally/defer. Validation signals include a cancelled parent leaving no running children and a timeout actually stopping the work. Risk boundary: a task that continues mutating state after cancellation can double-apply effects; make cancellation cooperative and verify no work proceeds past it.",
+  "domain": "concurrency",
+  "scope_hint": "code.concurrency:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.concurrency",
+  "pack_id": "code.concurrency"
+}

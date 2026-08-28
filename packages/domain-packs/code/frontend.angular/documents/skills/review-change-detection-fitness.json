@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:ng:review-change-detection-fitness",
+  "type": "skill",
+  "title": "Review change-detection fitness",
+  "description": "Check components for OnPush correctness and template work that re-runs every detection cycle.",
+  "body": "Use when validating render performance or a stale-view report. Procedure: read the component's change-detection strategy, check that OnPush inputs are treated immutably (replaced, not mutated), and scan the template for method/getter calls and inline filtering that re-run every cycle. Report which components are OnPush-correct, which mutate inputs in place, and which run heavy work in the detection path. This skill exposes findings only and must not change strategy or refactor without runtime permission. Validation signals include a profiler trace showing per-cycle recomputation. Risk boundary: flag an in-place-mutated OnPush input as a stale-view defect and heavy template work as a jank source.",
+  "domain": "angular",
+  "scope_hint": "code.frontend.angular:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.angular",
+  "pack_id": "code.frontend.angular"
+}

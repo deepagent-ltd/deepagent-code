@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:android:compose-recomposition-model",
+  "type": "knowledge",
+  "title": "Compose recomposition model",
+  "description": "Composables are functions of state that the runtime re-invokes when the state they read changes; UI is described, not mutated.",
+  "body": "Use when reasoning about Compose updates. A composable describes UI for the current state; when an observable state it reads changes, the runtime recomposes (re-invokes) the affected composables and skips the rest. Recomposition can happen often, in any order, and be skipped, so composables must be side-effect-free and idempotent in their body. Do not perform side effects directly in composition or rely on a plain var. Actions: use State for data, side-effect APIs (LaunchedEffect) for effects, and keep parameters stable. Validation signals include updates from state and minimal recomposition. Risk boundary: side effects in the composable body run unpredictably on every recomposition, and non-State data never triggers an update — the observable-state model is mandatory for correctness.",
+  "domain": "android",
+  "scope_hint": "code.mobile.android:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mobile.android",
+  "pack_id": "code.mobile.android"
+}

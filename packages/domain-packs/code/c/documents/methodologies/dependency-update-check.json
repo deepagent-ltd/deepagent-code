@@ -1,0 +1,11 @@
+{
+  "ref_id": "methodology:c:dependency-update-check",
+  "type": "methodology",
+  "description": "In C, when pkg-config entries, vendored headers, and the libraries listed in LDLIBS change, verify the lockfile, generated artifacts, and a runtime smoke.",
+  "body": "In C, a dependency change ripples through pkg-config entries, vendored headers, and the libraries listed in LDLIBS, generated bindings, and runtime behavior, so it needs more than a recompile. Use when pkg-config entries, vendored headers, and the libraries listed in LDLIBS are added, removed, or version-bumped. Do not merge a dependency bump on a green compile alone, and avoid editing the lockfile by hand. Actions: inspect the dependency delta, re-resolve and review pkg-config entries, vendored headers, and the libraries listed in LDLIBS, regenerate affected outputs from lex/yacc, autoconf (configure.ac), or codegen scripts that emit .c/.h, then run the unit binary plus valgrind on the changed translation unit and smoke the import/runtime path. Validation signals include a reviewed lockfile diff, a clean clang-tidy, cppcheck, and -fanalyzer warnings pass, and a passing runtime smoke. Risk boundary: escalate on a major-version bump, a transitive conflict you cannot resolve, or a license/security flag.",
+  "domain": "c",
+  "scope_hint": "code.c:methodologies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.c:skill_survey",
+  "pack_id": "code.c"
+}

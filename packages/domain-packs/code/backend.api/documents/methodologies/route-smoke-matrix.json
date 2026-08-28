@@ -1,0 +1,11 @@
+{
+  "ref_id": "methodology:backend_api:route-smoke-matrix",
+  "type": "methodology",
+  "description": "Smoke changed routes across success, validation, missing resource, conflict, and unexpected-error paths.",
+  "body": "Steps: identify every route, resolver, or procedure touched by the change; find the narrowest in-process or local server test harness; run a successful request with representative input; run invalid input that exercises request validation; run not-found or unauthorized-like routing only when already in scope; run conflict or duplicate-submit cases for mutators; verify status, headers, error shape, and safe logging. Do not use this as a substitute for deep authorization testing or database migration verification. Validation signals are expected status codes, stable content type, documented error code fields, request ID propagation, and no generic 500 for known domain failures. Rollback point: before changing shared middleware or global serializers, prove the route-local behavior first. Use when Backend API work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: follow the ordered review, edit, and validation sequence; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "api",
+  "scope_hint": "code.backend.api:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.api:route_smoke_pattern",
+  "pack_id": "code.backend.api"
+}

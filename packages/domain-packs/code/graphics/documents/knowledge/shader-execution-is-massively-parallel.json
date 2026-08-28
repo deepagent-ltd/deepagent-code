@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:gfx:shader-execution-is-massively-parallel",
+  "type": "knowledge",
+  "title": "Shaders run in lockstep parallel groups",
+  "description": "GPUs execute shader invocations in SIMD groups (warps/wavefronts), so divergent branches and per-invocation order assumptions hurt or break correctness.",
+  "body": "Use when reasoning about shader performance and correctness. A GPU runs many invocations of the same shader in lockstep groups; when invocations in a group take different branch paths the hardware executes both paths and masks lanes (divergence), wasting throughput. There is no defined ordering between invocations, and derivatives require neighboring lanes to be active. Do not assume one fragment runs before another or that a branch skips work for the whole group. Actions: keep control flow uniform across a group where possible and avoid per-invocation ordering assumptions. Validation signals include profiler occupancy/divergence metrics. Risk boundary: derivative or texture-bias calls inside divergent control flow are undefined; treat them as defects, not style.",
+  "domain": "graphics",
+  "scope_hint": "code.graphics:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.graphics",
+  "pack_id": "code.graphics"
+}

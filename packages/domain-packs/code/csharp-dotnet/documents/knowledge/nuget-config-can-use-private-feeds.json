@@ -1,0 +1,11 @@
+{
+  "ref_id": "knowledge:csharp_dotnet:nuget-config-can-use-private-feeds",
+  "type": "knowledge",
+  "description": "Restore may depend on repository or user NuGet.config sources and credentials.",
+  "body": "Use when restore fails or dependencies are missing. Do not replace private feeds, add public mirrors for private packages, or commit credentials. Inspect repository NuGet.config and user-visible restore diagnostics before editing package references. Report credential blockers and use existing config. Verify restore output with the same dotnet command. Risk boundary: secrets and supply-chain policy. Use when C# / .NET Engineering work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: use the fact to constrain the change and test plan; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "csharp_dotnet",
+  "scope_hint": "code.csharp-dotnet:knowledges",
+  "evidence_strength": "strong",
+  "provenance_tag": "code.csharp-dotnet:seed:dotnet_cli_csharp_docs:paraphrased",
+  "pack_id": "code.csharp-dotnet"
+}

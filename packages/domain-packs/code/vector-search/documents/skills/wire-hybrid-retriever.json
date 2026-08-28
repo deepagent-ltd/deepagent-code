@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:vsearch:wire-hybrid-retriever",
+  "type": "skill",
+  "title": "Wire a hybrid lexical+vector retriever",
+  "description": "Steps to run BM25 and vector retrieval in parallel and fuse them with tuned reciprocal rank fusion.",
+  "body": "Use when assembling a retriever that needs both exact and semantic matching. Do not concatenate raw scores from the two retrievers — their scales are incomparable. Actions: issue the query to BM25 and the vector index in parallel, fuse the two ranked lists with reciprocal rank fusion, tune the RRF constant or weights on a labeled set, and benchmark against each component alone. Validation signals include fused recall exceeding both single-mode baselines and a recorded fusion configuration. Risk boundary: a misweighted fusion can underperform a single retriever; if the fused result does not beat both baselines, treat it as misconfigured and escalate to re-tune before release.",
+  "domain": "vector_search",
+  "scope_hint": "code.vector-search:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.vector-search",
+  "pack_id": "code.vector-search"
+}

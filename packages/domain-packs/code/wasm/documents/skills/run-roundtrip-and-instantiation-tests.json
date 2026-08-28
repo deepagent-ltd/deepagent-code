@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:wasm:run-roundtrip-and-instantiation-tests",
+  "type": "skill",
+  "title": "Run round-trip and instantiation tests",
+  "description": "Instantiate the module and exercise boundary calls to verify marshalling, memory safety, and import resolution.",
+  "body": "Use when validating a WASM build or interop change. Procedure: instantiate the module in the target runtime with the real import object and confirm no missing-import error; run round-trip tests that pass strings/arrays/structs across the boundary and assert identical values back; repeat buffer round-trips while watching linear-memory size for leaks; trigger a memory.grow and confirm views read correctly after refreshing. Report which crossings round-tripped, whether memory stayed bounded, and any instantiation failure. This skill runs local/test-runtime checks only and must not deploy to production. Validation signals include round-trip equality, bounded memory, and successful instantiation. Risk boundary: if a round-trip corrupts data or memory grows without bound, treat it as a blocking defect rather than adjusting the assertion.",
+  "domain": "wasm",
+  "scope_hint": "code.wasm:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.wasm",
+  "pack_id": "code.wasm"
+}

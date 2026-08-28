@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:rag:run-retrieval-recall-eval",
+  "type": "skill",
+  "title": "Run a retrieval recall evaluation",
+  "description": "Execute or scaffold an evaluation over a labeled query set that measures recall, rerank precision, and grounding rate.",
+  "body": "Use when validating a retrieval or chunking change. Procedure: take a labeled query-passage set, run queries through the pipeline, measure first-stage recall and post-rerank precision against the labels, and compute the grounding rate of answers; if such an eval is absent, scaffold the minimal labeled set. Report recall, precision, and grounding before and after the change, and attribute regressions to a stage. This skill exposes capability only and must not run against production data without permission. Risk boundary: a retrieval change without a recall comparison is unverified and must not be reported as an improvement.",
+  "domain": "rag",
+  "scope_hint": "code.rag:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.rag",
+  "pack_id": "code.rag"
+}

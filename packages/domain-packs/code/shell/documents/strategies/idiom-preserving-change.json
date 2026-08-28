@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:shell:idiom-preserving-change",
+  "type": "strategy",
+  "description": "In shell, prefer established idioms (set -euo pipefail, quoting every expansion, and [[ ]] over [ ]) over generic rewrites.",
+  "body": "In shell, the ecosystem has settled idioms — set -euo pipefail, quoting every expansion, and [[ ]] over [ ] — and changes that ignore them add risk and review friction. Use when adding or modifying shell code near existing patterns. Do not impose a foreign style or rewrite working code into a generic shape, and avoid abandoning nearby conventions. Actions: read the surrounding code, follow its set -euo pipefail, quoting every expansion, and [[ ]] over [ ], keep the change minimal, then run shellcheck warnings (especially SC2086 word-splitting and SC2046) and bats tests or a guarded dry-run with set -euo pipefail to confirm fit. Validation signals include a small diff consistent with neighbors, a clean lint pass, and passing tests. Risk boundary: a broad idiom migration is its own reviewed task; escalate rather than bundling it into an unrelated change.",
+  "domain": "shell",
+  "scope_hint": "code.shell:strategies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.shell:skill_survey",
+  "pack_id": "code.shell"
+}

@@ -1,0 +1,69 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.backend.realtime",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "realtime",
+      "websocket",
+      "pubsub"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.backend.realtime: WebSocket connection lifecycle with reconnect and resync, SSE fallback, pub/sub broadcast fan-out, backpressure, and auth refresh on a long-lived subscription channel"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "plain prose note with no repository or domain signal"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "realtime websocket sse server-sent events pubsub subscription channel reconnect resync backpressure broadcast fan-out connection lifecycle heartbeat auth refresh",
+  "expected_pack_id": "code.backend.realtime",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "code.backend.realtime L3 validation smoke",
+    "signals": [
+      "reconnect resync recovers missed messages via cursor test",
+      "backpressure: slow client does not grow server memory unbounded test",
+      "auth re-checked on token expiry over a long connection test",
+      "heartbeat detects and closes a dead connection test"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "code.backend.realtime diagnosis smoke",
+    "signals": [
+      "unbounded per-connection send buffer",
+      "auth checked only at connect, never revalidated",
+      "reconnect loses messages (no cursor/resume)",
+      "broadcast fan-out blocks on the slowest client",
+      "no heartbeat so dead connections leak"
+    ]
+  },
+  "source_refs": [
+    "source:rfc6455-websocket:paraphrased",
+    "source:whatwg-server-sent-events:paraphrased"
+  ]
+}

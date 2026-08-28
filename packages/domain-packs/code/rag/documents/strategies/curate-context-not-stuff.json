@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:rag:curate-context-not-stuff",
+  "type": "strategy",
+  "title": "Curate context, do not stuff it",
+  "description": "Selected passages are deduplicated and trimmed to fit the window with output headroom, never packed until truncation.",
+  "body": "Use when assembling retrieved passages into the prompt. Do not concatenate every candidate until the window overflows, and avoid burying the most relevant passage among redundant ones. Actions: deduplicate near-identical passages, order by relevance, trim to a budget that leaves output headroom, and keep citations attached. Validation signals include a test that the assembled context fits the window and that the highest-ranked passages are never the ones truncated away. Risk boundary: stuffing past the window silently drops evidence the answer cites; treat overflow as a failure that breaks grounding.",
+  "domain": "rag",
+  "scope_hint": "code.rag:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.rag",
+  "pack_id": "code.rag"
+}

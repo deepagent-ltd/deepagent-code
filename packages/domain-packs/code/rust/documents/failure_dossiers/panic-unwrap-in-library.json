@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:rust:panic-unwrap-in-library",
+  "type": "failure_dossier",
+  "description": "Using .unwrap()/.expect() on fallible results in library code, turning recoverable errors into process-aborting panics.",
+  "body": "Failure mode: library code unwraps an Option/Result that can legitimately be None/Err (parse, IO, lock), so a caller's valid-but-edge input panics and may abort the whole process or poison a lock. Detection signals: production panic with 'called Option::unwrap() on a None value'; clippy unwrap_used lint; crashes on untrusted input. Do not unwrap fallible values in reusable library paths. Safer fallback: return Result with a typed error (thiserror) or propagate with ?, reserve expect for true invariants with a message explaining why it cannot fail, and add a test feeding the error-producing input.",
+  "domain": "rust",
+  "scope_hint": "code.rust:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.rust:human_authored",
+  "pack_id": "code.rust"
+}

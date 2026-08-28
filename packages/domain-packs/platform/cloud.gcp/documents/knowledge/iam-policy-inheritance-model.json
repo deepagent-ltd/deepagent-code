@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:gcp:iam-policy-inheritance-model",
+  "type": "knowledge",
+  "title": "GCP IAM resource hierarchy and policy inheritance",
+  "description": "Explains how allow policies set at org/folder/project inherit downward, how the union of bindings applies, and the role of deny policies and conditions.",
+  "body": "Use when reasoning about effective GCP permissions. Do not assume a permission must be granted at the resource itself. Actions: remember the hierarchy is org->folder->project->resource and allow policies inherit downward, the effective access is the union of all inherited bindings, conditions can narrow a binding, and IAM deny policies override allows. Verify with the Policy Analyzer. Validation signals include the analyzer attributing access to a specific inherited binding and a deny policy blocking as expected. Risk boundary: bindings high in the hierarchy have wide blast radius and warrant human review.",
+  "domain": "gcp",
+  "scope_hint": "platform.cloud.gcp:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.gcp",
+  "pack_id": "platform.cloud.gcp"
+}

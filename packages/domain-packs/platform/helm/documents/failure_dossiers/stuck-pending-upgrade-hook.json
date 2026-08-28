@@ -1,0 +1,11 @@
+{
+  "ref_id": "fail:helm:stuck-pending-upgrade-hook",
+  "type": "failure_dossier",
+  "description": "A failed pre-upgrade hook leaves the release wedged in pending-upgrade.",
+  "body": "Failure mode: a pre-upgrade hook Job never completes (bad migration, missing image, no delete policy), so Helm leaves the release in pending-upgrade and subsequent upgrades refuse to run. Detection signals: helm status shows pending-upgrade, the hook Job is stuck or failed, and helm upgrade errors that another operation is in progress. Do not delete the release secret to force it. Safer fallback: inspect the hook Job events, fix or remove the failing hook, set a hook-delete-policy, then helm rollback to the last deployed revision or re-run the upgrade once the hook can complete.",
+  "domain": "helm",
+  "scope_hint": "platform.helm:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.helm:human_authored",
+  "pack_id": "platform.helm"
+}

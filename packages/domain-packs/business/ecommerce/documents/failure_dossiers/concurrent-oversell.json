@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:ecom:concurrent-oversell",
+  "type": "failure_dossier",
+  "description": "Two checkouts read the same availability and both decrement, selling stock that does not exist.",
+  "body": "Failure mode: availability is checked and stock decremented in separate steps, so two concurrent checkouts on the last unit both pass the check and both decrement, selling inventory that does not exist. Detection signals: orders for more units than were ever on-hand; negative available counts; customer complaints about unfulfillable orders after a flash sale. Do not separate the check from the decrement. Safer fallback: reserve with a single atomic conditional decrement or a row lock, treat a failed reservation as out-of-stock, and load-test the concurrent path.",
+  "domain": "ecommerce",
+  "scope_hint": "business.ecommerce:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:business.ecommerce:human_authored",
+  "pack_id": "business.ecommerce"
+}

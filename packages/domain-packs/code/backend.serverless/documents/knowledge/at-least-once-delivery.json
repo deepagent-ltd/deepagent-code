@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:sls:at-least-once-delivery",
+  "type": "knowledge",
+  "title": "Event delivery is usually at-least-once",
+  "description": "Most async event sources retry on failure or ambiguity, so the same event can be delivered more than once; exactly-once is rare and costly.",
+  "body": "Use when consuming queues, streams, or async invocations. These sources guarantee at-least-once delivery: on timeout, error, or visibility expiry the event is redelivered, so duplicates are normal, not exceptional. Exactly-once across distributed systems is generally unattainable without idempotent consumers. Do not write handlers that assume each event arrives once. Actions: make consumers idempotent and design side effects to tolerate replay. Validation signals include a replay test confirming single-effect behavior. Risk boundary: building on an exactly-once assumption produces double-processing bugs under normal retries — idempotency is mandatory, not optional.",
+  "domain": "serverless",
+  "scope_hint": "code.backend.serverless:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.serverless",
+  "pack_id": "code.backend.serverless"
+}

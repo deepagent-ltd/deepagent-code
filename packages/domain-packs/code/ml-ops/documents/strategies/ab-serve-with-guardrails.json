@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:mlops:ab-serve-with-guardrails",
+  "type": "strategy",
+  "title": "A/B serve models behind metric guardrails",
+  "description": "Split traffic between model variants with predefined guardrail metrics and an automatic stop so a losing variant is bounded.",
+  "body": "Use when comparing two model variants on live traffic rather than offline data. Do not run an open-ended split without guardrails — a worse variant silently harms the share of users routed to it. Actions: define the primary metric and guardrails upfront, route a small bounded share, and auto-stop the variant when a guardrail breaches; record exposure and outcomes per variant. Validation signals include a statistically powered comparison and a logged auto-stop that fired on guardrail breach. Risk boundary: an unbounded experiment on real users is an uncontrolled risk; if guardrails are absent, deny the split and require human approval of the exposure budget.",
+  "domain": "mlops",
+  "scope_hint": "code.mlops:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mlops",
+  "pack_id": "code.mlops"
+}

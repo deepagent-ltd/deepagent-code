@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:dq:detect-and-confirm-drift",
+  "type": "methodology",
+  "title": "Detect and confirm distribution drift",
+  "description": "Compare current feature distributions to a baseline with a statistical test, then confirm it is real before acting.",
+  "body": "Steps: 1. Establish a reference baseline (e.g. the training window or a stable period). 2. Compute a drift metric per feature (population stability index, KS test, or mean/variance shift). 3. Flag features exceeding a tolerance. 4. Confirm the shift is genuine by ruling out a pipeline bug and checking sample size. 5. Decide the response: investigate source, adjust thresholds, or trigger retraining. Rollback point: not applicable — this is monitoring. Validation: flagged drift is reproduced against the baseline and survives a pipeline-integrity check; treating noise or a small sample as drift causes needless churn.",
+  "domain": "data_quality",
+  "scope_hint": "code.data-quality:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-quality",
+  "pack_id": "code.data-quality"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:mysql:keep-transactions-short-to-shrink-gap-locks",
+  "type": "strategy",
+  "title": "Keep transactions short to shrink gap-lock contention",
+  "description": "Under REPEATABLE READ InnoDB takes next-key locks on ranges, so long transactions block neighbouring inserts.",
+  "body": "Use when a workload reports lock-wait timeouts or deadlocks on ranged queries. Do not hold a transaction open across a network call or user think-time; under the default REPEATABLE READ a ranged UPDATE or SELECT ... FOR UPDATE acquires next-key locks that gap-lock the rows between matches and stall inserts there. Actions: shrink the transaction to the minimum statements, add an index so the predicate locks fewer rows, and inspect SHOW ENGINE INNODB STATUS for the gap. Validation signals include the LATEST DETECTED DEADLOCK section staying empty under load and insert latency on the range recovering. Risk boundary: switching to READ COMMITTED to drop gap locks changes correctness, so get human review before flipping isolation.",
+  "domain": "mysql",
+  "scope_hint": "code.database.mysql:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.mysql",
+  "pack_id": "code.database.mysql"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:cass:diagnose-a-wide-partition",
+  "type": "methodology",
+  "title": "Diagnose a wide or hot partition",
+  "description": "Use nodetool to find partitions exceeding size thresholds and trace the queries concentrating on them.",
+  "body": "Use when latency spikes or a node is overloaded. Actions: run nodetool tablehistograms and tablestats to find the max partition size and cell count, identify the offending key, and use query tracing to confirm whether traffic concentrates on it. If a partition is unbounded, redesign the key with a bucketing component and backfill into the new layout. Verify the new max partition size stays bounded. Validation signals include tablehistograms showing partition size back under threshold and load spreading across nodes. Risk boundary: a single unbounded partition can destabilise its replicas and resist repair, so treat it as an availability risk and stage the re-bucketing rather than deleting data in place.",
+  "domain": "cassandra",
+  "scope_hint": "code.database.cassandra:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.cassandra",
+  "pack_id": "code.database.cassandra"
+}

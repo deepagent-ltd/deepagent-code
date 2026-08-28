@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:tf:unpinned-provider-version-breaks-plan",
+  "type": "failure_dossier",
+  "description": "Leaving provider or module versions unconstrained so a new upstream release silently changes resource defaults or schema between runs.",
+  "body": "Failure mode: provider/module versions are unpinned and the lock file is absent or ignored, so a fresh init pulls a newer provider whose changed defaults produce surprise diffs or destroys on the next plan. Detection signals: a plan suddenly wants to change resources nobody edited; CI and local resolve different provider versions; behavior changed only after terraform init. Do not run shared infrastructure with unconstrained versions. Safer fallback: set explicit version constraints, commit .terraform.lock.hcl, upgrade only via deliberate init -upgrade with a reviewed plan, and verify identical versions across environments.",
+  "domain": "terraform",
+  "scope_hint": "platform.terraform:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.terraform:human_authored",
+  "pack_id": "platform.terraform"
+}

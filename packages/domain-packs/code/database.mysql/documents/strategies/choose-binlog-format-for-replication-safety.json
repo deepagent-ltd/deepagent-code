@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:mysql:choose-binlog-format-for-replication-safety",
+  "type": "strategy",
+  "title": "Choose the binlog format for replication safety",
+  "description": "ROW-based binary logging replicates exact changes and avoids the nondeterminism that breaks STATEMENT replication.",
+  "body": "Use when configuring replication or chasing data drift between primary and replica. Do not run STATEMENT binlog format with nondeterministic statements (NOW(), UUID(), LIMIT without ORDER BY, triggers); the replica re-executes the SQL and can diverge. Actions: set binlog_format=ROW for safety, reserve MIXED only when binlog volume is a proven problem, and verify with mysqlbinlog that row images are written. Validation signals include checksums matching between primary and replica and Seconds_Behind_Master settling at zero. Risk boundary: switching binlog format on a live primary affects every downstream replica and any CDC consumer, so coordinate the change and roll forward, never silently.",
+  "domain": "mysql",
+  "scope_hint": "code.database.mysql:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.mysql",
+  "pack_id": "code.database.mysql"
+}

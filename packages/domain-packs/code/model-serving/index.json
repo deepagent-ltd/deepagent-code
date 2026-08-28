@@ -1,0 +1,468 @@
+[
+  {
+    "ref_id": "strategy:serving:dynamic-batch-with-bounds",
+    "type": "strategy",
+    "title": "Batch dynamically with a bounded queue and timeout",
+    "summary": "Coalesce concurrent requests into batches up to a max size or max wait, so the accelerator stays busy without starving latency.",
+    "domains": [
+      "model_serving",
+      "inference_serving",
+      "batching",
+      "latency"
+    ],
+    "triggers": [
+      "dynamic batching",
+      "queue",
+      "timeout",
+      "batch size",
+      "throughput",
+      "latency"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.model-serving"
+  },
+  {
+    "ref_id": "strategy:serving:optimize-tail-not-mean",
+    "type": "strategy",
+    "title": "Optimize p99, not average latency",
+    "summary": "Tune and report tail latency under realistic concurrency, because the slowest requests define the user experience and SLO.",
+    "domains": [
+      "model_serving",
+      "inference_serving",
+      "batching",
+      "latency"
+    ],
+    "triggers": [
+      "p99",
+      "tail latency",
+      "percentile",
+      "slo",
+      "concurrency",
+      "load"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.model-serving"
+  },
+  {
+    "ref_id": "strategy:serving:version-and-rollback-models",
+    "type": "strategy",
+    "title": "Gate model versions behind health checks and rollback",
+    "summary": "Treat a model version as a deployable artifact: validate it on a canary before full traffic and keep the prior version ready to restore.",
+    "domains": [
+      "model_serving",
+      "inference_serving",
+      "batching",
+      "latency"
+    ],
+    "triggers": [
+      "model versioning",
+      "rollout",
+      "canary",
+      "rollback",
+      "health check",
+      "artifact"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.model-serving"
+  },
+  {
+    "ref_id": "strategy:serving:size-memory-for-peak-batch",
+    "type": "strategy",
+    "title": "Size accelerator memory for the worst concurrent batch",
+    "summary": "Provision and cap memory for the largest batch and longest sequences that can occur together, not the average request.",
+    "domains": [
+      "model_serving",
+      "inference_serving",
+      "batching",
+      "latency"
+    ],
+    "triggers": [
+      "gpu memory",
+      "oom",
+      "batch",
+      "kv cache",
+      "sequence length",
+      "peak"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.model-serving"
+  },
+  {
+    "ref_id": "strategy:serving:autoscale-on-the-right-signal",
+    "type": "strategy",
+    "title": "Autoscale on queue depth, not just CPU",
+    "summary": "Scale inference replicas on a saturation signal like queue depth or batch latency, which reflects accelerator load better than CPU.",
+    "domains": [
+      "model_serving",
+      "inference_serving",
+      "batching",
+      "latency"
+    ],
+    "triggers": [
+      "autoscaling",
+      "queue depth",
+      "saturation",
+      "replicas",
+      "cpu",
+      "metric"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.model-serving"
+  },
+  {
+    "ref_id": "strategy:serving:mitigate-cold-starts",
+    "type": "strategy",
+    "title": "Mitigate cold starts on scale-up",
+    "summary": "Pre-warm replicas and keep weights resident so a newly scaled instance does not add model-load latency to live requests.",
+    "domains": [
+      "model_serving",
+      "inference_serving",
+      "batching",
+      "latency"
+    ],
+    "triggers": [
+      "cold start",
+      "warm-up",
+      "model load",
+      "scale up",
+      "preload",
+      "readiness"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.model-serving"
+  },
+  {
+    "ref_id": "methodology:serving:set-up-an-inference-server",
+    "type": "methodology",
+    "title": "Stand up an inference server",
+    "summary": "Wrap a model artifact in a serving runtime with batching, health/readiness probes, versioning, and metrics from the start.",
+    "domains": [
+      "model_serving",
+      "inference_serving",
+      "batching",
+      "latency"
+    ],
+    "triggers": [
+      "inference server",
+      "triton",
+      "vllm",
+      "setup",
+      "readiness",
+      "metrics"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.model-serving"
+  },
+  {
+    "ref_id": "methodology:serving:tune-batching-for-slo",
+    "type": "methodology",
+    "title": "Tune batching against the latency SLO",
+    "summary": "Sweep batch size and queue timeout under load to find the point that maximizes throughput while keeping p99 under the SLO.",
+    "domains": [
+      "model_serving",
+      "inference_serving",
+      "batching",
+      "latency"
+    ],
+    "triggers": [
+      "batching",
+      "tuning",
+      "slo",
+      "throughput",
+      "sweep",
+      "p99"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.model-serving"
+  },
+  {
+    "ref_id": "methodology:serving:diagnose-latency-spikes",
+    "type": "methodology",
+    "title": "Diagnose inference latency spikes",
+    "summary": "Localize tail latency to queueing, batch window, memory pressure, or cold paths using server and accelerator metrics.",
+    "domains": [
+      "model_serving",
+      "inference_serving",
+      "batching",
+      "latency"
+    ],
+    "triggers": [
+      "latency spike",
+      "p99",
+      "queue",
+      "profiling",
+      "gpu",
+      "diagnose"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.model-serving"
+  },
+  {
+    "ref_id": "methodology:serving:roll-out-a-model-version",
+    "type": "methodology",
+    "title": "Roll out a new model version safely",
+    "summary": "Promote a model through health check, shadow/canary, and gradual ramp with metrics and an instant rollback.",
+    "domains": [
+      "model_serving",
+      "inference_serving",
+      "batching",
+      "latency"
+    ],
+    "triggers": [
+      "rollout",
+      "canary",
+      "shadow",
+      "version",
+      "ramp",
+      "rollback"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.model-serving"
+  },
+  {
+    "ref_id": "knowledge:serving:latency-throughput-tradeoff",
+    "type": "knowledge",
+    "title": "The latency/throughput tradeoff in batching",
+    "summary": "Larger batches raise throughput and GPU efficiency but add queue wait; the optimum is the largest batch whose tail stays under the SLO.",
+    "domains": [
+      "model_serving",
+      "inference_serving",
+      "batching",
+      "latency"
+    ],
+    "triggers": [
+      "latency",
+      "throughput",
+      "batch",
+      "tradeoff",
+      "utilization",
+      "queue"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.model-serving"
+  },
+  {
+    "ref_id": "knowledge:serving:dynamic-vs-continuous-batching",
+    "type": "knowledge",
+    "title": "Dynamic vs continuous batching",
+    "summary": "Dynamic batching groups whole requests per step; continuous (in-flight) batching swaps finished sequences for new ones each iteration, key for generative models.",
+    "domains": [
+      "model_serving",
+      "inference_serving",
+      "batching",
+      "latency"
+    ],
+    "triggers": [
+      "dynamic batching",
+      "continuous batching",
+      "in-flight",
+      "generative",
+      "token",
+      "iteration"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.model-serving"
+  },
+  {
+    "ref_id": "knowledge:serving:quantization-for-serving",
+    "type": "knowledge",
+    "title": "Quantization tradeoffs for serving",
+    "summary": "Lower-precision weights/activations (int8, fp8) cut memory and raise throughput, but can shift accuracy, so serving quality must be re-validated.",
+    "domains": [
+      "model_serving",
+      "inference_serving",
+      "batching",
+      "latency"
+    ],
+    "triggers": [
+      "quantization",
+      "int8",
+      "fp8",
+      "precision",
+      "accuracy",
+      "throughput"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.model-serving"
+  },
+  {
+    "ref_id": "knowledge:serving:gpu-utilization-vs-occupancy",
+    "type": "knowledge",
+    "title": "GPU utilization and where time goes",
+    "summary": "Reported GPU utilization can be high while the accelerator stalls on data transfer or small kernels; throughput, not the utilization number, is the truth.",
+    "domains": [
+      "model_serving",
+      "inference_serving",
+      "batching",
+      "latency"
+    ],
+    "triggers": [
+      "gpu utilization",
+      "occupancy",
+      "memory bound",
+      "transfer",
+      "kernel",
+      "bottleneck"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.model-serving"
+  },
+  {
+    "ref_id": "skill:serving:load-test-and-report-tail",
+    "type": "skill",
+    "title": "Load-test serving and report tail latency",
+    "summary": "Drive a serving endpoint at realistic concurrency and report p50/p95/p99, throughput, and GPU utilization against the SLO.",
+    "domains": [
+      "model_serving",
+      "inference_serving",
+      "batching",
+      "latency"
+    ],
+    "triggers": [
+      "load test",
+      "p99",
+      "throughput",
+      "benchmark",
+      "concurrency",
+      "report"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.model-serving"
+  },
+  {
+    "ref_id": "skill:serving:inspect-serving-config",
+    "type": "skill",
+    "title": "Inspect serving config for batching and rollout safety",
+    "summary": "Review batching limits, memory caps, readiness probes, versioning, and rollback config and report gaps with locations.",
+    "domains": [
+      "model_serving",
+      "inference_serving",
+      "batching",
+      "latency"
+    ],
+    "triggers": [
+      "config",
+      "batching",
+      "readiness",
+      "rollback",
+      "memory",
+      "report"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.model-serving"
+  }
+]

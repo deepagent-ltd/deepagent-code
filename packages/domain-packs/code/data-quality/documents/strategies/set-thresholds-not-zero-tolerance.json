@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:dq:set-thresholds-not-zero-tolerance",
+  "type": "strategy",
+  "title": "Express checks as thresholds, not absolutes",
+  "description": "Define quality expectations with tolerances calibrated to historical norms so checks catch real regressions without firing on benign variation.",
+  "body": "Use when defining quality rules on real-world data. Do not assert zero nulls or exact row counts unless the data is truly guaranteed — rigid rules fire constantly and get ignored. Actions: set thresholds from historical distributions (e.g. null rate under 2%, row count within a band), and tighten only where a hard invariant exists (primary key uniqueness). Validation signals include checks that pass on normal data and fail on a seeded regression, with a low false-positive rate. Risk boundary: alerts that cry wolf get muted, so a real incident slips through; calibrate thresholds against history before enabling paging.",
+  "domain": "data_quality",
+  "scope_hint": "code.data-quality:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-quality",
+  "pack_id": "code.data-quality"
+}

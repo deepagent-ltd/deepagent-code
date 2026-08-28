@@ -1,0 +1,11 @@
+{
+  "ref_id": "knowledge:c:generated-code-drift",
+  "type": "knowledge",
+  "description": "In C, never hand-edit outputs from lex/yacc, autoconf (configure.ac), or codegen scripts that emit .c/.h; change the source and rerun the generator.",
+  "body": "In C, outputs from lex/yacc, autoconf (configure.ac), or codegen scripts that emit .c/.h are derived artifacts: editing them directly drifts from the generator and is overwritten on the next run. Use when a diff touches generated files, codegen inputs, or the the toolchain triple, libc version, and compiler version that produces them. Do not use this to justify patching generated output by hand or skipping regeneration. Actions: locate the generator and its inputs, edit the source, rerun the generation step, then run make / Makefile targets (and the exact CC, CFLAGS, and -I/-L flags) so the regenerated output is what ships. Validation signals include a clean regeneration diff, a passing the unit binary plus valgrind on the changed translation unit, and no manual edits left in the generated tree. Risk boundary: escalate before regenerating if the generator is pinned, vendored, or owned by another team, and roll back if regeneration changes unrelated files.",
+  "domain": "c",
+  "scope_hint": "code.c:knowledge",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.c:skill_survey",
+  "pack_id": "code.c"
+}

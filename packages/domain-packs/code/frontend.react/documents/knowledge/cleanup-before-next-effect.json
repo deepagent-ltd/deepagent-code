@@ -1,0 +1,11 @@
+{
+  "ref_id": "knowledge:frontend_react:cleanup-before-next-effect",
+  "type": "knowledge",
+  "description": "React effect cleanup runs before the next effect for the same component and on unmount.",
+  "body": "Use this fact for subscriptions, event listeners, timers, and stale closure diagnosis. Verify StrictMode behavior in tests when relevant. Use when React component behavior work touches component ownership, hook dependencies, render paths, hydration output, router state, and browser smoke evidence. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: use the fact to constrain the change and test plan; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include component tests, React Testing Library assertions, Playwright smoke, console logs, hydration warnings, and viewport checks. Risk boundary: escalate or stop when the task involves state identity leaks, stale closures, inaccessible controls, hydration mismatch, and user-visible regressions, missing owner evidence, or live external state.",
+  "domain": "react",
+  "scope_hint": "code.frontend.react:knowledge",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.frontend.react:skill_survey",
+  "pack_id": "code.frontend.react"
+}

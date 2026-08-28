@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:production:traffic-shift-with-observability",
+  "type": "strategy",
+  "title": "Traffic shift with observability",
+  "description": "Canary, blue-green, shadow, or percentage rollouts need baseline metrics, guardrails, and stop conditions.",
+  "body": "Use when changing routing, load balancers, deployment strategies, service versions, or user cohorts. Do not recommend automatic traffic increases without human-readable evidence. Actions: define baseline, canary scope, metrics, log/trace checks, error budget guardrails, and rollback trigger. Validation signals include pre/post metric comparison and incident-free smoke evidence. Risk boundary: no monitoring or unclear owner blocks traffic shift. Use when Production Change Risk Controls work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: choose the smallest direction that preserves the domain contract; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "deployment",
+  "scope_hint": "risk.production:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.production",
+  "pack_id": "risk.production"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:aws:ecs-fargate-task-sizing",
+  "type": "strategy",
+  "title": "Right-size ECS Fargate tasks and protect placement",
+  "description": "Match task cpu/memory to the supported Fargate combinations, reserve subnet IP headroom, and use health checks plus minimumHealthyPercent for safe rollouts.",
+  "body": "Use when defining or scaling an ECS service on Fargate. Do not pick arbitrary cpu/memory pairs (Fargate only allows specific combinations) and avoid deploying into a /28 subnet that starves task ENIs. Actions: choose a valid cpu/memory pair, set container healthCheck and an ALB target-group health check, configure deploymentConfiguration minimumHealthyPercent/maximumPercent for rolling safety, and ensure the task subnets have free IPs and a route to ECR (VPC endpoint or NAT). Validation signals include tasks reaching RUNNING and passing target-group health, no PENDING tasks from capacity or IP exhaustion, and a clean rolling deploy. Risk boundary: scaling a production service or editing its task role is human-gated.",
+  "domain": "aws",
+  "scope_hint": "platform.cloud.aws:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.aws",
+  "pack_id": "platform.cloud.aws"
+}

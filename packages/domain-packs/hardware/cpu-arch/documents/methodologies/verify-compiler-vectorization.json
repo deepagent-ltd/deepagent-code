@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:cpuarch:verify-compiler-vectorization",
+  "type": "methodology",
+  "title": "Verify the compiler actually vectorized",
+  "description": "Confirm a loop emitted packed SIMD instructions instead of trusting compiler flags or vectorization remarks alone.",
+  "body": "Steps: 1. Enable vectorization remarks (-Rpass / -fopt-info-vec) and read why a loop did or did not vectorize. 2. Disassemble the hot function and look for packed ops (vmulps, fmla) vs scalar. 3. If scalar, remove the blocker: aliasing (add restrict), unknown trip count, non-unit stride, or reductions needing -ffast-math. 4. Re-compile and re-check the assembly. 5. Benchmark to confirm the speedup is real. Rollback point: before enabling fast-math, which changes FP results. Validation: the disassembly shows vector instructions and the measured speedup tracks the lane width; a green remark without packed opcodes in the binary is not confirmation.",
+  "domain": "cpu_arch",
+  "scope_hint": "hardware.cpu-arch:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.cpu-arch",
+  "pack_id": "hardware.cpu-arch"
+}

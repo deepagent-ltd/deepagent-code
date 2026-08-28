@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:mysql:isolation-default-is-repeatable-read",
+  "type": "knowledge",
+  "title": "MySQL defaults to REPEATABLE READ, unlike most engines",
+  "description": "InnoDB's default isolation is REPEATABLE READ with consistent snapshots, which differs from PostgreSQL's READ COMMITTED default.",
+  "body": "Reference for cross-engine portability. InnoDB defaults to REPEATABLE READ, where a transaction sees a consistent snapshot established at its first read, while many other engines default to READ COMMITTED; ported code that relied on seeing each statement's latest committed data can behave differently. Use when porting transactional logic to or from MySQL. Do not assume the default matches the source engine; a long read transaction on MySQL keeps reading the old snapshot. Validation signals include a test where a second transaction's committed change is invisible to an open MySQL transaction until it commits. Risk boundary: changing the default isolation alters correctness for every transaction, so treat it as a reviewed, system-wide decision.",
+  "domain": "mysql",
+  "scope_hint": "code.database.mysql:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.mysql",
+  "pack_id": "code.database.mysql"
+}

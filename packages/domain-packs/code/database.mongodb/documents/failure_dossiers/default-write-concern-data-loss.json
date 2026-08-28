@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:mongo:default-write-concern-data-loss",
+  "type": "failure_dossier",
+  "description": "Acknowledging writes at w:1 loses data when the primary fails before replication.",
+  "body": "Failure mode: writes acknowledged at w:1 are confirmed as soon as the primary applies them, so if that primary crashes or steps down before the change replicates, the new primary never had it and the write is rolled back. Detection signals: the rollback directory or rollback log gains entries after a failover, and clients that received a success acknowledgement find the data missing. Do not use w:1 for data that must survive a node failure. Safer fallback: set writeConcern w:majority for durable writes, pair with readConcern majority for read-your-write, and add a failover test to the suite to prove writes survive a stepDown.",
+  "domain": "mongodb",
+  "scope_hint": "code.database.mongodb:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.mongodb:human_authored",
+  "pack_id": "code.database.mongodb"
+}

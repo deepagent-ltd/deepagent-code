@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:ios:app-lifecycle-and-reclamation",
+  "type": "knowledge",
+  "title": "App lifecycle and system reclamation",
+  "description": "iOS moves apps through active/background/suspended states and can terminate suspended apps to reclaim resources without warning.",
+  "body": "Use when handling backgrounding or persistence. iOS transitions an app between foreground-active, background (briefly), and suspended; a suspended app does no work and can be terminated at any time to free memory, often with no callback. Background execution is a limited, API-gated privilege, not a default. Do not assume your process keeps running or gets a clean shutdown. Actions: persist state when entering background, use the proper background API for needed work, and restore on relaunch. Validation signals include correct restoration after a system kill. Risk boundary: assuming continuous background execution loses in-flight work when the system reclaims the app, and unsaved state at suspension is simply gone after termination — design for abrupt suspension.",
+  "domain": "ios",
+  "scope_hint": "code.mobile.ios:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mobile.ios",
+  "pack_id": "code.mobile.ios"
+}

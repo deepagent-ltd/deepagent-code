@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:sigproc:fixed-point-overflow",
+  "type": "failure_dossier",
+  "description": "Fixed-point output flips sign abruptly under loud input because an accumulator overflowed and wrapped around.",
+  "body": "Failure mode: an integer accumulator lacks guard bits, so a large intermediate sum exceeds the representable range and wraps to the opposite sign. Detection signals: sudden polarity inversions on peaks, errors that appear only at high input levels, and intermediate values pinned at the format extremes. Do not raise input gain while the accumulator can wrap. Safer fallback: add guard bits or saturating arithmetic and re-profile the dynamic range against realistic peaks.",
+  "domain": "signal_processing",
+  "scope_hint": "hardware.signal-processing:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.signal-processing:human_authored",
+  "pack_id": "hardware.signal-processing"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "failure_dossier:security:ui-only-authz",
+  "type": "failure_dossier",
+  "title": "UI-only authorization",
+  "description": "A change hides an action in the UI but leaves the API or service path callable.",
+  "body": "Failure mode: the implementation removes buttons, menu entries, or client routes for unauthorized users but does not enforce the same rule at the trusted boundary. It often passes manual browser checks while direct requests still succeed. Detection signals include missing server-side policy tests, client-only role checks, and API calls that return protected data when the UI is bypassed. Remediation is not to add more UI conditions; add trusted enforcement and negative tests. Human gate is required if no server-side owner for the policy exists. Use when a proposed approach skips trust boundaries, authorization decisions, dangerous sinks, secrets, and dependency execution or claims success without domain evidence. Do not use this dossier as a positive implementation strategy; it is a do-not-use signal. Actions: block the shortcut, name the missing evidence, and switch to a safer methodology or ask for human approval. Validation signals include absence or contradiction in negative security tests, server-side checks, sink payload tests, and secret scans. Risk boundary: treat repeated recurrence as a blocker when it can cause client-only controls, injection, credential leakage, permissive fallback, and unsafe dependency changes.",
+  "domain": "authz",
+  "scope_hint": "risk.security:failure_dossiers",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.security",
+  "pack_id": "risk.security"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:ios:privacy-and-permissions-model",
+  "type": "knowledge",
+  "title": "iOS privacy and permission model",
+  "description": "Access to sensitive data is gated by user-granted permissions plus mandatory Info.plist usage strings, and misuse is enforced at runtime and in review.",
+  "body": "Use when accessing protected data (location, camera, photos, contacts, health, tracking). iOS requires a per-API usage-description string in Info.plist and an explicit user authorization prompt; accessing the API without the string crashes the app, and tracking across apps needs App Tracking Transparency consent. App Privacy details must declare what you collect. Do not access protected APIs without declaring and requesting them. Actions: add usage strings, request in context, handle denial. Validation signals include prompts appearing correctly and no missing-string crash. Risk boundary: a missing usage string is a guaranteed runtime crash, and inaccurate privacy declarations cause App Store rejection or removal — the privacy model is enforced both at runtime and at review.",
+  "domain": "ios",
+  "scope_hint": "code.mobile.ios:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mobile.ios",
+  "pack_id": "code.mobile.ios"
+}

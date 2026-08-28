@@ -1,0 +1,143 @@
+import fs from "fs/promises"
+import path from "path"
+import { afterAll, beforeAll, describe, expect } from "bun:test"
+import { Effect, Layer, Schema } from "effect"
+import { Tool } from "@deepagent-code/core/public"
+import { AgentV2 } from "@deepagent-code/core/agent"
+import { Catalog } from "@deepagent-code/core/catalog"
+import { LocationServiceMap } from "@deepagent-code/core/location-layer"
+import { PluginBoot } from "@deepagent-code/core/plugin/boot"
+import { ProviderV2 } from "@deepagent-code/core/provider"
+import { AbsolutePath } from "@deepagent-code/core/schema"
+import { tmpdir } from "./fixture/tmpdir"
+import { testEffect } from "./lib/effect"
+import { toolDefinitions } from "./lib/tool"
+import { FSUtil } from "../src/fs-util"
+import { Auth } from "../src/auth"
+import { EventV2 } from "../src/event"
+import { Global } from "../src/global"
+import { ModelsDev } from "../src/models-dev"
+import { Npm } from "../src/npm"
+import { Project } from "../src/project"
+import { ProjectReference } from "../src/project-reference"
+import { LocationSearch } from "../src/location-search"
+import { ToolRegistry } from "../src/tool/registry"
+import { ApplicationTools } from "../src/tool/application-tools"
+import { Flag } from "../src/flag/flag"
+
+const applicationTools = ApplicationTools.layer
+const it = testEffect(
+  Layer.merge(
+    applicationTools,
+    LocationServiceMap.layer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          Project.defaultLayer,
+          EventV2.defaultLayer,
+          Auth.defaultLayer,
+          Npm.defaultLayer,
+          ModelsDev.defaultLayer,
+          FSUtil.defaultLayer,
+          Global.defaultLayer,
+        ),
+      ),
+    ),
+  ),
+)
+
+describe("LocationServiceMap", () => {
+  // ModelsDevPlugin.refresh() calls modelsDev.get() which acquires a cross-process
+  // Flock on models.json. On a developer machine where the main app holds that lock,
+  // PluginBoot.wait() never returns. Disable the models fetch for this test file so
+  // boot completes instantly without any network or file-locking. Same pattern as
+  // packages/core/test/models.test.ts.
+  const ORIGINAL_DISABLE_FETCH = Flag.DEEPAGENT_CODE_DISABLE_MODELS_FETCH
+  beforeAll(() => {
+    Flag.DEEPAGENT_CODE_DISABLE_MODELS_FETCH = true
+  })
+  afterAll(() => {
+    Flag.DEEPAGENT_CODE_DISABLE_MODELS_FETCH = ORIGINAL_DISABLE_FETCH
+  })
+
+  it.live("isolates location state while sharing location policy with catalog", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => Promise.all([tmpdir(), tmpdir()])),
+      (dirs) => Effect.promise(() => Promise.all(dirs.map((dir) => dir[Symbol.asyncDispose]())).then(() => undefined)),
+    ).pipe(
+      Effect.flatMap(([blocked, allowed]) =>
+        Effect.gen(function* () {
+          yield* (yield* ApplicationTools.Service).register({
+            application_context: Tool.make({
+              description: "Read application context",
+              input: Schema.Struct({}),
+              output: Schema.Struct({ ok: Schema.Boolean }),
+              execute: () => Effect.succeed({ ok: true }),
+            }),
+          })
+          yield* Effect.promise(() =>
+            fs.writeFile(
+              path.join(blocked.path, "deepagent-code.json"),
+              JSON.stringify({
+                experimental: { policies: [{ effect: "deny", action: "provider.use", resource: "test" }] },
+              }),
+            ),
+          )
+
+          const update = (directory: string) =>
+            Effect.gen(function* () {
+              yield* PluginBoot.Service.use((boot) => boot.wait())
+              yield* ProjectReference.Service
+              yield* LocationSearch.Service
+              const catalog = yield* Catalog.Service
+              const agents = yield* AgentV2.Service
+              const tools = yield* ToolRegistry.Service
+              const transform = yield* catalog.transform()
+              yield* transform((editor) => editor.provider.update(ProviderV2.ID.make("test"), () => {}))
+              return {
+                providers: yield* catalog.provider.all(),
+                tools: yield* toolDefinitions(tools),
+                researcherTools: yield* tools
+                  .materialize((yield* agents.get(AgentV2.ID.make("researcher")))?.permissions)
+                  .pipe(Effect.map((tools) => tools.definitions.map((tool) => tool.name).sort())),
+              }
+            }).pipe(Effect.scoped, Effect.provide(LocationServiceMap.get({ directory: AbsolutePath.make(directory) })))
+
+          const blockedState = yield* update(blocked.path)
+          expect(blockedState.providers.some((provider) => provider.id === ProviderV2.ID.make("test"))).toBe(false)
+          expect(blockedState.tools.map((tool) => tool.name).sort()).toEqual([
+            "application_context",
+            "apply_patch",
+            "bash",
+            "edit",
+            "glob",
+            "grep",
+            "question",
+            "read",
+            "skill",
+            "webfetch",
+            "websearch",
+            "write",
+          ])
+          expect(blockedState.researcherTools).toEqual(["glob", "grep", "read", "webfetch", "websearch"])
+          const allowedState = yield* update(allowed.path)
+          expect(allowedState.providers.some((provider) => provider.id === ProviderV2.ID.make("test"))).toBe(true)
+          expect(allowedState.tools.map((tool) => tool.name).sort()).toEqual([
+            "application_context",
+            "apply_patch",
+            "bash",
+            "edit",
+            "glob",
+            "grep",
+            "question",
+            "read",
+            "skill",
+            "webfetch",
+            "websearch",
+            "write",
+          ])
+          expect(allowedState.researcherTools).toEqual(["glob", "grep", "read", "webfetch", "websearch"])
+        }),
+      ),
+    ),
+  15000)
+})

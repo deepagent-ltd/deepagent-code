@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:git:perform-interactive-rebase",
+  "type": "skill",
+  "title": "Run an interactive rebase to reshape commits",
+  "description": "Reorder, squash, edit, and reword commits on a branch using git rebase -i, verifying the build at the end.",
+  "body": "Use when asked to tidy a branch's commits before merge. Do not apply it to commits already pulled by others. Actions: identify the base; run git rebase -i <base>; in the todo list set pick, squash, fixup, edit, or reword per commit; resolve any conflicts the rebase surfaces; build and test at the final state; push with --force-with-lease if the branch was already remote. Validation signals include a clean linear history and passing tests at HEAD. Risk boundary: rewriting published commits is destructive, so confine to private branches or confirm with collaborators first.",
+  "domain": "git_workflow",
+  "scope_hint": "code.git-workflow:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.git-workflow",
+  "pack_id": "code.git-workflow"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:finance:reconciliation-skipped-trusting-internal",
+  "type": "failure_dossier",
+  "description": "Trusting internal balances as final without reconciling against the processor or bank, so silent breaks accumulate undetected.",
+  "body": "Failure mode: internal records are treated as authoritative and never compared against the external settlement source, so missed fees, failed settlements, or dropped entries accumulate until a large unexplained gap surfaces. Detection signals: no scheduled reconciliation; internal totals diverge from bank/processor reports; breaks discovered only during an audit. Do not assume internal state matches reality without verification. Safer fallback: reconcile against the external source of truth on a schedule, classify every break, and investigate before adjusting. Risk boundary: advisory only; escalate unexplained reconciliation breaks to a human and never post a forcing adjustment to make totals match.",
+  "domain": "finance",
+  "scope_hint": "business.finance:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:business.finance:human_authored",
+  "pack_id": "business.finance"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "failure_dossier:production:feature-flag-default-on",
+  "type": "failure_dossier",
+  "title": "Feature flag default on",
+  "description": "A risky feature flag defaults enabled or targets broad production users before validation.",
+  "body": "Failure mode: a flag is introduced but default state exposes new behavior broadly, making rollback depend on hurried config edits. Detection signals include default true, broad percentage rollout, missing disabled-path tests, or no owner. Remediation is conservative default, both-path tests, monitoring, and explicit enablement approval. Human gate is required for production exposure. Use when a proposed approach skips repository conventions, toolchain files, changed symbols, validation commands, and runtime output or claims success without domain evidence. Do not use this dossier as a positive implementation strategy; it is a do-not-use signal. Actions: block the shortcut, name the missing evidence, and switch to a safer methodology or ask for human approval. Validation signals include absence or contradiction in package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: treat repeated recurrence as a blocker when it can cause broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes.",
+  "domain": "deployment",
+  "scope_hint": "risk.production:failure_dossiers",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:risk.production",
+  "pack_id": "risk.production"
+}

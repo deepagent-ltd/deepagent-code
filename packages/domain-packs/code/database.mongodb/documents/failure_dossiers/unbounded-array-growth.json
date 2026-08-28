@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:mongo:unbounded-array-growth",
+  "type": "failure_dossier",
+  "description": "Embedding an ever-growing array pushes a document toward the 16MB limit and degrades updates.",
+  "body": "Failure mode: an array field that grows without bound (appended events, comments, readings) inflates the document, rewriting the whole thing on every push and eventually failing at the 16MB BSON cap. Detection signals: Object.bsonsize() trends upward over time, update latency rises as the document grows, and a push eventually raises BSONObjectTooLarge. Do not embed unbounded collections in a parent document. Safer fallback: move the growing set to its own collection keyed by the parent id with an index, or use the bucket pattern to cap elements per document, then migrate existing oversized documents.",
+  "domain": "mongodb",
+  "scope_hint": "code.database.mongodb:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.mongodb:human_authored",
+  "pack_id": "code.database.mongodb"
+}

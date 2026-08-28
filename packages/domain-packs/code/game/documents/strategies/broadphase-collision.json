@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:game:broadphase-collision",
+  "type": "strategy",
+  "title": "Use a broad phase for collision",
+  "description": "Cull candidate collision pairs with a spatial structure before doing exact narrow-phase tests, never checking every pair.",
+  "body": "Use when many entities can collide. Do not test all n^2 pairs each frame, and do not run expensive narrow-phase math on objects that are nowhere near each other. Actions: maintain a spatial partition (uniform grid, quadtree/octree, or sweep-and-prune), query it to get only nearby candidate pairs (broad phase), then run precise shape tests (narrow phase) on those few. Validation signals include collision cost scaling far below n^2 as entity count grows and stable frame time with many objects. Risk boundary: O(n^2) collision silently caps the entity count and tanks frame rate at scale; a brute-force pair loop is a scalability defect once entity counts grow.",
+  "domain": "game",
+  "scope_hint": "code.game:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.game",
+  "pack_id": "code.game"
+}

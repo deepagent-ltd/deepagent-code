@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:sqlite:set-busy-timeout-to-handle-contention",
+  "type": "strategy",
+  "title": "Set busy_timeout to handle write contention",
+  "description": "Configure busy_timeout so a connection waits for the writer lock instead of immediately failing with SQLITE_BUSY.",
+  "body": "Use when multiple connections may write and you see SQLITE_BUSY. Do not leave busy_timeout at the default 0, which makes any contended write fail instantly. Actions: set PRAGMA busy_timeout=<ms> (e.g. 5000) on every connection so it waits and retries for the lock; keep write transactions short so the writer lock is released quickly; for read-then-write use BEGIN IMMEDIATE to take the write lock up front and avoid an upgrade deadlock. Validation signals include a concurrency test where contended writes succeed after a brief wait rather than erroring. Risk boundary: a long busy_timeout masking a long-held write transaction just trades errors for latency; fix the slow transaction.",
+  "domain": "sqlite",
+  "scope_hint": "code.database.sqlite:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.sqlite",
+  "pack_id": "code.database.sqlite"
+}

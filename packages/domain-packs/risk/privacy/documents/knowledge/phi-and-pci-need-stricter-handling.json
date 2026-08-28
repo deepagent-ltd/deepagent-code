@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:privacy:phi-and-pci-need-stricter-handling",
+  "type": "knowledge",
+  "title": "PHI and PCI need stricter handling",
+  "description": "Health information tied to a person and payment card data require stricter engineering controls than ordinary profile fields.",
+  "body": "Use when fields, routes, logs, or exports may include clinical, insurance, medical, card, payment, or billing-sensitive data. Do not provide compliance certification or decide allowed processing. Actions: avoid copying to prompts/logs, minimize fields, require explicit human review, and prefer tokenized or specialized processors when the project already uses them. Validation signals include absence from logs and tests for redaction. Risk boundary: any new PHI or PCI sink requires human gate. Use when Privacy Risk Controls work touches personal-data classes, sinks, retention, consent, logs, prompts, and exports. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: use the fact to constrain the change and test plan; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include data inventory, redaction tests, retention checks, export/delete tests, and approval evidence. Risk boundary: escalate or stop when the task involves PII disclosure, consent bypass, retention drift, and unapproved processor expansion, missing owner evidence, or live external state.",
+  "domain": "phi",
+  "scope_hint": "risk.privacy:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.privacy",
+  "pack_id": "risk.privacy"
+}

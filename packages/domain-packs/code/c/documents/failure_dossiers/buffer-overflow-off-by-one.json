@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:c:buffer-overflow-off-by-one",
+  "type": "failure_dossier",
+  "description": "Writing past the end of a buffer, often an off-by-one from forgetting the NUL terminator or using <= in a bound.",
+  "body": "Failure mode: a loop or string copy writes one or more bytes beyond the allocated size (e.g. strcpy with no room for '\\0', or `for (i=0; i<=n; i++)`), smashing adjacent memory or the stack canary. Detection signals: ASan stack/heap-buffer-overflow; corrupted neighboring variables; crashes only with max-length input. Do not assume input fits or that a fixed buffer is large enough. Safer fallback: use sized operations (snprintf, memcpy with an explicit length, strlcpy), always reserve room for the terminator, validate input length first, and confirm with an ASan run on a boundary-length input.",
+  "domain": "c",
+  "scope_hint": "code.c:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.c:human_authored",
+  "pack_id": "code.c"
+}

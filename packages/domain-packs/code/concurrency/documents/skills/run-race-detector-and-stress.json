@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:conc:run-race-detector-and-stress",
+  "type": "skill",
+  "title": "Run a race detector and stress test",
+  "description": "Execute the test suite under a race detector and a high-concurrency stress loop to surface races and hangs.",
+  "body": "Use when validating a concurrency change. Procedure: build/run the relevant tests under the language's race detector (Go -race, ThreadSanitizer, etc.), then run the targeted operation in a high-parallelism stress loop asserting its invariant, and watch for detector reports, hangs, or invariant violations. Report each detector finding with the conflicting accesses and whether the stress test held. This skill runs tests only and must not run against production or shared infrastructure. Validation signals include a clean detector run and a repeatedly-passing stress test. Risk boundary: if the detector reports a race or the stress test hangs, stop and treat it as a blocking defect rather than retrying until green.",
+  "domain": "concurrency",
+  "scope_hint": "code.concurrency:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.concurrency",
+  "pack_id": "code.concurrency"
+}

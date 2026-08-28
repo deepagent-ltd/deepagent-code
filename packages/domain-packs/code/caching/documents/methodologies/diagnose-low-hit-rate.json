@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:cache:diagnose-low-hit-rate",
+  "type": "methodology",
+  "title": "Diagnose a low hit rate",
+  "description": "Attribute misses to expiry, eviction, or never-cached reads, then fix the dominant cause.",
+  "body": "Steps: 1. Measure hit rate and break misses into expiry, eviction, and never-cached. 2. If evictions dominate, compare memory limit and key cardinality against capacity. 3. If expiry dominates, check whether the TTL is shorter than the access interval. 4. If never-cached, confirm the read path consults the cache before the origin. 5. Adjust the dominant factor and re-measure. Rollback point: before raising memory limits in production. Validation: hit rate rises and origin load falls after the targeted change.",
+  "domain": "caching",
+  "scope_hint": "code.caching:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.caching",
+  "pack_id": "code.caching"
+}

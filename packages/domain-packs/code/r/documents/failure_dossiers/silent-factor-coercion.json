@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:rlang:silent-factor-coercion",
+  "type": "failure_dossier",
+  "description": "A character column becomes a factor implicitly, so as.numeric returns level codes instead of the real values.",
+  "body": "Failure mode: a character column is coerced to factor on import or construction, and a later as.numeric returns the integer level codes rather than the intended values, silently corrupting the analysis. Detection signals: numbers that look like small sequential integers after conversion; joins failing on columns that print identically; unexpected factor class in str(). Do not convert a factor straight to numeric. Safer fallback: import with character columns, convert via as.numeric(as.character(x)), and set factor levels explicitly only where needed.",
+  "domain": "r_lang",
+  "scope_hint": "code.r:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.r:human_authored",
+  "pack_id": "code.r"
+}

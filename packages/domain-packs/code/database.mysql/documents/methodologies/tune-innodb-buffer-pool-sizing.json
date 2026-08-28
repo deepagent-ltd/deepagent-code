@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:mysql:tune-innodb-buffer-pool-sizing",
+  "type": "methodology",
+  "title": "Tune InnoDB buffer pool sizing",
+  "description": "Size innodb_buffer_pool_size against the hot working set and confirm the hit ratio rather than guessing a fraction of RAM.",
+  "body": "Use when read latency rises and disk reads dominate the I/O profile. Actions: measure the hot working-set size from INNODB_BUFFER_POOL_STATS, set innodb_buffer_pool_size large enough to hold it (commonly the bulk of a dedicated server's RAM, but driven by data not a fixed 70% rule), split into multiple instances for concurrency, and warm the pool on restart. Verify by comparing buffer-pool reads to disk reads before and after. Validation signals include the buffer-pool hit ratio approaching one and Innodb_buffer_pool_reads (disk) dropping sharply. Risk boundary: oversizing the pool on a shared host can trigger the OOM killer, so leave headroom and confirm the host is dedicated before claiming most of RAM.",
+  "domain": "mysql",
+  "scope_hint": "code.database.mysql:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.mysql",
+  "pack_id": "code.database.mysql"
+}

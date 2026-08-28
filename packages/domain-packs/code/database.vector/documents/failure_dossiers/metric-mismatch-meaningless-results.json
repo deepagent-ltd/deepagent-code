@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:vdb:metric-mismatch-meaningless-results",
+  "type": "failure_dossier",
+  "description": "Querying with a different distance metric than the index was built with returns wrong neighbours.",
+  "body": "Failure mode: an index built for cosine is queried with an L2 operator (or vice versa), so the distances computed do not match how the model encodes similarity and the returned neighbours are wrong even though the query succeeds. Detection signals: top-k results are obviously irrelevant, recall against ground truth is near zero, and the query operator does not match the index's operator class. Do not mix metrics between build and query. Safer fallback: assert one metric end to end, rebuild the index with the operator class matching the model's training metric, and normalize vectors when using cosine so the metric is consistent.",
+  "domain": "vector_db",
+  "scope_hint": "code.database.vector:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.vector:human_authored",
+  "pack_id": "code.database.vector"
+}

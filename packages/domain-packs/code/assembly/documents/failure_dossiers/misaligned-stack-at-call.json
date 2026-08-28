@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:asm:misaligned-stack-at-call",
+  "type": "failure_dossier",
+  "description": "Letting the stack pointer fall out of the ABI-required alignment before a call, crashing aligned-memory instructions in the callee.",
+  "body": "Failure mode: the function pushes an odd number of registers or miscomputes its frame, so the stack pointer is not 16-byte aligned at a call; a callee (or a library function) executes an aligned SSE/NEON load against the misaligned stack and faults, deep inside code that looks unrelated. Detection signals: intermittent crashes inside library/SSE code reached through the asm function; the debugger shows sp not 16-byte aligned at the call; the crash disappears when one extra push/pad is added. Do not ignore stack alignment. Safer fallback: account for the return address and all pushes when aligning, reserve frame space in one aligned adjustment, and verify sp alignment at every call site in the debugger.",
+  "domain": "assembly",
+  "scope_hint": "code.assembly:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.assembly:human_authored",
+  "pack_id": "code.assembly"
+}

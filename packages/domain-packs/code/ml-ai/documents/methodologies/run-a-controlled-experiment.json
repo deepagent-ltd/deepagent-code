@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:mlai:run-a-controlled-experiment",
+  "type": "methodology",
+  "title": "Run a controlled experiment",
+  "description": "Change one variable at a time against a fixed baseline with logged config and seeds so results are attributable and reproducible.",
+  "body": "Steps: 1. Establish a baseline and record its full config (data version, seed, hyperparameters). 2. Change exactly one variable for the candidate run. 3. Run both across the same seeds. 4. Compare validation distributions, not single points. 5. Record the config, metric, and seed for every run in an experiment tracker. Rollback point: revert to the baseline config if the candidate regresses. Validation: the baseline reproduces from its logged config and the candidate's effect exceeds seed variance; changing several knobs at once makes any gain unattributable.",
+  "domain": "ml",
+  "scope_hint": "code.ml-ai:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.ml-ai",
+  "pack_id": "code.ml-ai"
+}

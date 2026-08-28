@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:svc:implement-graceful-shutdown",
+  "type": "methodology",
+  "title": "Implement graceful shutdown",
+  "description": "Wire signal handling, work draining, and a bounded deadline so deploys and scale-downs lose no in-flight work.",
+  "body": "Steps: 1. Trap SIGTERM/SIGINT and flip a draining flag. 2. Stop accepting new requests/messages (close listener, pause fetch). 3. Wait for in-flight handlers with a deadline shorter than the orchestrator grace period. 4. Re-queue or nack anything unfinished; flush buffers and close pools. 5. Exit 0. Rollback point: the draining flag can be disabled to fall back to immediate exit. Validation: a SIGTERM-under-load test asserts zero dropped jobs and that readiness flips before draining so the load balancer stops routing.",
+  "domain": "backend_service",
+  "scope_hint": "code.backend.service:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.service",
+  "pack_id": "code.backend.service"
+}

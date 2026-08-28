@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:gfx:minimize-state-changes-and-draws",
+  "type": "strategy",
+  "title": "Batch by state to cut draw overhead",
+  "description": "Sort and batch draws by pipeline/material/texture so the CPU issues fewer state changes and the GPU front end is not starved.",
+  "body": "Use when the frame is CPU-bound on draw submission or has thousands of small draws. Do not rebind the same pipeline or texture per object, and avoid one draw call per mesh when instancing applies. Actions: sort draws by pipeline then material then texture, merge identical-material meshes, and use instanced draws for repeated geometry; record draw-call count before and after. Validation signals include a lower CPU frame time and reduced draw/state-change counts in a GPU profiler. Risk boundary: over-merging can break per-object culling or correctness; verify the batched output matches the reference image before keeping the optimization.",
+  "domain": "graphics",
+  "scope_hint": "code.graphics:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.graphics",
+  "pack_id": "code.graphics"
+}

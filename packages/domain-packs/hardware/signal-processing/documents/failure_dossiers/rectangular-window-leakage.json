@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:sigproc:rectangular-window-leakage",
+  "type": "failure_dossier",
+  "description": "Closely spaced tones blur into one another because a rectangular analysis window spread their energy across many bins.",
+  "body": "Failure mode: a non-periodic block analyzed with an implicit rectangular window produces high side lobes that smear each tone across neighboring bins. Detection signals: broad skirts around every peak, an inability to separate two known nearby tones, and amplitude readings that vary with block alignment. Do not report amplitudes from a rectangular-windowed spectrum when accuracy matters. Safer fallback: apply a tapered window such as Hann or Blackman-Harris and re-measure with the window's known scaling correction.",
+  "domain": "signal_processing",
+  "scope_hint": "hardware.signal-processing:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.signal-processing:human_authored",
+  "pack_id": "hardware.signal-processing"
+}

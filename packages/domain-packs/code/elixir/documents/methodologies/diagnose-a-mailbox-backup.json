@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:elixir:diagnose-a-mailbox-backup",
+  "type": "methodology",
+  "title": "Diagnose a GenServer mailbox backup",
+  "description": "Trace timeouts and growing memory to a process whose serial loop is blocked on slow work.",
+  "body": "Steps: 1. Observe the symptom: GenServer.call timeouts, latency under load, or growing memory. 2. Inspect the process with Process.info(pid, :message_queue_len) (or :observer) to confirm a long mailbox. 3. Find the handle_call/handle_cast doing slow I/O or CPU work that serializes messages. 4. Offload that work to a Task or split the responsibility across processes / a pool. 5. Re-measure the queue length under load. Rollback point: before changing the process topology. Validation: message_queue_len stays bounded under load and callers no longer time out, confirmed by a load test.",
+  "domain": "elixir",
+  "scope_hint": "code.elixir:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.elixir",
+  "pack_id": "code.elixir"
+}

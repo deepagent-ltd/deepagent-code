@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:gpu:float4-vectorized-load",
+  "type": "strategy",
+  "description": "Use float4 vectorized loads to improve global-to-shared memory bandwidth in CUDA/GPU kernels. 用 float4 向量化 load 提升 global→shared 搬运的带宽利用率。",
+  "body": "用 float4 向量化 load 提升 global→shared 搬运的带宽利用率。地址必须 16 字节对齐；搬运粒度从 4B 提升到 16B，减少内存事务数量。. Use when GPU kernel correctness and profiling work touches kernel launch parameters, memory-access shape, correctness harnesses, occupancy evidence, and profiler counters. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: choose the smallest direction that preserves the domain contract; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include golden-output comparisons, deterministic benchmark runs, sanitizer output, Nsight or rocprof evidence, and CPU/GPU tolerance checks. Risk boundary: escalate or stop when the task involves benchmark-only changes, silent numerical drift, undefined synchronization, bank conflicts, and hardware-specific regressions, missing owner evidence, or live external state.",
+  "domain": "gpu_kernel",
+  "scope_hint": "gpu_kernel",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:gpu_kernel",
+  "pack_id": "code.gpu-kernel"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:cli:inspect-stream-and-exit-behavior",
+  "type": "skill",
+  "title": "Inspect stream routing and exit codes",
+  "description": "Run a CLI under redirection to verify data/diagnostic separation and that exit codes match documented success/failure.",
+  "body": "Use when reviewing a CLI's contract. Actions: run the tool with stdout and stderr redirected separately and with piped input, confirm only data lands on stdout and diagnostics on stderr, and check `echo $?` against the documented exit code for success and each failure path. Report any stream mixing or wrong exit code with the failing invocation. Do not modify the program. This skill exposes capability only and must not run destructive subcommands without runtime permission. Validation signals include clean stdout under redirection and correct codes. Risk boundary: exit-0-on-failure and diagnostics-on-stdout are blocking findings that break CI and pipelines; report rather than ship.",
+  "domain": "cli",
+  "scope_hint": "code.cli:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.cli",
+  "pack_id": "code.cli"
+}

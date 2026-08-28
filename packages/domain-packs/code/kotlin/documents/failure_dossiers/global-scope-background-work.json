@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:kotlin:global-scope-background-work",
+  "type": "failure_dossier",
+  "description": "GlobalScope background work",
+  "body": "GlobalScope or detached jobs can outlive tests, requests, or Android lifecycles. Treat as a failure signal unless the repository has an explicit long-lived application scope. Safer path: pass an owned scope and propagate cancellation.\n\nUse only as a diagnostic do-not-use signal; do not expose this as positive strategy, methodology, knowledge, skill, or memory.",
+  "domain": "kotlin",
+  "scope_hint": "code.kotlin:failure_dossiers",
+  "evidence_strength": "medium",
+  "provenance_tag": "code.kotlin:failure_seed:paraphrased_common_failures",
+  "pack_id": "code.kotlin"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:ios:ui-updates-on-main-thread",
+  "type": "strategy",
+  "title": "Keep all UI updates on the main thread",
+  "description": "Mutate UIKit views and SwiftUI observable state only on the main thread, hopping back from any background work.",
+  "body": "Use when updating UI after async work (network, disk, computation). Do not touch UIKit views or published state from a background queue, and do not assume a completion handler runs on main. Actions: perform heavy work off the main thread, then hop to the main actor / main queue (DispatchQueue.main.async or @MainActor) to apply UI changes; mark UI-driving types @MainActor. Validation signals include the Main Thread Checker showing no violations and no intermittent UI corruption. Risk boundary: updating UIKit off the main thread causes nondeterministic crashes and corruption that surface only under timing — a background UI mutation is a real defect even when it 'usually works'.",
+  "domain": "ios",
+  "scope_hint": "code.mobile.ios:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mobile.ios",
+  "pack_id": "code.mobile.ios"
+}

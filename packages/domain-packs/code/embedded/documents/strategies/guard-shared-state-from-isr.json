@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:embed:guard-shared-state-from-isr",
+  "type": "strategy",
+  "title": "Guard state shared between ISR and task",
+  "description": "Protect data touched by both an interrupt and the base level with volatile plus the right critical section or lock-free pattern.",
+  "body": "Use whenever a variable or buffer is written in an ISR and read in a task (or vice versa). Do not assume single-word accesses are atomic on the target, and do not forget volatile on hardware/ISR-shared variables. Actions: mark ISR-shared variables volatile, use a short critical section (disable interrupts) or a lock-free ring buffer for multi-byte data, and keep the protected region tiny. Validation signals include a stress test toggling the interrupt at high rate with no corrupted or torn reads. Risk boundary: a torn read or lost update from an unprotected ISR/task race is a rare field-only heisenbug; treat any unsynchronized ISR-shared state as blocking and verify under interrupt stress.",
+  "domain": "embedded",
+  "scope_hint": "code.embedded:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.embedded",
+  "pack_id": "code.embedded"
+}
