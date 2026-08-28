@@ -579,6 +579,8 @@ export type ForkFromSafeBoundaryInput = {
   /** Caller-supplied fork session id (converges an exact retry on the SAME fork). */
   readonly forkSessionId?: string
   readonly now?: number
+  /** Test seam: inject a crash between the fork-manifest build and the fork+fence commit. */
+  readonly fault?: { readonly at: "after_fork_stage" }
 }
 
 /** C1B-07 outcome: forked, existing (exact retry, no second fork), or a typed conflict. */
@@ -595,6 +597,8 @@ export type ConfirmSettledInput = {
   /** Decoded as a frozen `RecoveryEvidence`; free text is refused (typed). */
   readonly evidence: unknown
   readonly now?: number
+  /** Test seam: inject a crash between the settled-verdict CAS and the evidence commit. */
+  readonly fault?: { readonly at: "after_evidence_stage" }
 }
 
 /** C1B-08 outcome: settled, existing (idempotent verdict), or a typed conflict. */
@@ -657,6 +661,8 @@ export interface Interface {
   readonly recordCommand: (input: {
     readonly requestHash: string
     readonly attemptIdentity: AttemptIdentity
+    /** Test seam: inject a crash between the command CAS and the command commit. */
+    readonly fault?: { readonly at: "after_command_stage" }
   }) => Effect.Effect<CommandWriteOutcome, Error>
   /** Read a command record by content address. */
   readonly getCommand: (commandId: string) => Effect.Effect<CommandRecord | undefined>
@@ -833,11 +839,18 @@ export const layer = Layer.effect(
     const recordCommand = Effect.fn("SessionProviderRecovery.recordCommand")(function* (input: {
       readonly requestHash: string
       readonly attemptIdentity: AttemptIdentity
+      readonly fault?: { readonly at: "after_command_stage" }
     }) {
       return yield* Semaphore.withPermits(lock, 1)(
         Effect.gen(function* () {
           const state = yield* Ref.get(store)
           const write = commandCas(commandsOf(state), input)
+          // C1B-12 crash seam: a crash injected when the command WOULD be newly recorded aborts the
+          // commit (nothing is written); an idempotent existing/mismatch write changes no state so
+          // it needs no crash seam.
+          if (input.fault?.at === "after_command_stage" && write.status === "recorded") {
+            return yield* Effect.fail(new RecoveryTransactionAbortedError({ operation: "record_command" }))
+          }
           if (write.status === "recorded") yield* setCommand(state, write.commandId, write.record)
           return write
         }),
@@ -1074,7 +1087,7 @@ export const layer = Layer.effect(
             permission: requiredPermissionFor("fork_only"),
             forkSessionId,
             now: input.now,
-          })
+          }, input.fault)
           if (tx.status === "aborted") {
             return yield* Effect.fail(new RecoveryTransactionAbortedError({ operation: "fork_from_safe_boundary" }))
           }
@@ -1188,6 +1201,11 @@ export const layer = Layer.effect(
           if (cas.status === "existing") {
             const existing: ConfirmSettledOutcome = { status: "existing", evidenceRef: cas.evidenceRef }
             return existing
+          }
+          // C1B-12 crash seam: a crash injected after the settled-verdict CAS but before the
+          // evidence commit returns `aborted` and commits nothing (same-transaction or nothing).
+          if (input.fault?.at === "after_evidence_stage") {
+            return yield* Effect.fail(new RecoveryTransactionAbortedError({ operation: "confirm_settled" }))
           }
           const record: EvidenceRecord = {
             evidenceRef,

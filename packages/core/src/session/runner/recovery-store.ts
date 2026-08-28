@@ -588,6 +588,7 @@ export type ForkTransactionOutcome =
 export function forkTransaction(
   state: RecoveryStoreState,
   input: ForkTransactionInput,
+  fault?: { readonly at: "after_fork_stage" },
 ): CommitResult<RecoveryStoreState, ForkTransactionOutcome> {
   const forkRef = forkManifestRef({
     sourceSessionId: input.sourceSessionId,
@@ -617,6 +618,9 @@ export function forkTransaction(
     permission: input.permission,
     forkedAt: now,
   }
+  // C1B-12 crash seam: a crash injected after the fork manifest is built but before the fork +
+  // read-only fence are committed returns `aborted` and commits NEITHER (same-transaction or nothing).
+  if (fault?.at === "after_fork_stage") return { status: "aborted" }
   const next: RecoveryStoreState = {
     commands: cas.status === "recorded" ? set(state.commands, cas.commandId, cas.record) : state.commands,
     evidence: state.evidence,
