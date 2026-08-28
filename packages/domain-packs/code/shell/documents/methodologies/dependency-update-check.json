@@ -1,0 +1,11 @@
+{
+  "ref_id": "methodology:shell:dependency-update-check",
+  "type": "methodology",
+  "description": "In shell, when external binaries on PATH and their version/flag differences (GNU vs BSD) change, verify the lockfile, generated artifacts, and a runtime smoke.",
+  "body": "In shell, a dependency change ripples through external binaries on PATH and their version/flag differences (GNU vs BSD), generated bindings, and runtime behavior, so it needs more than a recompile. Use when external binaries on PATH and their version/flag differences (GNU vs BSD) are added, removed, or version-bumped. Do not merge a dependency bump on a green compile alone, and avoid editing the lockfile by hand. Actions: inspect the dependency delta, re-resolve and review external binaries on PATH and their version/flag differences (GNU vs BSD), regenerate affected generated completion scripts and here-doc / templated output, then run bats tests or a guarded dry-run with set -euo pipefail and smoke the import/runtime path. Validation signals include a reviewed lockfile diff, a clean shellcheck warnings (especially SC2086 word-splitting and SC2046) pass, and a passing runtime smoke. Risk boundary: escalate on a major-version bump, a transitive conflict you cannot resolve, or a license/security flag.",
+  "domain": "shell",
+  "scope_hint": "code.shell:methodologies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.shell:skill_survey",
+  "pack_id": "code.shell"
+}

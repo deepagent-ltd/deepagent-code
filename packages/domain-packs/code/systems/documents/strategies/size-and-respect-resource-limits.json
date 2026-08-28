@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:sys:size-and-respect-resource-limits",
+  "type": "strategy",
+  "title": "Size and respect file-descriptor and resource limits",
+  "description": "Set RLIMIT/ulimit for peak fd and memory use and design so the process degrades rather than hitting a hard limit.",
+  "body": "Use when a service opens many files, sockets, or threads. Do not assume the default soft limit (often 1024 fds) is enough or raise limits to mask a leak. Actions: estimate peak concurrent fds/memory/threads, set RLIMIT_NOFILE and related limits accordingly, and add backpressure so the process refuses new work before hitting the hard limit rather than crashing. Validation signals include load tests staying under the configured limits and a graceful 'busy' response at saturation instead of EMFILE crashes. Risk boundary: raising a limit to hide a leak defers the crash; first confirm via a leak test that usage is bounded, and treat persistent growth as the real defect to escalate.",
+  "domain": "systems",
+  "scope_hint": "code.systems:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.systems",
+  "pack_id": "code.systems"
+}

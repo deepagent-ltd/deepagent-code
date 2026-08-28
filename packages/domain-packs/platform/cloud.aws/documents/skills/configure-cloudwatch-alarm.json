@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:aws:configure-cloudwatch-alarm",
+  "type": "skill",
+  "title": "Configure a CloudWatch alarm that survives missing data",
+  "description": "Create an alarm with the correct statistic, period, evaluation/datapoints-to-alarm, and treatMissingData, wired to an action.",
+  "body": "Use when you need a reliable alarm on an AWS metric. Do not leave treatMissingData at its default when the metric can go silent during a failure. Actions: pick the statistic and period that match the SLO, set evaluationPeriods and datapointsToAlarm to dampen flapping, choose treatMissingData (notBreaching vs breaching) deliberately, and attach an SNS or Auto Scaling action. Verify by injecting a fault. Validation signals include the alarm transitioning OK->ALARM on the injected fault, recovering to OK, and never sticking in INSUFFICIENT_DATA for a live metric. Risk boundary: alarms that trigger production auto-remediation must be reviewed before enabling.",
+  "domain": "aws",
+  "scope_hint": "platform.cloud.aws:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.aws",
+  "pack_id": "platform.cloud.aws"
+}

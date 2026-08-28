@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:rag:review-grounding-and-citations",
+  "type": "skill",
+  "title": "Review grounding and citations",
+  "description": "Read a RAG answer path and report whether claims are grounded, citations resolve to supporting passages, and abstention fires.",
+  "body": "Use when asked whether a RAG answer is trustworthy. Actions: inspect the generation step for a requirement that each claim cite a passage; resolve each citation to its retrieved passage and verify the text supports the claim; trace whether an empty or low-relevance retrieval triggers abstention rather than a parametric guess. Do not accept a fluent answer as evidence of grounding. Report and record the exact claim/citation pairs that fail, classifying each as ungrounded, unsupported-citation, or missing-abstention. This skill is read-only and must not change the corpus or index without runtime permission. Validation signals include a confirmed ungrounded-claim flag on a crafted query. Risk boundary: an answer asserting unsupported facts is a blocking finding; recommend abstention.",
+  "domain": "rag",
+  "scope_hint": "code.rag:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.rag",
+  "pack_id": "code.rag"
+}

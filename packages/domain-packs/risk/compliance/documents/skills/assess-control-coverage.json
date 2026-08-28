@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:comp:assess-control-coverage",
+  "type": "skill",
+  "title": "Assess control coverage for a change",
+  "description": "Read the change and report which in-scope controls apply, whether each is enforced, and whether evidence exists.",
+  "body": "Use when asked whether a change is compliant. Actions: identify the regulated resources the change touches, list the controls that apply (audit logging, approval, SoD, retention), inspect the code/config that should enforce each, and verify a test or attestation proves it operates. Do not treat the presence of a control in code as proof it ran. Report and record each control as enforced-with-evidence, enforced-but-unverified, or a gap, citing the exact file or its absence. This skill is read-only and must not alter controls or approve changes without runtime permission. Validation signals include a control-to-evidence mapping for the change. Risk boundary: report any missing audit record, self-approval path, or absent control as a blocking finding and recommend a human gate.",
+  "domain": "compliance",
+  "scope_hint": "risk.compliance:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.compliance",
+  "pack_id": "risk.compliance"
+}

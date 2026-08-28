@@ -1,0 +1,484 @@
+[
+  {
+    "ref_id": "strategy:comp:preserve-semantics-in-every-pass",
+    "type": "strategy",
+    "title": "Preserve semantics in every transformation",
+    "summary": "Treat each optimization or lowering as a behavior-preserving rewrite and prove it on the full input domain, not one example.",
+    "domains": [
+      "compiler",
+      "parser",
+      "ir",
+      "codegen",
+      "optimization"
+    ],
+    "triggers": [
+      "semantics",
+      "optimization",
+      "miscompilation",
+      "equivalence",
+      "transformation",
+      "soundness"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.compiler"
+  },
+  {
+    "ref_id": "strategy:comp:define-stage-contracts",
+    "type": "strategy",
+    "title": "Define a precise contract per stage",
+    "summary": "Give each pipeline stage an explicit input/output invariant so bugs are localized and stages can be tested in isolation.",
+    "domains": [
+      "compiler",
+      "parser",
+      "ir",
+      "codegen",
+      "optimization"
+    ],
+    "triggers": [
+      "contract",
+      "invariant",
+      "pipeline",
+      "stage",
+      "interface",
+      "isolation"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.compiler"
+  },
+  {
+    "ref_id": "strategy:comp:recover-from-parse-errors",
+    "type": "strategy",
+    "title": "Recover from parse errors gracefully",
+    "summary": "Make the parser resynchronize after an error so it reports multiple useful diagnostics instead of one cascade of noise.",
+    "domains": [
+      "compiler",
+      "parser",
+      "ir",
+      "codegen",
+      "optimization"
+    ],
+    "triggers": [
+      "error recovery",
+      "parser",
+      "diagnostic",
+      "resync",
+      "panic mode",
+      "cascade"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.compiler"
+  },
+  {
+    "ref_id": "strategy:comp:keep-type-system-sound",
+    "type": "strategy",
+    "title": "Keep the type system sound",
+    "summary": "Ensure type rules reject every ill-typed program (no false accepts) so well-typed programs cannot go wrong at runtime in the ways the type system promises.",
+    "domains": [
+      "compiler",
+      "parser",
+      "ir",
+      "codegen",
+      "optimization"
+    ],
+    "triggers": [
+      "type checker",
+      "soundness",
+      "type rule",
+      "inference",
+      "unification",
+      "ill-typed"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.compiler"
+  },
+  {
+    "ref_id": "strategy:comp:design-ir-for-analysis",
+    "type": "strategy",
+    "title": "Design the IR for analysis and rewriting",
+    "summary": "Choose an IR (often SSA) whose invariants make data-flow analysis and transformation simple and verifiable, and enforce them.",
+    "domains": [
+      "compiler",
+      "parser",
+      "ir",
+      "codegen",
+      "optimization"
+    ],
+    "triggers": [
+      "ir",
+      "ssa",
+      "data flow",
+      "invariant",
+      "cfg",
+      "representation"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.compiler"
+  },
+  {
+    "ref_id": "strategy:comp:generate-correct-code-first",
+    "type": "strategy",
+    "title": "Generate correct code before fast code",
+    "summary": "Lower the IR to target code that is provably correct (calling convention, evaluation order, side effects) before applying performance-oriented codegen.",
+    "domains": [
+      "compiler",
+      "parser",
+      "ir",
+      "codegen",
+      "optimization"
+    ],
+    "triggers": [
+      "codegen",
+      "lowering",
+      "correctness",
+      "calling convention",
+      "side effect",
+      "order"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.compiler"
+  },
+  {
+    "ref_id": "methodology:comp:build-a-lexer-and-parser",
+    "type": "methodology",
+    "title": "Build a lexer and parser to an AST",
+    "summary": "Implement tokenization and parsing for a grammar, producing a well-formed AST with source locations and useful errors.",
+    "domains": [
+      "compiler",
+      "parser",
+      "ir",
+      "codegen",
+      "optimization"
+    ],
+    "triggers": [
+      "lexer",
+      "parser",
+      "grammar",
+      "ast",
+      "tokenize",
+      "recursive descent"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.compiler"
+  },
+  {
+    "ref_id": "methodology:comp:add-an-optimization-pass",
+    "type": "methodology",
+    "title": "Add an optimization pass safely",
+    "summary": "Introduce an IR optimization by proving its legality condition, gating it on that condition, and validating equivalence on a corpus.",
+    "domains": [
+      "compiler",
+      "parser",
+      "ir",
+      "codegen",
+      "optimization"
+    ],
+    "triggers": [
+      "optimization",
+      "pass",
+      "legality",
+      "data flow",
+      "equivalence",
+      "ir"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.compiler"
+  },
+  {
+    "ref_id": "methodology:comp:debug-a-miscompilation",
+    "type": "methodology",
+    "title": "Debug a miscompilation",
+    "summary": "Localize a wrong-code bug by bisecting passes and reducing the input until a single transformation is shown to break semantics.",
+    "domains": [
+      "compiler",
+      "parser",
+      "ir",
+      "codegen",
+      "optimization"
+    ],
+    "triggers": [
+      "miscompilation",
+      "bisect",
+      "reduce",
+      "wrong code",
+      "pass",
+      "delta"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.compiler"
+  },
+  {
+    "ref_id": "methodology:comp:implement-type-checking",
+    "type": "methodology",
+    "title": "Implement type checking for a construct",
+    "summary": "Add type-checking for a language construct by encoding its typing rule, annotating the AST, and testing accept/reject behavior.",
+    "domains": [
+      "compiler",
+      "parser",
+      "ir",
+      "codegen",
+      "optimization"
+    ],
+    "triggers": [
+      "type checker",
+      "typing rule",
+      "annotate",
+      "scope",
+      "accept",
+      "reject"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.compiler"
+  },
+  {
+    "ref_id": "knowledge:comp:compilation-pipeline-stages",
+    "type": "knowledge",
+    "title": "The compilation pipeline and its stages",
+    "summary": "Source flows through lexing, parsing, semantic/type analysis, IR generation, optimization, and codegen, each refining a representation with its own contract.",
+    "domains": [
+      "compiler",
+      "parser",
+      "ir",
+      "codegen",
+      "optimization"
+    ],
+    "triggers": [
+      "pipeline",
+      "frontend",
+      "backend",
+      "stages",
+      "lowering",
+      "representation"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.compiler"
+  },
+  {
+    "ref_id": "knowledge:comp:ssa-and-dataflow",
+    "type": "knowledge",
+    "title": "SSA form and data-flow analysis",
+    "summary": "Static single assignment gives each value one definition, making def-use chains explicit and data-flow analyses (liveness, constant propagation) precise and fast.",
+    "domains": [
+      "compiler",
+      "parser",
+      "ir",
+      "codegen",
+      "optimization"
+    ],
+    "triggers": [
+      "ssa",
+      "data flow",
+      "def-use",
+      "phi",
+      "liveness",
+      "dominance"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.compiler"
+  },
+  {
+    "ref_id": "knowledge:comp:type-soundness-and-inference",
+    "type": "knowledge",
+    "title": "Type soundness and inference",
+    "summary": "A sound type system guarantees well-typed programs do not commit the errors it tracks (progress and preservation); inference reconstructs types via unification.",
+    "domains": [
+      "compiler",
+      "parser",
+      "ir",
+      "codegen",
+      "optimization"
+    ],
+    "triggers": [
+      "type soundness",
+      "inference",
+      "unification",
+      "progress",
+      "preservation",
+      "hindley milner"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.compiler"
+  },
+  {
+    "ref_id": "knowledge:comp:parsing-strategies-tradeoffs",
+    "type": "knowledge",
+    "title": "Parsing strategies and their trade-offs",
+    "summary": "Recursive-descent/PEG parsers are hand-written and flexible; LR/LALR are generated and handle more grammars but give opaque conflicts.",
+    "domains": [
+      "compiler",
+      "parser",
+      "ir",
+      "codegen",
+      "optimization"
+    ],
+    "triggers": [
+      "parsing",
+      "recursive descent",
+      "lr",
+      "lalr",
+      "peg",
+      "grammar"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.compiler"
+  },
+  {
+    "ref_id": "skill:comp:run-differential-tests",
+    "type": "skill",
+    "title": "Run differential and round-trip tests",
+    "summary": "Compile a program corpus at different optimization levels (and parse/print round-trip) and report any behavioral divergence.",
+    "domains": [
+      "compiler",
+      "parser",
+      "ir",
+      "codegen",
+      "optimization"
+    ],
+    "triggers": [
+      "differential",
+      "corpus",
+      "round-trip",
+      "optimization level",
+      "regression",
+      "run"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.compiler"
+  },
+  {
+    "ref_id": "skill:comp:verify-ir-invariants",
+    "type": "skill",
+    "title": "Verify IR invariants after a pass",
+    "summary": "Run the IR verifier (or implement invariant checks) after a transformation and report any malformed IR with the offending construct.",
+    "domains": [
+      "compiler",
+      "parser",
+      "ir",
+      "codegen",
+      "optimization"
+    ],
+    "triggers": [
+      "ir verifier",
+      "invariant",
+      "ssa",
+      "validate",
+      "pass",
+      "wellformed"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.compiler"
+  }
+]

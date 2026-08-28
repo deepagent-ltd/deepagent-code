@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:edge:shield-the-origin",
+  "type": "strategy",
+  "title": "Shield the origin from cache misses",
+  "description": "Use origin shielding and request coalescing so a cold or purged cache does not stampede the origin.",
+  "body": "Use when origin load spikes on cache misses or after a purge. Do not let every edge PoP fetch from origin independently — a purge or cold start then multiplies origin requests. Actions: enable origin shield / tiered caching so one mid-tier fetches on behalf of many PoPs, and rely on request coalescing for concurrent misses on the same key. Validation signals include origin request rate staying flat during a purge and a measured reduction in origin fetches. Risk boundary: an unshielded purge of a hot key can overload the origin — schedule mass purges carefully or use soft-purge.",
+  "domain": "cdn",
+  "scope_hint": "platform.cdn-edge:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cdn-edge",
+  "pack_id": "platform.cdn-edge"
+}

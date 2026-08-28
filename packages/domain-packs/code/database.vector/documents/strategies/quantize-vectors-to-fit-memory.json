@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:vdb:quantize-vectors-to-fit-memory",
+  "type": "strategy",
+  "title": "Quantize vectors to fit the memory budget",
+  "description": "Apply scalar or product quantization to shrink the index, accepting a measured recall cost for large datasets.",
+  "body": "Use when a full-precision vector index will not fit in the available RAM. Do not store millions of full float32 vectors in memory when the budget cannot hold them; the index either fails to build or spills and crawls. Actions: apply scalar quantization (float32 to int8) for a roughly 4x reduction with small recall loss, or product quantization for larger datasets, keep a re-scoring step against full-precision vectors for the final top-k, and benchmark recall after quantizing. Validation signals include the quantized index fitting the RAM budget and recall@k staying within the accepted delta. Risk boundary: aggressive product quantization can drop recall sharply, so measure against ground truth and add a full-precision re-rank step before shipping quantized search.",
+  "domain": "vector_db",
+  "scope_hint": "code.database.vector:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.vector",
+  "pack_id": "code.database.vector"
+}

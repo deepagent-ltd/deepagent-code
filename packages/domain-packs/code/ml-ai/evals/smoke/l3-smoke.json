@@ -1,0 +1,70 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.ml-ai",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "ml",
+      "training",
+      "inference"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.ml-ai: PyTorch training loop, train/val/test split, overfitting and regularization, loss function and metrics, reproducible seeds, model checkpoint, and GPU memory limits"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "add a REST endpoint to a Flask service and write request validation"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "pytorch training loop train validation test split overfitting regularization loss function metrics reproducibility seed checkpoint gpu memory data leakage",
+  "expected_pack_id": "code.ml-ai",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "code.ml-ai L3 validation smoke",
+    "signals": [
+      "held-out test metric reported once and matches validation trend",
+      "training and validation loss curves both decreasing then validation plateauing",
+      "fixed-seed run reproduces the same metric",
+      "no preprocessing statistics fit on test data",
+      "checkpoint restores to identical loss"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "code.ml-ai diagnosis smoke",
+    "signals": [
+      "validation loss rising while training loss falls",
+      "preprocessing scaler fit before the split",
+      "metric computed on the same data used to tune",
+      "no seed set so runs are irreproducible",
+      "CUDA out-of-memory mid-epoch with no gradient accumulation"
+    ]
+  },
+  "source_refs": [
+    "source:ml-generalization-practice:paraphrased",
+    "source:reproducible-ml-experiments:paraphrased"
+  ]
+}

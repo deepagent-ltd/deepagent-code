@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:rlang:apply-family-semantics",
+  "type": "knowledge",
+  "title": "Apply family semantics",
+  "description": "lapply, sapply, vapply, and purrr::map differ in return-type guarantees and simplification.",
+  "body": "Use when applying a function over a collection in R. lapply always returns a list; sapply tries to simplify but can return a list, vector, or matrix depending on inputs, making its type unstable; vapply requires a declared return template and fails fast on mismatch; purrr::map has typed variants (map_dbl, map_chr). Do not use sapply where the return type must be stable. Actions: prefer vapply or a typed map for predictable output. Validation signals include the returned object having the declared type. Risk boundary: sapply's silent simplification can change a downstream contract without warning.",
+  "domain": "r_lang",
+  "scope_hint": "code.r:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.r",
+  "pack_id": "code.r"
+}

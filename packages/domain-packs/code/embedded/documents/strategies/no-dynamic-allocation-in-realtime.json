@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:embed:no-dynamic-allocation-in-realtime",
+  "type": "strategy",
+  "title": "Avoid dynamic allocation on real-time paths",
+  "description": "Use static or pool allocation for anything in a real-time or ISR path so timing is deterministic and the heap cannot fragment or fail.",
+  "body": "Use when code runs in an ISR, a high-priority task, or any path with a deadline. Do not call malloc/free (or new/delete) on these paths — allocation time is non-deterministic and the heap can fragment until it fails on a long-running device. Actions: pre-allocate buffers statically or from fixed-size pools at init, size them for the worst case, and inspect real-time paths for hidden allocations (including library calls). Validation signals include a deterministic measured execution time and a long-running soak test with no allocation failure. Risk boundary: a heap failure or fragmentation pause on a device with no operator is unrecoverable; require static allocation on safety- or deadline-critical paths and escalate any heap use there.",
+  "domain": "embedded",
+  "scope_hint": "code.embedded:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.embedded",
+  "pack_id": "code.embedded"
+}

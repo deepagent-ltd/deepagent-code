@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:sls:cold-start-anatomy",
+  "type": "knowledge",
+  "title": "Anatomy of a cold start",
+  "description": "A cold start adds instance provisioning, runtime bootstrap, and init code before the first invocation; warm instances skip all of it.",
+  "body": "Use when explaining tail latency. A cold start occurs when no warm instance is available: the platform provisions an instance, downloads and starts the runtime and code package, and runs init (module-scope code) before handling the request; warm invocations reuse a ready instance and skip this. Larger packages, heavy dependency graphs, and slow-starting runtimes lengthen it. Do not confuse cold-start latency with handler latency. Actions: measure init separately and reduce package/init cost. Validation signals include distinct init vs invocation durations in traces. Risk boundary: optimizing handler code when the spike is init time wastes effort — attribute the latency correctly first.",
+  "domain": "serverless",
+  "scope_hint": "code.backend.serverless:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.serverless",
+  "pack_id": "code.backend.serverless"
+}

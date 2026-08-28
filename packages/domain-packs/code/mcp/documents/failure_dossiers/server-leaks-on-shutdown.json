@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:mcp:server-leaks-on-shutdown",
+  "type": "failure_dossier",
+  "description": "An MCP server that ignores close/shutdown signals and leaves orphaned child processes, open ports, or unflushed state.",
+  "body": "Failure mode: when the host closes the connection or sends SIGTERM, the server aborts mid-call or never releases spawned processes, sockets, or temp files, so resources leak and the host hangs or accumulates zombies. Detection signals: orphaned child processes after host exit; ports still bound; in-flight tool calls truncated without cleanup. Do not rely on the host force-killing the process for cleanup. Safer fallback: handle shutdown signals, drain or cancel in-flight calls with a deadline, release all handles and child processes, then exit cleanly; verify with a shutdown leak test. Risk boundary: flag a server that cannot shut down cleanly rather than shipping it.",
+  "domain": "code",
+  "scope_hint": "code.mcp:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mcp:human_authored",
+  "pack_id": "code.mcp"
+}

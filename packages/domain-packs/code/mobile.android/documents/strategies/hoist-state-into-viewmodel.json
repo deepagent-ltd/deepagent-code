@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:android:hoist-state-into-viewmodel",
+  "type": "strategy",
+  "title": "Hold UI state in a ViewModel",
+  "description": "Keep UI state in a ViewModel scoped to outlive Activity/Fragment recreation, not in the lifecycle component itself.",
+  "body": "Use when a screen has state that must persist across rotation or process-survivable recreation. Do not store screen state in Activity/Fragment fields, and do not reload everything from scratch on every recreation. Actions: put UI state and the logic that produces it in a ViewModel (which survives configuration changes), expose it as observable (StateFlow/LiveData), and let the UI re-bind on recreation; use SavedStateHandle for state that must survive process death. Validation signals include rotating the device and seeing state preserved with no reload. Risk boundary: holding state in the Activity loses it on every rotation and leaks the Activity if a long task outlives it — the ViewModel exists precisely to decouple state lifetime from the UI component's lifetime.",
+  "domain": "android",
+  "scope_hint": "code.mobile.android:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mobile.android",
+  "pack_id": "code.mobile.android"
+}

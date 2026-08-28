@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:c:control-struct-layout-and-packing",
+  "type": "strategy",
+  "title": "Control struct layout, alignment, and padding deliberately",
+  "description": "Order members and choose packing explicitly so size, alignment, and any wire/ABI layout are intentional rather than compiler-dependent.",
+  "body": "Use when a struct crosses an ABI, a wire/file format, or a memory-tight path. Do not assume zero padding, hardcode member offsets, or use __attribute__((packed)) casually (it creates unaligned access that faults on some targets). Actions: order members large-to-small to minimize padding, verify with sizeof and offsetof, use fixed-width types (uint32_t) for serialized data, and document any required packing. Validation signals include static_assert/_Static_assert on sizeof and offsetof matching the spec across target compilers. Risk boundary: unaligned access via packed structs can crash on strict-alignment architectures; if a layout must match an external format, verify byte-by-byte and escalate endianness concerns rather than assuming.",
+  "domain": "c",
+  "scope_hint": "code.c:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.c",
+  "pack_id": "code.c"
+}

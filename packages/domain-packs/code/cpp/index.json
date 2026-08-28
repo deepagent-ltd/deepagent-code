@@ -1,0 +1,461 @@
+[
+  {
+    "ref_id": "knowledge:cpp:abi-and-ownership",
+    "type": "knowledge",
+    "title": "Abi And Ownership",
+    "summary": "C++ API changes can affect ABI and memory ownership.",
+    "domains": [
+      "cpp",
+      "code"
+    ],
+    "triggers": [
+      "changes",
+      "affect",
+      "memory",
+      "ownership",
+      "review",
+      "lifetime",
+      "exceptions"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.cpp"
+  },
+  {
+    "ref_id": "knowledge:cpp:generated-code-drift",
+    "type": "knowledge",
+    "title": "Generated Code Drift",
+    "summary": "In C++, never hand-edit Protobuf/Qt MOC output, template-instantiation stubs, and configure_file headers; change the source and rerun the generator.",
+    "domains": [
+      "cpp",
+      "code"
+    ],
+    "triggers": [
+      "generated",
+      "code",
+      "must",
+      "tied",
+      "regeneration",
+      "commands",
+      "hand",
+      "edit"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.cpp"
+  },
+  {
+    "ref_id": "knowledge:cpp:runtime-errors-differ",
+    "type": "knowledge",
+    "title": "Runtime Errors Differ",
+    "summary": "In C++, a clean build does not prevent undefined behavior from dangling references, ODR violations, and unsequenced modifications.",
+    "domains": [
+      "cpp",
+      "code"
+    ],
+    "triggers": [
+      "compile",
+      "success",
+      "does",
+      "guarantee",
+      "runtime",
+      "behavior",
+      "representative",
+      "tests"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.cpp"
+  },
+  {
+    "ref_id": "knowledge:cpp:toolchain-is-contract",
+    "type": "knowledge",
+    "title": "Toolchain Is Contract",
+    "summary": "In C++, the compiler, standard library (libstdc++/libc++), and CMake version are part of the contract and changing them changes behavior.",
+    "domains": [
+      "cpp",
+      "code"
+    ],
+    "triggers": [
+      "compiler",
+      "formatter",
+      "package",
+      "manager",
+      "test",
+      "runner",
+      "part",
+      "language"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.cpp"
+  },
+  {
+    "ref_id": "methodology:cpp:dependency-update-check",
+    "type": "methodology",
+    "title": "Dependency Update Check",
+    "summary": "In C++, when find_package targets, vcpkg/Conan manifests, and transitive include paths change, verify the lockfile, generated artifacts, and a runtime smoke.",
+    "domains": [
+      "cpp",
+      "code"
+    ],
+    "triggers": [
+      "when",
+      "dependencies",
+      "change",
+      "inspect",
+      "lockfile",
+      "generated",
+      "artifacts",
+      "runtime"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.cpp"
+  },
+  {
+    "ref_id": "methodology:cpp:interop-boundary-check",
+    "type": "methodology",
+    "title": "Interop Boundary Check",
+    "summary": "In C++, validate the deserialization, narrowing conversions, and iterator invalidation where external data crosses in.",
+    "domains": [
+      "cpp",
+      "code"
+    ],
+    "triggers": [
+      "validate",
+      "module",
+      "shell",
+      "serialization",
+      "boundaries",
+      "steps",
+      "identify",
+      "boundary"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.cpp"
+  },
+  {
+    "ref_id": "methodology:cpp:language-gate-loop",
+    "type": "methodology",
+    "title": "Language Gate Loop",
+    "summary": "In C++, run the package-local gate, fix the first owned diagnostic, rerun, then broaden.",
+    "domains": [
+      "cpp",
+      "code"
+    ],
+    "triggers": [
+      "package",
+      "local",
+      "gate",
+      "first",
+      "owned",
+      "diagnostic",
+      "rerun",
+      "then"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.cpp"
+  },
+  {
+    "ref_id": "skill:cpp:run-language-gate",
+    "type": "skill",
+    "title": "Run Language Gate",
+    "summary": "In C++, run the package-local validation gate (CMake targets (cmake --build) with the configured generator and CMAKE_BUILD_TYPE) and summarize the diagnostics.",
+    "domains": [
+      "cpp",
+      "code"
+    ],
+    "triggers": [
+      "package",
+      "local",
+      "language",
+      "validation",
+      "gate",
+      "summarize",
+      "diagnostics",
+      "inputs"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.cpp"
+  },
+  {
+    "ref_id": "strategy:cpp:boundary-validation",
+    "type": "strategy",
+    "title": "Boundary Validation",
+    "summary": "In C++, validate external input at the deserialization, narrowing conversions, and iterator invalidation before internal use.",
+    "domains": [
+      "cpp",
+      "code"
+    ],
+    "triggers": [
+      "validate",
+      "external",
+      "input",
+      "language",
+      "runtime",
+      "boundaries",
+      "parsing",
+      "serialization"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.cpp"
+  },
+  {
+    "ref_id": "strategy:cpp:diagnostic-first",
+    "type": "strategy",
+    "title": "Diagnostic First",
+    "summary": "In C++, read the first template/overload-resolution error and the instantiation backtrace before making speculative edits.",
+    "domains": [
+      "cpp",
+      "code"
+    ],
+    "triggers": [
+      "compiler",
+      "runtime",
+      "diagnostics",
+      "before",
+      "speculative",
+      "edits",
+      "read",
+      "first"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.cpp"
+  },
+  {
+    "ref_id": "strategy:cpp:idiom-preserving-change",
+    "type": "strategy",
+    "title": "Idiom Preserving Change",
+    "summary": "In C++, prefer established idioms (RAII, rule-of-five, move semantics, and span/string_view over raw pointers) over generic rewrites.",
+    "domains": [
+      "cpp",
+      "code"
+    ],
+    "triggers": [
+      "prefer",
+      "local",
+      "idioms",
+      "standard",
+      "tooling",
+      "over",
+      "generic",
+      "rewrites"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.cpp"
+  },
+  {
+    "ref_id": "strategy:cpp:package-local-command",
+    "type": "strategy",
+    "title": "Package Local Command",
+    "summary": "In C++, use the package-local commands (CMake targets (cmake --build) with the configured generator and CMAKE_BUILD_TYPE) rather than a root or generic command.",
+    "domains": [
+      "cpp",
+      "code"
+    ],
+    "triggers": [
+      "package",
+      "local",
+      "build",
+      "test",
+      "typecheck",
+      "commands",
+      "this",
+      "language"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.cpp"
+  },
+  {
+    "ref_id": "strategy:cpp:own-resources-with-raii",
+    "type": "strategy",
+    "title": "Own every resource with RAII and smart pointers",
+    "summary": "Tie each heap allocation, file, lock, or handle to an object's lifetime via unique_ptr/shared_ptr and scope guards instead of manual new/delete.",
+    "domains": [
+      "cpp",
+      "code"
+    ],
+    "triggers": [
+      "raii",
+      "unique_ptr",
+      "shared_ptr",
+      "smart pointer",
+      "new",
+      "delete",
+      "leak"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.cpp"
+  },
+  {
+    "ref_id": "strategy:cpp:prefer-move-over-copy",
+    "type": "strategy",
+    "title": "Enable and use move semantics for expensive types",
+    "summary": "Define or default move operations and pass-by-value-then-move so large objects transfer ownership cheaply instead of deep-copying.",
+    "domains": [
+      "cpp",
+      "code"
+    ],
+    "triggers": [
+      "move",
+      "rvalue",
+      "std::move",
+      "copy",
+      "move constructor",
+      "rule of five"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.cpp"
+  },
+  {
+    "ref_id": "methodology:cpp:define-modern-cmake-targets",
+    "type": "methodology",
+    "title": "Model dependencies with target-based modern CMake",
+    "summary": "Express include dirs, compile features, and link deps as PUBLIC/PRIVATE target properties so usage requirements propagate correctly.",
+    "domains": [
+      "cpp",
+      "code"
+    ],
+    "triggers": [
+      "cmake",
+      "target_link_libraries",
+      "public",
+      "private",
+      "interface",
+      "target"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.cpp"
+  },
+  {
+    "ref_id": "skill:cpp:debug-with-sanitizers-and-gdb",
+    "type": "skill",
+    "title": "Diagnose memory bugs with sanitizers and gdb/lldb",
+    "summary": "Rebuild with AddressSanitizer/UBSan, reproduce the crash, and use gdb/lldb to capture the faulting stack and the offending allocation.",
+    "domains": [
+      "cpp",
+      "code"
+    ],
+    "triggers": [
+      "asan",
+      "ubsan",
+      "sanitizer",
+      "gdb",
+      "lldb",
+      "segfault",
+      "valgrind"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.cpp"
+  }
+]

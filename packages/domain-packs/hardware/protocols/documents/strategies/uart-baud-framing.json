@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:hwprot:uart-baud-framing",
+  "type": "strategy",
+  "title": "Lock UART baud and framing before data debug",
+  "description": "Set baud, parity, and stop bits identically on both ends and confirm framing on a scope before chasing payload bugs.",
+  "body": "Use when UART characters arrive garbled or intermittently. Do not raise the baud rate to chase throughput before the link is clean at a low rate. Actions: verify both ends share baud, data bits, parity, and stop bits, then measure the bit period on a capture against the configured rate. Validation signals include a known test string received intact and a framing-error counter that stays at zero. Risk boundary: a clock source that drifts under temperature can break a marginal link in the field, so escalate to a crystal or auto-baud when error rates climb.",
+  "domain": "hw_protocols",
+  "scope_hint": "hardware.protocols:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.protocols",
+  "pack_id": "hardware.protocols"
+}

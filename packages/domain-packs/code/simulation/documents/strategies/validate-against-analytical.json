@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:sim:validate-against-analytical",
+  "type": "strategy",
+  "title": "Validate a simulation against analytical cases",
+  "description": "Test the simulator on problems with closed-form solutions before trusting it on cases without one.",
+  "body": "Use when building or modifying a numerical simulation. Do not validate only on the target problem, since you cannot tell error from truth there. Actions: identify special cases with known closed-form solutions, run the simulator on them, and compare the numerical result against the analytical answer. Validation signals include error within the method's expected accuracy on each analytical case and consistent behavior as parameters vary. Risk boundary: a simulator that fails an analytical case cannot be trusted on harder ones, so deny production use until every available analytical check passes.",
+  "domain": "simulation",
+  "scope_hint": "code.simulation:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.simulation",
+  "pack_id": "code.simulation"
+}

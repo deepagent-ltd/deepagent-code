@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:chain:plan-immutability-and-upgrades",
+  "type": "strategy",
+  "title": "Plan for immutability and safe upgrades",
+  "description": "Decide deliberately between immutable contracts and an upgrade proxy, and protect upgrade authority and storage layout.",
+  "body": "Use before deploying anything intended to evolve. Do not assume you can patch a deployed contract (code is immutable), and avoid an upgrade proxy without protecting its admin and storage layout. Actions: choose immutable-plus-redeploy for simple value, or a vetted proxy pattern (transparent/UUPS) for upgradeable logic; if upgradeable, guard the upgrade function with strong access control, preserve storage slot layout across versions, and use initializers instead of constructors. Validation signals include a storage-layout diff showing no slot collision and an upgrade test that preserves state. Risk boundary: a botched upgrade or unprotected proxy admin can brick the contract or hand it to an attacker; require review and a layout check before any upgrade.",
+  "domain": "blockchain",
+  "scope_hint": "code.blockchain:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.blockchain",
+  "pack_id": "code.blockchain"
+}

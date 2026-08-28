@@ -1,0 +1,11 @@
+{
+  "ref_id": "methodology:frontend_vue:nuxt-hydration-smoke",
+  "type": "methodology",
+  "description": "Check Nuxt SSR/client consistency after page, plugin, composable, or data-fetch changes.",
+  "body": "Use for Nuxt projects or SSR-enabled Vue apps. Do not accept client navigation success as proof of full reload hydration. Steps: run build/dev per repo scripts, load route directly, inspect terminal and browser console for hydration mismatch, verify data fetching on server/client. Risk boundary: client-only code must not access secrets or server-only runtime config. Use when Vue Frontend Engineering work touches visible UI behavior, browser console output, DOM state, assets, viewport behavior, and interaction evidence. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: follow the ordered review, edit, and validation sequence; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include browser smoke, component tests, viewport screenshots, console/network checks, and accessibility assertions. Risk boundary: escalate or stop when the task involves visual regressions, inaccessible interaction, hydration mismatch, and browser-only failures, missing owner evidence, or live external state.",
+  "domain": "frontend_vue",
+  "scope_hint": "code.frontend.vue:methodologys",
+  "evidence_strength": "medium",
+  "provenance_tag": "code.frontend.vue:seed:vue_nuxt_pinia_vite_docs:paraphrased",
+  "pack_id": "code.frontend.vue"
+}

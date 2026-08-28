@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:ruby:gem-packaging-and-loading",
+  "type": "knowledge",
+  "title": "Gem packaging and the load path",
+  "description": "A gem is defined by a gemspec and loaded onto the $LOAD_PATH; require pulls files relative to lib, distinct from Bundler resolution.",
+  "body": "Use when building or troubleshooting a gem. A gem ships a .gemspec declaring name, version, files, and dependencies; its lib/ directory is added to $LOAD_PATH so require 'foo' finds lib/foo.rb. Bundler resolves which gem versions are available but require is what actually loads a file at runtime, so a gem can be installed yet not required. Do not confuse 'in the Gemfile' with 'loaded': a gem in a non-default group or with require: false must be required explicitly. Actions: declare runtime deps in the gemspec (not the Gemfile) for a library, and require entry points. Validation signals include the gem building with gem build and its public API loading in a spec. Risk boundary: a gem that monkey-patches core classes on require can silently change behavior app-wide; review what a gem loads, not just that it resolves.",
+  "domain": "ruby",
+  "scope_hint": "code.ruby:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.ruby",
+  "pack_id": "code.ruby"
+}

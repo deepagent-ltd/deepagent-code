@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:rt:wire-auth-refresh-on-connection",
+  "type": "methodology",
+  "title": "Wire auth refresh on a connection",
+  "description": "Track token expiry per connection and require re-auth before expiry so private streams never outlive authorization.",
+  "body": "Steps: 1. Record the token's expiry when the connection authenticates. 2. Schedule a server-side check before expiry; require the client to send a refreshed token. 3. On successful refresh, extend the connection; re-check channel authorization. 4. On expiry without refresh or on revocation, stop sending authorized data and close. 5. Have the client refresh proactively and reconnect if closed. Rollback point: shorten max connection lifetime to force reconnect-with-fresh-auth. Validation: tests show an expired-token connection stops authorized data and a revoked token severs the stream.",
+  "domain": "realtime",
+  "scope_hint": "code.backend.realtime:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.realtime",
+  "pack_id": "code.backend.realtime"
+}

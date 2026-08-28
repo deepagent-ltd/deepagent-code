@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:cache:coherence-and-staleness",
+  "type": "knowledge",
+  "title": "Coherence and staleness",
+  "description": "Across layers, end-to-end staleness is additive and the slowest-to-purge copy sets the floor.",
+  "body": "Use when multiple caches or replicas hold copies of the same data. Coherence is the guarantee that all copies converge to the latest value; staleness is how long a copy may lag. Independent TTLs across layers make end-to-end staleness additive, and a copy that cannot be purged sets the staleness floor. Do not assume invalidating one tier fixes all of them. Actions: model the worst case as the sum of un-purgeable layer TTLs. Validation signals include a converged read after update across every tier. Risk boundary: user-facing correctness depends on the slowest-to-converge layer.",
+  "domain": "caching",
+  "scope_hint": "code.caching:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.caching",
+  "pack_id": "code.caching"
+}

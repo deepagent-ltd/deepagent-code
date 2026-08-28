@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+version_file="$(cd "$(dirname "$0")/.." && pwd)/VERSION"
+version="$(tr -d '[:space:]' < "$version_file")"
+if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "Invalid GitHub Action version in $version_file: $version"
+  exit 1
+fi
+
+tag="github-v${version}"
+git fetch --force --tags
+if git rev-parse --verify --quiet "refs/tags/$tag" >/dev/null; then
+  tagged_commit="$(git rev-list -n 1 "$tag")"
+  current_commit="$(git rev-parse HEAD)"
+  if [ "$tagged_commit" = "$current_commit" ]; then
+    echo "Tag $tag already points to the current commit"
+    exit 0
+  fi
+  echo "Tag $tag already exists at $tagged_commit; bump github/VERSION before changing github/**"
+  exit 1
+fi
+
+echo "New tag: $tag"
+git tag "$tag"
+git push origin "$tag"

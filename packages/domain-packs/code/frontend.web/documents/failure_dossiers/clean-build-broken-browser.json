@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:frontend_web:clean-build-broken-browser",
+  "type": "failure_dossier",
+  "description": "Typecheck or build passed, but the browser route still failed due to runtime, asset, or network behavior.",
+  "body": "Failure mode: implementation is accepted after static checks even though the actual route throws console errors, fails required requests, renders a blank canvas, misses an asset, or never leaves loading state. Diagnostic trigger: confidence relies on build output while user-facing DOM/CSS/browser APIs changed. Do-not-use signal: static validation alone is insufficient for visible UI changes. Recovery: open the affected route, inspect page errors and failed network requests, and tie each browser failure to source or environment cause. Risk boundary: avoid silencing console errors or swallowing promise rejections only to make smoke output cleaner; fix the visible behavior or report the external blocker.",
+  "domain": "web",
+  "scope_hint": "code.frontend.web:failure_dossiers",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.web:runtime_validation_failure",
+  "pack_id": "code.frontend.web"
+}

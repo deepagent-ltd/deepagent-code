@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:comp:control-frameworks-overlap",
+  "type": "knowledge",
+  "title": "How SOC 2, GDPR, and HIPAA-style controls overlap",
+  "description": "Different frameworks demand overlapping evidence (access, change, audit, retention) so one well-designed control often satisfies several.",
+  "body": "Use when a system is subject to more than one regime. SOC 2 trust criteria, GDPR's accountability and security duties, and HIPAA-style safeguards all require evidence around access control, change management, audit logging, and data retention/disposal, framed differently but overlapping heavily. Do not build a separate, redundant control per framework; do not assume passing one means passing all, since each adds specifics (GDPR's lawful-basis and erasure, HIPAA's minimum-necessary). Actions: map controls to a shared backbone and note the framework-specific deltas. Validation signals include a control-to-framework matrix showing reuse and the unique requirements per regime. Risk boundary: framework-specific obligations (GDPR erasure, breach-notification timelines) cannot be inferred from a generic control and must be confirmed with counsel.",
+  "domain": "compliance",
+  "scope_hint": "risk.compliance:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.compliance",
+  "pack_id": "risk.compliance"
+}

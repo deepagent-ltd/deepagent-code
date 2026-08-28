@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:pcb:return-current-path",
+  "type": "knowledge",
+  "title": "Return current follows the path of least impedance",
+  "description": "At high frequency, return current concentrates in the plane directly beneath the signal trace rather than spreading evenly.",
+  "body": "Use when explaining why plane continuity matters for fast signals. Do not assume return current takes the shortest geometric path, because at high frequency it follows the signal to minimize loop inductance. Actions: identify the reference plane beneath each net, inspect for gaps that force a detour, and record where return current must hop planes. Validation signals include a continuous plane under each fast net and stitching vias wherever the reference plane changes. Risk boundary: a forced return detour increases loop area and emissions, so treat plane gaps under fast nets as an integrity defect.",
+  "domain": "pcb",
+  "scope_hint": "hardware.pcb:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.pcb",
+  "pack_id": "hardware.pcb"
+}

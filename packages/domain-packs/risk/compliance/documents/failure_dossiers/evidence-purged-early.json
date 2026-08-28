@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:comp:evidence-purged-early",
+  "type": "failure_dossier",
+  "description": "A generic log-rotation or cleanup job deletes compliance evidence before its mandated retention period elapses.",
+  "body": "Failure mode: a default retention or cost-saving cleanup purges logs, approvals, or attestations after a short window, but those artifacts were the evidence a control framework requires to be kept for years, so an assessment finds the period uncovered. Detection signals: evidence for older periods is missing; retention is governed by a generic rotation policy unaware of compliance classes; no lifecycle lock prevents early deletion. Do not apply one blanket retention to both transient logs and compliance evidence. Safer fallback: tag each evidence class with its required window, apply a lifecycle policy that blocks deletion until it elapses, and reconcile against privacy limits so personal data is not over-retained either.",
+  "domain": "compliance",
+  "scope_hint": "risk.compliance:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.compliance:human_authored",
+  "pack_id": "risk.compliance"
+}

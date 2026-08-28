@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:llm:validate-structured-output-with-repair",
+  "type": "strategy",
+  "title": "Validate structured output, then repair within budget",
+  "description": "Parse model JSON against a strict schema and run a bounded repair loop on failure rather than trusting the first parse.",
+  "body": "Use when a call must return machine-consumable structure (JSON, function arguments, enums). Do not JSON.parse and use the result directly, and avoid unbounded re-prompting on malformed output. Actions: define a strict schema; validate every response; on failure feed the validator error back for at most N repair attempts; fall back to a typed error after the budget. Validation signals include a conformance test over sampled responses and a test that malformed output triggers repair then a clean fallback. Risk boundary: never silently coerce or drop fields to force a parse; surface the failure and deny the downstream action.",
+  "domain": "llm_app",
+  "scope_hint": "code.llm-app:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.llm-app",
+  "pack_id": "code.llm-app"
+}

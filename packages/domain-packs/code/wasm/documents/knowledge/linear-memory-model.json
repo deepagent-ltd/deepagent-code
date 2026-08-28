@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:wasm:linear-memory-model",
+  "type": "knowledge",
+  "title": "The linear memory model",
+  "description": "WASM memory is a single growable byte array shared with the host; it is manually managed and can be reallocated by grow.",
+  "body": "Use when reasoning about data layout or memory bugs. A WASM instance has a linear memory: one contiguous, byte-addressable array starting at offset zero, exposed to JS as an ArrayBuffer. It has no built-in allocator or GC for the module's own data, so allocation/free is the program's job; memory.grow extends it by pages (64 KiB) and, in the browser, replaces the backing ArrayBuffer, detaching any existing TypedArray views. Pointers are just offsets into this array. Do not assume host GC reclaims WASM buffers or that a cached view survives growth. Actions: manage allocation explicitly and re-fetch views after grow. Validation signals include bounded memory across many allocations and views read after potential growth. Risk boundary: out-of-bounds offsets trap and stale views read garbage; treat memory math at the boundary carefully.",
+  "domain": "wasm",
+  "scope_hint": "code.wasm:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.wasm",
+  "pack_id": "code.wasm"
+}

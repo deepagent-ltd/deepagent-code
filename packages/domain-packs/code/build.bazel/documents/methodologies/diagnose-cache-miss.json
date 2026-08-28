@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:bazel:diagnose-cache-miss",
+  "type": "methodology",
+  "title": "Diagnose a persistent cache miss",
+  "description": "A procedure to find why an action never hits the cache by isolating the input that changes between builds.",
+  "body": "Use when remote or local cache hit rates are unexpectedly low. Do not accept slow rebuilds without finding the cause. Steps: enable execution-log or --explain to see why an action re-ran; compare the action's inputs and command line across two builds; look for absolute paths, timestamps, environment variables, or undeclared inputs that differ. Validation signals include identifying the volatile input and a stable action key after the fix. Risk boundary: a non-deterministic action invalidates the cache for everyone downstream, so fix the source of variance rather than disabling caching.",
+  "domain": "bazel",
+  "scope_hint": "code.build.bazel:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.build.bazel",
+  "pack_id": "code.build.bazel"
+}

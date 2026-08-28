@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:healthcare:gate-patient-impacting-logic",
+  "type": "strategy",
+  "title": "Gate patient-impacting logic behind clinical human review",
+  "description": "Require qualified human sign-off for any code path whose output could influence diagnosis, treatment, dosing, or triage decisions.",
+  "body": "Use when building logic that produces clinically-relevant output or decision support. Do not let software autonomously make or present treatment/dosing/triage determinations as authoritative, and avoid shipping clinical rules without qualified review. Actions: route clinically-impacting outputs through a qualified human, present software output as decision support requiring confirmation, and log the reviewing clinician; inspect that no path auto-acts on a patient. Validation signals include an audit trail tying clinical outputs to human confirmation and a test that the path cannot auto-finalize a clinical decision. Risk boundary: advisory only and never a substitute for clinical judgment; this system must not emit medical advice or autonomous clinical decisions, and any such request is escalated to qualified humans.",
+  "domain": "healthcare",
+  "scope_hint": "business.healthcare:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:business.healthcare",
+  "pack_id": "business.healthcare"
+}

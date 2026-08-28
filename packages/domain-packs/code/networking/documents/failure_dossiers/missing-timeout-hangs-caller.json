@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:net:missing-timeout-hangs-caller",
+  "type": "failure_dossier",
+  "description": "A call with no read or overall timeout hangs forever when the peer accepts the connection then stalls.",
+  "body": "Failure mode: a client sets no read/overall timeout (or relies on an infinite default), so when a server accepts the connection but never responds (overload, deadlock, black hole) the caller blocks indefinitely, parking a thread and a connection until the whole pool is consumed and the service stalls. Detection signals: threads stuck in socket read; latency climbing to infinity for one dependency; pool acquisition blocking; no timeout in the client config. Do not depend on library default timeouts. Safer fallback: set connect, read/write, and overall deadlines from the operation SLO, and verify with a black-hole test server that the call fails by the deadline instead of hanging.",
+  "domain": "networking",
+  "scope_hint": "code.networking:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.networking:human_authored",
+  "pack_id": "code.networking"
+}

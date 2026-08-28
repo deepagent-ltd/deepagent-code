@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:ng:change-detection-zone-onpush-signals",
+  "type": "knowledge",
+  "title": "Change detection: Zone, OnPush, and signals",
+  "description": "Zone.js triggers checks on every async event; OnPush narrows checks to input/observable changes; signals track dependencies precisely.",
+  "body": "Use when reasoning about why and when a view re-renders. By default Zone.js patches async APIs and runs change detection over the component tree after every event, timer, or HTTP callback. OnPush narrows a component to re-check only when an @Input reference changes, an async-piped observable emits, or an event originates inside it, so its inputs must be treated as immutable. Signals track reads and mark exactly the consumers that depend on a changed value dirty, enabling fine-grained updates and a path toward zoneless apps. Do not mutate OnPush inputs in place or assume default detection scales. Actions: choose the model and respect its update contract. Validation signals include a profiler trace and a test of re-render conditions. Risk boundary: mixing mutation with OnPush/signals yields a silently stale UI.",
+  "domain": "angular",
+  "scope_hint": "code.frontend.angular:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.angular",
+  "pack_id": "code.frontend.angular"
+}

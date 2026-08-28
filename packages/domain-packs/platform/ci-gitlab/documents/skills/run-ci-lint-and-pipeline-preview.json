@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:glci:run-ci-lint-and-pipeline-preview",
+  "type": "skill",
+  "title": "Run CI lint and preview the pipeline",
+  "description": "Validate .gitlab-ci.yml with CI lint and preview which jobs run for a given ref before pushing.",
+  "body": "Use when validating a pipeline change before it runs. Procedure: run GitLab CI Lint (or the pipeline editor's validation) to catch syntax and rules errors, then simulate against the target ref to see which jobs the config produces and on which runners; confirm rules evaluate as intended and no only/except mix exists. Report lint results and the simulated job list with their conditions. This skill exposes validation and analysis only and must not trigger a real deploy or run against production. Validation signals include a clean CI lint and a simulated job set matching intent. Risk boundary: if the preview shows a deploy or secret-bearing job on an untrusted ref, stop and escalate rather than pushing.",
+  "domain": "ci_gitlab",
+  "scope_hint": "platform.ci-gitlab:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.ci-gitlab",
+  "pack_id": "platform.ci-gitlab"
+}

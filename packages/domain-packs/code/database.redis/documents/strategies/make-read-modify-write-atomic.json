@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:redis:make-read-modify-write-atomic",
+  "type": "strategy",
+  "title": "Make read-modify-write atomic",
+  "description": "Use atomic commands, MULTI/EXEC with WATCH, or a Lua script so concurrent updates do not lose writes.",
+  "body": "Use when updating a value based on its current contents (counter, balance, set membership). Do not GET then SET from app code, which loses updates under concurrency. Actions: prefer a single atomic command (INCRBY, HINCRBY, SETNX); for multi-key logic use a Lua script (runs atomically server-side) or MULTI/EXEC with WATCH for optimistic concurrency and retry on the watched-key change. Validation signals include a concurrency test where N parallel increments produce exactly N, not a lower number from lost updates. Risk boundary: a non-atomic read-modify-write on a counter that drives billing or limits silently undercounts and is a correctness finding.",
+  "domain": "redis",
+  "scope_hint": "code.database.redis:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.redis",
+  "pack_id": "code.database.redis"
+}

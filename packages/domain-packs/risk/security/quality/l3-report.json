@@ -1,0 +1,35 @@
+{
+  "schema_version": "domain_pack_quality.v1",
+  "pack_id": "risk.security",
+  "maturity": "L3",
+  "counts": {
+    "strategy": 10,
+    "methodology": 6,
+    "knowledge": 12,
+    "skill": 6,
+    "memory": 0,
+    "failure_dossier": 10
+  },
+  "quality": {
+    "duplicate_ref": 0,
+    "weak_evidence": 0,
+    "failure_indexed": 0,
+    "thin_docs": 0
+  },
+  "l3_evidence": {
+    "activation_smoke": "evals/smoke/l3-smoke.json",
+    "retrieval_smoke": "pack-scoped activePackIds retrieval",
+    "validation_smoke": "security risk control L3 validation smoke",
+    "diagnosis_smoke": "security risk control diagnosis smoke"
+  },
+  "source_refs": [
+    "source:owasp-wstg:paraphrased",
+    "source:github-security-advisories:paraphrased"
+  ],
+  "structure_l3": true,
+  "validated_l3": true,
+  "activation_precision_checked": false,
+  "cross_pack_negative_checked": false,
+  "scaffold_ratio": 0,
+  "ablation_checked": false
+}

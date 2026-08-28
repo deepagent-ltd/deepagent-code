@@ -1,0 +1,888 @@
+import { Effect, Layer, Context, SynchronizedRef, Option } from "effect"
+import path from "node:path"
+import fs from "node:fs"
+import { randomUUID } from "node:crypto"
+import { Global } from "@deepagent-code/core/global"
+import { AgentGateway } from "@deepagent-code/core/agent-gateway"
+import { DocumentStore } from "@deepagent-code/core/deepagent/document-store"
+import {
+  buildPlanFromWriteInput,
+  createPlanDoc,
+  PlanConflictError,
+  PlanValidationError,
+  type PlanDoc,
+  type PlanWriteInput,
+} from "@deepagent-code/core/deepagent/plan-controller"
+import { decodePlanDoc } from "@deepagent-code/core/deepagent/plan-store"
+import {
+  PlanEditBusyError,
+  PlanEditChallengeError,
+  PlanEditMailboxConflictError,
+  PlanEditProtocolCorruptionError,
+  PlanEditRequestConflictError,
+  PlanEditTargetUnavailableError,
+  admitPlanEditCommand,
+  createPlanEditCommand,
+  issuePlanEditChallenge,
+  readPendingPlanEditCommand,
+  readPlanEditReceiptByRequest,
+  settlePlanEditCommand,
+  type PlanEditReceipt,
+} from "@deepagent-code/core/deepagent/plan-edit-protocol"
+import { parseGoalPlanFile, GOAL_PLAN_FILE, type ParsedGoalPlan } from "@deepagent-code/core/deepagent/goal-plan-file"
+import type { GoalStatus, GoalLimits, CompletionCriterion } from "@deepagent-code/core/deepagent/goal-loop"
+import { InvalidGoalError } from "@deepagent-code/core/deepagent/goal-loop"
+import { RuntimeFlags } from "../effect/runtime-flags"
+import { EventV2Bridge } from "@/event-v2-bridge"
+import { BackgroundJob } from "@/background/job"
+import { SessionV2 } from "@deepagent-code/core/session"
+import { Session } from "./session"
+import { Agent } from "../agent/agent"
+import { Snapshot } from "../snapshot"
+import { SessionPrompt } from "./prompt"
+import { SessionRevert } from "./revert"
+import { SessionSteer } from "./steer"
+import { LSP } from "../lsp/lsp"
+import { Provider } from "../provider/provider"
+import { SessionID } from "./schema"
+import { GoalEvent } from "./goal-event"
+import { PlanEvent } from "../tool/plan-write"
+import { Log } from "@deepagent-code/core/util/log"
+import {
+  GoalLoopWiring,
+  liveDiagnostics,
+  liveRollback,
+  makeTaskSubagentRunner,
+  type PanelQuestionInput,
+} from "./goal-loop-wiring"
+import { GoalDriver, type GoalDriverPorts } from "./goal-driver"
+import { writeGovernanceAudit } from "./goal-governance-audit"
+import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
+import { ApprovalQueue } from "@deepagent-code/core/deepagent/approval-queue"
+import { LMNEvents } from "@deepagent-code/core/deepagent/lmn-events"
+import { readGoalTickCursor } from "@deepagent-code/core/deepagent/goal-loop"
+import { makeGoalStatusPublisher } from "./goal-status-publisher"
+import { GoalTickConsumer } from "./goal-tick-consumer"
+
+/**
+ * V3.9 §D — the GOAL MANAGER service: the resident, in-process supervisor that OWNS running goals.
+ *
+ * This is the production seam that turns the built-but-unwired Goal Loop into a user-invocable mode.
+ * `startGoal` materializes the session's plan into the graded store doc, assembles the live
+ * `ControllerDeps` (via `makeGoalLoopWiring` — flag-gated), starts the driver as a BackgroundJob
+ * (a resident background Effect with cancellation), and tracks per-session control state so
+ * `pause` / `resume` / `stop` / `status` work while it runs. Each tick's status is published as a
+ * `goal.updated` event and mirrored into the session-state active-goal pointer so the UI stays live.
+ *
+ * Concurrency model (per the product decision — 服务内常驻后台任务): one goal per session at a time.
+ * The driver ticks in the background; the user's foreground conversation stays free. Pause is
+ * cooperative (the driver checks a flag before each tick and suspends without tearing down the loop);
+ * resume re-drives from the persisted run_context doc.
+ */
+
+// The DocumentStore holding a session's goal docs. Co-located with the run graph under the agent data
+// root, keyed by session id, so a restart re-opens the same store (the loop state is restart-recoverable).
+export const goalStoreRoot = (sessionID: string): string =>
+  path.join(Global.Path.agent.data, "state", "goal", sessionID, "graph")
+
+const glog = Log.create({ service: "session.goal" })
+
+// DESIGN mode's plan source: read the human-authored `.deepagent-code/plans/goal+plan.md` from the
+// session's working directory and parse it into a PlanDoc (+ any declared criteria). Default-safe — a
+// missing/unreadable/malformed file returns null so `start` falls through to the next plan source and
+// never throws. The parser (core) is pure; the fs read lives here at the wiring seam.
+const readGoalPlanFile = (cwd: string, sessionID: string): ParsedGoalPlan | null => {
+  try {
+    const file = path.join(cwd, GOAL_PLAN_FILE)
+    if (!fs.existsSync(file)) return null
+    const contents = fs.readFileSync(file, "utf8")
+    return parseGoalPlanFile(sessionID, contents)
+  } catch {
+    return null
+  }
+}
+
+// §S1.3 FIX 2 — the terminal active-goal-pointer phases. A goal in any of these has settled: its driver
+// job has returned (natural terminal) or been cancelled (stopped), so no further tick will drain the
+// steer buffer. The goal-steer ingress (promptOrSteer) and editPlan refuse to admit once the pointer
+// reports one of these (no orphan buffering). "running" and "paused" are the only non-terminal phases
+// (a paused goal resumes and drains again).
+export const isTerminalGoalPhase = (phase: string): boolean =>
+  phase === "done" || phase === "needs_human" || phase === "rolled_back" || phase === "stopped"
+
+// Per-session control state the driver ports read. Held in a SynchronizedRef so pause/stop from a route
+// are observed by the running background driver without a lock.
+type GoalControl = {
+  readonly goalId: string
+  readonly planDocId: string
+  jobId: string
+  paused: boolean
+  stopped: boolean
+  // Last-known observable status, cached so pause/resume/stop can publish an IMMEDIATE goal.updated that
+  // carries the real ledger (not zeros). Updated every tick by publishStatus. Without this, a control
+  // transition would either wait for the next tick (pause/resume — slow) or never publish at all (stop
+  // cancels the job, so no further tick fires), leaving the UI status bar stuck on the prior phase.
+  ledger: { ticks: number; tokens: number; cost: number; wallclockMs: number }
+  stallCount: number
+  gaps: readonly string[]
+}
+
+export type StartGoalInput = {
+  readonly sessionID: string
+  /**
+   * An optional free-text objective (e.g. from the CLI `/goal <objective>`). When the session has no
+   * plan yet, this seeds a minimal single-step plan so the goal can start; the goal-worker refines it
+   * on the first tick. Ignored when a plan already exists (the existing plan is the goal carrier).
+   */
+  readonly objective?: string
+  /** Objective completion criteria (AND). Defaults to plan_complete + no_diagnostics when omitted. */
+  readonly criteria?: readonly CompletionCriterion[]
+  /** Hard bounds; a goal with no bounds is rejected by the core (InvalidGoalError). */
+  readonly limits?: Partial<GoalLimits>
+  readonly stallThreshold?: number
+  /** The Expert Panel question convened at a decision point (§D.7). Defaults to a review of the diff. */
+  readonly panelQuestion?: PanelQuestionInput
+}
+
+export type GoalSnapshot = {
+  readonly goalId: string
+  readonly planDocId: string
+  readonly phase: string
+  readonly running: boolean
+}
+
+// Whether a goal can be started for a session RIGHT NOW, and where its plan would come from. The client
+// gates the "convert plan → goal" affordance on this instead of guessing from session_plan alone —
+// session_plan is only populated by the plan TOOL, but loop/design modes author the plan as the repo
+// file `.deepagent-code/plans/goal+plan.md`, which start() also accepts. `source` lets the UI phrase
+// the action correctly (existing in-session plan vs the authored repo file).
+export type GoalStartable = {
+  readonly startable: boolean
+  readonly source: "plan" | "file" | "none"
+}
+
+export class GoalPlanEditUnavailableError extends Error {
+  readonly _tag = "GoalPlanEditUnavailableError"
+  override readonly name = "GoalPlanEditUnavailableError"
+
+  constructor(readonly reason: string) {
+    super(`Goal plan edit admission is unavailable: ${reason}`)
+  }
+}
+
+export type GoalPlanEditAdmissionError =
+  | PlanValidationError
+  | PlanConflictError
+  | PlanEditBusyError
+  | PlanEditChallengeError
+  | PlanEditMailboxConflictError
+  | PlanEditProtocolCorruptionError
+  | PlanEditRequestConflictError
+  | PlanEditTargetUnavailableError
+  | GoalPlanEditUnavailableError
+
+export interface Interface {
+  readonly start: (input: StartGoalInput) => Effect.Effect<GoalSnapshot, InvalidGoalError>
+  readonly pause: (sessionID: string) => Effect.Effect<boolean>
+  readonly resume: (sessionID: string) => Effect.Effect<boolean>
+  readonly stop: (sessionID: string) => Effect.Effect<boolean>
+  readonly status: (sessionID: string) => Effect.Effect<GoalSnapshot | null>
+  readonly startable: (sessionID: string) => Effect.Effect<GoalStartable>
+  /**
+   * V4.1 §S2 — apply a USER plan edit to a RUNNING or PAUSED goal. The revised plan (a PlanInput) is
+   * enqueued on the control channel and admitted by the driver BETWEEN ticks (via its own store handle,
+   * with exact identity checks and runtime-owned evidence), which also RE-BASELINES the
+   * Controller's stall/version tracking so the revision gets a fresh runway. Returns false when no goal
+   * is running for the session OR the goal reached a terminal phase (no orphan edit). Takes effect on the
+   * next tick (or on resume, if paused).
+   */
+  readonly editPlan: (input: {
+    readonly sessionID: string
+    readonly requestID: string
+    readonly planWrite: PlanWriteInput
+    readonly qualityChallengeID?: string
+  }) => Effect.Effect<PlanEditReceipt, GoalPlanEditAdmissionError>
+}
+
+export class Service extends Context.Service<Service, Interface>()("@deepagent-code/GoalManager") {}
+
+const DEFAULT_LIMITS: GoalLimits = { maxTicks: 50, maxTokens: 500_000, maxWallclockMs: 60 * 60 * 1000 }
+const DEFAULT_CRITERIA: readonly CompletionCriterion[] = [{ kind: "plan_complete" }, { kind: "no_diagnostics" }]
+
+export const layer = Layer.effect(
+  Service,
+  Effect.gen(function* () {
+    const sessions = yield* Session.Service
+    const agents = yield* Agent.Service
+    const sessionPrompt = yield* SessionPrompt.Service
+    const revert = yield* SessionRevert.Service
+    // §S1.3 — the durable steer buffer the goal driver drains between ticks (goal-directed steering).
+    const steerBuffer = yield* SessionSteer.Service
+    const events = yield* EventV2Bridge.Service
+    const background = yield* BackgroundJob.Service
+    const provider = yield* Provider.Service
+    const lsp = yield* LSP.Service
+    const flags = yield* RuntimeFlags.Service
+    // §16.3 order 3 caller wiring: flag-gated V2 subagent drive. serviceOption keeps compositions
+    // that don't assemble the V2 session stack on the legacy path even with the flag on.
+    const { v2Session, snapshot: v2Snapshot } = yield* GoalLoopWiring.resolveV2SubagentDrive()
+    // V4.0 §N — the event bus + Approval Queue the goal loop escalates through. Only used when the
+    // event-driven runtime flag is on (default OFF → behavior byte-identical to V3.9).
+    const eventBus = yield* DeepAgentEventBus.Service
+    const approvalQueue = yield* ApprovalQueue.Service
+
+    // Diagnostics accessor with LSP already provided, so the goal-loop wiring stays free of LSP in its
+    // requirement channel (liveDiagnostics needs LSP.Service; we satisfy it here at construction).
+    const diagnostics = () => liveDiagnostics().pipe(Effect.provideService(LSP.Service, lsp))
+
+    // Rollback port shared by start + resume (best-effort revert to the last message).
+    const rollback = liveRollback(revert, (sid) =>
+      sessions
+        .messages({ sessionID: SessionID.make(sid) })
+        .pipe(
+          Effect.map((msgs) => msgs.at(-1)?.info.id ?? null),
+          Effect.catchCause(() => Effect.succeed(null)),
+        ),
+    )
+
+    const defaultPanelQuestion = (): PanelQuestionInput => ({
+      question: "Is the current change safe and correct enough to complete this goal?",
+      codeRefs: [],
+      lenses: ["correctness", "security", "architecture"],
+    })
+
+    // §S1.3 — the goal-tick steer PORT, backed by SessionSteer keyed on the GOAL (parent) session id AND
+    // the DISTINCT `goal_steer` delivery channel.
+    // TWO independence dimensions prevent any drainer contention:
+    //   (a) SESSION-ID: the goal-worker turns run in FRESH child session ids (makeTaskSubagentRunner →
+    //       sessions.create), so S1.1's intra-turn child-runLoop drain reads a DIFFERENT session's buffer.
+    //   (b) DELIVERY: on the GOAL/parent session id there are TWO drainers — the parent's OWN runLoop
+    //       (drainSteers, delivery="steer") and this goal driver. Scoping this port to delivery=
+    //       "goal_steer" makes the two read DISJOINT rows, so a goal-directed steer is never swept into
+    //       the parent chat history instead of the goal step prompt (FIX 1 — the design-level race).
+    // pendingSteer is NON-consuming: the driver stamps consumed only AFTER the tick threads the steer; the
+    // `consumed_seq IS NULL` guard keeps a stamped row from being re-drained by this channel.
+    const goalSteerPort = (sessionID: string): GoalDriver.GoalSteerPort => ({
+      pendingSteer: () =>
+        steerBuffer.pending(SessionID.make(sessionID), GoalDriver.GOAL_STEER_DELIVERY).pipe(
+          Effect.map((rows) => rows.map((r) => ({ id: r.id, text: r.prompt.text }))),
+          Effect.catchCause(() => Effect.succeed([] as ReadonlyArray<GoalDriver.PendingGoalSteer>)),
+        ),
+      markSteerConsumed: (ids) =>
+        steerBuffer
+          .markConsumed(SessionID.make(sessionID), [...ids], GoalDriver.GOAL_STEER_DELIVERY)
+          .pipe(Effect.catchCause(() => Effect.void)),
+    })
+
+    // Resolve the model the goal loop should run with. Prefer the SESSION's selected model (what the
+    // user picked in the composer — e.g. GLM-5.2), since a goal is a continuation of that conversation;
+    // fall back to the config default. If NEITHER resolves, fail with a clean InvalidGoalError instead
+    // of dying — otherwise a workspace with no config-default model turns the whole request into an
+    // opaque 500 ("[object Object]") even though the user has a working model selected.
+    const resolveGoalModel = (session: { model?: { providerID: string; id: string } }) =>
+      Effect.gen(function* () {
+        if (session.model) {
+          return { providerID: session.model.providerID, modelID: session.model.id }
+        }
+        const fallback = yield* provider.defaultModel().pipe(Effect.option)
+        if (Option.isNone(fallback)) {
+          return yield* Effect.fail(
+            new InvalidGoalError({
+              reason: "no model is configured for this session — select a model, then start the goal",
+            }),
+          )
+        }
+        return { providerID: fallback.value.providerID, modelID: fallback.value.modelID }
+      })
+
+    // Per-session control state, observed by the running driver's ports.
+    const controls = yield* SynchronizedRef.make(new Map<string, GoalControl>())
+
+    // §S2 — both warm and cold drivers drain and settle the SAME durable activity mailbox. Admission is
+    // complete only after the queued receipt is fsync-backed; there is no in-memory fallback and no LWW slot.
+    const goalPlanEditPort = (sessionID: string): Pick<GoalDriverPorts, "pendingPlanEdit" | "settlePlanEdit"> => ({
+      pendingPlanEdit: () =>
+        getControl(sessionID).pipe(
+          Effect.map((control) =>
+            control == null
+              ? null
+              : readPendingPlanEditCommand(DocumentStore.shared(goalStoreRoot(sessionID)), sessionID, control.goalId),
+          ),
+        ),
+      settlePlanEdit: (command, settlement) =>
+        Effect.sync(() => {
+          settlePlanEditCommand(DocumentStore.shared(goalStoreRoot(sessionID)), command, settlement)
+        }),
+    })
+
+    const getControl = (sessionID: string) =>
+      SynchronizedRef.get(controls).pipe(Effect.map((m) => m.get(sessionID) ?? null))
+
+    const setControl = (sessionID: string, control: GoalControl | null) =>
+      SynchronizedRef.update(controls, (m) => {
+        const next = new Map(m)
+        if (control) next.set(sessionID, control)
+        else next.delete(sessionID)
+        return next
+      })
+
+    const mutateControl = (sessionID: string, f: (c: GoalControl) => void) =>
+      SynchronizedRef.update(controls, (m) => {
+        const c = m.get(sessionID)
+        if (c) f(c)
+        return m
+      })
+
+    // V4.1 §N — the SHARED status publisher. publishGoalEvent (raw goal.updated) + publishStatus (the
+    // full onStatus port: mirror plan → session-state, publish goal.updated, flag-on mirror to bus +
+    // approval queue). Extracted to goal-status-publisher.ts so the event-driven cold consumer's port
+    // (makeGoalTickPort) runs the IDENTICAL logic — no drift. The only goal-manager-specific step is
+    // caching the tick's ledger on the in-memory control (so pause/resume/stop publish the real ledger);
+    // that rides the optional `cacheStatus` callback here and is simply omitted on the cold path.
+    const statusPublisher = makeGoalStatusPublisher({
+      events,
+      sessions,
+      eventBus,
+      approvalQueue,
+      v4MultiAgentRuntime: flags.v4MultiAgentRuntime,
+      v4GoalTickEventDriven: flags.v4GoalTickEventDriven,
+      goalStoreRoot,
+      cacheStatus: (sessionID, cached) =>
+        mutateControl(sessionID, (ctrl) => {
+          ctrl.ledger = cached.ledger
+          ctrl.stallCount = cached.stallCount
+          ctrl.gaps = cached.gaps
+        }),
+    })
+    const publishGoalEvent = statusPublisher.publishGoalEvent
+    const publishStatus = statusPublisher.publishStatus
+
+    // Publish an IMMEDIATE goal.updated for a control transition (pause/resume/stop). Reuses the control's
+    // cached ledger/stall/gaps so the UI keeps its live budget readout while only the phase changes.
+    const publishControlPhase = (sessionID: string, control: GoalControl, phase: string) =>
+      publishGoalEvent(sessionID, {
+        goalId: control.goalId,
+        planDocId: control.planDocId,
+        phase,
+        ledger: control.ledger,
+        stallCount: control.stallCount,
+        gaps: control.gaps,
+      })
+
+    // Reflect a driver's terminal outcome into the active-goal pointer — but ONLY if the goal is still
+    // controlled. A user `stop()` clears the control (setControl null) and has already set the pointer to
+    // "stopped" and published it; the cancelled driver may still settle with its own outcome (e.g. it
+    // observed shouldStop and returned "needs_human") whose late tap would otherwise clobber "stopped".
+    // Guarding on a live control makes the explicit stop authoritative and drops the racing outcome.
+    const finalizeOutcome = (sessionID: string, outcome: string) =>
+      getControl(sessionID).pipe(
+        Effect.flatMap((c) =>
+          Effect.sync(() => {
+            if (outcome !== "continue" && c != null) {
+              AgentGateway.DeepAgentSessionState.setActiveGoalPhase(sessionID, outcome as never)
+            }
+          }),
+        ),
+      )
+
+    const start: Interface["start"] = (input) =>
+      Effect.gen(function* () {
+        const sessionID = input.sessionID
+        // CONCURRENCY GUARD: at most ONE live driver per session. A second start() (double-click / retried
+        // request / stale client) would spawn a second BackgroundJob that RACES the first over the same
+        // run_context doc — the core tick dedup is version-based, NOT a lock, so two ticks reading the same
+        // plan version both execute (double execute + double budget). setControl would also overwrite the
+        // first job's id, orphaning it (unstoppable). If a non-stopped control already exists, this start
+        // is a no-op that returns the live goal's snapshot (idempotent) instead of starting a rival driver.
+        const live = yield* getControl(sessionID)
+        if (live && !live.stopped) {
+          return {
+            goalId: live.goalId,
+            planDocId: live.planDocId,
+            phase: (live.paused ? "paused" : "running") as GoalSnapshot["phase"],
+            running: !live.paused,
+          }
+        }
+        const session = yield* sessions.get(SessionID.make(sessionID)).pipe(Effect.orDie)
+        const cwd = session.directory ?? process.cwd()
+
+        // Resolve the goal's plan from the FIRST available source, in precedence order:
+        //   1. session-state plan  — LOOP mode: the agent just produced the plan via the `plan` tool.
+        //   2. repo goal+plan.md   — DESIGN mode: the HUMAN authored `.deepagent-code/plans/goal+plan.md`;
+        //                            we parse it into a PlanDoc so the loop executes the user's plan as-is
+        //                            (the agent does NOT regenerate it). Criteria declared in the file are
+        //                            adopted unless the caller supplied explicit criteria.
+        //   3. free-text objective — CLI `/goal <objective>`: seed a minimal single-step plan the worker
+        //                            refines on the first tick.
+        // With none of these, the plan stays null and the core rejects the start (a goal must be decidable).
+        const existing = AgentGateway.DeepAgentSessionState.getPlan(sessionID) as PlanDoc | null
+        const objective = input.objective?.trim()
+        // Only fall back to the repo goal+plan.md (design mode) when there is NEITHER a session-state
+        // plan (loop mode) NOR an explicit free-text objective. An explicit objective is a direct user
+        // intent for THIS start and must win over a stale/leftover file in the workspace.
+        const fromFile = existing == null && !objective ? readGoalPlanFile(cwd, sessionID) : null
+        const plan =
+          existing ??
+          (objective
+            ? createPlanDoc(sessionID, objective, [
+                {
+                  step_id: "step_1",
+                  title: objective,
+                  status: "active",
+                  acceptance: null,
+                  assigned_agent: null,
+                  evidence: [],
+                  note: null,
+                },
+              ])
+            : (fromFile?.plan ?? null))
+        // I33-1: SHARED handle so the goal's plan doc and the `plan` tool's writes (core plan-store,
+        // same root + slug) share ONE in-memory index — a goal-side plan edit is immediately visible to
+        // the tool path and vice versa, structurally preventing the two-store divergence.
+        const store = DocumentStore.shared(goalStoreRoot(sessionID))
+        const planDocId =
+          plan != null
+            ? GoalDriver.materializePlanDoc({ store, sessionId: sessionID, plan })
+            : GoalDriver.goalPlanScope(sessionID) // no plan + no objective → startGoal rejects (no doc)
+
+        const model = yield* resolveGoalModel(session)
+
+        const runTurn = makeTaskSubagentRunner({
+          sessions,
+          agents,
+          sessionPrompt,
+          parentSessionID: SessionID.make(sessionID),
+          model,
+          allowPlanWriteCapability: true,
+          purpose: "goal-loop",
+          ...GoalLoopWiring.v2DriveDeps(v2Session, v2Snapshot, flags.coreV2Only),
+        })
+
+        // §S1.3 — ONE goal-steer relay per run, shared by the wiring (executor threads staged guidance
+        // into the step prompt) and the driver (drains between ticks + stamps consumed after the tick).
+        const steerRelay = GoalDriver.makeGoalSteerRelay()
+
+        // §S1.3 hygiene — the goal_steer buffer is scoped by (session_id, delivery) with NO goal_id column,
+        // and stop() does not drain pending rows. So a goal_steer admitted for a PRIOR goal on this session
+        // (e.g. one that landed right before the prior goal settled and was never threaded) would otherwise
+        // be read by THIS new goal's first between-tick drain — cross-goal contamination. Purge any leftover
+        // pending goal_steer rows at start so the new goal begins with a clean buffer. Best-effort: a failure
+        // here must not block starting the goal (the worst case is the pre-existing leak, not a new defect).
+        yield* steerBuffer
+          .pending(SessionID.make(sessionID), GoalDriver.GOAL_STEER_DELIVERY)
+          .pipe(
+            Effect.flatMap((stale) =>
+              stale.length === 0
+                ? Effect.void
+                : steerBuffer.markConsumed(
+                    SessionID.make(sessionID),
+                    stale.map((s) => s.id),
+                    GoalDriver.GOAL_STEER_DELIVERY,
+                  ),
+            ),
+            Effect.catchCause(() => Effect.void),
+          )
+
+        const deps = yield* GoalLoopWiring.makeGoalLoopWiring({
+          store,
+          parentSessionID: sessionID,
+          cwd,
+          runTurn,
+          panelQuestion: () => input.panelQuestion ?? defaultPanelQuestion(),
+          diagnostics,
+          rollback,
+          steerRelay,
+        }).pipe(Effect.provideService(RuntimeFlags.Service, flags))
+        // Flag OFF ⇒ wiring is null ⇒ the goal loop is unavailable. Reject clearly.
+        if (deps == null) {
+          return yield* Effect.fail(
+            new InvalidGoalError({ reason: "goal loop is disabled (experimentalGoalLoop flag off)" }),
+          )
+        }
+
+        // Criteria precedence mirrors the plan: explicit caller criteria win; else a design-mode file's
+        // own criteria (when it declared any); else the built-in default (plan_complete + no_diagnostics).
+        const criteria =
+          input.criteria ??
+          (fromFile && fromFile.criteria.length > 0 ? fromFile.criteria : DEFAULT_CRITERIA)
+
+        const { handle } = yield* GoalDriver.startGoal({
+          deps,
+          planDocId,
+          criteria,
+          limits: { ...DEFAULT_LIMITS, ...input.limits },
+          stallThreshold: input.stallThreshold,
+        })
+
+        // Register the session-state pointer so the UI reflects the goal even before the first tick.
+        AgentGateway.DeepAgentSessionState.setActiveGoal(sessionID, {
+          goalId: handle.goalId,
+          planDocId: handle.planDocId,
+          phase: "running",
+          startedAt: new Date().toISOString(),
+        })
+
+        // Emit an IMMEDIATE goal.updated (phase=running, empty ledger) BEFORE the first tick. The first
+        // driver tick is a full subagent turn (tens of seconds), and onStatus only fires AFTER it — so
+        // without this, the client's session_goal store stays empty and the "convert plan → goal" hint
+        // never flips to the GoalStatusBar, leaving the user with no confirmation the goal started. This
+        // seeds the store the moment start returns, so the UI reflects the running goal instantly.
+        yield* publishGoalEvent(sessionID, {
+          goalId: handle.goalId,
+          planDocId: handle.planDocId,
+          phase: "running",
+          ledger: { ticks: 0, tokens: 0, cost: 0, wallclockMs: 0 },
+          stallCount: 0,
+          gaps: [],
+        })
+
+        // The driver ports read the per-session control flags (pause/stop) live, plus the §S1.3 goal-steer
+        // channel (drained between ticks and threaded into the next step prompt via the shared relay).
+        const steerPort = goalSteerPort(sessionID)
+        const planEditPort = goalPlanEditPort(sessionID)
+        const ports: GoalDriverPorts = {
+          onStatus: (status) => publishStatus(sessionID, status),
+          shouldPause: () => getControl(sessionID).pipe(Effect.map((c) => c?.paused ?? false)),
+          shouldStop: () => getControl(sessionID).pipe(Effect.map((c) => c?.stopped ?? false)),
+          pendingSteer: steerPort.pendingSteer,
+          markSteerConsumed: steerPort.markSteerConsumed,
+          pendingPlanEdit: planEditPort.pendingPlanEdit,
+          settlePlanEdit: planEditPort.settlePlanEdit,
+        }
+
+        // V4.1 §N DUAL-PATH drive. The two paths MUST be mutually exclusive — running both for one goal
+        // would double-execute every tick over the same run_context doc.
+        //   • flag ON  (v4MultiAgentRuntime OR v4GoalTickEventDriven): publish the FIRST goal.tick.requested
+        //     command onto the Event Bus (seq=0). Either flag activates this path.
+        //   • flag OFF (default): the existing in-process BackgroundJob `runToCompletion` drives the ticks
+        //     (byte-identical to V3.9). The event-driven consumer's handle() acks-and-drives-nothing when
+        //     the flag is off, so a stray command can never double-drive.
+        // In BOTH paths we still register the in-memory control (jobId="" on the event path — there is no
+        // job to cancel; stop() sets the durable phase the cold tick reads, and cancel("") is a safe no-op)
+        // so pause / resume / stop / status / editPlan keep working the same way.
+        let jobId = ""
+        if (flags.v4MultiAgentRuntime || flags.v4GoalTickEventDriven) {
+          // seq=0 is the seed; expectedPlanVersion is advisory trace. The bus dedups on goal:tick:<id>:0
+          // so a retried start() cannot seed two chains.
+          const expectedPlanVersion = store.get(planDocId)?.version ?? 0
+          yield* eventBus
+            .publish(
+              GoalTickConsumer.tickCommand({
+                sessionID,
+                goalId: handle.goalId,
+                planDocId: handle.planDocId,
+                seq: 0,
+                expectedPlanVersion,
+                // §E4/§N — carry the real workspace id so the consumer's quiet-hours gate can use it.
+                ...(session.workspaceID != null ? { workspaceID: String(session.workspaceID) } : {}),
+              }),
+            )
+            .pipe(Effect.ignore)
+        } else {
+          // Start the driver as a resident background task. onFinish clears the pointer / control state.
+          const job = yield* background.start({
+            type: "goal-loop",
+            title: `goal ${handle.goalId}`,
+            metadata: { sessionID, goalId: handle.goalId },
+            run: GoalDriver.runToCompletion({ deps, handle, ports, steerRelay }).pipe(
+              // A terminal outcome clears the running pointer to its terminal phase (unless the user already
+              // stopped it); a paused exit ("continue") leaves the pointer for a later resume.
+              Effect.tap((outcome) => finalizeOutcome(sessionID, outcome)),
+              Effect.map((outcome) => `goal ${handle.goalId}: ${outcome}`),
+              Effect.catchCause(() => Effect.succeed(`goal ${handle.goalId}: driver defect`)),
+            ),
+          })
+          jobId = job.id
+        }
+
+        yield* setControl(sessionID, {
+          goalId: handle.goalId,
+          planDocId: handle.planDocId,
+          jobId,
+          paused: false,
+          stopped: false,
+          ledger: { ticks: 0, tokens: 0, cost: 0, wallclockMs: 0 },
+          stallCount: 0,
+          gaps: [],
+        })
+
+        return { goalId: handle.goalId, planDocId: handle.planDocId, phase: "running", running: true }
+      })
+
+    const pause: Interface["pause"] = (sessionID) =>
+      Effect.gen(function* () {
+        const c = yield* getControl(sessionID)
+        if (!c) return false
+        yield* mutateControl(sessionID, (ctrl) => (ctrl.paused = true))
+        AgentGateway.DeepAgentSessionState.setActiveGoalPhase(sessionID, "paused")
+        // Immediate goal.updated so the status bar flips to "paused" now, not after the in-flight tick.
+        yield* publishControlPhase(sessionID, c, "paused")
+        return true
+      })
+
+    const resume: Interface["resume"] = (sessionID) =>
+      Effect.gen(function* () {
+        const c = yield* getControl(sessionID)
+        if (!c || c.stopped) return false
+        // CONCURRENCY GUARD: only a PAUSED goal has no live driver to re-drive. Resuming a goal that is
+        // already running (paused === false) would spawn a SECOND driver racing the live one over the same
+        // run_context doc (version dedup is not a lock → double execute). A resume on a non-paused goal is
+        // a no-op.
+        if (!c.paused) return true
+        yield* mutateControl(sessionID, (ctrl) => (ctrl.paused = false))
+        AgentGateway.DeepAgentSessionState.setActiveGoalPhase(sessionID, "running")
+        // Re-drive: the persisted run_context doc resumes exactly where it paused. I33-1: SHARED handle
+        // (same shared index as the tool path + the first driver) so the resumed loop's plan reads/writes
+        // stay coherent with any concurrent `plan` tool write on the same session.
+        const store = DocumentStore.shared(goalStoreRoot(sessionID))
+        const session = yield* sessions.get(SessionID.make(sessionID)).pipe(Effect.orDie)
+
+        // V4.1 §N DUAL-PATH resume. flag ON ⇒ RE-SEED the event chain rather than starting a BackgroundJob.
+        // The paused command consumed the current normal cursor key without advancing state. Resume keeps
+        // that cursor as the tick's true pre-state but publishes it through a fresh resume-only key; the
+        // resumed tick's successor returns to the normal durable-cursor namespace.
+        if (flags.v4MultiAgentRuntime || flags.v4GoalTickEventDriven) {
+          const tick = readGoalTickCursor(store, sessionID, c.goalId)
+          const expectedPlanVersion = tick?.planVersion ?? store.get(c.planDocId)?.version ?? 0
+          yield* eventBus
+            .publish(
+              GoalTickConsumer.resumeTickCommand({
+                sessionID,
+                goalId: c.goalId,
+                planDocId: c.planDocId,
+                seq: tick?.seq ?? 0,
+                expectedPlanVersion,
+                // FEATURE-003-407 residual: re-stamp the real workspace id on resume too — the consumer
+                // chain carries it from the PAYLOAD, so without this the resumed chain (and its quiet-hours
+                // gate) would silently lose the workspace and degrade to the "" global fallback.
+                ...(session.workspaceID != null ? { workspaceID: String(session.workspaceID) } : {}),
+              }),
+            )
+            .pipe(Effect.ignore)
+          yield* publishControlPhase(sessionID, c, "running")
+          return true
+        }
+
+        // Resume can't run without a model; if none resolves, don't crash — just report "not resumed".
+        const modelOpt = yield* resolveGoalModel(session).pipe(Effect.option)
+        if (Option.isNone(modelOpt)) return false
+        const model = modelOpt.value
+        const runTurn = makeTaskSubagentRunner({
+          sessions,
+          agents,
+          sessionPrompt,
+          parentSessionID: SessionID.make(sessionID),
+          model,
+          allowPlanWriteCapability: true,
+          purpose: "goal-loop",
+          ...GoalLoopWiring.v2DriveDeps(v2Session, v2Snapshot, flags.coreV2Only),
+        })
+        // §S1.3 — a fresh relay for the resumed run (steers admitted while paused are still pending in the
+        // durable buffer, so the resumed driver re-drains and threads them on its first tick — no loss).
+        const steerRelay = GoalDriver.makeGoalSteerRelay()
+        const deps = yield* GoalLoopWiring.makeGoalLoopWiring({
+          store,
+          parentSessionID: sessionID,
+          cwd: session.directory ?? process.cwd(),
+          runTurn,
+          panelQuestion: defaultPanelQuestion,
+          diagnostics,
+          rollback,
+          steerRelay,
+        }).pipe(Effect.provideService(RuntimeFlags.Service, flags))
+        if (deps == null) return false
+        const handle = { goalId: c.goalId, planDocId: c.planDocId, sessionId: sessionID }
+        const steerPort = goalSteerPort(sessionID)
+        const planEditPort = goalPlanEditPort(sessionID)
+        const ports: GoalDriverPorts = {
+          onStatus: (status) => publishStatus(sessionID, status),
+          shouldPause: () => getControl(sessionID).pipe(Effect.map((ctrl) => ctrl?.paused ?? false)),
+          shouldStop: () => getControl(sessionID).pipe(Effect.map((ctrl) => ctrl?.stopped ?? false)),
+          pendingSteer: steerPort.pendingSteer,
+          markSteerConsumed: steerPort.markSteerConsumed,
+          pendingPlanEdit: planEditPort.pendingPlanEdit,
+          settlePlanEdit: planEditPort.settlePlanEdit,
+        }
+        const job = yield* background.start({
+          type: "goal-loop",
+          title: `goal ${c.goalId} (resumed)`,
+          metadata: { sessionID, goalId: c.goalId },
+          run: GoalDriver.runToCompletion({ deps, handle, ports, steerRelay }).pipe(
+            Effect.tap((outcome) => finalizeOutcome(sessionID, outcome)),
+            Effect.map((outcome) => `goal ${c.goalId}: ${outcome}`),
+            Effect.catchCause(() => Effect.succeed(`goal ${c.goalId}: driver defect`)),
+          ),
+        })
+        yield* mutateControl(sessionID, (ctrl) => (ctrl.jobId = job.id))
+        // Immediate goal.updated so the status bar flips back to "running" now. The resumed driver's
+        // first tick may be tens of seconds away; without this the bar would stay stuck on "paused".
+        yield* publishControlPhase(sessionID, c, "running")
+        return true
+      })
+
+    const stop: Interface["stop"] = (sessionID) =>
+      Effect.gen(function* () {
+        const c = yield* getControl(sessionID)
+        if (!c) return false
+        yield* mutateControl(sessionID, (ctrl) => (ctrl.stopped = true))
+        yield* background.cancel(c.jobId).pipe(Effect.ignore)
+        AgentGateway.DeepAgentSessionState.setActiveGoalPhase(sessionID, "stopped")
+        yield* setControl(sessionID, null)
+        // Immediate goal.updated is MANDATORY here: cancelling the job means no further tick will ever
+        // fire onStatus, so this is the ONLY event that can move the status bar off its prior phase.
+        // Without it the UI is stuck showing "running" forever after the user hits stop.
+        yield* publishControlPhase(sessionID, c, "stopped")
+        return true
+      })
+
+    const status: Interface["status"] = (sessionID) =>
+      Effect.gen(function* () {
+        const ptr = AgentGateway.DeepAgentSessionState.getActiveGoal(sessionID)
+        if (!ptr) return null
+        const c = yield* getControl(sessionID)
+        return {
+          goalId: ptr.goalId,
+          planDocId: ptr.planDocId,
+          phase: ptr.phase,
+          running: c != null && !c.paused && !c.stopped,
+        }
+      })
+
+    // Whether start() would find a plan to run — mirrors its plan-resolution precedence WITHOUT side
+    // effects (no doc materialized, no driver started). Flag-gated: a disabled goal loop is never
+    // startable. session_plan (loop-tool authored) wins; else the repo goal+plan.md (loop/design file);
+    // else none. Used by the client to gate the convert-to-goal affordance in the modes where it applies.
+    const startable: Interface["startable"] = (sessionID) =>
+      Effect.gen(function* () {
+        if (!flags.experimentalGoalLoop) return { startable: false, source: "none" as const }
+        const existing = AgentGateway.DeepAgentSessionState.getPlan(sessionID) as PlanDoc | null
+        if (existing != null) return { startable: true, source: "plan" as const }
+        const session = yield* sessions.get(SessionID.make(sessionID)).pipe(Effect.orDie)
+        const cwd = session.directory ?? process.cwd()
+        const fromFile = readGoalPlanFile(cwd, sessionID)
+        if (fromFile?.plan != null) return { startable: true, source: "file" as const }
+        return { startable: false, source: "none" as const }
+      })
+
+    const editPlan: Interface["editPlan"] = (input) =>
+      Effect.gen(function* () {
+        const c = yield* getControl(input.sessionID)
+        if (!c || c.stopped) return yield* Effect.fail(new PlanEditTargetUnavailableError("no live goal driver"))
+        const ptr = AgentGateway.DeepAgentSessionState.getActiveGoal(input.sessionID)
+        if (!ptr || ptr.goalId !== c.goalId || ptr.planDocId !== c.planDocId || isTerminalGoalPhase(ptr.phase)) {
+          return yield* Effect.fail(new PlanEditTargetUnavailableError("active goal pointer does not match a live goal"))
+        }
+        const store = DocumentStore.shared(goalStoreRoot(input.sessionID))
+        const command = createPlanEditCommand({
+          requestID: input.requestID,
+          sessionID: input.sessionID,
+          goalID: c.goalId,
+          planWrite: input.planWrite,
+          confirmedChallengeID: input.qualityChallengeID,
+        })
+        const prior = yield* planEditAdmission(() =>
+          readPlanEditReceiptByRequest(store, input.sessionID, c.goalId, input.requestID),
+        )
+        if (prior) {
+          if (prior.command.candidate_hash !== command.candidate_hash) {
+            return yield* Effect.fail(new PlanEditRequestConflictError(input.requestID))
+          }
+          return prior
+        }
+        const existing = store.get(c.planDocId)
+        if (!existing) return yield* Effect.fail(new PlanEditTargetUnavailableError("authoritative plan document not found"))
+        const previous = decodePlanDoc(existing.body)
+        if (!previous) return yield* Effect.fail(new PlanEditTargetUnavailableError("authoritative plan is malformed"))
+        const validated = yield* planEditAdmission(() =>
+            buildPlanFromWriteInput(
+              input.sessionID,
+              input.planWrite,
+              previous,
+              { plan_id: previous.plan_id, doc_id: existing.id, version: existing.version },
+            ),
+          ).pipe(
+            Effect.match({
+              onFailure: (error) => ({ ok: false as const, error }),
+              onSuccess: () => ({ ok: true as const }),
+            }),
+          )
+        if (validated.ok) {
+          return yield* planEditAdmission(() => admitPlanEditCommand(store, command))
+        }
+        if (!(validated.error instanceof PlanValidationError) || validated.error.code !== "suspicious_quality_regression") {
+          return yield* Effect.fail(validated.error)
+        }
+        const qualityError = validated.error
+        const receipt = yield* input.qualityChallengeID
+          ? planEditAdmission(() => {
+              buildPlanFromWriteInput(
+                input.sessionID,
+                input.planWrite,
+                previous,
+                { plan_id: previous.plan_id, doc_id: existing.id, version: existing.version },
+                { allowQualityRegression: true },
+              )
+              return admitPlanEditCommand(store, command)
+            })
+          : planEditAdmission(() => issuePlanEditChallenge(store, command, qualityError.challenge_id ?? randomUUID()))
+
+        writeGovernanceAudit(input.sessionID, c.goalId, "plan_edit", {
+          activityId: receipt.command.activity_id,
+          requestId: receipt.command.request_id,
+          candidateHash: receipt.command.candidate_hash,
+          state: receipt.state,
+          stepCount: input.planWrite.steps.length,
+          goalChars: input.planWrite.goal.length,
+        })
+        glog.info("goal plan hot-edit admitted", {
+          sessionID: input.sessionID,
+          goalId: c.goalId,
+          activityId: receipt.command.activity_id,
+          state: receipt.state,
+          stepCount: input.planWrite.steps.length,
+        })
+        return receipt
+      })
+
+    return Service.of({ start, pause, resume, stop, status, startable, editPlan })
+  }),
+)
+
+const planEditAdmission = <A>(operation: () => A): Effect.Effect<A, GoalPlanEditAdmissionError> =>
+  Effect.try({
+    try: operation,
+    catch: (error) => {
+      if (
+        error instanceof PlanValidationError ||
+        error instanceof PlanConflictError ||
+        error instanceof PlanEditBusyError ||
+        error instanceof PlanEditChallengeError ||
+        error instanceof PlanEditMailboxConflictError ||
+        error instanceof PlanEditProtocolCorruptionError ||
+        error instanceof PlanEditRequestConflictError ||
+        error instanceof PlanEditTargetUnavailableError
+      ) {
+        return error
+      }
+      return new GoalPlanEditUnavailableError(error instanceof Error ? error.message : "unknown persistence failure")
+    },
+  })
+
+export const defaultLayer = Layer.suspend(() =>
+  layer.pipe(
+    Layer.provide(Session.defaultLayer),
+    Layer.provide(Agent.defaultLayer),
+    Layer.provide(SessionPrompt.defaultLayer),
+    Layer.provide(SessionRevert.defaultLayer),
+    Layer.provide(SessionSteer.defaultLayer),
+    Layer.provide(EventV2Bridge.defaultLayer),
+    Layer.provide(BackgroundJob.defaultLayer),
+    Layer.provide(Provider.defaultLayer),
+    Layer.provide(LSP.defaultLayer),
+    Layer.provide(RuntimeFlags.defaultLayer),
+    Layer.provide(DeepAgentEventBus.defaultLayer),
+    Layer.provide(ApprovalQueue.defaultLayer),
+  ),
+)
+
+export * as GoalManager from "./goal-manager"

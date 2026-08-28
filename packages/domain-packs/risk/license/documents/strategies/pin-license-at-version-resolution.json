@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:lic:pin-license-at-version-resolution",
+  "type": "strategy",
+  "title": "Re-resolve licenses on every dependency bump",
+  "description": "Treat a version change as a potential license change, because projects relicense between releases.",
+  "body": "Use when upgrading, adding, or transitively pulling a new dependency version. Do not assume a package keeps the same license across versions (e.g. relicensing from open to BSL/SSPL, or dual-license changes). Actions: on any lockfile change, diff the resolved license of each changed component against the prior inventory and surface every license delta for review. Validation signals include a CI gate that compares the new inventory to the committed baseline and fails on any unreviewed license change. Risk boundary: a silent move to a source-available or non-OSI license (BSL, SSPL, Elastic) is blocking and must reach a human before merge.",
+  "domain": "license",
+  "scope_hint": "risk.license:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.license",
+  "pack_id": "risk.license"
+}

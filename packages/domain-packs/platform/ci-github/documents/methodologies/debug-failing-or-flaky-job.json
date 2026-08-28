@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:ghci:debug-failing-or-flaky-job",
+  "type": "methodology",
+  "title": "Debug a failing or flaky CI job",
+  "description": "Reproduce locally, isolate the failing step, and separate code failures from runner/cache/env nondeterminism.",
+  "body": "Steps: 1. Open the job logs and find the first failing step (not just the last red line). 2. Re-run with debug logging (ACTIONS_STEP_DEBUG) to see expanded commands and env. 3. Determine whether it is code (fails locally too), environment (runner image/tool version drift), or cache (stale restore) by clearing the cache and pinning the runner image. 4. Reproduce in a minimal branch with the same matrix leg. 5. Fix the root cause, not the symptom (e.g. pin a tool version rather than retry). Rollback point: the branch under test. Validation: the job passes deterministically across reruns, not just once.",
+  "domain": "ci_github",
+  "scope_hint": "platform.ci-github:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.ci-github",
+  "pack_id": "platform.ci-github"
+}

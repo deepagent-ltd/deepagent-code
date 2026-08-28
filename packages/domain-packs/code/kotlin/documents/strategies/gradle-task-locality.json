@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:lang_kotlin:gradle-task-locality",
+  "type": "strategy",
+  "description": "Run the narrow Gradle task for the owning module before broad workspace gates.",
+  "body": "Use when Kotlin code lives in a multi-module Gradle or Android project. Do not run only root generic commands when the changed source set has a module-specific check or test task. Inspect settings.gradle.kts, included builds, source sets, and task names, then run the narrow compile/test task before widening. Verification is the Gradle task path and exit code. Risk boundary: broad Gradle invocations can be slow, flaky, or require Android SDK state unrelated to the edit. Use when Kotlin Engineering work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: choose the smallest direction that preserves the domain contract; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "kotlin",
+  "scope_hint": "code.kotlin:strategys",
+  "evidence_strength": "medium",
+  "provenance_tag": "code.kotlin:seed:kotlin_gradle_coroutines_docs:paraphrased",
+  "pack_id": "code.kotlin"
+}

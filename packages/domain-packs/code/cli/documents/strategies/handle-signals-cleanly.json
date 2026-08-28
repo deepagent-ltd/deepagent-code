@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:cli:handle-signals-cleanly",
+  "type": "strategy",
+  "title": "Handle signals for clean shutdown",
+  "description": "Trap SIGINT/SIGTERM to flush output, remove temp files, and reap child processes so an interrupt never leaves corruption.",
+  "body": "Use when a CLI writes files, spawns children, or holds resources. Do not ignore termination signals or leave partial files on Ctrl-C, and do not orphan child processes. Actions: install handlers for SIGINT/SIGTERM that flush buffers, delete temp/partial files (or write atomically via temp+rename), terminate or wait on children, then exit with the conventional 128+signal code. Validation signals include sending SIGINT mid-run and finding no half-written output and no orphaned children. Risk boundary: a tool that leaves a half-written output file on interrupt can corrupt a pipeline's input or a user's data — write atomically and clean up on signal.",
+  "domain": "cli",
+  "scope_hint": "code.cli:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.cli",
+  "pack_id": "code.cli"
+}

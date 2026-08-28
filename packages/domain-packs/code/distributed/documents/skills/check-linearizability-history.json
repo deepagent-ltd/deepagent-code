@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:dist:check-linearizability-history",
+  "type": "skill",
+  "title": "Check a recorded history for linearizability",
+  "description": "Feed a recorded operation history into a consistency checker and report any anomaly with the offending operations.",
+  "body": "Use when you have a recorded concurrent history and need to know whether it is linearizable (or satisfies a weaker target model). Actions: detect the available checker (Knossos/Porcupine or the project's harness), supply the history and the model specification, run it, and report the verdict plus the minimal anomalous operation sequence if it fails. Do not declare a system linearizable from a passing run that included no concurrency or faults. This skill exposes capability only and must not run against production data without runtime permission. Validation signals include a checker pass over histories that include partitions and concurrent clients. Risk boundary: an anomaly means an acked guarantee is broken; surface it as a blocking finding and recommend escalation rather than re-running until it passes.",
+  "domain": "distributed",
+  "scope_hint": "code.distributed:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.distributed",
+  "pack_id": "code.distributed"
+}

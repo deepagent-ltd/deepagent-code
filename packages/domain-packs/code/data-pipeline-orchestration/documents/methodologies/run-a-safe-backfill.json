@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:orch:run-a-safe-backfill",
+  "type": "methodology",
+  "title": "Run a safe, reconciled backfill",
+  "description": "Reprocess a historical range with idempotent tasks, bounded concurrency, and a reconciliation check against the original output.",
+  "body": "Use when a logic fix requires reprocessing past dates. Do not rerun history at full parallelism on append-mode tasks — it duplicates data and can overload shared resources. Actions: verify each task overwrites its own date partition idempotently, cap backfill concurrency, run the explicit date range, then diff a sample of backfilled output against the original scheduled output. Validation signals include backfilled partitions matching expectations and shared resources staying within capacity during the run. Risk boundary: a backfill that double-writes corrupts downstream totals; if reconciliation shows duplication or drift, halt the backfill and escalate to fix idempotency before continuing.",
+  "domain": "orchestration",
+  "scope_hint": "code.data-pipeline-orchestration:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-pipeline-orchestration",
+  "pack_id": "code.data-pipeline-orchestration"
+}

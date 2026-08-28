@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:java_jvm:idiom-preserving-change",
+  "type": "strategy",
+  "description": "In Java/JVM, prefer established idioms (Optional over null, try-with-resources, checked-exception discipline, and immutable value types) over generic rewrites.",
+  "body": "In Java/JVM, the ecosystem has settled idioms — Optional over null, try-with-resources, checked-exception discipline, and immutable value types — and changes that ignore them add risk and review friction. Use when adding or modifying Java/JVM code near existing patterns. Do not impose a foreign style or rewrite working code into a generic shape, and avoid abandoning nearby conventions. Actions: read the surrounding code, follow its Optional over null, try-with-resources, checked-exception discipline, and immutable value types, keep the change minimal, then run SpotBugs, Error Prone, and Checkstyle reports and the module's JUnit suite on the affected classpath to confirm fit. Validation signals include a small diff consistent with neighbors, a clean lint pass, and passing tests. Risk boundary: a broad idiom migration is its own reviewed task; escalate rather than bundling it into an unrelated change.",
+  "domain": "java_jvm",
+  "scope_hint": "code.java-jvm:strategies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.java-jvm:skill_survey",
+  "pack_id": "code.java-jvm"
+}

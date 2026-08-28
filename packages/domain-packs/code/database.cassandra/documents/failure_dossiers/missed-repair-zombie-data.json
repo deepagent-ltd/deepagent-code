@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:cass:missed-repair-zombie-data",
+  "type": "failure_dossier",
+  "description": "Skipping repair beyond gc_grace_seconds lets deleted data resurrect across replicas.",
+  "body": "Failure mode: anti-entropy repair is not run within gc_grace_seconds, so a replica that missed a delete's tombstone keeps the old value; once the tombstone is garbage-collected elsewhere, that stale value propagates and the deleted row reappears. Detection signals: previously deleted rows return in reads, repair logs show gaps or failures, and the repair interval exceeds gc_grace_seconds. Do not let the repair cycle lapse past gc_grace_seconds. Safer fallback: schedule incremental or subrange repair (or a reaper) to cover every table within the gc_grace window, alert on missed cycles, and run a full repair before trusting deletes after an outage.",
+  "domain": "cassandra",
+  "scope_hint": "code.database.cassandra:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.cassandra:human_authored",
+  "pack_id": "code.database.cassandra"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:debugging:symptom-patch",
+  "type": "failure_dossier",
+  "description": "Catching or suppressing the visible error can hide the real invariant break.",
+  "body": "Do not add default fallbacks or broad catches before proving the cause.\n\nUse only as a diagnostic do-not-use signal; do not expose this as positive strategy, methodology, or memory. Use when a proposed approach skips reproduction steps, stack traces, logs, state transitions, and controlled hypotheses or claims success without domain evidence. Do not use this dossier as a positive implementation strategy; it is a do-not-use signal. Actions: block the shortcut, name the missing evidence, and switch to a safer methodology or ask for human approval. Validation signals include absence or contradiction in minimal repro, before/after trace, regression test, and command output. Risk boundary: treat repeated recurrence as a blocker when it can cause blind retries, wrapper fixes, broad rewrites, and unproven root cause.",
+  "domain": "debugging",
+  "scope_hint": "code.debugging:failure_dossiers",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.debugging",
+  "pack_id": "code.debugging"
+}

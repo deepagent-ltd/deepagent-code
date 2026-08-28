@@ -1,0 +1,71 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.llm-app",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "llm_app",
+      "llm",
+      "model_api",
+      "tool_calls",
+      "structured_output"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.llm-app: model API completion call, tool call / function call schemas, structured output validation, streaming, token limit and prompt injection handling with OpenAI and Anthropic clients"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "plain prose note with no repository or domain signal"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "llm model api completion tool call function call structured output json schema validation streaming retry timeout cost prompt injection token limit",
+  "expected_pack_id": "code.llm-app",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "code.llm-app L3 validation smoke",
+    "signals": [
+      "structured output conforms to schema across sampled responses",
+      "tool-call arguments validated before execution",
+      "timeout and max-cost ceiling enforced per call",
+      "injected content cannot alter system instructions"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "code.llm-app diagnosis smoke",
+    "signals": [
+      "model output trusted as fact without verification",
+      "unvalidated tool-call arguments executed",
+      "no timeout or unbounded retry/cost",
+      "structured output parsed without schema",
+      "retrieved content interpreted as instructions"
+    ]
+  },
+  "source_refs": [
+    "source:openai-function-calling:paraphrased",
+    "source:json-schema-spec:paraphrased"
+  ]
+}

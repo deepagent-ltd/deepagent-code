@@ -1,0 +1,11 @@
+{
+  "ref_id": "skill:database:migration-dry-run-review",
+  "type": "skill",
+  "description": "Run or inspect a database migration on disposable data and report schema, data, lock, and rollback evidence.",
+  "body": "Inputs: migration files or generated SQL, project migration command, disposable database target, and expected schema intent. Procedure: inspect SQL for destructive and locking operations; run the migration against isolated data or a fixture snapshot; capture schema diff, timing, row counts, constraint failures, and warnings; run rollback/down migration or document roll-forward recovery; run smoke queries or tests that touch changed tables. Do not use this skill on production data or shared environments without explicit approval. Outputs: commands run, migration phase classification, dry-run result, data integrity checks, rollback evidence, and blockers. Failure handling: if no disposable database exists, report the missing harness and perform static migration review instead of claiming the migration is safe. Use when Database Engineering work touches schema deltas, query shape, transaction ownership, constraints, locks, and data volume. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: run the documented inspection and validation workflow; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include migration dry-runs, rollback checks, EXPLAIN output, constraint tests, and fixture data comparisons. Risk boundary: escalate or stop when the task involves data loss, long locks, non-rollbackable writes, silent query-plan regressions, and unsafe backfills, missing owner evidence, or live external state.",
+  "domain": "sql",
+  "scope_hint": "code.database:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database:migration_dry_run_skill",
+  "pack_id": "code.database"
+}

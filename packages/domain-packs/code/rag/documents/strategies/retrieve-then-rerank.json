@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:rag:retrieve-then-rerank",
+  "type": "strategy",
+  "title": "Retrieve broadly, then rerank precisely",
+  "description": "Cast a wide first-stage retrieval net, then apply a precise reranker to order the small top-k the model actually sees.",
+  "body": "Use when first-stage retrieval alone gives noisy top results. Do not feed raw vector-similarity top-k straight to the model, and avoid reranking so few candidates that the relevant passage never enters the pool. Actions: retrieve a larger candidate set for recall, rerank with a cross-encoder or scoring model for precision, and pass only the reranked top-k into context. Validation signals include a test that reranking raises top-k relevance over raw retrieval on a labeled set. Risk boundary: if the relevant passage is lost before rerank, the answer cannot be grounded; measure recall at the first stage, not just final precision.",
+  "domain": "rag",
+  "scope_hint": "code.rag:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.rag",
+  "pack_id": "code.rag"
+}

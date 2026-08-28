@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:gfx:rasterization-pipeline-stages",
+  "type": "knowledge",
+  "title": "Stages of the rasterization pipeline",
+  "description": "Vertices flow through vertex shading, primitive assembly and clipping, rasterization to fragments, fragment shading, and per-fragment depth/blend tests.",
+  "body": "Use when reasoning about where work happens in a frame. The fixed pipeline runs: vertex shader (per-vertex transform/attributes) -> primitive assembly and clipping -> rasterization (primitives to candidate fragments with interpolated attributes) -> fragment shader (per-fragment color) -> depth/stencil and blend tests -> framebuffer write. Vertex and fragment stages are programmable; the rest is fixed-function state. Do not expect to control rasterization order or fragment scheduling. Actions: place each computation in the cheapest correct stage (per-vertex when interpolation suffices). Validation signals include the GPU debugger showing expected inputs/outputs per stage. Risk boundary: doing per-vertex work per-fragment wastes huge throughput; locate work in the right stage and confirm via a capture.",
+  "domain": "graphics",
+  "scope_hint": "code.graphics:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.graphics",
+  "pack_id": "code.graphics"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:observability:high-cardinality-metric-explosion",
+  "type": "failure_dossier",
+  "description": "Adding an unbounded label such as user id or request id to a metric, exploding series count and degrading the metrics backend.",
+  "body": "Failure mode: a metric is tagged with a high-cardinality dimension, so each distinct value creates a new time series and the metrics store balloons, slowing queries and risking an outage — often discovered mid-incident when dashboards stall. Detection signals: series count spikes after a deploy; metrics backend memory/cost climbs; queries time out. Do not put per-request or per-user identifiers in metric labels. Safer fallback: remove the unbounded label, keep only bounded dimensions, move per-request detail to logs/traces, and add a cardinality budget alert.",
+  "domain": "code",
+  "scope_hint": "code.observability:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.observability:human_authored",
+  "pack_id": "code.observability"
+}

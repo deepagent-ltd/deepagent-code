@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:tsdb:choose-engine-by-write-shape",
+  "type": "strategy",
+  "title": "Choose engine by write and query shape",
+  "description": "Match the TSDB (TimescaleDB vs InfluxDB vs Prometheus) to whether the workload is relational-join, high-ingest, or pull-based metrics.",
+  "body": "Use when selecting a time-series store. Do not default to one engine for all cases — TimescaleDB suits SQL/joins on time data, InfluxDB suits high-ingest event streams, Prometheus suits pull-based service metrics with short retention. Actions: characterize ingest rate, query patterns (joins vs rollups), and retention need; compare against each engine's model. Validation signals include a prototype sustaining target ingest and query latency. Risk boundary: migrating engines later is costly — record the decision and its assumptions.",
+  "domain": "timeseries_db",
+  "scope_hint": "code.database.timeseries:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.timeseries",
+  "pack_id": "code.database.timeseries"
+}

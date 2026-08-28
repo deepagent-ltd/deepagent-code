@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:k8s:read-manifest-for-safety-gaps",
+  "type": "skill",
+  "title": "Read a manifest for safety gaps",
+  "description": "Inspect a Deployment/Helm output and report missing probes, unset resources, risky RBAC, and secret exposure.",
+  "body": "Use when asked whether a workload manifest is production-safe. Actions: read the rendered manifest and verify readiness/liveness presence and targets, resource requests/limits set sensibly, RBAC scoped (no wildcards/cluster-admin), Secrets mounted rather than plaintext env, and a sane rollout strategy plus PDB. Do not assume defaults are safe (no probe means traffic to unready pods; no limits means OOM risk). Record each gap with the file/field and classify as availability, isolation, privilege, or secret-exposure. This skill is read-only and must not apply changes without runtime permission. Validation signals include a concrete list of fields and their risk class. Risk boundary: report any secret-in-env or cluster-admin grant as a blocking finding and recommend escalation.",
+  "domain": "kubernetes",
+  "scope_hint": "platform.kubernetes:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.kubernetes",
+  "pack_id": "platform.kubernetes"
+}

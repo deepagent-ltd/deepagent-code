@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:net:retry-storm-no-backoff",
+  "type": "failure_dossier",
+  "description": "Retries fire immediately and in lockstep with no backoff or jitter, amplifying a partial outage into a thundering herd.",
+  "body": "Failure mode: on failure the client retries in a tight loop (or fixed delay) with no jitter and no cap, so when a dependency degrades every client hammers it simultaneously, multiplying load and preventing recovery. Detection signals: request volume to a failing dependency spikes instead of dropping; synchronized retry bursts; no backoff/jitter in the retry code; the dependency cannot recover while clients retry. Do not retry without capped exponential backoff and jitter. Safer fallback: cap attempts and total time, use exponential backoff with full jitter, respect Retry-After, add a circuit breaker, and load-test that a degraded dependency does not see amplified traffic.",
+  "domain": "networking",
+  "scope_hint": "code.networking:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.networking:human_authored",
+  "pack_id": "code.networking"
+}

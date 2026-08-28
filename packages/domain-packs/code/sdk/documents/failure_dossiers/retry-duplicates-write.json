@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:sdk:retry-duplicates-write",
+  "type": "failure_dossier",
+  "description": "Retrying a non-idempotent write after a timeout, duplicating the effect because the first request had already succeeded.",
+  "body": "Failure mode: a client retries a create/charge on timeout without an idempotency key, but the original request actually completed server-side, so the retry produces a second record or charge. Detection signals: duplicate resources or double-charges correlated with network timeouts; retries on mutating calls with no idempotency key; support reports of duplicates. Do not retry unkeyed mutations. Safer fallback: attach idempotency keys to writes, retry only idempotent operations with backoff, and test a timeout-then-success path to confirm exactly one effect.",
+  "domain": "sdk",
+  "scope_hint": "code.sdk:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.sdk:human_authored",
+  "pack_id": "code.sdk"
+}

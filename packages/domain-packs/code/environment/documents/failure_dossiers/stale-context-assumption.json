@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:environment:stale-context-assumption",
+  "type": "failure_dossier",
+  "description": "Answering about runtime state from earlier conversation context instead of inspecting the current live environment.",
+  "body": "Failure mode: a claim about which port is bound, which process is running, or what config is active is made from stale prior context rather than fresh inspection, so the answer describes a state that has since changed. Detection signals: assertions about ports/processes/config with no fresh command output; behavior contradicts the stated state; the environment was modified since the context was captured. Do not trust remembered state for runtime questions. Safer fallback: re-inspect the live environment (process list, bound ports, effective config) immediately before answering and base the response on that output.",
+  "domain": "code",
+  "scope_hint": "code.environment:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.environment:human_authored",
+  "pack_id": "code.environment"
+}

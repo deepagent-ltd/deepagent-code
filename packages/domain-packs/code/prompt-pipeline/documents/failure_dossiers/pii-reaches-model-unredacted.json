@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:prompt:pii-reaches-model-unredacted",
+  "type": "failure_dossier",
+  "description": "Personal data flows into the model request because redaction runs late, partially, or not at all.",
+  "body": "Failure mode: prompt inputs contain emails, names, or ids and the pipeline assembles and sends them to the model without a redaction pass, or redacts after assembly so raw PII is already in the payload. Detection signals: no redaction stage before assembly; redaction after the prompt is built; reliance on the model to ignore PII; no test seeding PII. Do not send raw personal data to the model. Safer fallback: run redaction or tokenization during preparation before assembly, keep any token map outside the prompt, fail closed on detection uncertainty, defer the policy to risk.privacy, and test that seeded PII never reaches the outbound request.",
+  "domain": "prompt_pipeline",
+  "scope_hint": "code.prompt-pipeline:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.prompt-pipeline:human_authored",
+  "pack_id": "code.prompt-pipeline"
+}

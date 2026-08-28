@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:chain:diagnose-a-failed-transaction",
+  "type": "methodology",
+  "title": "Diagnose a reverted or stuck transaction",
+  "description": "Trace a failing transaction to its revert reason or gas/nonce cause instead of resubmitting blindly.",
+  "body": "Steps: 1. Get the transaction hash and read its status and revert reason. 2. Distinguish causes: a require/revert (logic), out-of-gas (limit too low or unbounded work), or a nonce/replacement issue (stuck pending tx). 3. For reverts, trace the call to the failing require and check inputs/state. 4. For out-of-gas, estimate gas for the worst case and check for unbounded loops. 5. For nonce issues, inspect the account's pending transactions. Rollback point: before resubmitting a value-moving transaction. Validation: the root cause is identified and a re-run with the fix succeeds; blindly bumping gas or resubmitting without the revert reason risks repeating or duplicating the failure.",
+  "domain": "blockchain",
+  "scope_hint": "code.blockchain:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.blockchain",
+  "pack_id": "code.blockchain"
+}

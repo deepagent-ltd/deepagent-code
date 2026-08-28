@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:sim:euler-vs-rk4-tradeoff",
+  "type": "knowledge",
+  "title": "Explicit Euler versus RK4 accuracy tradeoff",
+  "description": "Euler is first-order and cheap per step while RK4 is fourth-order, reaching far smaller error for the same step size.",
+  "body": "Use when deciding between a simple and a higher-order explicit integrator. Do not assume Euler with a small step beats RK4, since RK4's higher order usually wins on accuracy per unit work. Actions: compare the per-step cost against the order of accuracy, estimate the step each needs for a target error, and choose by total work. Validation signals include a convergence study showing each method's order and RK4 reaching the target error at a far larger step. Risk boundary: Euler's large error can accumulate into qualitatively wrong dynamics, so flag long Euler integrations where error growth threatens validity.",
+  "domain": "simulation",
+  "scope_hint": "code.simulation:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.simulation",
+  "pack_id": "code.simulation"
+}

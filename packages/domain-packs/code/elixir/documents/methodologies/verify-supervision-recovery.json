@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:elixir:verify-supervision-recovery",
+  "type": "methodology",
+  "title": "Verify supervision and crash recovery",
+  "description": "Confirm a crashing process is restarted to a known state and that the restart strategy matches dependencies.",
+  "body": "Steps: 1. Identify the child and its supervisor's strategy and restart/max_restarts settings. 2. In a test, start the tree with start_supervised! and kill the child (Process.exit(pid, :kill)). 3. Confirm the supervisor restarts it and the new process holds a clean init state. 4. Check the strategy: one_for_one for independent children, rest_for_one/one_for_all when a crash should also reset dependents. 5. Verify max_restarts is not so low it tears down the tree on a transient fault nor so high it masks a crash loop. Rollback point: before changing the strategy. Validation: the killed process is replaced, state is reset, and dependent children behave per the chosen strategy.",
+  "domain": "elixir",
+  "scope_hint": "code.elixir:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.elixir",
+  "pack_id": "code.elixir"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:sqlite:configure-a-new-connection",
+  "type": "methodology",
+  "title": "Configure a new connection correctly",
+  "description": "Apply the standard pragma set on open so concurrency, durability, and integrity behave predictably.",
+  "body": "Steps: 1. On first open of the database set PRAGMA journal_mode=WAL (persists in the file). 2. On every connection set busy_timeout (e.g. 5000), foreign_keys=ON, and synchronous=NORMAL (with WAL). 3. Decide cache_size and mmap_size if the working set is large. 4. For a read-then-write transaction use BEGIN IMMEDIATE. 5. Verify the pragmas with a SELECT on PRAGMA values at startup. Rollback point: pragmas are per-connection (except journal_mode) so reverting is just changing the open routine. Validation: a startup check confirms WAL is active, foreign_keys is on, and busy_timeout is non-zero on each connection.",
+  "domain": "sqlite",
+  "scope_hint": "code.database.sqlite:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.sqlite",
+  "pack_id": "code.database.sqlite"
+}

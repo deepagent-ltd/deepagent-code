@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:auth:migrate-auth-policy-safely",
+  "type": "methodology",
+  "title": "Migrate an auth policy without lockout or widening",
+  "description": "Change permission models behind tests and a compatibility window so no role is silently widened or locked out.",
+  "body": "Steps: 1. Snapshot the current effective permissions (matrix tests green). 2. Introduce the new policy in shadow/dual-read, comparing decisions against the old one. 3. Log and review any divergence before cutover. 4. Cut over behind a flag with a fast rollback. 5. Remove the old path only after the divergence log is clean. Rollback point: the flag. Validation: divergence log shows no unintended allow; lockout tests for each role pass.",
+  "domain": "backend_auth",
+  "scope_hint": "code.backend.auth:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.auth",
+  "pack_id": "code.backend.auth"
+}

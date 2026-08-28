@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:rag:context-stuffed-past-window",
+  "type": "failure_dossier",
+  "description": "Every candidate passage is concatenated until the window overflows, truncating cited evidence and burying relevant passages.",
+  "body": "Failure mode: the pipeline packs all retrieved passages into the prompt with no budget, so the context exceeds the window and the provider truncates, often dropping passages the answer needs to cite, while relevant passages sit buried in the middle where the model attends least. Detection signals: no context budget; passage count unbounded; truncation observed; key passage placed mid-context. Do not stuff until overflow. Safer fallback: rerank and trim to the most relevant few, deduplicate, leave output headroom, order so key passages are not buried, and test that the assembled context fits without dropping cited passages.",
+  "domain": "rag",
+  "scope_hint": "code.rag:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.rag:human_authored",
+  "pack_id": "code.rag"
+}

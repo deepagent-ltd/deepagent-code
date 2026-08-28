@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:ui_frontend_vue:vue-router-navigation-contract",
+  "type": "strategy",
+  "description": "Preserve route params, query, guards, and async navigation behavior as public UI contracts.",
+  "body": "Use when changing routes, links, guards, or route-driven data. Do not construct URLs by string concatenation if named routes or router helpers exist. Validate params/query encoding, guard redirects, and browser back/forward behavior. Verify route tests or browser smoke. Risk boundary: auth/security packs override when guards protect access. Use when Vue Frontend Engineering work touches visible UI behavior, browser console output, DOM state, assets, viewport behavior, and interaction evidence. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: choose the smallest direction that preserves the domain contract; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include browser smoke, component tests, viewport screenshots, console/network checks, and accessibility assertions. Risk boundary: escalate or stop when the task involves visual regressions, inaccessible interaction, hydration mismatch, and browser-only failures, missing owner evidence, or live external state.",
+  "domain": "frontend_vue",
+  "scope_hint": "code.frontend.vue:strategys",
+  "evidence_strength": "medium",
+  "provenance_tag": "code.frontend.vue:seed:vue_nuxt_pinia_vite_docs:paraphrased",
+  "pack_id": "code.frontend.vue"
+}

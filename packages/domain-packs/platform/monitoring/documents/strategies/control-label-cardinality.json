@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:mon:control-label-cardinality",
+  "type": "strategy",
+  "title": "Control label cardinality",
+  "description": "Keep label value sets bounded; never label series with unbounded identifiers like user id or request id.",
+  "body": "Use when defining metric labels or diagnosing TSDB memory pressure. Do not attach unbounded labels (user id, request id, full path) — each unique label combination is a new series and cardinality grows multiplicatively until the server degrades. Actions: enumerate expected label values, drop or aggregate high-cardinality dimensions at scrape or relabel time, and inspect series counts per metric. Validation signals include total active series staying within the tested budget and stable memory. Risk boundary: cardinality explosion degrades the whole Prometheus instance, not one query — treat an unbounded label as a blocking defect and escalate before it OOMs.",
+  "domain": "monitoring",
+  "scope_hint": "platform.monitoring:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.monitoring",
+  "pack_id": "platform.monitoring"
+}

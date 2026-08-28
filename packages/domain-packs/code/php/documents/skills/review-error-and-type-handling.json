@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:php:review-error-and-type-handling",
+  "type": "skill",
+  "title": "Review error and type handling",
+  "description": "Scan PHP code for suppressed errors, empty catches, loose comparisons, and missing strict_types.",
+  "body": "Use when validating robustness of a PHP path. Procedure: scan for the @ suppression operator, empty or overly broad catch blocks, ignored false returns, loose == comparisons on values where type matters, and files missing declare(strict_types=1) whose contracts depend on it. Report which paths swallow errors and which risk coercion bugs, with file and line. This skill exposes findings only and must not change comparison semantics without runtime permission. Validation signals include identifying a path that needs strict comparison or a typed exception. Risk boundary: flag a suppressed or swallowed error on a security- or data-relevant path as a blocking finding to remove.",
+  "domain": "php",
+  "scope_hint": "code.php:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.php",
+  "pack_id": "code.php"
+}

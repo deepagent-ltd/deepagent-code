@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:glci:diagnose-runner-and-job-failure",
+  "type": "methodology",
+  "title": "Diagnose a runner or job execution failure",
+  "description": "Separate config errors from runner/environment issues by checking tags, executor, image, and resource limits.",
+  "body": "Steps: 1. Check whether the job is stuck pending (no runner matches its tags) versus failing during execution. 2. For pending, verify a runner with matching tags is online and not at concurrency limit. 3. For failures, identify the executor (docker, shell, kubernetes) and confirm the image, services, and before_script ran. 4. Distinguish code failures (reproduce locally) from environment drift (image/tool version) and resource limits (OOM, timeout). 5. Fix the root cause: add a tagged runner, pin the image, or raise limits deliberately. Rollback point: the pipeline config branch. Validation: the job is picked up and passes deterministically across reruns.",
+  "domain": "ci_gitlab",
+  "scope_hint": "platform.ci-gitlab:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.ci-gitlab",
+  "pack_id": "platform.ci-gitlab"
+}

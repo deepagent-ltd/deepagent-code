@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:ansible:make-task-idempotent",
+  "type": "methodology",
+  "title": "Make a task idempotent",
+  "description": "Convert a re-running task into one that converges and reports changed only when it acts.",
+  "body": "Steps: 1. Run the play twice and find tasks that report changed on the second run. 2. For each, check whether a native module can declare the state instead of a command. 3. Replace the command with the module, or guard it with creates/changed_when. 4. Re-run twice and confirm the task is changed only on the first. 5. Add the task to check-mode coverage. Rollback point: keep the prior task until the idempotent version is confirmed. Validation: a second consecutive run reports zero changed for the task.",
+  "domain": "ansible",
+  "scope_hint": "platform.ansible:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.ansible",
+  "pack_id": "platform.ansible"
+}

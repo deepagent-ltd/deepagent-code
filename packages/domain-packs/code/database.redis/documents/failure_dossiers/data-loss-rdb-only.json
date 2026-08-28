@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:redis:data-loss-rdb-only",
+  "type": "failure_dossier",
+  "description": "Redis used as a datastore with RDB-only persistence loses every write since the last snapshot on a crash.",
+  "body": "Failure mode: Redis holds data the app cannot reconstruct but is configured with only periodic RDB snapshots; a crash between snapshots discards minutes of writes, and the app reads a stale dataset after restart. Detection signals: missing recent writes after a Redis restart; only save points configured, AOF disabled; the loss window matches the snapshot interval. Do not assume Redis is durable by default. Safer fallback: enable AOF (appendfsync everysec or always) for datastore roles, optionally with RDB for fast restore, and run a kill-restart test to confirm the loss window is acceptable.",
+  "domain": "redis",
+  "scope_hint": "code.database.redis:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.redis:human_authored",
+  "pack_id": "code.database.redis"
+}

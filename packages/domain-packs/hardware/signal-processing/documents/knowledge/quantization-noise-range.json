@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:sigproc:quantization-noise-range",
+  "type": "knowledge",
+  "title": "Quantization noise and dynamic range in fixed point",
+  "description": "Each added bit improves the signal-to-quantization-noise ratio by about six decibels, setting the dynamic range a word length can represent.",
+  "body": "Use when budgeting word lengths for a fixed-point datapath. Do not ignore accumulator growth, since repeated additions extend the needed integer width. Actions: estimate required SNR, derive minimum bits from the six-decibel-per-bit rule, and verify accumulators carry guard bits. Validation signals include a measured quantization SNR matching the bit budget and no accumulator overflow over a long run. Risk boundary: underbudgeting bits buries small signals in quantization noise, so escalate the word length when the noise floor rises into the band of interest.",
+  "domain": "signal_processing",
+  "scope_hint": "hardware.signal-processing:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.signal-processing",
+  "pack_id": "hardware.signal-processing"
+}

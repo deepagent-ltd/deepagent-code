@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:swift:design-with-property-wrappers",
+  "type": "strategy",
+  "title": "Encapsulate cross-cutting field behavior with property wrappers",
+  "description": "Use property wrappers to factor out repeated get/set behavior (clamping, persistence, thread-safety) instead of duplicating logic per property.",
+  "body": "Use when several properties share the same access behavior (validation, UserDefaults backing, clamping, logging). Do not hand-roll the same didSet/computed logic on every property or hide IO in a wrapper used in a hot path unknowingly. Actions: define a @propertyWrapper struct with wrappedValue (and projectedValue via $ when callers need the wrapper), keep its work cheap and predictable, and document any side effects (a UserDefaults-backed wrapper does IO on every set). Validation signals include unit tests on the wrapper's get/set behavior and instruments showing no surprise IO. Risk boundary: a wrapper that performs IO or locking on every access can silently dominate cost; verify with Instruments and escalate before placing an IO-backed wrapper on a frequently-mutated property.",
+  "domain": "swift",
+  "scope_hint": "code.swift:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.swift",
+  "pack_id": "code.swift"
+}

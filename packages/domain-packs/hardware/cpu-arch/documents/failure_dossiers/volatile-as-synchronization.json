@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:cpuarch:volatile-as-synchronization",
+  "type": "failure_dossier",
+  "description": "Using volatile (or no barrier) to coordinate threads, which prevents some compiler optimizations but provides no hardware ordering or atomicity.",
+  "body": "Failure mode: shared flags/counters are marked volatile and assumed to be thread-safe; volatile stops the compiler caching the value but emits no fence and gives no atomicity, so on weakly-ordered CPUs reads and writes reorder and updates are lost. Detection signals: rare data races flagged by TSan; bug reproduces on ARM but not x86; corruption only under high concurrency. Do not use volatile as a synchronization primitive. Safer fallback: use atomics with explicit acquire/release (or seq_cst) ordering or a proper lock, document the ordering, and verify with a thread sanitizer plus a stress test on the weakest target.",
+  "domain": "cpu_arch",
+  "scope_hint": "hardware.cpu-arch:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.cpu-arch:human_authored",
+  "pack_id": "hardware.cpu-arch"
+}

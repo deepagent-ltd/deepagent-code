@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:hwprot:i2c-address-shift-confusion",
+  "type": "failure_dossier",
+  "description": "An I2C device never acknowledges because the seven-bit address was used where the eight-bit framed byte was expected, or vice versa.",
+  "body": "Failure mode: firmware passes the datasheet seven-bit address directly into a register that expects the address already shifted with the R/W bit, so the wrong byte goes on the wire. Detection signals: no ACK after the address byte, a bus scan finding the device at double or half the documented address, and writes that never take effect. Do not issue register writes while the address fails to ACK. Safer fallback: confirm whether the API expects seven-bit or eight-bit form and align the shift, then verify the ACK on a capture.",
+  "domain": "hw_protocols",
+  "scope_hint": "hardware.protocols:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.protocols:human_authored",
+  "pack_id": "hardware.protocols"
+}

@@ -1,0 +1,404 @@
+[
+  {
+    "ref_id": "strategy:cmake:model-the-build-as-targets",
+    "type": "strategy",
+    "title": "Model the build as targets, not directories",
+    "summary": "Express the build as libraries and executables with properties attached per target, instead of directory-scoped commands that leak settings everywhere.",
+    "domains": [
+      "cmake",
+      "build_system",
+      "cmake_targets"
+    ],
+    "triggers": [
+      "target based cmake",
+      "add_library",
+      "modern cmake"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.build.cmake"
+  },
+  {
+    "ref_id": "strategy:cmake:set-visibility-by-requirement",
+    "type": "strategy",
+    "title": "Choose PUBLIC, PRIVATE, or INTERFACE by who needs it",
+    "summary": "Mark a usage requirement PRIVATE when only the target itself needs it, INTERFACE when only consumers do, and PUBLIC when both do.",
+    "domains": [
+      "cmake",
+      "build_system",
+      "cmake_targets"
+    ],
+    "triggers": [
+      "PUBLIC PRIVATE INTERFACE",
+      "usage requirements",
+      "target visibility"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.build.cmake"
+  },
+  {
+    "ref_id": "strategy:cmake:depend-via-imported-targets",
+    "type": "strategy",
+    "title": "Depend on imported targets, not raw paths",
+    "summary": "Link against the namespaced imported target a package exports rather than hardcoding library file paths and include directories.",
+    "domains": [
+      "cmake",
+      "build_system",
+      "cmake_targets"
+    ],
+    "triggers": [
+      "imported target",
+      "find_package",
+      "namespaced target"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.build.cmake"
+  },
+  {
+    "ref_id": "strategy:cmake:keep-builds-out-of-source",
+    "type": "strategy",
+    "title": "Always build out-of-source",
+    "summary": "Configure and build in a dedicated build directory so generated artifacts never mix with tracked source files.",
+    "domains": [
+      "cmake",
+      "build_system",
+      "cmake_targets"
+    ],
+    "triggers": [
+      "out-of-source",
+      "build directory",
+      "cmake -B"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.build.cmake"
+  },
+  {
+    "ref_id": "strategy:cmake:standardize-with-presets",
+    "type": "strategy",
+    "title": "Standardize configurations with CMakePresets",
+    "summary": "Capture common configure and build settings in CMakePresets.json so contributors and CI use identical, reproducible invocations.",
+    "domains": [
+      "cmake",
+      "build_system",
+      "cmake_targets"
+    ],
+    "triggers": [
+      "CMakePresets",
+      "cmake preset",
+      "reproducible configure"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.build.cmake"
+  },
+  {
+    "ref_id": "strategy:cmake:register-tests-with-ctest",
+    "type": "strategy",
+    "title": "Register tests so ctest can drive them",
+    "summary": "Enable testing and add each test through add_test so the suite runs uniformly under ctest in local and CI builds.",
+    "domains": [
+      "cmake",
+      "build_system",
+      "cmake_targets"
+    ],
+    "triggers": [
+      "ctest",
+      "add_test",
+      "enable_testing"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.build.cmake"
+  },
+  {
+    "ref_id": "methodology:cmake:diagnose-missing-find-package",
+    "type": "methodology",
+    "title": "Diagnose a failing find_package",
+    "summary": "A procedure to work out why find_package cannot locate a package and to point it at the right config or module.",
+    "domains": [
+      "cmake",
+      "build_system",
+      "cmake_targets"
+    ],
+    "triggers": [
+      "find_package not found",
+      "CMAKE_PREFIX_PATH",
+      "debug find"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.build.cmake"
+  },
+  {
+    "ref_id": "methodology:cmake:choose-find-package-vs-fetchcontent",
+    "type": "methodology",
+    "title": "Decide between find_package and FetchContent",
+    "summary": "A decision procedure for whether a dependency should be discovered from the system or fetched and built as part of the project.",
+    "domains": [
+      "cmake",
+      "build_system",
+      "cmake_targets"
+    ],
+    "triggers": [
+      "find_package vs FetchContent",
+      "vendoring",
+      "dependency acquisition"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.build.cmake"
+  },
+  {
+    "ref_id": "methodology:cmake:debug-generator-expression",
+    "type": "methodology",
+    "title": "Debug a misbehaving generator expression",
+    "summary": "A procedure to inspect what a generator expression evaluates to and fix conditions that were written as configure-time strings.",
+    "domains": [
+      "cmake",
+      "build_system",
+      "cmake_targets"
+    ],
+    "triggers": [
+      "generator expression",
+      "genex",
+      "file GENERATE"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.build.cmake"
+  },
+  {
+    "ref_id": "methodology:cmake:fix-stale-cache-configure",
+    "type": "methodology",
+    "title": "Recover from a stale CMake cache",
+    "summary": "A procedure to identify and clear cached variables that no longer reflect the intended configuration.",
+    "domains": [
+      "cmake",
+      "build_system",
+      "cmake_targets"
+    ],
+    "triggers": [
+      "cmake cache",
+      "stale cache",
+      "CMakeCache"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.build.cmake"
+  },
+  {
+    "ref_id": "knowledge:cmake:transitive-usage-requirements",
+    "type": "knowledge",
+    "title": "How usage requirements propagate transitively",
+    "summary": "INTERFACE and PUBLIC properties on a target flow to anything that links it, so consumers inherit includes, definitions, and dependencies automatically.",
+    "domains": [
+      "cmake",
+      "build_system",
+      "cmake_targets"
+    ],
+    "triggers": [
+      "transitive usage requirements",
+      "INTERFACE properties",
+      "propagation"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.build.cmake"
+  },
+  {
+    "ref_id": "knowledge:cmake:configure-vs-generate-phases",
+    "type": "knowledge",
+    "title": "Configure phase versus generate phase",
+    "summary": "CMake first runs the configure step that executes CMakeLists logic, then a generate step that emits build files where generator expressions are resolved.",
+    "domains": [
+      "cmake",
+      "build_system",
+      "cmake_targets"
+    ],
+    "triggers": [
+      "configure phase",
+      "generate phase",
+      "cmake phases"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.build.cmake"
+  },
+  {
+    "ref_id": "knowledge:cmake:imported-vs-alias-targets",
+    "type": "knowledge",
+    "title": "Imported targets versus alias targets",
+    "summary": "An imported target represents a pre-built external dependency, while an alias gives an existing target a stable namespaced name for consumers.",
+    "domains": [
+      "cmake",
+      "build_system",
+      "cmake_targets"
+    ],
+    "triggers": [
+      "imported target",
+      "alias target",
+      "namespaced name"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.build.cmake"
+  },
+  {
+    "ref_id": "knowledge:cmake:cache-variables-and-options",
+    "type": "knowledge",
+    "title": "Cache variables and the option command",
+    "summary": "Cache variables persist across configures and are set with -D or option(), while normal variables live only for the current configure run.",
+    "domains": [
+      "cmake",
+      "build_system",
+      "cmake_targets"
+    ],
+    "triggers": [
+      "cache variable",
+      "option()",
+      "cmake -D"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.build.cmake"
+  },
+  {
+    "ref_id": "skill:cmake:author-a-library-target",
+    "type": "skill",
+    "title": "Author a library target with correct visibility",
+    "summary": "Define a library, attach its includes and dependencies with the right PUBLIC/PRIVATE/INTERFACE scope, and verify a consumer links it cleanly.",
+    "domains": [
+      "cmake",
+      "build_system",
+      "cmake_targets"
+    ],
+    "triggers": [
+      "add_library",
+      "target_include_directories",
+      "library target"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.build.cmake"
+  },
+  {
+    "ref_id": "skill:cmake:set-up-presets-and-ctest",
+    "type": "skill",
+    "title": "Set up presets and ctest for a project",
+    "summary": "Create CMakePresets.json with configure and build presets and register tests so ctest runs them reproducibly.",
+    "domains": [
+      "cmake",
+      "build_system",
+      "cmake_targets"
+    ],
+    "triggers": [
+      "CMakePresets",
+      "ctest setup",
+      "reproducible build"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.build.cmake"
+  }
+]

@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:gfx:graphics-apis-compared",
+  "type": "knowledge",
+  "title": "OpenGL vs Vulkan vs WebGPU",
+  "description": "OpenGL hides state and synchronization; Vulkan exposes explicit pipelines, memory, and barriers; WebGPU is a safer explicit middle ground for the web.",
+  "body": "Use when choosing or porting between graphics APIs. OpenGL is a global state machine that manages synchronization and memory for you, which is simple but hides hazards and costs; Vulkan exposes pipeline objects, explicit memory allocation, and manual barriers/synchronization for control and lower overhead at the cost of verbosity; WebGPU offers explicit pipelines and bind groups with validation built in for the web. Do not carry OpenGL's implicit-sync assumptions into Vulkan, where missing barriers cause corruption. Actions: match the API's synchronization and resource model when porting. Validation signals include a clean validation-layer run after a port. Risk boundary: implicit-to-explicit ports drop synchronization that the driver used to add; verify every hazard is now covered by a barrier.",
+  "domain": "graphics",
+  "scope_hint": "code.graphics:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.graphics",
+  "pack_id": "code.graphics"
+}

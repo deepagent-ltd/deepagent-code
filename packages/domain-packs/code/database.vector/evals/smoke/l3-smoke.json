@@ -1,0 +1,71 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.database.vector",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "vector_db",
+      "pgvector_ext",
+      "milvus",
+      "qdrant",
+      "ann_index"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.database.vector: IVFFlat and HNSW index tradeoffs, cosine vs L2 vs dot metrics, ef_search and nprobe tuning, hybrid filter plus vector, quantization, capacity planning"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "write a bash script to rotate logs"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "vector database HNSW IVFFlat index cosine distance ef_search nprobe recall quantization hybrid filter capacity",
+  "expected_pack_id": "code.database.vector",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "code.database.vector L3 validation smoke",
+    "signals": [
+      "a recall@k benchmark against a brute-force ground truth meets the target recall threshold",
+      "the query planner uses the ANN index rather than falling back to an exact sequential scan",
+      "p99 query latency stays within budget at the chosen ef_search or nprobe setting",
+      "index build completes within the memory budget and the on-disk index size matches the estimate"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "code.database.vector diagnosis smoke",
+    "signals": [
+      "recall@k drops sharply because ef_search or nprobe is set too low for the index's list or layer count",
+      "a metadata filter applied after ANN search returns fewer than k results because the filter is not index-aware",
+      "an IVFFlat index built before bulk loading has too few populated lists, collapsing recall",
+      "index build OOMs because HNSW graph construction exceeds the maintenance memory budget",
+      "the query uses a different distance metric than the index was built with, so results are meaningless"
+    ]
+  },
+  "source_refs": [
+    "vdb:ref:ann-index-recall-latency-tradeoffs",
+    "vdb:ref:distance-metric-selection-guide"
+  ]
+}

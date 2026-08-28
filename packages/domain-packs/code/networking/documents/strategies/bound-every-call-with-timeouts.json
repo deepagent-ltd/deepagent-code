@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:net:bound-every-call-with-timeouts",
+  "type": "strategy",
+  "title": "Bound every network call with explicit timeouts",
+  "description": "Set connect, read/write, and overall deadlines so a stalled peer cannot hang the caller indefinitely.",
+  "body": "Use when making any outbound network call. Do not rely on the library default (often infinite) or set only a connect timeout while leaving the read unbounded, because a peer that accepts then stalls will hang the caller forever and tie up a connection. Actions: set a connect timeout, a read/write timeout, and an overall request deadline (or a context/cancellation with a deadline that covers retries); choose values from the operation's SLO. Validation signals include a test where a slow/black-hole server causes the call to fail by the deadline rather than hang, and no thread parked indefinitely on a socket read. Risk boundary: removing or unbounding a timeout on a live client path is an availability regression requiring review.",
+  "domain": "networking",
+  "scope_hint": "code.networking:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.networking",
+  "pack_id": "code.networking"
+}

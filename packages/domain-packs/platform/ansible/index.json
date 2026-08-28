@@ -1,0 +1,452 @@
+[
+  {
+    "ref_id": "strategy:ansible:declare-state-not-commands",
+    "type": "strategy",
+    "title": "Declare state, not commands",
+    "summary": "Use a module that describes the desired end state instead of a shell command that runs every time.",
+    "domains": [
+      "ansible",
+      "config_management",
+      "playbook",
+      "idempotent_provisioning"
+    ],
+    "triggers": [
+      "idempotent",
+      "module",
+      "state",
+      "shell",
+      "command"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.ansible"
+  },
+  {
+    "ref_id": "strategy:ansible:guard-raw-commands",
+    "type": "strategy",
+    "title": "Guard raw commands for idempotency",
+    "summary": "When a module does not exist, bound shell/command tasks with creates, changed_when, and failed_when.",
+    "domains": [
+      "ansible",
+      "config_management",
+      "playbook",
+      "idempotent_provisioning"
+    ],
+    "triggers": [
+      "shell",
+      "command",
+      "creates",
+      "changed_when",
+      "guard"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.ansible"
+  },
+  {
+    "ref_id": "strategy:ansible:notify-handlers-for-side-effects",
+    "type": "strategy",
+    "title": "Notify handlers for service side effects",
+    "summary": "Trigger restarts and reloads through handlers that fire only when the changing task reports changed.",
+    "domains": [
+      "ansible",
+      "config_management",
+      "playbook",
+      "idempotent_provisioning"
+    ],
+    "triggers": [
+      "handler",
+      "notify",
+      "restart",
+      "reload",
+      "changed"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.ansible"
+  },
+  {
+    "ref_id": "strategy:ansible:encrypt-secrets-with-vault",
+    "type": "strategy",
+    "title": "Encrypt secrets with ansible-vault",
+    "summary": "Keep credentials in vault-encrypted files, never in plaintext vars or playbooks.",
+    "domains": [
+      "ansible",
+      "config_management",
+      "playbook",
+      "idempotent_provisioning"
+    ],
+    "triggers": [
+      "vault",
+      "secret",
+      "encrypt",
+      "credential",
+      "plaintext"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.ansible"
+  },
+  {
+    "ref_id": "strategy:ansible:dry-run-with-check-mode",
+    "type": "strategy",
+    "title": "Dry-run with check mode and diff",
+    "summary": "Preview changes with --check and --diff before applying, especially against shared hosts.",
+    "domains": [
+      "ansible",
+      "config_management",
+      "playbook",
+      "idempotent_provisioning"
+    ],
+    "triggers": [
+      "check mode",
+      "diff",
+      "dry-run",
+      "preview",
+      "apply"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.ansible"
+  },
+  {
+    "ref_id": "strategy:ansible:scope-runs-with-tags-and-limit",
+    "type": "strategy",
+    "title": "Scope runs with tags and --limit",
+    "summary": "Constrain which tasks and hosts a play touches using tags and inventory limits to shrink blast radius.",
+    "domains": [
+      "ansible",
+      "config_management",
+      "playbook",
+      "idempotent_provisioning"
+    ],
+    "triggers": [
+      "tags",
+      "limit",
+      "scope",
+      "blast radius",
+      "hosts"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.ansible"
+  },
+  {
+    "ref_id": "methodology:ansible:make-task-idempotent",
+    "type": "methodology",
+    "title": "Make a task idempotent",
+    "summary": "Convert a re-running task into one that converges and reports changed only when it acts.",
+    "domains": [
+      "ansible",
+      "config_management",
+      "playbook",
+      "idempotent_provisioning"
+    ],
+    "triggers": [
+      "idempotent",
+      "task",
+      "changed",
+      "converge",
+      "module"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.ansible"
+  },
+  {
+    "ref_id": "methodology:ansible:structure-role-and-inventory",
+    "type": "methodology",
+    "title": "Structure a role and inventory",
+    "summary": "Organize tasks, handlers, defaults, and variables into a role and map hosts through a clear inventory.",
+    "domains": [
+      "ansible",
+      "config_management",
+      "playbook",
+      "idempotent_provisioning"
+    ],
+    "triggers": [
+      "role",
+      "inventory",
+      "structure",
+      "defaults",
+      "variables"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.ansible"
+  },
+  {
+    "ref_id": "methodology:ansible:handle-failures-gracefully",
+    "type": "methodology",
+    "title": "Handle play failures gracefully",
+    "summary": "Define real failure conditions and recovery so a mid-run error does not leave hosts half-converged.",
+    "domains": [
+      "ansible",
+      "config_management",
+      "playbook",
+      "idempotent_provisioning"
+    ],
+    "triggers": [
+      "failure",
+      "failed_when",
+      "block",
+      "rescue",
+      "recovery"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.ansible"
+  },
+  {
+    "ref_id": "methodology:ansible:verify-secret-hygiene",
+    "type": "methodology",
+    "title": "Verify secret hygiene",
+    "summary": "Audit a repository for plaintext credentials and confirm vault encryption and no_log coverage.",
+    "domains": [
+      "ansible",
+      "config_management",
+      "playbook",
+      "idempotent_provisioning"
+    ],
+    "triggers": [
+      "secret",
+      "vault",
+      "no_log",
+      "audit",
+      "plaintext"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.ansible"
+  },
+  {
+    "ref_id": "knowledge:ansible:idempotency-model",
+    "type": "knowledge",
+    "title": "Idempotency model",
+    "summary": "Ansible modules declare desired state and report changed only when they had to act to reach it.",
+    "domains": [
+      "ansible",
+      "config_management",
+      "playbook",
+      "idempotent_provisioning"
+    ],
+    "triggers": [
+      "idempotent",
+      "module",
+      "changed",
+      "state",
+      "converge"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.ansible"
+  },
+  {
+    "ref_id": "knowledge:ansible:handlers-and-notify",
+    "type": "knowledge",
+    "title": "Handlers and notify",
+    "summary": "Handlers are deferred tasks that run once at play end, only if a notifying task reported changed.",
+    "domains": [
+      "ansible",
+      "config_management",
+      "playbook",
+      "idempotent_provisioning"
+    ],
+    "triggers": [
+      "handler",
+      "notify",
+      "deferred",
+      "flush",
+      "changed"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.ansible"
+  },
+  {
+    "ref_id": "knowledge:ansible:inventory-and-variable-precedence",
+    "type": "knowledge",
+    "title": "Inventory and variable precedence",
+    "summary": "Hosts and groups define scope, and variables resolve through a defined precedence from defaults to extra-vars.",
+    "domains": [
+      "ansible",
+      "config_management",
+      "playbook",
+      "idempotent_provisioning"
+    ],
+    "triggers": [
+      "inventory",
+      "group",
+      "precedence",
+      "variable",
+      "scope"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.ansible"
+  },
+  {
+    "ref_id": "knowledge:ansible:check-mode-and-facts",
+    "type": "knowledge",
+    "title": "Check mode and facts",
+    "summary": "Check mode predicts changes without applying them, and gathered facts describe each host's current state.",
+    "domains": [
+      "ansible",
+      "config_management",
+      "playbook",
+      "idempotent_provisioning"
+    ],
+    "triggers": [
+      "check mode",
+      "facts",
+      "gather_facts",
+      "diff",
+      "predict"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.ansible"
+  },
+  {
+    "ref_id": "skill:ansible:inspect-idempotency",
+    "type": "skill",
+    "title": "Inspect playbook idempotency",
+    "summary": "Report which tasks report changed on a second run to locate non-idempotent steps.",
+    "domains": [
+      "ansible",
+      "config_management",
+      "playbook",
+      "idempotent_provisioning"
+    ],
+    "triggers": [
+      "idempotent",
+      "changed",
+      "inspect",
+      "second-run",
+      "report"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.ansible"
+  },
+  {
+    "ref_id": "skill:ansible:scan-for-plaintext-secrets",
+    "type": "skill",
+    "title": "Scan for plaintext secrets",
+    "summary": "Search vars and tasks for unencrypted credentials and report vault and no_log gaps.",
+    "domains": [
+      "ansible",
+      "config_management",
+      "playbook",
+      "idempotent_provisioning"
+    ],
+    "triggers": [
+      "secret",
+      "vault",
+      "plaintext",
+      "no_log",
+      "scan"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.ansible"
+  }
+]

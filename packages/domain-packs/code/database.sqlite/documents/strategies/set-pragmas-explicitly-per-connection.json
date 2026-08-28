@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:sqlite:set-pragmas-explicitly-per-connection",
+  "type": "strategy",
+  "title": "Set durability and integrity pragmas explicitly",
+  "description": "Configure foreign_keys, synchronous, and journal pragmas on each connection rather than trusting defaults.",
+  "body": "Use when opening any SQLite connection. Do not assume defaults are what you want: foreign_keys is OFF by default (constraints silently ignored), and synchronous interacts with WAL for durability. Actions: per connection set PRAGMA foreign_keys=ON to enforce FKs, choose synchronous=NORMAL with WAL (safe against app crashes, fast) or FULL when you must survive OS/power loss, and set busy_timeout and journal_mode. Validation signals include a test that an FK violation is rejected and that the chosen synchronous level survives the crash scenario you care about. Risk boundary: leaving foreign_keys off lets orphaned rows accumulate undetected — a data-integrity finding to flag.",
+  "domain": "sqlite",
+  "scope_hint": "code.database.sqlite:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.sqlite",
+  "pack_id": "code.database.sqlite"
+}

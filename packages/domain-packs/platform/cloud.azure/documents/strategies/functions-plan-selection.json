@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:azure:functions-plan-selection",
+  "type": "strategy",
+  "title": "Pick the Azure Functions hosting plan for the latency and scale profile",
+  "description": "Choose Consumption for bursty cheap workloads, Premium for no-cold-start and VNet, and Dedicated when co-locating with an App Service plan.",
+  "body": "Use when creating or tuning an Azure Functions app. Do not run latency-sensitive or VNet-bound functions on Consumption (cold starts, no VNet), and avoid Premium for rarely-invoked jobs where Consumption's pay-per-execution is cheaper. Actions: use Consumption for spiky, latency-tolerant work; use the Premium (Elastic) plan with pre-warmed instances for low-latency and VNet integration; use Dedicated/App Service plan to reuse existing capacity; set maxScale and per-instance concurrency. Validation signals include cold-start latency disappearing on Premium pre-warmed instances and scale events matching load. Risk boundary: changing a production function's plan affects cost and availability and is human-gated.",
+  "domain": "azure",
+  "scope_hint": "platform.cloud.azure:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.azure",
+  "pack_id": "platform.cloud.azure"
+}

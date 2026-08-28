@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:fpgatf:constrain-clocks-first",
+  "type": "strategy",
+  "title": "Define every clock before reading timing",
+  "description": "Create primary and generated clock constraints for all clocks first so static timing analysis has a valid reference.",
+  "body": "Use when starting timing closure on any nontrivial FPGA design. Do not interpret slack numbers before every clock is defined, because unconstrained clocks make the report meaningless. Actions: create a clock for each primary input clock, derive generated clocks for dividers and PLL outputs, and verify the timing summary lists no unconstrained clocks. Validation signals include a constraints report covering all clocks and an STA run with no unconstrained-clock warnings. Risk boundary: an unconstrained clock hides real violations that surface only on hardware, so deny timing sign-off while any clock is undefined.",
+  "domain": "fpga_toolflow",
+  "scope_hint": "hardware.fpga-toolflow:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.fpga-toolflow",
+  "pack_id": "hardware.fpga-toolflow"
+}

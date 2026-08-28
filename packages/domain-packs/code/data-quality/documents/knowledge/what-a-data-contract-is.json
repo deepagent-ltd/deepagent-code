@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:dq:what-a-data-contract-is",
+  "type": "knowledge",
+  "title": "What a data contract guarantees",
+  "description": "A data contract is an enforced agreement on schema, semantics, nullability, and freshness between a producer and its consumers, versioned and validated.",
+  "body": "Use when datasets cross team or system boundaries. A contract specifies not just column names and types but value semantics (units, meaning), nullability, allowed ranges, and a freshness SLA, and it is versioned and enforced at the producer's publish step. It shifts breakage left: the producer's CI fails instead of a consumer's dashboard. Do not treat a shared table's current shape as an implicit contract. Actions: define and validate the contract at publish, version changes, and require sign-off on breaking ones. Validation signals include a publish-time contract check and a versioned contract file. Risk boundary: without an enforced contract, every producer change risks silently breaking unknown consumers.",
+  "domain": "data_quality",
+  "scope_hint": "code.data-quality:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-quality",
+  "pack_id": "code.data-quality"
+}

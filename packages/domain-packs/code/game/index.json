@@ -1,0 +1,468 @@
+[
+  {
+    "ref_id": "strategy:game:fixed-timestep-simulation",
+    "type": "strategy",
+    "title": "Simulate on a fixed timestep",
+    "summary": "Advance game logic in fixed-size steps decoupled from the render rate so physics is stable and frame-rate independent.",
+    "domains": [
+      "game",
+      "game_loop",
+      "physics",
+      "rendering_game"
+    ],
+    "triggers": [
+      "fixed timestep",
+      "simulation",
+      "delta time",
+      "accumulator",
+      "frame-rate",
+      "stable"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.game"
+  },
+  {
+    "ref_id": "strategy:game:respect-the-frame-budget",
+    "type": "strategy",
+    "title": "Treat the frame budget as a hard deadline",
+    "summary": "Hold each frame's total work under the budget (16.6 ms at 60 FPS) by profiling and moving expensive work off the critical path.",
+    "domains": [
+      "game",
+      "game_loop",
+      "physics",
+      "rendering_game"
+    ],
+    "triggers": [
+      "frame budget",
+      "16ms",
+      "deadline",
+      "fps",
+      "profile",
+      "stall"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.game"
+  },
+  {
+    "ref_id": "strategy:game:organize-with-ecs",
+    "type": "strategy",
+    "title": "Organize game state with an ECS",
+    "summary": "Model entities as ids, data as components, and behavior as systems iterating over component sets, instead of deep inheritance hierarchies.",
+    "domains": [
+      "game",
+      "game_loop",
+      "physics",
+      "rendering_game"
+    ],
+    "triggers": [
+      "ecs",
+      "entity",
+      "component",
+      "system",
+      "data-oriented",
+      "composition"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.game"
+  },
+  {
+    "ref_id": "strategy:game:broadphase-collision",
+    "type": "strategy",
+    "title": "Use a broad phase for collision",
+    "summary": "Cull candidate collision pairs with a spatial structure before doing exact narrow-phase tests, never checking every pair.",
+    "domains": [
+      "game",
+      "game_loop",
+      "physics",
+      "rendering_game"
+    ],
+    "triggers": [
+      "collision",
+      "broad phase",
+      "spatial",
+      "quadtree",
+      "grid",
+      "narrow phase"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.game"
+  },
+  {
+    "ref_id": "strategy:game:sample-input-per-tick",
+    "type": "strategy",
+    "title": "Sample and apply input per simulation tick",
+    "summary": "Capture input and apply it within the simulation step it belongs to, buffering events so none are lost between frames.",
+    "domains": [
+      "game",
+      "game_loop",
+      "physics",
+      "rendering_game"
+    ],
+    "triggers": [
+      "input",
+      "tick",
+      "polling",
+      "event",
+      "latency",
+      "buffer"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.game"
+  },
+  {
+    "ref_id": "strategy:game:avoid-per-frame-allocation",
+    "type": "strategy",
+    "title": "Avoid per-frame heap allocation",
+    "summary": "Eliminate allocations in the hot loop by pooling and reusing objects so the garbage collector never causes a frame hitch.",
+    "domains": [
+      "game",
+      "game_loop",
+      "physics",
+      "rendering_game"
+    ],
+    "triggers": [
+      "allocation",
+      "gc",
+      "pool",
+      "hot loop",
+      "hitch",
+      "memory"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.game"
+  },
+  {
+    "ref_id": "methodology:game:implement-fixed-timestep-loop",
+    "type": "methodology",
+    "title": "Implement a fixed-timestep loop with interpolation",
+    "summary": "Build the accumulator loop that steps simulation at fixed dt and interpolates rendering, with a clamp against the spiral of death.",
+    "domains": [
+      "game",
+      "game_loop",
+      "physics",
+      "rendering_game"
+    ],
+    "triggers": [
+      "fixed timestep",
+      "accumulator",
+      "interpolation",
+      "loop",
+      "render",
+      "clamp"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.game"
+  },
+  {
+    "ref_id": "methodology:game:profile-a-frame-spike",
+    "type": "methodology",
+    "title": "Profile and fix a frame-time spike",
+    "summary": "Capture frame timing, attribute the spike to CPU/GPU/GC/IO, and remove or amortize the offending work.",
+    "domains": [
+      "game",
+      "game_loop",
+      "physics",
+      "rendering_game"
+    ],
+    "triggers": [
+      "profile",
+      "spike",
+      "frame time",
+      "gc",
+      "hitch",
+      "diagnose"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.game"
+  },
+  {
+    "ref_id": "methodology:game:make-simulation-deterministic",
+    "type": "methodology",
+    "title": "Make the simulation deterministic",
+    "summary": "Remove non-determinism (variable dt, float order, unseeded RNG, wall-clock) so the same inputs reproduce the same state for replay and netcode.",
+    "domains": [
+      "game",
+      "game_loop",
+      "physics",
+      "rendering_game"
+    ],
+    "triggers": [
+      "determinism",
+      "replay",
+      "netcode",
+      "rng",
+      "lockstep",
+      "reproducible"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.game"
+  },
+  {
+    "ref_id": "methodology:game:build-an-asset-pipeline",
+    "type": "methodology",
+    "title": "Build an asset pipeline that avoids runtime stalls",
+    "summary": "Move asset import/conversion to build time and load at runtime asynchronously so the main loop never blocks on disk.",
+    "domains": [
+      "game",
+      "game_loop",
+      "physics",
+      "rendering_game"
+    ],
+    "triggers": [
+      "asset",
+      "pipeline",
+      "import",
+      "streaming",
+      "load",
+      "bake"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.game"
+  },
+  {
+    "ref_id": "knowledge:game:simulation-vs-rendering",
+    "type": "knowledge",
+    "title": "Simulation and rendering are separate clocks",
+    "summary": "Game logic advances in discrete simulation ticks while rendering draws as fast as it can; conflating them ties physics to frame rate.",
+    "domains": [
+      "game",
+      "game_loop",
+      "physics",
+      "rendering_game"
+    ],
+    "triggers": [
+      "simulation",
+      "rendering",
+      "tick",
+      "frame",
+      "decouple",
+      "interpolation"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.game"
+  },
+  {
+    "ref_id": "knowledge:game:cache-locality-drives-ecs",
+    "type": "knowledge",
+    "title": "Cache locality drives data-oriented design",
+    "summary": "Iterating contiguous component arrays is far faster than chasing pointers through scattered objects because of CPU cache behavior.",
+    "domains": [
+      "game",
+      "game_loop",
+      "physics",
+      "rendering_game"
+    ],
+    "triggers": [
+      "cache",
+      "locality",
+      "data-oriented",
+      "ecs",
+      "memory",
+      "iteration"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.game"
+  },
+  {
+    "ref_id": "knowledge:game:floating-point-determinism",
+    "type": "knowledge",
+    "title": "Floating-point determinism is fragile",
+    "summary": "Float results can differ across compilers, hardware, and optimization levels, so cross-machine determinism needs deliberate control or fixed-point math.",
+    "domains": [
+      "game",
+      "game_loop",
+      "physics",
+      "rendering_game"
+    ],
+    "triggers": [
+      "determinism",
+      "float",
+      "ieee",
+      "netcode",
+      "lockstep",
+      "reproducible"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.game"
+  },
+  {
+    "ref_id": "knowledge:game:input-latency-budget",
+    "type": "knowledge",
+    "title": "Input latency is a frame-by-frame budget",
+    "summary": "Player-perceived responsiveness is the sum of input sampling, simulation, render, and display latencies, each measured in frames.",
+    "domains": [
+      "game",
+      "game_loop",
+      "physics",
+      "rendering_game"
+    ],
+    "triggers": [
+      "input latency",
+      "lag",
+      "responsiveness",
+      "frame",
+      "photon",
+      "polling"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.game"
+  },
+  {
+    "ref_id": "skill:game:inspect-loop-and-timestep",
+    "type": "skill",
+    "title": "Inspect the game loop and timestep",
+    "summary": "Review the update loop for fixed-vs-variable timestep, spiral-of-death clamping, and frame-rate-dependent movement.",
+    "domains": [
+      "game",
+      "game_loop",
+      "physics",
+      "rendering_game"
+    ],
+    "triggers": [
+      "loop",
+      "timestep",
+      "inspect",
+      "delta",
+      "movement",
+      "review"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.game"
+  },
+  {
+    "ref_id": "skill:game:profile-frame-and-allocations",
+    "type": "skill",
+    "title": "Profile frame time and per-frame allocations",
+    "summary": "Capture frame timing and allocation behavior to surface budget overruns, GC hitches, and O(n^2) systems.",
+    "domains": [
+      "game",
+      "game_loop",
+      "physics",
+      "rendering_game"
+    ],
+    "triggers": [
+      "profile",
+      "frame time",
+      "allocation",
+      "gc",
+      "budget",
+      "spike"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.game"
+  }
+]

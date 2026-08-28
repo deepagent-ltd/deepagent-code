@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:testing:negative-path-matrix",
+  "type": "strategy",
+  "description": "Add or select tests for invalid input, missing state, duplicate actions, permissions, retries, and rollback paths.",
+  "body": "Apply when the change adds validation, parsing, permission checks, persistence, network boundaries, or state transitions. Build a small matrix of likely negative paths: invalid value, missing dependency, duplicate request, denied permission, timeout or retry, rollback or cleanup, and incompatible schema. Do not broaden into exhaustive fuzzing unless the affected package already owns that harness. Execution action: select existing tests that cover the matrix first, then add the smallest missing negative case when implementation changed. Verification signals include named negative test cases, rejected input assertions, error-shape checks, and fixture values that show why the path matters. Use when Code Testing work touches test runner output, fixture intent, coverage boundaries, flake history, and negative paths. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: choose the smallest direction that preserves the domain contract; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include focused test output, regression tests, fixture assertions, and rerun evidence. Risk boundary: escalate or stop when the task involves testing implementation details only, masking flakes, and claiming coverage without behavior proof, missing owner evidence, or live external state.",
+  "domain": "testing",
+  "scope_hint": "code.testing:strategies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.testing:human_authored",
+  "pack_id": "code.testing"
+}

@@ -1,0 +1,43 @@
+{
+  "name": "@deepagent-code/web",
+  "type": "module",
+  "license": "AGPL-3.0-or-later",
+  "version": "1.0.0-beta",
+  "scripts": {
+    "dev": "astro dev",
+    "dev:remote": "VITE_API_URL=https://api.deepagent-code.ai astro dev",
+    "start": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "astro": "astro"
+  },
+  "dependencies": {
+    "@astrojs/markdown-remark": "6.3.11",
+    "@astrojs/node": "10.1.4",
+    "@astrojs/solid-js": "6.0.1",
+    "@astrojs/starlight": "0.40.0",
+    "@fontsource/ibm-plex-mono": "5.2.5",
+    "@shikijs/transformers": "3.20.0",
+    "@solid-primitives/resize-observer": "2.1.5",
+    "@types/luxon": "catalog:",
+    "ai": "catalog:",
+    "astro": "6.4.8",
+    "diff": "catalog:",
+    "js-base64": "3.7.7",
+    "lang-map": "0.4.0",
+    "luxon": "catalog:",
+    "marked": "catalog:",
+    "marked-shiki": "catalog:",
+    "rehype-autolink-headings": "7.1.0",
+    "remeda": "catalog:",
+    "shiki": "catalog:",
+    "solid-js": "catalog:",
+    "vscode-languageserver-types": "3.17.5"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "@astrojs/check": "0.9.9",
+    "typescript": "catalog:",
+    "deepagent-code": "workspace:*"
+  }
+}

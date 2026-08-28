@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:kotlin:copy-java-patterns-verbatim",
+  "type": "failure_dossier",
+  "description": "Copying Java patterns verbatim into Kotlin",
+  "body": "Java-style null checks, builders, static utilities, and mutable models can fight Kotlin idioms and hide better sealed/data/extension approaches. Treat as a quality risk when it changes public behavior or readability.\n\nUse only as a diagnostic do-not-use signal; do not expose this as positive strategy, methodology, knowledge, skill, or memory.",
+  "domain": "kotlin",
+  "scope_hint": "code.kotlin:failure_dossiers",
+  "evidence_strength": "medium",
+  "provenance_tag": "code.kotlin:failure_seed:paraphrased_common_failures",
+  "pack_id": "code.kotlin"
+}

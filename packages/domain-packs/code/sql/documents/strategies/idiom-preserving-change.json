@@ -1,0 +1,11 @@
+{
+  "ref_id": "strategy:sql:idiom-preserving-change",
+  "type": "strategy",
+  "description": "In SQL, prefer established idioms (set-based operations, explicit JOIN types, and dialect-specific functions) over generic rewrites.",
+  "body": "In SQL, the ecosystem has settled idioms — set-based operations, explicit JOIN types, and dialect-specific functions — and changes that ignore them add risk and review friction. Use when adding or modifying SQL code near existing patterns. Do not impose a foreign style or rewrite working code into a generic shape, and avoid abandoning nearby conventions. Actions: read the surrounding code, follow its set-based operations, explicit JOIN types, and dialect-specific functions, keep the change minimal, then run EXPLAIN ANALYZE, the query plan, and index-usage inspection and a transaction that runs the statement, asserts row counts, then rolls back to confirm fit. Validation signals include a small diff consistent with neighbors, a clean lint pass, and passing tests. Risk boundary: a broad idiom migration is its own reviewed task; escalate rather than bundling it into an unrelated change.",
+  "domain": "sql",
+  "scope_hint": "code.sql:strategies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.sql:skill_survey",
+  "pack_id": "code.sql"
+}

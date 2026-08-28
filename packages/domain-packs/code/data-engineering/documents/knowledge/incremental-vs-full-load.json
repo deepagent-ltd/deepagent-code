@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:dataeng:incremental-vs-full-load",
+  "type": "knowledge",
+  "title": "Incremental loads and watermarks",
+  "description": "Incremental loads move only new/changed rows via a watermark or CDC; full reloads are simple but do not scale and risk overwriting good data.",
+  "body": "Use when deciding how much data to move each run. Incremental extraction tracks a high-watermark (max updated_at) or uses change-data-capture to pull only deltas, which scales but must handle late-arriving and updated rows. Full reloads are simple and self-correcting but expensive and, if a source read fails midway, can replace good data with partial data. Do not full-reload large sources routinely. Actions: use a persisted watermark or CDC with idempotent merge. Validation signals include a stable watermark advancing and counts matching expected deltas. Risk boundary: a watermark that misses updates silently drops changes; verify late/updated-row handling.",
+  "domain": "data_engineering",
+  "scope_hint": "code.data-engineering:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-engineering",
+  "pack_id": "code.data-engineering"
+}

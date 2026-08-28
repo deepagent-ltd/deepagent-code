@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:csharp_dotnet:blocking-on-async-task",
+  "type": "failure_dossier",
+  "description": "Blocking on async Task",
+  "body": "Task.Result, Wait, or GetAwaiter().GetResult can deadlock or starve request threads in ASP.NET and UI contexts. Safer path: propagate async or isolate a proven sync boundary.\n\nUse only as a diagnostic do-not-use signal; do not expose this as positive strategy, methodology, knowledge, skill, or memory.",
+  "domain": "csharp_dotnet",
+  "scope_hint": "code.csharp-dotnet:failure_dossiers",
+  "evidence_strength": "medium",
+  "provenance_tag": "code.csharp-dotnet:failure_seed:paraphrased_common_failures",
+  "pack_id": "code.csharp-dotnet"
+}

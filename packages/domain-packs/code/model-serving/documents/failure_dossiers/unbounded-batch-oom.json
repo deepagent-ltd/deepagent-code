@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:serving:unbounded-batch-oom",
+  "type": "failure_dossier",
+  "description": "Allowing the batch or sequence length to grow unbounded, causing an out-of-memory crash at peak concurrency.",
+  "body": "Failure mode: batching has no size or memory cap, so at peak concurrency with long inputs (or a large KV cache) the accelerator runs out of memory and the whole server crashes, dropping all in-flight requests. Detection signals: OOM errors correlated with traffic peaks; server restarts under load; memory graph hitting the ceiling. Do not batch without a memory-derived cap. Safer fallback: compute worst-case memory from max batch times max sequence plus weights, cap batch size so it fits, and queue or reject beyond capacity instead of OOM.",
+  "domain": "model_serving",
+  "scope_hint": "code.model-serving:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.model-serving:human_authored",
+  "pack_id": "code.model-serving"
+}

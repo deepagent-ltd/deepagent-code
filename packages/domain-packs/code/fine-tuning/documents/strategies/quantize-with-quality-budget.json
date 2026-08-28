@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:finetune:quantize-with-quality-budget",
+  "type": "strategy",
+  "title": "Quantize against an explicit quality budget",
+  "description": "Choose a quantization scheme by measuring the accuracy delta against full precision rather than assuming int4 is free.",
+  "body": "Use when shrinking a model for cheaper or faster inference. Do not assume int4 or int8 preserves quality — aggressive quantization can degrade reasoning and long-context behavior unevenly. Actions: set an acceptable quality delta, evaluate fp16/bf16/int8/int4 on the task and capability evals, and pick the smallest scheme inside the budget; prefer calibrated or QLoRA-style approaches for low bit-widths. Validation signals include a benchmark comparing each precision against full precision and a chosen scheme inside the stated delta. Risk boundary: an over-quantized model fails silently on hard inputs; if no scheme meets the budget, escalate rather than shipping degraded quality.",
+  "domain": "fine_tuning",
+  "scope_hint": "code.fine-tuning:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.fine-tuning",
+  "pack_id": "code.fine-tuning"
+}

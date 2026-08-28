@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:frontend_performance:image-and-font-optimization",
+  "type": "methodology",
+  "title": "Optimize images and fonts on the load path",
+  "description": "Right-size, format, and lazy-load images and control font loading so media does not dominate LCP or cause layout shift.",
+  "body": "Steps: 1. Identify the LCP element and the largest media on the route. 2. Serve responsive sizes in a modern format (WebP/AVIF), set width/height or aspect-ratio to reserve space, and lazy-load offscreen images. 3. Preload the LCP image; avoid lazy-loading it. 4. Set font-display swap/optional and preload critical fonts to avoid invisible-text and reflow. 5. Re-measure. Rollback point: before changing the LCP image strategy. Validation: the network panel shows reduced bytes, CLS stays within budget because dimensions are reserved, and LCP improves in a trace; a smaller file with worse layout shift is not a win.",
+  "domain": "frontend",
+  "scope_hint": "code.frontend.performance:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.performance",
+  "pack_id": "code.frontend.performance"
+}
