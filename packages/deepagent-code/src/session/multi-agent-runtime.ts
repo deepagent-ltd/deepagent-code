@@ -18,6 +18,9 @@ import { FileLock } from "@deepagent-code/core/file-lock"
 import { Identifier } from "@deepagent-code/core/util/identifier"
 import type { SubagentTurnRunner, SubagentTurnResult } from "./goal-loop-wiring"
 import type { EventDispatcher } from "./event-dispatcher"
+import { SYSTEM_PRINCIPAL } from "./event-dispatcher"
+import { isEventV2AdmissionEnabled } from "@deepagent-code/core/deepagent/event-admission"
+import { EventAdmissionWiring } from "@deepagent-code/core/deepagent/event-admission-wiring"
 import { SessionID } from "./schema"
 import * as Log from "@deepagent-code/core/util/log"
 
@@ -79,6 +82,24 @@ export interface CompletedTurn {
   readonly sessionID?: string
   readonly continuationRef?: string
   readonly artifacts: ReadonlyArray<string>
+}
+
+// C5-04 — the event→V2 admission bridge (design §8.4/§8.7). When `isEventV2AdmissionEnabled()` is ON AND
+// an `eventV2Admission` seam is provided, `dispatch` routes the event through the durable V2 admission
+// path (SessionV2) BEFORE the §C V4 coordination. The seam is injectable (not a hard SessionV2/DB import)
+// so the runtime stays decoupled + the existing `layerWith` unit tests stay green: the production wiring
+// (app graph) provides a bridge whose `admit` performs assertPublishable → build → `EventAdmission.admit`
+// with a `(yield* SessionV2.Service).prompt(...)` adapter. Omitted ⇒ inert (V4 unchanged, default OFF).
+export interface EventV2AdmissionBridge {
+  /** Resolve the security namespace a workspace belongs to (fail-closed: unknown ⇒ refusal). */
+  readonly securityNamespaceFor: (workspaceId: string) => Effect.Effect<string, unknown>
+  /** Admit a routed V4 event as durable bounded V2 work under an explicit scope. Called ONLY when the V2
+   * admission switch is ON. The bridge owns the SessionV2 adapter + C5 event registry + the V2 database;
+   * the runtime supplies the resolved scope so authority stays explicit. */
+  readonly admit: (input: {
+    readonly request: EventDispatcher.DispatchRequest
+    readonly scope: EventAdmissionWiring.AdmissionScope
+  }) => Effect.Effect<void, unknown>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/MultiAgentRuntime") {}
@@ -149,6 +170,10 @@ export interface LayerOptions {
     readonly parentSessionID: SessionID
     readonly turns: ReadonlyArray<CompletedTurn>
   }) => Effect.Effect<void, unknown>
+  // C5-04 — the event→V2-admission bridge. When DEEPAGENT_CODE_EVENT_V2_ADMISSION is ON and this seam is
+  // provided, `dispatch` routes the event through the durable V2 admission path BEFORE the §C coordination
+  // (design §8.7 — event turns go through SessionV2/SessionExecution). Omitted ⇒ inert; V4 unchanged.
+  readonly eventV2Admission?: EventV2AdmissionBridge
 }
 
 export const parentSessionIDFor = (eventID: DeepAgentEvent.ID): SessionID =>
@@ -1102,20 +1127,47 @@ export const layerWith = (options: LayerOptions) =>
           return { event, outcomes, hasUnfinished }
         })
 
+      // C5-04 — the V2 admission dispatch entry (BEFORE §C coordination per design §8.7). When the V2
+      // admission switch is ON and an `eventV2Admission` seam is provided, the event is admitted as
+      // durable bounded V2 session work instead of being partitioned into §C DAG subtasks. The runtime
+      // resolves the scope it can derive from the routed event (workspace/project/principal/session); the
+      // security namespace + the C5 mapping + the SessionV2.prompt adapter live in the injected bridge.
+      // A resolution/admission refusal fails the dispatch so the dispatcher nacks → the retry pump
+      // re-drives the event (never a silent drop), matching the V4 nack contract.
+      const dispatchV2 = (request: EventDispatcher.DispatchRequest): Effect.Effect<void, unknown> =>
+        Effect.gen(function* () {
+          const bridge = options.eventV2Admission
+          if (!bridge) return yield* Effect.void
+          const securityNamespaceId = yield* bridge.securityNamespaceFor(request.event.workspaceID)
+          const scope: EventAdmissionWiring.AdmissionScope = {
+            workspaceId: request.event.workspaceID,
+            securityNamespaceId,
+            projectScopeKey: request.event.projectID ?? request.event.workspaceID,
+            principal: request.event.actorID ?? SYSTEM_PRINCIPAL,
+            sessionID: parentSessionIDFor(request.event.id),
+            // The router authorized this trigger (it returned `dispatch` with targets) → trust `derived`.
+            authorizedTrigger: true,
+          }
+          return yield* bridge.admit({ request, scope })
+        })
+
       // dispatch: if any subtask was deferred / dep-unmet / runner-failed, FAIL so the Event Dispatcher
       // nacks and the retry pump re-drives the event (idempotent thanks to stable ids + started-guard).
       // A coordination where every subtask reached a terminal state (completed, or blocked for a
       // permanent reason like no_capable_agent / autonomy / security / suggestion_only) returns void →
       // the dispatcher acks. NOTE: no_capable_agent/autonomy/security are treated as TERMINAL here
       // (retrying won't change the registry/gates); only deferred + runner_failed + dep_not_met retry.
-      const dispatch: Interface["dispatch"] = (request) =>
-        coordinate(request.event).pipe(
+      const dispatch: Interface["dispatch"] = (request) => {
+        // C5-04 — the V2 admission path is authoritative when the switch is ON + a seam is present.
+        if (isEventV2AdmissionEnabled() && options.eventV2Admission) return dispatchV2(request)
+        return coordinate(request.event).pipe(
           Effect.flatMap((summary) =>
             summary.hasUnfinished
               ? Effect.fail(new Error(`multi-agent coordination incomplete for event ${request.event.id}`))
               : Effect.void,
           ),
         )
+      }
 
       return Service.of({ dispatch, coordinate })
     }),
