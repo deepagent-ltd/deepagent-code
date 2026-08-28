@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:embed:respect-flash-and-ram-budget",
+  "type": "strategy",
+  "title": "Respect the flash and RAM budget",
+  "description": "Track code, data, and stack against the device's tiny memory and keep margin, because there is no swap and overflow corrupts silently.",
+  "body": "Use when adding features or libraries to a constrained MCU. Do not pull in heavyweight libraries, large buffers, or deep recursion without checking the memory map, and do not run to the edge of RAM. Actions: read the linker map after each build, watch the stack high-water mark per task, keep margin for worst-case nesting, and prefer const data in flash over RAM copies. Validation signals include a linker map that fits with headroom and stack high-water marks that never approach the guard. Risk boundary: stack overflow on an MCU silently corrupts adjacent memory and crashes unpredictably; treat shrinking stack margin as blocking and escalate before consuming the last reserve.",
+  "domain": "embedded",
+  "scope_hint": "code.embedded:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.embedded",
+  "pack_id": "code.embedded"
+}

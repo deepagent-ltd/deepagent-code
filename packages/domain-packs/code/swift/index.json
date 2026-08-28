@@ -1,0 +1,476 @@
+[
+  {
+    "ref_id": "knowledge:swift:generated-code-drift",
+    "type": "knowledge",
+    "title": "Generated Code Drift",
+    "summary": "In Swift, never hand-edit Swift Package plugin output and generated bindings (e.g. from .proto); change the source and rerun the generator.",
+    "domains": [
+      "swift",
+      "code",
+      "mobile"
+    ],
+    "triggers": [
+      "generated",
+      "code",
+      "must",
+      "tied",
+      "regeneration",
+      "commands",
+      "hand",
+      "edit"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.swift"
+  },
+  {
+    "ref_id": "knowledge:swift:main-actor-boundary",
+    "type": "knowledge",
+    "title": "Main Actor Boundary",
+    "summary": "Swift UI updates need actor/thread boundary awareness.",
+    "domains": [
+      "swift",
+      "code",
+      "mobile"
+    ],
+    "triggers": [
+      "swift",
+      "updates",
+      "need",
+      "actor",
+      "thread",
+      "boundary",
+      "awareness",
+      "async"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.swift"
+  },
+  {
+    "ref_id": "knowledge:swift:runtime-errors-differ",
+    "type": "knowledge",
+    "title": "Runtime Errors Differ",
+    "summary": "In Swift, a clean build does not prevent force-unwrap crashes on nil, retain cycles, and data races flagged by strict concurrency.",
+    "domains": [
+      "swift",
+      "code",
+      "mobile"
+    ],
+    "triggers": [
+      "compile",
+      "success",
+      "does",
+      "guarantee",
+      "runtime",
+      "behavior",
+      "representative",
+      "tests"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.swift"
+  },
+  {
+    "ref_id": "knowledge:swift:toolchain-is-contract",
+    "type": "knowledge",
+    "title": "Toolchain Is Contract",
+    "summary": "In Swift, the Swift toolchain version, the SDK/platform, and the build configuration are part of the contract and changing them changes behavior.",
+    "domains": [
+      "swift",
+      "code",
+      "mobile"
+    ],
+    "triggers": [
+      "compiler",
+      "formatter",
+      "package",
+      "manager",
+      "test",
+      "runner",
+      "part",
+      "language"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.swift"
+  },
+  {
+    "ref_id": "methodology:swift:dependency-update-check",
+    "type": "methodology",
+    "title": "Dependency Update Check",
+    "summary": "In Swift, when Package.swift / Package.resolved and the resolved version graph change, verify the lockfile, generated artifacts, and a runtime smoke.",
+    "domains": [
+      "swift",
+      "code",
+      "mobile"
+    ],
+    "triggers": [
+      "when",
+      "dependencies",
+      "change",
+      "inspect",
+      "lockfile",
+      "generated",
+      "artifacts",
+      "runtime"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.swift"
+  },
+  {
+    "ref_id": "methodology:swift:interop-boundary-check",
+    "type": "methodology",
+    "title": "Interop Boundary Check",
+    "summary": "In Swift, validate the Codable decoding, actor isolation, and Objective-C interop bridging where external data crosses in.",
+    "domains": [
+      "swift",
+      "code",
+      "mobile"
+    ],
+    "triggers": [
+      "validate",
+      "module",
+      "shell",
+      "serialization",
+      "boundaries",
+      "steps",
+      "identify",
+      "boundary"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.swift"
+  },
+  {
+    "ref_id": "methodology:swift:language-gate-loop",
+    "type": "methodology",
+    "title": "Language Gate Loop",
+    "summary": "In Swift, run the package-local gate, fix the first owned diagnostic, rerun, then broaden.",
+    "domains": [
+      "swift",
+      "code",
+      "mobile"
+    ],
+    "triggers": [
+      "package",
+      "local",
+      "gate",
+      "first",
+      "owned",
+      "diagnostic",
+      "rerun",
+      "then"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.swift"
+  },
+  {
+    "ref_id": "skill:swift:run-language-gate",
+    "type": "skill",
+    "title": "Run Language Gate",
+    "summary": "In Swift, run the package-local validation gate (swift build (or the Xcode scheme) for the right platform and configuration) and summarize the diagnostics.",
+    "domains": [
+      "swift",
+      "code",
+      "mobile"
+    ],
+    "triggers": [
+      "package",
+      "local",
+      "language",
+      "validation",
+      "gate",
+      "summarize",
+      "diagnostics",
+      "inputs"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.swift"
+  },
+  {
+    "ref_id": "strategy:swift:boundary-validation",
+    "type": "strategy",
+    "title": "Boundary Validation",
+    "summary": "In Swift, validate external input at the Codable decoding, actor isolation, and Objective-C interop bridging before internal use.",
+    "domains": [
+      "swift",
+      "code",
+      "mobile"
+    ],
+    "triggers": [
+      "validate",
+      "external",
+      "input",
+      "language",
+      "runtime",
+      "boundaries",
+      "parsing",
+      "serialization"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.swift"
+  },
+  {
+    "ref_id": "strategy:swift:diagnostic-first",
+    "type": "strategy",
+    "title": "Diagnostic First",
+    "summary": "In Swift, read the first type-checker diagnostic and its fix-it suggestion before making speculative edits.",
+    "domains": [
+      "swift",
+      "code",
+      "mobile"
+    ],
+    "triggers": [
+      "compiler",
+      "runtime",
+      "diagnostics",
+      "before",
+      "speculative",
+      "edits",
+      "read",
+      "first"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.swift"
+  },
+  {
+    "ref_id": "strategy:swift:idiom-preserving-change",
+    "type": "strategy",
+    "title": "Idiom Preserving Change",
+    "summary": "In Swift, prefer established idioms (optionals with guard/if-let, value types, protocol-oriented design, and async/await) over generic rewrites.",
+    "domains": [
+      "swift",
+      "code",
+      "mobile"
+    ],
+    "triggers": [
+      "prefer",
+      "local",
+      "idioms",
+      "standard",
+      "tooling",
+      "over",
+      "generic",
+      "rewrites"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.swift"
+  },
+  {
+    "ref_id": "strategy:swift:package-local-command",
+    "type": "strategy",
+    "title": "Package Local Command",
+    "summary": "In Swift, use the package-local commands (swift build (or the Xcode scheme) for the right platform and configuration) rather than a root or generic command.",
+    "domains": [
+      "swift",
+      "code",
+      "mobile"
+    ],
+    "triggers": [
+      "package",
+      "local",
+      "build",
+      "test",
+      "typecheck",
+      "commands",
+      "this",
+      "language"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.swift"
+  },
+  {
+    "ref_id": "strategy:swift:isolate-shared-state-with-actors",
+    "type": "strategy",
+    "title": "Protect shared mutable state with actors",
+    "summary": "Move mutable state that multiple tasks touch into an actor so the compiler serializes access instead of relying on manual locks.",
+    "domains": [
+      "swift",
+      "code",
+      "mobile"
+    ],
+    "triggers": [
+      "actor",
+      "concurrency",
+      "data race",
+      "isolation",
+      "async",
+      "sendable"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.swift"
+  },
+  {
+    "ref_id": "strategy:swift:design-with-property-wrappers",
+    "type": "strategy",
+    "title": "Encapsulate cross-cutting field behavior with property wrappers",
+    "summary": "Use property wrappers to factor out repeated get/set behavior (clamping, persistence, thread-safety) instead of duplicating logic per property.",
+    "domains": [
+      "swift",
+      "code",
+      "mobile"
+    ],
+    "triggers": [
+      "property wrapper",
+      "propertyWrapper",
+      "projectedValue",
+      "wrappedValue",
+      "state",
+      "userdefaults"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.swift"
+  },
+  {
+    "ref_id": "methodology:swift:manage-spm-dependencies",
+    "type": "methodology",
+    "title": "Manage dependencies and targets with Swift Package Manager",
+    "summary": "Define products, targets, and version-pinned dependencies in Package.swift and resolve a committed Package.resolved for reproducible builds.",
+    "domains": [
+      "swift",
+      "code",
+      "mobile"
+    ],
+    "triggers": [
+      "spm",
+      "package.swift",
+      "package.resolved",
+      "target",
+      "dependency",
+      "from"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.swift"
+  },
+  {
+    "ref_id": "skill:swift:profile-with-instruments",
+    "type": "skill",
+    "title": "Profile time and leaks with Instruments",
+    "summary": "Run the Time Profiler and Leaks/Allocations instruments to locate a hotspot or retain cycle and report the responsible call tree.",
+    "domains": [
+      "swift",
+      "code",
+      "mobile"
+    ],
+    "triggers": [
+      "instruments",
+      "time profiler",
+      "leaks",
+      "allocations",
+      "retain cycle",
+      "profile"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.swift"
+  }
+]

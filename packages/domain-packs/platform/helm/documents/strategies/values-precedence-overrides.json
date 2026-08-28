@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:helm:values-precedence-overrides",
+  "type": "strategy",
+  "title": "Respect Helm values precedence when layering overrides",
+  "description": "Order overrides knowingly: chart defaults < parent values < -f files (last wins) < --set, and avoid deep-key collisions that silently lose values.",
+  "body": "Use when a value override is not taking effect or you are layering environment configs. Do not assume the chart's values.yaml wins or that multiple -f files merge by union (later files override earlier on conflicting keys). Actions: remember precedence is subchart/chart defaults, then parent values.yaml, then each -f file in order, then --set highest; render with helm template --debug to see the effective value; avoid setting the same deep key in two layers expecting a merge. Validation signals include helm template showing the expected value and a diff confirming only intended keys changed. Risk boundary: changing values that drive replica count or resource limits on a production release is human-gated.",
+  "domain": "helm",
+  "scope_hint": "platform.helm:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.helm",
+  "pack_id": "platform.helm"
+}

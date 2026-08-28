@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:release:correlate-tag-to-build",
+  "type": "strategy",
+  "title": "Bind every release artifact to its exact source tag",
+  "description": "Make each published build traceable to one immutable commit and tag so any shipped binary can be rebuilt and audited from source.",
+  "body": "Use when producing artifacts that will be published or deployed. Do not build releases from a dirty working tree or an untagged commit, and avoid re-tagging an existing version. Actions: create the annotated tag on the exact reviewed commit, stamp the build with that tag and commit SHA, and embed the SHA in the artifact metadata or version output; inspect that the running binary reports the same SHA as the tag. Validation signals include a build log showing a clean tree, a version command echoing the tag/SHA, and a rebuild from the tag producing a matching artifact hash. Risk boundary: a published artifact whose source commit cannot be identified is unauditable; halt the release and escalate rather than shipping an untraceable build.",
+  "domain": "code",
+  "scope_hint": "code.release:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.release",
+  "pack_id": "code.release"
+}

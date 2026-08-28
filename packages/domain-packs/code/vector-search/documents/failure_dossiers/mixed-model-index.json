@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:vsearch:mixed-model-index",
+  "type": "failure_dossier",
+  "description": "A partial re-embed leaves old and new model vectors in one index, corrupting similarity.",
+  "body": "Failure mode: an embedding-model upgrade re-embeds only part of the corpus in place, so the index holds a mix of old-model and new-model vectors that are not comparable, and recall degrades unpredictably. Detection signals: inconsistent recall that varies by which documents were re-embedded, and an index whose vectors trace to two different model versions. Do not continue serving the mixed index while finishing the migration. Safer fallback: build a fresh index by re-embedding the entire corpus with the new model, validate recall against the old index on the labeled set, then atomically switch queries and embedder together via a blue/green swap.",
+  "domain": "vector_search",
+  "scope_hint": "code.vector-search:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.vector-search:human_authored",
+  "pack_id": "code.vector-search"
+}

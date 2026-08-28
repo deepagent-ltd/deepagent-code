@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:ng:diagnose-an-onpush-not-updating",
+  "type": "methodology",
+  "title": "Diagnose an OnPush component that will not update",
+  "description": "Trace a stale OnPush view to an in-place mutation or a change that did not flow through an input or async pipe.",
+  "body": "Steps: 1. Confirm the component uses OnPush. 2. Identify how the changed data reaches it: @Input reference, async-piped observable, or internal event. 3. Check whether the data was mutated in place (same reference) instead of replaced, which OnPush ignores. 4. Replace the object/array immutably or bind via async so a new reference/emission triggers detection. 5. Only as a last resort use markForCheck for a justified imperative update. Rollback point: before adding manual detection calls. Validation: a test shows the view updates when the input is replaced and does not when it is mutated.",
+  "domain": "angular",
+  "scope_hint": "code.frontend.angular:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.angular",
+  "pack_id": "code.frontend.angular"
+}

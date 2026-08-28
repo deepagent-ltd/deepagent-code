@@ -1,0 +1,11 @@
+{
+  "ref_id": "knowledge:typescript:exported-types-are-api",
+  "type": "knowledge",
+  "description": "Exported TypeScript types, declaration files, and package exports are API surface for downstream consumers.",
+  "body": "Use this when changing exported interfaces, functions, classes, schemas, declaration output, or index barrels. Even if runtime behavior is unchanged, exported type shape can break consumers through stricter generics, removed fields, narrowed literals, or changed module paths. Execution action: inspect public exports, generated declarations, and at least one consumer or package-level typecheck when available. Do not treat internal refactors as safe if they leak through exported types. Verification signals include declaration diff, consumer compilation, API extractor or generated SDK checks, and semver or changelog notes when public surface changes. Use when TypeScript / JavaScript work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: use the fact to constrain the change and test plan; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "typescript",
+  "scope_hint": "code.typescript:knowledge",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.typescript:human_authored",
+  "pack_id": "code.typescript"
+}

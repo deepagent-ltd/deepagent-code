@@ -1,0 +1,11 @@
+{
+  "ref_id": "knowledge:swift:toolchain-is-contract",
+  "type": "knowledge",
+  "description": "In Swift, the Swift toolchain version, the SDK/platform, and the build configuration are part of the contract and changing them changes behavior.",
+  "body": "In Swift, the Swift toolchain version, the SDK/platform, and the build configuration define how code compiles, lints, and resolves dependencies; bumping any of them can change diagnostics and emitted output. Use when you touch the Swift toolchain version, the SDK/platform, and the build configuration or when a build behaves differently than the pinned environment. Do not silently upgrade the toolchain or override the pinned version to make an error disappear. Actions: read the pinned config, match the project's the Swift toolchain version, the SDK/platform, and the build configuration, then run swift build -warnings-as-errors and the Xcode static analyzer and swift build (or the Xcode scheme) for the right platform and configuration to compare against the baseline. Validation signals include identical swift build -warnings-as-errors and the Xcode static analyzer output, a reproducible build, and unchanged lockfile resolution. Risk boundary: a toolchain bump is a deliberate, reviewed change; escalate rather than upgrading to unblock yourself.",
+  "domain": "swift",
+  "scope_hint": "code.swift:knowledge",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.swift:skill_survey",
+  "pack_id": "code.swift"
+}

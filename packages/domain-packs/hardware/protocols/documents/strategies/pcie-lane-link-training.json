@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:hwprot:pcie-lane-link-training",
+  "type": "strategy",
+  "title": "Confirm PCIe lane width and link training",
+  "description": "Verify negotiated link width and speed before debugging transaction-layer traffic on a PCIe endpoint.",
+  "body": "Use when a PCIe device underperforms or fails to be detected. Do not analyze transaction-layer packets before the physical link has trained to the expected width and speed. Actions: read the link status register, compare negotiated width and speed against the slot capability, and inspect for lane-reversal or polarity issues. Validation signals include a trained link at the expected lane count and a clean configuration-space read of the device ID. Risk boundary: a link that silently trains down to fewer lanes halves bandwidth, so flag any negotiated width below the slot capability for hardware review.",
+  "domain": "hw_protocols",
+  "scope_hint": "hardware.protocols:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.protocols",
+  "pack_id": "hardware.protocols"
+}

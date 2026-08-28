@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:serving:inspect-serving-config",
+  "type": "skill",
+  "title": "Inspect serving config for batching and rollout safety",
+  "description": "Review batching limits, memory caps, readiness probes, versioning, and rollback config and report gaps with locations.",
+  "body": "Use when reviewing a serving deployment. Actions: check that dynamic batching has a max size and queue timeout, that memory/batch caps fit peak concurrency, that readiness is gated on warm-up, and that model versioning has a rollback path; report each setting and any gap with its file/line. Compare config against the latency SLO and peak load. Do not assume defaults are safe. This skill exposes capability only and does not change deployment config without permission. Validation signals include bounded batching and a verified rollback path. Risk boundary: unbounded batching, CPU-only autoscaling, or missing rollback are blocking; recommend fixing before promotion.",
+  "domain": "model_serving",
+  "scope_hint": "code.model-serving:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.model-serving",
+  "pack_id": "code.model-serving"
+}

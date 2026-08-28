@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:asm:preserve-callee-saved-registers",
+  "type": "strategy",
+  "title": "Preserve every callee-saved register you use",
+  "description": "Save and restore the ABI's callee-saved registers in the prologue/epilogue so the caller's values survive the call.",
+  "body": "Use when a function uses more registers than the scratch (caller-saved) set. Do not write to a callee-saved register (e.g. rbx/rbp/r12-r15 on x86-64, x19-x28 on AArch64) without saving it first, and do not forget to restore it on every return path. Actions: in the prologue push/store each callee-saved register you will clobber, restore them in the epilogue (including early returns), and keep the save/restore balanced. Validation signals include the disassembly showing matched save/restore on all paths and the caller's register values intact after the call. Risk boundary: clobbering a callee-saved register corrupts the caller silently and the failure appears unrelated; treat an unbalanced or missing restore as a blocking defect.",
+  "domain": "assembly",
+  "scope_hint": "code.assembly:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.assembly",
+  "pack_id": "code.assembly"
+}

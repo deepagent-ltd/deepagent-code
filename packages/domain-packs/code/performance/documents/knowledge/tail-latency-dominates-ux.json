@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:performance:tail-latency-dominates-ux",
+  "type": "knowledge",
+  "title": "Tail latency dominates user-visible performance",
+  "description": "At scale a request often fans out to many backends, so the slow p99 of each component compounds and the tail, not the mean, defines what users feel.",
+  "body": "Use when reasoning about why average-looking systems feel slow. A user request frequently depends on several sub-calls; the probability that at least one hits the slow tail grows with fan-out, so a great mean with a bad p99 still yields frequent slow requests. Do not judge a system by its average latency alone. Actions: measure and budget high percentiles, identify fan-out points, and attack the tail (timeouts, hedging, caching the slow path). Validation signals include p99/p99.9 dashboards and a fan-out latency model. Risk boundary: optimizing the mean while the tail regresses can pass naive checks yet degrade real UX — track percentiles and escalate tail regressions.",
+  "domain": "code",
+  "scope_hint": "code.performance:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.performance",
+  "pack_id": "code.performance"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:docs:examples-are-tested-contracts",
+  "type": "knowledge",
+  "title": "Runnable examples are tested contracts",
+  "description": "An example that is executed in CI is a contract that catches drift, while an unverified snippet rots silently into a wrong instruction.",
+  "body": "Use when deciding how much to trust or invest in a doc example. An example wired into CI (doctest, sample build, snippet runner) fails the build when the API changes, so it stays correct; a copy-pasted snippet that nothing executes drifts the moment the code moves. Do not present unverified snippets as authoritative without marking them illustrative. Actions: extract examples into runnable, CI-checked sources where feasible. Validation signals include the example suite passing in CI and a failure when the API is intentionally changed. Risk boundary: an out-of-date example is worse than none because readers trust and run it; mark anything unrunnable as illustrative.",
+  "domain": "code",
+  "scope_hint": "code.docs:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.docs",
+  "pack_id": "code.docs"
+}

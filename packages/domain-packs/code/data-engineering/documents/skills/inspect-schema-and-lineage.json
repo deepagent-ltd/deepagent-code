@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:dataeng:inspect-schema-and-lineage",
+  "type": "skill",
+  "title": "Inspect schema changes and lineage impact",
+  "description": "Analyze a proposed schema change and the lineage graph and report which downstream consumers break and whether the change is additive.",
+  "body": "Use when reviewing a schema or source change. Actions: compare old and new schema for renames/drops/retypes, walk the lineage graph to list downstream tables and jobs that read the affected columns, and classify the change as additive or breaking. Report each impacted consumer with its path. Do not approve a change without checking downstream readers. This skill exposes capability only and does not alter schemas without permission. Validation signals include an additive classification and an enumerated impact set. Risk boundary: rename/drop/retype on a shared table is breaking; recommend a dual-write migration and consumer sign-off rather than an in-place change.",
+  "domain": "data_engineering",
+  "scope_hint": "code.data-engineering:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-engineering",
+  "pack_id": "code.data-engineering"
+}

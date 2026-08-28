@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:environment:edited-shadowed-config",
+  "type": "failure_dossier",
+  "description": "Editing a config file value that is overridden at runtime by an environment variable, so the change has no effect.",
+  "body": "Failure mode: a setting is changed in a config file while an environment variable for the same key takes precedence, so the running process keeps the old value and the fix appears to do nothing. Detection signals: the file shows the new value but the process behaves with the old one; the env var is set in the shell/container; restart does not change behavior. Do not edit a layer that is shadowed by a higher-precedence source. Safer fallback: read the effective resolved value first, identify the winning layer, change that layer, and confirm by re-reading runtime state.",
+  "domain": "code",
+  "scope_hint": "code.environment:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.environment:human_authored",
+  "pack_id": "code.environment"
+}

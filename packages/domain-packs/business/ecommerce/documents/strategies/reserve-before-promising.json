@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:ecom:reserve-before-promising",
+  "type": "strategy",
+  "title": "Reserve stock before promising it",
+  "description": "Atomically decrement available inventory at add-to-cart or checkout so two buyers cannot claim the last unit.",
+  "body": "Use when a SKU has limited stock and concurrent buyers can compete for it. Do not check availability and then decrement in two separate steps — the gap lets two checkouts both pass the check and oversell. Actions: reserve with a single atomic conditional decrement (available = available - qty WHERE available >= qty) or a row lock, and treat a failed reservation as out-of-stock. Validation signals include reserved-plus-sold never exceeding on-hand under concurrent load. Risk boundary: overselling promises stock you cannot ship — escalate to a human before disabling reservation checks for a launch spike.",
+  "domain": "ecommerce",
+  "scope_hint": "business.ecommerce:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:business.ecommerce",
+  "pack_id": "business.ecommerce"
+}

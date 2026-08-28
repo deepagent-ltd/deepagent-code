@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:frontend_react:memoize-with-intent",
+  "type": "strategy",
+  "title": "Memoize only proven hot paths",
+  "description": "Apply useMemo/useCallback/React.memo to fix a measured render cost or a referential-identity break, not as a blanket default.",
+  "body": "Use when a profiler shows a component or computation is a real render hotspot, or when an unstable reference breaks a downstream memo or effect dependency. Do not wrap every value and callback by default; memoization has its own allocation and comparison cost and can hide bugs. Actions: profile first, identify the specific reference or expensive compute, then memoize that one path and confirm the dependency array is exhaustive. Validation signals include a render trace showing fewer commits and a passing test for the memoized output. Risk boundary: a wrong or missing dependency in useMemo/useCallback yields stale closures; if correctness is unclear, prefer no memoization over a subtly stale one.",
+  "domain": "react",
+  "scope_hint": "code.frontend.react:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.react",
+  "pack_id": "code.frontend.react"
+}

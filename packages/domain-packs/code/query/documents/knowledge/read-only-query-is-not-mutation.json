@@ -1,0 +1,11 @@
+{
+  "ref_id": "knowledge:query:read-only-query-is-not-mutation",
+  "type": "knowledge",
+  "description": "SELECT, status, diff, list, and read operations inspect state; write, update, delete, migrate, deploy, and drop operations mutate state and require different gates.",
+  "body": "Read-only operations inspect current state. Mutating operations change code, data, infrastructure, or external services. The distinction is a policy boundary, not just a command syntax detail. SELECT, SHOW, DESCRIBE, EXPLAIN, git status, git diff, file read, and log read are query-like. INSERT, UPDATE, DELETE, ALTER, DROP, migration, deploy, restart, and destructive shell commands require the relevant database, production, or security gates. Do not let a query request drift into mutation. Use when a read-only query, count, list, status, diff, or inspection request must be answered from repository or tool evidence. Do not use when the user asks to edit, fix, deploy, migrate, delete, insert, update, or alter state. Actions: identify the exact scope, run read-only search or inspection tools, cite the source artifact, and preserve the command or file evidence used for the answer. Validation signals include matching counts against tool output, source references, scope labels, and no modified working-tree files. Risk boundary: stop or ask for confirmation if the task changes from query to mutation, if evidence is stale, or if the answer would expose secrets or excessive output.",
+  "domain": "query",
+  "scope_hint": "code.query:read-only-boundary",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.query",
+  "pack_id": "code.query"
+}

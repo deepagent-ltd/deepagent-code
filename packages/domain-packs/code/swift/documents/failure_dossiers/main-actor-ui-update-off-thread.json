@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:swift:main-actor-ui-update-off-thread",
+  "type": "failure_dossier",
+  "description": "Mutating UIKit/SwiftUI state from a background task without hopping to the main actor, causing crashes or undefined UI behavior.",
+  "body": "Failure mode: a network or background task updates UI state directly off the main thread; UIKit/SwiftUI require main-thread/MainActor updates, so this triggers assertions, glitches, or crashes. Detection signals: Main Thread Checker / purple runtime warnings 'UI API called on a background thread'; intermittent UI corruption; crashes after async work completes. Do not update UI state off the main actor. Safer fallback: annotate the UI-owning type or method @MainActor, or hop with await MainActor.run { ... }, ensure async completions resume on the main actor, and verify the Main Thread Checker stays silent.",
+  "domain": "swift",
+  "scope_hint": "code.swift:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.swift:human_authored",
+  "pack_id": "code.swift"
+}

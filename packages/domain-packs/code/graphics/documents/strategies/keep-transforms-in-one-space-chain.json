@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:gfx:keep-transforms-in-one-space-chain",
+  "type": "strategy",
+  "title": "Track every vector's coordinate space",
+  "description": "Be explicit about object, world, view, and clip space and apply the model-view-projection chain in the right order so geometry lands where intended.",
+  "body": "Use when positioning, lighting, or projecting geometry. Do not multiply a vector by a matrix from the wrong space, and avoid mixing row-major and column-major conventions between the math library and the shader. Actions: label each position/normal with its space, apply model (object->world), view (world->camera), then projection (camera->clip) in that order, and transform normals by the inverse-transpose of the model matrix. Validation signals include geometry appearing at the expected screen location and a reference-image match within tolerance. Risk boundary: a transposed or mis-ordered matrix can still render a plausible image while being geometrically wrong; verify against a known reference rather than eyeballing.",
+  "domain": "graphics",
+  "scope_hint": "code.graphics:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.graphics",
+  "pack_id": "code.graphics"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:ansible:scope-runs-with-tags-and-limit",
+  "type": "strategy",
+  "title": "Scope runs with tags and --limit",
+  "description": "Constrain which tasks and hosts a play touches using tags and inventory limits to shrink blast radius.",
+  "body": "Use when you need to apply only part of a playbook or target a subset of hosts. Do not run the whole play against the whole inventory for a small change — that maximizes blast radius. Actions: tag tasks by concern, run with --tags to apply just the relevant ones, and use --limit to scope to specific hosts, verifying the host list before running. Validation signals include only the intended tasks and hosts appearing in the run summary. Risk boundary: an over-broad --limit pattern can still hit production — confirm the resolved host list and gate prod inventory on human approval.",
+  "domain": "ansible",
+  "scope_hint": "platform.ansible:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.ansible",
+  "pack_id": "platform.ansible"
+}

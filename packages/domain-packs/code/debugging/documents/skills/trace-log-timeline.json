@@ -1,0 +1,11 @@
+{
+  "ref_id": "skill:debugging:trace-log-timeline",
+  "type": "skill",
+  "description": "Reconstruct a failure timeline from logs, traces, stack frames, request IDs, and state transitions.",
+  "body": "Inputs: log snippets, stack trace, trace ID, timestamps, request or job identifiers, and expected workflow. Procedure: normalize time order, group events by correlation ID, mark missing or duplicate transitions, and identify the first event where observed state diverges from expected state. Do not treat logs as complete truth; they are observations that can be sampled, delayed, or missing. Output: timeline with first divergence, supporting evidence refs, and hypotheses to confirm. Verification signals include correlated request IDs, monotonic order where available, project-owned stack frames, and a before/after trace after the fix. Use when Code Debugging work touches reproduction steps, stack traces, logs, state transitions, and controlled hypotheses. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: run the documented inspection and validation workflow; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include minimal repro, before/after trace, regression test, and command output. Risk boundary: escalate or stop when the task involves blind retries, wrapper fixes, broad rewrites, and unproven root cause, missing owner evidence, or live external state.",
+  "domain": "debugging",
+  "scope_hint": "code.debugging:skills",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.debugging:human_authored",
+  "pack_id": "code.debugging"
+}

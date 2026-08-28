@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:cloud:design-for-region-az-failover",
+  "type": "strategy",
+  "title": "Design for region and availability-zone failover",
+  "description": "Spread stateful and stateful-dependent resources across AZs (and regions where required) so a single zone or region loss degrades rather than downs the service.",
+  "body": "Use when provisioning compute, databases, or load balancers for a service with an availability target. Do not pin all instances to one AZ or assume a managed service is multi-AZ by default, and avoid a failover path that was never exercised. Actions: place instances across at least two AZs behind a balancer, enable multi-AZ/replica modes on stateful services, define how state replicates and how failover promotes, and inspect the actual placement. Validation signals include a zone-failure game-day test where traffic shifts and an architecture review confirming no single-AZ dependency. Risk boundary: an untested failover is not a failover; for a cross-region DR change, escalate to a human and rehearse before relying on it.",
+  "domain": "platform",
+  "scope_hint": "platform.cloud:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud",
+  "pack_id": "platform.cloud"
+}

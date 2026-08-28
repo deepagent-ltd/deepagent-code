@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:dq:add-completeness-checks",
+  "type": "methodology",
+  "title": "Add completeness and reconciliation checks",
+  "description": "Verify that expected rows arrived by reconciling counts against source and expected cardinality, catching partial loads.",
+  "body": "Steps: 1. Determine the expected volume per partition from source counts or historical bands. 2. Reconcile target row counts against source for each load. 3. Check cardinality of key dimensions (e.g. all expected accounts/regions present). 4. Alert when counts fall outside the band or a dimension is missing. 5. Quarantine and re-run the partition on failure. Rollback point: re-run the partition from landed data. Validation: target counts reconcile with source and all expected key values are present; a load that silently lands a fraction of rows passes naive checks but fails reconciliation.",
+  "domain": "data_quality",
+  "scope_hint": "code.data-quality:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-quality",
+  "pack_id": "code.data-quality"
+}

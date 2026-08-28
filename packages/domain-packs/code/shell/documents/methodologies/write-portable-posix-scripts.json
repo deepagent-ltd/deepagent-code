@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:shell:write-portable-posix-scripts",
+  "type": "methodology",
+  "title": "Write portable scripts and verify with shellcheck",
+  "description": "Decide bash-vs-POSIX-sh deliberately, avoid bashisms when targeting /bin/sh, and lint with shellcheck before shipping.",
+  "body": "Steps: 1. Choose the target shell and set the matching shebang (#!/usr/bin/env bash for bash features, #!/bin/sh for POSIX). 2. If targeting sh, avoid bashisms (arrays, [[ ]], local, process substitution) since /bin/sh may be dash. 3. Enable `set -euo pipefail` (bash) or `set -eu` (sh) and quote all expansions. 4. Run `shellcheck script.sh` and fix or justify each finding. 5. Test under the actual target shell, not just your interactive one. Rollback point: before swapping the shebang on a deployed script. Validation: shellcheck passes clean and the script runs identically under bash and the target sh. Risk boundary: `set -e` has surprising exceptions (it ignores failures in conditions and some subshells); record where you rely on it and test the failure paths rather than assuming -e catches everything.",
+  "domain": "shell",
+  "scope_hint": "code.shell:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.shell",
+  "pack_id": "code.shell"
+}

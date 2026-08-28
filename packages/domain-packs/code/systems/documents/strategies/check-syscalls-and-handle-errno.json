@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:sys:check-syscalls-and-handle-errno",
+  "type": "strategy",
+  "title": "Check every syscall return and handle errno",
+  "description": "Treat each syscall as fallible: inspect the return, branch on errno, and retry EINTR and short writes correctly.",
+  "body": "Use when calling read/write/open/connect or any syscall wrapper. Do not ignore the return value or assume a write wrote everything, because syscalls fail (EINTR, EAGAIN, ENOSPC) and write may transfer fewer bytes than requested. Actions: check the return, branch on errno for the specific condition, retry on EINTR, loop on partial read/write until complete or error, and surface ENOSPC/EACCES as real failures. Validation signals include tests that inject short writes and EINTR and confirm the code retries/recovers rather than silently truncating. Risk boundary: an unchecked syscall on a data path can silently corrupt or truncate; treat ignored errno on durability or network writes as a blocking defect.",
+  "domain": "systems",
+  "scope_hint": "code.systems:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.systems",
+  "pack_id": "code.systems"
+}

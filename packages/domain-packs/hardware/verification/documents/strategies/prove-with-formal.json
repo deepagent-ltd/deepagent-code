@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:hwverif:prove-with-formal",
+  "type": "strategy",
+  "title": "Prove key properties with formal verification",
+  "description": "Use formal property checking on control logic and protocol rules where exhaustive proof beats random sampling.",
+  "body": "Use when a property must hold for all inputs, such as a protocol rule or safety invariant. Do not rely on random simulation for properties that demand exhaustiveness, since simulation samples rather than proves. Actions: write the property as an assertion, run a formal engine to prove it, and inspect any counterexample. Validation signals include a proven property or a concrete counterexample trace and bounded proofs reaching a useful depth. Risk boundary: an inconclusive proof is not a pass, so escalate to constraints or abstraction rather than claiming a property holds when the engine could not prove it.",
+  "domain": "hw_verification",
+  "scope_hint": "hardware.verification:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.verification",
+  "pack_id": "hardware.verification"
+}

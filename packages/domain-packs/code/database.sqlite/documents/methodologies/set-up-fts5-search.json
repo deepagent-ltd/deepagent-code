@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:sqlite:set-up-fts5-search",
+  "type": "methodology",
+  "title": "Set up FTS5 search end to end",
+  "description": "Create the FTS5 table, keep it synced with triggers, and query with MATCH and bm25 ranking.",
+  "body": "Steps: 1. Create an FTS5 virtual table (or external-content table referencing the base) over the columns to search and choose a tokenizer. 2. Add AFTER INSERT/UPDATE/DELETE triggers (or use the contentless/external-content sync commands) so the index tracks the base table. 3. Backfill existing rows into the index. 4. Query with WHERE fts MATCH ? ORDER BY bm25(fts) for ranked results. 5. Periodically run an 'optimize' insert to merge the index. Rollback point: drop the FTS table and triggers; the base table is unchanged. Validation: insert/update/delete on the base reflects in search results, and MATCH queries are fast and ranked.",
+  "domain": "sqlite",
+  "scope_hint": "code.database.sqlite:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.sqlite",
+  "pack_id": "code.database.sqlite"
+}

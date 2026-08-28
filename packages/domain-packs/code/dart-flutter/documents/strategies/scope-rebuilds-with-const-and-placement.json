@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:flutter:scope-rebuilds-with-const-and-placement",
+  "type": "strategy",
+  "title": "Scope rebuilds with const widgets and state placement",
+  "description": "Place state as low as possible and mark static subtrees const so a change rebuilds only what depends on it.",
+  "body": "Use when a small change causes a large or janky rebuild. Do not hoist all state to a top-level widget that rebuilds the entire tree, and do not omit const on widgets that never change. Actions: keep state in the smallest widget that needs it, extract const subtrees so the framework skips rebuilding them, and use targeted listeners (Selector/Consumer, ValueListenableBuilder) so only dependent widgets rebuild. Validation signals include the Flutter DevTools rebuild counter showing only the intended widgets rebuild on a change. Risk boundary: over-broad rebuilds cause visible jank on lists and animations; misplaced state turns a local update into a whole-screen rebuild, so verify with the rebuild profiler, not by eye.",
+  "domain": "dart",
+  "scope_hint": "code.dart-flutter:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.dart-flutter",
+  "pack_id": "code.dart-flutter"
+}

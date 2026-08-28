@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:security:supply-chain-pin-review",
+  "type": "strategy",
+  "title": "Review supply-chain deltas",
+  "description": "Dependency and lockfile changes are executable risk and require provenance, maintainer, install-script, and transitive-delta review.",
+  "body": "Use when package manifests, lockfiles, vendored code, registries, plugin sources, build images, or generated SDKs change. Do not duplicate the deeper risk.supply-chain pack; use this as the security-level gate that activates stricter review. Actions: inspect added packages, version jumps, integrity fields, install scripts, binary downloads, and license/security advisories before accepting. Validation signals include lockfile diff review, package manager audit where available, and tests running without network surprises. Risk boundary: new install-time execution, unpinned sources, abandoned packages, or registry changes require human review. Use when Security Risk Controls work touches trust boundaries, authorization decisions, dangerous sinks, secrets, and dependency execution. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: choose the smallest direction that preserves the domain contract; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include negative security tests, server-side checks, sink payload tests, and secret scans. Risk boundary: escalate or stop when the task involves client-only controls, injection, credential leakage, permissive fallback, and unsafe dependency changes, missing owner evidence, or live external state.",
+  "domain": "supply_chain",
+  "scope_hint": "risk.security:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.security",
+  "pack_id": "risk.security"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:edge:handle-cache-invalidation",
+  "type": "methodology",
+  "title": "Handle cache invalidation and purge",
+  "description": "Choose surrogate-key purge over broad purge, measure propagation, and protect the origin during mass invalidation.",
+  "body": "Steps: 1. Tag responses with surrogate keys grouping related objects. 2. On change, purge by surrogate key rather than wildcarding the whole zone. 3. Prefer soft-purge (serve stale, revalidate) for hot keys. 4. Measure how long the purge takes to reach all PoPs. 5. Confirm the origin can absorb the resulting miss wave (shield enabled). Rollback point: avoid full-zone purge as a default. Validation: only intended objects are invalidated and origin load stays bounded during purge.",
+  "domain": "cdn",
+  "scope_hint": "platform.cdn-edge:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cdn-edge",
+  "pack_id": "platform.cdn-edge"
+}

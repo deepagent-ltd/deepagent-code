@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:hwpwr:isolation-and-level-shifter-roles",
+  "type": "knowledge",
+  "title": "Roles of isolation cells and level shifters",
+  "description": "Isolation cells clamp signals leaving a powered-down domain, while level shifters translate between voltage domains.",
+  "body": "Use when reasoning about which special cell a domain crossing needs. Do not confuse the two, since isolation handles power-down and level shifting handles voltage difference. Actions: identify whether a crossing changes power state, voltage, or both, and place the matching cell for each condition. Validation signals include isolation on every power-state crossing and level shifters on every voltage crossing. Risk boundary: using the wrong cell leaves the crossing unprotected, so flag any crossing whose cell does not match its power and voltage condition.",
+  "domain": "power_design",
+  "scope_hint": "hardware.power:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.power",
+  "pack_id": "hardware.power"
+}

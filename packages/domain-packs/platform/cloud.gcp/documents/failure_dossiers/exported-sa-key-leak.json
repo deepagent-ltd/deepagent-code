@@ -1,0 +1,11 @@
+{
+  "ref_id": "fail:gcp:exported-sa-key-leak",
+  "type": "failure_dossier",
+  "description": "Authenticating a workload with a downloaded service-account JSON key that then leaks.",
+  "body": "Failure mode: a team exports a service-account key, commits or bakes it into an image, and the long-lived credential leaks or never rotates. Detection signals: serviceAccountKeys listing user-managed keys, a JSON key in source control or a container layer, and audit logs showing the key used from unexpected locations. Do not download service-account keys for workloads that run on GCP. Safer fallback: use Workload Identity (GKE) or the runtime service account (Cloud Run/Functions) so credentials are short-lived and never exported, and delete any existing user-managed keys.",
+  "domain": "gcp",
+  "scope_hint": "platform.cloud.gcp:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.gcp:human_authored",
+  "pack_id": "platform.cloud.gcp"
+}

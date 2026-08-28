@@ -1,0 +1,104 @@
+{
+  lib,
+  stdenvNoCC,
+  callPackage,
+  bun,
+  nodejs,
+  sysctl,
+  makeBinaryWrapper,
+  ripgrep,
+  installShellFiles,
+  versionCheckHook,
+  writableTmpDirAsHomeHook,
+  node_modules ? callPackage ./node-modules.nix { },
+}:
+stdenvNoCC.mkDerivation (finalAttrs: {
+  pname = "deepagent-code";
+  inherit (node_modules) version src;
+  inherit node_modules;
+
+  patchPhase = ''
+    BUN_VERSION=$(bun --version)
+    sed -i "s/const expectedBunVersionRange.*/const expectedBunVersionRange = \"^$BUN_VERSION\";/" packages/script/src/index.ts
+  '';
+
+  nativeBuildInputs = [
+    bun
+    nodejs # for patchShebangs node_modules
+    installShellFiles
+    makeBinaryWrapper
+    writableTmpDirAsHomeHook
+  ];
+
+  configurePhase = ''
+    runHook preConfigure
+
+    cp -R ${finalAttrs.node_modules}/. .
+    patchShebangs node_modules
+    patchShebangs packages/*/node_modules
+
+    runHook postConfigure
+  '';
+
+  env.DEEPAGENT_CODE_DISABLE_MODELS_FETCH = true;
+  env.DEEPAGENT_CODE_VERSION = finalAttrs.version;
+  env.DEEPAGENT_CODE_CHANNEL = "prod";
+
+  buildPhase = ''
+    runHook preBuild
+
+    cd ./packages/deepagent-code
+    bun --bun ./script/build.ts --single --skip-install
+    bun --bun ./script/schema.ts schema.json
+
+    runHook postBuild
+  '';
+
+  installPhase = ''
+    runHook preInstall
+
+    install -Dm755 dist/deepagent-code-*/bin/deepagent-code $out/bin/deepagent-code
+    install -Dm644 schema.json $out/share/deepagent-code/schema.json
+
+    wrapProgram $out/bin/deepagent-code \
+      --prefix PATH : ${
+        lib.makeBinPath (
+          [
+            ripgrep
+          ]
+          # bun runs sysctl to detect if running on rosetta2
+          ++ lib.optional stdenvNoCC.hostPlatform.isDarwin sysctl
+        )
+      }
+
+    runHook postInstall
+  '';
+
+  postInstall = lib.optionalString (stdenvNoCC.buildPlatform.canExecute stdenvNoCC.hostPlatform) ''
+    # trick yargs into also generating zsh completions
+    installShellCompletion --cmd deepagent-code \
+      --bash <($out/bin/deepagent-code completion) \
+      --zsh <(SHELL=/bin/zsh $out/bin/deepagent-code completion)
+  '';
+
+  nativeInstallCheckInputs = [
+    versionCheckHook
+    writableTmpDirAsHomeHook
+  ];
+  doInstallCheck = true;
+  versionCheckKeepEnvironment = [ "HOME" "DEEPAGENT_CODE_DISABLE_MODELS_FETCH" ];
+  versionCheckProgramArg = "--version";
+
+  passthru = {
+    jsonschema = "${placeholder "out"}/share/deepagent-code/schema.json";
+    env = finalAttrs.env;
+  };
+
+  meta = {
+    description = "The open source coding agent";
+    homepage = "https://deepagent-code.ai";
+    license = lib.licenses.mit;
+    mainProgram = "deepagent-code";
+    inherit (node_modules.meta) platforms;
+  };
+})

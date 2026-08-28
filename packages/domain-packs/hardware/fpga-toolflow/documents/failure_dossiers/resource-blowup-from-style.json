@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:fpgatf:resource-blowup-from-style",
+  "type": "failure_dossier",
+  "description": "Implementation overflows the device or misses timing because RTL coding style made synthesis infer the wrong primitives.",
+  "body": "Failure mode: a coding pattern leads synthesis to map a memory into distributed LUTs instead of block RAM, or to build wide combinational logic, exploding utilization and routing. Detection signals: utilization far above estimate, the synthesis report showing unexpected primitive counts, and congestion in place-and-route. Do not push through place-and-route while utilization is anomalous. Safer fallback: adjust the RTL style or synthesis attributes to steer the intended mapping, re-synthesize, and confirm utilization returns to budget.",
+  "domain": "fpga_toolflow",
+  "scope_hint": "hardware.fpga-toolflow:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.fpga-toolflow:human_authored",
+  "pack_id": "hardware.fpga-toolflow"
+}

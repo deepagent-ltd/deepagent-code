@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:tf:detect-and-reconcile-drift",
+  "type": "strategy",
+  "title": "Detect and reconcile drift deliberately",
+  "description": "Periodically refresh and plan to surface out-of-band changes, then decide to codify or revert them rather than blindly overwriting.",
+  "body": "Use when infrastructure may have been changed outside Terraform (console edits, other tools). Do not let drift accumulate silently, and do not auto-apply a plan that reverts unknown manual changes without understanding them. Actions: run terraform plan (which refreshes) to see drift, inspect each unexpected diff, and decide per item to update HCL to match reality or apply to restore the codified state. Validation signals include a clean plan (no changes) after reconciliation. Risk boundary: blindly applying over drift can delete a hotfix someone made in an incident; review drift origin before reverting and escalate destructive reverts.",
+  "domain": "terraform",
+  "scope_hint": "platform.terraform:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.terraform",
+  "pack_id": "platform.terraform"
+}

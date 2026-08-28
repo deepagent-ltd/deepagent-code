@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:ng:tear-down-every-subscription",
+  "type": "strategy",
+  "title": "Tear down every long-lived subscription",
+  "description": "A manual subscribe outlives the component unless unsubscribed, so prefer the async pipe or takeUntilDestroyed.",
+  "body": "Use when a component or service subscribes to an observable that does not complete on its own (router events, stores, websockets, intervals). Do not call .subscribe() in ngOnInit and forget it. Actions: prefer binding the stream in the template with the async pipe so Angular manages teardown; for imperative cases use takeUntilDestroyed() or a destroy Subject completed in ngOnDestroy. Validation signals include a test that destroying the component stops further emissions and a lint/check that no bare subscribe lacks teardown. Risk boundary: leaked subscriptions accumulate across route navigations, causing memory growth and duplicate side effects; treat a long-lived bare subscribe as a defect.",
+  "domain": "angular",
+  "scope_hint": "code.frontend.angular:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.angular",
+  "pack_id": "code.frontend.angular"
+}

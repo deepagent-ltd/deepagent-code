@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:ansible:idempotency-model",
+  "type": "knowledge",
+  "title": "Idempotency model",
+  "description": "Ansible modules declare desired state and report changed only when they had to act to reach it.",
+  "body": "Use when reasoning about why repeated runs should be safe. A well-behaved module compares the host's current state to the declared target and only acts (and reports changed) when they differ, so re-running converges without side effects. Raw shell/command tasks break this because they run unconditionally and always report changed. Do not measure success by 'it ran' but by 'it stopped changing'. Actions: prefer modules and guard raw commands. Validation signals include a second run reporting zero changed. Risk boundary: a perpetually-changed task hides real drift and triggers handlers needlessly.",
+  "domain": "ansible",
+  "scope_hint": "platform.ansible:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.ansible",
+  "pack_id": "platform.ansible"
+}

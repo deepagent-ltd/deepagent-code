@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:orch:timer-gated-dependency",
+  "type": "failure_dossier",
+  "description": "A downstream task runs on a timer and processes incomplete data when the upstream is late.",
+  "body": "Failure mode: a consumer task is scheduled a fixed offset after its producer instead of depending on the producer's completion, so when the upstream runs late the consumer fires on missing or partial data and produces wrong results silently. Detection signals: downstream output that is empty or undercounted on days the upstream finished late, and no dependency edge or sensor linking the two. Do not just push the consumer's start time later. Safer fallback: express the dependency explicitly in the DAG or add a sensor that waits for the data to land with a timeout, so the consumer runs only when its input exists and fails loudly if it never arrives.",
+  "domain": "orchestration",
+  "scope_hint": "code.data-pipeline-orchestration:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-pipeline-orchestration:human_authored",
+  "pack_id": "code.data-pipeline-orchestration"
+}

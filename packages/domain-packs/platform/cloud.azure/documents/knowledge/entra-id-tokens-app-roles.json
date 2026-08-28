@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:azure:entra-id-tokens-app-roles",
+  "type": "knowledge",
+  "title": "Entra ID app registrations, scopes, and app roles",
+  "description": "Covers OAuth scopes vs app roles, delegated vs application permissions, and why a valid token can still be denied without the right role/scope claim.",
+  "body": "Use when securing an API with Entra ID (Azure AD). Do not assume a valid token implies authorization. Actions: distinguish delegated permissions (acting as a user, scp claim) from application permissions (daemon, roles claim); register the API's exposed scopes and app roles; the client must be granted and consent to them so the token carries the scp/roles claim; the API must validate audience, issuer, and the required claim. Validation signals include the token containing the expected scp/roles claim and the API returning 403 when it is absent. Risk boundary: granting admin-consented application permissions is a privilege change requiring review.",
+  "domain": "azure",
+  "scope_hint": "platform.cloud.azure:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.azure",
+  "pack_id": "platform.cloud.azure"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:eval:review-eval-for-leakage-and-significance",
+  "type": "skill",
+  "title": "Review an eval for leakage and significance",
+  "description": "Read an evaluation setup and report whether the golden set is leak-free, the metric fits the goal, and wins are significant.",
+  "body": "Use when asked whether an eval result can be trusted. Actions: inspect how the golden set was sourced and whether it overlaps training/prompt material; check the metric against the stated goal for gameability; verify reported differences come with variance and a significance check; confirm the dataset version is stamped on the score. Do not accept a headline score without checking its dataset and statistics. Report and record the exact weaknesses, classifying each as leakage, gameable-metric, no-significance, or unversioned-data. This skill is read-only and must not modify the dataset without runtime permission. Validation signals include a confirmed cross-boundary overlap or a missing confidence interval. Risk boundary: a leaked or non-significant result presented as a win is a blocking finding; require re-evaluation.",
+  "domain": "eval",
+  "scope_hint": "code.eval:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.eval",
+  "pack_id": "code.eval"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:bazel:gate-access-with-visibility",
+  "type": "strategy",
+  "title": "Gate target access with visibility",
+  "description": "Set visibility so a target is reachable only by the packages meant to use it, enforcing module boundaries at build time.",
+  "body": "Use when exposing a library across packages or tightening an internal API. Do not default everything to //visibility:public. Actions: set visibility to the specific packages or a package_group that should depend on the target; keep internal helpers private; review changes that widen visibility. Validation signals include a visibility error when an unauthorized package tries to depend on a private target. Risk boundary: public-by-default erodes module boundaries and invites unwanted coupling, so grant the narrowest visibility that works.",
+  "domain": "bazel",
+  "scope_hint": "code.build.bazel:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.build.bazel",
+  "pack_id": "code.build.bazel"
+}

@@ -1,0 +1,16 @@
+research
+dist
+dist-*
+gen
+app.log
+script/build-*.ts
+# build-node.ts is a committed source entrypoint for the desktop sidecar build, not a
+# generated artifact — keep it tracked despite the build-*.ts rule above.
+!script/build-node.ts
+temporary-*.md
+.artifacts
+
+# DeepAgent task-run scratch output (CUDA/GEMM benchmarks, stray probe files) must not be committed
+*.cu
+/git
+/config.json

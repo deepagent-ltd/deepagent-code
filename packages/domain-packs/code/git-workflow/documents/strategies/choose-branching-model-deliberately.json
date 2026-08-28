@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:git:choose-branching-model-deliberately",
+  "type": "strategy",
+  "title": "Choose a branching model to fit release cadence",
+  "description": "Pick trunk-based or a release-branch model from how often the team ships, not by habit, and keep long-lived branches few.",
+  "body": "Use when starting a repo or when branch sprawl and stale long-lived branches are slowing integration. Do not run a heavyweight gitflow with many long-lived branches on a team that ships continuously. Actions: inspect merge frequency and release cadence; pick trunk-based with short feature branches for frequent shipping, or a release-branch model only when supporting parallel released versions; document where hotfixes land. Validation signals include short-lived branches that merge within days and a main branch that stays releasable. Risk boundary: changing the model affects everyone, so agree it with the team before rewriting workflow docs.",
+  "domain": "git_workflow",
+  "scope_hint": "code.git-workflow:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.git-workflow",
+  "pack_id": "code.git-workflow"
+}

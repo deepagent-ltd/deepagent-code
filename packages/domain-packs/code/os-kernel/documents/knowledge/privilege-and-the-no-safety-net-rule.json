@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:kernel:privilege-and-the-no-safety-net-rule",
+  "type": "knowledge",
+  "title": "Kernel privilege and the no-safety-net rule",
+  "description": "Kernel code runs with full hardware privilege and no process isolation, so a fault panics the machine and any unchecked input is a system-wide exploit.",
+  "body": "Use when reasoning about why kernel bugs are categorically worse than user-space bugs. In kernel mode there is no segfault-and-continue: a bad dereference panics or corrupts the whole system, and code runs above all process protections, so an unvalidated user input can escalate privilege. Do not apply user-space habits (catch and recover, trust local callers) in the kernel. Actions: validate at every boundary, fail closed, and test destructively in a VM. Validation signals include sanitizer-clean runs and fault-injection survival. Risk boundary: a kernel defect can compromise or crash the entire machine; treat correctness and input validation here as security-critical and escalate uncertain cases.",
+  "domain": "kernel",
+  "scope_hint": "code.os-kernel:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.os-kernel",
+  "pack_id": "code.os-kernel"
+}

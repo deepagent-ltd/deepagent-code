@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:electron:integrate-a-native-module",
+  "type": "methodology",
+  "title": "Integrate a native module safely",
+  "description": "Add a native addon by matching it to Electron's ABI, rebuilding for the target, and isolating its failure modes.",
+  "body": "Steps: 1. Prefer an N-API/prebuilt module so it is ABI-stable across Node/Electron versions. 2. If it compiles against the Node ABI, rebuild it for the app's exact Electron version (electron-rebuild) per target platform/arch. 3. Verify the build for each shipped platform (macOS arm64/x64, Windows, Linux). 4. Load the module in the main or a utility process, not an untrusted renderer, and guard against load failure. 5. Add a smoke test that loads and calls it on each platform in CI. Rollback point: before upgrading Electron (may break the native ABI). Validation: the module loads and runs on every target platform without ABI errors; a module built against the system Node but loaded in Electron is the mismatch this prevents.",
+  "domain": "electron",
+  "scope_hint": "code.desktop.electron:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.desktop.electron",
+  "pack_id": "code.desktop.electron"
+}

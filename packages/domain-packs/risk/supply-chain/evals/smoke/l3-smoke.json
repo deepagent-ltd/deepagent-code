@@ -1,0 +1,74 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "risk.supply-chain",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "code"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [
+      "security",
+      "supply_chain",
+      "dependency"
+    ],
+    "repo_signals": [
+      "L3 smoke for risk.supply-chain: security, supply_chain, dependency"
+    ],
+    "round_signals": [
+      "l3_validation_smoke"
+    ],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "round_signals": [],
+    "user_overrides": [],
+    "repo_signals": [
+      "fix CSS responsive text overlap on mobile viewport"
+    ]
+  },
+  "retrieval_query": "lockfile integrity dependency provenance SBOM postinstall script typosquatting version pinning registry",
+  "expected_pack_id": "risk.supply-chain",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "Supply Chain Risk L3 validation smoke",
+    "signals": [
+      "package-local checks",
+      "focused tests",
+      "build output",
+      "smoke runs",
+      "command logs",
+      "and reviewer-readable evidence"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "Supply Chain Risk diagnosis smoke",
+    "signals": [
+      "compare expected and observed behavior",
+      "inspect the owning files",
+      "isolate the failing boundary",
+      "and record residual risk"
+    ]
+  },
+  "source_refs": [
+    "source:owasp-wstg:paraphrased",
+    "source:github-security-advisories:paraphrased"
+  ]
+}

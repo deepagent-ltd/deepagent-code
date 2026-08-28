@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:asm:read-disassembly-to-verify",
+  "type": "strategy",
+  "title": "Read the disassembly to verify behavior",
+  "description": "Confirm what the machine actually does by reading the disassembly and stepping it, rather than trusting the source or mnemonics alone.",
+  "body": "Use when validating low-level behavior or debugging an assembly/codegen issue. Do not assume the source assembled to what you intended or that a mnemonic means what you think on this operand width. Actions: disassemble the function (objdump / debugger / Godbolt), confirm register usage, operand sizes, and addressing modes, and single-step in a debugger watching registers, flags, and the stack at each instruction. Validation signals include the stepped register/stack state matching expectation and the result matching a reference. Risk boundary: assembly bugs manifest as corrupted state far from the instruction at fault; reading and stepping the disassembly is how you localize them — guessing from source is unreliable.",
+  "domain": "assembly",
+  "scope_hint": "code.assembly:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.assembly",
+  "pack_id": "code.assembly"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:cpuarch:inspect-emitted-assembly",
+  "type": "skill",
+  "title": "Inspect the emitted assembly for a hot function",
+  "description": "Disassemble a hot function and report whether it vectorized, the instruction mix, and obvious stalls or scalar fallbacks.",
+  "body": "Use when verifying that an optimization reached the machine code. Actions: build with symbols, disassemble the target function (objdump / compiler -S / Godbolt), and report whether the hot loop uses packed SIMD vs scalar ops, the presence of spills, and any long-latency instructions. Do not claim a loop was vectorized without seeing packed opcodes. This skill exposes capability only and must not run vendor tools without runtime permission. Validation signals include identified vector vs scalar instructions in the hot block. Risk boundary: assembly differs by compiler/flags/target; report the exact toolchain and flags used so the finding is reproducible, and flag if they differ from production.",
+  "domain": "cpu_arch",
+  "scope_hint": "hardware.cpu-arch:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.cpu-arch",
+  "pack_id": "hardware.cpu-arch"
+}

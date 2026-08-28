@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:sls:state-stored-in-module-global",
+  "type": "failure_dossier",
+  "description": "Storing per-request data in a module-scope global and expecting it to persist, leaking data across requests or losing it on cold start.",
+  "body": "Failure mode: a handler caches request-specific data (user, cart, auth) in a module-level variable, assuming the instance persists; warm reuse then serves one user's data to another, and cold starts lose it entirely. Detection signals: intermittent cross-user data bleed; behavior differs between first and subsequent requests; state vanishes unpredictably. Do not keep per-request state in shared module scope. Safer fallback: store durable or per-request state externally (database/cache), reserve module globals for read-only config and connection reuse, and test with each request on a fresh instance.",
+  "domain": "serverless",
+  "scope_hint": "code.backend.serverless:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.serverless:human_authored",
+  "pack_id": "code.backend.serverless"
+}

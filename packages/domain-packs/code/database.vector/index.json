@@ -1,0 +1,467 @@
+[
+  {
+    "ref_id": "strategy:vdb:choose-hnsw-or-ivfflat-by-workload",
+    "type": "strategy",
+    "title": "Choose HNSW or IVFFlat by workload shape",
+    "summary": "Pick HNSW for high recall at query time and IVFFlat for fast builds and lower memory, matching the workload.",
+    "domains": [
+      "vector_db",
+      "pgvector_ext",
+      "milvus",
+      "qdrant",
+      "ann_index"
+    ],
+    "triggers": [
+      "hnsw",
+      "ivfflat",
+      "index type",
+      "recall",
+      "build time"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.vector"
+  },
+  {
+    "ref_id": "strategy:vdb:match-the-distance-metric-to-the-model",
+    "type": "strategy",
+    "title": "Match the distance metric to the embedding model",
+    "summary": "Use the same metric the embedding model was trained for, since cosine, L2, and dot product rank differently.",
+    "domains": [
+      "vector_db",
+      "pgvector_ext",
+      "milvus",
+      "qdrant",
+      "ann_index"
+    ],
+    "triggers": [
+      "distance metric",
+      "cosine",
+      "l2",
+      "dot product",
+      "operator class",
+      "normalize"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.vector"
+  },
+  {
+    "ref_id": "strategy:vdb:tune-query-params-for-recall-latency-tradeoff",
+    "type": "strategy",
+    "title": "Tune query parameters for the recall-latency tradeoff",
+    "summary": "Raise ef_search (HNSW) or nprobe (IVFFlat) until recall meets target, then stop, since both cost latency.",
+    "domains": [
+      "vector_db",
+      "pgvector_ext",
+      "milvus",
+      "qdrant",
+      "ann_index"
+    ],
+    "triggers": [
+      "ef_search",
+      "nprobe",
+      "recall tuning",
+      "latency tradeoff",
+      "query parameter"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.vector"
+  },
+  {
+    "ref_id": "strategy:vdb:build-ivfflat-after-loading-data",
+    "type": "strategy",
+    "title": "Build IVFFlat indexes after bulk loading data",
+    "summary": "IVFFlat partitions vectors into lists from the data present at build time, so it must be built on a populated table.",
+    "domains": [
+      "vector_db",
+      "pgvector_ext",
+      "milvus",
+      "qdrant",
+      "ann_index"
+    ],
+    "triggers": [
+      "ivfflat build",
+      "lists",
+      "bulk load",
+      "training data",
+      "rebuild index"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.vector"
+  },
+  {
+    "ref_id": "strategy:vdb:filter-with-an-index-aware-hybrid-query",
+    "type": "strategy",
+    "title": "Combine metadata filters with vector search safely",
+    "summary": "Use the engine's native pre-filtering so a metadata predicate narrows candidates before ANN, not after.",
+    "domains": [
+      "vector_db",
+      "pgvector_ext",
+      "milvus",
+      "qdrant",
+      "ann_index"
+    ],
+    "triggers": [
+      "hybrid query",
+      "metadata filter",
+      "pre-filtering",
+      "payload filter",
+      "post-filter"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.vector"
+  },
+  {
+    "ref_id": "strategy:vdb:quantize-vectors-to-fit-memory",
+    "type": "strategy",
+    "title": "Quantize vectors to fit the memory budget",
+    "summary": "Apply scalar or product quantization to shrink the index, accepting a measured recall cost for large datasets.",
+    "domains": [
+      "vector_db",
+      "pgvector_ext",
+      "milvus",
+      "qdrant",
+      "ann_index"
+    ],
+    "triggers": [
+      "quantization",
+      "scalar quantization",
+      "product quantization",
+      "memory budget",
+      "rescoring"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.vector"
+  },
+  {
+    "ref_id": "methodology:vdb:benchmark-recall-against-ground-truth",
+    "type": "methodology",
+    "title": "Benchmark recall against brute-force ground truth",
+    "summary": "Establish exact nearest neighbours on a sample, then measure how many the ANN index recovers at each setting.",
+    "domains": [
+      "vector_db",
+      "pgvector_ext",
+      "milvus",
+      "qdrant",
+      "ann_index"
+    ],
+    "triggers": [
+      "recall benchmark",
+      "ground truth",
+      "recall at k",
+      "parameter sweep",
+      "held-out queries"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.vector"
+  },
+  {
+    "ref_id": "methodology:vdb:plan-capacity-for-a-vector-index",
+    "type": "methodology",
+    "title": "Plan capacity for a vector index",
+    "summary": "Estimate index memory from vector count, dimensionality, and index overhead before provisioning.",
+    "domains": [
+      "vector_db",
+      "pgvector_ext",
+      "milvus",
+      "qdrant",
+      "ann_index"
+    ],
+    "triggers": [
+      "capacity planning",
+      "index memory",
+      "dimensionality",
+      "hnsw overhead",
+      "sizing"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.vector"
+  },
+  {
+    "ref_id": "methodology:vdb:diagnose-poor-recall",
+    "type": "methodology",
+    "title": "Diagnose poor search recall",
+    "summary": "Work through metric mismatch, query parameters, index training, and filtering to find why neighbours are wrong.",
+    "domains": [
+      "vector_db",
+      "pgvector_ext",
+      "milvus",
+      "qdrant",
+      "ann_index"
+    ],
+    "triggers": [
+      "recall diagnosis",
+      "wrong neighbours",
+      "metric mismatch",
+      "low recall",
+      "filter aware"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.vector"
+  },
+  {
+    "ref_id": "methodology:vdb:reindex-on-embedding-model-change",
+    "type": "methodology",
+    "title": "Reindex when the embedding model changes",
+    "summary": "Re-embed and rebuild the index whenever the model or its version changes, since vectors are model-specific.",
+    "domains": [
+      "vector_db",
+      "pgvector_ext",
+      "milvus",
+      "qdrant",
+      "ann_index"
+    ],
+    "triggers": [
+      "reindex",
+      "embedding model change",
+      "re-embed",
+      "model version",
+      "cutover"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.vector"
+  },
+  {
+    "ref_id": "knowledge:vdb:hnsw-graph-parameters",
+    "type": "knowledge",
+    "title": "What HNSW m and ef_construction control",
+    "summary": "The m (connectivity) and ef_construction parameters set graph quality at build time and trade memory and build speed for recall.",
+    "domains": [
+      "vector_db",
+      "pgvector_ext",
+      "milvus",
+      "qdrant",
+      "ann_index"
+    ],
+    "triggers": [
+      "hnsw m",
+      "ef_construction",
+      "graph connectivity",
+      "build parameter"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.vector"
+  },
+  {
+    "ref_id": "knowledge:vdb:curse-of-dimensionality",
+    "type": "knowledge",
+    "title": "High dimensionality erodes distance contrast",
+    "summary": "As dimensions grow, distances between points concentrate, making nearest-neighbour search less discriminative and indexes less effective.",
+    "domains": [
+      "vector_db",
+      "pgvector_ext",
+      "milvus",
+      "qdrant",
+      "ann_index"
+    ],
+    "triggers": [
+      "dimensionality",
+      "curse of dimensionality",
+      "distance contrast",
+      "high dimensional"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.vector"
+  },
+  {
+    "ref_id": "knowledge:vdb:exact-vs-approximate-search",
+    "type": "knowledge",
+    "title": "When exact search beats an ANN index",
+    "summary": "Below a dataset size threshold, brute-force exact search is faster and simpler than maintaining an ANN index.",
+    "domains": [
+      "vector_db",
+      "pgvector_ext",
+      "milvus",
+      "qdrant",
+      "ann_index"
+    ],
+    "triggers": [
+      "exact search",
+      "brute force",
+      "ann threshold",
+      "small dataset",
+      "perfect recall"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.vector"
+  },
+  {
+    "ref_id": "knowledge:vdb:ivfflat-lists-and-probes",
+    "type": "knowledge",
+    "title": "How IVFFlat lists and probes govern recall",
+    "summary": "IVFFlat partitions vectors into lists at build time; nprobe sets how many lists a query searches, trading recall for speed.",
+    "domains": [
+      "vector_db",
+      "pgvector_ext",
+      "milvus",
+      "qdrant",
+      "ann_index"
+    ],
+    "triggers": [
+      "ivfflat lists",
+      "nprobe",
+      "voronoi",
+      "list count",
+      "probes recall"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.vector"
+  },
+  {
+    "ref_id": "skill:vdb:write-a-pgvector-knn-query",
+    "type": "skill",
+    "title": "Write an indexed pgvector KNN query",
+    "summary": "Use the matching distance operator and set the per-query search parameter so the ANN index is actually used.",
+    "domains": [
+      "vector_db",
+      "pgvector_ext",
+      "milvus",
+      "qdrant",
+      "ann_index"
+    ],
+    "triggers": [
+      "pgvector query",
+      "knn",
+      "distance operator",
+      "ef_search",
+      "index scan"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.vector"
+  },
+  {
+    "ref_id": "skill:vdb:configure-a-qdrant-collection",
+    "type": "skill",
+    "title": "Configure a Qdrant collection with payload filtering",
+    "summary": "Set the vector size and metric and create payload indexes so filtered vector queries stay index-aware.",
+    "domains": [
+      "vector_db",
+      "pgvector_ext",
+      "milvus",
+      "qdrant",
+      "ann_index"
+    ],
+    "triggers": [
+      "qdrant",
+      "payload index",
+      "collection config",
+      "vector size",
+      "filtered search"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.database.vector"
+  }
+]

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:mongo:index-every-query-predicate-with-esr",
+  "type": "strategy",
+  "title": "Build compound indexes with the ESR rule",
+  "description": "Order compound index keys Equality, then Sort, then Range so one index serves filter and sort together.",
+  "body": "Use when a query filters on some fields and sorts on another. Do not create one single-field index per field and hope the planner combines them; MongoDB rarely intersects indexes efficiently. Actions: build a compound index ordered Equality fields first, then the Sort field, then Range fields (the ESR rule), so the index satisfies the match and returns rows already sorted. Verify with explain that the winning plan is an IXSCAN with no in-memory SORT stage. Validation signals include explain showing the sort served by the index and totalKeysExamined close to nReturned. Risk boundary: every extra index slows writes and consumes RAM, so drop indexes that $indexStats shows are never used rather than adding more.",
+  "domain": "mongodb",
+  "scope_hint": "code.database.mongodb:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.mongodb",
+  "pack_id": "code.database.mongodb"
+}

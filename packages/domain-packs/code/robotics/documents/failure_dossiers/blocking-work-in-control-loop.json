@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:robot:blocking-work-in-control-loop",
+  "type": "failure_dossier",
+  "description": "Doing allocation, logging, or I/O inside the real-time control loop, causing jitter and missed deadlines that destabilize motion.",
+  "body": "Failure mode: the periodic control callback performs heavy or blocking work (memory allocation, disk/network logging, a lock shared with a slow thread), so its execution time spikes and the loop misses its period, breaking the timing the controller was tuned for. Detection signals: a jitter histogram shows occasional large spikes; missed cycles correlate with logging or GC; actuator motion oscillates under load. Do not run nondeterministic work in the real-time path. Safer fallback: preallocate buffers, move logging/planning/I/O to separate threads communicating via bounded or lock-free queues, run the loop at real-time priority, and confirm worst-case execution time fits the period under load before hardware use.",
+  "domain": "robotics",
+  "scope_hint": "code.robotics:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.robotics:human_authored",
+  "pack_id": "code.robotics"
+}

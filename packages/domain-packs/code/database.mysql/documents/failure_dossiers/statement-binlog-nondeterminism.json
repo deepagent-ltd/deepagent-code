@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:mysql:statement-binlog-nondeterminism",
+  "type": "failure_dossier",
+  "description": "STATEMENT-format binary logging replicates nondeterministic SQL and drifts the replica.",
+  "body": "Failure mode: with binlog_format=STATEMENT, statements using NOW(), UUID(), RAND(), or LIMIT without ORDER BY replay differently on the replica, so primary and replica diverge silently. Detection signals: pt-table-checksum reports differing chunks, application reads return stale or different rows from the replica, and the error log shows unsafe-statement warnings. Do not run STATEMENT format with nondeterministic functions. Safer fallback: switch to binlog_format=ROW, re-sync the divergent chunks from the primary with reviewed repair SQL, and re-checksum to confirm zero diffs.",
+  "domain": "mysql",
+  "scope_hint": "code.database.mysql:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.mysql:human_authored",
+  "pack_id": "code.database.mysql"
+}

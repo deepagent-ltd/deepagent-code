@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:production:human-gate-for-production-change",
+  "type": "strategy",
+  "title": "Human gate for production change",
+  "description": "Production deployments, irreversible migrations, external-state changes, and traffic shifts require explicit human approval.",
+  "body": "Use when a task touches deploy scripts, release workflows, migrations, feature flags, live services, cloud resources, traffic routing, monitoring, or incident response. Do not use to execute deployment or to infer approval from tests. Actions: identify whether the change can affect live users or external state, stop before applying it, assemble evidence, and request an accountable human decision. Validation signals include explicit approval, release ticket, runbook reference, or a blocked finding. Risk boundary: silence, green tests, or prior patterns are not approval for production changes.",
+  "domain": "production",
+  "scope_hint": "risk.production:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.production",
+  "pack_id": "risk.production"
+}

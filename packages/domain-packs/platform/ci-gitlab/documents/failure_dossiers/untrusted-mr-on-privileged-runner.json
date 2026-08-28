@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:glci:untrusted-mr-on-privileged-runner",
+  "type": "failure_dossier",
+  "description": "Fork merge-request code executes on a shared privileged runner with deploy credentials or host access.",
+  "body": "Failure mode: a merge-request pipeline from a fork runs on a privileged runner (docker-in-docker, host volume mounts, or deploy-credentialed) because jobs are untagged or share the runner pool, letting attacker-controlled code escape the container or steal credentials. Detection signals: fork MR jobs landing on privileged/shared runners; untagged deploy-capable runners; no maintainer approval gate for fork pipelines. Do not run untrusted MR code on privileged runners. Safer fallback: tag jobs so untrusted pipelines use isolated minimal runners, reserve privileged runners for protected refs, and require maintainer approval to run fork MR pipelines.",
+  "domain": "ci_gitlab",
+  "scope_hint": "platform.ci-gitlab:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.ci-gitlab:human_authored",
+  "pack_id": "platform.ci-gitlab"
+}

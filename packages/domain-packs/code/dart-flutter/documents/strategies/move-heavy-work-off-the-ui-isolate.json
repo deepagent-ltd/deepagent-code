@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:flutter:move-heavy-work-off-the-ui-isolate",
+  "type": "strategy",
+  "title": "Move heavy work off the UI isolate",
+  "description": "Dart is single-threaded per isolate, so CPU-heavy work blocks rendering; offload it to a background isolate.",
+  "body": "Use when doing CPU-bound work (parsing large JSON, image processing, crypto) during interaction. Do not run heavy synchronous computation on the UI isolate, which blocks the event loop and drops frames even if wrapped in an async function. Actions: move the work to a background isolate via compute() or Isolate.run, keep awaited I/O async (it yields), and stream results back to update state. Validation signals include a frame timing trace showing no long UI-isolate stalls and a test that the heavy operation does not block interaction. Risk boundary: async alone does not parallelize CPU work (an await on a synchronous heavy function still blocks); only an isolate gives true parallelism, and large messages to/from isolates are copied, so design payloads accordingly.",
+  "domain": "dart",
+  "scope_hint": "code.dart-flutter:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.dart-flutter",
+  "pack_id": "code.dart-flutter"
+}

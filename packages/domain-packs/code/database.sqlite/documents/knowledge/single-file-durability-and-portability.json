@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:sqlite:single-file-durability-and-portability",
+  "type": "knowledge",
+  "title": "Single-file durability and portability",
+  "description": "The whole database is one file (plus WAL sidecars), which simplifies deployment but constrains backup and concurrency.",
+  "body": "Use when reasoning about deployment, backup, or moving a database. SQLite stores everything in one cross-platform file, making it ideal for embedded, on-device, and single-node use, and it is portable between architectures (consistent byte order). But that file model means backup must be transactionally aware (online backup or VACUUM INTO, not a live cp), concurrency is bounded by the single-writer lock, and it should not live on a network share. Do not treat the .db as a plain blob you can copy or sync mid-write. Actions: use the backup API, keep it on local storage, and tune synchronous for your durability needs. Validation signals include a verified, integrity-checked backup. Risk boundary: putting an active SQLite file on NFS/SMB or a sync folder risks corruption.",
+  "domain": "sqlite",
+  "scope_hint": "code.database.sqlite:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.sqlite",
+  "pack_id": "code.database.sqlite"
+}

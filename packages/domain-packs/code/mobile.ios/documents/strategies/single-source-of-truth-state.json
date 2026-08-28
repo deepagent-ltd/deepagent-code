@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:ios:single-source-of-truth-state",
+  "type": "strategy",
+  "title": "Drive SwiftUI from a single source of truth",
+  "description": "Store mutable UI state in @State/@StateObject and derive views from it, instead of duplicating or imperatively mutating view contents.",
+  "body": "Use when building SwiftUI screens. Do not keep duplicate copies of the same state in multiple places, and do not try to mutate a view imperatively as in UIKit. Actions: own value state with @State and reference/model state with @StateObject (observed elsewhere via @ObservedObject/@EnvironmentObject), pass mutable access down as @Binding, and let the framework re-render when the source changes. Validation signals include the UI updating automatically on a state change with no manual refresh. Risk boundary: mutating a property that is not part of observable state means the view silently never updates (a stale-UI bug), while duplicating state risks divergence — keep one authoritative source per piece of state.",
+  "domain": "ios",
+  "scope_hint": "code.mobile.ios:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mobile.ios",
+  "pack_id": "code.mobile.ios"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:gfx:derivative-in-divergent-control-flow",
+  "type": "failure_dossier",
+  "description": "Calling a derivative or mip-biased texture op inside non-uniform branching, where the result is undefined across the SIMD group.",
+  "body": "Failure mode: a shader calls dFdx/dFdy or samples with an implicit LOD inside an if-branch that not all invocations in a group take, but derivatives need neighboring lanes active, so the result is undefined and varies by GPU. Detection signals: speckled or block-shaped artifacts along edges; output differs across drivers; the validation layer warns about derivatives in non-uniform control flow. Do not place derivative or implicit-LOD operations inside divergent branches. Safer fallback: hoist derivative and implicit-LOD texture operations into uniform control flow, or compute the LOD explicitly and pass it to textureLod, then confirm a clean validation pass and consistent output across drivers.",
+  "domain": "graphics",
+  "scope_hint": "code.graphics:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.graphics:human_authored",
+  "pack_id": "code.graphics"
+}

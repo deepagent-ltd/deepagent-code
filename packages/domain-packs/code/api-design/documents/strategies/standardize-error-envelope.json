@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:apidesign:standardize-error-envelope",
+  "type": "strategy",
+  "title": "Standardize one error envelope",
+  "description": "Return all errors in a single structured shape with a stable machine-readable code, a message, and details, so clients handle them uniformly.",
+  "body": "Use when defining error responses for any endpoint. Do not let different endpoints return errors in different shapes. Actions: define one envelope with a stable error code, human message, and optional field-level details; map status codes consistently; document the code list. Validation signals include a client parsing every error the same way and switching on the code rather than the message text. Risk boundary: inconsistent error shapes force brittle client parsing and leak internals, so adopt one envelope and keep messages free of sensitive detail.",
+  "domain": "api_design",
+  "scope_hint": "code.api-design:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.api-design",
+  "pack_id": "code.api-design"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:svelte:assign-to-trigger-reactivity",
+  "type": "strategy",
+  "title": "Trigger reactivity through assignment or runes",
+  "description": "Svelte's compiler reacts to assignments, not to in-place mutation, so updates must reassign or use $state.",
+  "body": "Use when state changes in a component but the DOM does not update. Do not push/splice an array or set a nested object field and expect a re-render in legacy mode. Actions: either reassign (arr = [...arr, x]) so the compiler sees the dependency, or adopt the $state rune whose proxy tracks deep mutation; pick one model per component and stay consistent. Validation signals include a @testing-library/svelte test asserting the DOM reflects the change after the update. Risk boundary: silently relying on mutation is a correctness bug that hides until production data shapes change; when migrating between legacy and runes, do it per-component, not half-way.",
+  "domain": "svelte",
+  "scope_hint": "code.frontend.svelte:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.svelte",
+  "pack_id": "code.frontend.svelte"
+}

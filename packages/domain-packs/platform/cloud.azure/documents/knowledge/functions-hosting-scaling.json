@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:azure:functions-hosting-scaling",
+  "type": "knowledge",
+  "title": "Azure Functions hosting plans and scaling mechanics",
+  "description": "Explains Consumption scale-from-zero, Premium pre-warmed elastic instances, the scale controller, and per-plan VNet and timeout limits.",
+  "body": "Use when reasoning about Azure Functions performance and cost. Do not expect Consumption to avoid cold starts or support VNet. Actions: know Consumption bills per execution and scales from zero (cold starts, capped timeout), Premium keeps pre-warmed instances and allows VNet and unbounded duration, and the scale controller monitors trigger sources (queue length, event rate) to add instances. Inspect the plan and instance metrics. Validation signals include instance counts reacting to trigger backlog and no cold starts on a Premium pre-warmed pool. Risk boundary: plan changes affect cost and availability and are deliberate.",
+  "domain": "azure",
+  "scope_hint": "platform.cloud.azure:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.azure",
+  "pack_id": "platform.cloud.azure"
+}

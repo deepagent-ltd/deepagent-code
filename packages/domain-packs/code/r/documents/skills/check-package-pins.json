@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:rlang:check-package-pins",
+  "type": "skill",
+  "title": "Check package version pins",
+  "description": "Compare renv.lock against installed versions to surface reproducibility drift.",
+  "body": "Use when verifying that an R analysis will reproduce. Actions: read renv.lock, compare each pinned version against the installed library, and report any package that is unpinned or drifted. List the specific package and version gap rather than a pass/fail verdict. Do not declare an analysis reproducible without confirming the lockfile covers every loaded package. This skill is read-only and must not install or upgrade packages without permission. Validation signals include a per-package pinned-versus-installed comparison. Risk boundary: a loaded package missing from the lockfile breaks reproducibility — flag it for snapshotting.",
+  "domain": "r_lang",
+  "scope_hint": "code.r:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.r",
+  "pack_id": "code.r"
+}

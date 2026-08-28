@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:chain:run-contract-test-suite",
+  "type": "skill",
+  "title": "Run the contract test and gas suite",
+  "description": "Compile contracts and run the Foundry/Hardhat tests including adversarial cases and the gas report.",
+  "body": "Use when validating a contract change. Actions: detect the toolchain (Foundry forge or Hardhat), compile the contracts, run the full test suite including fuzz/invariant and adversarial tests, and produce the gas report; report compile errors, failing tests, and the worst-case gas per function. Do not declare safety from happy-path tests alone; confirm adversarial and invariant tests ran. This skill exposes capability only and must not deploy to mainnet or a public testnet without runtime permission. Validation signals include all adversarial tests passing and gas under the block limit. Risk boundary: if adversarial or invariant coverage is absent, report the contract as unverified and recommend adding attack tests before any deployment.",
+  "domain": "blockchain",
+  "scope_hint": "code.blockchain:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.blockchain",
+  "pack_id": "code.blockchain"
+}

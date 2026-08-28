@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:azure:assign-scoped-rbac-role",
+  "type": "skill",
+  "title": "Assign a least-privilege Azure RBAC role to an identity",
+  "description": "Create a role assignment binding a built-in role to a managed identity at the narrowest scope, then verify with Check Access.",
+  "body": "Use when an Azure identity needs exactly the access required. Do not assign Contributor/Owner or assign at subscription scope for convenience. Actions: identify the data or control action needed, choose the matching built-in role, target the principal (preferably a managed identity or Entra group) and the narrowest scope (resource then resource group), create the assignment, and confirm with az role assignment list and Check Access. Validation signals include the principal holding only that role at that scope and a denied action elsewhere. Risk boundary: if the task seems to need Owner or a high scope, stop and escalate for human approval.",
+  "domain": "azure",
+  "scope_hint": "platform.cloud.azure:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.azure",
+  "pack_id": "platform.cloud.azure"
+}

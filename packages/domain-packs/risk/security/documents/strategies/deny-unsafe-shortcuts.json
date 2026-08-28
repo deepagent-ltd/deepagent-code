@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:security:deny-unsafe-shortcuts",
+  "type": "strategy",
+  "title": "Deny unsafe shortcuts",
+  "description": "Do not recommend disabling validation, weakening policy, broadening secrets, or suppressing warnings to make a security task pass.",
+  "body": "Use when a build, test, integration, or deployment problem tempts the change to skip checks, disable scanners, remove authorization, relax CORS, broaden CSP, or ignore certificate errors. Do not use to block temporary local-only diagnostics that never ship and do not expose data. Actions: preserve the guard, diagnose the underlying failure, and propose a safer narrow exception only with explicit expiry and human approval. Validation signals include the guard still active, tests passing through the protected path, and no new broad allowlist. Risk boundary: production-facing relaxation or persistent bypass must be recorded as rejected or escalated.",
+  "domain": "security",
+  "scope_hint": "risk.security:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.security",
+  "pack_id": "risk.security"
+}

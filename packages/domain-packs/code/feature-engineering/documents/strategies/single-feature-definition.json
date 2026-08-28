@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:feat:single-feature-definition",
+  "type": "strategy",
+  "title": "Define each feature once for offline and online",
+  "description": "Express every feature transform in a single shared definition so backfill and serving compute identical values and skew cannot creep in.",
+  "body": "Use when a feature must be available both for training backfills and low-latency serving. Do not reimplement the transform separately in a training notebook and a serving service — the two drift apart and produce train/serve skew. Actions: declare the feature once in the store (Feast/Tecton) or a shared library, materialize offline and online from that definition, then replay an entity through both paths and compare. Validation signals include identical feature values offline and online for the same entity and a test asserting that equality. Risk boundary: skew silently degrades production accuracy while offline metrics look fine; if a feature has two definitions, treat it as a defect and unify before serving.",
+  "domain": "feature_engineering",
+  "scope_hint": "code.feature-engineering:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.feature-engineering",
+  "pack_id": "code.feature-engineering"
+}

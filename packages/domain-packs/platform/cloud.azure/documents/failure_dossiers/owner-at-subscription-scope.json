@@ -1,0 +1,11 @@
+{
+  "ref_id": "fail:azure:owner-at-subscription-scope",
+  "type": "failure_dossier",
+  "description": "Resolving AuthorizationFailed by assigning Owner or Contributor at subscription scope.",
+  "body": "Failure mode: an operation fails with AuthorizationFailed and someone assigns Owner/Contributor at the subscription, granting the principal control over every resource. Detection signals: az role assignment list shows a high-scope Owner/Contributor binding, Azure Advisor/PIM flags excessive standing access, and the grant dwarfs the failing action. Do not assign broad roles at subscription scope as a fix. Safer fallback: use Check Access to find the exact missing action, assign the matching built-in role at the narrowest scope (resource or resource group), and escalate if only a broad role appears to work.",
+  "domain": "azure",
+  "scope_hint": "platform.cloud.azure:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.azure:human_authored",
+  "pack_id": "platform.cloud.azure"
+}

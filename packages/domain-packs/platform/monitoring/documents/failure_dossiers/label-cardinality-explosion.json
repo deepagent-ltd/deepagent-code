@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:mon:label-cardinality-explosion",
+  "type": "failure_dossier",
+  "description": "A high-cardinality label is attached to a metric, multiplying series until Prometheus runs out of memory.",
+  "body": "Failure mode: a metric carries an unbounded label (user id, request id, full URL), so each unique value creates a new series and active series grow until the Prometheus server slows or OOMs for everyone. Detection signals: active series climbing without bound; server memory pressure; one metric dominating the series count. Do not label metrics with unbounded identifiers. Safer fallback: drop or aggregate the label via metric_relabel_configs, enumerate allowed values, and re-measure active series against the budget.",
+  "domain": "monitoring",
+  "scope_hint": "platform.monitoring:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.monitoring:human_authored",
+  "pack_id": "platform.monitoring"
+}

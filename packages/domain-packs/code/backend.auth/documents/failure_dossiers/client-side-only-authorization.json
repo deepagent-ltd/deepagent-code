@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:auth:client-side-only-authorization",
+  "type": "failure_dossier",
+  "description": "Authorization enforced only in the UI or via a client-supplied flag, so the API accepts forged privileged requests.",
+  "body": "Failure mode: access is gated by hiding a button or reading a role from the request body / client state, while the server accepts the call regardless. Detection signals: the only 'check' is in frontend code or a request field; no server-side guard reads the authenticated principal; the endpoint returns success when called directly with a crafted role. Do not use UI gating, hidden fields, or client role flags as enforcement. Safer fallback: add a server-side check at the resource boundary using the session/token principal, plus a negative test calling the API directly as a non-privileged user.",
+  "domain": "backend_auth",
+  "scope_hint": "code.backend.auth:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.auth:human_authored",
+  "pack_id": "code.backend.auth"
+}

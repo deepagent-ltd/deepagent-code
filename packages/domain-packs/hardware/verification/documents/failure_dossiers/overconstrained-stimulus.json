@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:hwverif:overconstrained-stimulus",
+  "type": "failure_dossier",
+  "description": "Random verification misses bugs because the constraints were so tight that whole regions of legal input were never generated.",
+  "body": "Failure mode: overly restrictive randomization constraints exclude legal but unusual input combinations, so the design's behavior there is never exercised. Detection signals: coverage plateauing well below target despite many seeds, coverpoints that stay unhit no matter the run length, and constraints that forbid valid combinations. Do not extend run time hoping to reach corners the constraints forbid. Safer fallback: review and relax the constraints to admit the missing legal space, then confirm the previously unreachable coverpoints now fill.",
+  "domain": "hw_verification",
+  "scope_hint": "hardware.verification:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.verification:human_authored",
+  "pack_id": "hardware.verification"
+}

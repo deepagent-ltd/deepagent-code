@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:lic:check-attribution-completeness",
+  "type": "skill",
+  "title": "Check attribution completeness",
+  "description": "Verify the committed NOTICE/THIRD-PARTY file covers every attribution-requiring component in the current lockfile.",
+  "body": "Use when validating that a release satisfies notice duties. Procedure: regenerate the attribution file from the current lockfile, diff it against the committed NOTICE/THIRD-PARTY file, and list every component present in the lockfile but missing from the notice, plus any Apache-2.0 upstream NOTICE content that was dropped. Report which attributions are present and which are missing. This skill exposes findings only and must not be run as a release sign-off without human review. Validation signals include a clean diff between regenerated and committed attribution. Risk boundary: a missing required notice is a blocking compliance gap, not a warning to suppress.",
+  "domain": "license",
+  "scope_hint": "risk.license:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.license",
+  "pack_id": "risk.license"
+}

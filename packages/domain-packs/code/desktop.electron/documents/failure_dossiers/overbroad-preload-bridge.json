@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:electron:overbroad-preload-bridge",
+  "type": "failure_dossier",
+  "description": "Exposing ipcRenderer, require, or a generic channel-invoke function through preload, letting the page reach any main-process handler.",
+  "body": "Failure mode: the preload uses contextBridge to expose ipcRenderer directly or an invoke(channel, args) pass-through, so a compromised renderer can call any IPC channel and trigger privileged operations it should never reach. Detection signals: window.api exposes send/invoke with arbitrary channels; the page can require modules; the preload surface is large and generic. Do not expose raw IPC or modules. Safer fallback: expose only named, purpose-specific functions that each call a fixed channel, keep the surface small and auditable, and validate every call in the main process.",
+  "domain": "electron",
+  "scope_hint": "code.desktop.electron:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.desktop.electron:human_authored",
+  "pack_id": "code.desktop.electron"
+}

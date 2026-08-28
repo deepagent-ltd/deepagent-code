@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:comp:self-approval",
+  "type": "failure_dossier",
+  "description": "The change-approval gate accepts an approval from the change's own author, defeating independent review.",
+  "body": "Failure mode: the pipeline checks that an approval exists but not that the approver differs from the author, so an author approves their own change and it deploys to a regulated system unreviewed. Detection signals: a deploy proceeds with author and sole approver being the same principal; the gate counts approvals without comparing identities; emergency changes routinely self-approve. Do not count an approval without verifying approver-author distinctness. Safer fallback: require the gate to reject any change whose only approver is its author, bind the approval to the exact artifact, and route break-glass self-approvals to a retroactive human review.",
+  "domain": "compliance",
+  "scope_hint": "risk.compliance:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.compliance:human_authored",
+  "pack_id": "risk.compliance"
+}

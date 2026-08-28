@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:dataeng:cron-coupled-stale-data",
+  "type": "failure_dossier",
+  "description": "Coupling pipeline stages by cron timing instead of data dependencies, so a slow upstream feeds downstream stale or empty data.",
+  "body": "Failure mode: a downstream job is scheduled a fixed offset after an upstream rather than triggered by upstream completion, so when the upstream runs late or fails the downstream processes yesterday's or empty data and reports it as fresh. Detection signals: outputs look correct but are stale; downstream runs even when upstream failed; no explicit dependency in the DAG. Do not couple stages by guessed timing. Safer fallback: declare explicit task/data dependencies in the orchestrator, trigger downstream on upstream success, and alert on SLA miss.",
+  "domain": "data_engineering",
+  "scope_hint": "code.data-engineering:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-engineering:human_authored",
+  "pack_id": "code.data-engineering"
+}

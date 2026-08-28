@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:sim:vectorize-sim-loop",
+  "type": "strategy",
+  "title": "Vectorize the inner simulation loop safely",
+  "description": "Replace scalar inner loops with vectorized array operations only after the scalar reference is validated.",
+  "body": "Use when an inner simulation loop dominates runtime and the math is element-wise. Do not vectorize before the scalar version is validated, since debugging numerics and vectorization together is error-prone. Actions: confirm the scalar reference passes its analytical checks, rewrite the hot loop with array operations, and compare output against the scalar reference within tolerance. Validation signals include the vectorized output matching the scalar reference and a measured speedup on a benchmark. Risk boundary: vectorization can change reduction order and results, so flag any numerical divergence from the scalar reference for investigation.",
+  "domain": "simulation",
+  "scope_hint": "code.simulation:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.simulation",
+  "pack_id": "code.simulation"
+}

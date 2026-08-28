@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:mlai:manage-gpu-memory",
+  "type": "methodology",
+  "title": "Fit a model into GPU memory",
+  "description": "Reduce memory pressure through batch size, gradient accumulation, and mixed precision instead of silently truncating data.",
+  "body": "Steps: 1. Read the actual OOM message — activations, not just weights, dominate. 2. Lower the batch size and use gradient accumulation to keep the effective batch. 3. Enable mixed precision (fp16/bf16) to roughly halve activation memory. 4. Use gradient checkpointing for deep models to trade compute for memory. 5. Confirm the metric is unchanged by the smaller physical batch. Rollback point: before enabling mixed precision if numerics destabilize. Validation: training completes within memory and the effective-batch metric matches the original; a quietly reduced batch that changes the learning dynamics is a hidden regression.",
+  "domain": "ml",
+  "scope_hint": "code.ml-ai:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.ml-ai",
+  "pack_id": "code.ml-ai"
+}

@@ -1,0 +1,458 @@
+[
+  {
+    "ref_id": "knowledge:architecture:adr-not-spec",
+    "type": "knowledge",
+    "title": "Adr Not Spec",
+    "summary": "An ADR records a decision, not all requirements.",
+    "domains": [
+      "architecture",
+      "code"
+    ],
+    "triggers": [
+      "records",
+      "decision",
+      "requirements",
+      "keep",
+      "adrs",
+      "concise",
+      "link",
+      "specs"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.architecture"
+  },
+  {
+    "ref_id": "knowledge:architecture:architecture-is-change-cost",
+    "type": "knowledge",
+    "title": "Architecture Is Change Cost",
+    "summary": "Architecture quality shows up as change cost and failure isolation.",
+    "domains": [
+      "architecture",
+      "code"
+    ],
+    "triggers": [
+      "architecture",
+      "quality",
+      "shows",
+      "change",
+      "cost",
+      "failure",
+      "isolation",
+      "design"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.architecture"
+  },
+  {
+    "ref_id": "knowledge:architecture:shared-kernel-risk",
+    "type": "knowledge",
+    "title": "Shared Kernel Risk",
+    "summary": "Shared helpers can become hidden coupling across domains.",
+    "domains": [
+      "architecture",
+      "code"
+    ],
+    "triggers": [
+      "shared",
+      "helpers",
+      "become",
+      "hidden",
+      "coupling",
+      "across",
+      "domains",
+      "utilities"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.architecture"
+  },
+  {
+    "ref_id": "methodology:architecture:adr-materialization",
+    "type": "methodology",
+    "title": "Adr Materialization",
+    "summary": "Write decision, alternatives, consequences, and validation for durable architecture changes.",
+    "domains": [
+      "architecture",
+      "code"
+    ],
+    "triggers": [
+      "write",
+      "decision",
+      "alternatives",
+      "consequences",
+      "validation",
+      "durable",
+      "architecture",
+      "changes"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.architecture"
+  },
+  {
+    "ref_id": "methodology:architecture:architecture-scan",
+    "type": "methodology",
+    "title": "Architecture Scan",
+    "summary": "Map modules, dependencies, data flow, and ownership before proposing changes.",
+    "domains": [
+      "architecture",
+      "code"
+    ],
+    "triggers": [
+      "modules",
+      "dependencies",
+      "data",
+      "flow",
+      "ownership",
+      "before",
+      "proposing",
+      "changes"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.architecture"
+  },
+  {
+    "ref_id": "methodology:architecture:cycle-risk-review",
+    "type": "methodology",
+    "title": "Cycle Risk Review",
+    "summary": "Find cycles and hidden dependency inversions.",
+    "domains": [
+      "architecture",
+      "code"
+    ],
+    "triggers": [
+      "find",
+      "cycles",
+      "hidden",
+      "dependency",
+      "inversions",
+      "steps",
+      "inspect",
+      "imports"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.architecture"
+  },
+  {
+    "ref_id": "skill:architecture:produce-architecture-map",
+    "type": "skill",
+    "title": "Produce Architecture Map",
+    "summary": "Summarize components, ownership, dependencies, and risk hotspots.",
+    "domains": [
+      "architecture",
+      "code"
+    ],
+    "triggers": [
+      "summarize",
+      "components",
+      "ownership",
+      "dependencies",
+      "risk",
+      "hotspots",
+      "inputs",
+      "repository"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.architecture"
+  },
+  {
+    "ref_id": "strategy:architecture:boundary-ownership",
+    "type": "strategy",
+    "title": "Boundary Ownership",
+    "summary": "Assign each invariant to one owning boundary.",
+    "domains": [
+      "architecture",
+      "code"
+    ],
+    "triggers": [
+      "assign",
+      "each",
+      "invariant",
+      "owning",
+      "boundary",
+      "architecture",
+      "reviews",
+      "should"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.architecture"
+  },
+  {
+    "ref_id": "strategy:architecture:decision-record",
+    "type": "strategy",
+    "title": "Decision Record",
+    "summary": "Record architectural tradeoffs when choices affect future work.",
+    "domains": [
+      "architecture",
+      "code"
+    ],
+    "triggers": [
+      "record",
+      "architectural",
+      "tradeoffs",
+      "when",
+      "choices",
+      "affect",
+      "future",
+      "work"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.architecture"
+  },
+  {
+    "ref_id": "strategy:architecture:dependency-direction",
+    "type": "strategy",
+    "title": "Dependency Direction",
+    "summary": "Keep dependencies flowing from high-level policy to lower-level mechanisms intentionally.",
+    "domains": [
+      "architecture",
+      "code"
+    ],
+    "triggers": [
+      "keep",
+      "dependencies",
+      "flowing",
+      "from",
+      "high",
+      "level",
+      "policy",
+      "lower"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.architecture"
+  },
+  {
+    "ref_id": "strategy:architecture:small-surface-integration",
+    "type": "strategy",
+    "title": "Small Surface Integration",
+    "summary": "Integrate systems through narrow contracts instead of shared internals.",
+    "domains": [
+      "architecture",
+      "code"
+    ],
+    "triggers": [
+      "integrate",
+      "systems",
+      "through",
+      "narrow",
+      "contracts",
+      "instead",
+      "shared",
+      "internals"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "medium",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.architecture"
+  },
+  {
+    "ref_id": "strategy:architecture:enforce-dependency-acyclicity",
+    "type": "strategy",
+    "title": "Keep the module dependency graph acyclic",
+    "summary": "Prevent and break import cycles between modules so build, test, and reasoning stay tractable and ownership stays clear.",
+    "domains": [
+      "code",
+      "architecture"
+    ],
+    "triggers": [
+      "cycle",
+      "acyclic",
+      "import",
+      "dependency graph",
+      "circular",
+      "layering"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.architecture"
+  },
+  {
+    "ref_id": "strategy:architecture:design-seams-for-testing",
+    "type": "strategy",
+    "title": "Design seams for testing and substitution",
+    "summary": "Introduce explicit boundaries where external dependencies can be substituted, so units are testable without real infrastructure.",
+    "domains": [
+      "code",
+      "architecture"
+    ],
+    "triggers": [
+      "seam",
+      "testability",
+      "dependency injection",
+      "interface",
+      "boundary",
+      "substitute"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.architecture"
+  },
+  {
+    "ref_id": "methodology:architecture:assess-coupling-and-cohesion",
+    "type": "methodology",
+    "title": "Assess coupling and cohesion before changing a module",
+    "summary": "Map a module's responsibilities and its inbound/outbound dependencies to judge whether it is cohesive and loosely coupled before reshaping it.",
+    "domains": [
+      "code",
+      "architecture"
+    ],
+    "triggers": [
+      "coupling",
+      "cohesion",
+      "responsibility",
+      "fan-in",
+      "fan-out",
+      "module"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.architecture"
+  },
+  {
+    "ref_id": "knowledge:architecture:dependency-direction-encodes-stability",
+    "type": "knowledge",
+    "title": "Dependency direction should follow stability",
+    "summary": "Stable, abstract policy should not depend on volatile, concrete detail; dependencies pointing the wrong way propagate churn upward.",
+    "domains": [
+      "code",
+      "architecture"
+    ],
+    "triggers": [
+      "dependency direction",
+      "stability",
+      "abstraction",
+      "policy",
+      "detail",
+      "inversion"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.architecture"
+  },
+  {
+    "ref_id": "skill:architecture:detect-dependency-cycles",
+    "type": "skill",
+    "title": "Detect dependency cycles in the module graph",
+    "summary": "Build the module import graph for the codebase and report any cycles with the participating modules and edges.",
+    "domains": [
+      "code",
+      "architecture"
+    ],
+    "triggers": [
+      "cycle detection",
+      "import graph",
+      "circular dependency",
+      "edges",
+      "modules",
+      "graph"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.architecture"
+  }
+]
