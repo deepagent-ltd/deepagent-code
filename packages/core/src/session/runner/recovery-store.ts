@@ -588,6 +588,7 @@ export type ForkTransactionOutcome =
 export function forkTransaction(
   state: RecoveryStoreState,
   input: ForkTransactionInput,
+  fault?: { readonly at: "after_fork_stage" },
 ): CommitResult<RecoveryStoreState, ForkTransactionOutcome> {
   const forkRef = forkManifestRef({
     sourceSessionId: input.sourceSessionId,
@@ -617,6 +618,9 @@ export function forkTransaction(
     permission: input.permission,
     forkedAt: now,
   }
+  // C1B-12 crash seam: a crash injected after the fork manifest is built but before the fork +
+  // read-only fence are committed returns `aborted` and commits NEITHER (same-transaction or nothing).
+  if (fault?.at === "after_fork_stage") return { status: "aborted" }
   const next: RecoveryStoreState = {
     commands: cas.status === "recorded" ? set(state.commands, cas.commandId, cas.record) : state.commands,
     evidence: state.evidence,
@@ -669,6 +673,47 @@ export function evidenceSettleCas(
   }
   if (!sameIdentity) return { status: "conflict", reason: "evidence_request_hash_mismatch" }
   return { status: "settled", evidenceRef: input.evidenceRef }
+}
+
+/**
+ * C1B-11 — duplicate-terminal scan (design §10.7 "CAS lost 重读 canonical state 并返回
+ * conflict/existing，不能用 defect 让 Database layer 整体 die").
+ *
+ * Scans the settled evidence rows for ONE request/attempt and reports whether there is:
+ *   - no terminal            → `none`            (nothing to canonize);
+ *   - exactly one terminal   → `single`          (the canonical record, unchanged);
+ *   - MORE than one terminal → `duplicate`       (a duplicate terminal row for one attempt; the
+ *                                                 caller must return a TYPED conflict naming the
+ *                                                 canonical row — never a raw defect).
+ *
+ * Pure and deterministic. This is the read-side guard a recovery command consults INSTEAD of an
+ * arbitrary `.find()` over settled rows, so a surprise duplicate never silently re-chooses a
+ * canonical row or kills the startup.
+ */
+export type TerminalEvidenceScan =
+  | { readonly status: "none" }
+  | { readonly status: "single"; readonly canonical: EvidenceRecord }
+  | { readonly status: "duplicate"; readonly canonical: EvidenceRecord; readonly duplicate: EvidenceRecord }
+
+export function scanTerminalEvidence(
+  existing: ReadonlyMap<string, EvidenceRecord>,
+  requestHash: string,
+): TerminalEvidenceScan {
+  const terminals = [...existing.values()].filter(
+    (e) => e.requestHash === requestHash && e.status === "settled",
+  )
+  if (terminals.length === 0) return { status: "none" }
+  const canonical = terminals[0]!
+  // Distinct terminal payload identities. Confirm-settled legitimately records a NEW settled row
+  // whose payload hash ALWAYS equals the recorded terminal (the binding check enforces it), so two
+  // settled rows with the SAME payload key are an idempotent convergence → `single`. Only TWO
+  // DIFFERENT terminal payloads (a genuinely conflicting duplicate terminal) are a `duplicate` →
+  // typed conflict naming the canonical row. Never a raw defect.
+  const payloadIds = new Set(terminals.map((e) => e.payloadHash ?? e.evidenceRef))
+  if (payloadIds.size === 1)
+    return { status: "single", canonical }
+  const duplicate = terminals.find((e) => (e.payloadHash ?? e.evidenceRef) !== (canonical.payloadHash ?? canonical.evidenceRef))!
+  return { status: "duplicate", canonical, duplicate }
 }
 
 // ---------------------------------------------------------------------------

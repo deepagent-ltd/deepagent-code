@@ -67,6 +67,7 @@ import {
   readOnlySessionsOf,
   recoveryCommandContentAddress,
   repairAndAbandonTransaction,
+  scanTerminalEvidence,
   verifyBaselineReconstruction,
 } from "./recovery-store"
 import { SessionRecoverySafeBoundary } from "./recovery-safe-boundary"
@@ -78,7 +79,6 @@ import {
   encryptEvidenceArtifact,
   evidenceArtifactAAD,
   redactedSummary,
-  terminalPayloadHashOf,
   validateConfirmSettledEvidence,
   verifyExportedArtifact,
 } from "./recovery-evidence"
@@ -184,6 +184,16 @@ export class RefuseAbandonWithTerminalEvidenceError extends Schema.TaggedErrorCl
   "SessionProviderRecovery.RefuseAbandonWithTerminalEvidenceError",
   { evidenceRef: Schema.String, requestHash: Schema.String },
 ) {}
+/**
+ * C1B-11 typed conflict: MORE than one terminal (settled) row already exists for one
+ * attempt. This is a duplicate-terminal data anomaly — the store must surface it as a
+ * typed conflict naming the canonical row and NEVER as a raw defect that kills the
+ * startup/data layer (design §10.7 "CAS lost 重读 canonical state 并返回 conflict/existing").
+ */
+export class DuplicateTerminalConflictError extends Schema.TaggedErrorClass<DuplicateTerminalConflictError>()(
+  "SessionProviderRecovery.DuplicateTerminalConflictError",
+  { evidenceRef: Schema.String, requestHash: Schema.String, duplicateRef: Schema.String },
+) {}
 /** Typed refusal for a transaction that was torn by a crash/simulated fault: no state was committed. */
 export class RecoveryTransactionAbortedError extends Schema.TaggedErrorClass<RecoveryTransactionAbortedError>()(
   "SessionProviderRecovery.RecoveryTransactionAbortedError",
@@ -256,6 +266,7 @@ export type Error =
   | AdapterOutOfAuthorityError
   | RecoveryDecodeError
   | RefuseAbandonWithTerminalEvidenceError
+  | DuplicateTerminalConflictError
   | RecoveryTransactionAbortedError
   | BaselineVerifyRefusedError
   | TextIsNotEvidenceError
@@ -568,6 +579,8 @@ export type ForkFromSafeBoundaryInput = {
   /** Caller-supplied fork session id (converges an exact retry on the SAME fork). */
   readonly forkSessionId?: string
   readonly now?: number
+  /** Test seam: inject a crash between the fork-manifest build and the fork+fence commit. */
+  readonly fault?: { readonly at: "after_fork_stage" }
 }
 
 /** C1B-07 outcome: forked, existing (exact retry, no second fork), or a typed conflict. */
@@ -584,6 +597,8 @@ export type ConfirmSettledInput = {
   /** Decoded as a frozen `RecoveryEvidence`; free text is refused (typed). */
   readonly evidence: unknown
   readonly now?: number
+  /** Test seam: inject a crash between the settled-verdict CAS and the evidence commit. */
+  readonly fault?: { readonly at: "after_evidence_stage" }
 }
 
 /** C1B-08 outcome: settled, existing (idempotent verdict), or a typed conflict. */
@@ -646,6 +661,8 @@ export interface Interface {
   readonly recordCommand: (input: {
     readonly requestHash: string
     readonly attemptIdentity: AttemptIdentity
+    /** Test seam: inject a crash between the command CAS and the command commit. */
+    readonly fault?: { readonly at: "after_command_stage" }
   }) => Effect.Effect<CommandWriteOutcome, Error>
   /** Read a command record by content address. */
   readonly getCommand: (commandId: string) => Effect.Effect<CommandRecord | undefined>
@@ -822,11 +839,18 @@ export const layer = Layer.effect(
     const recordCommand = Effect.fn("SessionProviderRecovery.recordCommand")(function* (input: {
       readonly requestHash: string
       readonly attemptIdentity: AttemptIdentity
+      readonly fault?: { readonly at: "after_command_stage" }
     }) {
       return yield* Semaphore.withPermits(lock, 1)(
         Effect.gen(function* () {
           const state = yield* Ref.get(store)
           const write = commandCas(commandsOf(state), input)
+          // C1B-12 crash seam: a crash injected when the command WOULD be newly recorded aborts the
+          // commit (nothing is written); an idempotent existing/mismatch write changes no state so
+          // it needs no crash seam.
+          if (input.fault?.at === "after_command_stage" && write.status === "recorded") {
+            return yield* Effect.fail(new RecoveryTransactionAbortedError({ operation: "record_command" }))
+          }
           if (write.status === "recorded") yield* setCommand(state, write.commandId, write.record)
           return write
         }),
@@ -855,6 +879,19 @@ export const layer = Layer.effect(
           recordedAt: Date.now(),
         }
         const state = yield* Ref.get(store)
+        // C1B-11: a status write to an existing slot is an EXACT idempotent no-op when every
+        // identity field matches; any divergence is a typed conflict (never a silent overwrite
+        // of recorded evidence / never a raw defect).
+        const prior = state.evidence.get(input.evidenceRef)
+        if (prior) {
+          const same =
+            prior.status === record.status &&
+            prior.providerId === record.providerId &&
+            prior.requestHash === record.requestHash &&
+            prior.payloadHash === record.payloadHash
+          if (same) return undefined
+          return yield* Effect.fail(new MismatchError({ reason: "evidence_status_divergence" }))
+        }
         yield* Ref.set(store, { ...state, evidence: new Map(state.evidence).set(input.evidenceRef, record) })
       }),
       getStatus: (evidenceRef: string) => Effect.map(Ref.get(store), (state) => evidenceOf(state).get(evidenceRef)),
@@ -926,13 +963,22 @@ export const layer = Layer.effect(
           // Network-unknown-after-dispatch: the FIRST step is query-command. If a
           // settled/terminal provider evidence exists the attempt may have dispatched and
           // produced a result, so the user is NOT offered abandon (design §11.3 / §9.2).
-          const terminal = [...evidenceOf(state).values()].find(
-            (e) => e.requestHash === input.requestHash && e.status === "settled",
-          )
-          if (terminal) {
+          // A duplicate terminal (two settled rows for one attempt) is a typed conflict
+          // naming the canonical row — never a raw defect (C1B-11).
+          const scan = scanTerminalEvidence(evidenceOf(state), input.requestHash)
+          if (scan.status === "duplicate") {
+            return yield* Effect.fail(
+              new DuplicateTerminalConflictError({
+                evidenceRef: scan.canonical.evidenceRef,
+                requestHash: input.requestHash,
+                duplicateRef: scan.duplicate.evidenceRef,
+              }),
+            )
+          }
+          if (scan.status === "single") {
             return yield* Effect.fail(
               new RefuseAbandonWithTerminalEvidenceError({
-                evidenceRef: terminal.evidenceRef,
+                evidenceRef: scan.canonical.evidenceRef,
                 requestHash: input.requestHash,
               }),
             )
@@ -1041,7 +1087,7 @@ export const layer = Layer.effect(
             permission: requiredPermissionFor("fork_only"),
             forkSessionId,
             now: input.now,
-          })
+          }, input.fault)
           if (tx.status === "aborted") {
             return yield* Effect.fail(new RecoveryTransactionAbortedError({ operation: "fork_from_safe_boundary" }))
           }
@@ -1115,7 +1161,19 @@ export const layer = Layer.effect(
           }
           const state = yield* Ref.get(store)
           // The terminal payload hash must be verifiable against the recorded terminal receipt.
-          const terminalPayloadHash = terminalPayloadHashOf(state, input.requestHash)
+          // A duplicate terminal is surfaced as a typed conflict with the canonical row (C1B-11);
+          // the settle CAS never silently re-chooses a canonical row.
+          const scan = scanTerminalEvidence(evidenceOf(state), input.requestHash)
+          if (scan.status === "duplicate") {
+            return yield* Effect.fail(
+              new DuplicateTerminalConflictError({
+                evidenceRef: scan.canonical.evidenceRef,
+                requestHash: input.requestHash,
+                duplicateRef: scan.duplicate.evidenceRef,
+              }),
+            )
+          }
+          const terminalPayloadHash = scan.status === "single" ? scan.canonical.payloadHash : undefined
           if (terminalPayloadHash === undefined) {
             return yield* Effect.fail(new MissingTerminalEvidenceError({ requestHash: input.requestHash }))
           }
@@ -1143,6 +1201,11 @@ export const layer = Layer.effect(
           if (cas.status === "existing") {
             const existing: ConfirmSettledOutcome = { status: "existing", evidenceRef: cas.evidenceRef }
             return existing
+          }
+          // C1B-12 crash seam: a crash injected after the settled-verdict CAS but before the
+          // evidence commit returns `aborted` and commits nothing (same-transaction or nothing).
+          if (input.fault?.at === "after_evidence_stage") {
+            return yield* Effect.fail(new RecoveryTransactionAbortedError({ operation: "confirm_settled" }))
           }
           const record: EvidenceRecord = {
             evidenceRef,
