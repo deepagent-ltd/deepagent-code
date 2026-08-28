@@ -17,7 +17,6 @@ import { SessionPromptEpochTable, type PromptEpochReason } from "./prompt-epoch.
 import { HistoryAuthority } from "./history-authority"
 import { MessageTable, SessionPromptEpochMessageTable } from "@deepagent-code/core/session/sql"
 import { V2ProviderTurn } from "@deepagent-code/core/session/runner/v2-provider-turn"
-import { SessionContextSelectionTable } from "@deepagent-code/core/context-federation/session-sql"
 import { ContextReference } from "@deepagent-code/core/context-federation/reference"
 import { SessionRunnerCanonical } from "@deepagent-code/core/session/runner/canonical-turn"
 
@@ -254,73 +253,13 @@ export const historyEpochLookup =
       .get()
       .pipe(Effect.map((row) => row?.epoch), Effect.orDie)
 
-// §16.3 order 4 package D — federation selection evidence provider: reads the session's latest
-// committed federation selection (the legacy durable loop stays the single selection writer) so a
-// V2 turn's selection commit records the real graph revisions / source fingerprint instead of the
-// empty v2:local evidence. Read-only; absent selection or a fault returns undefined (local
-// evidence, exactly the pre-seam behavior).
-export const selectionEvidenceLookup =
-  (database: Database.Interface) =>
-  (sessionID: string): Effect.Effect<SessionRunnerCanonical.SelectionEvidence | undefined> =>
-    database.db
-      .select({
-        graph_revisions: SessionContextSelectionTable.graph_revisions,
-        selected_source_fingerprint: SessionContextSelectionTable.selected_source_fingerprint,
-        observed_location_mutation_epoch: SessionContextSelectionTable.observed_location_mutation_epoch,
-      })
-      .from(SessionContextSelectionTable)
-      // The V2 runner's own selections (`v2:local` namespace) are not federation evidence; only
-      // rows committed by the durable runtime count. Newest by wall clock — revision restarts per
-      // activity, so it is NOT a session-wide recency key.
-      .where(
-        and(
-          eq(SessionContextSelectionTable.session_id, sessionID),
-          ne(SessionContextSelectionTable.security_namespace_id, ContextReference.SecurityNamespaceID.make("v2:local")),
-        ),
-      )
-      .orderBy(desc(SessionContextSelectionTable.created_at))
-      .limit(1)
-      .get()
-      .pipe(
-        Effect.map((row) => {
-          if (!row) return undefined
-          const parsed: unknown = JSON.parse(row.graph_revisions)
-          const revisions = parsed as Partial<Record<"code" | "documents" | "knowledge" | "memory", unknown>>
-          if (
-            typeof revisions.code !== "string" ||
-            typeof revisions.documents !== "string" ||
-            typeof revisions.knowledge !== "string" ||
-            typeof revisions.memory !== "string"
-          )
-            return undefined
-          return {
-            graphRevisions: {
-              code: revisions.code,
-              documents: revisions.documents,
-              knowledge: revisions.knowledge,
-              memory: revisions.memory,
-            },
-            selectedSourceFingerprint: row.selected_source_fingerprint,
-            observedLocationMutationEpoch: row.observed_location_mutation_epoch,
-          }
-        }),
-        // Full-cause downgrade by contract: any lookup fault (malformed stored revision, DB
-        // failure, anything else) yields undefined and the runner keeps the pre-seam local
-        // evidence — a seam fault must never fail the turn.
-        Effect.catchCause(() => Effect.succeed(undefined)),
-      )
-
-// Composition seam layer: hands BOTH order-4 runner seams (history epoch lookup, selection
-// evidence lookup) to the V2 runner scope in any graph where Database is available (AppRuntime
-// root graph, instance HTTP route root). Layer.effect pins the SHARED Database service captured
-// from the surrounding graph at build time — the layer itself has no open requirements, so
-// mergeAll never leaks Database into the root graph's RIn.
 export const v2RunnerSeamLayer = Layer.effectContext(
   Effect.gen(function* () {
     const database = yield* Database.Service
-    return Context.make(V2ProviderTurn.CurrentHistoryEpochLookup, historyEpochLookup(database)).pipe(
-      Context.add(SessionRunnerCanonical.CurrentSelectionEvidenceLookup, selectionEvidenceLookup(database)),
-    )
+    // C3-08: the legacy selection evidence bridge was removed with the v2-none fallback; the V2
+    // turn selection is written through the SelectionWriter — the runner no longer reads selection
+    // via a side lookup. Only the history-epoch seam remains.
+    return Context.make(V2ProviderTurn.CurrentHistoryEpochLookup, historyEpochLookup(database))
   }),
 )
 

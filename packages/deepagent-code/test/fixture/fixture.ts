@@ -216,9 +216,11 @@ export function provideTmpdirServer<A, E, R>(
 > {
   return Effect.gen(function* () {
     const llm = yield* TestLLMServer
+    // The tmpdir helper's error channel is unknown (test fixture; the failure surface is the
+    // caller's own E plus the platform error type) — narrow at this boundary.
     return yield* provideTmpdirInstance((dir) => self({ dir, llm }), {
       git: options?.git,
       config: options?.config?.(llm.url),
-    })
+    }).pipe(Effect.mapError((e) => e as E | PlatformError.PlatformError))
   })
 }
