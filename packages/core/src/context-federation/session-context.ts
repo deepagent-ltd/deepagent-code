@@ -15,6 +15,7 @@ import { GraphQueryStatus } from "./federation"
 import { Sensitivity } from "./authorization"
 import type { Rendered } from "./projection"
 import { ContextRef, LocationKey, ProjectScopeKey, SecurityNamespaceID } from "./reference"
+import { isLegacyIncompleteRow } from "./selection-writer"
 import {
   SessionActivityInputTable,
   SessionActivityTable,
@@ -131,6 +132,13 @@ export type Selection = {
   readonly tokenCount: number
   readonly artifactBinding: ArtifactBinding
   readonly createdAt: number
+  /**
+   * C3-08 read-side marking (no schema column): true when the row was committed by the pre-switch
+   * legacy evidence bridge (graph_statuses is the legacy GraphQueryStatus ARRAY shape or
+   * graph_revisions carries the forbidden v2-none value). Such rows stay READABLE for history/export
+   * but are NOT usable for a new V2 dispatch (the dispatch seam refuses them).
+   */
+  readonly legacyIncomplete?: boolean
 }
 
 export class InputError extends Schema.TaggedErrorClass<InputError>()("SessionContext.InputError", {
@@ -877,6 +885,7 @@ function decodeSelection(
               inlineAudit: yield* parseStored("inline_audit", MinimalAudit, row.inline_audit ?? ""),
             },
       createdAt: row.created_at,
+      legacyIncomplete: isLegacyIncompleteRow(row),
     }
   })
 }

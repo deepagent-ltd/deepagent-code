@@ -60,6 +60,22 @@ export class V2NoneForbiddenError extends Schema.TaggedErrorClass<V2NoneForbidde
   { graph: Schema.String },
 ) {}
 
+/**
+ * A legacy selection row (C3-08: written by the pre-switch legacy evidence bridge) is read-only for
+ * history/export but is NEVER usable for new dispatch. A fresh V2 attempt must be bound to a real
+ * V2 selection, so the dispatch seam refuses a legacy_incomplete selection with a typed error.
+ */
+export class LegacySelectionNotDispatchableError extends Schema.TaggedErrorClass<LegacySelectionNotDispatchableError>()(
+  "SelectionWriter.LegacySelectionNotDispatchableError",
+  { selectionId: Schema.String },
+) {}
+
+/** The selection row is legacy_incomplete (read-side interpretation, no schema column). */
+export class LegacySelectionCorruptError extends Schema.TaggedErrorClass<LegacySelectionCorruptError>()(
+  "SelectionWriter.LegacySelectionCorruptError",
+  { field: Schema.String },
+) {}
+
 /** The committed slot for (session, activity, revision) already holds a DIFFERENT selection. */
 export class SelectionExistsConflictError extends Schema.TaggedErrorClass<SelectionExistsConflictError>()(
   "SelectionWriter.SelectionExistsConflictError",
@@ -81,6 +97,8 @@ export class SelectionRowCorruptError extends Schema.TaggedErrorClass<SelectionR
 export type Error =
   | RequiredAttemptFkError
   | V2NoneForbiddenError
+  | LegacySelectionNotDispatchableError
+  | LegacySelectionCorruptError
   | SelectionExistsConflictError
   | ValidationMismatchError
   | SelectionRowCorruptError
@@ -275,150 +293,15 @@ export const layer = Layer.effect(
     const db = (yield* Database.Service).db
 
     const write = Effect.fn("SelectionWriter.write")(function* (input: WriteInput) {
-      if (!input.attempt.attemptId || !input.attempt.requestHash || !input.attempt.providerId) {
-        return yield* new RequiredAttemptFkError({ reason: "attempt_binding_absent" })
-      }
-      const envelope = input.envelope
-      if (hasV2None(envelope.graphStatuses)) {
-        return yield* new V2NoneForbiddenError({ graph: v2NoneGraph(envelope.graphStatuses) })
-      }
-      const now = input.now ?? Date.now()
-      const existing = yield* db
-        .select()
-        .from(SessionContextSelectionTable)
-        .where(
-          and(
-            eq(SessionContextSelectionTable.session_id, envelope.membership.sessionId),
-            eq(SessionContextSelectionTable.activity_id, envelope.membership.activityId),
-            eq(SessionContextSelectionTable.revision, envelope.revision),
-          ),
-        )
-        .get()
-        .pipe(Effect.orDie)
-      if (existing) {
-        if (selectionRowsMatch(existing, envelope)) {
-          const validationId = yield* ensureValidationRow(db, envelope, input.attempt, existing.selection_id, now)
-          return { kind: "existing", selectionId: existing.selection_id, validationId, revision: existing.revision, conflict: false } as const
-        }
-        // CAS-lost: the slot for (session, activity, revision) already holds a DIFFERENT selection.
-        // Design §6.4: never rewrite a dispatched selection — the caller must build a successor.
-        return {
-          kind: "existing",
-          selectionId: existing.selection_id,
-          validationId: "",
-          revision: existing.revision,
-          conflict: true,
-        } as const
-      }
-      const created = yield* db
-        .insert(SessionContextSelectionTable)
-        .values(rowValues(envelope, now))
-        .onConflictDoNothing()
-        .returning({ selection_id: SessionContextSelectionTable.selection_id })
-        .get()
-        .pipe(Effect.orDie)
-      const selectionId = created?.selection_id ?? envelope.selectionId
-      const validationId = yield* ensureValidationRow(db, envelope, input.attempt, selectionId, now)
-      return { kind: "written", selectionId, validationId, revision: envelope.revision } as const
+      return yield* writeSelection(db, input)
     })
 
     const assertAttemptBound = Effect.fn("SelectionWriter.assertAttemptBound")(function* (input: AttemptBoundInput) {
-        const attempt = yield* db
-          .select()
-          .from(SessionProviderAttemptTable)
-          .where(eq(SessionProviderAttemptTable.attempt_id, input.attemptId))
-          .get()
-          .pipe(Effect.orDie)
-        if (!attempt) return yield* new RequiredAttemptFkError({ reason: "attempt_not_found" })
-        if (attempt.selection_id !== input.selectionId) {
-          return yield* new RequiredAttemptFkError({ reason: "attempt_selection_mismatch" })
-        }
-        const selection = yield* db
-          .select()
-          .from(SessionContextSelectionTable)
-          .where(eq(SessionContextSelectionTable.selection_id, input.selectionId))
-          .get()
-          .pipe(Effect.orDie)
-        if (!selection) return yield* new RequiredAttemptFkError({ reason: "selection_not_found" })
-        const statuses = parseStatuses(selection)
-        if (hasV2None(statuses)) {
-          return yield* new V2NoneForbiddenError({ graph: v2NoneGraph(statuses) })
-        }
-        const now = input.now ?? Date.now()
-        const validation = yield* db
-          .select()
-          .from(SessionContextValidationTable)
-          .where(
-            and(
-              eq(SessionContextValidationTable.selection_id, input.selectionId),
-              eq(SessionContextValidationTable.provider_turn_seq, attempt.provider_turn_seq),
-            ),
-          )
-          .orderBy(desc(SessionContextValidationTable.validated_at))
-          .get()
-          .pipe(Effect.orDie)
-        if (!validation || validation.outcome !== "valid") {
-          return yield* new ValidationMismatchError({ reason: "attempt_validation_not_valid" })
-        }
-        if (validation.valid_until <= now) {
-          return yield* new ValidationMismatchError({ reason: "attempt_validation_expired" })
-        }
-        return {
-          attemptId: attempt.attempt_id,
-          selectionId: selection.selection_id,
-          revision: selection.revision,
-          outcome: validation.outcome,
-        }
-      },
-    )
+      return yield* assertAttemptBoundSelection(db, input)
+    })
 
     const revalidate = Effect.fn("SelectionWriter.revalidate")(function* (input: RevalidateInput) {
-      const now = input.now ?? Date.now()
-      const validationId = validationIdOf({
-        selectionId: input.selectionId,
-        providerTurnSeq: input.providerTurnSeq,
-        seed: {
-          selectionId: input.selectionId,
-          providerTurnSeq: input.providerTurnSeq,
-          authorizationEpoch: input.authorizationEpoch,
-          egressEpoch: input.egressEpoch,
-          observedLocationMutationEpoch: input.observedLocationMutationEpoch,
-          selectedSourceFingerprint: input.selectedSourceFingerprint,
-        },
-        outcome: "valid",
-      })
-      const inserted = yield* db
-        .insert(SessionContextValidationTable)
-        .values({
-          validation_id: validationId,
-          selection_id: input.selectionId,
-          provider_turn_seq: input.providerTurnSeq,
-          authorization_epoch: input.authorizationEpoch,
-          egress_epoch: input.egressEpoch,
-          observed_location_mutation_epoch: input.observedLocationMutationEpoch,
-          selected_source_fingerprint: input.selectedSourceFingerprint,
-          validated_at: now,
-          valid_until: input.validUntil,
-          outcome: "valid",
-          reason_code: "selection_revalidated",
-        })
-        .onConflictDoNothing()
-        .returning({ validation_id: SessionContextValidationTable.validation_id })
-        .get()
-        .pipe(Effect.orDie)
-      if (inserted) return inserted.validation_id
-      const existing = yield* db
-        .select({ validation_id: SessionContextValidationTable.validation_id })
-        .from(SessionContextValidationTable)
-        .where(
-          and(
-            eq(SessionContextValidationTable.selection_id, input.selectionId),
-            eq(SessionContextValidationTable.provider_turn_seq, input.providerTurnSeq),
-          ),
-        )
-        .get()
-        .pipe(Effect.orDie)
-      return existing?.validation_id ?? validationId
+      return yield* revalidateSelection(db, input)
     })
 
     return Service.of({ write, assertAttemptBound, revalidate })
@@ -428,6 +311,247 @@ export const layer = Layer.effect(
 // ---------------------------------------------------------------------------
 // pure helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Stateless production selection write (C3-08: shared by the service layer and the canonical
+ * V2 turn, so the F2 writer is the single write authority). Idempotent, FK-enforced, refuses a
+ * v2-none envelope, and refuses a CAS-lost slot rather than rewriting a dispatched selection.
+ */
+export const writeSelection = Effect.fn("SelectionWriter.writeSelection")(function* (
+  db: Database.Interface["db"],
+  input: WriteInput,
+) {
+  if (!input.attempt.attemptId || !input.attempt.requestHash || !input.attempt.providerId) {
+    return yield* new RequiredAttemptFkError({ reason: "attempt_binding_absent" })
+  }
+  const envelope = input.envelope
+  if (hasV2None(envelope.graphStatuses)) {
+    return yield* new V2NoneForbiddenError({ graph: v2NoneGraph(envelope.graphStatuses) })
+  }
+  const now = input.now ?? Date.now()
+  const existing = yield* db
+    .select()
+    .from(SessionContextSelectionTable)
+    .where(
+      and(
+        eq(SessionContextSelectionTable.session_id, envelope.membership.sessionId),
+        eq(SessionContextSelectionTable.activity_id, envelope.membership.activityId),
+        eq(SessionContextSelectionTable.revision, envelope.revision),
+      ),
+    )
+    .get()
+    .pipe(Effect.orDie)
+  if (existing) {
+    if (selectionRowsMatch(existing, envelope)) {
+      const validationId = yield* ensureValidationRow(db, envelope, input.attempt, existing.selection_id, now)
+      return { kind: "existing", selectionId: existing.selection_id, validationId, revision: existing.revision, conflict: false } as const
+    }
+    // CAS-lost: the slot for (session, activity, revision) already holds a DIFFERENT selection.
+    // Design §6.4: never rewrite a dispatched selection — the caller must build a successor.
+    return {
+      kind: "existing",
+      selectionId: existing.selection_id,
+      validationId: "",
+      revision: existing.revision,
+      conflict: true,
+    } as const
+  }
+  const created = yield* db
+    .insert(SessionContextSelectionTable)
+    .values(rowValues(envelope, now))
+    .onConflictDoNothing()
+    .returning({ selection_id: SessionContextSelectionTable.selection_id })
+    .get()
+    .pipe(Effect.orDie)
+  const selectionId = created?.selection_id ?? envelope.selectionId
+  const validationId = yield* ensureValidationRow(db, envelope, input.attempt, selectionId, now)
+  return { kind: "written", selectionId, validationId, revision: envelope.revision } as const
+})
+
+/**
+ * C3-08 stateless selection-row write used by the admission phase (before the attempt binding or
+ * provider turn seq is known). Writes ONLY the `session_context_selection` row (idempotent,
+ * content-addressed, never v2-none); validation is added at the commit seam by the writer's
+ * `revalidate`/`write` or the runner's appendValidation. Returns the selection identity.
+ */
+export const writeSelectionRow = Effect.fn("SelectionWriter.writeSelectionRow")(function* (
+  db: Database.Interface["db"],
+  envelope: SelectionEnvelope,
+  now = Date.now(),
+) {
+  if (hasV2None(envelope.graphStatuses)) {
+    return yield* new V2NoneForbiddenError({ graph: v2NoneGraph(envelope.graphStatuses) })
+  }
+  const existing = yield* db
+    .select()
+    .from(SessionContextSelectionTable)
+    .where(
+      and(
+        eq(SessionContextSelectionTable.session_id, envelope.membership.sessionId),
+        eq(SessionContextSelectionTable.activity_id, envelope.membership.activityId),
+        eq(SessionContextSelectionTable.revision, envelope.revision),
+      ),
+    )
+    .get()
+    .pipe(Effect.orDie)
+  if (existing) {
+    if (selectionRowsMatch(existing, envelope)) {
+      return { selectionId: existing.selection_id, revision: existing.revision, conflict: false } as const
+    }
+    return { selectionId: existing.selection_id, revision: existing.revision, conflict: true } as const
+  }
+  const created = yield* db
+    .insert(SessionContextSelectionTable)
+    .values(rowValues(envelope, now))
+    .onConflictDoNothing()
+    .returning({ selection_id: SessionContextSelectionTable.selection_id })
+    .get()
+    .pipe(Effect.orDie)
+  const selectionId = created?.selection_id ?? envelope.selectionId
+  return { selectionId, revision: envelope.revision, conflict: false } as const
+})
+
+/**
+ * Stateless dispatch-time assertion (C3-08): verifies the attempt is bound to a real (never v2-none,
+ * never legacy_incomplete) selection with a valid, unexpired validation before one physical dispatch.
+ * Legacy rows decode as `legacy_incomplete` and are refused (read-only for history, not dispatchable).
+ */
+export const assertAttemptBoundSelection = Effect.fn("SelectionWriter.assertAttemptBoundSelection")(function* (
+  db: Database.Interface["db"],
+  input: AttemptBoundInput,
+) {
+  const attempt = yield* db
+    .select()
+    .from(SessionProviderAttemptTable)
+    .where(eq(SessionProviderAttemptTable.attempt_id, input.attemptId))
+    .get()
+    .pipe(Effect.orDie)
+  if (!attempt) return yield* new RequiredAttemptFkError({ reason: "attempt_not_found" })
+  if (attempt.selection_id !== input.selectionId) {
+    return yield* new RequiredAttemptFkError({ reason: "attempt_selection_mismatch" })
+  }
+  const selection = yield* db
+    .select()
+    .from(SessionContextSelectionTable)
+    .where(eq(SessionContextSelectionTable.selection_id, input.selectionId))
+    .get()
+    .pipe(Effect.orDie)
+  if (!selection) return yield* new RequiredAttemptFkError({ reason: "selection_not_found" })
+  if (isLegacyIncompleteRow(selection)) {
+    return yield* new LegacySelectionNotDispatchableError({ selectionId: input.selectionId })
+  }
+  const statuses = parseStatuses(selection)
+  if (hasV2None(statuses)) {
+    return yield* new V2NoneForbiddenError({ graph: v2NoneGraph(statuses) })
+  }
+  const now = input.now ?? Date.now()
+  const validation = yield* db
+    .select()
+    .from(SessionContextValidationTable)
+    .where(
+      and(
+        eq(SessionContextValidationTable.selection_id, input.selectionId),
+        eq(SessionContextValidationTable.provider_turn_seq, attempt.provider_turn_seq),
+      ),
+    )
+    .orderBy(desc(SessionContextValidationTable.validated_at))
+    .get()
+    .pipe(Effect.orDie)
+  if (!validation || validation.outcome !== "valid") {
+    return yield* new ValidationMismatchError({ reason: "attempt_validation_not_valid" })
+  }
+  if (validation.valid_until <= now) {
+    return yield* new ValidationMismatchError({ reason: "attempt_validation_expired" })
+  }
+  return {
+    attemptId: attempt.attempt_id,
+    selectionId: selection.selection_id,
+    revision: selection.revision,
+    outcome: validation.outcome,
+  }
+})
+
+/**
+ * C3-08 stateless re-validation (design §4.1 step 7): mark a selection valid for a provider turn after
+ * a drift/rebuild. Idempotent; returns the validation id. Shared by the service layer and the runner.
+ */
+export const revalidateSelection = Effect.fn("SelectionWriter.revalidateSelection")(function* (
+  db: Database.Interface["db"],
+  input: RevalidateInput,
+) {
+  const now = input.now ?? Date.now()
+  const validationId = validationIdOf({
+    selectionId: input.selectionId,
+    providerTurnSeq: input.providerTurnSeq,
+    seed: {
+      selectionId: input.selectionId,
+      providerTurnSeq: input.providerTurnSeq,
+      authorizationEpoch: input.authorizationEpoch,
+      egressEpoch: input.egressEpoch,
+      observedLocationMutationEpoch: input.observedLocationMutationEpoch,
+      selectedSourceFingerprint: input.selectedSourceFingerprint,
+    },
+    outcome: "valid",
+  })
+  const inserted = yield* db
+    .insert(SessionContextValidationTable)
+    .values({
+      validation_id: validationId,
+      selection_id: input.selectionId,
+      provider_turn_seq: input.providerTurnSeq,
+      authorization_epoch: input.authorizationEpoch,
+      egress_epoch: input.egressEpoch,
+      observed_location_mutation_epoch: input.observedLocationMutationEpoch,
+      selected_source_fingerprint: input.selectedSourceFingerprint,
+      validated_at: now,
+      valid_until: input.validUntil,
+      outcome: "valid",
+      reason_code: "selection_revalidated",
+    })
+    .onConflictDoNothing()
+    .returning({ validation_id: SessionContextValidationTable.validation_id })
+    .get()
+    .pipe(Effect.orDie)
+  if (inserted) return inserted.validation_id
+  const existing = yield* db
+    .select({ validation_id: SessionContextValidationTable.validation_id })
+    .from(SessionContextValidationTable)
+    .where(
+      and(
+        eq(SessionContextValidationTable.selection_id, input.selectionId),
+        eq(SessionContextValidationTable.provider_turn_seq, input.providerTurnSeq),
+      ),
+    )
+    .get()
+    .pipe(Effect.orDie)
+  return existing?.validation_id ?? validationId
+})
+
+/**
+ * C3-08 read-side legacy_incomplete classification (no schema column was added; the marking is a
+ * typed interpretation). A selection row is `legacy_incomplete` when it was written by the
+ * pre-switch legacy evidence bridge: the stored `graph_statuses` is the legacy GraphQueryStatus
+ * ARRAY shape (the V2 writer stores a contract Record keyed by graph) or the stored
+ * `graph_revisions` carries the forbidden v2-none value. Such rows stay READABLE for history/export
+ * but are never usable for new dispatch (assertAttemptBoundSelection refuses them).
+ */
+export function isLegacyIncompleteRow(row: typeof SessionContextSelectionTable.$inferSelect): boolean {
+  const statuses = tryJson(row.graph_statuses)
+  if (Array.isArray(statuses)) return true
+  const revisions = tryJson(row.graph_revisions)
+  if (revisions && typeof revisions === "object" && Object.values(revisions).some((value) => value === "v2-none")) {
+    return true
+  }
+  return false
+}
+
+function tryJson(value: string): unknown {
+  try {
+    return JSON.parse(value)
+  } catch {
+    return undefined
+  }
+}
 
 function selectionIdOf(seed: unknown): string {
   return Hash.sha256(CanonicalJson.stringify(seed))

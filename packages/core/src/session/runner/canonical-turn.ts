@@ -1,13 +1,22 @@
 export * as SessionRunnerCanonical from "./canonical-turn"
 
 import { and, asc, desc, eq } from "drizzle-orm"
-import { Context, Effect, Layer, Schema } from "effect"
+import { Effect, Layer, Schema } from "effect"
 import { Database } from "../../database/database"
 import { ContextArtifactStore } from "../../context-federation/artifact-store"
-import { ContextProjection } from "../../context-federation/projection"
 import { SessionProviderAttempt } from "../../context-federation/provider-attempt"
 import { ContextReference } from "../../context-federation/reference"
 import { SessionContext } from "../../context-federation/session-context"
+import { resolveGraphs, GraphOrder, type QueryEnvelope } from "../../context-federation/resolver-v2"
+import { budgetSelection } from "../../context-federation/selection-budget"
+import {
+  buildSelectionEnvelope,
+  isLegacyIncompleteRow,
+  writeSelectionRow,
+  assertAttemptBoundSelection,
+} from "../../context-federation/selection-writer"
+import { stagedV2Adapters } from "../../context-federation/staged-adapters-v2"
+import type { GraphKind, SelectionEnvelope } from "../../contract/selection"
 import {
   SessionActivityInputTable,
   SessionActivityTable,
@@ -19,38 +28,25 @@ import {
   ProjectScopeIdentityTable,
   SecurityNamespaceTable,
 } from "../../context-federation/sql"
-import { DeepAgentReleasedSnapshot } from "../../deepagent/released-snapshot"
 import { SessionSchema } from "../schema"
-import { CanonicalJson } from "../../util/canonical-json"
 import { Hash } from "../../util/hash"
 import { V2ProviderTurn } from "./v2-provider-turn"
 
 // V2 runner turns bind Context Federation authority through the same admission chain as the legacy
-// durable runtime (activity -> selection -> validation -> attempt), but the selected source is the
-// Session-owned history/system context epoch: no federation graphs are queried yet, so selections
-// carry empty evidence and the degraded audit path records the projection fingerprints inline.
+// durable runtime (activity -> selection -> validation -> attempt). Since C3-08 the selection is a
+// REAL four-graph V2 selection produced by the F1 resolver + F2 writer (never the legacy v2-none
+// fallback), so a V2 attempt is always bound to real graph statuses/revisions. The runner
+// composition uses the staged adapter set until production graph sources are wired (C7).
 export const SelectionLifetimeMs = 14 * 60_000
 export const ValidationMs = 60_000
 
 const V2Namespace = ContextReference.SecurityNamespaceID.make("v2:local")
 const V2Scope = ContextReference.ProjectScopeKey.make("v2:local")
-const GraphRevisions = { code: "v2-none", documents: "v2-none", knowledge: "v2-none", memory: "v2-none" } as const
+const StagedPerGraphTimeoutMs = 5_000
 
-// §16.3 order 4 package D — federation selection evidence seam. When provided, a V2 turn's
-// selection commit records the session's REAL federation selection evidence (the selection the
-// legacy durable loop committed for that session) instead of the empty `v2:local` fingerprints.
-// Read-only by construction: the seam only reads the already-committed authority, so the legacy
-// loop remains the single selection writer and the two paths cannot diverge. Unwired compositions
-// (or a lookup fault) keep the empty-evidence local selection exactly as before.
-export type SelectionEvidence = {
-  readonly graphRevisions: { readonly code: string; readonly documents: string; readonly knowledge: string; readonly memory: string }
-  readonly selectedSourceFingerprint: string
-  readonly observedLocationMutationEpoch: number
-}
-export const CurrentSelectionEvidenceLookup = Context.Reference<
-  ((sessionID: SessionSchema.ID) => Effect.Effect<SelectionEvidence | undefined, unknown>) | undefined
->("@deepagent-code/v2/SessionRunnerCanonical/CurrentSelectionEvidenceLookup", { defaultValue: () => undefined })
-
+// §16.3 order 4 package D — the legacy federation selection evidence seam is DELETED by C3-08.
+// A V2 turn no longer copies legacy evidence (or the v2-none fallback) into the selection; the
+// selection is produced by the F1 resolver + F2 writer and always carries real graph statuses.
 export class AdmissionError extends Schema.TaggedErrorClass<AdmissionError>()("SessionRunnerCanonical.AdmissionError", {
   reason: Schema.String,
 }) {}
@@ -195,7 +191,7 @@ function selectContext(
 ) {
   return Effect.gen(function* () {
     const latest = yield* input.db
-      .select({ selectionId: SessionContextSelectionTable.selection_id })
+      .select()
       .from(SessionContextSelectionTable)
       .where(
         and(
@@ -207,64 +203,147 @@ function selectContext(
       .limit(1)
       .get()
       .pipe(Effect.orDie)
-    if (latest) {
-      const existing = yield* input.contexts.getSelection(latest.selectionId)
-      if (!existing) return yield* new AdmissionError({ reason: "selection_missing" })
-      return existing
+    // Reuse an existing V2 selection for this activity (exact-retry/continuation): ONLY a real V2
+    // selection is dispatchable. A legacy_incomplete row (C3-08 read-side marking) stays readable
+    // for history but is NOT reusable for a new dispatch — build a V2 successor instead.
+    if (latest && !isLegacyIncompleteRow(latest)) return yield* admissionFromRow(latest, activity, input, now)
+    const revision = latest ? latest.revision + 1 : 0
+    return yield* buildV2Selection(input, activity, now, locationKey, revision)
+  })
+}
+
+/** Derive the selection admission from an existing V2 selection row (read-only reuse). */
+function admissionFromRow(
+  row: typeof SessionContextSelectionTable.$inferSelect,
+  activity: { readonly activityId: string },
+  input: AdmitSelectionInput,
+  now: number,
+): Effect.Effect<SelectionAdmission, AdmissionError> {
+  return Effect.gen(function* () {
+    return {
+      activityId: activity.activityId,
+      selectionId: row.selection_id,
+      projectionHash: row.projection_hash,
+      authorizationEpoch: row.authorization_epoch,
+      egressEpoch: input.system.baselineSeq,
+      observedLocationMutationEpoch: row.observed_location_mutation_epoch,
+      selectedSourceFingerprint: row.selected_source_fingerprint,
+      nextRevalidationAt: row.next_revalidation_at,
     }
-    const inputs = yield* activityInputIds(input, activity.activityId)
-    const rendered = ContextProjection.render({ evidence: [], statuses: [] })
-    const evidenceLookup = yield* CurrentSelectionEvidenceLookup
-    const evidence = evidenceLookup
-      ? yield* Effect.suspend(() => evidenceLookup(input.sessionID)).pipe(
-          // Synchronous throws at construction land in the cause too; never fail the admission.
-          Effect.catchCause(() => Effect.succeed(undefined)),
-        )
-      : undefined
-    return yield* input.contexts
-      .commitSelection({
-        securityNamespaceId: V2Namespace,
-        projectScopeKey: V2Scope,
-        sessionId: input.sessionID,
-        activityId: activity.activityId,
-        revision: 0,
+  })
+}
+
+/**
+ * C3-08 — build a REAL V2 selection (never v2-none) through the F1 resolver-v2 + F2 selection-budget
+ * + selection-writer flow, write the selection row, and derive the admission. A staged adapter set
+ * yields explicit `degraded_unavailable` statuses until production graph sources are wired; every
+ * graph still produces an explicit status + revision, so a V2 attempt is NEVER a v2-none fallback.
+ */
+function buildV2Selection(
+  input: AdmitSelectionInput,
+  activity: { readonly activityId: string; readonly triggerInputId: string },
+  now: number,
+  locationKey: string,
+  revision: number,
+): Effect.Effect<SelectionAdmission, AdmissionError> {
+  const inputs = activityInputIds(input, activity.activityId)
+  return Effect.gen(function* () {
+    const ids = yield* inputs
+    const envelope = buildV2Envelope(input, activity, ids, locationKey, now)
+    const resolved = yield* resolveGraphs(envelope, stagedV2Adapters(), StagedPerGraphTimeoutMs)
+    const batch = budgetSelection(resolved, envelope)
+    const selectionEnvelope = buildSelectionEnvelope(batch, resolved, envelope, {
+      revision,
+      triggerInputId: activity.triggerInputId,
+      providerTurnSeq: 0,
+      now,
+    })
+    const written = yield* writeSelectionRow(input.db, selectionEnvelope, now).pipe(
+      Effect.mapError((error) => new AdmissionError({ reason: `selection_commit_failed:${selectionErrorDetail(error)}` })),
+    )
+    if (written.conflict && !selectionRowsEqual(written.selectionId, selectionEnvelope.selectionId)) {
+      // A different selection already owns this (session, activity, revision) slot. Build a
+      // successor at the next revision so the attempt binds THIS turn's selection (design §6.4).
+      const successor = buildSelectionEnvelope(batch, resolved, envelope, {
+        revision: revision + 1,
         triggerInputId: activity.triggerInputId,
-        locationKey: ContextReference.LocationKey.make(locationKey),
-        promotedInputIds: inputs,
-        queryFingerprint: fingerprint("v2_activity_query", {
-          activityId: activity.activityId,
-          triggerInputId: activity.triggerInputId,
-          inputIds: inputs,
-        }),
-        authorizationFingerprint: fingerprint("v2_history_context", {
-          agent: input.agent,
-          baseline: input.system.baseline,
-          revision: input.system.revision,
-        }),
-        authorizationEpoch: input.system.revision,
-        executionFingerprint: fingerprint("v2_runner_location", {
-          directory: input.location.directory,
-          workspaceID: input.location.workspaceID ?? null,
-        }),
-        selectedSourceFingerprint:
-          evidence?.selectedSourceFingerprint ??
-          fingerprint("v2_history_source", {
-            baseline: input.system.baseline,
-            revision: input.system.revision,
-            historyEndMessageId: input.historyEndMessageId ?? null,
-          }),
-        observedLocationMutationEpoch: evidence?.observedLocationMutationEpoch ?? 0,
-        nextRevalidationAt: now + SelectionLifetimeMs,
-        releasedKnowledgeBinding: DeepAgentReleasedSnapshot.binding(undefined),
-        graphRevisions: evidence?.graphRevisions ?? GraphRevisions,
-        graphStatuses: [],
-        selectedRefs: [],
-        rendered,
-        artifact: { rankingVersion: "v2-history-context-v1", rejected: [] },
+        providerTurnSeq: 0,
         now,
       })
-      .pipe(Effect.mapError((error) => new AdmissionError({ reason: `selection_commit_failed:${contextErrorDetail(error)}` })))
+      const successorWritten = yield* writeSelectionRow(input.db, successor, now).pipe(
+        Effect.mapError((error) => new AdmissionError({ reason: `selection_commit_failed:${selectionErrorDetail(error)}` })),
+      )
+      return admissionOf(successorWritten.selectionId, successor, input, activity, now)
+    }
+    return admissionOf(written.selectionId, selectionEnvelope, input, activity, now)
   })
+}
+
+function admissionOf(
+  selectionId: string,
+  envelope: SelectionEnvelope,
+  input: AdmitSelectionInput,
+  activity: { readonly activityId: string },
+  now: number,
+): SelectionAdmission {
+  return {
+    activityId: activity.activityId,
+    selectionId,
+    projectionHash: envelope.projectionHash,
+    authorizationEpoch: envelope.principal.authorizationEpoch,
+    egressEpoch: envelope.egress.epoch,
+    observedLocationMutationEpoch: envelope.identity.observedLocationMutationEpoch,
+    selectedSourceFingerprint: envelope.identity.selectedSourceFingerprint,
+    nextRevalidationAt: envelope.validation.validUntil,
+  }
+}
+
+/** Build the F1 resolver QueryEnvelope for a V2 runner turn (v2:local authority scope). */
+function buildV2Envelope(
+  input: AdmitSelectionInput,
+  activity: { readonly activityId: string; readonly triggerInputId: string },
+  inputIds: readonly string[],
+  locationKey: string,
+  now: number,
+): QueryEnvelope {
+  const location = ContextReference.LocationKey.make(locationKey)
+  const principal = {
+    securityNamespaceId: V2Namespace,
+    principalId: input.sessionID,
+    authorizationEpoch: input.system.revision,
+    locationKeys: [location],
+    projectScopeKeys: [V2Scope],
+    sessionIds: [input.sessionID],
+    subjectIds: [],
+    allowBuiltin: false,
+  }
+  const graphs: GraphKind[] = [...GraphOrder]
+  return {
+    membership: { sessionId: input.sessionID, activityId: activity.activityId, inputIds },
+    location: { locationKey, ...(input.location.workspaceID === undefined ? {} : { workspaceId: input.location.workspaceID }) },
+    principal,
+    workspace: { workspaceId: input.location.workspaceID ?? "" },
+    securityNamespace: { securityNamespaceId: V2Namespace },
+    projectScope: { projectScopeKey: V2Scope },
+    egress: { policyId: "v2:history-context", epoch: input.system.baselineSeq, graphs, sensitivities: [] },
+    agentPolicy: { agentId: input.agent, autonomyCeiling: "medium", permitDegraded: true },
+    modelCapability: { modelId: "", providerId: "", protocol: "openai.responses", contextWindow: 0, structuredOutput: false },
+    releasedKnowledge: { snapshotId: "", binding: "unavailable" },
+    queryIntent: "search",
+    query: "session context",
+    observedLocationMutationEpoch: 0,
+    now,
+  }
+}
+
+function selectionRowsEqual(a: string, b: string) {
+  return a === b
+}
+
+function selectionErrorDetail(error: unknown): string {
+  return typeof error === "object" && error !== null && "_tag" in error
+    ? String((error as { readonly _tag: unknown })._tag)
+    : String(error)
 }
 
 function activityInputIds(input: AdmitSelectionInput, activityId: string) {
@@ -278,10 +357,6 @@ function activityInputIds(input: AdmitSelectionInput, activityId: string) {
       Effect.orDie,
       Effect.map((rows) => rows.map((row) => row.inputId)),
     )
-}
-
-function fingerprint(kind: string, payload: unknown) {
-  return Hash.sha256(CanonicalJson.stringify({ kind, ...Object(payload) }))
 }
 
 function isContextError(value: unknown): value is SessionContext.Error {
@@ -320,7 +395,7 @@ export type CommitTurnInput = {
 // binding to the same attempt is idempotent.
 export const commitTurn = Effect.fn("SessionRunnerCanonical.commitTurn")(function* (input: CommitTurnInput) {
   const now = input.now ?? Date.now()
-  return yield* input.db
+  const result = yield* input.db
     .transaction(
       (tx) =>
         Effect.gen(function* () {
@@ -402,6 +477,15 @@ export const commitTurn = Effect.fn("SessionRunnerCanonical.commitTurn")(functio
             : Effect.die(error),
       ),
     )
+  // C3-08 dispatch seam: before ONE physical dispatch, the attempt must be bound to a real
+  // (never v2-none, never legacy_incomplete) selection with a valid, unexpired validation. A
+  // legacy_incomplete or v2-none/absent selection refuses here (no request is dispatched).
+  yield* assertAttemptBoundSelection(input.db, {
+    attemptId: result.attempt.attemptId,
+    selectionId: input.admission.selectionId,
+    now,
+  }).pipe(Effect.mapError((error) => new AdmissionError({ reason: `selection_dispatch_refused:${selectionErrorDetail(error)}` })))
+  return result
 })
 
 // Best-effort audit store for V2 selections: V2 has no federation security namespace yet, so writes
