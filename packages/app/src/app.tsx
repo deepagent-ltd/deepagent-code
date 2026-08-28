@@ -28,6 +28,7 @@ import {
 } from "solid-js"
 import { Dynamic } from "solid-js/web"
 import { CommandProvider } from "@/context/command"
+import { BootstrapGate } from "@/maintenance/bootstrap-gate"
 import { CommentsProvider } from "@/context/comments"
 import { DebugProvider } from "@/context/debug"
 import { FileProvider } from "@/context/file"
@@ -387,32 +388,34 @@ export function AppInterface(props: {
       >
         <GlobalProvider>
           <ConnectionGate disableHealthCheck={props.disableHealthCheck}>
-            <Dynamic
-              component={props.router ?? Router}
-              root={(routerProps) => (
-                <TabsProvider>
-                  <ServerKey>
-                    <QueryProvider>
-                      <ServerSDKProvider>
-                        <ServerSyncProvider>
-                          <RouterRoot appChildren={props.children} onStartupReady={props.onStartupReady}>
-                            {routerProps.children}
-                          </RouterRoot>
-                        </ServerSyncProvider>
-                      </ServerSDKProvider>
-                    </QueryProvider>
-                  </ServerKey>
-                </TabsProvider>
-              )}
-            >
-              <Route path="/" component={HomeRoute} />
-              <Route path="/:dir" component={DirectoryLayout}>
-                <Route path="/" component={() => <Navigate href="session" />} />
-                <Route path="/agent" component={AgentSystemRoute} />
-                <Route path="/review" component={ReviewRoute} />
-                <Route path="/session/:id?" component={SessionRoute} />
-              </Route>
-            </Dynamic>
+            <BootstrapGate>
+              <Dynamic
+                component={props.router ?? Router}
+                root={(routerProps) => (
+                  <TabsProvider>
+                    <ServerKey>
+                      <QueryProvider>
+                        <ServerSDKProvider>
+                          <ServerSyncProvider>
+                            <RouterRoot appChildren={props.children} onStartupReady={props.onStartupReady}>
+                              {routerProps.children}
+                            </RouterRoot>
+                          </ServerSyncProvider>
+                        </ServerSDKProvider>
+                      </QueryProvider>
+                    </ServerKey>
+                  </TabsProvider>
+                )}
+              >
+                <Route path="/" component={HomeRoute} />
+                <Route path="/:dir" component={DirectoryLayout}>
+                  <Route path="/" component={() => <Navigate href="session" />} />
+                  <Route path="/agent" component={AgentSystemRoute} />
+                  <Route path="/review" component={ReviewRoute} />
+                  <Route path="/session/:id?" component={SessionRoute} />
+                </Route>
+              </Dynamic>
+            </BootstrapGate>
           </ConnectionGate>
         </GlobalProvider>
       </ServerProvider>
