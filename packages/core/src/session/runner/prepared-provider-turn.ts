@@ -1,4 +1,5 @@
 import type { Model } from "@deepagent-code/llm"
+import type { ProtocolAttemptIdentity } from "../../contract/model-protocol"
 import { CanonicalJson } from "../../util/canonical-json"
 import { Hash } from "../../util/hash"
 
@@ -52,6 +53,9 @@ export interface Input {
   readonly userMessageID: string
   readonly assistantMessageID?: string
   readonly preparedAt?: number
+  /** C2-04 route/protocol/origin/capability/lowering identity (optional, runtime-record home). */
+  readonly protocolAttemptIdentity?: ProtocolAttemptIdentity
+  readonly protocolAttemptIdentityHash?: string
 }
 
 export interface PreparedProviderTurn {
@@ -95,6 +99,27 @@ export interface PreparedProviderTurn {
   readonly user_message_id: string
   readonly assistant_message_id: string | undefined
   readonly prepared_at: number
+  /** C2-04 route/protocol/origin/capability/lowering identity on the runtime attempt record. */
+  readonly protocol_attempt_identity?: ProtocolAttemptIdentity
+  readonly protocol_attempt_identity_hash?: string
+}
+
+/**
+ * Full prepared attempt identity (design §4.1 step 8). Composes the content
+ * identity (`request_hash`) with the C2-04 protocol attempt identity hash so an
+ * exact retry is byte-stable only when BOTH the payload AND the
+ * route/protocol/origin/capability/lowering binding are identical; a config
+ * drift changes this value and is detected before dispatch.
+ */
+export function attemptIdentityHash(turn: PreparedProviderTurn): string {
+  return Hash.sha256(
+    CanonicalJson.stringify({
+      request_hash: turn.request_hash,
+      ...(turn.protocol_attempt_identity_hash === undefined
+        ? {}
+        : { protocol_attempt_identity_hash: turn.protocol_attempt_identity_hash }),
+    }),
+  )
 }
 
 export function prepare(input: Input): PreparedProviderTurn {
@@ -153,6 +178,10 @@ export function prepare(input: Input): PreparedProviderTurn {
     user_message_id: input.userMessageID,
     assistant_message_id: input.assistantMessageID,
     prepared_at: input.preparedAt ?? Date.now(),
+    ...(input.protocolAttemptIdentityHash === undefined
+      ? {}
+      : { protocol_attempt_identity_hash: input.protocolAttemptIdentityHash }),
+    ...(input.protocolAttemptIdentity === undefined ? {} : { protocol_attempt_identity: input.protocolAttemptIdentity }),
   }
 }
 

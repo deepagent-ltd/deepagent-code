@@ -520,3 +520,83 @@ export function resetProbeHook(): void {
 export function probeHookCalls(): number {
   return configProbeCallCount
 }
+
+// ===========================================================================
+// C2-04 — route/protocol/origin/capability/lowering hash in the attempt identity
+// ===========================================================================
+//
+// design §2.3 + §4.1 step 8: an exact retry keeps the same route; config drift is
+// detected BEFORE dispatch. The runtime attempt record (prepared-provider-turn,
+// untouched here) is the home for the new identity fields; the frozen contract
+// identity field set stays as-is.
+
+/**
+ * Build the frozen `ProtocolAttemptIdentity` (route/protocol/origin/capability/
+ * lowering) for a resolved model. `endpointOriginHash` is a stable hash of the
+ * route-origin binding; `capabilityFingerprint` a stable hash of the resolved
+ * capability set (from C2-03 evidence when supplied). Deterministic: identical
+ * config -> identical identity.
+ */
+export function protocolAttemptIdentityFor(
+  model: ModelV2.Info,
+  provider?: ProviderV2.Info,
+  evidence?: CapabilityConfigEvidence,
+): Contract.ProtocolAttemptIdentity {
+  const selection = resolveModelProtocol(model, provider)
+  if (!selection.protocol || selection.selectionState === "disabled") {
+    const reason = selection.disabledReason ?? "model_protocol_selection_required"
+    throw new CapabilityProbeNotApplicableError({ providerId: model.providerID, modelId: model.id, disabledReason: reason })
+  }
+  const protocol = selection.protocol
+  const routeId = protocolRouteId(protocol)
+  const originId = provider ? provider.id : model.providerID
+  const endpoint = endpointUrl(model, provider) ?? model.providerID
+  const capabilityFingerprint = evidence?.capabilityFingerprint ?? contentDigest({ hashed: contentDigest(selection.capabilities), protocol })
+  return {
+    protocol,
+    routeId,
+    originId,
+    endpointOriginHash: contentDigest({ endpoint, originId, routeId, protocol, protocolVersion: String(Contract.ModelProtocolVersion.protocol) }),
+    capabilityFingerprint,
+    loweringVersion: evidence?.loweringVersion ?? 1,
+    protocolRevision: Contract.ModelProtocolVersion.protocol,
+  }
+}
+
+/** Byte-stable hash of a protocol attempt identity. */
+export function protocolAttemptIdentityHash(identity: Contract.ProtocolAttemptIdentity): string {
+  return Contract.protocolAttemptIdentityDigest(identity)
+}
+
+/** Typed failure: config drifted after the attempt identity was bound (design §2.3). */
+export class ConfigDriftError extends Schema.TaggedErrorClass<ConfigDriftError>()(
+  "ModelProtocol.ConfigDriftError",
+  { reason: Schema.Literal("config_drift_rebuild_required") },
+) {}
+
+/** Whether the current identity drifts from a previously bound identity hash. */
+export function configDrift(current: Contract.ProtocolAttemptIdentity, boundIdentityHash: string): boolean {
+  return protocolAttemptIdentityHash(current) !== boundIdentityHash
+}
+
+/**
+ * Dispatch gate: never dispatch with a mismatched identity. On drift the caller
+ * rebuilds the attempt from the CURRENT config and dispatches THAT (the stale
+ * attempt produces 0 requests); on no drift the stored attempt dispatches as-is
+ * (an exact retry keeps the same route). `dispatch` returns the request count so
+ * a counting transport can assert exactly which attempt went to the wire.
+ */
+export function dispatchGuarded<Request>(input: {
+  readonly current: Contract.ProtocolAttemptIdentity
+  readonly storedIdentityHash: string
+  readonly storedAttempt: Request
+  readonly rebuildAttempt: (identity: Contract.ProtocolAttemptIdentity) => Request
+  readonly dispatch: (request: Request) => number
+}): { readonly action: "dispatch" | "rebuild"; readonly requests: number } {
+  if (!configDrift(input.current, input.storedIdentityHash)) {
+    return { action: "dispatch", requests: input.dispatch(input.storedAttempt) }
+  }
+  const rebuilt = input.rebuildAttempt(input.current)
+  return { action: "rebuild", requests: input.dispatch(rebuilt) }
+}
+
