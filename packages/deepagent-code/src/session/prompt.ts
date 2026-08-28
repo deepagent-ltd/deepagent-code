@@ -3324,8 +3324,13 @@ export const layer = Layer.effect(
             // and is a pure read-projection — it never mutates the graph), so a failure here can never
             // affect the round. Non-terminal `continue` rounds are skipped — the trajectory is not yet
             // complete.
+            // C5-12 — when the V2 event-driven archive path is ON (`v4EventDrivenArchive`), the inline
+            // session-completion archive is SKIPPED: the EventDrivenArchiver consumer is the single
+            // durable archive path (the session.completed / goal.completed consumer-driven projection),
+            // so this inline call would be a DOUBLE-archive of the same authority. When the flag is OFF
+            // the V3.9 inline-archive-only path stays authoritative (unchanged).
             Effect.tap(() =>
-              flags.experimentalWiki && suggestion.status !== "continue"
+              flags.experimentalWiki && suggestion.status !== "continue" && !flags.v4EventDrivenArchive
                 ? archiveSessionOnCompletion({ workspacePath: ctx.directory, sessionID: input.sessionID }).pipe(
                     Effect.asVoid,
                   )
