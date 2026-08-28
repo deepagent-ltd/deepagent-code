@@ -6,6 +6,7 @@ import { Cause, Context, Duration, Effect, Exit, Layer, Option, Ref, Schedule, S
 import { Database } from "../../database/database"
 import { CanonicalJson } from "../../util/canonical-json"
 import { Hash } from "../../util/hash"
+import type { ProtocolAttemptIdentity } from "../../contract/model-protocol"
 import { ContextFederationExecutionParity } from "../../context-federation/execution-parity"
 import { SessionProviderOwner } from "../../context-federation/provider-owner"
 import { SessionProviderAttempt } from "../../context-federation/provider-attempt"
@@ -131,6 +132,9 @@ export type PrepareInput = {
   readonly providerTurnSeq: number
   readonly contextSelectionID?: string
   readonly contextProjectionHash?: string
+  /** C2-04 route/protocol/origin/capability/lowering identity on the prepared attempt record. */
+  readonly protocolAttemptIdentity?: ProtocolAttemptIdentity
+  readonly protocolAttemptIdentityHash?: string
 }
 
 export type ParityInput = ContextFederationExecutionParity.Observation & {
@@ -761,6 +765,12 @@ export function prepare(input: PrepareInput, wireRequestHash: string) {
     wireRequestHash,
     receiptID: input.receipt.receiptId,
     userMessageID: input.userMessageID,
+    ...(input.protocolAttemptIdentity === undefined
+      ? {}
+      : { protocolAttemptIdentity: input.protocolAttemptIdentity }),
+    ...(input.protocolAttemptIdentityHash === undefined
+      ? {}
+      : { protocolAttemptIdentityHash: input.protocolAttemptIdentityHash }),
   })
 }
 
