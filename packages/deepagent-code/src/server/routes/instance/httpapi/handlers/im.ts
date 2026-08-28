@@ -21,6 +21,7 @@ import {
 import { MentionParser } from "@deepagent-code/core/im/mention-parser"
 import { AgentListProviderService } from "@deepagent-code/core/im/agent-list-provider"
 import { executeAgentMentions } from "@deepagent-code/core/im/agent-orchestrator"
+import { isEventV2ImSingleWriteEnabled } from "@deepagent-code/core/deepagent/im-single-write"
 import type { IMMessage, IMAttachment } from "@deepagent-code/core/im/repository"
 import * as IMID from "@deepagent-code/core/im/id"
 import { getWorkspaceContext } from "../utils/workspace-context"
@@ -29,6 +30,14 @@ import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-even
 import { LMNEvents } from "@deepagent-code/core/deepagent/lmn-events"
 
 const IMAttachmentID = IMID.AttachmentID
+
+/** C5-12 — the IM single-write gate for the legacy @mention execution path. When the IM single-write
+ * switch is ON, the legacy synchronous @mention double-write side is SKIPPED (the durable IM single-write
+ * receipt is the single authority); the WebSocket broadcast + agent progress/status remain the
+ * non-authoritative low-latency hint. When OFF the legacy double-write path stays authoritative. Exported
+ * for deterministic testing of the flag-gated branch. */
+export const shouldExecuteLegacyAgentMentions = (mentionCount: number): boolean =>
+  mentionCount > 0 && !isEventV2ImSingleWriteEnabled()
 
 const IM_MAX_MESSAGE_LENGTH = 100000 // 增加到 100k，更灵活
 
@@ -448,7 +457,14 @@ export const imHandlers = HttpApiBuilder.group(InstanceHttpApi, "im", (handlers)
             // InstanceRef/WorkspaceRef that the agent executor (SessionPrompt) needs
             // to locate the worktree/directory. A detached Effect.runFork would drop
             // those references and the agent would never actually run.
-            if (mentionedAgentNames.length > 0) {
+            //
+            // C5-12 — IM SINGLE-WRITE: when `isEventV2ImSingleWriteEnabled()` is ON, the legacy
+            // synchronous @mention execution path is SKIPPED (the durable IM single-write receipt is the
+            // single authority). The live WebSocket broadcast of message_created (above) and the agent's
+            // progress/status are the non-authoritative LOW-LATENCY hint surface; the durable receipt is
+            // the authority. When the flag is OFF the legacy double-write path stays authoritative
+            // (unchanged).
+            if (shouldExecuteLegacyAgentMentions(mentionedAgentNames.length)) {
               yield* executeAgentMentions({
                 workspaceID,
                 directory,

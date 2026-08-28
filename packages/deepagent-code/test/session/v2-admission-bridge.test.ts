@@ -191,8 +191,8 @@ describe("C5-12 V2 admission bridge provider", () => {
     await runWithDb((db) =>
       Effect.gen(function* () {
         const provider = makeV2AdmissionBridge({ db, v2Session: fakeV2Session([]) })
-        req.event = { ...req.event, type: "some.unknown.type" }
-        const outcome = yield* provider.admit({ request: req, scope: scope(req.event) }).pipe(Effect.exit)
+        const badRequest = { ...req, event: { ...req.event, type: "some.unknown.type" } }
+        const outcome = yield* provider.admit({ request: badRequest, scope: scope(req.event) }).pipe(Effect.exit)
         expect(Exit.isFailure(outcome)).toBe(true)
         expect(String(outcome)).toContain("is not registered")
       }),
