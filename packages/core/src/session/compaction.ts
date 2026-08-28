@@ -14,6 +14,7 @@ import type { Config } from "../config"
 import type { SessionContext } from "../context-federation/session-context"
 import type { Database } from "../database/database"
 import type { EventV2 } from "../event"
+import * as Contract from "../contract/model-protocol"
 import { CanonicalJson } from "../util/canonical-json"
 import { Hash } from "../util/hash"
 import { SessionEvent } from "./event"
@@ -125,7 +126,7 @@ type Dependencies = {
   // the local summary dispatch byte-for-byte.
   readonly remoteCompaction?: (
     input: RemoteCompactionRequest,
-  ) => Effect.Effect<{ readonly summary: string } | undefined, unknown>
+  ) => Effect.Effect<RemoteCompactionResult, unknown>
   readonly config: readonly Config.Entry[]
 }
 
@@ -281,18 +282,41 @@ export const reconstructSettledSummary = (existing: {
 // summary short-circuits the local provider dispatch. The remote authority keeps its own durable
 // state (plan §5: the remote state machine stays an independent authority exchanging typed
 // command/result), so no local V2ProviderTurn receipt is created for a remote-produced summary.
-// Unwired (default) or a remote fault degrades to the local summary dispatch — that is the V2-native
-// local path, NOT a fallback to legacy orchestration. Delivery is at-least-once: a crash between the
-// remote result and the Compaction.Ended publish re-sends the same deterministic command, so the
-// remote authority MUST be idempotent / dedupe by command content.
+// Unwired (default) keeps the local summary dispatch — that is the V2-native local path, NOT a
+// fallback to legacy orchestration. Delivery is at-least-once: a crash between the remote result and
+// the Compaction.Ended publish re-sends the same deterministic command, so the remote authority MUST
+// be idempotent / dedupe by command content.
+//
+// design §5.3 (C2-05): remote compact is a Responses-only feature. A non-Responses route must be
+// reported as `not_supported` and never silently routed to a `/responses` compact, and a remote
+// compact whose provider result is unknown must surface as `recovery_required` (keeping the original
+// history readable) rather than be disguised as a successful local summary. The in-process seam
+// narrows the frozen `Contract.RemoteCompactOutcome` to a closeable result projection: a genuinely
+// compacted run carries the summary text so the caller may publish Compaction.Ended.
 export type RemoteCompactionRequest = {
   readonly sessionID: SessionSchema.ID
   readonly summaryPrompt: string
   readonly model: Model
 }
+export type RemoteCompactionResult =
+  | { readonly kind: "compacted"; readonly summary: string }
+  | { readonly kind: "recovery_required"; readonly reason: Contract.RemoteCompactRecoveryReason }
 export const CurrentRemoteCompaction = Context.Reference<
-  ((input: RemoteCompactionRequest) => Effect.Effect<{ readonly summary: string } | undefined, unknown>) | undefined
+  ((input: RemoteCompactionRequest) => Effect.Effect<RemoteCompactionResult, unknown>) | undefined
 >("@deepagent-code/v2/SessionCompaction/CurrentRemoteCompaction", { defaultValue: () => undefined })
+
+/**
+ * design §5.3 Responses-only gate (C2-05). Remote compact is only applicable to an explicit
+ * Responses route (canonical OpenAI or allowlisted-compatible). A Chat-only or Anthropic Messages
+ * route must be reported as `not_supported` and NEVER silently routed to a `/responses` compact.
+ */
+export function remoteCompactSupported(model: Model): boolean {
+  const id = model.route.id
+  return id === "openai-responses" || id === "openai-compatible-responses"
+}
+export function isRemoteCompactUnsupported(model: Model): boolean {
+  return !remoteCompactSupported(model)
+}
 
 export const make = (dependencies: Dependencies) => {
   const config = settings(dependencies.config)
@@ -318,36 +342,64 @@ export const make = (dependencies: Dependencies) => {
     })
 
     const remote = dependencies.remoteCompaction
-    const remoteSummary = remote
-      ? yield* remote({ sessionID: input.sessionID, summaryPrompt, model: input.model }).pipe(
-          // A remote fault degrades to the local dispatch (V2-native), never fails the turn:
-          // typed failures first, then adapter defects — both logged so a broken adapter cannot
-          // hide as "remote never works". Interrupts are caught by NEITHER stage, so cancellation
-          // always propagates (the order-4 seams' catchCause swallowed them; this one must not).
-          Effect.catch(() => {
-            log.warn("remote compaction degraded to local dispatch", { sessionID: input.sessionID })
-            return Effect.succeed(undefined)
-          }),
-          Effect.catchDefect(() => {
-            log.warn("remote compaction adapter defect, degraded to local dispatch", {
-              sessionID: input.sessionID,
-            })
-            return Effect.succeed(undefined)
-          }),
-        )
-      : undefined
-    // An empty remote summary is untrusted input: degrade to the local dispatch instead of
-    // publishing an empty Compaction.Ended (the local path has the same non-empty guard).
-    if (remoteSummary !== undefined && remoteSummary.summary.trim().length > 0) {
-      yield* dependencies.events.publish(SessionEvent.Compaction.Ended, {
+    // design §5.3 Responses-only gate (C2-05): remote compact is only applicable on an explicit
+    // Responses route and must never be silently routed to a `/responses` compact for a Chat-only or
+    // Anthropic route. A non-Responses route short-circuits the REMOTE attempt and falls through to
+    // the V2-native LOCAL summary (a legitimate local compaction, not a disguised remote success).
+    if (remote && remoteCompactSupported(input.model)) {
+      const remoteResult: RemoteCompactionResult = yield* remote({
         sessionID: input.sessionID,
-        messageID,
-        timestamp: yield* DateTime.now,
-        reason: "auto",
-        text: remoteSummary.summary,
-        recent: selected.recent,
+        summaryPrompt,
+        model: input.model,
+      }).pipe(
+        // design §5.3: an unknown/faulted remote result never degrades to a fake local success — it
+        // enters compact recovery (the original history stays readable). Typed failures first, then
+        // adapter defects, both logged; interrupts are caught by NEITHER stage so cancellation always
+        // propagates (the order-4 seams' catchCause swallowed them; this one must not).
+        Effect.catch((error): Effect.Effect<RemoteCompactionResult> => {
+          log.warn("remote compaction faulted, entering compact recovery", {
+            sessionID: input.sessionID,
+            reason: String(error),
+          })
+          return Effect.succeed({ kind: "recovery_required", reason: "provider_error" })
+        }),
+        Effect.catchDefect((): Effect.Effect<RemoteCompactionResult> => {
+          log.warn("remote compaction adapter defect, entering compact recovery", {
+            sessionID: input.sessionID,
+          })
+          return Effect.succeed({ kind: "recovery_required", reason: "provider_error" })
+        }),
+      )
+      if (remoteResult.kind === "compacted") {
+        if (remoteResult.summary.trim().length > 0) {
+          yield* dependencies.events.publish(SessionEvent.Compaction.Ended, {
+            sessionID: input.sessionID,
+            messageID,
+            timestamp: yield* DateTime.now,
+            reason: "auto",
+            text: remoteResult.summary,
+            recent: selected.recent,
+          })
+          return true
+        }
+        log.warn("remote compaction returned an empty summary, entering compact recovery", {
+          sessionID: input.sessionID,
+        })
+        return false
+      }
+      // recovery_required: never publish a fake Compaction.Ended. The original history stays readable
+      // and we do NOT fall through to the local summary dispatch — the compact result is unknown.
+      log.warn("remote compaction entered recovery", {
+        sessionID: input.sessionID,
+        reason: remoteResult.reason,
       })
-      return true
+      return false
+    }
+    if (remote && isRemoteCompactUnsupported(input.model)) {
+      log.warn("remote compact not applicable for a non-Responses route; using the local summary", {
+        sessionID: input.sessionID,
+        route: input.model.route.id,
+      })
     }
 
     const summaryRequest = LLM.request({
