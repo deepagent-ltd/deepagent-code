@@ -30,21 +30,26 @@ import type {
   AbandonTransactionOutcome,
   AttemptIdentity,
   BaselineEvidence,
+  BaselineFragment,
+  BaselineRecord,
   BaselineReconstruction,
   BaselineVerificationOutcome,
   CommandRecord,
   CommandWriteOutcome,
   EvidenceRecord,
   RecoveryStoreState,
+  RepairAndAbandonOutcome,
 } from "./recovery-store"
 import {
   abandonAttemptKey,
   abandonTransaction,
+  baselinesOf,
   commandCas,
   commandsOf,
   emptyRecoveryStoreState,
   evidenceOf,
   recoveryCommandContentAddress,
+  repairAndAbandonTransaction,
   verifyBaselineReconstruction,
 } from "./recovery-store"
 
@@ -55,6 +60,7 @@ export {
   commandCas,
   emptyRecoveryStoreState,
   recoveryCommandContentAddress,
+  repairAndAbandonTransaction,
   verifyBaselineReconstruction,
 } from "./recovery-store"
 
@@ -169,12 +175,15 @@ export type {
   AbandonRecord,
   AbandonTransactionOutcome,
   BaselineEvidence,
+  BaselineFragment,
+  BaselineRecord,
   BaselineReconstruction,
   BaselineVerificationOutcome,
   CommandRecord,
   CommandWriteOutcome,
   EvidenceRecord,
   RecoveryStoreState,
+  RepairAndAbandonOutcome,
 }
 
 // ---------------------------------------------------------------------------
@@ -431,6 +440,19 @@ export type AbandonExactInput = {
   readonly fault?: { readonly at: "after_command_stage" }
 }
 
+/** C1B-06 input: repair the baseline rows AND abandon the attempt atomically. */
+export type RepairBaselineAndAbandonInput = {
+  readonly actor: { readonly type: "user" | "administrator" | "system"; readonly id: string }
+  readonly requestHash: string
+  readonly attemptIdentity: AttemptIdentity
+  readonly baselineRef: string
+  readonly evidence: BaselineEvidence
+  readonly fragments: readonly BaselineFragment[]
+  readonly reasonCode: RecoveryCommandContract.RecoveryReasonCode
+  /** Test seam: inject a crash between the repair and abandon stages. */
+  readonly fault?: { readonly at: "after_repair_stage" }
+}
+
 export interface Interface {
   /** Classify a single attempt into the five-class frozen descriptor (pure). */
   readonly classify: (input: ClassifyInput) => RecoveryCommandContract.RecoveryDescriptor
@@ -479,6 +501,16 @@ export interface Interface {
     readonly reconstruction: BaselineReconstruction
     readonly evidence?: BaselineEvidence
   }) => BaselineVerificationOutcome
+  /** Read a repaired baseline record by its ref. */
+  readonly queryBaseline: (baselineRef: string) => Effect.Effect<BaselineRecord | undefined>
+  /**
+   * C1B-06: repair the baseline rows AND abandon the attempt in ONE atomic
+   * transaction. C1B-05 verification MUST pass first (else no repair and no
+   * abandon); the repair write is hash-committed; a CAS-lost baseline with
+   * legally-different data is never clobbered; a crash between the repair and
+   * abandon stages rolls back both.
+   */
+  readonly repairBaselineAndAbandon: (input: RepairBaselineAndAbandonInput) => Effect.Effect<RepairAndAbandonOutcome, Error>
   /** Evidence store: typed statuses (pending / external / settled); body is C1B-08. */
   readonly evidence: {
     readonly recordStatus: (input: {
@@ -699,6 +731,51 @@ export const layer = Layer.effect(
       )
     })
 
+    const queryBaseline = Effect.fn("SessionProviderRecovery.queryBaseline")(function* (baselineRef: string) {
+      const state = yield* Ref.get(store)
+      return baselinesOf(state).get(baselineRef)
+    })
+
+    const repairBaselineAndAbandon = Effect.fn("SessionProviderRecovery.repairBaselineAndAbandon")(function* (
+      input: RepairBaselineAndAbandonInput,
+    ) {
+      return yield* Semaphore.withPermits(lock, 1)(
+        Effect.gen(function* () {
+          // Repair writes a reconstructed baseline — administrator-grade exit.
+          yield* assertPermission(input.actor, requiredPermissionFor("repairable_exact"))
+          // C1B-05 MUST pass first: never repair without a committed hash/provenance.
+          const verified = verifyBaselineReconstruction({
+            reconstruction: { fragments: input.fragments },
+            evidence: input.evidence,
+          })
+          if (verified.status !== "verified") {
+            return yield* Effect.fail(new BaselineVerifyRefusedError({ reason: verified.reason }))
+          }
+          const state = yield* Ref.get(store)
+          const tx = repairAndAbandonTransaction(
+            state,
+            {
+              requestHash: input.requestHash,
+              attemptIdentity: input.attemptIdentity,
+              baselineRef: input.baselineRef,
+              evidence: input.evidence,
+              fragments: input.fragments,
+              actorType: input.actor.type,
+              actorId: input.actor.id,
+              reasonCode: input.reasonCode,
+            },
+            input.fault,
+          )
+          if (tx.status === "aborted") {
+            return yield* Effect.fail(new RecoveryTransactionAbortedError({ operation: "repair_baseline_and_abandon" }))
+          }
+          // Repair + abandon + command are committed together (no torn third state).
+          yield* Ref.set(store, tx.state)
+          return tx.outcome
+        }),
+      )
+    })
+
     return Service.of({
       classify,
       resolve,
@@ -708,6 +785,8 @@ export const layer = Layer.effect(
       queryAbandon,
       abandonExact,
       verifyBaselineReconstruction,
+      queryBaseline,
+      repairBaselineAndAbandon,
       evidence,
       adapter,
     })
