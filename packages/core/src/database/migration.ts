@@ -1,7 +1,7 @@
 export * as DatabaseMigration from "./migration"
 
 import { sql } from "drizzle-orm"
-import { Cause, Data, Effect, Exit, Schedule, Semaphore } from "effect"
+import { Cause, Data, Effect, Exit, Option, Schedule, Semaphore } from "effect"
 import type { EffectDrizzleSqlite } from "@deepagent-code/effect-drizzle-sqlite"
 import { migrations } from "./migration.gen"
 import { MigrationIdentity } from "./migration-identity"
@@ -100,7 +100,7 @@ export function apply(db: Database, opts: ApplyOptions = {}) {
         opts.filename,
       )
       const outcome = yield* Effect.gen(function* () {
-        const run = yield* beginOrResumeRun(db, opts, pending)
+        const run = yield* beginOrResumeRun(db, opts, pending, completed)
         if (run.state !== "verifying") {
           yield* DatabaseUpgradeRun.advanceRun(db, run.runId, "applying")
           yield* applyMigrations(db, migrations, true, { run, lease, opts })
@@ -109,10 +109,24 @@ export function apply(db: Database, opts: ApplyOptions = {}) {
         yield* DatabaseUpgradeRun.advanceRun(db, run.runId, "ready")
         return yield* DatabaseUpgradeRun.loadRun(db, run.runId)
       }).pipe(
-        // On any failure (including a migration defect), the run goes to recovery_required and
-        // the lease is always released below — a failed run must never stay "applying" forever.
+        // On any failure the run must not stay "applying" forever, but a resume is handled with
+        // different semantics: a divergent run is routed to recovery_required by beginOrResumeRun
+        // (with its specific stable code) and an old-binary fence is a NON-mutating refusal. Only a
+        // genuine migration defect leaves the run in recovery_required here under the generic code.
         Effect.catchCause((cause) =>
           Effect.gen(function* () {
+            const root = Cause.findErrorOption(cause).pipe(Option.getOrUndefined)
+            if (root && root instanceof DatabaseUpgradeRun.OldBinaryFenceError) {
+              // Non-mutating: this binary cannot resume the run; leave it for a capable binary.
+              return yield* Effect.failCause(cause)
+            }
+            if (root && root instanceof DatabaseUpgradeRun.ResumeValidationError) {
+              // A divergent run is routed to recovery_required under its specific stable code.
+              const active = yield* DatabaseUpgradeRun.loadActiveRun(db).pipe(Effect.orDie)
+              if (active) yield* DatabaseUpgradeRun.failRun(db, active.runId, root.code).pipe(Effect.ignore)
+              return yield* Effect.failCause(cause)
+            }
+            // A genuine migration defect leaves the run here under the generic code.
             const active = yield* DatabaseUpgradeRun.loadActiveRun(db).pipe(Effect.orDie)
             if (active) yield* DatabaseUpgradeRun.failRun(db, active.runId, "migration_apply_failed").pipe(Effect.ignore)
             return yield* Effect.failCause(cause)
@@ -195,11 +209,19 @@ function readCompletedSet(db: Database, input: Migration[], requireLinearHistory
   })
 }
 
-function beginOrResumeRun(db: Database, opts: ApplyOptions, pending: Migration[]) {
+function beginOrResumeRun(db: Database, opts: ApplyOptions, pending: Migration[], completed: Set<string>) {
   return Effect.gen(function* () {
     const existing = yield* DatabaseUpgradeRun.loadActiveRun(db)
     if (existing) {
+      // Old-binary fence (non-mutating): a run targeting a protocol this binary cannot write is
+      // refused WITHOUT touching the run, so a capable binary can resume it (design §10.5).
+      yield* checkBinaryFence(existing, opts)
+      // A planned run is not yet writable; advance it so a resume failure can route cleanly to
+      // recovery_required (planned -> recovery_required is not an allowed transition).
       if (existing.state === "planned") yield* DatabaseUpgradeRun.advanceRun(db, existing.runId, "backup_verified")
+      // Validate the run's receipts as the resume source of truth. A divergence is never silently
+      // skipped: apply()'s failure path advances the run to recovery_required under its stable code.
+      yield* validateResumeRun(db, existing, completed)
       return existing
     }
     const reader = opts.readerProtocol ?? DatabaseUpgradeRun.RuntimeReaderProtocol
@@ -220,6 +242,116 @@ function beginOrResumeRun(db: Database, opts: ApplyOptions, pending: Migration[]
     yield* DatabaseUpgradeRun.advanceRun(db, run.runId, "backup_verified")
     return run
   })
+}
+
+// Receipt results that mean "this migration durably reached its applied/backfilled state" and are
+// therefore resumable. `verify_failed` / `rolled_back` record a non-applied outcome and must never
+// be silently resumed over.
+const RESUMABLE_RESULTS = new Set(["applied", "backfilled"])
+
+/**
+ * Validate an active run before resuming it (design §10.5 forward resume). The resume source of
+ * truth is the run's content-addressed receipts; the legacy `migration` journal is a compatibility
+ * source that must agree with the receipts for the run's scope. A divergence is never silently
+ * skipped: it is a typed {@link DatabaseUpgradeRun.ResumeValidationError}.
+ *
+ * Decision rationale (why each check is a hard failure, not a merge):
+ * - receipt-without-journal: a receipt and its journal row are written in the SAME transaction as
+ *   the migration body (design §10.5), so on the happy path a receipt implies a journal row. Its
+ *   absence is a true anomaly / out-of-band journal write => recovery.
+ * - journal-without-receipt (run scope): a migration the run owns that the journal claims applied
+ *   but that never recorded a receipt on the same path, i.e. it was applied outside the run (e.g. a
+ *   legacy binary wrote the journal only). Resuming would risk a duplicate/replayed effect => recovery.
+ * - content_hash / ordinal mismatch or unknown migration: the registry the run targets no longer
+ *   matches the registry the receipts address => recovery (never resume a drifted run).
+ * - failed result: a receipt recording verify_failed / rolled_back under an active run means the
+ *   migration did not reach a durable applied state => recovery.
+ */
+function validateResumeRun(
+  db: Database,
+  run: UpgradeRun,
+  completed: Set<string>,
+): Effect.Effect<void, DatabaseUpgradeRun.ResumeValidationError> {
+  return Effect.gen(function* () {
+    if (run.targetRegistryDigest !== DatabaseUpgradeRun.registryDigest(migrations))
+      return yield* Effect.fail(
+        new DatabaseUpgradeRun.ResumeValidationError({
+          code: "stale_run_target_digest",
+          detail: `run ${run.runId} targets ${run.targetRegistryDigest} but the current registry is ${DatabaseUpgradeRun.registryDigest(migrations)}`,
+        }),
+      )
+    const receipts = yield* DatabaseUpgradeRun.loadReceiptsForRun(db, run.runId)
+    const receiptByMigrationId = new Map<string, DatabaseUpgradeRun.ReceiptRow>()
+    for (const receipt of receipts) {
+      const migration = migrations.find((candidate) => candidate.id === receipt.migration_id)
+      if (!migration)
+        return yield* Effect.fail(
+          new DatabaseUpgradeRun.ResumeValidationError({
+            code: "resume_receipt_unknown_migration",
+            detail: `receipt for migration ${receipt.migration_id} is not in the current registry under run ${run.runId}`,
+          }),
+        )
+      const expectedOrdinal = migrations.indexOf(migration) + 1
+      if (receipt.ordinal !== expectedOrdinal)
+        return yield* Effect.fail(
+          new DatabaseUpgradeRun.ResumeValidationError({
+            code: "resume_receipt_ordinal_mismatch",
+            detail: `receipt for ${receipt.migration_id} has ordinal ${receipt.ordinal} but ${expectedOrdinal} in the registry (run ${run.runId})`,
+          }),
+        )
+      const expectedContentHash = DatabaseUpgradeRun.migrationContentHash(migration)
+      if (receipt.content_hash !== expectedContentHash)
+        return yield* Effect.fail(
+          new DatabaseUpgradeRun.ResumeValidationError({
+            code: "resume_receipt_content_mismatch",
+            detail: `receipt for ${receipt.migration_id} content hash ${receipt.content_hash} does not match the current body ${expectedContentHash} (run ${run.runId})`,
+          }),
+        )
+      if (!RESUMABLE_RESULTS.has(receipt.result))
+        return yield* Effect.fail(
+          new DatabaseUpgradeRun.ResumeValidationError({
+            code: "resume_receipt_failed_result",
+            detail: `receipt for ${receipt.migration_id} recorded result '${receipt.result}' under run ${run.runId}`,
+          }),
+        )
+      if (!completed.has(receipt.migration_id))
+        return yield* Effect.fail(
+          new DatabaseUpgradeRun.ResumeValidationError({
+            code: "resume_receipt_without_journal",
+            detail: `receipt exists for ${receipt.migration_id} but the migration journal has no row (run ${run.runId})`,
+          }),
+        )
+      receiptByMigrationId.set(receipt.migration_id, receipt)
+    }
+    for (const migrationId of run.pendingMigrationIds) {
+      if (completed.has(migrationId) && !receiptByMigrationId.has(migrationId))
+        return yield* Effect.fail(
+          new DatabaseUpgradeRun.ResumeValidationError({
+            code: "resume_journal_without_receipt",
+            detail: `migration journal has ${migrationId} applied under run ${run.runId} but no receipt was recorded`,
+          }),
+        )
+    }
+  })
+}
+
+/**
+ * Non-mutating old-binary fence: refuse to resume an active run whose target reader/writer protocol
+ * exceeds what the running binary supports, leaving the run untouched (design §10.5 "旧 binary 由
+ * capability fence 拒绝连接部分升级 DB").
+ */
+function checkBinaryFence(run: UpgradeRun, opts: ApplyOptions): Effect.Effect<void, DatabaseUpgradeRun.OldBinaryFenceError> {
+  const runningReader = opts.readerProtocol ?? DatabaseUpgradeRun.RuntimeReaderProtocol
+  const runningWriter = opts.writerProtocol ?? DatabaseUpgradeRun.RuntimeWriterProtocol
+  const neededReader = run.targetProtocol.reader
+  const neededWriter = run.targetProtocol.writer
+  if (Number(neededReader) > Number(runningReader) || Number(neededWriter) > Number(runningWriter))
+    return Effect.fail(
+      new DatabaseUpgradeRun.OldBinaryFenceError(
+        `run targets reader/writer protocol ${neededReader}/${neededWriter} but this binary supports ${runningReader}/${runningWriter}`,
+      ),
+    )
+  return Effect.void
 }
 
 function currentProtocol(db: Database, defaultReader: string, defaultWriter: string) {

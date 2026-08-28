@@ -7,7 +7,10 @@ export * as DatabasePreflight from "./preflight"
 // state, the upgrade_run table, free space and the filesystem type. A failing
 // preflight rejects the binary BEFORE migration runs (design §10.3: "不兼容时
 // 不得先跑 migration 再拒绝"). The database is opened with a read-only SQLite
-// connection; nothing is written.
+// connection; nothing is written. The connection keeps SQLite's default
+// synchronous=FULL (it is at FULL, never NORMAL), which is a legitimate read-only,
+// query_only-fenced exemption from design §10.6's "migration/backup/recovery
+// 连接不得使用 NORMAL" rule.
 
 import { Database as BunDatabase } from "bun:sqlite"
 import { promises as fs } from "fs"
@@ -115,6 +118,10 @@ const readConnection = (filename: string): BunDatabase | null => {
   try {
     const db = new BunDatabase(filename, { readwrite: true, create: false })
     db.run("PRAGMA query_only = ON")
+    // Design §10.6: a recovery/read-only inspection connection must not be at NORMAL. bun:sqlite
+    // defaults a fresh connection to synchronous=NORMAL, so force FULL (query_only fences all writes,
+    // so this is purely the durability posture, never a write path).
+    db.run("PRAGMA synchronous = FULL")
     return db
   } catch {
     return null

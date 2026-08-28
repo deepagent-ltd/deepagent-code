@@ -92,7 +92,9 @@ export const verify = Effect.fn("BackupVerify.verify")(function* (manifest: Back
   }
 
   // Reopen the backup read-only on an independent connection; proof the snapshot is a valid,
-  // openable SQLite database rather than a copied byte stream.
+  // openable SQLite database rather than a copied byte stream. This connection is READ-ONLY and
+  // never writes the authority DB, so it keeps SQLite's default synchronous=FULL — a legitimate
+  // read-only exemption from design §10.6 (it is at FULL, never NORMAL).
   const reload = yield* Effect.tryPromise(
     async () => new Database(backupPath, { create: false, readonly: true }),
   ).pipe(Effect.orElseSucceed(() => null))
@@ -101,6 +103,9 @@ export const verify = Effect.fn("BackupVerify.verify")(function* (manifest: Back
   }
 
   try {
+    // Design §10.6: verification/recovery connections must never be at NORMAL. bun:sqlite defaults a
+    // fresh connection to synchronous=NORMAL, so force FULL (read-only here — no authority writes).
+    reload.exec("PRAGMA synchronous = FULL")
     const quick = (reload.query("PRAGMA integrity_check").get() as { integrity_check: string } | undefined)?.integrity_check
     if (quick !== "ok") {
       return fail("integrity_check_failed", `PRAGMA integrity_check returned ${String(quick)}`)

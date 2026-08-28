@@ -130,12 +130,19 @@ export const create = Effect.fn("Backup.create")(function* (options: BackupOptio
 
   // Introspect the source on a separate, read-only connection and produce the snapshot. VACUUM
   // INTO reads a consistent snapshot (including committed WAL frames) and never mutates the
-  // source; the live effect-connection is untouched.
+  // source; the live effect-connection is untouched. This connection is READ-ONLY (it never writes
+  // the authority DB) so it keeps SQLite's default synchronous=FULL and is therefore a legitimate
+  // multi-consumer read-only exemption from design §10.6 "migration/backup/recovery 连接不得使用
+  // NORMAL" — it is at FULL, never NORMAL.
   const snapshot = yield* Effect.tryPromise({
     try: async () => {
       const source = new Database(sourcePath, { create: false, readonly: true })
       try {
         source.exec("PRAGMA busy_timeout = 5000")
+        // Design §10.6: backup connections must never be at NORMAL. bun:sqlite defaults a fresh
+        // connection to synchronous=NORMAL, so force FULL so the VACUUM INTO snapshot commit is
+        // fsynced (a power-loss-consistent backup, not a lazily-flushed one).
+        source.exec("PRAGMA synchronous = FULL")
         const journalMode = (source.query("PRAGMA journal_mode").get() as { journal_mode: string })?.journal_mode
         const synchronous = (source.query("PRAGMA synchronous").get() as { synchronous: number })?.synchronous
         const pageCount = (source.query("PRAGMA page_count").get() as { page_count: number })?.page_count
