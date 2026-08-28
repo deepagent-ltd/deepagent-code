@@ -6,10 +6,17 @@
  * carry `v2-none`). The bridge that copies legacy selection evidence into the V2 selection is a
  * legacy-authority leak the gate must drive to zero.
  *
- * This module counts the runtime `v2-none` string-literal usages in the production src tree
- * using the TypeScript AST, so comment/string-template prose is structurally invisible — the
- * same anti-pollution rule the C0-01 inventory applies. A V2 turn that commits a real four-graph
- * selection has zero such literals.
+ * Semantic precision rule (2026-08-28, after F2/C3-05 defensively referenced the forbidden value):
+ * only a literal that is COMMITTED as a value counts as a bridge usage — object-literal property
+ * value (`{ code: "v2-none" }` — the canonical-turn fallback shape) or a variable-initializer
+ * value (`const x = "v2-none"`). Literals used in comparison/consumption positions
+ * (`status === "v2-none"`, `case "v2-none":`, diagnostic strings) are the SOLUTION side
+ * (defense/removal detection), not the bridge, and are structurally invisible — the same
+ * anti-pollution rule the C0-01 inventory applies.
+ *
+ * This module counts those VALUE-position `v2-none` string literals in the production src tree
+ * using the TypeScript AST, so comment/string-template prose is structurally invisible. A V2 turn
+ * that commits a real four-graph selection has zero such literals.
  */
 import { readFileSync, readdirSync } from "node:fs"
 import { join } from "node:path"
@@ -43,10 +50,21 @@ function collectTsFiles(dir: string, out: string[]): void {
   }
 }
 
+/** True when the literal is COMMITTED as a value (bridge shape), not consumed/compared (solution side). */
+export function isCommittedValueLiteral(node: ts.StringLiteral): boolean {
+  const parent = node.parent
+  return (
+    (ts.isPropertyAssignment(parent) && parent.initializer === node) ||
+    (ts.isVariableDeclaration(parent) && parent.initializer === node)
+  )
+}
+
 /**
- * Enumerate every production source site that commits the v2-none selection-bridge
- * fallback (a TS string literal with the text `v2-none`). Sites are in deterministic
- * file order. A clean V2 four-graph tree has zero sites.
+ * Enumerate every production source site that COMMITS the v2-none selection-bridge fallback:
+ * a `v2-none` string literal in value position (object-literal property value or
+ * variable-initializer value). Literals in comparison/consumption positions are the solution
+ * side and are excluded. Sites are in deterministic file order. A clean V2 four-graph tree has
+ * zero sites.
  */
 export function selectionBridgeSites(): readonly SelectionBridgeSite[] {
   const repoRoot = rootRepoPath()
@@ -58,7 +76,7 @@ export function selectionBridgeSites(): readonly SelectionBridgeSite[] {
     const text = readFileSync(file, "utf8")
     const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
     const visit = (node: ts.Node): void => {
-      if (ts.isStringLiteral(node) && node.text === "v2-none") {
+      if (ts.isStringLiteral(node) && node.text === "v2-none" && isCommittedValueLiteral(node)) {
         const line = source.getLineAndCharacterOfPosition(node.getStart()).line + 1
         sites.push({ repoFile: file.slice(repoRoot.length + 1).replaceAll("\\", "/"), line })
       }
