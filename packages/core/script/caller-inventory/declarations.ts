@@ -131,10 +131,10 @@ const RULES: ReadonlyArray<{ readonly match: (id: string) => boolean; readonly r
     rules: {
       recovery_owner: {
         verdict: "read_only",
-        requirements: [
-          { kind: "reach", pathSuffix: "packages/core/src/database/recovery-binding.ts" },
-          { kind: "reach", pathSuffix: "packages/core/src/database/database.ts" },
-        ],
+        // NEW-P3-F rule: the entry's OWN module is the read fact. `database.ts` is not in the
+        // closure since de09e5b17 (recovery-binding.ts imports the drizzle type directly); the
+        // classifier still reads via its injected db — read-only, no write path.
+        requirements: [{ kind: "reach", pathSuffix: "packages/core/src/database/recovery-binding.ts" }],
       },
     },
   },

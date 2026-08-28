@@ -140,14 +140,17 @@ function withReadOnlyRest(
   return result as EntryRules
 }
 
-/** Non-bus authority writels an event-plane consumer does not reach (so read_only rest is provable). */
+/** Non-bus authority writers an event-plane consumer does not reach (so read_only rest is provable). */
 const EVENT_CONSUMER_READONLY: readonly Requirement[] = [
   noReachPath(AUTHORITY.LEGACY_PROMPT),
   noReachPath(AUTHORITY.V2_EXECUTION_LOCAL),
   noReachPath(AUTHORITY.V2_EXECUTION_RESTART),
   noReachPath(AUTHORITY.V2_TOOL_REGISTRY),
   noReachPath(AUTHORITY.PROJECTOR),
-  noReachPath(AUTHORITY.RECOVERY_BINDING),
+  // recovery-binding is a READ-ONLY recovery classifier, not a writer. Since A5/C1A-11 the
+  // DB-layer post-verify audit (migration.ts -> post-verify.ts -> recovery-binding.ts) is in every
+  // event consumer's reach closure, so an absence check against it could never hold again — it
+  // guarded a non-writer and was unsound by construction; the writer noReach guards above remain.
 ]
 
 const LEGACY_READONLY_REST: readonly Requirement[] = [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish")]
@@ -533,7 +536,7 @@ export const RULE_PACKS: readonly RulePack[] = [
   },
   {
     match: (id) => id === "recovery.database-binding",
-    rules: withReadOnlyRest({ recovery_owner: readOnly([RECOVERY_BINDING]) }, [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish")], "packages/core/src/database/database.ts"),
+    rules: withReadOnlyRest({ recovery_owner: readOnly([RECOVERY_BINDING]) }, [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish")], "packages/core/src/database/recovery-binding.ts"),
   },
   {
     match: (id) => id === "recovery.session-execution-restart",
