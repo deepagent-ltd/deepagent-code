@@ -29,6 +29,9 @@ import type {
   AbandonRecord,
   AbandonTransactionOutcome,
   AttemptIdentity,
+  BaselineEvidence,
+  BaselineReconstruction,
+  BaselineVerificationOutcome,
   CommandRecord,
   CommandWriteOutcome,
   EvidenceRecord,
@@ -42,6 +45,7 @@ import {
   emptyRecoveryStoreState,
   evidenceOf,
   recoveryCommandContentAddress,
+  verifyBaselineReconstruction,
 } from "./recovery-store"
 
 // Re-export the store's value functions so consumers reach them through the service namespace.
@@ -51,6 +55,7 @@ export {
   commandCas,
   emptyRecoveryStoreState,
   recoveryCommandContentAddress,
+  verifyBaselineReconstruction,
 } from "./recovery-store"
 
 // ---------------------------------------------------------------------------
@@ -143,6 +148,11 @@ export class RecoveryTransactionAbortedError extends Schema.TaggedErrorClass<Rec
   "SessionProviderRecovery.RecoveryTransactionAbortedError",
   { operation: Schema.String },
 ) {}
+/** Typed refusal: a reconstructed baseline failed C1B-05 verification. */
+export class BaselineVerifyRefusedError extends Schema.TaggedErrorClass<BaselineVerifyRefusedError>()(
+  "SessionProviderRecovery.BaselineVerifyRefusedError",
+  { reason: Schema.String },
+) {}
 
 export type Error =
   | NotFoundError
@@ -153,10 +163,14 @@ export type Error =
   | RecoveryDecodeError
   | RefuseAbandonWithTerminalEvidenceError
   | RecoveryTransactionAbortedError
+  | BaselineVerifyRefusedError
 
 export type {
   AbandonRecord,
   AbandonTransactionOutcome,
+  BaselineEvidence,
+  BaselineReconstruction,
+  BaselineVerificationOutcome,
   CommandRecord,
   CommandWriteOutcome,
   EvidenceRecord,
@@ -455,6 +469,16 @@ export interface Interface {
    * is refused when a settled/terminal evidence already exists.
    */
   readonly abandonExact: (input: AbandonExactInput) => Effect.Effect<AbandonTransactionOutcome, Error>
+  /**
+   * C1B-05: verify a reconstructed baseline. Pure and deterministic; only an
+   * exact match against a committed hash with unbroken provenance is accepted.
+   * A missing hash/provenance, a hash mismatch or a broken parent chain is a
+   * typed refusal — history is never fabricated from current state.
+   */
+  readonly verifyBaselineReconstruction: (input: {
+    readonly reconstruction: BaselineReconstruction
+    readonly evidence?: BaselineEvidence
+  }) => BaselineVerificationOutcome
   /** Evidence store: typed statuses (pending / external / settled); body is C1B-08. */
   readonly evidence: {
     readonly recordStatus: (input: {
@@ -683,6 +707,7 @@ export const layer = Layer.effect(
       queryCommand,
       queryAbandon,
       abandonExact,
+      verifyBaselineReconstruction,
       evidence,
       adapter,
     })

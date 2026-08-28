@@ -251,3 +251,90 @@ export function abandonTransaction(
   }
   return { status: "committed", state: next, outcome: stage.outcome }
 }
+
+// ---------------------------------------------------------------------------
+// Baseline reconstruction evidence + verifier (C1B-05, design §9.1)
+// ---------------------------------------------------------------------------
+
+/** Provenance of a committed baseline: source, committed-at, parent-hash root. */
+export type BaselineProvenance = {
+  readonly source: string
+  readonly committedAt: number
+  readonly parentHash: string
+}
+
+/** One reconstructed baseline row/fragment with its provenance-chain hash. */
+export type BaselineFragment = {
+  readonly ref: string
+  readonly content: string
+  readonly hash: string
+  readonly parentHash?: string
+}
+
+/** Committed baseline evidence a reconstruction must match. */
+export type BaselineEvidence = {
+  readonly baselineHash: string
+  readonly provenance: BaselineProvenance
+}
+
+/**
+ * A reconstructed baseline: the ordered set of fragments rebuilt from a trusted
+ * source snapshot. The verifier accepts it ONLY when its recomputed content hash
+ * exactly matches the committed hash AND its parent-hash chain is unbroken. There
+ * is deliberately no "current world state" here — a reconstruction that lacks a
+ * committed hash/provenance is always refused, so history is never fabricated from
+ * current rows.
+ */
+export type BaselineReconstruction = {
+  readonly fragments: readonly BaselineFragment[]
+}
+
+/** Result of verifying a reconstructed baseline (C1B-05). */
+export type BaselineVerificationOutcome =
+  | { readonly status: "verified"; readonly hash: string }
+  | {
+      readonly status: "refused"
+      readonly reason: "baseline_missing_hash_provenance" | "hash_mismatch" | "provenance_chain_broken"
+    }
+
+/**
+ * Verify a reconstructed baseline against committed evidence. This is the single
+ * gate a repair may pass (C1B-06 step 1) and it accepts a reconstruction ONLY when:
+ *   1. a committed content hash AND provenance (source / committed-at / parent
+ *      chain root) are present — otherwise `baseline_missing_hash_provenance`
+ *      (history is never fabricated from current rows);
+ *   2. the recomputed hash over the reconstructed content exactly matches the
+ *      committed hash — otherwise `hash_mismatch`;
+ *   3. the provenance parent-hash chain is unbroken (each fragment's parentHash
+ *      links to the prior fragment, rooted at the committed parent) — otherwise
+ *      `provenance_chain_broken` (a baseline is never partially rebuilt).
+ * Pure and deterministic: the same reconstruction + evidence always yields the
+ * same verdict.
+ */
+export function verifyBaselineReconstruction(input: {
+  readonly reconstruction: BaselineReconstruction
+  readonly evidence?: BaselineEvidence
+}): BaselineVerificationOutcome {
+  const { fragments } = input.reconstruction
+  const evidence = input.evidence
+  if (!evidence) return { status: "refused", reason: "baseline_missing_hash_provenance" }
+  const { baselineHash, provenance } = evidence
+  const hasProvenance =
+    provenance != null &&
+    provenance.source.length > 0 &&
+    provenance.committedAt > 0 &&
+    provenance.parentHash.length > 0
+  if (baselineHash.length === 0 || !hasProvenance) {
+    return { status: "refused", reason: "baseline_missing_hash_provenance" }
+  }
+  const reconstructedHash = contentDigest({ fragments: fragments.map((f) => ({ ref: f.ref, content: f.content })) })
+  if (reconstructedHash !== baselineHash) return { status: "refused", reason: "hash_mismatch" }
+  let previousHash: string = provenance.parentHash
+  for (const fragment of fragments) {
+    if (fragment.parentHash === undefined || fragment.parentHash !== previousHash) {
+      return { status: "refused", reason: "provenance_chain_broken" }
+    }
+    previousHash = fragment.hash
+  }
+  return { status: "verified", hash: reconstructedHash }
+}
