@@ -75,7 +75,14 @@ export const check = Effect.fn("DataIntegrity.check")(function* (
           canonicalize(row.id),
         )
       : []
-    ).sort()
+    )
+      // Set semantics (C1A-11 gate, alias reconciliation): a DB migrated across a rename/alias
+      // transition legitimately carries BOTH the alias journal row and the canonical row (e.g.
+      // 20260803000000_subagent_control_plane_l1 + 20260803000001_...), and both canonicalize to
+      // the SAME id. The oracle is a SET equality, so canonical duplicates must be deduped before
+      // the sorted comparison — otherwise a merged-history DB is misrouted to recovery_required.
+      .filter((id, index, all) => all.indexOf(id) === index)
+      .sort()
     const expected = [...options.registryIds].sort()
     const firstMismatch = applied.findIndex((id, index) => id !== expected[index])
     const mismatch =
