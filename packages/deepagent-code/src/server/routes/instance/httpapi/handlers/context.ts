@@ -124,6 +124,11 @@ export const contextHandlers = HttpApiBuilder.group(InstanceHttpApi, "context", 
       query: { session_id: string }
     }) {
       const sessionId = ctx.query.session_id
+      // G7i security F3 — the cursor read is instance-local: the requested session must exist
+      // here (typed 404 otherwise), so a foreign/cross-instance id is never silently served.
+      yield* session.get(SessionID.make(sessionId)).pipe(
+        Effect.mapError(() => makeApiError("resource_not_found", { resource: sessionId })),
+      )
       const authority = yield* database.db
         .select({
           seq: EventSequenceTable.seq,
@@ -142,6 +147,10 @@ export const contextHandlers = HttpApiBuilder.group(InstanceHttpApi, "context", 
       query: { session_id: string; after?: number; limit?: number }
     }) {
       const sessionId = ctx.query.session_id
+      // G7i security F3 — same instance-local existence gate as eventsCursor.
+      yield* session.get(SessionID.make(sessionId)).pipe(
+        Effect.mapError(() => makeApiError("resource_not_found", { resource: sessionId })),
+      )
       const after = ctx.query.after ?? 0
       const limit = ctx.query.limit ?? ContextEventPageLimit
 

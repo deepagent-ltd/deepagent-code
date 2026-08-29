@@ -62,3 +62,9 @@ export function resolveNetworkOptionsNoConfig(args: NetworkOptions, config?: Con
 
   return { hostname, port, mdns, mdnsDomain, cors }
 }
+
+/** Loopback-only helper for the unauthenticated-serve refusal (G7i security F1). */
+export function isLoopbackHost(hostname: string | undefined): boolean {
+  const host = hostname ?? "localhost"
+  return /^(localhost|127\.0\.0\.1|::1)$/.test(host)
+}

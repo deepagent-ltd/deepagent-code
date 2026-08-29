@@ -1,7 +1,7 @@
 import { Effect } from "effect"
 import { UI } from "../ui"
-import { effectCmd } from "../effect-cmd"
-import { withNetworkOptions, resolveNetworkOptions } from "../network"
+import { CliError, effectCmd } from "../effect-cmd"
+import { isLoopbackHost, withNetworkOptions, resolveNetworkOptions } from "../network"
 import { Flag } from "@deepagent-code/core/flag/flag"
 import open from "open"
 import { networkInterfaces } from "os"
@@ -110,10 +110,20 @@ export const WebCommand = effectCmd({
   instance: false,
   handler: Effect.fn("Cli.web")(function* (args) {
     const { Server } = yield* Effect.promise(() => import("../../server/server"))
-    if (!Flag.DEEPAGENT_CODE_SERVER_PASSWORD) {
-      UI.println(UI.Style.TEXT_WARNING_BOLD + "!  DEEPAGENT_CODE_SERVER_PASSWORD is not set; server is unsecured.")
-    }
     const baseOpts = yield* resolveNetworkOptions(args)
+    if (!Flag.DEEPAGENT_CODE_SERVER_PASSWORD) {
+      // G7i security F1: never serve unauthenticated on a non-loopback bind.
+      if (!isLoopbackHost(baseOpts.hostname)) {
+        return yield* Effect.fail(
+          new CliError({
+            message:
+              "Refusing to serve unauthenticated on a non-loopback host; set DEEPAGENT_CODE_SERVER_PASSWORD or bind --hostname 127.0.0.1/::1",
+            exitCode: 2,
+          }),
+        )
+      }
+      UI.println(UI.Style.TEXT_WARNING_BOLD + "!  DEEPAGENT_CODE_SERVER_PASSWORD is not set; server is unsecured (loopback only).")
+    }
     const appHost = "127.0.0.1"
     const appPort = Installation.isLocal()
       ? yield* Effect.promise(() => findAvailablePort(appHost, Number(process.env.DEEPAGENT_WEB_UI_PORT ?? 3000)))
