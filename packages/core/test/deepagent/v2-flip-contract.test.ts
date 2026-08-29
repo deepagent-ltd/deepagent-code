@@ -45,6 +45,9 @@ describe("C7-05 flip contract (production-entry ON + explicit kill-switch)", () 
     )
     expect(entry).toContain('process.env.DEEPAGENT_CODE_EVENT_V2_ADMISSION ??= "true"')
     expect(entry).toContain('process.env.DEEPAGENT_CODE_EVENT_V2_IM_SINGLE_WRITE ??= "true"')
+    // The IM single-write suppression must ship together with the V2 event-driven IM path
+    // (otherwise @mention work is silently dropped — the G7i authority review P1).
+    expect(entry).toContain('process.env.DEEPAGENT_CODE_V4_EVENT_DRIVEN_IM ??= "true"')
   })
 
   test("the two switches are independent", () => {
