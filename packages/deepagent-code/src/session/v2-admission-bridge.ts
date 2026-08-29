@@ -21,6 +21,9 @@ import type { Database } from "@deepagent-code/core/database/database"
 import { SessionV2 } from "@deepagent-code/core/session"
 import { SessionMessage } from "@deepagent-code/core/session/message"
 import { Prompt } from "@deepagent-code/core/session/prompt"
+import { Location } from "@deepagent-code/core/location"
+import { AbsolutePath } from "@deepagent-code/core/schema"
+import { Option } from "effect"
 import type { EventDispatcher } from "./event-dispatcher"
 import type { MultiAgentRuntime } from "./multi-agent-runtime"
 
@@ -251,11 +254,29 @@ const sessionMessageID = (anchor: string): string => `msg_${contentDigest(anchor
 /** The `(yield* SessionV2.Service).prompt(...)` adapter wrapped to the `EventAdmission.SessionWorkAdapter`
  * contract. The model-facing prompt is the serialized bounded envelope (`promptText`), never the raw V4
  * payload; the delivery vocabulary maps 1:1 (steer/queue/goal_steer). */
-export const makeSessionV2Adapter = (v2Session: SessionV2.Interface): EventAdmission.SessionWorkAdapter => ({
+export const makeSessionV2Adapter = (
+  v2Session: SessionV2.Interface,
+  locationFor: (workspaceId: string | undefined) => Location.Ref | undefined,
+  workspaceId: string | undefined,
+): EventAdmission.SessionWorkAdapter => ({
   admit: ({ envelope, sessionID, messageID, delivery, resume, promptText }) =>
     Effect.gen(function* () {
+      const sid = SessionV2.ID.make(sessionID)
+      // C5-12-DEV-01: a fresh routed event may arrive before its V2 projection exists; the durable
+      // admission must get-or-create the session first (the legacy path lazily ensured it). The
+      // location follows the §C derivation (a non-"wrk" workspaceID doubles as the directory).
+      const exists = yield* v2Session.get(sid).pipe(Effect.option)
+      if (Option.isNone(exists)) {
+        const location = locationFor(workspaceId)
+        if (!location) {
+          return yield* Effect.fail(
+            new Error(`C5-12 admission cannot create session "${sessionID}": no event directory or workspace location`),
+          )
+        }
+        yield* v2Session.create({ id: sid, location })
+      }
       const admitted = yield* v2Session.prompt({
-        sessionID: SessionV2.ID.make(sessionID),
+        sessionID: sid,
         prompt: new Prompt({ text: promptText }),
         delivery,
         resume,
@@ -276,7 +297,17 @@ export interface V2AdmissionBridgeDeps {
    * Omitted ⇒ deterministic workspace-scoped default. */
   readonly securityNamespaceFor?: (workspaceId: string) => Effect.Effect<string, unknown>
   readonly now?: () => number
+  /** Optional session-location derivation for get-or-create (C5-12-DEV-01). Default: §C
+   * derivation — a non-"wrk" workspaceID doubles as the directory; bare "wrk_" ids have no
+   * directory and get-or-create fails closed instead of guessing one. */
+  readonly locationFor?: (workspaceId: string | undefined) => Location.Ref | undefined
 }
+
+/** Default §C derivation for get-or-create: a non-"wrk" workspaceID doubles as the directory. */
+const defaultLocationFor = (workspaceId: string | undefined): Location.Ref | undefined =>
+  workspaceId && !workspaceId.startsWith("wrk")
+    ? Location.Ref.make({ directory: AbsolutePath.make(workspaceId) })
+    : undefined
 
 /**
  * Build the production `MultiAgentRuntime.EventV2AdmissionBridge`. This is typed against the runtime's
@@ -325,7 +356,7 @@ export const makeV2AdmissionBridge = (deps: V2AdmissionBridgeDeps): MultiAgentRu
           event: registered,
           registration: verdict.registration,
           scope,
-          adapter: makeSessionV2Adapter(deps.v2Session),
+          adapter: makeSessionV2Adapter(deps.v2Session, deps.locationFor ?? defaultLocationFor, scope.workspaceId),
           now: now(),
         })
       }),
