@@ -10,7 +10,7 @@ import type {
   SessionConfigSelectOption,
   SetSessionConfigOptionResponse,
 } from "@agentclientprotocol/sdk"
-import type { OpencodeClient } from "@deepagent-code/sdk/v2"
+import type { OpencodeClient } from "@deepagent-code/sdk"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { ModelV2 } from "@deepagent-code/core/model"
 import { Effect } from "effect"
