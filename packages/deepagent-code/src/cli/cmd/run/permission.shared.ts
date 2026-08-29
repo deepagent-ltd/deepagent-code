@@ -13,7 +13,7 @@
 //
 // permissionInfo() extracts display info (icon, title, lines, diff) from
 // the request, delegating to tool.ts for tool-specific formatting.
-import type { PermissionRequest } from "@deepagent-code/sdk/v2"
+import type { PermissionRequest } from "@deepagent-code/sdk"
 import type { PermissionReply } from "./types"
 import { toolPath, toolPermissionInfo } from "./tool"
 

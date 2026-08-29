@@ -12,7 +12,7 @@
 //   3. starts the stream transport (SDK event subscription), lazily for fresh
 //      local sessions,
 //   4. runs the prompt queue until the footer closes.
-import { createOpencodeClient } from "@deepagent-code/sdk/v2"
+import { createOpencodeClient } from "@deepagent-code/sdk"
 import { Flag } from "@deepagent-code/core/flag/flag"
 import { Identifier } from "@deepagent-code/core/util/identifier"
 import { MessageID } from "@/session/schema"

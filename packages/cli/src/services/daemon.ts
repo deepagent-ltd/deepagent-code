@@ -1,6 +1,6 @@
 import { Global } from "@deepagent-code/core/global"
 import { InstallationVersion } from "@deepagent-code/core/installation/version"
-import { createOpencodeClient } from "@deepagent-code/sdk/v2/client"
+import { createOpencodeClient } from "@deepagent-code/sdk/client"
 import { ServerAuth } from "@deepagent-code/server/auth"
 import { Context, Effect, FileSystem, Layer, Option, Schedule, Schema, Scope } from "effect"
 import { HttpServer } from "effect/unstable/http"

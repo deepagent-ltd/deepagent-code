@@ -1,9 +1,8 @@
 import type { AgentSideConnection } from "@agentclientprotocol/sdk"
 import * as Log from "@deepagent-code/core/util/log"
-import type { OpencodeClient, Part, SessionMessageResponse, ToolPart } from "@deepagent-code/sdk/v2"
-import type { SessionEventPayload } from "@deepagent-code/sdk/v2/client"
+import type { ContextSessionEvent, OpencodeClient, Part, SessionMessageResponse, ToolPart } from "@deepagent-code/sdk"
 import { Effect } from "effect"
-import { openRunJournal } from "../session-v2-journal"
+import { openRunJournal, type RunJournalClient } from "../session-v2-journal"
 import { ACPSession } from "./session"
 import { ACPPermission } from "./permission"
 import { partsToContentChunks, type ReplayPart } from "./content"
@@ -87,21 +86,14 @@ export class Subscription {
       current?.close()
     }
     this.journals.set(sessionID, { close })
-    // Resync reopens from the journal head so missed boundaries re-render in order; the
-    // applied-id set absorbs duplicates from the value boundary replay.
+    // The durable cursor is read by openRunJournal itself (context.eventsCursor), and a 410 gap is
+    // bounded-resynced there; the applied-id set absorbs duplicates from the value-boundary replay.
     void (async () => {
-      const watermark = await this.input.sdk.session
-        .sessionEventWatermark(sessionID)
-        .catch(() => undefined)
-      let after = watermark === undefined ? undefined : String(watermark)
-      let lastSeq = watermark
       while (!closed) {
-        current = await openRunJournal(this.input.sdk.session, sessionID, {
-          after,
+        current = await openRunJournal(this.journalClient, sessionID, {
           onEvent: (payload) => {
             if (!payload.id || applied.has(payload.id)) return
             applied.add(payload.id)
-            if (payload.seq !== undefined) lastSeq = payload.seq
             void this.deliver(payload).catch((error: unknown) => {
               log.error("failed to handle journal event", { error, type: payload.type })
             })
@@ -110,16 +102,33 @@ export class Subscription {
           onStreamEnd: () => {},
           onError: (error) => log.error("session journal error", { sessionID, error }),
         })
-        // Reopen from the last delivered seq so only the in-flight window re-drains; the
-        // applied-id set absorbs any transport-level duplicates from the reconnect.
-        after = lastSeq === undefined ? undefined : String(lastSeq)
         await current.done
+        // A terminal error settles the journal without closing it; back off and reopen from the
+        // durable head so a transient failure does not spin, and the applied-id set absorbs the
+        // replay of any boundary already delivered.
+        if (!closed) await new Promise((resolve) => setTimeout(resolve, 250))
       }
       this.journals.delete(sessionID)
     })().catch((error: unknown) => {
       log.error("session journal drive failed", { sessionID, error })
       this.journals.delete(sessionID)
     })
+  }
+
+  private get journalClient(): RunJournalClient {
+    return {
+      // `throwOnError: true` throws the wrapped C0-03 error on failure and resolves the HeyApi
+      // result envelope on success, so unwrap `.data` to expose the durable cursor surface.
+      eventsCursor: async (sessionId) =>
+        (await this.input.sdk.context.eventsCursor({ session_id: sessionId }, { throwOnError: true })).data,
+      events: async (sessionId, input) =>
+        (
+          await this.input.sdk.context.events(
+            { session_id: sessionId, after: input?.after, limit: input?.limit },
+            { throwOnError: true },
+          )
+        ).data,
+    }
   }
 
   private async openKnownSessions() {
@@ -162,7 +171,7 @@ export class Subscription {
     this.permission.handle({ type: "permission.asked", properties } as never)
   }
 
-    async deliver(payload: SessionEventPayload) {
+    async deliver(payload: ContextSessionEvent) {
     const data = payload.data ?? {}
     const sessionID = typeof data.sessionID === "string" ? data.sessionID : undefined
     const assistantMessageID = typeof data.assistantMessageID === "string" ? data.assistantMessageID : undefined

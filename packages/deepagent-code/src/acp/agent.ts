@@ -17,7 +17,7 @@ import {
   type SetSessionModeRequest,
 } from "@agentclientprotocol/sdk"
 import { Effect } from "effect"
-import type { OpencodeClient } from "@deepagent-code/sdk/v2"
+import type { OpencodeClient } from "@deepagent-code/sdk"
 import * as ACPError from "./error"
 import * as ACPService from "./service"
 

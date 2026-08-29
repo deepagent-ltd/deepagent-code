@@ -32,7 +32,7 @@ import {
 import { InstallationVersion } from "@deepagent-code/core/installation/version"
 import { Identifier } from "@deepagent-code/core/util/identifier"
 import * as Log from "@deepagent-code/core/util/log"
-import type { Message, OpencodeClient, SessionMessageResponse } from "@deepagent-code/sdk/v2"
+import type { Message, OpencodeClient, SessionMessageResponse } from "@deepagent-code/sdk"
 import { Context, Effect, Layer, ManagedRuntime } from "effect"
 import * as ACPError from "./error"
 import { buildConfigOptions, parseModelSelection } from "./config-option"

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test"
-import { createOpencodeClient, type OpencodeClient, type Provider } from "@deepagent-code/sdk/v2"
+import { createOpencodeClient, type OpencodeClient, type Provider } from "@deepagent-code/sdk"
 import type { Resolved } from "@deepagent-code/tui/config"
 import { TuiConfig } from "@/config/tui"
 import { resolveDiffStyle, resolveModelInfo, resolveRunTuiConfig } from "@/cli/cmd/run/runtime.boot"
