@@ -13,7 +13,7 @@
 //
 // Custom answers: if a question has custom=true, an extra "Type your own
 // answer" option appears. Selecting it enters editing mode with a text field.
-import type { QuestionInfo, QuestionRequest } from "@deepagent-code/sdk/v2"
+import type { QuestionInfo, QuestionRequest } from "@deepagent-code/sdk"
 import type { QuestionReject, QuestionReply } from "./types"
 
 export type QuestionBodyState = {

@@ -1,4 +1,4 @@
-import type { Model } from "@deepagent-code/sdk/v2"
+import type { Model } from "@deepagent-code/sdk"
 import { Option, Schema } from "effect"
 
 const item = Schema.Struct({

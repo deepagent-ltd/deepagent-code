@@ -11,7 +11,7 @@
 //     → stream.ts bridges to footer API
 //       → footer.ts queues commits and patches the footer view
 //         → OpenTUI split-footer renderer writes to terminal
-import type { OpencodeClient, PermissionRequest, QuestionRequest, ToolPart } from "@deepagent-code/sdk/v2"
+import type { OpencodeClient, PermissionRequest, QuestionRequest, ToolPart } from "@deepagent-code/sdk"
 import type { TuiConfig } from "@deepagent-code/tui/config"
 
 export type RunFilePart = {

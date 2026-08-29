@@ -1,4 +1,4 @@
-import type { Session as SDKSession, Message, Part } from "@deepagent-code/sdk/v2"
+import type { Session as SDKSession, Message, Part } from "@deepagent-code/sdk"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { Session } from "@/session/session"
 import { MessageV2 } from "../../session/message-v2"

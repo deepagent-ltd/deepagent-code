@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test"
-import { createOpencodeClient, type OpencodeClient } from "@deepagent-code/sdk/v2"
+import { createOpencodeClient, type OpencodeClient } from "@deepagent-code/sdk"
 import { runInteractiveMode } from "@/cli/cmd/run/runtime"
 import type { FooterApi, RunProvider } from "@/cli/cmd/run/types"
 
