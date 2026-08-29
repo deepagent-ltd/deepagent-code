@@ -1,4 +1,4 @@
-import { createOpencodeClient } from "@deepagent-code/sdk/v2"
+import { createOpencodeClient } from "@deepagent-code/sdk"
 import { SessionID } from "@/session/schema"
 import { Schema } from "effect"
 
