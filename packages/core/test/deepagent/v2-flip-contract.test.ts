@@ -40,7 +40,7 @@ describe("C7-05 flip contract (production-entry ON + explicit kill-switch)", () 
 
   test("the production entrypoint enables both authorities", () => {
     const entry = readFileSync(
-      fileURLToPath(new URL("../../../packages/deepagent-code/src/index.ts", import.meta.url)),
+      fileURLToPath(new URL("../../../deepagent-code/src/index.ts", import.meta.url)),
       "utf8",
     )
     expect(entry).toContain('process.env.DEEPAGENT_CODE_EVENT_V2_ADMISSION ??= "true"')
