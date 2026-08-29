@@ -69,7 +69,7 @@ const event = (over?: Partial<DeepAgentEvent.Event>): DeepAgentEvent.Event => ({
   id: DeepAgentEvent.ID.create(1_000),
   type: "ci.failure",
   source: "ci",
-  workspaceID: "wrk_1",
+  workspaceID: "acme/app",
   projectID: "proj_1",
   idempotencyKey: "k",
   priority: "normal",
@@ -89,8 +89,13 @@ type V2PromptCall = { readonly sessionID: string; readonly prompt: { readonly te
 
 /** A fake SessionV2 whose `prompt` records each admission and returns a minimal `Admitted`. Verifies the
  * adapter really drives SessionV2.prompt without needing a live session stack. */
-const fakeV2Session = (calls: V2PromptCall[]): SessionV2.Interface =>
+const fakeV2Session = (calls: V2PromptCall[], options: { readonly exists?: boolean } = {}): SessionV2.Interface =>
   ({
+    get: (_sessionID: unknown) =>
+      options.exists
+        ? Effect.sync(() => ({ id: _sessionID as never, location: undefined as never }))
+        : Effect.fail(new Error("not found")),
+    create: () => Effect.sync(() => ({}) as never),
     prompt: (input: Parameters<SessionV2.Interface["prompt"]>[0]) =>
       Effect.sync(() => {
         calls.push({
@@ -177,7 +182,8 @@ describe("C5-12 V2 admission bridge provider", () => {
     // contract event version, and does NOT embed the raw payload.
     expect(admitted.prompt.text).toContain("event://dae_")
     expect(admitted.prompt.text).toContain('"eventType":"ci.failure"')
-    expect(admitted.prompt.text).not.toContain("acme/app")
+    expect(admitted.prompt.text).not.toContain('"repo":"acme/app"')
+    expect(admitted.prompt.text).not.toContain('"branch":"main"')
   })
 
   test("provider.admit writes a durable admission receipt row", async () => {
