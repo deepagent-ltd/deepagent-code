@@ -146,6 +146,7 @@ import { maintenanceHandlers } from "./handlers/maintenance"
 import { layer as maintenanceRegistryLayer } from "./maintenance-registry"
 import { capabilityHandlers } from "./handlers/capability"
 import { systemContextHandlers } from "./handlers/system-context"
+import { contextHandlers } from "./handlers/context"
 
 export const context = Context.makeUnsafe<unknown>(new Map())
 
@@ -275,6 +276,7 @@ const instanceApiRoutes = HttpApiBuilder.layer(InstanceHttpApi).pipe(
     maintenanceHandlers,
     capabilityHandlers,
     systemContextHandlers,
+    contextHandlers,
   ]),
 )
 
