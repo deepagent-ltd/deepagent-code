@@ -3,8 +3,8 @@ import {
   type SnapshotFileDiff,
   Message as MessageType,
   Part as PartType,
-} from "@deepagent-code/sdk/v2/client"
-import type { SessionStatus } from "@deepagent-code/sdk/v2"
+} from "@deepagent-code/sdk/client"
+import type { SessionStatus } from "@deepagent-code/sdk"
 import { useData } from "../context"
 import { useFileComponent } from "../context/file"
 

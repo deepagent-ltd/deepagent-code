@@ -1,4 +1,4 @@
-import type { AssistantMessage, Part, Provider, UserMessage } from "@deepagent-code/sdk/v2"
+import type { AssistantMessage, Part, Provider, UserMessage } from "@deepagent-code/sdk"
 import { Locale } from "./locale"
 import * as Model from "./model"
 

@@ -28,7 +28,7 @@ import type {
   SessionMessageUser,
   ToolFileContent,
   ToolTextContent,
-} from "@deepagent-code/sdk/v2"
+} from "@deepagent-code/sdk"
 import { createEffect, createMemo, createSignal, For, Match, Show, Switch } from "solid-js"
 import { collapseToolOutput } from "../../util/collapse-tool-output"
 import { setPreLayoutSiblingMargin } from "../../util/layout"

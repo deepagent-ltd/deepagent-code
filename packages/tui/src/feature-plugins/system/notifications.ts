@@ -1,4 +1,4 @@
-import type { Event } from "@deepagent-code/sdk/v2"
+import type { Event } from "@deepagent-code/sdk"
 import type { TuiAttentionSoundName, TuiPlugin, TuiPluginApi } from "@deepagent-code/plugin/tui"
 import type { BuiltinTuiPlugin } from "../builtins"
 

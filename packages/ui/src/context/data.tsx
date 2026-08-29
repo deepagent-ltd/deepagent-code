@@ -6,7 +6,7 @@ import type {
   SessionStatus,
   Provider,
   ProviderConfigError,
-} from "@deepagent-code/sdk/v2"
+} from "@deepagent-code/sdk"
 import { createSimpleContext } from "./helper"
 import { PreloadMultiFileDiffResult } from "@pierre/diffs/ssr"
 

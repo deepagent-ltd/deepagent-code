@@ -1,5 +1,5 @@
 import { Identifier } from "@deepagent-code/core/util/identifier"
-import type { Message, Part } from "@deepagent-code/sdk/v2"
+import type { Message, Part } from "@deepagent-code/sdk"
 
 const pendingForkIntents = new Map<string, string>()
 const pendingForkRequests = new Map<string, Promise<ForkSessionResult>>()

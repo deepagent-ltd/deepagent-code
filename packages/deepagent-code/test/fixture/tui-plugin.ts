@@ -1,4 +1,4 @@
-import { createOpencodeClient } from "@deepagent-code/sdk/v2"
+import { createOpencodeClient } from "@deepagent-code/sdk"
 import { RGBA, type CliRenderer } from "@opentui/core"
 import type { HostPluginApi } from "@deepagent-code/tui/plugin/slots"
 import { createTuiResolvedConfig } from "./tui-runtime"

@@ -1,4 +1,4 @@
-import type { Event } from "@deepagent-code/sdk/v2"
+import type { Event } from "@deepagent-code/sdk"
 import { useSDK } from "./sdk"
 
 type EventMetadata = {
