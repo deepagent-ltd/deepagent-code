@@ -7,10 +7,9 @@ import { exportSessionContext } from "@/cli/session-context"
 // minimal fake so the contract (session_id on create, export_id on read, typed errors propagate)
 // is pinned without a live server.
 
-function makeRecovery() {
+function makeClient() {
   const calls: Record<string, unknown[]> = {}
-  return {
-    calls,
+  const client: RecoveryExportClient = {
     recovery: {
       evidenceExport: (parameters: { export_id: string }) => {
         ;(calls["evidenceExport"] ??= []).push(parameters)
@@ -22,21 +21,22 @@ function makeRecovery() {
           return Promise.resolve({ exportId: "exp_1", sessionId: parameters?.evidenceExportInput?.session_id })
         },
       },
-    } as RecoveryExportClient,
+    },
   }
+  return { calls, client }
 }
 
 describe("session context export", () => {
   it("creates an evidence export for a session (read-only recovery available)", async () => {
-    const { calls, recovery } = makeRecovery()
-    const manifest = await exportSessionContext({ recovery }, { sessionID: "ses-1" })
+    const { calls, client } = makeClient()
+    const manifest = await exportSessionContext(client, { sessionID: "ses-1" })
     expect(calls["create"]).toEqual([{ session_id: "ses-1" }])
     expect(manifest).toEqual({ exportId: "exp_1", sessionId: "ses-1" })
   })
 
   it("reads a previously-created evidence export by id", async () => {
-    const { calls, recovery } = makeRecovery()
-    const manifest = await exportSessionContext({ recovery }, { sessionID: "ses-1", exportID: "exp_old" })
+    const { calls, client } = makeClient()
+    const manifest = await exportSessionContext(client, { sessionID: "ses-1", exportID: "exp_old" })
     expect(calls["evidenceExport"]).toEqual([{ export_id: "exp_old" }])
     expect(manifest).toEqual({ exportId: "exp_old", sessionId: "ses-1" })
   })
@@ -54,12 +54,13 @@ describe("session context export", () => {
         message: "export expired",
       },
     }
-    const sdk = {
+    const client: RecoveryExportClient = {
       recovery: {
         evidenceExport: () => Promise.reject(new Error("export expired", { cause: { body: gone } })),
+        evidenceExport2: { create: () => Promise.resolve({}) },
       },
-    } as unknown as RecoveryExportClient
-    await expect(exportSessionContext(sdk, { sessionID: "ses-1", exportID: "exp_old" })).rejects.toThrow(
+    }
+    await expect(exportSessionContext(client, { sessionID: "ses-1", exportID: "exp_old" })).rejects.toThrow(
       "export expired",
     )
   })
