@@ -117,12 +117,17 @@ export class Subscription {
 
   private get journalClient(): RunJournalClient {
     return {
-      eventsCursor: async (sessionId) => this.input.sdk.context.eventsCursor({ session_id: sessionId }, { throwOnError: true }),
+      // `throwOnError: true` throws the wrapped C0-03 error on failure and resolves the HeyApi
+      // result envelope on success, so unwrap `.data` to expose the durable cursor surface.
+      eventsCursor: async (sessionId) =>
+        (await this.input.sdk.context.eventsCursor({ session_id: sessionId }, { throwOnError: true })).data,
       events: async (sessionId, input) =>
-        this.input.sdk.context.events(
-          { session_id: sessionId, after: input?.after, limit: input?.limit },
-          { throwOnError: true },
-        ),
+        (
+          await this.input.sdk.context.events(
+            { session_id: sessionId, after: input?.after, limit: input?.limit },
+            { throwOnError: true },
+          )
+        ).data,
     }
   }
 

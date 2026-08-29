@@ -26,8 +26,8 @@ export const SessionExportContextCommand = effectCmd({
           type: "string",
         }),
     ),
-  handler: Effect.fn("Cli.session.exportContext")(function* (rawArgs) {
-    const args = rawArgs as unknown as QueryFormatArgs & { sessionID: string; exportId?: string }
+  handler: Effect.fn("Cli.session.exportContext")(function* (rawArgs: QueryFormatArgs & { sessionID: string; exportId?: string }) {
+    const args = rawArgs
     const sdk = yield* Effect.promise(() => createInstanceSDK(args, process.cwd()))
     const manifest = yield* Effect.tryPromise(() =>
       exportSessionContext(sdk, { sessionID: args.sessionID, exportID: args.exportId }),
