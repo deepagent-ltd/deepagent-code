@@ -8,7 +8,7 @@
  * extracted from the response body, plus `.status` and `.body` attached.
  */
 import { afterEach, describe, expect, test } from "bun:test"
-import { createOpencodeClient } from "@deepagent-code/sdk/v2"
+import { createOpencodeClient } from "@deepagent-code/sdk"
 import { Server } from "../../src/server/server"
 import * as Log from "@deepagent-code/core/util/log"
 import { disposeAllInstances, tmpdir } from "../fixture/fixture"

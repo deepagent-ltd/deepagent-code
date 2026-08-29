@@ -11,7 +11,7 @@ import type {
   ToolPart,
   FilePart,
   AgentPart,
-} from "@deepagent-code/sdk/v2"
+} from "@deepagent-code/sdk"
 import { DataProvider } from "../context/data"
 import { FileComponentProvider } from "../context/file"
 import { SessionTurn } from "./session-turn"

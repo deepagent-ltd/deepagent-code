@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import type { Message, Part } from "@deepagent-code/sdk/v2"
+import type { Message, Part } from "@deepagent-code/sdk"
 import {
   acquireForkIntent,
   completeForkIntent,

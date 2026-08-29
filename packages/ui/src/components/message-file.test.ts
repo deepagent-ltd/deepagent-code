@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import type { FilePart } from "@deepagent-code/sdk/v2"
+import type { FilePart } from "@deepagent-code/sdk"
 import { attached, inline, kind } from "./message-file"
 
 function file(part: Partial<FilePart> = {}): FilePart {

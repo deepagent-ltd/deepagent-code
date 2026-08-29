@@ -1,5 +1,5 @@
-import { createOpencodeClient } from "@deepagent-code/sdk/v2"
-import type { GlobalEvent } from "@deepagent-code/sdk/v2"
+import { createOpencodeClient } from "@deepagent-code/sdk"
+import type { GlobalEvent } from "@deepagent-code/sdk"
 import { Flag } from "@deepagent-code/core/flag/flag"
 import { createSimpleContext } from "./helper"
 import { batch, onCleanup, onMount } from "solid-js"
