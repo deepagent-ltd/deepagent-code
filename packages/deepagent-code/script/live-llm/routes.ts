@@ -1002,6 +1002,7 @@ export const routeManifest = [
       "packages/deepagent-code/src/effect/run-service.ts",
       "packages/deepagent-code/src/effect/runtime-flags.ts",
       "packages/deepagent-code/src/event-v2-bridge.ts",
+      "packages/deepagent-code/src/session/v2-admission-bridge.ts",
       "packages/deepagent-code/src/question/**",
     ],
     checks: ["permission", "worktree-routing"],
