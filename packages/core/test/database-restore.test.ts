@@ -38,6 +38,16 @@ const seedCorrupt = (filename: string) => {
   db.close()
 }
 
+const seedCorruptWAL = (filename: string) => {
+  const db = new BunDatabase(filename, { create: true })
+  db.exec("PRAGMA journal_mode = WAL")
+  db.run("CREATE TABLE markers (id TEXT PRIMARY KEY)")
+  db.run("INSERT INTO markers VALUES ('corrupt')")
+  // Leave a committed WAL frame uncheckpointed so the -wal file genuinely exists at the live path.
+  db.exec("INSERT INTO markers VALUES ('wal_frame')")
+  db.close()
+}
+
 const markerOf = (filename: string) => {
   const db = new BunDatabase(filename, { readonly: true })
   try {
@@ -128,6 +138,59 @@ describe("Restore verified (C1A-13)", () => {
     )
     expect(outcome._tag).toBe("Failure")
     // The live DB is untouched (quarantine is a copy; install never replaced it).
+    expect(markerOf(live)).toEqual([{ id: "corrupt" }])
+  }, 60_000)
+
+  test("restore-over-WAL live: stale -wal/-shm are removed so the reopen verify reads the true installed DB", async () => {
+    await using tmp = await tmpdir()
+    const good = path.join(tmp.path, "good.db")
+    const live = path.join(tmp.path, "live.db")
+    const backupDir = await mkBackupDir(tmp.path)
+    await makeGoodDb(good)
+    const manifest = await backUp(good, backupDir)
+    // The live DB is WAL-mode and has a leftover WAL frame (a real WAL-authority DB).
+    seedCorruptWAL(live)
+    const outcome = await Effect.runPromise(
+      Restore.restoreVerified({ dbPath: live, backup: manifest }).pipe(Effect.exit),
+    )
+    expect(outcome._tag).toBe("Success")
+    // The installed content is the true source (the stale WAL frame did NOT leak in: with the
+    // old sidecars in place the reopen would have read the 'wal_frame' row or failed to reopen).
+    expect(markerOf(live)).toEqual([{ id: "known-good" }])
+    // A fresh WAL may exist after the forward-migrate reopen — that is legitimate; the STALE
+    // pre-restore sidecars are gone (their foreign frames cannot survive the reopen verify).
+  }, 60_000)
+
+  test("install failure AFTER the atomic rename puts the original live DB back (partial-install rollback)", async () => {
+    await using tmp = await tmpdir()
+    const good = path.join(tmp.path, "good.db")
+    const live = path.join(tmp.path, "live.db")
+    const backupDir = await mkBackupDir(tmp.path)
+    await makeGoodDb(good)
+    const manifest = await backUp(good, backupDir)
+    seedCorrupt(live)
+    let installed = false
+    const outcome = await Effect.runPromise(
+      Restore.restoreVerified({
+        dbPath: live,
+        backup: manifest,
+        // A post-rename failure: rename succeeds, then the dir fsync step throws.
+        install: (source, target) =>
+          Effect.gen(function* () {
+            // Replicate the real atomic install up to the rename...
+            const dir = path.dirname(target)
+            const tmpFile = path.join(dir, `.${path.basename(target)}.restore-tmp`)
+            yield* Effect.tryPromise(() => fs.copyFile(source, tmpFile))
+            yield* Effect.tryPromise(() => fs.rename(tmpFile, target))
+            installed = true
+            // ...then fail AFTER the rename (the dir fsync that follows a real rename).
+            return yield* Effect.fail(new RestoreError({ code: "install_failed", detail: "post-rename injected" }))
+          }),
+      }).pipe(Effect.exit),
+    )
+    expect(installed).toBe(true)
+    expect(outcome._tag).toBe("Failure")
+    // The ORIGINAL live DB is put back (rollback scope now covers the install step).
     expect(markerOf(live)).toEqual([{ id: "corrupt" }])
   }, 60_000)
 })
