@@ -1,5 +1,5 @@
 import { getFilename } from "@deepagent-code/core/util/path"
-import type { FileSystemBinaryContent, FileSystemTextContent } from "@deepagent-code/sdk/v2"
+import type { FileSystemBinaryContent, FileSystemTextContent } from "@deepagent-code/sdk"
 
 export function serverAttachmentFile(path: string, data: FileSystemTextContent | FileSystemBinaryContent) {
   const content =

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import type { Message, Part, PermissionRequest, Project, QuestionRequest, Session } from "@deepagent-code/sdk/v2/client"
+import type { Message, Part, PermissionRequest, Project, QuestionRequest, Session } from "@deepagent-code/sdk/client"
 import { createRoot } from "solid-js"
 import { isServer } from "solid-js/web"
 import { createStore, reconcile, unwrap } from "solid-js/store"

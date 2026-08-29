@@ -16,7 +16,7 @@
 import { describe, expect, test } from "bun:test"
 import { createRoot } from "solid-js"
 import { createStore, type SetStoreFunction, type Store } from "solid-js/store"
-import type { Message } from "@deepagent-code/sdk/v2/client"
+import type { Message } from "@deepagent-code/sdk/client"
 import { ServerScope } from "@/utils/server-scope"
 import type { State } from "./global-sync/types"
 import { applyDirectoryEvent } from "./global-sync/event-reducer"

@@ -1,4 +1,4 @@
-import type { Project, UserMessage } from "@deepagent-code/sdk/v2"
+import type { Project, UserMessage } from "@deepagent-code/sdk"
 import { useDialog } from "@deepagent-code/ui/context/dialog"
 import { createQuery, skipToken, useMutation, useQueryClient } from "@tanstack/solid-query"
 import {

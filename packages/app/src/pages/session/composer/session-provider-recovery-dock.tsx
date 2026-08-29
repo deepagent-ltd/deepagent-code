@@ -1,4 +1,4 @@
-import type { SessionProviderResolutionListResponse } from "@deepagent-code/sdk/v2"
+import type { SessionProviderResolutionListResponse } from "@deepagent-code/sdk"
 import { hash } from "@deepagent-code/core/util/encode"
 import { Button } from "@deepagent-code/ui/button"
 import { useDialog } from "@deepagent-code/ui/context/dialog"

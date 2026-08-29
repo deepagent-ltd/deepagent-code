@@ -1,4 +1,4 @@
-import type { PermissionRequest, Session } from "@deepagent-code/sdk/v2/client"
+import type { PermissionRequest, Session } from "@deepagent-code/sdk/client"
 import { cmp } from "./utils"
 import { SESSION_RECENT_LIMIT, SESSION_RECENT_WINDOW } from "./types"
 

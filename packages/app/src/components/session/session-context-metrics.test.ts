@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import type { Message, Part, Session } from "@deepagent-code/sdk/v2/client"
+import type { Message, Part, Session } from "@deepagent-code/sdk/client"
 import {
   getConversationTokens,
   getSessionContextMetrics,

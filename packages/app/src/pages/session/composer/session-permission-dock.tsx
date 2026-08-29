@@ -1,5 +1,5 @@
 import { For, Show } from "solid-js"
-import type { PermissionRequest } from "@deepagent-code/sdk/v2"
+import type { PermissionRequest } from "@deepagent-code/sdk"
 import { Button } from "@deepagent-code/ui/button"
 import { DockPrompt } from "@deepagent-code/ui/dock-prompt"
 import { Icon } from "@deepagent-code/ui/icon"

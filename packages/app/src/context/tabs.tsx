@@ -1,4 +1,4 @@
-import type { Session } from "@deepagent-code/sdk/v2/client"
+import type { Session } from "@deepagent-code/sdk/client"
 import { createSimpleContext } from "@deepagent-code/ui/context"
 import { base64Encode } from "@deepagent-code/core/util/encode"
 import { createStore, produce } from "solid-js/store"

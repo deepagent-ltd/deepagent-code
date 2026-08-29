@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { createRoot } from "solid-js"
 import { createStore } from "solid-js/store"
-import type { Message, Part } from "@deepagent-code/sdk/v2/client"
+import type { Message, Part } from "@deepagent-code/sdk/client"
 import { ServerScope } from "@/utils/server-scope"
 import { applyOptimisticAdd, createDirSyncContext, mergeOptimisticPage, runInflight } from "./directory-sync"
 

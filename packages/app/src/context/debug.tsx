@@ -2,15 +2,14 @@
  * DebugContext — 共享调试状态 (V3.7 Phase 4.5)
  *
  * 把 DebugPanel、编辑器断点 gutter、Debug Console 三处连到同一份状态和
- * 同一条 SSE 流。单一 /debug/events 订阅（含 auth_token），事件写入 store，
- * 各消费方从 store 读，不再各自订阅。
+ * 同一条 SSE 流。单一 /debug/events 订阅（C6-04 起走生成 SDK 的 SSE 客户端，
+ * 认证随 REST 调用同源），事件写入 store，各消费方从 store 读，不再各自订阅。
  */
 import { createSimpleContext } from "@deepagent-code/ui/context"
 import { createStore, produce } from "solid-js/store"
 import { onCleanup } from "solid-js"
 import { useServerSDK } from "./server-sdk"
 import { useServer } from "./server"
-import { authTokenFromCredentials } from "@/utils/server"
 
 // ── Types (mirror DebugService.SessionState for the frontend) ─────────────────
 
@@ -94,31 +93,26 @@ export const { use: useDebug, provider: DebugProvider } = createSimpleContext({
     }
 
     const loadScopes = async (sessionId: string, frameId: number) => {
-      const res = await sdk.client.debug.scopes({ sessionId, frameId })
+      const res = await sdk.client.debug.scopes({ sessionId, frameId: String(frameId) })
       const data = res.data as { scopes?: Scope[] } | null
       setState("scopes", data?.scopes ?? [])
     }
 
     // ── SSE (single subscription) ───────────────────────────────────────────
 
-    let sseSource: EventSource | undefined
+    let sseSource: { close?: () => void } | undefined
     const connectStream = () => {
-      sseSource?.close()
-      const url = sdk.client.debug.eventsUrl({})
-      const full = new URL(`${sdk.url}${url}`)
-      const conn = server.current
-      if (conn?.http?.password) {
-        full.searchParams.set(
-          "auth_token",
-          authTokenFromCredentials({ username: conn.http.username, password: conn.http.password }),
-        )
-      }
-      const es = new EventSource(full.toString())
-      sseSource = es
-
-      es.onmessage = (e) => {
-        try {
-          const msg = JSON.parse(e.data) as { type: string; data: Record<string, unknown> }
+      void sseSource?.close?.()
+      void (async () => {
+        // C6-04: the generated SDK exposes the /debug/events SSE surface
+        // (client.debug.events) with the same auth the REST calls use, so the
+        // hand-rolled EventSource + auth_token URL is gone.
+        const stream = (await sdk.client.debug.events()) as unknown as {
+          stream: AsyncGenerator<{ type: string; data: Record<string, unknown> }>
+          close?: () => void
+        }
+        sseSource = stream
+        for await (const msg of stream.stream) {
           const { type, data } = msg
           const sid = data.sessionId as string | undefined
 
@@ -156,27 +150,29 @@ export const { use: useDebug, provider: DebugProvider } = createSimpleContext({
               setState("pausedLocation", undefined)
             }
           }
-        } catch {
-          // ignore parse errors
         }
-      }
+      })().catch((error) => {
+        console.error("[debug] event stream error", error)
+      })
     }
 
     // Connect immediately; load current sessions.
     connectStream()
     void loadSessions()
 
-    onCleanup(() => sseSource?.close())
+    onCleanup(() => void sseSource?.close?.())
 
     // ── actions ────────────────────────────────────────────────────────────
 
     const start = async (input: { adapter: string; program: string; args?: string[]; cwd?: string }) => {
       try {
         const res = await sdk.client.debug.start({
-          adapter: input.adapter,
-          program: input.program,
-          ...(input.args ? { args: input.args } : {}),
-          ...(input.cwd ? { cwd: input.cwd } : {}),
+          debugStartBody: {
+            adapter: input.adapter,
+            program: input.program,
+            ...(input.args ? { args: input.args } : {}),
+            ...(input.cwd ? { cwd: input.cwd } : {}),
+          },
         })
         const data = res.data as { sessionId?: string; error?: string; message?: string } | null
         if (!data || data.error) {
@@ -193,9 +189,11 @@ export const { use: useDebug, provider: DebugProvider } = createSimpleContext({
               .filter(([, lines]) => lines.length > 0)
               .map(([file, lines]) =>
                 (sdk.client.debug.breakpoints({
-                  sessionId: sid,
-                  file,
-                  breakpoints: lines.map((line) => ({ line: line + 1 })),
+                  debugBreakpointsBody: {
+                    sessionId: sid,
+                    file,
+                    breakpoints: lines.map((line) => ({ line: line + 1 })),
+                  },
                 }) as Promise<unknown>).catch(() => undefined),
               ),
           )
@@ -207,7 +205,7 @@ export const { use: useDebug, provider: DebugProvider } = createSimpleContext({
     }
 
     const terminate = async (sessionId: string) => {
-      await (sdk.client.debug.terminate({ sessionId }) as Promise<unknown>).catch(() => undefined)
+      await (sdk.client.debug.terminate({ debugTerminateBody: { sessionId } }) as Promise<unknown>).catch(() => undefined)
       await loadSessions()
     }
 
@@ -218,12 +216,12 @@ export const { use: useDebug, provider: DebugProvider } = createSimpleContext({
     }
 
     const doContinue = async (sessionId: string) => {
-      await (sdk.client.debug.continue({ sessionId }) as Promise<unknown>).catch(() => undefined)
+      await (sdk.client.debug.continue({ debugContinueBody: { sessionId } }) as Promise<unknown>).catch(() => undefined)
       await loadSessions()
     }
 
     const step = async (sessionId: string, kind: "next" | "stepIn" | "stepOut") => {
-      await (sdk.client.debug.step({ sessionId, kind }) as Promise<unknown>).catch(() => undefined)
+      await (sdk.client.debug.step({ debugStepBody: { sessionId, kind } }) as Promise<unknown>).catch(() => undefined)
       await loadSessions()
     }
 
@@ -235,14 +233,14 @@ export const { use: useDebug, provider: DebugProvider } = createSimpleContext({
     }
 
     const loadVariables = async (sessionId: string, variablesReference: number): Promise<Variable[]> => {
-      const res = await sdk.client.debug.variables({ sessionId, variablesReference })
+      const res = await sdk.client.debug.variables({ sessionId, variablesReference: String(variablesReference) })
       const data = res.data as { variables?: Variable[] } | null
       return data?.variables ?? []
     }
 
     const evaluate = async (sessionId: string, expression: string, frameId?: number): Promise<string> => {
       try {
-        const res = await sdk.client.debug.evaluate({ sessionId, expression, ...(frameId !== undefined ? { frameId } : {}) })
+        const res = await sdk.client.debug.evaluate({ debugEvaluateBody: { sessionId, expression, ...(frameId !== undefined ? { frameId } : {}) } })
         // V3.7 review P2: show the `.result` field, not the whole DAP body.
         const data = res.data as { result?: unknown } | null
         const r = data?.result
@@ -261,9 +259,11 @@ export const { use: useDebug, provider: DebugProvider } = createSimpleContext({
       if (!sid) return // no live session — local-only until one starts
       const lines = state.breakpoints[file] ?? []
       await (sdk.client.debug.breakpoints({
-        sessionId: sid,
-        file,
-        breakpoints: lines.map((line) => ({ line: line + 1 })), // DAP is 1-based
+        debugBreakpointsBody: {
+          sessionId: sid,
+          file,
+          breakpoints: lines.map((line) => ({ line: line + 1 })), // DAP is 1-based
+        },
       }) as Promise<unknown>).catch(() => undefined)
     }
 

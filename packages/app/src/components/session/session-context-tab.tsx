@@ -10,7 +10,7 @@ import { StickyAccordionHeader } from "@deepagent-code/ui/sticky-accordion-heade
 import { File } from "@deepagent-code/ui/file"
 import { Markdown } from "@deepagent-code/ui/markdown"
 import { ScrollView } from "@deepagent-code/ui/scroll-view"
-import type { Message, Part, UserMessage } from "@deepagent-code/sdk/v2/client"
+import type { Message, Part, UserMessage } from "@deepagent-code/sdk/client"
 import { useLanguage } from "@/context/language"
 import { useProviders } from "@/hooks/use-providers"
 import { useSessionLayout } from "@/pages/session/session-layout"

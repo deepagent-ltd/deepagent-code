@@ -1,4 +1,4 @@
-import type { Message, Part } from "@deepagent-code/sdk/v2/client"
+import type { Message, Part } from "@deepagent-code/sdk/client"
 
 export type SessionContextBreakdownKey = "system" | "user" | "assistant" | "tool" | "other"
 

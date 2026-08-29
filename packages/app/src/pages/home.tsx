@@ -75,7 +75,7 @@ export default function Home() {
     // the sandbox root without needing a pre-existing instance.
     const client = serverCtx.sdk.createClient({ directory, throwOnError: true })
     try {
-      await client.file.mkdir({ path: "." })
+      await client.file.mkdir({ fileMkdirBody: { path: "." } })
     } catch (err) {
       showToast({
         variant: "error",

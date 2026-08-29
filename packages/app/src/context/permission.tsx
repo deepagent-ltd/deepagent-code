@@ -1,7 +1,7 @@
 import { createEffect, createMemo, onCleanup } from "solid-js"
 import { createStore, produce } from "solid-js/store"
 import { createSimpleContext } from "@deepagent-code/ui/context"
-import type { PermissionRequest } from "@deepagent-code/sdk/v2/client"
+import type { PermissionRequest } from "@deepagent-code/sdk/client"
 import { Persist, persisted } from "@/utils/persist"
 import { useServerSDK } from "@/context/server-sdk"
 import { useServerSync } from "./server-sync"
