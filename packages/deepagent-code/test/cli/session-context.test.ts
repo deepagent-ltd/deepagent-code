@@ -10,15 +10,17 @@ import { exportSessionContext } from "@/cli/session-context"
 function makeClient() {
   const calls: Record<string, unknown[]> = {}
   const client: RecoveryExportClient = {
-    recovery: {
-      evidenceExport: (parameters: { export_id: string }) => {
-        ;(calls["evidenceExport"] ??= []).push(parameters)
-        return Promise.resolve({ exportId: parameters.export_id, sessionId: "ses-1" })
-      },
-      evidenceExport2: {
-        create: (parameters?: { evidenceExportInput?: { session_id: string } }) => {
-          ;(calls["create"] ??= []).push(parameters?.evidenceExportInput)
-          return Promise.resolve({ exportId: "exp_1", sessionId: parameters?.evidenceExportInput?.session_id })
+    maintenance: {
+      recovery: {
+        evidenceExport: (parameters: { export_id: string }) => {
+          ;(calls["evidenceExport"] ??= []).push(parameters)
+          return Promise.resolve({ exportId: parameters.export_id, sessionId: "ses-1" })
+        },
+        evidenceExport2: {
+          create: (parameters?: { evidenceExportInput?: { session_id: string } }) => {
+            ;(calls["create"] ??= []).push(parameters?.evidenceExportInput)
+            return Promise.resolve({ exportId: "exp_1", sessionId: parameters?.evidenceExportInput?.session_id })
+          },
         },
       },
     },
@@ -55,9 +57,11 @@ describe("session context export", () => {
       },
     }
     const client: RecoveryExportClient = {
-      recovery: {
-        evidenceExport: () => Promise.reject(new Error("export expired", { cause: { body: gone } })),
-        evidenceExport2: { create: () => Promise.resolve({}) },
+      maintenance: {
+        recovery: {
+          evidenceExport: () => Promise.reject(new Error("export expired", { cause: { body: gone } })),
+          evidenceExport2: { create: () => Promise.resolve({}) },
+        },
       },
     }
     await expect(exportSessionContext(client, { sessionID: "ses-1", exportID: "exp_old" })).rejects.toThrow(

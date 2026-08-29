@@ -105,8 +105,8 @@ function createHarness(messages: Record<string, SessionMessageResponse> = {}) {
       messages: () => Promise.resolve({ data: [] }),
     },
     context: {
-      eventsCursor: async () => ({ watermark: 0, cursor: 0, floor: 0 }),
-      events: async () => ({ events: [], floor: 0 }),
+      eventsCursor: async () => ({ data: { watermark: 0, cursor: 0, floor: 0 } }),
+      events: async () => ({ data: { events: [], floor: 0 } }),
     },
   } as unknown as OpencodeClient
   const connection = {
@@ -355,8 +355,8 @@ describe("acp event routing", () => {
             }),
         },
         context: {
-          eventsCursor: async () => ({ watermark: 0, cursor: 0, floor: 0 }),
-          events: async () => ({ events: [], floor: 0 }),
+          eventsCursor: async () => ({ data: { watermark: 0, cursor: 0, floor: 0 } }),
+      events: async () => ({ data: { events: [], floor: 0 } }),
         },
       } as unknown as OpencodeClient,
       connection,
@@ -584,11 +584,11 @@ describe("acp event routing", () => {
       global: { event: () => Promise.resolve({ stream: events.stream() }) },
       session: { list: () => Promise.resolve({ data: [] }) },
       context: {
-        eventsCursor: async () => ({ watermark: 42, cursor: 42, floor: 5 }),
-        events: async () => {
-          const page = pages.shift()
-          return page ?? { events: [], floor: 5 }
-        },
+        eventsCursor: async () => ({ data: { watermark: 42, cursor: 42, floor: 5 } }),
+      events: async () => {
+        const page = pages.shift()
+        return { data: page ?? { events: [], floor: 5 } }
+      },
       },
     } as unknown as OpencodeClient
     const connection = {
@@ -632,14 +632,14 @@ describe("acp event routing", () => {
       global: { event: () => Promise.resolve({ stream: events.stream() }) },
       session: { list: () => Promise.resolve({ data: [] }) },
       context: {
-        eventsCursor: async () => ({ watermark: 42, cursor: 42, floor: 5 }),
+        eventsCursor: async () => ({ data: { watermark: 42, cursor: 42, floor: 5 } }),
         events: async () => {
           callCount += 1
           // The first drain uses the initial cursor (after=42); the durable store reports the gap,
           // so the journal resyncs (re-reads the cursor and re-drains from the retained floor).
           if (callCount === 1) return Promise.reject(gapError())
           const page = pages.shift()
-          return page ?? { events: [], floor: 5 }
+          return { data: page ?? { events: [], floor: 5 } }
         },
       },
     } as unknown as OpencodeClient

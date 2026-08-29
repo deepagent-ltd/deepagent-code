@@ -15,7 +15,7 @@ import type {
   SessionStatus,
   TextPart,
   Config as SdkConfig,
-} from "@deepagent-code/sdk/v2"
+} from "@deepagent-code/sdk"
 import type { CliRenderer, KeyEvent, RGBA, Renderable, SlotMode } from "@opentui/core"
 import type { Binding, Keymap } from "@opentui/keymap"
 import {

@@ -1,4 +1,4 @@
-import { EventSessionError } from "@deepagent-code/sdk/v2"
+import { EventSessionError } from "@deepagent-code/sdk"
 import { isFilesystemRootDir } from "@/utils/filesystem-root"
 
 type NotificationBase = {
