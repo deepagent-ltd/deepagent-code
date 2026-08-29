@@ -41,6 +41,7 @@ export function MaintenanceShell(props: { client: MaintenanceClient }) {
       verifyResult: s.verify.status === "verified" ? s.verify.result : undefined,
       verifyReason: s.verify.status === "verified" && s.verify.result.ok === false ? s.verify.result.reason : undefined,
       restoreStatus: s.restore.status,
+      restoreOutcome: s.restore.status === "completed" ? s.restore.result?.status : undefined,
       restoreSelected: restoreSelection(s),
       restoreBusy: isRestoreBusy(s),
       restoreError: s.restore.status === "error" ? s.restore.stableCode : undefined,
@@ -208,7 +209,11 @@ export function MaintenanceShell(props: { client: MaintenanceClient }) {
           </Show>
 
           <Show when={view().restoreStatus === "completed"}>
-            <div class="mt-3 text-12-regular text-text-weak">Restore request recorded (dry-run status).</div>
+            <div class="mt-3 text-12-regular text-text-weak">
+              {view().restoreOutcome === "restored"
+                ? "Restore succeeded: the store was replaced and the pre-restore store is retained in the quarantine."
+                : "Restore request recorded (dry-run status)."}
+            </div>
           </Show>
 
           <Show when={view().restoreError}>

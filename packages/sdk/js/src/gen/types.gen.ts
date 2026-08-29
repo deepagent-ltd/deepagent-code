@@ -3621,7 +3621,7 @@ export type RestoreInput = {
 }
 
 export type RestoreStatus = {
-  status: "dry_run"
+  status: "dry_run" | "restored" | "failed"
   inProgress: boolean
   restoreId?: string
   sourceFile?: string

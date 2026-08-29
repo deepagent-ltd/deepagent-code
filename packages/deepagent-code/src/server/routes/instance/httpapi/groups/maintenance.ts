@@ -85,7 +85,9 @@ const BackupVerifySchema = Schema.Union([BackupVerifyOkSchema, BackupVerifyFailu
 })
 
 const RestoreStatusSchema = Schema.Struct({
-  status: Schema.Literal("dry_run"),
+  // C7-05 honest surface: a dry_run request reports "dry_run"; a real verified restore reports
+  // "restored" (or "failed" with the quarantine retained) — never a dry-run label on a real install.
+  status: Schema.Literals(["dry_run", "restored", "failed"]),
   inProgress: Schema.Boolean,
   restoreId: Schema.optional(Schema.String),
   sourceFile: Schema.optional(Schema.String),
