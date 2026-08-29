@@ -217,12 +217,21 @@ export const restoreVerified = Effect.fn("Restore.restoreVerified")(function* (o
     }
   }
 
-  // 3. Atomic install of the backup file onto dbPath.
-  yield* (options.install ?? installFile)(backupPath, dbPath)
-
-  // 4.+5. Reopen + verify + forward migrate through the normal apply(). On ANY failure put the original
-  //       back from the incident set and record a typed failure (the incident set is never deleted).
+  // 3.+4.+5. Atomic install + reopen-verify + forward migrate, ALL inside the rollback scope: a
+  //       failure AFTER the atomic rename (e.g. dir-fsync) must put the original live DB back too.
   const result = yield* Effect.gen(function* () {
+    yield* (options.install ?? installFile)(backupPath, dbPath)
+    // The pre-restore live DB's WAL/SHM belong to the OLD main file (quarantine retained the
+    // copies); leaving them on the live path would make the reopen-verify read foreign frames
+    // (a stale-WAL recovery against the freshly installed backup). Remove the stale sidecars.
+    for (const sidecar of [`${dbPath}-wal`, `${dbPath}-shm`]) {
+      if (yield* exists(sidecar)) {
+        yield* Effect.tryPromise({
+          try: () => fs.rm(sidecar),
+          catch: () => new RestoreError({ code: "install_failed", detail: `cannot remove stale sidecar ${sidecar}` }),
+        })
+      }
+    }
     yield* verifyInstalled(dbPath, options.backup)
     const { db } = yield* Database.Service.pipe(Effect.provide(Database.layerFromPath(dbPath)), Effect.scoped)
     void db
