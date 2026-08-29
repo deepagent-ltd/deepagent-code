@@ -175,7 +175,7 @@ describe("Restore verified (C1A-13)", () => {
         dbPath: live,
         backup: manifest,
         // A post-rename failure: rename succeeds, then the dir fsync step throws.
-        install: (source, target) =>
+        install: (source, target): Effect.Effect<void, RestoreError> =>
           Effect.gen(function* () {
             // Replicate the real atomic install up to the rename...
             const dir = path.dirname(target)
