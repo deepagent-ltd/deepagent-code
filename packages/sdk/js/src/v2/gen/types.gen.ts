@@ -3263,6 +3263,601 @@ export type FormatterStatus = {
   enabled: boolean
 }
 
+export type BootstrapDiagnostics = {
+  stableCode: string
+  mode: "ready" | "read_only_recovery" | "blocked_schema"
+  phase:
+    | "shell_start"
+    | "preflight_read_only"
+    | "backup_required"
+    | "backup_verifying"
+    | "migration_applying"
+    | "recovery_reconciling"
+    | "post_verify"
+    | "ready"
+    | "read_only_recovery"
+    | "blocked_schema"
+  sqliteExtendedCode?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  runId?: string
+  migrationId?: string
+  table?: string
+  key?: string
+  constraint?: string
+  trigger?: boolean
+  buildDigest: string
+  correlationId: string
+  message: string
+}
+
+export type BootstrapState = {
+  phase:
+    | "shell_start"
+    | "preflight_read_only"
+    | "backup_required"
+    | "backup_verifying"
+    | "migration_applying"
+    | "recovery_reconciling"
+    | "post_verify"
+    | "ready"
+    | "read_only_recovery"
+    | "blocked_schema"
+  mode: "ready" | "read_only_recovery" | "blocked_schema"
+  ready: boolean
+  diagnostics: BootstrapDiagnostics
+  next:
+    | {
+        action: "proceed"
+        to:
+          | "shell_start"
+          | "preflight_read_only"
+          | "backup_required"
+          | "backup_verifying"
+          | "migration_applying"
+          | "recovery_reconciling"
+          | "post_verify"
+          | "ready"
+          | "read_only_recovery"
+          | "blocked_schema"
+      }
+    | {
+        action: "pause"
+        to:
+          | "shell_start"
+          | "preflight_read_only"
+          | "backup_required"
+          | "backup_verifying"
+          | "migration_applying"
+          | "recovery_reconciling"
+          | "post_verify"
+          | "ready"
+          | "read_only_recovery"
+          | "blocked_schema"
+      }
+}
+
+export type ApiBadRequest = {
+  name: "ApiBadRequest"
+  data: {
+    schemaVersion: "stable-error.v1"
+    code: string
+    category:
+      | "bootstrap"
+      | "migration"
+      | "backup_verify"
+      | "restore"
+      | "recovery"
+      | "provider"
+      | "model_route"
+      | "selection"
+      | "capability"
+      | "event"
+      | "cursor"
+      | "session"
+      | "permission"
+      | "validation"
+      | "conflict"
+      | "malformed"
+      | "internal"
+      | "unavailable"
+      | "not_found"
+    retryability: "retryable" | "not_retryable" | "indeterminate"
+    httpStatus: 400 | 403 | 404 | 409 | 410 | 423 | 503
+    resource: string
+    correlationId: string
+    message: string
+    expected?: string
+    actual?: string
+  }
+}
+
+export type ApiForbidden = {
+  name: "ApiForbidden"
+  data: {
+    schemaVersion: "stable-error.v1"
+    code: string
+    category:
+      | "bootstrap"
+      | "migration"
+      | "backup_verify"
+      | "restore"
+      | "recovery"
+      | "provider"
+      | "model_route"
+      | "selection"
+      | "capability"
+      | "event"
+      | "cursor"
+      | "session"
+      | "permission"
+      | "validation"
+      | "conflict"
+      | "malformed"
+      | "internal"
+      | "unavailable"
+      | "not_found"
+    retryability: "retryable" | "not_retryable" | "indeterminate"
+    httpStatus: 400 | 403 | 404 | 409 | 410 | 423 | 503
+    resource: string
+    correlationId: string
+    message: string
+    expected?: string
+    actual?: string
+  }
+}
+
+export type ApiNotFound = {
+  name: "ApiNotFound"
+  data: {
+    schemaVersion: "stable-error.v1"
+    code: string
+    category:
+      | "bootstrap"
+      | "migration"
+      | "backup_verify"
+      | "restore"
+      | "recovery"
+      | "provider"
+      | "model_route"
+      | "selection"
+      | "capability"
+      | "event"
+      | "cursor"
+      | "session"
+      | "permission"
+      | "validation"
+      | "conflict"
+      | "malformed"
+      | "internal"
+      | "unavailable"
+      | "not_found"
+    retryability: "retryable" | "not_retryable" | "indeterminate"
+    httpStatus: 400 | 403 | 404 | 409 | 410 | 423 | 503
+    resource: string
+    correlationId: string
+    message: string
+    expected?: string
+    actual?: string
+  }
+}
+
+export type ApiConflict = {
+  name: "ApiConflict"
+  data: {
+    schemaVersion: "stable-error.v1"
+    code: string
+    category:
+      | "bootstrap"
+      | "migration"
+      | "backup_verify"
+      | "restore"
+      | "recovery"
+      | "provider"
+      | "model_route"
+      | "selection"
+      | "capability"
+      | "event"
+      | "cursor"
+      | "session"
+      | "permission"
+      | "validation"
+      | "conflict"
+      | "malformed"
+      | "internal"
+      | "unavailable"
+      | "not_found"
+    retryability: "retryable" | "not_retryable" | "indeterminate"
+    httpStatus: 400 | 403 | 404 | 409 | 410 | 423 | 503
+    resource: string
+    correlationId: string
+    message: string
+    expected?: string
+    actual?: string
+  }
+}
+
+export type ApiGone = {
+  name: "ApiGone"
+  data: {
+    schemaVersion: "stable-error.v1"
+    code: string
+    category:
+      | "bootstrap"
+      | "migration"
+      | "backup_verify"
+      | "restore"
+      | "recovery"
+      | "provider"
+      | "model_route"
+      | "selection"
+      | "capability"
+      | "event"
+      | "cursor"
+      | "session"
+      | "permission"
+      | "validation"
+      | "conflict"
+      | "malformed"
+      | "internal"
+      | "unavailable"
+      | "not_found"
+    retryability: "retryable" | "not_retryable" | "indeterminate"
+    httpStatus: 400 | 403 | 404 | 409 | 410 | 423 | 503
+    resource: string
+    correlationId: string
+    message: string
+    expected?: string
+    actual?: string
+  }
+}
+
+export type ApiLocked = {
+  name: "ApiLocked"
+  data: {
+    schemaVersion: "stable-error.v1"
+    code: string
+    category:
+      | "bootstrap"
+      | "migration"
+      | "backup_verify"
+      | "restore"
+      | "recovery"
+      | "provider"
+      | "model_route"
+      | "selection"
+      | "capability"
+      | "event"
+      | "cursor"
+      | "session"
+      | "permission"
+      | "validation"
+      | "conflict"
+      | "malformed"
+      | "internal"
+      | "unavailable"
+      | "not_found"
+    retryability: "retryable" | "not_retryable" | "indeterminate"
+    httpStatus: 400 | 403 | 404 | 409 | 410 | 423 | 503
+    resource: string
+    correlationId: string
+    message: string
+    expected?: string
+    actual?: string
+  }
+}
+
+export type ApiUnavailable = {
+  name: "ApiUnavailable"
+  data: {
+    schemaVersion: "stable-error.v1"
+    code: string
+    category:
+      | "bootstrap"
+      | "migration"
+      | "backup_verify"
+      | "restore"
+      | "recovery"
+      | "provider"
+      | "model_route"
+      | "selection"
+      | "capability"
+      | "event"
+      | "cursor"
+      | "session"
+      | "permission"
+      | "validation"
+      | "conflict"
+      | "malformed"
+      | "internal"
+      | "unavailable"
+      | "not_found"
+    retryability: "retryable" | "not_retryable" | "indeterminate"
+    httpStatus: 400 | 403 | 404 | 409 | 410 | 423 | 503
+    resource: string
+    correlationId: string
+    message: string
+    expected?: string
+    actual?: string
+  }
+}
+
+export type BackupInfo = {
+  fileName: string
+  filePath: string
+  sizeBytes: number
+  sha256: string
+  createdAt: number
+}
+
+export type BackupList = {
+  backups: Array<BackupInfo>
+  count: number
+}
+
+export type BackupVerify =
+  | {
+      ok: true
+      quickCheck: string
+      foreignKeyCount: number
+      journalMode: string
+      synchronous: number
+      capabilityCompatible: true
+      capabilityCount: number
+      migrationCount: number
+      sqliteMasterCount: number
+      sessionCount: number
+      hashMatch: true
+      schemaDigestMatch: true
+    }
+  | {
+      ok: false
+      reason: string
+      detail: string
+    }
+
+export type RestoreInput = {
+  backup_manifest_ref: string
+  target?: string
+  dry_run?: boolean
+}
+
+export type RestoreStatus = {
+  status: "dry_run"
+  inProgress: boolean
+  restoreId?: string
+  sourceFile?: string
+  message: string
+}
+
+export type MigrationReceipt = {
+  receiptId: string
+  migrationId: string
+  contentHash: string
+  ordinal: number
+  runId: string
+  result: string
+  startedAt: number
+  completedAt: number
+}
+
+export type UpgradeStatus = {
+  active: boolean
+  run?: UpgradeRunUpgradeRun
+  receipts: Array<MigrationReceipt>
+  count: number
+}
+
+export type RecoveryList = {
+  descriptors: Array<
+    | RecoveryExactDescriptor
+    | RecoveryRepairableDescriptor
+    | RecoveryForkDescriptor
+    | RecoveryCoordinationDescriptor
+    | RecoveryResolvedDescriptor
+  >
+  count: number
+}
+
+export type RecoveryCommandInput = {
+  session_id: string
+  attempt_id: string
+  request_hash: string
+  actor_type: "user" | "administrator" | "system"
+  actor_id: string
+  activity_id?: string
+  provider_id?: string
+}
+
+export type RecoveryCommandResult = {
+  command_id: string
+  descriptor:
+    | RecoveryExactDescriptor
+    | RecoveryRepairableDescriptor
+    | RecoveryForkDescriptor
+    | RecoveryCoordinationDescriptor
+    | RecoveryResolvedDescriptor
+}
+
+export type RecoveryDescriptorRecord = {
+  commandId: string
+  sessionId: string
+  attemptId: string
+  requestHash: string
+  descriptor:
+    | RecoveryExactDescriptor
+    | RecoveryRepairableDescriptor
+    | RecoveryForkDescriptor
+    | RecoveryCoordinationDescriptor
+    | RecoveryResolvedDescriptor
+  actorType: "user" | "administrator" | "system"
+  actorId: string
+  createdAt: number
+}
+
+export type EvidenceExportManifest = {
+  exportId: string
+  sessionId: string
+  ownerSessionId: string
+  exportedAt: number
+  expiresAt: number
+  contentHash: string
+}
+
+export type EvidenceExportInput = {
+  session_id: string
+}
+
+export type CapabilityCatalog = {
+  schemaVersion: string
+  id: string
+  digest: string
+  capabilities: Array<{
+    id: string
+    version: string
+    summary: string
+    use_when: Array<string>
+    availability: "stable" | "maintenance_only" | "disabled" | "unavailable"
+    required_permissions: Array<string>
+    required_runtime_features: Array<string>
+    entry_tools: Array<string>
+    body_ref: string
+    body_hash?: string
+    max_body_tokens: number
+  }>
+}
+
+export type CapabilitySearchInput = {
+  query: string
+  intended_action?: string
+}
+
+export type CapabilityLoadReceipt = {
+  identity: string
+  capabilityId: string
+  version: string
+  bodyRef: string
+  bodyHash: string
+  runtimeHash: string
+  permissionHash: string
+  state: "loaded"
+  tokenCount: number
+  byteCount: number
+}
+
+export type CapabilityLoadReceipts = {
+  receipts: Array<CapabilityLoadReceipt>
+  count: number
+}
+
+export type ContextReadiness = {
+  session_id: string
+  ready: boolean
+  graphs: Array<{
+    graph: "code" | "documents" | "knowledge" | "memory"
+    status: "ready" | "empty" | "degraded_unavailable" | "denied" | "timeout"
+    revision: string
+    adapterVersion: string
+    observedMutationEpoch: number
+    latencyMs: number
+    candidateCount: number
+    reasonCode:
+      | "none"
+      | "cold_start"
+      | "bootstrap_complete_no_match"
+      | "bootstrap_budget_exhausted"
+      | "bootstrap_timeout"
+      | "fresh_timeout"
+      | "refresh_failed"
+      | "parser_unsupported"
+      | "lsp_unavailable"
+      | "overlay_unavailable"
+      | "scope_denied"
+      | "security_namespace_denied"
+      | "project_scope_denied"
+      | "agent_policy_denied"
+      | "model_capability_denied"
+      | "provider_egress_denied"
+      | "source_timeout"
+      | "source_error"
+      | "partial_sources"
+      | "source_disabled"
+      | "link_refresh_pending"
+      | "released_snapshot_unavailable"
+  }>
+  statuses: {
+    [key: string]: {
+      graph: "code" | "documents" | "knowledge" | "memory"
+      status: "ready" | "empty" | "degraded_unavailable" | "denied" | "timeout"
+      revision: string
+      adapterVersion: string
+      observedMutationEpoch: number
+      latencyMs: number
+      candidateCount: number
+      reasonCode:
+        | "none"
+        | "cold_start"
+        | "bootstrap_complete_no_match"
+        | "bootstrap_budget_exhausted"
+        | "bootstrap_timeout"
+        | "fresh_timeout"
+        | "refresh_failed"
+        | "parser_unsupported"
+        | "lsp_unavailable"
+        | "overlay_unavailable"
+        | "scope_denied"
+        | "security_namespace_denied"
+        | "project_scope_denied"
+        | "agent_policy_denied"
+        | "model_capability_denied"
+        | "provider_egress_denied"
+        | "source_timeout"
+        | "source_error"
+        | "partial_sources"
+        | "source_disabled"
+        | "link_refresh_pending"
+        | "released_snapshot_unavailable"
+    }
+  }
+}
+
+export type ContextEventsCursor = {
+  watermark: number
+  cursor: number
+  floor: number
+}
+
+export type ContextSessionEvent = {
+  id: string
+  seq: number
+  type: string
+  data: {
+    [key: string]: unknown
+  }
+}
+
+export type ContextSessionEvents = {
+  events: Array<ContextSessionEvent>
+  nextCursor?: number
+  floor: number
+}
+
+export type SystemContextLoadedCapability = {
+  capabilityId: string
+  bodyHash: string
+  state: string
+  tokenCount: number
+  byteCount: number
+}
+
+export type SystemContextSnapshot = {
+  catalogSnapshotId: string
+  catalogDigest: string
+  catalogDigestConsistent: boolean
+  l0LineCount: number
+  l0TextHash: string
+  loadedCapabilityCount: number
+  loadedCapabilities: Array<SystemContextLoadedCapability>
+}
+
 export type McpStatusConnected = {
   status: "connected"
 }
@@ -4436,6 +5031,16 @@ export type ModelV2Info = {
         settings?: {
           [key: string]: unknown
         }
+        protocol?: "openai.responses" | "openai-compatible.responses" | "openai-compatible.chat" | "anthropic.messages"
+        protocolCapabilities?: {
+          structuredOutput: boolean
+          reasoningItems: boolean
+          providerToolExecution: boolean
+          previousResponseId: boolean
+          remoteCompaction: boolean
+          streamTransport: "http_sse" | "http_chunked" | "byte_stream" | "none"
+          protocolRevision: number
+        }
       }
     | {
         id: string
@@ -4443,6 +5048,16 @@ export type ModelV2Info = {
         url?: string
         settings: {
           [key: string]: unknown
+        }
+        protocol?: "openai.responses" | "openai-compatible.responses" | "openai-compatible.chat" | "anthropic.messages"
+        protocolCapabilities?: {
+          structuredOutput: boolean
+          reasoningItems: boolean
+          providerToolExecution: boolean
+          previousResponseId: boolean
+          remoteCompaction: boolean
+          streamTransport: "http_sse" | "http_chunked" | "byte_stream" | "none"
+          protocolRevision: number
         }
       }
   capabilities: {
@@ -5400,6 +6015,215 @@ export type ConfigV2ExperimentalPolicy = {
   resource: string
 }
 
+export type UpgradeRunUpgradeRun = {
+  schemaVersion: "upgrade-run.v1"
+  runId: string
+  sourceRegistryDigest: string
+  targetRegistryDigest: string
+  sourceProtocol: {
+    reader: string
+    writer: string
+  }
+  targetProtocol: {
+    reader: string
+    writer: string
+  }
+  buildIdentity: string
+  packageVersion: string
+  backupManifestRef?: string
+  pendingMigrationIds: Array<string>
+  state: "planned" | "backup_verified" | "applying" | "verifying" | "ready" | "recovery_required"
+  failureCode?: string
+  appliedOrdinal: number
+  totalMigrations: number
+  startedAt: number
+  completedAt: number
+}
+
+export type RecoveryExactDescriptor = {
+  schemaVersion: "recovery-descriptor.v1"
+  requestHash: string
+  provenance: {
+    origin: "recorded" | "reconstructed" | "external"
+    sourceRefs: Array<string>
+    reconstructionRef?: string
+  }
+  baseline: {
+    baselineHash?: string
+    sourceSnapshotRef?: string
+    verified: boolean
+  }
+  terminalBridge: {
+    bridgeId: string
+    bridgeType: string
+    terminalRef?: string
+  }
+  casTokens: {
+    expectedState: string
+    expectedVersion: number
+    ownerToken: string
+  }
+  descriptorKind: "resolvable_exact"
+  exact: {
+    attemptHash: string
+    selectionHash: string
+    historyHash: string
+    baselineHash: string
+    allVerified: boolean
+  }
+}
+
+export type RecoveryRepairableDescriptor = {
+  schemaVersion: "recovery-descriptor.v1"
+  requestHash: string
+  provenance: {
+    origin: "recorded" | "reconstructed" | "external"
+    sourceRefs: Array<string>
+    reconstructionRef?: string
+  }
+  baseline: {
+    baselineHash?: string
+    sourceSnapshotRef?: string
+    verified: boolean
+  }
+  terminalBridge: {
+    bridgeId: string
+    bridgeType: string
+    terminalRef?: string
+  }
+  casTokens: {
+    expectedState: string
+    expectedVersion: number
+    ownerToken: string
+  }
+  descriptorKind: "repairable_exact"
+  repairable: {
+    baselineState: "corrupt" | "missing"
+    sourceSnapshotRef: string
+    canReconstruct: boolean
+  }
+}
+
+export type RecoveryForkDescriptor = {
+  schemaVersion: "recovery-descriptor.v1"
+  requestHash: string
+  provenance: {
+    origin: "recorded" | "reconstructed" | "external"
+    sourceRefs: Array<string>
+    reconstructionRef?: string
+  }
+  baseline: {
+    baselineHash?: string
+    sourceSnapshotRef?: string
+    verified: boolean
+  }
+  terminalBridge: {
+    bridgeId: string
+    bridgeType: string
+    terminalRef?: string
+  }
+  casTokens: {
+    expectedState: string
+    expectedVersion: number
+    ownerToken: string
+  }
+  descriptorKind: "fork_only"
+  fork: {
+    safeBoundaryRef: string
+    safeBoundaryHash: string
+    reasonCode:
+      | "network_unknown"
+      | "baseline_missing"
+      | "baseline_corrupt"
+      | "source_snapshot_unavailable"
+      | "provider_lookup_incomplete"
+      | "placement_unresolved"
+      | "workspace_conflict"
+      | "permission_incomplete"
+      | "history_unverified"
+      | "safe_boundary_none"
+      | "request_hash_mismatch"
+      | "cas_lost"
+      | "unsupported_state"
+    originalSessionReadOnly: boolean
+  }
+}
+
+export type RecoveryCoordinationDescriptor = {
+  schemaVersion: "recovery-descriptor.v1"
+  requestHash: string
+  provenance: {
+    origin: "recorded" | "reconstructed" | "external"
+    sourceRefs: Array<string>
+    reconstructionRef?: string
+  }
+  baseline: {
+    baselineHash?: string
+    sourceSnapshotRef?: string
+    verified: boolean
+  }
+  terminalBridge: {
+    bridgeId: string
+    bridgeType: string
+    terminalRef?: string
+  }
+  casTokens: {
+    expectedState: string
+    expectedVersion: number
+    ownerToken: string
+  }
+  descriptorKind: "coordination_required"
+  coordination: {
+    reason:
+      | "network_unknown"
+      | "baseline_missing"
+      | "baseline_corrupt"
+      | "source_snapshot_unavailable"
+      | "provider_lookup_incomplete"
+      | "placement_unresolved"
+      | "workspace_conflict"
+      | "permission_incomplete"
+      | "history_unverified"
+      | "safe_boundary_none"
+      | "request_hash_mismatch"
+      | "cas_lost"
+      | "unsupported_state"
+    requiredActor: "admin" | "external" | "provider_lookup"
+    evidenceExportRef?: string
+  }
+}
+
+export type RecoveryResolvedDescriptor = {
+  schemaVersion: "recovery-descriptor.v1"
+  requestHash: string
+  provenance: {
+    origin: "recorded" | "reconstructed" | "external"
+    sourceRefs: Array<string>
+    reconstructionRef?: string
+  }
+  baseline: {
+    baselineHash?: string
+    sourceSnapshotRef?: string
+    verified: boolean
+  }
+  terminalBridge: {
+    bridgeId: string
+    bridgeType: string
+    terminalRef?: string
+  }
+  casTokens: {
+    expectedState: string
+    expectedVersion: number
+    ownerToken: string
+  }
+  descriptorKind: "resolved"
+  resolved: {
+    resolutionRef: string
+    bridgeRef: string
+    terminal: "settled" | "abandoned" | "forked" | "unknown"
+  }
+}
+
 export type ProjectDirectories = Array<string>
 
 export type ProjectCopyCopy = {
@@ -5822,6 +6646,7 @@ export type ProviderV2Info = {
         settings?: {
           [key: string]: unknown
         }
+        protocol?: "openai.responses" | "openai-compatible.responses" | "openai-compatible.chat" | "anthropic.messages"
       }
     | {
         type: "native"
@@ -5829,6 +6654,7 @@ export type ProviderV2Info = {
         settings: {
           [key: string]: unknown
         }
+        protocol?: "openai.responses" | "openai-compatible.responses" | "openai-compatible.chat" | "anthropic.messages"
       }
   request: {
     headers: {
@@ -5947,6 +6773,16 @@ export type ModelV2Info1 = {
         settings?: {
           [key: string]: unknown
         }
+        protocol?: "openai.responses" | "openai-compatible.responses" | "openai-compatible.chat" | "anthropic.messages"
+        protocolCapabilities?: {
+          structuredOutput: boolean
+          reasoningItems: boolean
+          providerToolExecution: boolean
+          previousResponseId: boolean
+          remoteCompaction: boolean
+          streamTransport: "http_sse" | "http_chunked" | "byte_stream" | "none"
+          protocolRevision: number
+        }
       }
     | {
         id: string
@@ -5954,6 +6790,16 @@ export type ModelV2Info1 = {
         url?: string
         settings: {
           [key: string]: unknown
+        }
+        protocol?: "openai.responses" | "openai-compatible.responses" | "openai-compatible.chat" | "anthropic.messages"
+        protocolCapabilities?: {
+          structuredOutput: boolean
+          reasoningItems: boolean
+          providerToolExecution: boolean
+          previousResponseId: boolean
+          remoteCompaction: boolean
+          streamTransport: "http_sse" | "http_chunked" | "byte_stream" | "none"
+          protocolRevision: number
         }
       }
   capabilities: {
@@ -12089,6 +12935,883 @@ export type FormatterStatusResponses = {
 }
 
 export type FormatterStatusResponse = FormatterStatusResponses[keyof FormatterStatusResponses]
+
+export type MaintenanceBootstrapStatusData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/bootstrap/status"
+}
+
+export type MaintenanceBootstrapStatusErrors = {
+  /**
+   * Bad request
+   */
+  400: ApiBadRequest
+  /**
+   * Forbidden
+   */
+  403: ApiForbidden
+  /**
+   * Not found
+   */
+  404: ApiNotFound
+  /**
+   * Conflict
+   */
+  409: ApiConflict
+  /**
+   * Gone (retention floor exceeded)
+   */
+  410: ApiGone
+  /**
+   * Locked
+   */
+  423: ApiLocked
+  /**
+   * Service unavailable
+   */
+  503: ApiUnavailable
+}
+
+export type MaintenanceBootstrapStatusError = MaintenanceBootstrapStatusErrors[keyof MaintenanceBootstrapStatusErrors]
+
+export type MaintenanceBootstrapStatusResponses = {
+  /**
+   * Current bootstrap state
+   */
+  200: BootstrapState
+}
+
+export type MaintenanceBootstrapStatusResponse =
+  MaintenanceBootstrapStatusResponses[keyof MaintenanceBootstrapStatusResponses]
+
+export type MaintenanceBackupListData = {
+  body?: never
+  path?: never
+  query?: {
+    dir?: string
+  }
+  url: "/backup/list"
+}
+
+export type MaintenanceBackupListErrors = {
+  /**
+   * Bad request
+   */
+  400: ApiBadRequest
+  /**
+   * Forbidden
+   */
+  403: ApiForbidden
+  /**
+   * Not found
+   */
+  404: ApiNotFound
+  /**
+   * Conflict
+   */
+  409: ApiConflict
+  /**
+   * Gone (retention floor exceeded)
+   */
+  410: ApiGone
+  /**
+   * Locked
+   */
+  423: ApiLocked
+  /**
+   * Service unavailable
+   */
+  503: ApiUnavailable
+}
+
+export type MaintenanceBackupListError = MaintenanceBackupListErrors[keyof MaintenanceBackupListErrors]
+
+export type MaintenanceBackupListResponses = {
+  /**
+   * Backup manifest list
+   */
+  200: BackupList
+}
+
+export type MaintenanceBackupListResponse = MaintenanceBackupListResponses[keyof MaintenanceBackupListResponses]
+
+export type MaintenanceBackupVerifyData = {
+  body?: never
+  path?: never
+  query: {
+    manifest_path: string
+  }
+  url: "/backup/verify"
+}
+
+export type MaintenanceBackupVerifyErrors = {
+  /**
+   * Bad request
+   */
+  400: ApiBadRequest
+  /**
+   * Forbidden
+   */
+  403: ApiForbidden
+  /**
+   * Not found
+   */
+  404: ApiNotFound
+  /**
+   * Conflict
+   */
+  409: ApiConflict
+  /**
+   * Gone (retention floor exceeded)
+   */
+  410: ApiGone
+  /**
+   * Locked
+   */
+  423: ApiLocked
+  /**
+   * Service unavailable
+   */
+  503: ApiUnavailable
+}
+
+export type MaintenanceBackupVerifyError = MaintenanceBackupVerifyErrors[keyof MaintenanceBackupVerifyErrors]
+
+export type MaintenanceBackupVerifyResponses = {
+  /**
+   * Backup verify result
+   */
+  200: BackupVerify
+}
+
+export type MaintenanceBackupVerifyResponse = MaintenanceBackupVerifyResponses[keyof MaintenanceBackupVerifyResponses]
+
+export type MaintenanceBackupRestoreData = {
+  body?: RestoreInput
+  path?: never
+  query?: never
+  url: "/backup/restore"
+}
+
+export type MaintenanceBackupRestoreErrors = {
+  /**
+   * Bad request
+   */
+  400: ApiBadRequest
+  /**
+   * Forbidden
+   */
+  403: ApiForbidden
+  /**
+   * Not found
+   */
+  404: ApiNotFound
+  /**
+   * Conflict
+   */
+  409: ApiConflict
+  /**
+   * Gone (retention floor exceeded)
+   */
+  410: ApiGone
+  /**
+   * Locked
+   */
+  423: ApiLocked
+  /**
+   * Service unavailable
+   */
+  503: ApiUnavailable
+}
+
+export type MaintenanceBackupRestoreError = MaintenanceBackupRestoreErrors[keyof MaintenanceBackupRestoreErrors]
+
+export type MaintenanceBackupRestoreResponses = {
+  /**
+   * Restore dry-run status
+   */
+  200: RestoreStatus
+}
+
+export type MaintenanceBackupRestoreResponse =
+  MaintenanceBackupRestoreResponses[keyof MaintenanceBackupRestoreResponses]
+
+export type MaintenanceUpgradeStatusData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/upgrade/status"
+}
+
+export type MaintenanceUpgradeStatusErrors = {
+  /**
+   * Bad request
+   */
+  400: ApiBadRequest
+  /**
+   * Forbidden
+   */
+  403: ApiForbidden
+  /**
+   * Not found
+   */
+  404: ApiNotFound
+  /**
+   * Conflict
+   */
+  409: ApiConflict
+  /**
+   * Gone (retention floor exceeded)
+   */
+  410: ApiGone
+  /**
+   * Locked
+   */
+  423: ApiLocked
+  /**
+   * Service unavailable
+   */
+  503: ApiUnavailable
+}
+
+export type MaintenanceUpgradeStatusError = MaintenanceUpgradeStatusErrors[keyof MaintenanceUpgradeStatusErrors]
+
+export type MaintenanceUpgradeStatusResponses = {
+  /**
+   * Upgrade run status
+   */
+  200: UpgradeStatus
+}
+
+export type MaintenanceUpgradeStatusResponse =
+  MaintenanceUpgradeStatusResponses[keyof MaintenanceUpgradeStatusResponses]
+
+export type MaintenanceRecoveryListData = {
+  body?: never
+  path?: never
+  query: {
+    session_id: string
+  }
+  url: "/recovery/list"
+}
+
+export type MaintenanceRecoveryListErrors = {
+  /**
+   * Bad request
+   */
+  400: ApiBadRequest
+  /**
+   * Forbidden
+   */
+  403: ApiForbidden
+  /**
+   * Not found
+   */
+  404: ApiNotFound
+  /**
+   * Conflict
+   */
+  409: ApiConflict
+  /**
+   * Gone (retention floor exceeded)
+   */
+  410: ApiGone
+  /**
+   * Locked
+   */
+  423: ApiLocked
+  /**
+   * Service unavailable
+   */
+  503: ApiUnavailable
+}
+
+export type MaintenanceRecoveryListError = MaintenanceRecoveryListErrors[keyof MaintenanceRecoveryListErrors]
+
+export type MaintenanceRecoveryListResponses = {
+  /**
+   * Recovery descriptors for a session
+   */
+  200: RecoveryList
+}
+
+export type MaintenanceRecoveryListResponse = MaintenanceRecoveryListResponses[keyof MaintenanceRecoveryListResponses]
+
+export type MaintenanceRecoveryCommandData = {
+  body?: RecoveryCommandInput
+  path?: never
+  query?: never
+  url: "/recovery/command"
+}
+
+export type MaintenanceRecoveryCommandErrors = {
+  /**
+   * Bad request
+   */
+  400: ApiBadRequest
+  /**
+   * Forbidden
+   */
+  403: ApiForbidden
+  /**
+   * Not found
+   */
+  404: ApiNotFound
+  /**
+   * Conflict
+   */
+  409: ApiConflict
+  /**
+   * Gone (retention floor exceeded)
+   */
+  410: ApiGone
+  /**
+   * Locked
+   */
+  423: ApiLocked
+  /**
+   * Service unavailable
+   */
+  503: ApiUnavailable
+}
+
+export type MaintenanceRecoveryCommandError = MaintenanceRecoveryCommandErrors[keyof MaintenanceRecoveryCommandErrors]
+
+export type MaintenanceRecoveryCommandResponses = {
+  /**
+   * Classified recovery command
+   */
+  200: RecoveryCommandResult
+}
+
+export type MaintenanceRecoveryCommandResponse =
+  MaintenanceRecoveryCommandResponses[keyof MaintenanceRecoveryCommandResponses]
+
+export type MaintenanceRecoveryCommandGetData = {
+  body?: never
+  path?: never
+  query: {
+    command_id: string
+  }
+  url: "/recovery/commandGet"
+}
+
+export type MaintenanceRecoveryCommandGetErrors = {
+  /**
+   * Bad request
+   */
+  400: ApiBadRequest
+  /**
+   * Forbidden
+   */
+  403: ApiForbidden
+  /**
+   * Not found
+   */
+  404: ApiNotFound
+  /**
+   * Conflict
+   */
+  409: ApiConflict
+  /**
+   * Gone (retention floor exceeded)
+   */
+  410: ApiGone
+  /**
+   * Locked
+   */
+  423: ApiLocked
+  /**
+   * Service unavailable
+   */
+  503: ApiUnavailable
+}
+
+export type MaintenanceRecoveryCommandGetError =
+  MaintenanceRecoveryCommandGetErrors[keyof MaintenanceRecoveryCommandGetErrors]
+
+export type MaintenanceRecoveryCommandGetResponses = {
+  /**
+   * Recovery command record
+   */
+  200: RecoveryDescriptorRecord
+}
+
+export type MaintenanceRecoveryCommandGetResponse =
+  MaintenanceRecoveryCommandGetResponses[keyof MaintenanceRecoveryCommandGetResponses]
+
+export type MaintenanceRecoveryEvidenceExportData = {
+  body?: never
+  path?: never
+  query: {
+    export_id: string
+  }
+  url: "/recovery/evidenceExport"
+}
+
+export type MaintenanceRecoveryEvidenceExportErrors = {
+  /**
+   * Bad request
+   */
+  400: ApiBadRequest
+  /**
+   * Forbidden
+   */
+  403: ApiForbidden
+  /**
+   * Not found
+   */
+  404: ApiNotFound
+  /**
+   * Conflict
+   */
+  409: ApiConflict
+  /**
+   * Gone (retention floor exceeded)
+   */
+  410: ApiGone
+  /**
+   * Locked
+   */
+  423: ApiLocked
+  /**
+   * Service unavailable
+   */
+  503: ApiUnavailable
+}
+
+export type MaintenanceRecoveryEvidenceExportError =
+  MaintenanceRecoveryEvidenceExportErrors[keyof MaintenanceRecoveryEvidenceExportErrors]
+
+export type MaintenanceRecoveryEvidenceExportResponses = {
+  /**
+   * Evidence export manifest
+   */
+  200: EvidenceExportManifest
+}
+
+export type MaintenanceRecoveryEvidenceExportResponse =
+  MaintenanceRecoveryEvidenceExportResponses[keyof MaintenanceRecoveryEvidenceExportResponses]
+
+export type MaintenanceRecoveryEvidenceExportCreateData = {
+  body?: EvidenceExportInput
+  path?: never
+  query?: never
+  url: "/recovery/evidenceExport"
+}
+
+export type MaintenanceRecoveryEvidenceExportCreateErrors = {
+  /**
+   * Bad request
+   */
+  400: ApiBadRequest
+  /**
+   * Forbidden
+   */
+  403: ApiForbidden
+  /**
+   * Not found
+   */
+  404: ApiNotFound
+  /**
+   * Conflict
+   */
+  409: ApiConflict
+  /**
+   * Gone (retention floor exceeded)
+   */
+  410: ApiGone
+  /**
+   * Locked
+   */
+  423: ApiLocked
+  /**
+   * Service unavailable
+   */
+  503: ApiUnavailable
+}
+
+export type MaintenanceRecoveryEvidenceExportCreateError =
+  MaintenanceRecoveryEvidenceExportCreateErrors[keyof MaintenanceRecoveryEvidenceExportCreateErrors]
+
+export type MaintenanceRecoveryEvidenceExportCreateResponses = {
+  /**
+   * Evidence export manifest
+   */
+  200: EvidenceExportManifest
+}
+
+export type MaintenanceRecoveryEvidenceExportCreateResponse =
+  MaintenanceRecoveryEvidenceExportCreateResponses[keyof MaintenanceRecoveryEvidenceExportCreateResponses]
+
+export type CapabilityCatalogData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/capability/catalog"
+}
+
+export type CapabilityCatalogErrors = {
+  /**
+   * Bad request
+   */
+  400: ApiBadRequest
+  /**
+   * Forbidden
+   */
+  403: ApiForbidden
+  /**
+   * Not found
+   */
+  404: ApiNotFound
+  /**
+   * Conflict
+   */
+  409: ApiConflict
+  /**
+   * Gone (retention floor exceeded)
+   */
+  410: ApiGone
+  /**
+   * Locked
+   */
+  423: ApiLocked
+  /**
+   * Service unavailable
+   */
+  503: ApiUnavailable
+}
+
+export type CapabilityCatalogError = CapabilityCatalogErrors[keyof CapabilityCatalogErrors]
+
+export type CapabilityCatalogResponses = {
+  /**
+   * Capability catalog snapshot
+   */
+  200: CapabilityCatalog
+}
+
+export type CapabilityCatalogResponse = CapabilityCatalogResponses[keyof CapabilityCatalogResponses]
+
+export type CapabilitySearchData = {
+  body?: CapabilitySearchInput
+  path?: never
+  query?: never
+  url: "/capability/search"
+}
+
+export type CapabilitySearchErrors = {
+  /**
+   * Bad request
+   */
+  400: ApiBadRequest
+  /**
+   * Forbidden
+   */
+  403: ApiForbidden
+  /**
+   * Not found
+   */
+  404: ApiNotFound
+  /**
+   * Conflict
+   */
+  409: ApiConflict
+  /**
+   * Gone (retention floor exceeded)
+   */
+  410: ApiGone
+  /**
+   * Locked
+   */
+  423: ApiLocked
+  /**
+   * Service unavailable
+   */
+  503: ApiUnavailable
+}
+
+export type CapabilitySearchError = CapabilitySearchErrors[keyof CapabilitySearchErrors]
+
+export type CapabilitySearchResponses = {
+  /**
+   * L1 capability search cards
+   */
+  200: {
+    cards: Array<{
+      id: string
+      version: string
+      summary: string
+      use_when: Array<string>
+      availability: "stable" | "maintenance_only" | "disabled" | "unavailable"
+      entry_tools: Array<string>
+      body_ref: string
+      body_hash?: string
+      runtime_compatible: boolean
+      authorized: boolean
+    }>
+    query: string
+    catalog_snapshot_id: string
+    count: number
+  }
+}
+
+export type CapabilitySearchResponse = CapabilitySearchResponses[keyof CapabilitySearchResponses]
+
+export type CapabilityLoadReceiptsData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/capability/loadReceipts"
+}
+
+export type CapabilityLoadReceiptsErrors = {
+  /**
+   * Bad request
+   */
+  400: ApiBadRequest
+  /**
+   * Forbidden
+   */
+  403: ApiForbidden
+  /**
+   * Not found
+   */
+  404: ApiNotFound
+  /**
+   * Conflict
+   */
+  409: ApiConflict
+  /**
+   * Gone (retention floor exceeded)
+   */
+  410: ApiGone
+  /**
+   * Locked
+   */
+  423: ApiLocked
+  /**
+   * Service unavailable
+   */
+  503: ApiUnavailable
+}
+
+export type CapabilityLoadReceiptsError = CapabilityLoadReceiptsErrors[keyof CapabilityLoadReceiptsErrors]
+
+export type CapabilityLoadReceiptsResponses = {
+  /**
+   * Capability load receipts
+   */
+  200: CapabilityLoadReceipts
+}
+
+export type CapabilityLoadReceiptsResponse = CapabilityLoadReceiptsResponses[keyof CapabilityLoadReceiptsResponses]
+
+export type ContextReadinessData = {
+  body?: never
+  path?: never
+  query: {
+    session_id: string
+  }
+  url: "/context/readiness"
+}
+
+export type ContextReadinessErrors = {
+  /**
+   * Bad request
+   */
+  400: ApiBadRequest
+  /**
+   * Forbidden
+   */
+  403: ApiForbidden
+  /**
+   * Not found
+   */
+  404: ApiNotFound
+  /**
+   * Conflict
+   */
+  409: ApiConflict
+  /**
+   * Gone (retention floor exceeded)
+   */
+  410: ApiGone
+  /**
+   * Locked
+   */
+  423: ApiLocked
+  /**
+   * Service unavailable
+   */
+  503: ApiUnavailable
+}
+
+export type ContextReadinessError = ContextReadinessErrors[keyof ContextReadinessErrors]
+
+export type ContextReadinessResponses = {
+  /**
+   * Four-graph context readiness
+   */
+  200: ContextReadiness
+}
+
+export type ContextReadinessResponse = ContextReadinessResponses[keyof ContextReadinessResponses]
+
+export type ContextEventsCursorData = {
+  body?: never
+  path?: never
+  query: {
+    session_id: string
+  }
+  url: "/context/eventsCursor"
+}
+
+export type ContextEventsCursorErrors = {
+  /**
+   * Bad request
+   */
+  400: ApiBadRequest
+  /**
+   * Forbidden
+   */
+  403: ApiForbidden
+  /**
+   * Not found
+   */
+  404: ApiNotFound
+  /**
+   * Conflict
+   */
+  409: ApiConflict
+  /**
+   * Gone (retention floor exceeded)
+   */
+  410: ApiGone
+  /**
+   * Locked
+   */
+  423: ApiLocked
+  /**
+   * Service unavailable
+   */
+  503: ApiUnavailable
+}
+
+export type ContextEventsCursorError = ContextEventsCursorErrors[keyof ContextEventsCursorErrors]
+
+export type ContextEventsCursorResponses = {
+  /**
+   * Event cursor (snapshot-at-watermark)
+   */
+  200: ContextEventsCursor
+}
+
+export type ContextEventsCursorResponse = ContextEventsCursorResponses[keyof ContextEventsCursorResponses]
+
+export type ContextEventsData = {
+  body?: never
+  path?: never
+  query: {
+    session_id: string
+    after?: string
+    limit?: string
+  }
+  url: "/context/events"
+}
+
+export type ContextEventsErrors = {
+  /**
+   * Bad request
+   */
+  400: ApiBadRequest
+  /**
+   * Forbidden
+   */
+  403: ApiForbidden
+  /**
+   * Not found
+   */
+  404: ApiNotFound
+  /**
+   * Conflict
+   */
+  409: ApiConflict
+  /**
+   * Gone (retention floor exceeded)
+   */
+  410: ApiGone
+  /**
+   * Locked
+   */
+  423: ApiLocked
+  /**
+   * Service unavailable
+   */
+  503: ApiUnavailable
+}
+
+export type ContextEventsError = ContextEventsErrors[keyof ContextEventsErrors]
+
+export type ContextEventsResponses = {
+  /**
+   * Durable session events drained after a cursor
+   */
+  200: ContextSessionEvents
+}
+
+export type ContextEventsResponse = ContextEventsResponses[keyof ContextEventsResponses]
+
+export type SystemContextSnapshotData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/system-context/snapshot"
+}
+
+export type SystemContextSnapshotErrors = {
+  /**
+   * Bad request
+   */
+  400: ApiBadRequest
+  /**
+   * Forbidden
+   */
+  403: ApiForbidden
+  /**
+   * Not found
+   */
+  404: ApiNotFound
+  /**
+   * Conflict
+   */
+  409: ApiConflict
+  /**
+   * Gone (retention floor exceeded)
+   */
+  410: ApiGone
+  /**
+   * Locked
+   */
+  423: ApiLocked
+  /**
+   * Service unavailable
+   */
+  503: ApiUnavailable
+}
+
+export type SystemContextSnapshotError = SystemContextSnapshotErrors[keyof SystemContextSnapshotErrors]
+
+export type SystemContextSnapshotResponses = {
+  /**
+   * System context snapshot diagnostics
+   */
+  200: SystemContextSnapshot
+}
+
+export type SystemContextSnapshotResponse = SystemContextSnapshotResponses[keyof SystemContextSnapshotResponses]
 
 export type McpStatusData = {
   body?: never
