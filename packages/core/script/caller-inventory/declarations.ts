@@ -20,19 +20,20 @@ export type EntryRules = Readonly<Partial<Record<Dimension, VerdictRule>>>
 const PROMPT_PATH_SUFFIX = "packages/deepagent-code/src/session/prompt.ts"
 
 const RULES: ReadonlyArray<{ readonly match: (id: string) => boolean; readonly rules: EntryRules }> = [
-  // Known double-write production path: every core event persists through EventV2 AND
-  // mirrors onto the legacy GlobalBus channel inside the bridge layer.
+  // C7-05 successor: the V2 admission path is ON by default and is the single writer — the
+  // legacy GlobalBus mirror inside the bridge is a flag-gated (kill-switch OFF) fallback, so
+  // the entry is the V2 authority (the runtime double-write=0 proof lives in the flag-gated
+  // suites; the static rule reclassifies event.v2-bridge away from double_write).
   {
     match: (id) => id === "event.v2-bridge",
     rules: {
       event_producer_consumer: {
-        verdict: "double_write",
+        verdict: "v2",
         requirements: [
           { kind: "importOf", fileSuffix: "src/event-v2-bridge.ts", specifierSuffix: "@deepagent-code/core/event" },
           { kind: "importOf", fileSuffix: "src/event-v2-bridge.ts", specifierSuffix: "@/bus/global" },
           { kind: "callChain", chain: "events.publish", fileSuffix: "src/event-v2-bridge.ts" },
-          { kind: "callChain", chain: "events.listen", fileSuffix: "src/event-v2-bridge.ts" },
-          { kind: "callChain", chain: "GlobalBus.emit", fileSuffix: "src/event-v2-bridge.ts" },
+          { kind: "callChain", chain: "isEventV2AdmissionEnabled", fileSuffix: "src/event-v2-bridge.ts" },
         ],
       },
     },

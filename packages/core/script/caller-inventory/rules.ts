@@ -206,6 +206,19 @@ export const RULE_PACKS: readonly RulePack[] = [
     rules: withReadOnlyRest({ recovery_owner: adapter([{ kind: "reach", pathSuffix: "packages/deepagent-code/src/context-federation/provider-owner-runtime.ts" }]) }, [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish"), notBody("EventV2.Cursor")], "packages/deepagent-code/src/context-federation/provider-owner-runtime.ts"),
   },
 
+  // ---- C6 API surfaces (capability/context/maintenance/system-context groups): instance-plane
+  // read/control HTTP handlers — read_only with the genuine instance/workspace reader fact (the
+  // same pattern every other http.instance.* GET reader uses). Their authority owners live in
+  // the core services the handlers read. ----
+  {
+    match: (id) =>
+      id.startsWith("http.instance.capability.") ||
+      id.startsWith("http.instance.context.") ||
+      id.startsWith("http.instance.maintenance.") ||
+      id.startsWith("http.instance.system-context."),
+    rules: readOnlyNoBody(),
+  },
+
   // ===========================================================================
   // HTTP — session-execution operations driving the legacy SessionPrompt turn
   // ===========================================================================
