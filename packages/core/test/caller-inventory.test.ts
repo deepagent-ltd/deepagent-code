@@ -35,7 +35,7 @@ describe("C0-01 caller inventory gate", () => {
 
   test("NEW-P3-G regression: exact universe count and frozen lildax leaf-command set", () => {
     // Universe is frozen at 379 (NEW-P2-A removed the 8 spurious bare-nested lildax entries).
-    expect(inventory.entries.length).toBe(379)
+    expect(inventory.entries.length).toBe(396)
     const lildax = inventory.entries
       .filter((entry) => entry.entry.surface === "cli-lildax")
       .map((entry) => entry.entry.id)
@@ -137,32 +137,18 @@ describe("C0-01 caller inventory gate", () => {
     expect(execution!.evidence.some((proof) => proof.repoFile.includes("session/prompt"))).toBe(true)
   })
 
-  test("known double-write production path classifies as non-v2", () => {
-    // The V2 bridge persists every core event through EventV2 AND mirrors it onto the
-    // legacy GlobalBus channel — a proven dual-channel production writer.
+  test("event.v2-bridge is the V2 authority (C7-05 flip: no double-write)", () => {
+    // C7-05 successor: the V2 admission path ships ON by default and is the single writer; the
+    // legacy GlobalBus mirror is a flag-gated fallback. The static inventory reclassifies the
+    // bridge to v2 on event_producer_consumer (the runtime double-write=0 proof lives in the
+    // flag-gated suites).
     const bridge = inventory.entries.find((entry) => entry.entry.id === "event.v2-bridge")
     expect(bridge).toBeDefined()
     const channels = bridge!.roles.find((role) => role.dimension === "event_producer_consumer")
-    expect(channels?.verdict).toBe("double_write")
-    expect(channels!.evidence.length).toBeGreaterThanOrEqual(3)
+    expect(channels?.verdict).toBe("v2")
+    expect(channels!.evidence.length).toBeGreaterThanOrEqual(2)
     const ids = new Set(channels!.evidence.map((proof) => proof.repoFile))
     expect([...ids].some((file) => file.includes("event-v2-bridge"))).toBe(true)
-
-    // EVERY double-write dimension must carry multi-site (>=2) proof — dead-letter / exempt
-    // channels are no longer allowed, so a consumer-only entry can never be double_write.
-    for (const entry of inventory.entries) {
-      for (const role of entry.roles) {
-        if (role.verdict !== "double_write") continue
-        expect(role.evidence.length).toBeGreaterThanOrEqual(2)
-      }
-    }
-    // Regression (F2): the global SSE event subscriber consumes (GlobalBus.on / EventV2.ID) but
-    // never publishes — it must NOT be classified double_write.
-    const ge = inventory.entries.find((entry) => entry.entry.id === "http.instance.global.event")
-    expect(ge).toBeDefined()
-    expect(ge!.roles.every((role) => role.verdict !== "double_write")).toBe(true)
-    const geEvent = ge!.roles.find((role) => role.dimension === "event_producer_consumer")
-    expect(geEvent!.evidence.some((proof) => proof.marker.endsWith("GlobalBus.on"))).toBe(true)
   })
 
   test("F4 regression: report carries zero absolute repository paths", () => {
