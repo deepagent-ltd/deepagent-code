@@ -1,4 +1,4 @@
-import type { GlobalEvent } from "@deepagent-code/sdk/v2"
+import type { GlobalEvent } from "@deepagent-code/sdk"
 import type { EventSource } from "@deepagent-code/tui/context/sdk"
 
 export const worktree = "/tmp/deepagent-code"

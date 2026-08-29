@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { createOpencodeClient } from "@deepagent-code/sdk/v2"
+import { createOpencodeClient } from "@deepagent-code/sdk"
 
 // Regression guard for the compatibility layer in packages/sdk/js/src/v2/client.ts.
 // The generated SDK under gen/ is wiped on every `bun run build`; once the backend

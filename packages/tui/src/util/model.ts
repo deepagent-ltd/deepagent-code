@@ -1,4 +1,4 @@
-import type { Provider } from "@deepagent-code/sdk/v2"
+import type { Provider } from "@deepagent-code/sdk"
 
 export function parse(value: string) {
   const [providerID, ...modelID] = value.split("/")

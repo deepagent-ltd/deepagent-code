@@ -6,7 +6,7 @@ import type {
   SessionMessageAssistantReasoning,
   SessionMessageAssistantText,
   SessionMessageAssistantTool,
-} from "@deepagent-code/sdk/v2"
+} from "@deepagent-code/sdk"
 import { createStore, produce, reconcile } from "solid-js/store"
 import { onCleanup } from "solid-js"
 import { createSimpleContext } from "./helper"
@@ -120,11 +120,12 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
     // journaled event at or below the cursor is reflected in the snapshot (projection commits
     // with the journal), so the drained tail is exact and replayed boundary events converge.
     async function cycle(sessionID: string) {
-      const watermark = await sdk.client.session.sessionEventWatermark(sessionID).catch(() => undefined)
+      const cursor = await sdk.client.context.eventsCursor({ session_id: sessionID }).catch(() => undefined)
+      const watermark = cursor?.data?.watermark
       await hydrate(sessionID)
       if (watermark === undefined) return
       if (journals.has(sessionID)) return
-      const journal = await openSessionJournal(sdk.client.session, sessionID, {
+      const journal = await openSessionJournal(sdk.client, sessionID, {
         after: String(watermark),
         onEvent: (payload) => {
           if (!payload.id || duplicate(payload.id)) return
@@ -134,7 +135,8 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
           void resync(sessionID)
         },
         onStreamEnd: () => {
-          void resync(sessionID)
+          // C6-07: the durable drain never "ends"; a caught-up page is the steady state and
+          // the volatile global stream stays the delta surface (never the authority).
         },
         onError: (error) => {
           console.error("session journal error", { sessionID, error })

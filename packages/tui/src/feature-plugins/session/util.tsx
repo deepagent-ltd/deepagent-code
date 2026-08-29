@@ -1,4 +1,4 @@
-import type { Part } from "@deepagent-code/sdk/v2"
+import type { Part } from "@deepagent-code/sdk"
 import { Locale } from "../../util/locale"
 
 export function relativeTime(timestamp: number): string {

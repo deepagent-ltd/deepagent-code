@@ -1,4 +1,4 @@
-import type { FileContent } from "@deepagent-code/sdk/v2"
+import type { FileContent } from "@deepagent-code/sdk"
 
 export type MediaKind = "image" | "audio" | "svg"
 

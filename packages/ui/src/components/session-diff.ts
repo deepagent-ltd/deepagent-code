@@ -1,6 +1,6 @@
 import { parseDiffFromFile, parsePatchFiles, type FileDiffMetadata } from "@pierre/diffs"
 import { parsePatch } from "diff"
-import type { SnapshotFileDiff, VcsFileDiff } from "@deepagent-code/sdk/v2"
+import type { SnapshotFileDiff, VcsFileDiff } from "@deepagent-code/sdk"
 
 type LegacyDiff = {
   file: string

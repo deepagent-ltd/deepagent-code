@@ -4,7 +4,7 @@ import { useSDK } from "../context/sdk"
 import { useDialog } from "../ui/dialog"
 import { useToast } from "../ui/toast"
 import { useTheme } from "../context/theme"
-import type { ExperimentalConsoleListOrgsResponse } from "@deepagent-code/sdk/v2"
+import type { ExperimentalConsoleListOrgsResponse } from "@deepagent-code/sdk"
 
 type OrgOption = ExperimentalConsoleListOrgsResponse["orgs"][number]
 
