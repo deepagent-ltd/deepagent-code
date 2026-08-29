@@ -12,7 +12,9 @@ import { route as OpenAIChatRoute } from "../src/protocols/openai-compatible-cha
 // Target: the user's LAN vLLM (http://10.17.28.98:8000/v1, apiKey EMPTY, openai-compatible Chat)
 // — the same model family the harness runs on; no external paid key, nothing leaves the LAN.
 
-const runtimeLayer: Layer.Layer<LLMClient.Service> = LLMClient.layer.pipe(
+import type { Service as LLMClientService } from "../src/route/client"
+
+const runtimeLayer: Layer.Layer<LLMClientService> = LLMClient.layer.pipe(
   Layer.provide(Layer.mergeAll(RequestExecutor.defaultLayer, WebSocketExecutor.layer)),
 )
 
