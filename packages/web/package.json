@@ -2,7 +2,7 @@
   "name": "@deepagent-code/web",
   "type": "module",
   "license": "AGPL-3.0-or-later",
-  "version": "1.0.0-beta",
+  "version": "2.0.0-beta.0",
   "scripts": {
     "dev": "astro dev",
     "dev:remote": "VITE_API_URL=https://api.deepagent-code.ai astro dev",

@@ -42866,7 +42866,7 @@
         "properties": {
           "status": {
             "type": "string",
-            "enum": ["dry_run"]
+            "enum": ["dry_run", "restored", "failed"]
           },
           "inProgress": {
             "type": "boolean"

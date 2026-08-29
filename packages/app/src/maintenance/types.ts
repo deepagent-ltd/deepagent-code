@@ -83,7 +83,7 @@ export interface BackupVerifyFailure {
 export type BackupVerify = BackupVerifyOk | BackupVerifyFailure
 
 export interface RestoreStatus {
-  status: "dry_run"
+  status: "dry_run" | "restored" | "failed"
   inProgress: boolean
   restoreId?: string
   sourceFile?: string
