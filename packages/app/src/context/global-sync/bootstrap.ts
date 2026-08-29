@@ -7,7 +7,7 @@ import type {
   ProviderAuthResponse,
   QuestionRequest,
   Session,
-} from "@deepagent-code/sdk/v2/client"
+} from "@deepagent-code/sdk/client"
 import { showToast } from "@/utils/toast"
 import { getFilename } from "@deepagent-code/core/util/path"
 import { retry } from "@deepagent-code/core/util/retry"

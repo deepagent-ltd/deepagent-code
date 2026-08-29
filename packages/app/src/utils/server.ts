@@ -1,4 +1,4 @@
-import { createDeepAgentCodeClient } from "@deepagent-code/sdk/v2/client"
+import { createDeepAgentCodeClient } from "@deepagent-code/sdk/client"
 import type { ServerConnection } from "@/context/server"
 import { decode64 } from "@/utils/base64"
 

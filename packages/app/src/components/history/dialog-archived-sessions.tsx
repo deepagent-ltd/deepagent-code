@@ -1,4 +1,4 @@
-import type { GlobalSession } from "@deepagent-code/sdk/v2/client"
+import type { GlobalSession } from "@deepagent-code/sdk/client"
 import { Component, createMemo, createResource, createSignal, For, Show } from "solid-js"
 import { Dialog } from "@deepagent-code/ui/v2/dialog-v2"
 import { Icon } from "@deepagent-code/ui/icon"

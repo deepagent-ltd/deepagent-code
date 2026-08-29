@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import type { UserMessage } from "@deepagent-code/sdk/v2"
+import type { UserMessage } from "@deepagent-code/sdk"
 import { jumpToTurn, turnRailLabel } from "./helpers"
 
 const userMessage = (id: string): UserMessage => ({ id, role: "user" }) as UserMessage

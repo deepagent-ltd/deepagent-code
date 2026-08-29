@@ -107,7 +107,7 @@ export default function Layout(props: ParentProps) {
           .then((response) => response.data)
           .catch(() => undefined),
       mkdir: async (destination) => {
-        await serverSDK.createClient({ directory: destination, throwOnError: true }).file.mkdir({ path: "." })
+        await serverSDK.createClient({ directory: destination, throwOnError: true }).file.mkdir({ fileMkdirBody: { path: "." } })
       },
       moveSession: async (sessionID, destination) => {
         await serverSDK.client.experimental.controlPlane.moveSession({

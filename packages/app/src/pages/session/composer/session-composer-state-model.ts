@@ -1,4 +1,4 @@
-import type { Todo } from "@deepagent-code/sdk/v2"
+import type { Todo } from "@deepagent-code/sdk"
 
 export const todoState = (input: {
   count: number

@@ -1,5 +1,5 @@
 import { createStore, produce, reconcile } from "solid-js/store"
-import type { FileNode } from "@deepagent-code/sdk/v2"
+import type { FileNode } from "@deepagent-code/sdk"
 
 type DirectoryState = {
   expanded: boolean

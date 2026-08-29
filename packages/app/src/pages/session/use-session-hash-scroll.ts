@@ -1,4 +1,4 @@
-import type { UserMessage } from "@deepagent-code/sdk/v2"
+import type { UserMessage } from "@deepagent-code/sdk"
 import { useLocation, useNavigate } from "@solidjs/router"
 import { createEffect, createMemo, onCleanup, onMount } from "solid-js"
 import { messageIdFromHash } from "./message-id-from-hash"
