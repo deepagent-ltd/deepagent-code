@@ -35,6 +35,7 @@ import { Api } from "@deepagent-code/server/api"
 import { GlobalApi } from "./groups/global"
 import { MaintenanceApi } from "./groups/maintenance"
 import { CapabilityApi } from "./groups/capability"
+import { ContextApi } from "./groups/context"
 import { SystemContextApi } from "./groups/system-context"
 import { Authorization } from "./middleware/authorization"
 import { SchemaErrorMiddleware } from "./middleware/schema-error"
@@ -73,6 +74,7 @@ export const InstanceHttpApi = HttpApi.make("deepagent-code-instance")
   .addHttpApi(InstanceApi)
   .addHttpApi(MaintenanceApi)
   .addHttpApi(CapabilityApi)
+  .addHttpApi(ContextApi)
   .addHttpApi(SystemContextApi)
   .addHttpApi(McpApi)
   .addHttpApi(ProjectApi)

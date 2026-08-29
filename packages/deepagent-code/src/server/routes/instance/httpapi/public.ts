@@ -79,6 +79,60 @@ const LegacyComponentDescriptions: Record<string, string> = {
   LayoutConfig: "@deprecated Always uses stretch layout.",
 }
 
+// C6-04 — split the C0-03 typed-error union (ApiTypedError) that Effect's
+// OpenApi.fromApi emits as a single 500 `anyOf` into the per-status responses
+// 400/403/404/409/410/423/503. The status is derived from the component's own
+// `name` enum (the ErrorClass literal), so the mapping is authoritative and
+// never needs to parse `message`. This runs in the mapper we own — the C6
+// schemas themselves are untouched.
+const ApiErrorStatusByComponent: Record<string, number> = {
+  ApiBadRequest: 400,
+  ApiForbidden: 403,
+  ApiNotFound: 404,
+  ApiConflict: 409,
+  ApiGone: 410,
+  ApiLocked: 423,
+  ApiUnavailable: 503,
+}
+
+const ApiErrorStatusDescription: Record<number, string> = {
+  400: "Bad request",
+  403: "Forbidden",
+  404: "Not found",
+  409: "Conflict",
+  410: "Gone (retention floor exceeded)",
+  423: "Locked",
+  503: "Service unavailable",
+}
+
+/**
+ * Expand a typed-error union 500 response into per-status responses. A response
+ * is only split when the 500 body is an `anyOf`/`oneOf` whose members are all
+ * `$ref`s to the known Api* typed-error components; otherwise it is left alone.
+ */
+function splitTypedErrorUnionResponses(operation: OpenApiOperation) {
+  const union = operation.responses?.["500"]
+  if (!union) return
+  const schema = union.content?.["application/json"]?.schema
+  const anyOf = schema?.anyOf ?? schema?.oneOf
+  if (!anyOf || anyOf.length < 2) return
+  const members = anyOf.map((member) => member.$ref?.replace("#/components/schemas/", ""))
+  const statuses = members.map((name) => (name ? ApiErrorStatusByComponent[name] : undefined))
+  if (statuses.some((status) => status === undefined)) return
+  for (let index = 0; index < members.length; index++) {
+    const status = statuses[index]!
+    const component = members[index]!
+    // The typed-error union is the authoritative per-status surface for these
+    // endpoints, so an existing status response (e.g. the schema-validation 400
+    // the HttpApi adds for a malformed query) is replaced by the typed schema.
+    operation.responses![String(status)] = {
+      description: ApiErrorStatusDescription[status],
+      content: { "application/json": { schema: { $ref: `#/components/schemas/${component}` } } },
+    }
+  }
+  delete operation.responses!["500"]
+}
+
 function matchLegacyOpenApi(input: Record<string, unknown>) {
   const spec = input as OpenApiSpec
 
@@ -107,6 +161,9 @@ function matchLegacyOpenApi(input: Record<string, unknown>) {
       const operation = item[method]
       if (!operation) continue
       const isV2Api = isV2ApiPath(path)
+      // C6-04: expand the C0-03 typed-error union into per-status responses
+      // (400/403/404/409/410/423/503) before any legacy-error normalization.
+      splitTypedErrorUnionResponses(operation)
       if (operation.requestBody) {
         // The legacy OpenAPI surface never marked request bodies as required.
         // Keep that SDK surface stable while the HttpApi spec is tightened.
