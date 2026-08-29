@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { createDeepAgentCodeClient } from "../src/v2/client.js"
+import { createDeepAgentCodeClient } from "../src/client.js"
 
 const response = () =>
   new Response(JSON.stringify({ name: "PtyNotFoundError", data: { message: "PTY session not found" } }), {
