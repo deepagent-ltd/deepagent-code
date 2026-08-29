@@ -170,11 +170,11 @@ describe("C0-08 legacy-zero gate real inventory (actual frozen numbers)", () => 
   test("frozen counters match the C0-01 report (red oracle, never hidden)", () => {
     const counters = currentTreeCounts(inventory)
     expect(counters.legacyDims).toBe(903)
-    expect(counters.doubleWrite).toBe(1)
-    expect(counters.doubleWriteEntries).toBe(1)
-    expect(counters.v2Dims).toBe(25)
+    expect(counters.doubleWrite).toBe(0)
+    expect(counters.doubleWriteEntries).toBe(0)
+    expect(counters.v2Dims).toBe(26)
     expect(counters.adapterDims).toBe(3)
-    expect(counters.readOnlyDims).toBe(1721)
+    expect(counters.readOnlyDims).toBe(1840)
     expect(counters.unclassifiedDims).toBe(0)
   })
 
@@ -193,12 +193,13 @@ describe("C0-08 legacy-zero gate real inventory (actual frozen numbers)", () => 
     expect(bridgeSites).toEqual([])
   })
 
-  test("the known double-write path is event.v2-bridge :: event_producer_consumer", () => {
+  test("the known double-write path is GONE (C7-05 flip: event.v2-bridge is V2 authority)", () => {
     const doubleWrite = violationsFor(inventory).filter((v) => v.verdict === "double_write")
-    expect(doubleWrite.length).toBe(1)
-    expect(doubleWrite[0].entryId).toBe("event.v2-bridge")
-    expect(doubleWrite[0].dimension).toBe("event_producer_consumer")
-    expect(doubleWrite[0].evidence.length).toBeGreaterThanOrEqual(2)
+    expect(doubleWrite.length).toBe(0)
+    const v2 = inventory.entries
+      .find((entry) => entry.entry.id === "event.v2-bridge")
+      ?.roles.find((role) => role.dimension === "event_producer_consumer")
+    expect(v2?.verdict).toBe("v2")
   })
 
   test("every legacy/write/adapter violation carries machine evidence", () => {
@@ -215,12 +216,13 @@ describe("C0-08 legacy-zero gate real inventory (actual frozen numbers)", () => 
     expect(caught).toBeInstanceOf(LegacyZeroError)
     const error = caught as LegacyZeroError
     expect(error.counters.legacyDims).toBe(903)
-    expect(error.counters.doubleWrite).toBe(1)
+    expect(error.counters.doubleWrite).toBe(0)
     expect(error.counters.adapterDims).toBe(3)
     expect(error.selectionBridgeSites.length).toBe(0)
     expect(error.message).toContain("legacy dims=903")
-    expect(error.message).toContain("event.v2-bridge :: event_producer_consumer :: double_write")
-    expect(error.violations.length).toBe(903 + 1 + 3)
+    expect(error.message).toContain("double_write=0")
+    expect(error.message).toContain("im.agent-executor :: execution_owner :: legacy")
+    expect(error.violations.length).toBe(903 + 0 + 3)
   })
 })
 
@@ -252,11 +254,11 @@ describe("C0-08 legacy-zero gate snapshot (byte-stable)", () => {
   test("snapshot counters carry the frozen red numbers", () => {
     const snapshot = buildSnapshot(inventory, bridgeSites)
     expect(snapshot.counters.legacyDims).toBe(903)
-    expect(snapshot.counters.doubleWrite).toBe(1)
+    expect(snapshot.counters.doubleWrite).toBe(0)
     expect(snapshot.counters.adapterDims).toBe(3)
-    expect(snapshot.counters.v2Dims).toBe(25)
-    expect(snapshot.entries).toBe(379)
-    expect(snapshot.roles).toBe(2653)
+    expect(snapshot.counters.v2Dims).toBe(26)
+    expect(snapshot.entries).toBe(396)
+    expect(snapshot.roles).toBe(2772)
     expect(snapshot.selectionBridgeUsages).toBe(0)
   })
 
