@@ -1,4 +1,4 @@
-import type { SessionContextDiagnosticsResponse } from "@deepagent-code/sdk/v2"
+import type { SessionContextDiagnosticsResponse } from "@deepagent-code/sdk"
 import { Icon } from "@deepagent-code/ui/icon"
 import { IconButton } from "@deepagent-code/ui/icon-button"
 import { Tooltip } from "@deepagent-code/ui/tooltip"

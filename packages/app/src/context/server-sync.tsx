@@ -6,7 +6,7 @@ import type {
   Path,
   Project,
   ProviderAuthResponse,
-} from "@deepagent-code/sdk/v2/client"
+} from "@deepagent-code/sdk/client"
 import { showToast } from "@/utils/toast"
 import { getFilename } from "@deepagent-code/core/util/path"
 import { batch, getOwner, onCleanup, onMount, untrack } from "solid-js"

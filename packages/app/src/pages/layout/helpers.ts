@@ -1,5 +1,5 @@
 import { getFilename } from "@deepagent-code/core/util/path"
-import { type Session } from "@deepagent-code/sdk/v2/client"
+import { type Session } from "@deepagent-code/sdk/client"
 import { pathKey } from "@/utils/path-key"
 import type { ServerConnection } from "@/context/server"
 

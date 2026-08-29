@@ -7,7 +7,7 @@ import type {
   SessionStatus,
   SnapshotFileDiff,
   Todo,
-} from "@deepagent-code/sdk/v2/client"
+} from "@deepagent-code/sdk/client"
 import { dropSessionCaches, pickSessionCacheEvictions } from "./session-cache"
 
 const msg = (id: string, sessionID: string) =>

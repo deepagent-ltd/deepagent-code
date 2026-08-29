@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import type { PermissionRequest, Session } from "@deepagent-code/sdk/v2/client"
+import type { PermissionRequest, Session } from "@deepagent-code/sdk/client"
 import { base64Encode } from "@deepagent-code/core/util/encode"
 import {
   autoRespondsPermission,

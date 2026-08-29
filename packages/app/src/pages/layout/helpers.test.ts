@@ -6,7 +6,7 @@ import {
   parseDeepLink,
   parseNewSessionDeepLink,
 } from "./deep-links"
-import { type Session } from "@deepagent-code/sdk/v2/client"
+import { type Session } from "@deepagent-code/sdk/client"
 import {
   childSessionOnPath,
   closeHomeProject,

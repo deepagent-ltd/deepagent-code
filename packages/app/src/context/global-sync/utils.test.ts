@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import type { Agent } from "@deepagent-code/sdk/v2/client"
+import type { Agent } from "@deepagent-code/sdk/client"
 import { directoryKey, normalizeAgentList, normalizeProviderList } from "./utils"
 
 const agent = (name = "build") =>

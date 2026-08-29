@@ -1,5 +1,5 @@
 import { For, Show, createMemo, createSignal } from "solid-js"
-import type { Part, UserMessage } from "@deepagent-code/sdk/v2"
+import type { Part, UserMessage } from "@deepagent-code/sdk"
 import {
   jumpToTurn,
   shouldRenderTurnRail,

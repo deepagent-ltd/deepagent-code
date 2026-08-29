@@ -14,7 +14,7 @@ import type {
   SnapshotFileDiff,
   Todo,
   VcsInfo,
-} from "@deepagent-code/sdk/v2/client"
+} from "@deepagent-code/sdk/client"
 import { NormalizedProviderListResponse } from "@deepagent-code/ui/context"
 import type { Accessor } from "solid-js"
 import type { SetStoreFunction, Store } from "solid-js/store"

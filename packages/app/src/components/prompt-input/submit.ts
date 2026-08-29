@@ -1,4 +1,4 @@
-import type { Message, Part, Session } from "@deepagent-code/sdk/v2/client"
+import type { Message, Part, Session } from "@deepagent-code/sdk/client"
 import { showToast } from "@/utils/toast"
 import { base64Encode } from "@deepagent-code/core/util/encode"
 import { Binary } from "@deepagent-code/core/util/binary"

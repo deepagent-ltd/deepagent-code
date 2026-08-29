@@ -1,4 +1,4 @@
-import type { ProviderAuthAuthorization, ProviderAuthMethod } from "@deepagent-code/sdk/v2/client"
+import type { ProviderAuthAuthorization, ProviderAuthMethod } from "@deepagent-code/sdk/client"
 import { Button } from "@deepagent-code/ui/button"
 import { Collapsible } from "@deepagent-code/ui/collapsible"
 import { useDialog } from "@deepagent-code/ui/context/dialog"

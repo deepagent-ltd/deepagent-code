@@ -25,7 +25,7 @@ import {
   type ComponentProps,
   type ParentProps,
 } from "solid-js"
-import type { FileNode } from "@deepagent-code/sdk/v2"
+import type { FileNode } from "@deepagent-code/sdk"
 
 const MAX_DEPTH = 128
 

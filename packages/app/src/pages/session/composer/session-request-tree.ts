@@ -1,4 +1,4 @@
-import type { PermissionRequest, QuestionRequest, Session } from "@deepagent-code/sdk/v2/client"
+import type { PermissionRequest, QuestionRequest, Session } from "@deepagent-code/sdk/client"
 
 function sessionTreeRequest<T>(
   session: Session[],
