@@ -1,30 +1,12 @@
-import type { SessionEventCursor } from "@deepagent-code/sdk/v2/client"
-import { subscribeSessionNotifications, type NotificationHandlers } from "./v2-notification-subscription"
+import { subscribeSessionNotifications, type DrainClient, type NotificationHandlers } from "./v2-notification-subscription"
 
 // §16.5 API-APP-PACKAGE P5 — durable replacement of the notification feed GlobalBus
 // listener. The volatile stream notified idle/error for every session at once; the durable
-// surface subscribes each known session V2 journal via the P2/P3 cursor primitive anchored at
+// surface subscribes each known session V2 journal via the C6-07 drain cursor anchored at
 // the session journal watermark (first subscribe) or the last seen seq (rebuild), so no
 // rebuild ever re-replays history. The known set is the active directory session list.
 
-type CursorClient = {
-  readonly session: {
-    readonly sessionEventCursor: (
-      sessionId: string,
-      input: {
-        readonly after?: string
-        readonly onEvent: (event: {
-          readonly type?: string
-          readonly seq?: number
-          readonly data?: Record<string, unknown>
-        }) => void
-        readonly onResync?: () => void
-        readonly onError?: (error: unknown) => void
-      },
-    ) => SessionEventCursor
-    readonly sessionEventWatermark: (sessionId: string) => Promise<number | undefined>
-  }
-}
+type CursorClient = DrainClient
 
 export type NotificationJournalHandlers = {
   readonly onIdle: (directory: string | undefined, sessionID: string, time: number) => void
@@ -37,12 +19,15 @@ export type NotificationJournalHandlers = {
   readonly onErrorEvent?: (error: unknown) => void
 }
 
-export const createNotificationJournalSubscription = (input: {
-  readonly client: CursorClient
-  readonly currentDirectory: () => string | undefined
-  readonly sessionsOf: (directory: string) => readonly string[]
-  readonly handlers: NotificationJournalHandlers
-}): { readonly dispose: () => void; readonly refresh: (force?: boolean) => void } => {
+export const createNotificationJournalSubscription = (
+  input: {
+    readonly client: CursorClient
+    readonly currentDirectory: () => string | undefined
+    readonly sessionsOf: (directory: string) => readonly string[]
+    readonly handlers: NotificationJournalHandlers
+  },
+  pollMs = 1000,
+): { readonly dispose: () => void; readonly refresh: (force?: boolean) => void } => {
   let unsubscribe: (() => void) | undefined
   let directory = ""
   let sessionIDs: readonly string[] = []
@@ -67,8 +52,8 @@ export const createNotificationJournalSubscription = (input: {
           after.set(sessionID, String(last))
           return
         }
-        const watermark = await input.client.session.sessionEventWatermark(sessionID).catch(() => undefined)
-        after.set(sessionID, watermark === undefined ? undefined : String(watermark))
+        const cursor = await input.client.context.eventsCursor({ session_id: sessionID }).catch(() => undefined)
+        after.set(sessionID, cursor?.data?.watermark !== undefined ? String(cursor.data.watermark) : undefined)
       }),
     )
     const handlers: NotificationHandlers = {
@@ -87,7 +72,7 @@ export const createNotificationJournalSubscription = (input: {
     }
     unsubscribe = subscribeSessionNotifications(input.client, [...ids], handlers, {
       after: (sessionID) => after.get(sessionID),
-    })
+    }, pollMs)
   }
 
   const refresh = (force = false) => {
