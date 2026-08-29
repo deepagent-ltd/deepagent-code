@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
-import type { SnapshotFileDiff } from "@deepagent-code/sdk/v2"
-import type { Message } from "@deepagent-code/sdk/v2/client"
+import type { SnapshotFileDiff } from "@deepagent-code/sdk"
+import type { Message } from "@deepagent-code/sdk/client"
 import { DIFF_PROJECTION_LIMITS, diffs, message } from "./diffs"
 
 const item = {

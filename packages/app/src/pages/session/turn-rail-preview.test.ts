@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import type { Part } from "@deepagent-code/sdk/v2"
+import type { Part } from "@deepagent-code/sdk"
 import { turnPreview } from "./helpers"
 
 const text = (over: Partial<Extract<Part, { type: "text" }>>): Part =>

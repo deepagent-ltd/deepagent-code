@@ -1,5 +1,5 @@
 import { getFilename } from "@deepagent-code/core/util/path"
-import { type AgentPartInput, type FilePartInput, type Part, type TextPartInput } from "@deepagent-code/sdk/v2/client"
+import { type AgentPartInput, type FilePartInput, type Part, type TextPartInput } from "@deepagent-code/sdk/client"
 import type { FileSelection } from "@/context/file"
 import { encodeFilePath } from "@/context/file/path"
 import type { AgentPart, FileAttachmentPart, ImageAttachmentPart, Prompt } from "@/context/prompt"

@@ -1,5 +1,5 @@
-import type { SnapshotFileDiff, VcsFileDiff } from "@deepagent-code/sdk/v2"
-import type { Message } from "@deepagent-code/sdk/v2/client"
+import type { SnapshotFileDiff, VcsFileDiff } from "@deepagent-code/sdk"
+import type { Message } from "@deepagent-code/sdk/client"
 
 type Diff = SnapshotFileDiff | VcsFileDiff
 

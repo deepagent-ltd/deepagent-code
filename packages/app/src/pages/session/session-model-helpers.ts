@@ -1,4 +1,4 @@
-import type { UserMessage } from "@deepagent-code/sdk/v2"
+import type { UserMessage } from "@deepagent-code/sdk"
 
 type Local = {
   session: {

@@ -2,7 +2,7 @@ import { Match, Show, Switch, createMemo } from "solid-js"
 import { Tooltip, type TooltipProps } from "@deepagent-code/ui/tooltip"
 import { ProgressCircle } from "@deepagent-code/ui/progress-circle"
 import { Button } from "@deepagent-code/ui/button"
-import type { Part } from "@deepagent-code/sdk/v2/client"
+import type { Part } from "@deepagent-code/sdk/client"
 
 import { useFile } from "@/context/file"
 import { useLayout } from "@/context/layout"

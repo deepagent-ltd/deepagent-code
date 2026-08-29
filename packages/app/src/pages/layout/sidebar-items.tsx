@@ -1,4 +1,4 @@
-import type { Session } from "@deepagent-code/sdk/v2/client"
+import type { Session } from "@deepagent-code/sdk/client"
 import { Avatar } from "@deepagent-code/ui/avatar"
 import { Icon } from "@deepagent-code/ui/icon"
 import { IconButton } from "@deepagent-code/ui/icon-button"

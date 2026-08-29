@@ -7,7 +7,7 @@ import { InlineInput } from "@deepagent-code/ui/inline-input"
 import { useLanguage } from "@/context/language"
 import { useMcpAdd, useMcpCatalog, useMcpCatalogEnable } from "@/context/mcp"
 import { showToast } from "@/utils/toast"
-import type { McpLocalConfig, McpRemoteConfig, McpCatalogResponses } from "@deepagent-code/sdk/v2/client"
+import type { McpLocalConfig, McpRemoteConfig, McpCatalogResponses } from "@deepagent-code/sdk/client"
 
 type CatalogEntry = McpCatalogResponses[200][number]
 

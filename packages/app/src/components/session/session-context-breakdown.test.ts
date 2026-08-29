@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import type { Message, Part } from "@deepagent-code/sdk/v2/client"
+import type { Message, Part } from "@deepagent-code/sdk/client"
 import { estimateSessionContextBreakdown } from "./session-context-breakdown"
 
 const user = (id: string) => {

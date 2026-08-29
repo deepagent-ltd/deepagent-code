@@ -1,4 +1,4 @@
-import type { Message } from "@deepagent-code/sdk/v2/client"
+import type { Message } from "@deepagent-code/sdk/client"
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === "object" && !Array.isArray(value)
