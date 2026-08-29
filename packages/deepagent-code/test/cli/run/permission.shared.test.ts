@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import type { PermissionRequest } from "@deepagent-code/sdk/v2"
+import type { PermissionRequest } from "@deepagent-code/sdk"
 import {
   createPermissionBodyState,
   permissionAlwaysLines,
