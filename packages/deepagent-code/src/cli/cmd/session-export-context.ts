@@ -1,14 +1,15 @@
 import { Effect } from "effect"
 import { EOL } from "os"
-import { effectCmd, fail } from "../effect-cmd"
-import { attachOptions, createInstanceSDK, type QueryFormatArgs } from "./instance-sdk"
+import { CliError, effectCmd } from "../effect-cmd"
+import { attachOptions, createInstanceSDK } from "./instance-sdk"
 import { renderSdkError } from "../sdk-error"
 import { exportSessionContext } from "../session-context"
 
 // C6-08: "复制上下文" — copy/export a session's recovery context in read-only recovery. Reuses the
-// generated recovery evidence-export surface (client.recovery.*) which remains available when the
-// store is in read_only_recovery mode. Output is JSON (scriptable); failures are rendered through
-// the stable C0-03 typed-error path (branch on code/httpStatus, never parse message).
+// generated recovery evidence-export surface (client.maintenance.recovery.*) which remains
+// available when the store is in read_only_recovery mode. Output is JSON (scriptable); failures
+// are rendered through the stable C0-03 typed-error path (branch on code/httpStatus, never parse
+// message). Type-checked like every other effectCmd: args infer from the yargs builder.
 
 export const SessionExportContextCommand = effectCmd({
   command: "export-context <sessionID>",
@@ -26,12 +27,12 @@ export const SessionExportContextCommand = effectCmd({
           type: "string",
         }),
     ),
-  handler: Effect.fn("Cli.session.exportContext")(function* (rawArgs: QueryFormatArgs & { sessionID: string; exportId?: string }) {
-    const args = rawArgs
+  handler: Effect.fn("Cli.session.exportContext")(function* (args) {
     const sdk = yield* Effect.promise(() => createInstanceSDK(args, process.cwd()))
-    const manifest = yield* Effect.tryPromise(() =>
-      exportSessionContext(sdk, { sessionID: args.sessionID, exportID: args.exportId }),
-    ).pipe(Effect.catchAll((error: unknown) => fail(renderSdkError(error))))
+    const manifest = yield* Effect.tryPromise({
+      try: () => exportSessionContext(sdk, { sessionID: args.sessionID, exportID: args.exportId }),
+      catch: (error) => new CliError({ message: renderSdkError(error) }),
+    })
     process.stdout.write(JSON.stringify(manifest))
     process.stdout.write(EOL)
   }),

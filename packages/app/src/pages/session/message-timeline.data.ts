@@ -6,7 +6,7 @@ import {
   SnapshotDiffArtifactDescriptor,
   SnapshotFileDiff,
   UserMessage,
-} from "@deepagent-code/sdk/v2"
+} from "@deepagent-code/sdk"
 import { groupParts, PartGroup, renderable } from "@deepagent-code/ui/message-part"
 import { Data, Equal } from "effect"
 

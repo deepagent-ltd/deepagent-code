@@ -11,7 +11,7 @@
  * assert the spec-compliant convergence behavior.
  */
 import { afterAll, describe, expect, mock, spyOn, test } from "bun:test"
-import type { AssistantMessage, Part, UserMessage } from "@deepagent-code/sdk/v2/client"
+import type { AssistantMessage, Part, UserMessage } from "@deepagent-code/sdk/client"
 import type { TimelineRow } from "./message-timeline.data"
 
 mock.module("@deepagent-code/ui/message-part", () => ({

@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, mock, test } from "bun:test"
-import type { AssistantMessage, Part, UserMessage } from "@deepagent-code/sdk/v2/client"
+import type { AssistantMessage, Part, UserMessage } from "@deepagent-code/sdk/client"
 
 mock.module("@deepagent-code/ui/message-part", () => ({
   groupParts: (refs: { messageID: string; part: Part }[]) =>

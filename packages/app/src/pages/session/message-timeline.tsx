@@ -50,7 +50,7 @@ import type {
   SnapshotDiffArtifactDescriptor,
   ToolPart,
   UserMessage,
-} from "@deepagent-code/sdk/v2"
+} from "@deepagent-code/sdk"
 import { showToast } from "@/utils/toast"
 import { Binary } from "@deepagent-code/core/util/binary"
 import { getDirectory, getFilename } from "@deepagent-code/core/util/path"
