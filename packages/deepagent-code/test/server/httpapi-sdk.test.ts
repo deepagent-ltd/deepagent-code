@@ -80,7 +80,7 @@ function client(
       createOpencodeClient({
         baseUrl: "http://localhost",
         directory,
-        experimental_workspaceID: input?.workspaceID,
+        workspace: input?.workspaceID,
         headers: input?.headers,
         fetch,
       }),
