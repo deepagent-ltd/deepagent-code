@@ -1,0 +1,12 @@
+{
+  "ref_id": "failure_dossier:privacy:export-cross-user-data",
+  "type": "failure_dossier",
+  "title": "Export includes another user data",
+  "description": "A data export, support bundle, or admin download includes personal data belonging to other users.",
+  "body": "Failure mode: joins, shared resources, comments, audit logs, or relationship tables are exported without ownership filtering or redaction. Detection signals include export fixtures with multiple users, missing ownership filters, and broad admin serializers. Remediation is field and owner review plus negative tests for cross-user leakage. Human gate is required before shipping export changes with ambiguous ownership. Use when a proposed approach skips personal-data classes, sinks, retention, consent, logs, prompts, and exports or claims success without domain evidence. Do not use this dossier as a positive implementation strategy; it is a do-not-use signal. Actions: block the shortcut, name the missing evidence, and switch to a safer methodology or ask for human approval. Validation signals include absence or contradiction in data inventory, redaction tests, retention checks, export/delete tests, and approval evidence. Risk boundary: treat repeated recurrence as a blocker when it can cause PII disclosure, consent bypass, retention drift, and unapproved processor expansion.",
+  "domain": "privacy",
+  "scope_hint": "risk.privacy:failure_dossiers",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.privacy",
+  "pack_id": "risk.privacy"
+}

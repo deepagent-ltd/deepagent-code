@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:analytics:olap-vs-oltp",
+  "type": "knowledge",
+  "title": "OLAP versus OLTP workloads",
+  "description": "Why analytical (columnar, scan-heavy) and transactional (row, point-write) systems are tuned oppositely.",
+  "body": "Use when deciding where a workload belongs. OLTP systems handle many small point reads and writes on row-oriented storage with B-tree indexes; OLAP warehouses run few large aggregating scans on columnar storage optimized for bytes scanned. Do not run heavy analytical scans against the production OLTP database — it competes with transactions and lacks columnar speed. Actions: route aggregations to the warehouse, keep transactions on the OLTP store, and replicate via ELT. Validation signals include analytical queries hitting the warehouse and the OLTP store free of scan-heavy reporting load. Risk boundary: analytics on the OLTP primary can starve live transactions; if reporting hits production, escalate to offload it before it degrades the application.",
+  "domain": "analytics",
+  "scope_hint": "code.analytics:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.analytics",
+  "pack_id": "code.analytics"
+}

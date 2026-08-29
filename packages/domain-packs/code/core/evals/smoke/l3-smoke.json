@@ -1,0 +1,70 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.core",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "code"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.core: code"
+    ],
+    "round_signals": [
+      "l3_validation_smoke"
+    ],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "plain prose note with no repository or domain signal"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "Code Core code validation smoke diagnosis",
+  "expected_pack_id": "code.core",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "Code Core L3 validation smoke",
+    "signals": [
+      "package-local checks",
+      "focused tests",
+      "build output",
+      "smoke runs",
+      "command logs",
+      "and reviewer-readable evidence"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "Code Core diagnosis smoke",
+    "signals": [
+      "compare expected and observed behavior",
+      "inspect the owning files",
+      "isolate the failing boundary",
+      "and record residual risk"
+    ]
+  },
+  "source_refs": [
+    "source:official-tooling-docs:paraphrased",
+    "source:engineering-practice:paraphrased"
+  ]
+}

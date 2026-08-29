@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:azure:app-service-slot-swap",
+  "type": "strategy",
+  "title": "Deploy App Service with deployment slots and warm-up",
+  "description": "Stage to a non-production slot, warm it, then swap so traffic shifts to an already-initialized instance with the right slot settings.",
+  "body": "Use when deploying to Azure App Service and you want zero-downtime releases. Do not deploy straight to the production slot or forget which settings are slot-sticky. Actions: deploy to a staging slot, configure slot-specific settings (connection strings, slot setting flags) so they don't follow the swap, trigger warm-up via applicationInitialization so the slot is hot, then swap. Validation signals include the staging slot passing health checks before swap, no cold-start latency after swap, and slot-sticky settings staying with their slot. Risk boundary: swapping into production is a release action; verify health and have rollback (swap back) ready.",
+  "domain": "azure",
+  "scope_hint": "platform.cloud.azure:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.azure",
+  "pack_id": "platform.cloud.azure"
+}

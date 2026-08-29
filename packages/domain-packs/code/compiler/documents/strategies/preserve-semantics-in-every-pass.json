@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:comp:preserve-semantics-in-every-pass",
+  "type": "strategy",
+  "title": "Preserve semantics in every transformation",
+  "description": "Treat each optimization or lowering as a behavior-preserving rewrite and prove it on the full input domain, not one example.",
+  "body": "Use when writing or reviewing any optimization or lowering pass. Do not assume a faster/smaller output is correct because it works on a sample, and do not ignore edge cases (overflow, division by zero, undefined behavior, NaN, aliasing). Actions: state the precondition under which the rewrite is legal, apply it only when that holds, and verify with differential testing of optimized vs unoptimized output across a corpus. Validation signals include matching results on a large program corpus and an IR verifier pass after the transform. Risk boundary: a miscompilation silently corrupts every program it touches and is extremely hard to trace from the symptom; treat any pass that cannot be shown semantics-preserving as blocking and escalate for review.",
+  "domain": "compiler",
+  "scope_hint": "code.compiler:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.compiler",
+  "pack_id": "code.compiler"
+}

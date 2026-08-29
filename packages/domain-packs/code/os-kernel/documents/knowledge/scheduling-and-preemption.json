@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:kernel:scheduling-and-preemption",
+  "type": "knowledge",
+  "title": "Scheduling, preemption, and atomic context",
+  "description": "The scheduler can preempt most kernel code, but atomic contexts (interrupt, spinlock held) must never sleep or the kernel deadlocks.",
+  "body": "Use when reasoning about when kernel code can be interrupted or must not block. The scheduler preempts threads to share CPUs and honor priorities, but in atomic context — inside an interrupt handler or while holding a spinlock — sleeping is forbidden because there is no safe point to switch out, and doing so hangs the CPU. Real-time classes change preemption guarantees. Do not call any potentially-sleeping function (mutex, GFP_KERNEL alloc, copy_from_user) in atomic context. Actions: know your context and pick non-sleeping primitives there. Validation signals include no scheduling-while-atomic warnings under lockdep. Risk boundary: sleeping while atomic deadlocks the system; treat it as blocking and verify with lockdep.",
+  "domain": "kernel",
+  "scope_hint": "code.os-kernel:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.os-kernel",
+  "pack_id": "code.os-kernel"
+}

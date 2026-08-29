@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:hwverif:passing-test-coverage-hole",
+  "type": "failure_dossier",
+  "description": "A feature ships broken because every test passed but functional coverage never reached the corner that exercises it.",
+  "body": "Failure mode: the regression passes because the stimulus never drove the design into the untested corner, so the bug there is never triggered. Detection signals: green test results alongside an unhit coverpoint, a coverage report below target on a key feature, and a field bug in the uncovered scenario. Do not declare verification complete on passing tests while coverage holes remain. Safer fallback: add directed or better-constrained stimulus to hit the missing bins, or formally waive them with rationale, then re-measure coverage.",
+  "domain": "hw_verification",
+  "scope_hint": "hardware.verification:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.verification:human_authored",
+  "pack_id": "hardware.verification"
+}

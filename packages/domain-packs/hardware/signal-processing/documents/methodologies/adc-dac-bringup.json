@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:sigproc:adc-dac-bringup",
+  "type": "methodology",
+  "title": "Bring up an ADC and DAC sampling pipeline",
+  "description": "Validate clocking, full-scale range, and loopback fidelity before trusting captured or generated samples.",
+  "body": "Use when commissioning a new data-converter path on a board or eval kit. Do not interpret captured data before confirming the sample clock and reference voltage. Actions: verify the converter clock frequency, run a known full-scale tone through a loopback, and compare the captured spectrum against the generated one. Validation signals include a clean single tone at the expected bin and a measured signal-to-noise-and-distortion ratio near the datasheet value. Risk boundary: a misconfigured reference voltage silently scales every sample, so escalate any full-scale mismatch before downstream calibration.",
+  "domain": "signal_processing",
+  "scope_hint": "hardware.signal-processing:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.signal-processing",
+  "pack_id": "hardware.signal-processing"
+}

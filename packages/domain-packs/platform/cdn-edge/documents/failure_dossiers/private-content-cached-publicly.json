@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:edge:private-content-cached-publicly",
+  "type": "failure_dossier",
+  "description": "An authenticated/per-user response cached at the shared edge because it lacked private/no-store, leaking data across users.",
+  "body": "Failure mode: a response containing user-specific data is served without Cache-Control: private/no-store, so the CDN caches it and serves one user's content to others. Detection signals: cache-status HIT on an authenticated endpoint; users report seeing each other's data; missing private directive on dynamic responses. Do not let per-user responses reach the shared cache. Safer fallback: set Cache-Control: private, no-store on authenticated responses, scope public caching to truly static content, and purge the leaked objects immediately.",
+  "domain": "cdn",
+  "scope_hint": "platform.cdn-edge:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cdn-edge:human_authored",
+  "pack_id": "platform.cdn-edge"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "failure_dossier:security:allow-on-error",
+  "type": "failure_dossier",
+  "title": "Allow on error",
+  "description": "Authorization or validation exceptions fall back to allow, default role, or broad scope.",
+  "body": "Failure mode: catch blocks, cache misses, config lookup failures, or policy-service timeouts convert uncertainty into access. This creates intermittent bypasses that are hard to reproduce and dangerous during outages. Detection signals include catch blocks returning true, permissive default roles, tests that only cover healthy policy reads, and logs showing failed policy lookup followed by success. The safe response is deny or fail-safe degraded mode with observable diagnostics. Human gate is required for any intentional exception. Use when a proposed approach skips trust boundaries, authorization decisions, dangerous sinks, secrets, and dependency execution or claims success without domain evidence. Do not use this dossier as a positive implementation strategy; it is a do-not-use signal. Actions: block the shortcut, name the missing evidence, and switch to a safer methodology or ask for human approval. Validation signals include absence or contradiction in negative security tests, server-side checks, sink payload tests, and secret scans. Risk boundary: treat repeated recurrence as a blocker when it can cause client-only controls, injection, credential leakage, permissive fallback, and unsafe dependency changes.",
+  "domain": "authz",
+  "scope_hint": "risk.security:failure_dossiers",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.security",
+  "pack_id": "risk.security"
+}

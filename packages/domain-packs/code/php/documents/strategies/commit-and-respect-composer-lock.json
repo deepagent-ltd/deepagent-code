@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:php:commit-and-respect-composer-lock",
+  "type": "strategy",
+  "title": "Commit composer.lock and install from it",
+  "description": "Pin the exact dependency graph in composer.lock so every environment resolves identical versions.",
+  "body": "Use when adding or upgrading a dependency in an application (not a library). Do not run composer update on deploy or leave composer.lock uncommitted. Actions: commit composer.lock, use composer install (which honors the lock) in CI and deploy, and reserve composer update for an intentional, reviewed dependency bump that regenerates the lock. Validation signals include a CI step that runs composer install --no-dev and verifies vendor/ matches the lock with no drift. Risk boundary: resolving versions at deploy time means production runs untested dependency versions; an uncommitted or ignored lock is a reproducibility defect. Libraries intentionally omit the lock, applications must commit it.",
+  "domain": "php",
+  "scope_hint": "code.php:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.php",
+  "pack_id": "code.php"
+}

@@ -1,0 +1,35 @@
+{
+  "schema_version": "domain_pack_quality.v1",
+  "pack_id": "code.llm-app",
+  "maturity": "L3",
+  "counts": {
+    "strategy": 7,
+    "methodology": 4,
+    "knowledge": 5,
+    "skill": 2,
+    "memory": 0,
+    "failure_dossier": 6
+  },
+  "quality": {
+    "duplicate_ref": 0,
+    "weak_evidence": 0,
+    "failure_indexed": 0,
+    "thin_docs": 0
+  },
+  "structure_l3": true,
+  "validated_l3": true,
+  "activation_precision_checked": true,
+  "cross_pack_negative_checked": true,
+  "scaffold_ratio": 0,
+  "ablation_checked": false,
+  "l3_evidence": {
+    "activation_smoke": "evals/smoke/l3-smoke.json",
+    "retrieval_smoke": "pack-scoped activePackIds retrieval",
+    "validation_smoke": "code.llm-app L3 validation smoke",
+    "diagnosis_smoke": "code.llm-app diagnosis smoke"
+  },
+  "source_refs": [
+    "source:openai-function-calling:paraphrased",
+    "source:json-schema-spec:paraphrased"
+  ]
+}

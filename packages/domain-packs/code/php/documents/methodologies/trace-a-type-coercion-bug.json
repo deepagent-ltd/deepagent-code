@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:php:trace-a-type-coercion-bug",
+  "type": "methodology",
+  "title": "Trace a scalar type-coercion bug",
+  "description": "Find where a value was silently coerced by following it from input to the wrong-typed comparison or store.",
+  "body": "Steps: 1. Identify the symptom (a numeric string compared loosely, a bool stored as 1, a null becoming 0). 2. Trace the value from its source (request, DB, JSON) to where it misbehaves. 3. Check whether the calling file declares strict_types and whether comparisons use == (loose) vs === (strict). 4. Add strict_types and a precise type hint at the boundary, switch to strict comparison. 5. Add a test passing a wrong-typed value to confirm it now errors instead of coercing. Rollback point: before tightening comparisons that other code may rely on. Validation: the boundary now rejects or correctly converts the value with a test proving it.",
+  "domain": "php",
+  "scope_hint": "code.php:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.php",
+  "pack_id": "code.php"
+}

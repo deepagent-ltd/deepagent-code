@@ -1,0 +1,62 @@
+name: pr-routing
+
+on:
+  pull_request_target:
+    types: [opened, reopened, edited, synchronize, ready_for_review]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  enforce-target:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Enforce PR target branches
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const sameRepo = pr.head.repo.full_name === pr.base.repo.full_name;
+            const contributorToDev = pr.base.ref === 'dev';
+            const devToMain = pr.base.ref === 'main' && sameRepo && pr.head.ref === 'dev';
+
+            if (contributorToDev || devToMain) {
+              core.info(`Allowed PR route: ${pr.head.repo.full_name}:${pr.head.ref} -> ${pr.base.ref}`);
+              return;
+            }
+
+            const marker = '<!-- pr-routing:invalid-target -->';
+            const body = `${marker}
+            This repository only accepts contributor PRs targeting \`dev\`.
+
+            The only allowed PR route into \`main\` is a same-repository \`dev\` -> \`main\` PR opened by a maintainer after \`dev\` has passed validation.
+
+            Please reopen this change against \`dev\`.`;
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr.number,
+              per_page: 100,
+            });
+
+            const existing = comments.find((comment) => comment.body?.includes(marker));
+            if (!existing) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr.number,
+                body,
+              });
+            }
+
+            await github.rest.pulls.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number,
+              state: 'closed',
+            });
+
+            core.setFailed(`Invalid PR route: ${pr.head.repo.full_name}:${pr.head.ref} -> ${pr.base.ref}`);

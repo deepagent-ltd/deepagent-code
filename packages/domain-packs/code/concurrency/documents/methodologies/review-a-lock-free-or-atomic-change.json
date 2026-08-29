@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:conc:review-a-lock-free-or-atomic-change",
+  "type": "methodology",
+  "title": "Review a lock-free or atomic change",
+  "description": "Verify the happens-before reasoning, ABA safety, and detector evidence before accepting clever lock-free code.",
+  "body": "Steps: 1. Identify every shared atomic and the ordering it claims (seq-cst, acquire/release, relaxed). 2. For each, trace the happens-before edges that make a reader observe the writer's prior stores. 3. Check compare-and-swap loops for the ABA problem (value cycles back) and add tagging/hazard pointers if needed. 4. Demand a stress test and a race-detector clean run as evidence. 5. Compare against a simpler locked version's benchmark to confirm the complexity is justified. Rollback point: keep the locked implementation available to revert to. Validation: detector is clean, the stress test passes, and the ordering argument is written down.",
+  "domain": "concurrency",
+  "scope_hint": "code.concurrency:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.concurrency",
+  "pack_id": "code.concurrency"
+}

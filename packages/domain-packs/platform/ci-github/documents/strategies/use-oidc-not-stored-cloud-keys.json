@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:ghci:use-oidc-not-stored-cloud-keys",
+  "type": "strategy",
+  "title": "Authenticate to cloud via OIDC, not stored keys",
+  "description": "Exchange the workflow's OIDC token for short-lived cloud credentials instead of storing long-lived access keys as secrets.",
+  "body": "Use when a workflow deploys to or reads from a cloud provider. Do not store static AWS/GCP/Azure access keys as repo secrets when OIDC federation is available, since static keys leak and never expire. Actions: set permissions: id-token: write, configure a cloud role trust policy scoped to the repo and ref, and use the provider's configure-credentials action to assume the role; constrain the trust policy by branch/environment. Validation signals include no long-lived cloud key secrets present and a trust policy bound to the exact repo and ref. Risk boundary: a broad OIDC trust policy (any repo, any ref) or fallback to stored keys is a privilege finding needing review.",
+  "domain": "ci_github",
+  "scope_hint": "platform.ci-github:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.ci-github",
+  "pack_id": "platform.ci-github"
+}

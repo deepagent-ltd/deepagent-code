@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:vdb:configure-a-qdrant-collection",
+  "type": "skill",
+  "title": "Configure a Qdrant collection with payload filtering",
+  "description": "Set the vector size and metric and create payload indexes so filtered vector queries stay index-aware.",
+  "body": "Use when standing up a Qdrant collection that combines metadata filters with vector search. Actions: create the collection with the correct vector size (matching the embedding dimension) and distance metric, define payload field indexes on the attributes you filter by, and set HNSW parameters (m, ef_construct) for the recall target. Verify a filtered search returns a full set of results all matching the payload condition. Validation signals include payload-filtered queries returning k results and the search reporting the filter applied within the index. Risk boundary: filtering on an un-indexed payload field forces Qdrant into a slower scan path, so confirm a payload index exists for every field used in production filters.",
+  "domain": "vector_db",
+  "scope_hint": "code.database.vector:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.vector",
+  "pack_id": "code.database.vector"
+}

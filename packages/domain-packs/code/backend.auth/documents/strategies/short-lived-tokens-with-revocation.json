@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:auth:short-lived-tokens-with-revocation",
+  "type": "strategy",
+  "title": "Short-lived tokens with revocation",
+  "description": "Access tokens are short-lived and revocable; long sessions rely on refresh with server-side revocation, not on long token TTLs.",
+  "body": "Use when changing session length, token TTL, or refresh logic. Do not extend an access-token TTL to avoid re-auth friction. Actions: keep access-token lifetime short; implement refresh with a server-side revocation list or rotating refresh tokens; invalidate on logout and on credential change. Validation signals include a test that a revoked/expired token is rejected and that logout invalidates the session. Risk boundary: lengthening token life or removing revocation is a permission-expansion change and needs a human gate.",
+  "domain": "backend_auth",
+  "scope_hint": "code.backend.auth:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.auth",
+  "pack_id": "code.backend.auth"
+}

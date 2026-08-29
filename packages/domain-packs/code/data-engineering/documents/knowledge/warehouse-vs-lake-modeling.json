@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:dataeng:warehouse-vs-lake-modeling",
+  "type": "knowledge",
+  "title": "Warehouse modeling and partitioning",
+  "description": "Columnar warehouses reward partitioning and clustering for pruning; modeling (staging, dimensions, facts) trades storage for query simplicity.",
+  "body": "Use when designing analytical tables. Columnar warehouses scan by column and prune by partition, so partitioning on the common filter (often date) and clustering on frequent keys cuts cost dramatically. Layered modeling — immutable staging, then conformed dimensions and facts — trades extra storage for queries that are simple and consistent. Do not query raw, unpartitioned sources for analytics. Actions: partition by the dominant filter, cluster on join/filter keys, and model in layers. Validation signals include queries pruning to few partitions and bytes-scanned dropping. Risk boundary: an unpartitioned wide table scans everything per query, so cost and latency grow without bound.",
+  "domain": "data_engineering",
+  "scope_hint": "code.data-engineering:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-engineering",
+  "pack_id": "code.data-engineering"
+}

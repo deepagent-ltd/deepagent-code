@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:ghci:pin-actions-to-sha",
+  "type": "strategy",
+  "title": "Pin third-party actions to a full commit SHA",
+  "description": "Reference external actions by 40-char commit SHA, not a mutable tag or branch, to stop silent supply-chain swaps.",
+  "body": "Use when adding or updating any uses: that points outside your org. Do not pin to a floating tag (@v3), a branch (@main), or a short SHA, because a tag can be re-pointed at malicious code after you review it. Actions: replace the tag with the full commit SHA and keep the human-readable version in a trailing comment; enable Dependabot for actions so SHA bumps are reviewed PRs. Validation signals include every external uses: ending in a 40-hex SHA and a lockfile-like audit trail of version comments. Risk boundary: a new third-party action by mutable ref on a workflow with secret or write access is a supply-chain finding; escalate before merge.",
+  "domain": "ci_github",
+  "scope_hint": "platform.ci-github:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.ci-github",
+  "pack_id": "platform.ci-github"
+}

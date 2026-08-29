@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:ng:accidental-multiple-service-instances",
+  "type": "failure_dossier",
+  "description": "A service intended as a singleton is provided at multiple levels, so components silently get separate instances and split state.",
+  "body": "Failure mode: a service is added to several components' providers arrays (or both root and a component) while the code assumes one shared instance, so each subtree gets its own instance and state written in one is invisible in another. Detection signals: a value set via the service in one component is not seen in another; constructor/instance counters fire more than once; the same token is provided at multiple injector levels. Do not provide a shared service at multiple levels. Safer fallback: provide app-wide singletons with providedIn: 'root', reserve component/route providers for deliberately scoped instances, and assert the expected instance count in a test.",
+  "domain": "angular",
+  "scope_hint": "code.frontend.angular:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.angular:human_authored",
+  "pack_id": "code.frontend.angular"
+}

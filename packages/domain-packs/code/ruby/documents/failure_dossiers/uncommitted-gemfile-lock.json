@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:ruby:uncommitted-gemfile-lock",
+  "type": "failure_dossier",
+  "description": "Gemfile.lock is missing or ignored for an application, so machines resolve different gems and prod runs untested versions.",
+  "body": "Failure mode: an application does not commit Gemfile.lock (or deploy runs bundle update), so each environment resolves the Gemfile independently and runs different transitive gem versions than were tested. Detection signals: Gemfile.lock absent or gitignored for an app; deploy invokes bundle update; a bug reproduces on one machine only. Do not resolve gem versions at deploy time for an application. Safer fallback: commit Gemfile.lock, run bundle install (which honors the lock) everywhere or bundle install --deployment in CI, and reserve bundle update for a reviewed, tested bump. A reusable gem library legitimately omits the lock so consumers resolve fresh.",
+  "domain": "ruby",
+  "scope_hint": "code.ruby:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.ruby:human_authored",
+  "pack_id": "code.ruby"
+}

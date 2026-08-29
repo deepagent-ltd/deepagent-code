@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:robot:e-stop-coupled-to-control-flow",
+  "type": "failure_dossier",
+  "description": "An emergency stop routed through the same threads or queues as normal control, so it fails exactly when the software is stuck.",
+  "body": "Failure mode: the safety stop is implemented as a normal message or a graceful-shutdown routine on the same blocked thread/queue as the control loop, so when the software hangs or a node stalls the stop never executes and actuators keep moving. Detection signals: the stop shares a thread or queue with the main loop; a test that stalls the control loop also disables the stop; no independent watchdog. Do not couple the stop to the healthy-software path. Safer fallback: drive the stop from an independent high-priority watchdog that cuts actuator power or commands a safe hold on missed heartbeats, make the fail-safe state the default on any fault, and verify the stop halts all actuators within the required time even with the main loop deliberately stalled.",
+  "domain": "robotics",
+  "scope_hint": "code.robotics:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.robotics:human_authored",
+  "pack_id": "code.robotics"
+}

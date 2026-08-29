@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:rlang:na-propagation-rules",
+  "type": "knowledge",
+  "title": "NA propagation rules",
+  "description": "NA is contagious: most operations involving NA return NA unless missingness is removed explicitly.",
+  "body": "Use when computing over data that may contain missing values. NA in R is contagious: arithmetic, comparisons, and aggregates involving NA return NA, and == against NA yields NA rather than FALSE. Do not test missingness with == NA — use is.na(). Actions: set na.rm where summarizing, decide drop versus impute per column, and use is.na for missingness tests. Validation signals include aggregates that are not unexpectedly NA and logged NA counts. Risk boundary: na.rm silently excludes rows, which can bias a statistic if missingness is not random.",
+  "domain": "r_lang",
+  "scope_hint": "code.r:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.r",
+  "pack_id": "code.r"
+}

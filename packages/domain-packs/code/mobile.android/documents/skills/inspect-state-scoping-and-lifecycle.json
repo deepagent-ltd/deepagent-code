@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:android:inspect-state-scoping-and-lifecycle",
+  "type": "skill",
+  "title": "Inspect state scoping and lifecycle handling",
+  "description": "Review where UI state lives and whether it survives configuration changes and process death.",
+  "body": "Use when reviewing an Android screen for state correctness. Actions: locate UI state and check whether it lives in the Activity/Fragment (lost on recreation), a plain composable var (lost on recomposition/recreation), a ViewModel (survives configuration change), or SavedStateHandle/rememberSaveable (survives process death); also check for Activity/Context captured in long-lived objects. Report misplaced state and leak risks with location. Do not modify code. This skill exposes capability only and must not run instrumented tests against production services without runtime permission. Validation signals include durable state in a ViewModel and no leaked Context. Risk boundary: state in the Activity and Context leaks are blocking findings; recommend hoisting to a ViewModel rather than papering over rotation bugs.",
+  "domain": "android",
+  "scope_hint": "code.mobile.android:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mobile.android",
+  "pack_id": "code.mobile.android"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:rag:misattributed-failure",
+  "type": "failure_dossier",
+  "description": "A retrieval failure is debugged as a generation problem (or vice versa), so effort is spent on the wrong stage.",
+  "body": "Failure mode: a wrong answer is fixed by tuning the prompt when the supporting passage was never retrieved, or by re-chunking when the passage was present but ignored, so the real gap stays open. Detection signals: no check of whether a supporting passage was retrieved before fixing; chunking changes that do not move recall; prompt changes that do not help because retrieval missed. Do not change a stage before confirming it is the failing one. Safer fallback: attribute each failure as retrieval (missing passage) or generation (passage present but ignored), confirm with the retrieved set, and fix at the lowest failing stage with a regression test.",
+  "domain": "rag",
+  "scope_hint": "code.rag:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.rag:human_authored",
+  "pack_id": "code.rag"
+}

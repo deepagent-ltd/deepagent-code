@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:net:reuse-connections-via-pooling",
+  "type": "strategy",
+  "title": "Reuse connections through a properly sized pool",
+  "description": "Use keep-alive and a bounded connection pool so calls avoid handshake cost without leaking or exhausting sockets.",
+  "body": "Use when a client makes many calls to the same host. Do not open a fresh connection per request (handshake and TIME_WAIT overhead) and do not leave the pool unbounded or fail to return/close connections (socket leak, CLOSE_WAIT buildup). Actions: enable keep-alive, size max connections per host and total, set idle timeouts and max lifetime, and ensure response bodies are fully read/closed so connections return to the pool. Validation signals include connection reuse (few new handshakes under load), a stable socket count, and no descriptor leak over time. Risk boundary: an undersized pool serializes traffic and an unbounded one exhausts file descriptors; size it against load and verify under sustained traffic.",
+  "domain": "networking",
+  "scope_hint": "code.networking:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.networking",
+  "pack_id": "code.networking"
+}

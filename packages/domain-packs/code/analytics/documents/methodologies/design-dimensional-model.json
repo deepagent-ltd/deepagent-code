@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:analytics:design-dimensional-model",
+  "type": "methodology",
+  "title": "Design a dimensional model from the grain up",
+  "description": "Define the fact grain, then dimensions and measures, choosing star or snowflake to fit query and maintenance needs.",
+  "body": "Use when modeling a business process for analytics. Do not start from source tables — start from the question and the grain. Actions: declare the fact table's grain (one row per what), identify the dimensions and additive measures, build conformed dimensions shared across facts, and choose a denormalized star for query simplicity or a normalized snowflake when dimension reuse and storage justify it. Validation signals include a fact table with a single declared grain and conformed dimensions reused across marts. Risk boundary: a mixed-grain fact table produces double-counted measures; if rows do not share one grain, treat the model as broken and re-derive it before building reports.",
+  "domain": "analytics",
+  "scope_hint": "code.analytics:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.analytics",
+  "pack_id": "code.analytics"
+}

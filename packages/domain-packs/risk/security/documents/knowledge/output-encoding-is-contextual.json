@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:security:output-encoding-is-contextual",
+  "type": "knowledge",
+  "title": "Output encoding is contextual",
+  "description": "HTML, attribute, URL, JavaScript, CSS, Markdown, shell, and SQL contexts need different escaping or structured APIs.",
+  "body": "Use when rendering or serializing user-controlled content. Do not approve a single regex sanitizer across multiple output contexts. Actions: identify the exact output context and use the framework or library encoder for that context; avoid mixing contexts after encoding. Validation signals include rendered malicious payload tests and browser or parser observations. Risk boundary: stored content rendered in privileged admin surfaces needs extra review. Use when Security Risk Controls work touches trust boundaries, authorization decisions, dangerous sinks, secrets, and dependency execution. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: use the fact to constrain the change and test plan; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include negative security tests, server-side checks, sink payload tests, and secret scans. Risk boundary: escalate or stop when the task involves client-only controls, injection, credential leakage, permissive fallback, and unsafe dependency changes, missing owner evidence, or live external state.",
+  "domain": "injection",
+  "scope_hint": "risk.security:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.security",
+  "pack_id": "risk.security"
+}

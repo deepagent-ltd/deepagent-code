@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:dq:enforce-data-contracts",
+  "type": "strategy",
+  "title": "Enforce a data contract between producer and consumer",
+  "description": "Codify the schema, semantics, and SLAs a producer guarantees so a breaking change is rejected at the source, not discovered downstream.",
+  "body": "Use when a dataset is shared across teams or pipelines. Do not let producers change shape or semantics unilaterally — consumers break without warning and blame lands on the wrong team. Actions: define a contract (schema, types, nullability, value semantics, freshness SLA), validate producer output against it in CI/at publish, and version it; reject or quarantine violations. Validation signals include a contract check passing at publish and a breaking change blocked before reaching consumers. Risk boundary: an unversioned, unenforced contract makes every producer change a potential outage; require contract validation on shared datasets and consumer sign-off for breaking changes.",
+  "domain": "data_quality",
+  "scope_hint": "code.data-quality:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-quality",
+  "pack_id": "code.data-quality"
+}

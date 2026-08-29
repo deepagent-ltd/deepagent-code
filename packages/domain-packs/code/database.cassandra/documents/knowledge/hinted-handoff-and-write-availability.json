@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:cass:hinted-handoff-and-write-availability",
+  "type": "knowledge",
+  "title": "How hinted handoff preserves write availability",
+  "description": "When a replica is down, the coordinator stores a hint and replays it later, which keeps writes available but is not a consistency guarantee.",
+  "body": "Reference for understanding write availability under node failure. If a replica is unreachable during a write, the coordinator can store a hint and replay it once the node returns, so writes stay available even with a replica down (within the hint window). Use when reasoning about availability versus durability. Do not treat hinted handoff as a substitute for repair or for an adequate consistency level; hints expire after a window and a coordinator failure loses them. Validation signals include hints metrics showing replay after a node restart and repair still reconciling any gaps. Risk boundary: relying on hints alone for consistency risks lost updates if the window lapses, so pair an appropriate write CL with scheduled repair rather than leaning on handoff.",
+  "domain": "cassandra",
+  "scope_hint": "code.database.cassandra:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.cassandra",
+  "pack_id": "code.database.cassandra"
+}

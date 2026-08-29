@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:net:debug-connection-pool-exhaustion",
+  "type": "methodology",
+  "title": "Debug connection pool exhaustion or socket leak",
+  "description": "Correlate pool metrics, socket states, and code paths to find connections that are never returned or closed.",
+  "body": "Steps: 1. Observe the symptom: calls blocking on pool acquisition, rising latency, or descriptor-limit errors. 2. Inspect socket states (netstat/ss): many CLOSE_WAIT means the app is not closing connections; many TIME_WAIT means churn. 3. Trace code paths that obtain a connection/response and verify each one fully reads and closes the body (or returns the connection). 4. Check pool max sizes and idle timeouts against concurrency. 5. Fix the leak (close in finally/defer) or resize the pool. Rollback point: config and close-handling changes are reversible. Validation: socket counts stabilize and pool acquisition no longer blocks under load.",
+  "domain": "networking",
+  "scope_hint": "code.networking:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.networking",
+  "pack_id": "code.networking"
+}

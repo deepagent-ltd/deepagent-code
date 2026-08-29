@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:sls:the-faas-execution-model",
+  "type": "knowledge",
+  "title": "The FaaS execution model",
+  "description": "The platform creates, freezes, reuses, and reaps instances; your code runs as short-lived invocations on instances you do not control.",
+  "body": "Use when reasoning about why warm/cold behavior and globals act as they do. The platform spins up an instance, runs init once, then handles invocations; between calls it may freeze the instance (background work pauses) and later reuse or destroy it. Module-scope state persists only while an instance stays warm, which is non-deterministic. Do not treat instance reuse as a guarantee. Actions: use module scope for connection reuse, external stores for durability. Validation signals include identical behavior across cold and warm runs. Risk boundary: assuming an instance (or its in-memory data) survives leads to lost state and cross-request leakage — design for ephemerality.",
+  "domain": "serverless",
+  "scope_hint": "code.backend.serverless:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.serverless",
+  "pack_id": "code.backend.serverless"
+}

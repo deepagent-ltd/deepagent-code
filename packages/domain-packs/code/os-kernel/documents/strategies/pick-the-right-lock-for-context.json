@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:kernel:pick-the-right-lock-for-context",
+  "type": "strategy",
+  "title": "Pick the right lock for the context",
+  "description": "Choose spinlock vs mutex vs RCU by whether the path can sleep and whether it runs in interrupt context, never sleeping while atomic.",
+  "body": "Use when adding synchronization to kernel code. Do not take a mutex (which can sleep) in interrupt context or while holding a spinlock, and do not spin on a spinlock for a long critical section. Actions: use a spinlock (with irqsave if shared with an ISR) for short, non-sleeping critical sections, a mutex for paths that may sleep, and RCU for read-mostly data; keep critical sections minimal. Validation signals include a clean lockdep run and no might_sleep/scheduling-while-atomic warnings under stress. Risk boundary: sleeping in atomic context deadlocks or panics the kernel; treat a sleeping call under a spinlock as blocking and confirm with lockdep before merging.",
+  "domain": "kernel",
+  "scope_hint": "code.os-kernel:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.os-kernel",
+  "pack_id": "code.os-kernel"
+}

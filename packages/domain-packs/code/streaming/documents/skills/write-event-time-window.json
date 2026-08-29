@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:stream:write-event-time-window",
+  "type": "skill",
+  "title": "Write an event-time windowed aggregation",
+  "description": "Steps to assign timestamps and watermarks and emit a correct tumbling aggregate tolerant of bounded lateness.",
+  "body": "Use when implementing a time-based aggregate over a stream. Do not key the window on ingestion time — late events then land in the wrong window. Actions: assign the event timestamp, set a watermark covering measured lateness, define the tumbling window with allowed lateness and a side output, and verify a replay reproduces the live aggregate. Validation signals include each event landing in the correct event-time window and identical aggregates between live and replayed runs. Risk boundary: a too-tight watermark drops valid late events; if the dropped-late metric is non-trivial, treat the window as lossy and escalate to widen the bound or fix the source before relying on the output.",
+  "domain": "streaming",
+  "scope_hint": "code.streaming:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.streaming",
+  "pack_id": "code.streaming"
+}

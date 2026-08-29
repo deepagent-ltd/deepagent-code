@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:hwpwr:lost-state-no-retention",
+  "type": "failure_dossier",
+  "description": "State is corrupted after a power-down because registers that needed to survive were not mapped to retention cells.",
+  "body": "Failure mode: a domain is power-gated but its essential state sits in ordinary registers on the gated supply, so the values are lost when the supply turns off. Detection signals: correct operation until the first power-down, garbage state after wake, and a power-intent file lacking retention on those registers. Do not power-gate the domain while persistent state lacks retention. Safer fallback: map the must-survive registers to retention cells, declare the retention strategy in the power-intent file, and re-verify the save and restore cycle.",
+  "domain": "power_design",
+  "scope_hint": "hardware.power:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.power:human_authored",
+  "pack_id": "hardware.power"
+}

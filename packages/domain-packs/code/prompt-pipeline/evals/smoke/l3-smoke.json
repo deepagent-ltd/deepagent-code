@@ -1,0 +1,71 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.prompt-pipeline",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "prompt_pipeline",
+      "prompt",
+      "scrubbing",
+      "templating",
+      "locale"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.prompt-pipeline: prompt template assembly, input scrubbing and PII redaction, prompt versioning, system prompt isolation, locale i18n prompt preparation"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "plain prose note with no repository or domain signal"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "prompt template assembly pipeline input scrubbing pii redaction system prompt versioning locale i18n deterministic preparation raw input echo injection scrub",
+  "expected_pack_id": "code.prompt-pipeline",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "code.prompt-pipeline L3 validation smoke",
+    "signals": [
+      "identical inputs produce a byte-identical prompt",
+      "PII redacted before the prompt is assembled",
+      "untrusted input cannot reach instruction position",
+      "prompt artifacts are versioned and diffable"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "code.prompt-pipeline diagnosis smoke",
+    "signals": [
+      "raw user input echoed into the system instruction",
+      "PII reaches the model unredacted",
+      "prompt assembly nondeterministic across runs",
+      "locale assumptions hardcoded for one language",
+      "prompt changes shipped without versioning"
+    ]
+  },
+  "source_refs": [
+    "source:prompt-engineering-guide:paraphrased",
+    "source:pii-redaction-practices:paraphrased"
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:bazel:leverage-remote-cache-safely",
+  "type": "strategy",
+  "title": "Leverage the remote cache only with hermetic actions",
+  "description": "Turn on remote caching after actions are hermetic, so cache entries are valid across machines instead of returning stale or wrong outputs.",
+  "body": "Use when introducing or relying on a shared remote cache or remote execution. Do not enable caching while actions still read undeclared inputs. Actions: confirm hermeticity first; configure the remote cache endpoint; verify cache hits on a clean checkout reproduce correct outputs. Validation signals include a high hit rate across fresh checkouts and CI agents, with no behavioral difference from a local build. Risk boundary: caching non-hermetic actions serves machine-specific or stale artifacts to everyone, so prove hermeticity before trusting the shared cache.",
+  "domain": "bazel",
+  "scope_hint": "code.build.bazel:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.build.bazel",
+  "pack_id": "code.build.bazel"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:comp:compilation-pipeline-stages",
+  "type": "knowledge",
+  "title": "The compilation pipeline and its stages",
+  "description": "Source flows through lexing, parsing, semantic/type analysis, IR generation, optimization, and codegen, each refining a representation with its own contract.",
+  "body": "Use when reasoning about where a compiler responsibility belongs or where a bug originates. The front end (lex, parse, type-check) turns text into a typed AST; the middle end lowers to an IR and optimizes; the back end generates target code. Each stage consumes one representation and produces a more refined one under a contract. Do not blur stage responsibilities or debug downstream without checking the upstream contract held. Actions: locate a symptom by identifying which stage's invariant is violated and inspect that stage's output. Validation signals include per-stage verifiers confirming each representation is well-formed. Risk boundary: misattributing a bug to the wrong stage wastes effort and can mask the real cause; verify the producing stage's output before editing the consumer.",
+  "domain": "compiler",
+  "scope_hint": "code.compiler:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.compiler",
+  "pack_id": "code.compiler"
+}

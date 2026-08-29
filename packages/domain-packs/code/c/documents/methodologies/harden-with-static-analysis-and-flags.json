@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:c:harden-with-static-analysis-and-flags",
+  "type": "methodology",
+  "title": "Harden a C build with warnings, sanitizers, and static analysis",
+  "description": "Layer strict warning flags, runtime sanitizers, and a static analyzer to catch memory and integer bugs the standard does not require diagnosing.",
+  "body": "Steps: 1. Build with -Wall -Wextra -Wconversion -Werror and treat warnings as defects. 2. Add a sanitized build target (-fsanitize=address,undefined -g) and run the test suite under it. 3. Run a static analyzer (clang --analyze / clang-tidy / cppcheck) over the sources and triage findings. 4. For untrusted input paths, fuzz with libFuzzer/AFL. 5. Record which findings are real vs suppressed-with-justification. Rollback point: before suppressing any analyzer warning. Validation: the sanitized suite passes clean and the analyzer reports no new high-severity issues. Risk boundary: a suppressed warning on a memory or integer-overflow path can be an exploitable bug; require an explicit justification comment and human review rather than a blanket suppression.",
+  "domain": "c",
+  "scope_hint": "code.c:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.c",
+  "pack_id": "code.c"
+}

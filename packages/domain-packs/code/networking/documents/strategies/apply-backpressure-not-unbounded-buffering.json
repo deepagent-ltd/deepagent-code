@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:net:apply-backpressure-not-unbounded-buffering",
+  "type": "strategy",
+  "title": "Apply backpressure instead of unbounded buffering",
+  "description": "Bound in-flight concurrency and queue depth so a slow downstream slows the producer rather than exhausting memory.",
+  "body": "Use when one component produces requests faster than a downstream can serve them. Do not buffer requests in an unbounded queue or spawn unlimited concurrent calls, because a slow dependency then turns into an out-of-memory or descriptor exhaustion failure. Actions: cap concurrent in-flight calls (semaphore/pool size), bound any queue and decide a block/drop/shed policy, and propagate slowness upstream (block the producer or return a busy signal). Validation signals include memory and connection counts staying flat under a slow downstream and the producer slowing rather than crashing. Risk boundary: a buffering change that alters drop vs block semantics affects data loss; confirm the policy and escalate if it can drop committed work.",
+  "domain": "networking",
+  "scope_hint": "code.networking:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.networking",
+  "pack_id": "code.networking"
+}

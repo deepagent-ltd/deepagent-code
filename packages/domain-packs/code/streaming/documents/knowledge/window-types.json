@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:stream:window-types",
+  "type": "knowledge",
+  "title": "Tumbling, sliding, and session windows",
+  "description": "How disjoint tumbling, overlapping sliding, and gap-driven session windows differ in coverage and event membership.",
+  "body": "Use when picking how events group over time. Tumbling windows are fixed, non-overlapping intervals so each event belongs to exactly one; sliding windows advance by a step smaller than their length so events fall into several overlapping windows; session windows group bursts separated by an inactivity gap and have variable length. Do not use sliding when you mean disjoint periods — it multiplies each event across windows. Actions: choose by whether periods overlap and whether boundaries are fixed or activity-driven. Validation signals include each event's window membership matching the chosen type and aggregates matching a manual check. Risk boundary: a wrong type distorts every aggregate; if counts disagree with a reference, revisit the window definition first.",
+  "domain": "streaming",
+  "scope_hint": "code.streaming:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.streaming",
+  "pack_id": "code.streaming"
+}

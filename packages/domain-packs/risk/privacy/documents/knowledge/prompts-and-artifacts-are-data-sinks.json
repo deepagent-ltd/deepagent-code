@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:privacy:prompts-and-artifacts-are-data-sinks",
+  "type": "knowledge",
+  "title": "Prompts and artifacts are data sinks",
+  "description": "Model prompts, tool transcripts, screenshots, generated fixtures, and exported artifacts can persist personal data outside the application boundary.",
+  "body": "Use when debugging with AI tools, preparing reports, generating tests from real data, or creating screenshots/log bundles. Do not put real personal data into prompts unless explicitly approved. Actions: use synthetic or redacted data, crop or mask screenshots, and avoid copying raw records into generated files. Validation signals include artifact inspection and redacted examples. Risk boundary: PHI, PCI, credentials, or customer records in prompts require human gate. Use when Privacy Risk Controls work touches personal-data classes, sinks, retention, consent, logs, prompts, and exports. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: use the fact to constrain the change and test plan; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include data inventory, redaction tests, retention checks, export/delete tests, and approval evidence. Risk boundary: escalate or stop when the task involves PII disclosure, consent bypass, retention drift, and unapproved processor expansion, missing owner evidence, or live external state.",
+  "domain": "privacy",
+  "scope_hint": "risk.privacy:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.privacy",
+  "pack_id": "risk.privacy"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:comp:define-stage-contracts",
+  "type": "strategy",
+  "title": "Define a precise contract per stage",
+  "description": "Give each pipeline stage an explicit input/output invariant so bugs are localized and stages can be tested in isolation.",
+  "body": "Use when structuring the compiler pipeline (lex, parse, typecheck, IR, optimize, codegen). Do not let stages reach across boundaries or assume undocumented invariants about each other's output. Actions: specify what each stage requires and guarantees (e.g. parser yields a well-formed AST, type checker annotates every node, IR is in SSA), add a verifier that checks the invariant between stages, and test each stage against its contract. Validation signals include the inter-stage verifier passing and unit tests per stage. Risk boundary: a violated cross-stage invariant surfaces as a confusing failure far downstream; treat verifier failures as blocking and fix the producing stage rather than patching the consumer.",
+  "domain": "compiler",
+  "scope_hint": "code.compiler:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.compiler",
+  "pack_id": "code.compiler"
+}

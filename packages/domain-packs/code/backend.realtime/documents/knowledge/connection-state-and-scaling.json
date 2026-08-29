@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:rt:connection-state-and-scaling",
+  "type": "knowledge",
+  "title": "Connection state and horizontal scaling",
+  "description": "Persistent connections pin state to one instance, so broadcasting across a fleet needs a shared pub/sub backplane.",
+  "body": "Use when scaling realtime beyond one process. A connection lives on one instance, so an event produced elsewhere will not reach it unless instances share a backplane (Redis/NATS pub/sub) that relays events to whichever instance holds each subscriber. Do not assume an in-memory subscriber map works across replicas, and beware that load balancers may break long connections without sticky/upgrade support. Actions: introduce a pub/sub backplane, keep per-connection state local but route events through it, and configure the LB for WebSocket upgrade or SSE. Validation signals include a cross-instance delivery test. Risk boundary: missing backplane means clients on other instances silently miss events.",
+  "domain": "realtime",
+  "scope_hint": "code.backend.realtime:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.realtime",
+  "pack_id": "code.backend.realtime"
+}

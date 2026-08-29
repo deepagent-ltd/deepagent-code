@@ -1,0 +1,7 @@
+Search and navigate code in the current Location using the shared Code Graph, current source, editor overlays, and LSP enrichment.
+
+Use search for code discovery by behavior, symbol, path, or natural-language concept. Use definition, references, implementations, calls, dependencies, outline, and diagnostics for precise navigation. `calls_out` returns the symbols called by the requested symbol (outgoing edges); `calls_in` returns the symbols that call it (incoming edges). Results include `degree.inDegree`, `degree.outDegree`, `degree.callsIn`, and `degree.callsOut` for the returned node, plus an explicit `direction` on relationship hits. Results include opaque references that can be passed to context_query for cross-graph evidence tracing.
+
+Argument rules: `search` requires `query` or `symbol`; `outline` and `diagnostics` require `file`; all other intents require `symbol` or `file`. Use `depth` 1 for immediate callers/callees and increase it only when the first result is insufficient. Read the current file before editing; snippets are bounded evidence, not an editable source snapshot.
+
+Read the current file before editing. Returned snippets are bounded evidence, not an editable source snapshot.

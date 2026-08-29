@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:rt:audit-connection-lifecycle",
+  "type": "skill",
+  "title": "Audit a realtime connection lifecycle",
+  "description": "Read a WebSocket/SSE handler and report on reconnect-resync, backpressure, heartbeat, and auth revalidation.",
+  "body": "Use when asked whether a realtime endpoint is robust. Actions: inspect the connection handler to verify messages carry sequence ids and reconnect resumes from a client cursor; check the outbound buffer is bounded with a slow-consumer policy; verify a heartbeat reaps dead connections; confirm authorization is re-checked as tokens expire. Do not assume the socket stays up or that connect-time auth suffices. Report and record the handler location, classifying gaps as no-resume, unbounded-buffer, no-heartbeat, or auth-only-at-connect. This skill is read-only and must not open production connections. Validation signals include a confirmed reconnect-recovery path. Risk boundary: streaming private data on an expired token is a blocking security finding.",
+  "domain": "realtime",
+  "scope_hint": "code.backend.realtime:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.realtime",
+  "pack_id": "code.backend.realtime"
+}

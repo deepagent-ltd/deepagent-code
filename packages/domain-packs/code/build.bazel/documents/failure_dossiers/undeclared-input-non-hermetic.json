@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:bazel:undeclared-input-non-hermetic",
+  "type": "failure_dossier",
+  "description": "An action that reads an undeclared file or system tool builds locally but fails or returns wrong cached results elsewhere.",
+  "body": "Failure mode: a rule or genrule reads a header, config, or binary that is not listed as an input, so the action succeeds on a machine where the file happens to exist. Detection signals: the build passes locally but fails on a clean CI agent or remote executor; cache hits return outputs that ignore a changed undeclared file; results differ by machine. Do not rely on files Bazel does not know about. Safer fallback: declare every file and tool the action uses in srcs, deps, or tools, pin the toolchain, and verify on a clean remote build.",
+  "domain": "bazel",
+  "scope_hint": "code.build.bazel:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.build.bazel:human_authored",
+  "pack_id": "code.build.bazel"
+}

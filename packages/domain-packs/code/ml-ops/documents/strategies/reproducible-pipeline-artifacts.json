@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:mlops:reproducible-pipeline-artifacts",
+  "type": "strategy",
+  "title": "Make the ML pipeline produce immutable artifacts",
+  "description": "Have each pipeline stage emit content-addressed, versioned artifacts so a run is replayable and a model's provenance is traceable end to end.",
+  "body": "Use when building a multi-stage train-eval-package pipeline. Do not let stages overwrite mutable paths — a rerun then changes history and breaks provenance. Actions: write each stage output to a content-addressed or versioned store, record input artifact hashes, and verify a replay from the same inputs yields the same downstream hash. Validation signals include a pipeline run whose artifact DAG is fully traceable and a replay reproducing the packaged model. Risk boundary: mutable artifacts make incidents unexplainable; if a stage cannot guarantee immutable outputs, escalate before wiring it into production retraining.",
+  "domain": "mlops",
+  "scope_hint": "code.mlops:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mlops",
+  "pack_id": "code.mlops"
+}

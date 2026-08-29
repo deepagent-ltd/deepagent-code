@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:tsdb:size-chunks-to-query-window",
+  "type": "strategy",
+  "title": "Size chunks to the query window",
+  "description": "Choose hypertable chunk intervals so the working set spans a small number of chunks, balancing insert and query performance.",
+  "body": "Use when creating a hypertable or diagnosing slow time-range queries. Do not leave the default chunk interval on high-ingest tables — too-large chunks bloat the working set, too-small ones explode chunk count and planning time. Actions: pick an interval so recent data (most-queried) fits ~1-2 chunks and a typical query touches a handful; inspect chunk count and sizes before tuning. Validation signals include query plans hitting few chunks and chunk size near the target memory budget. Risk boundary: changing chunk interval only affects new chunks — escalate if existing data needs re-chunking under load.",
+  "domain": "timeseries_db",
+  "scope_hint": "code.database.timeseries:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.timeseries",
+  "pack_id": "code.database.timeseries"
+}

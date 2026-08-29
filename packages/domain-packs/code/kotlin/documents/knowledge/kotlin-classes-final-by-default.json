@@ -1,0 +1,11 @@
+{
+  "ref_id": "knowledge:kotlin:kotlin-classes-final-by-default",
+  "type": "knowledge",
+  "description": "Kotlin classes and methods are final unless opened by modifier or compiler plugin.",
+  "body": "Use when frameworks, proxies, or tests require subclassing. Do not scatter open modifiers without knowing whether all-open plugins or framework conventions exist. Inspect plugins and framework requirements. Verify compile/runtime startup. Risk boundary is changing inheritance API unintentionally. Use when Kotlin Engineering work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: use the fact to constrain the change and test plan; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "kotlin",
+  "scope_hint": "code.kotlin:knowledges",
+  "evidence_strength": "strong",
+  "provenance_tag": "code.kotlin:seed:kotlin_gradle_coroutines_docs:paraphrased",
+  "pack_id": "code.kotlin"
+}

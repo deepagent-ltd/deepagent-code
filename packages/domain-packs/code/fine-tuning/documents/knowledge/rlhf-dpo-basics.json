@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:finetune:rlhf-dpo-basics",
+  "type": "knowledge",
+  "title": "RLHF and DPO at a glance",
+  "description": "How preference optimization aligns a model to human-ranked outputs and where DPO simplifies the RLHF loop.",
+  "body": "Use when the goal is aligning model behavior to human preference rather than teaching facts. RLHF trains a reward model on ranked pairs then optimizes the policy against it with a KL penalty to the reference; DPO skips the separate reward model by optimizing a preference loss directly on the pairs. Do not use preference tuning to inject knowledge — it shapes behavior, not facts. Actions: collect preference pairs, choose RLHF or DPO, and keep a KL/anchor to the base. Validation signals include a preference win-rate gain and a capability holdout that does not regress. Risk boundary: over-optimizing the reward causes reward hacking; if outputs game the metric, escalate and re-anchor to human review.",
+  "domain": "fine_tuning",
+  "scope_hint": "code.fine-tuning:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.fine-tuning",
+  "pack_id": "code.fine-tuning"
+}

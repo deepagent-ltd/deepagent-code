@@ -1,0 +1,74 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "platform.kubernetes",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "kubernetes",
+      "k8s",
+      "helm",
+      "rollout",
+      "rbac"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [
+      "production",
+      "security"
+    ],
+    "repo_signals": [
+      "L3 smoke for platform.kubernetes: deployment manifest with readiness probe, resource requests and limits, rbac role binding, namespace isolation, helm chart rollout and rollback"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "plain prose note with no repository or domain signal"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "kubernetes deployment rollout rollback readiness liveness probe resource requests limits rbac role binding namespace secret helm dry-run manifest",
+  "expected_pack_id": "platform.kubernetes",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "platform.kubernetes L3 validation smoke",
+    "signals": [
+      "kubectl diff / helm diff shows only intended changes",
+      "rollout status reaches available with new revision",
+      "probes pass for new pods before old terminate",
+      "RBAC change reviewed against least privilege"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "platform.kubernetes diagnosis smoke",
+    "signals": [
+      "missing or wrong readiness probe causing traffic to unready pods",
+      "no resource limits leading to OOMKill or noisy neighbor",
+      "over-broad ClusterRole or wildcard verbs",
+      "Secret mounted as plaintext env var",
+      "rollout stuck on crashloop with no rollback"
+    ]
+  },
+  "source_refs": [
+    "source:kubernetes-docs:paraphrased",
+    "source:helm-docs:paraphrased"
+  ]
+}

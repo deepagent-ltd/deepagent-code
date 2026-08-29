@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:llm:run-structured-output-conformance",
+  "type": "skill",
+  "title": "Run a structured-output conformance check",
+  "description": "Execute or scaffold a conformance run that samples responses and asserts each conforms to the schema or reaches the typed fallback.",
+  "body": "Use when validating a structured-output change. Procedure: collect a sample of representative inputs, run them through the pipeline, validate each response against the schema, and classify failures (truncation, prose-wrapped, wrong-type, bad-enum, missing-field); if such a run is absent, scaffold the minimal cases. Report the conformance rate and which failure classes appear and whether each reaches the typed fallback rather than downstream code. This skill exposes capability only and must not run against production traffic. Risk boundary: a structured-output change without a passing conformance run is unverified and must not be reported as done.",
+  "domain": "llm_app",
+  "scope_hint": "code.llm-app:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.llm-app",
+  "pack_id": "code.llm-app"
+}

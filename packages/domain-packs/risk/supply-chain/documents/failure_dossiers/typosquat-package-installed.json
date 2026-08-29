@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:supply_chain:typosquat-package-installed",
+  "type": "failure_dossier",
+  "description": "Adding a lookalike package name that impersonates a popular dependency, pulling malicious code into the tree.",
+  "body": "Failure mode: a misspelled or scope-swapped package name is added (or auto-suggested) and installs a typosquat that mimics a trusted library while running malicious install scripts or exfiltrating data. Detection signals: a newly-published, low-download package with a near-identical name to a popular one; repo URL missing or pointing to a recent fork; unexpected install-time network activity. Do not install a package whose name closely resembles a known one without verifying it. Safer fallback: confirm the canonical name, maintainer, and repository, install from the verified source, and remove the impostor. Risk boundary: deny the add and escalate when a lookalike package shows typosquat signals rather than installing to test it.",
+  "domain": "security",
+  "scope_hint": "risk.supply-chain:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.supply-chain:human_authored",
+  "pack_id": "risk.supply-chain"
+}

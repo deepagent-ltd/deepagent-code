@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:typescript:esm-cjs-type-only-pass",
+  "type": "failure_dossier",
+  "description": "A typecheck pass alone can miss ESM/CJS loader failures in runtime or test execution.",
+  "body": "Failure mode: import/export types compile, but Node, Bun, Jest, Vitest, tsx, or a bundler fails because emitted module format, package type, extension, or exports map does not match runtime expectations. Diagnostic signal: ERR_REQUIRE_ESM, Cannot use import statement outside a module, missing default export, or path alias resolving only in TypeScript. Do not use typecheck pass as full validation for module-boundary changes. Recovery is to run a runtime smoke under the intended loader and inspect package.json exports/type plus tsconfig module settings. Use when a proposed approach skips repository conventions, toolchain files, changed symbols, validation commands, and runtime output or claims success without domain evidence. Do not use this dossier as a positive implementation strategy; it is a do-not-use signal. Actions: block the shortcut, name the missing evidence, and switch to a safer methodology or ask for human approval. Validation signals include absence or contradiction in package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: treat repeated recurrence as a blocker when it can cause broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes.",
+  "domain": "typescript",
+  "scope_hint": "code.typescript:failure_dossiers",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.typescript:human_authored",
+  "pack_id": "code.typescript"
+}

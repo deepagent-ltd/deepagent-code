@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:bazel:keep-actions-hermetic",
+  "type": "strategy",
+  "title": "Keep every action hermetic",
+  "description": "Make each build action depend only on declared inputs and the toolchain Bazel controls, so results are reproducible and cacheable anywhere.",
+  "body": "Use when writing or fixing a rule or genrule that touches files or tools. Do not read from absolute paths, the network, or undeclared system binaries. Actions: declare every input in srcs or deps; pin the toolchain so the host compiler is not used implicitly; avoid embedding timestamps or machine paths in outputs. Validation signals include identical outputs on two machines and high remote-cache hit rates across clean checkouts. Risk boundary: a non-hermetic action poisons the cache with machine-specific results, so treat any undeclared input as a defect to fix, not tolerate.",
+  "domain": "bazel",
+  "scope_hint": "code.build.bazel:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.build.bazel",
+  "pack_id": "code.build.bazel"
+}

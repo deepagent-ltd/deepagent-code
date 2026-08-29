@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:hwpwr:ir-drop-mechanism",
+  "type": "knowledge",
+  "title": "IR drop and its effect on timing",
+  "description": "Current through the power grid's resistance lowers the local supply voltage, slowing logic in high-current regions.",
+  "body": "Use when reasoning about why some blocks slow under load. Do not assume every cell sees the nominal voltage, because grid resistance and peak current create local droop. Actions: relate the local current and grid resistance to the voltage drop, identify high-droop regions, and connect droop to slower timing there. Validation signals include droop staying within budget and timing holding at the reduced local voltage. Risk boundary: severe droop pushes a block below its functional voltage, so flag any region whose droop threatens timing closure.",
+  "domain": "power_design",
+  "scope_hint": "hardware.power:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.power",
+  "pack_id": "hardware.power"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:gfx:missing-barrier-resource-hazard",
+  "type": "failure_dossier",
+  "description": "Reading a render target or storage image while a previous write is still in flight, with no barrier, causing driver-dependent corruption.",
+  "body": "Failure mode: a pass samples an attachment (for example a shadow or G-buffer) that an earlier pass wrote, but no pipeline barrier or layout transition guards the read-after-write, so the read may observe partially-written data depending on driver scheduling. Detection signals: the Vulkan/WebGPU validation layer reports a synchronization hazard; output is correct on one GPU and corrupt on another; flickering that changes with frame timing. Do not assume passes execute in submission order. Safer fallback: insert the matching pipeline barrier with correct source/destination stage and access masks, transition the image to the sampled layout, and confirm a clean validation-layer run across at least two drivers.",
+  "domain": "graphics",
+  "scope_hint": "code.graphics:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.graphics:human_authored",
+  "pack_id": "code.graphics"
+}

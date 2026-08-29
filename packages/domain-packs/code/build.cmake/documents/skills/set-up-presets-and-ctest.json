@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:cmake:set-up-presets-and-ctest",
+  "type": "skill",
+  "title": "Set up presets and ctest for a project",
+  "description": "Create CMakePresets.json with configure and build presets and register tests so ctest runs them reproducibly.",
+  "body": "Use when standardizing how a project is configured, built, and tested. Do not leave configure flags as undocumented shell commands. Actions: write configurePresets with generator and cache variables and matching buildPresets; include(CTest) and register tests with add_test; verify cmake --preset configures and ctest runs the suite. Validation signals include a fresh checkout building and testing through the presets and ctest reporting passes. Risk boundary: tests or flags left outside presets drift between environments, so capture them in versioned files.",
+  "domain": "cmake",
+  "scope_hint": "code.build.cmake:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.build.cmake",
+  "pack_id": "code.build.cmake"
+}

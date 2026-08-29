@@ -1,0 +1,72 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "platform.ci-github",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "ci_github",
+      "github_actions",
+      "workflow",
+      "ci"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [
+      "supply-chain"
+    ],
+    "repo_signals": [
+      "L3 smoke for platform.ci-github: github actions workflow with matrix strategy, actions/checkout pinned to sha, github_token permissions, cache key, reusable workflow, and oidc cloud auth"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "plain prose note with no repository or domain signal"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "github actions workflow job matrix cache key artifact github_token permissions pinned action sha pull_request_target oidc secret fork",
+  "expected_pack_id": "platform.ci-github",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "platform.ci-github L3 validation smoke",
+    "signals": [
+      "GITHUB_TOKEN permissions block present and scoped to least privilege",
+      "third-party actions pinned to full commit SHA not floating tag",
+      "no secret referenced in a pull_request_target job that checks out PR head",
+      "cache key includes lockfile hash so it busts on dependency change"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "platform.ci-github diagnosis smoke",
+    "signals": [
+      "pull_request_target checking out untrusted PR head with secrets in scope",
+      "third-party action referenced by mutable tag like @v3 or @main",
+      "GITHUB_TOKEN left at default write-all permissions",
+      "cache key not keyed on lockfile so stale dependencies persist",
+      "long-lived cloud credentials stored as secrets instead of OIDC"
+    ]
+  },
+  "source_refs": [
+    "source:github-actions-docs:paraphrased",
+    "source:slsa-framework:paraphrased"
+  ]
+}

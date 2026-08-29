@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:python:profile-with-cprofile",
+  "type": "skill",
+  "title": "Profile a hot path with cProfile and pstats",
+  "description": "Run cProfile on a representative workload, sort by cumulative time, and report the top callers instead of guessing at the bottleneck.",
+  "body": "Use when a Python path is reported slow and the cause is unknown. Actions: run `python -m cProfile -o out.prof script.py` (or cProfile.Profile() around the hot block), load with pstats and `sort_stats('cumulative').print_stats(20)`, and compare tottime vs cumtime to separate self-time from callee-time; for visual review export to snakeviz. Report the top functions, their call counts, and the suspected cause. Do not micro-optimize before measuring or profile a toy input that misses the real distribution. This skill exposes capability only and must not run production workloads without runtime permission. Validation signals include a profile where the named hot function dominates cumtime and a before/after benchmark after the fix. Risk boundary: if the cost is in a C extension or IO wait, report that cProfile undercounts it and recommend py-spy or tracing instead of forcing a Python-level change.",
+  "domain": "python",
+  "scope_hint": "code.python:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.python",
+  "pack_id": "code.python"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "methodology:query:plan-execute-summarize",
+  "type": "methodology",
+  "description": "For deterministic tasks, identify the read-only source, execute the tool, summarize bounded results, then answer from the result.",
+  "body": "Steps: 1. Identify the smallest read-only source that can answer the request: file, search, git, validation output, log, config, SQL SELECT, or runtime status. 2. Execute the read-only tool or use the already available runner result. 3. Summarize large output into a bounded result summary, preserving command/query/scope and truncation state. 4. Answer from that summary and cite the source ref when available. 5. If no tool result exists, mark the answer unverified instead of guessing. Rollback point: if the request requires mutation, stop this methodology and switch to the relevant risk-controlled workflow. Use when a read-only query, count, list, status, diff, or inspection request must be answered from repository or tool evidence. Do not use when the user asks to edit, fix, deploy, migrate, delete, insert, update, or alter state. Actions: identify the exact scope, run read-only search or inspection tools, cite the source artifact, and preserve the command or file evidence used for the answer. Validation signals include matching counts against tool output, source references, scope labels, and no modified working-tree files. Risk boundary: stop or ask for confirmation if the task changes from query to mutation, if evidence is stale, or if the answer would expose secrets or excessive output.",
+  "domain": "query",
+  "scope_hint": "code.query:workflow",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.query",
+  "pack_id": "code.query"
+}

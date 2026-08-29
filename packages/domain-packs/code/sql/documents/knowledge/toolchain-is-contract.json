@@ -1,0 +1,11 @@
+{
+  "ref_id": "knowledge:sql:toolchain-is-contract",
+  "type": "knowledge",
+  "description": "In SQL, the database engine and version, and its SQL dialect are part of the contract and changing them changes behavior.",
+  "body": "In SQL, the database engine and version, and its SQL dialect define how code compiles, lints, and resolves dependencies; bumping any of them can change diagnostics and emitted output. Use when you touch the database engine and version, and its SQL dialect or when a build behaves differently than the pinned environment. Do not silently upgrade the toolchain or override the pinned version to make an error disappear. Actions: read the pinned config, match the project's the database engine and version, and its SQL dialect, then run EXPLAIN ANALYZE, the query plan, and index-usage inspection and the migration applied against a scratch database (the same engine/version as prod) to compare against the baseline. Validation signals include identical EXPLAIN ANALYZE, the query plan, and index-usage inspection output, a reproducible build, and unchanged lockfile resolution. Risk boundary: a toolchain bump is a deliberate, reviewed change; escalate rather than upgrading to unblock yourself.",
+  "domain": "sql",
+  "scope_hint": "code.sql:knowledge",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.sql:skill_survey",
+  "pack_id": "code.sql"
+}

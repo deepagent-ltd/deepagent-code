@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:feat:leakage-taxonomy",
+  "type": "knowledge",
+  "title": "Temporal versus target leakage",
+  "description": "How temporal leakage (future data in a row) and target leakage (label-derived features) differ and how each is detected.",
+  "body": "Use when distinguishing the two main leakage classes during a review. Temporal leakage uses feature values recorded after the label time, fixed by point-in-time joins; target leakage uses features computed from or after the outcome, fixed by dropping those fields. Do not conflate them — the remedies differ. Actions: for temporal leakage audit join timing; for target leakage trace feature provenance to the outcome. Validation signals include a join-timing audit and a feature-provenance trace with each fix recorded. Risk boundary: either leakage class ships a model that fails on real data; if a feature's relationship to the label is ambiguous, escalate and exclude it pending review.",
+  "domain": "feature_engineering",
+  "scope_hint": "code.feature-engineering:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.feature-engineering",
+  "pack_id": "code.feature-engineering"
+}

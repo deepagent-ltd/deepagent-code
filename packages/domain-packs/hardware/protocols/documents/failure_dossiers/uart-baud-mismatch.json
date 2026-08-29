@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:hwprot:uart-baud-mismatch",
+  "type": "failure_dossier",
+  "description": "UART characters arrive as garbage that worsens at higher rates because the two endpoints run at different effective baud rates.",
+  "body": "Failure mode: a divisor rounding error or wrong clock source leaves one side at a slightly different baud, accumulating bit-sampling error across each frame. Detection signals: framing errors counting up, corruption that grows with frame length, and a fixed offset that disappears at lower baud. Do not raise the baud rate while framing errors persist. Safer fallback: recompute the divisor against the real peripheral clock, verify the error margin, and switch to a crystal source if the on-chip oscillator drifts.",
+  "domain": "hw_protocols",
+  "scope_hint": "hardware.protocols:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.protocols:human_authored",
+  "pack_id": "hardware.protocols"
+}

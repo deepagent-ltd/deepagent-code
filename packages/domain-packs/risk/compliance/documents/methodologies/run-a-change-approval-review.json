@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:comp:run-a-change-approval-review",
+  "type": "methodology",
+  "title": "Run a change-approval review for a deploy",
+  "description": "Verify a pending deploy carries valid, independent, change-bound approval before it proceeds.",
+  "body": "Steps: 1. Identify the artifact/commit to deploy. 2. Locate its approval record and confirm the approver is not the author. 3. Confirm the approval references this exact artifact, not a prior one. 4. Confirm a linked authorized change request exists and predates the change. 5. Pass only if all hold; otherwise block and report which gate failed. Rollback point: the gate itself, before the deploy step runs. Validation: a self-approved or artifact-mismatched deploy is rejected, and the decision plus its evidence are recorded.",
+  "domain": "compliance",
+  "scope_hint": "risk.compliance:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.compliance",
+  "pack_id": "risk.compliance"
+}

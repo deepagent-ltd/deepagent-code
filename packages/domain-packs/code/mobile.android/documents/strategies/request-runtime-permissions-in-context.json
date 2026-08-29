@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:android:request-runtime-permissions-in-context",
+  "type": "strategy",
+  "title": "Request runtime permissions in context",
+  "description": "Declare permissions in the manifest and request dangerous ones at point of use, handling denial and don't-ask-again.",
+  "body": "Use when accessing protected data/features (location, camera, contacts, notifications). Do not access a dangerous-permission API assuming it is granted, and do not request everything up front. Actions: declare permissions in AndroidManifest, request dangerous ones at runtime via the permission launcher at the moment they are needed, show a rationale when appropriate, and degrade gracefully on denial (including permanent denial). Validation signals include the feature working after grant and not crashing on denial. Risk boundary: using a dangerous API without the granted runtime permission throws a SecurityException, and requesting unused permissions erodes trust and risks Play policy issues — request the minimum, in context, and handle every denial path.",
+  "domain": "android",
+  "scope_hint": "code.mobile.android:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mobile.android",
+  "pack_id": "code.mobile.android"
+}

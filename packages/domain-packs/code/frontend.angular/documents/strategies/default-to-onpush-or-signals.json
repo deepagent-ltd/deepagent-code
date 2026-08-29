@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:ng:default-to-onpush-or-signals",
+  "type": "strategy",
+  "title": "Default components to OnPush or signals",
+  "description": "Run change detection on explicit inputs and observable emissions rather than on every Zone-tracked event.",
+  "body": "Use when building or optimizing a component, especially in a large tree. Do not leave everything on default change detection where any event re-checks the whole tree. Actions: set ChangeDetectionStrategy.OnPush so the component re-renders only when an @Input reference changes, an observable bound via async emits, or an event fires inside it; treat inputs as immutable and replace objects rather than mutate; or adopt signals which mark consumers dirty precisely. Validation signals include a test asserting an OnPush component does not re-render when an input is mutated in place but does when replaced. Risk boundary: mutating an OnPush input in place produces a silently stale view; signals and OnPush both require treating state as replaced, not mutated.",
+  "domain": "angular",
+  "scope_hint": "code.frontend.angular:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.angular",
+  "pack_id": "code.frontend.angular"
+}

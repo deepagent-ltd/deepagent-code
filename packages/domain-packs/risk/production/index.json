@@ -1,0 +1,903 @@
+[
+  {
+    "ref_id": "knowledge:production:database-migrations-can-lock-or-rewrite",
+    "type": "knowledge",
+    "title": "Database Migrations Can Lock Or Rewrite",
+    "summary": "Schema and index changes may lock tables, rewrite rows, break old code, or destroy information even when syntax is valid.",
+    "domains": [
+      "migration",
+      "production",
+      "deployment",
+      "rollback",
+      "incident"
+    ],
+    "triggers": [
+      "schema",
+      "index",
+      "changes",
+      "lock",
+      "tables",
+      "rewrite",
+      "rows",
+      "break"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.production"
+  },
+  {
+    "ref_id": "knowledge:production:external-state-needs-environment-proof",
+    "type": "knowledge",
+    "title": "External State Needs Environment Proof",
+    "summary": "Production, staging, and local state may look similar in config; writes require proof of target environment and approval.",
+    "domains": [
+      "production",
+      "deployment",
+      "migration",
+      "rollback",
+      "incident"
+    ],
+    "triggers": [
+      "production",
+      "staging",
+      "local",
+      "state",
+      "look",
+      "similar",
+      "config",
+      "writes"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.production"
+  },
+  {
+    "ref_id": "knowledge:production:feature-flags-have-operational-risk",
+    "type": "knowledge",
+    "title": "Feature Flags Have Operational Risk",
+    "summary": "Flags add state, targeting, monitoring, cleanup, and compatibility risks; they are not free safety.",
+    "domains": [
+      "deployment",
+      "production",
+      "migration",
+      "rollback",
+      "incident"
+    ],
+    "triggers": [
+      "flags",
+      "state",
+      "targeting",
+      "monitoring",
+      "cleanup",
+      "compatibility",
+      "risks",
+      "they"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.production"
+  },
+  {
+    "ref_id": "knowledge:production:green-tests-are-not-deploy-approval",
+    "type": "knowledge",
+    "title": "Green Tests Are Not Deploy Approval",
+    "summary": "Passing tests prove a validation subset, not permission to deploy, migrate, shift traffic, or alter production state.",
+    "domains": [
+      "production",
+      "deployment",
+      "migration",
+      "rollback",
+      "incident"
+    ],
+    "triggers": [
+      "passing",
+      "tests",
+      "prove",
+      "validation",
+      "subset",
+      "permission",
+      "deploy",
+      "migrate"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.production"
+  },
+  {
+    "ref_id": "knowledge:production:manual-hotfixes-create-drift",
+    "type": "knowledge",
+    "title": "Manual Hotfixes Create Drift",
+    "summary": "Untracked production changes, console edits, one-off scripts, and manual config edits can diverge from source control and rollback plans.",
+    "domains": [
+      "production",
+      "deployment",
+      "migration",
+      "rollback",
+      "incident"
+    ],
+    "triggers": [
+      "untracked",
+      "production",
+      "changes",
+      "console",
+      "edits",
+      "scripts",
+      "manual",
+      "config"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.production"
+  },
+  {
+    "ref_id": "knowledge:production:monitoring-is-part-of-release",
+    "type": "knowledge",
+    "title": "Monitoring Is Part Of Release",
+    "summary": "A production change without logs, metrics, traces, alerts, or user-impact checks has limited validation after deployment.",
+    "domains": [
+      "incident",
+      "production",
+      "deployment",
+      "migration",
+      "rollback"
+    ],
+    "triggers": [
+      "production",
+      "change",
+      "without",
+      "logs",
+      "metrics",
+      "traces",
+      "alerts",
+      "user"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.production"
+  },
+  {
+    "ref_id": "knowledge:production:rollback-may-not-undo-data",
+    "type": "knowledge",
+    "title": "Rollback May Not Undo Data",
+    "summary": "Reverting code can leave migrated data, emitted events, external API calls, cache state, or user-visible side effects behind.",
+    "domains": [
+      "rollback",
+      "production",
+      "deployment",
+      "migration",
+      "incident"
+    ],
+    "triggers": [
+      "reverting",
+      "code",
+      "leave",
+      "migrated",
+      "data",
+      "emitted",
+      "events",
+      "external"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.production"
+  },
+  {
+    "ref_id": "knowledge:production:traffic-shifts-need-guardrails",
+    "type": "knowledge",
+    "title": "Traffic Shifts Need Guardrails",
+    "summary": "Canary or percentage rollout should have baseline metrics, stop conditions, and a rollback owner before traffic increases.",
+    "domains": [
+      "deployment",
+      "production",
+      "migration",
+      "rollback",
+      "incident"
+    ],
+    "triggers": [
+      "canary",
+      "percentage",
+      "rollout",
+      "should",
+      "have",
+      "baseline",
+      "metrics",
+      "stop"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.production"
+  },
+  {
+    "ref_id": "methodology:production:feature-flag-release-check",
+    "type": "methodology",
+    "title": "Feature Flag Release Check",
+    "summary": "Check default state, targeting, both code paths, metrics, rollback, and cleanup owner before flag-mediated release.",
+    "domains": [
+      "deployment",
+      "production",
+      "migration",
+      "rollback",
+      "incident"
+    ],
+    "triggers": [
+      "check",
+      "default",
+      "state",
+      "targeting",
+      "both",
+      "code",
+      "paths",
+      "metrics"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.production"
+  },
+  {
+    "ref_id": "methodology:production:incident-handoff-evidence",
+    "type": "methodology",
+    "title": "Incident Handoff Evidence",
+    "summary": "Summarize production incident work as timeline, impact, mitigation, validation, remaining risk, and owner decisions.",
+    "domains": [
+      "incident",
+      "production",
+      "deployment",
+      "migration",
+      "rollback"
+    ],
+    "triggers": [
+      "summarize",
+      "production",
+      "incident",
+      "work",
+      "timeline",
+      "impact",
+      "mitigation",
+      "validation"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.production"
+  },
+  {
+    "ref_id": "methodology:production:migration-safety-review",
+    "type": "methodology",
+    "title": "Migration Safety Review",
+    "summary": "Review migrations for destructive operations, locks, runtime compatibility, backfill safety, and verification evidence.",
+    "domains": [
+      "migration",
+      "production",
+      "deployment",
+      "rollback",
+      "incident"
+    ],
+    "triggers": [
+      "review",
+      "migrations",
+      "destructive",
+      "operations",
+      "locks",
+      "runtime",
+      "compatibility",
+      "backfill"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.production"
+  },
+  {
+    "ref_id": "methodology:production:production-change-triage",
+    "type": "methodology",
+    "title": "Production Change Triage",
+    "summary": "Classify whether a task can affect live users, durable state, external systems, security posture, or incident response.",
+    "domains": [
+      "production",
+      "deployment",
+      "migration",
+      "rollback",
+      "incident"
+    ],
+    "triggers": [
+      "classify",
+      "whether",
+      "task",
+      "affect",
+      "live",
+      "users",
+      "durable",
+      "state"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.production"
+  },
+  {
+    "ref_id": "methodology:production:rollback-readiness-check",
+    "type": "methodology",
+    "title": "Rollback Readiness Check",
+    "summary": "Verify rollback or disablement exists, is tested enough for the risk, and does not create data incompatibility.",
+    "domains": [
+      "rollback",
+      "production",
+      "deployment",
+      "migration",
+      "incident"
+    ],
+    "triggers": [
+      "verify",
+      "rollback",
+      "disablement",
+      "exists",
+      "tested",
+      "enough",
+      "risk",
+      "does"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.production"
+  },
+  {
+    "ref_id": "skill:risk.production:incident-evidence-summary",
+    "type": "skill",
+    "title": "Incident Evidence Summary",
+    "summary": "Prepare a concise handoff for production incident or rollback decisions.",
+    "domains": [
+      "incident",
+      "production",
+      "deployment",
+      "migration",
+      "rollback"
+    ],
+    "triggers": [
+      "prepare",
+      "concise",
+      "handoff",
+      "production",
+      "incident",
+      "rollback",
+      "decisions",
+      "inputs"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.production"
+  },
+  {
+    "ref_id": "skill:risk.production:migration-preflight-review",
+    "type": "skill",
+    "title": "Migration Preflight Review",
+    "summary": "Inspect migration risk before any production apply step.",
+    "domains": [
+      "migration",
+      "production",
+      "deployment",
+      "rollback",
+      "incident"
+    ],
+    "triggers": [
+      "inspect",
+      "migration",
+      "risk",
+      "before",
+      "production",
+      "apply",
+      "step",
+      "inputs"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.production"
+  },
+  {
+    "ref_id": "skill:risk.production:production-risk-triage",
+    "type": "skill",
+    "title": "Production Risk Triage",
+    "summary": "Classify production impact, external-state writes, approval needs, validation gates, and rollback requirements.",
+    "domains": [
+      "production",
+      "deployment",
+      "migration",
+      "rollback",
+      "incident"
+    ],
+    "triggers": [
+      "classify",
+      "production",
+      "impact",
+      "external",
+      "state",
+      "writes",
+      "approval",
+      "needs"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.production"
+  },
+  {
+    "ref_id": "skill:risk.production:rollback-plan-review",
+    "type": "skill",
+    "title": "Rollback Plan Review",
+    "summary": "Review rollback or disablement plans for code, data, config, traffic, and external dependencies.",
+    "domains": [
+      "rollback",
+      "production",
+      "deployment",
+      "migration",
+      "incident"
+    ],
+    "triggers": [
+      "review",
+      "rollback",
+      "disablement",
+      "plans",
+      "code",
+      "data",
+      "config",
+      "traffic"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.production"
+  },
+  {
+    "ref_id": "strategy:production:external-state-conservatism",
+    "type": "strategy",
+    "title": "External State Conservatism",
+    "summary": "Treat databases, queues, caches, object stores, cloud resources, third-party systems, and user-visible configuration as external state.",
+    "domains": [
+      "production",
+      "deployment",
+      "migration",
+      "rollback",
+      "incident"
+    ],
+    "triggers": [
+      "treat",
+      "databases",
+      "queues",
+      "caches",
+      "object",
+      "stores",
+      "cloud",
+      "resources"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.production"
+  },
+  {
+    "ref_id": "strategy:production:feature-flag-conservative-rollout",
+    "type": "strategy",
+    "title": "Feature Flag Conservative Rollout",
+    "summary": "Use flags to reduce blast radius only when defaults, targeting, monitoring, and rollback semantics are explicit.",
+    "domains": [
+      "deployment",
+      "production",
+      "migration",
+      "rollback",
+      "incident"
+    ],
+    "triggers": [
+      "flags",
+      "reduce",
+      "blast",
+      "radius",
+      "only",
+      "when",
+      "defaults",
+      "targeting"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.production"
+  },
+  {
+    "ref_id": "strategy:production:human-gate-for-production-change",
+    "type": "strategy",
+    "title": "Human Gate For Production Change",
+    "summary": "Production deployments, irreversible migrations, external-state changes, and traffic shifts require explicit human approval.",
+    "domains": [
+      "production",
+      "deployment",
+      "migration",
+      "rollback",
+      "incident"
+    ],
+    "triggers": [
+      "production",
+      "deployments",
+      "irreversible",
+      "migrations",
+      "external",
+      "state",
+      "changes",
+      "traffic"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.production"
+  },
+  {
+    "ref_id": "strategy:production:incident-evidence-preservation",
+    "type": "strategy",
+    "title": "Incident Evidence Preservation",
+    "summary": "During production incidents or regressions, preserve logs, metrics, timelines, commands, and decisions before cleanup or broad changes.",
+    "domains": [
+      "incident",
+      "production",
+      "deployment",
+      "migration",
+      "rollback"
+    ],
+    "triggers": [
+      "during",
+      "production",
+      "incidents",
+      "regressions",
+      "preserve",
+      "logs",
+      "metrics",
+      "timelines"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.production"
+  },
+  {
+    "ref_id": "strategy:production:migration-expand-contract",
+    "type": "strategy",
+    "title": "Migration Expand Contract",
+    "summary": "Prefer additive, backward-compatible migration steps before removing columns, changing semantics, or rewriting data.",
+    "domains": [
+      "migration",
+      "production",
+      "deployment",
+      "rollback",
+      "incident"
+    ],
+    "triggers": [
+      "prefer",
+      "additive",
+      "backward",
+      "compatible",
+      "migration",
+      "steps",
+      "before",
+      "removing"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.production"
+  },
+  {
+    "ref_id": "strategy:production:no-production-shortcuts",
+    "type": "strategy",
+    "title": "No Production Shortcuts",
+    "summary": "Do not disable monitoring, tests, approvals, backups, migrations, rate limits, or safety checks to make a production change succeed.",
+    "domains": [
+      "production",
+      "deployment",
+      "migration",
+      "rollback",
+      "incident"
+    ],
+    "triggers": [
+      "disable",
+      "monitoring",
+      "tests",
+      "approvals",
+      "backups",
+      "migrations",
+      "rate",
+      "limits"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.production"
+  },
+  {
+    "ref_id": "strategy:production:rollback-first-design",
+    "type": "strategy",
+    "title": "Rollback First Design",
+    "summary": "Plan rollback, disablement, or forward-fix boundaries before changing production-impacting code or state.",
+    "domains": [
+      "rollback",
+      "production",
+      "deployment",
+      "migration",
+      "incident"
+    ],
+    "triggers": [
+      "plan",
+      "rollback",
+      "disablement",
+      "forward",
+      "boundaries",
+      "before",
+      "changing",
+      "production"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.production"
+  },
+  {
+    "ref_id": "strategy:production:traffic-shift-with-observability",
+    "type": "strategy",
+    "title": "Traffic Shift With Observability",
+    "summary": "Canary, blue-green, shadow, or percentage rollouts need baseline metrics, guardrails, and stop conditions.",
+    "domains": [
+      "deployment",
+      "production",
+      "migration",
+      "rollback",
+      "incident"
+    ],
+    "triggers": [
+      "canary",
+      "blue",
+      "green",
+      "shadow",
+      "percentage",
+      "rollouts",
+      "need",
+      "baseline"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.production"
+  },
+  {
+    "ref_id": "strategy:production:external-mutation-human-gate",
+    "type": "strategy",
+    "title": "External Mutation Human Gate",
+    "summary": "External-state mutations need explicit human approval and environment proof before execution.",
+    "domains": [
+      "production",
+      "deployment",
+      "migration",
+      "rollback",
+      "incident"
+    ],
+    "triggers": [
+      "external",
+      "mutation",
+      "human",
+      "gate",
+      "approval",
+      "environment",
+      "proof",
+      "deploy"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.production"
+  },
+  {
+    "ref_id": "knowledge:production:external-mutation-is-not-validation",
+    "type": "knowledge",
+    "title": "External Mutation Is Not Validation",
+    "summary": "Running a deploy, migration, delete, or traffic shift is a production action, not a validation shortcut.",
+    "domains": [
+      "production",
+      "deployment",
+      "migration",
+      "rollback",
+      "incident"
+    ],
+    "triggers": [
+      "external",
+      "mutation",
+      "validation",
+      "deploy",
+      "migration",
+      "delete",
+      "traffic",
+      "shift"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.production"
+  },
+  {
+    "ref_id": "skill:production:human-gate-check",
+    "type": "skill",
+    "title": "Production Human Gate Check",
+    "summary": "Check whether a production or external-state action has the evidence needed to proceed.",
+    "domains": [
+      "production",
+      "deployment",
+      "migration",
+      "rollback",
+      "incident"
+    ],
+    "triggers": [
+      "production",
+      "human",
+      "gate",
+      "approval",
+      "rollback",
+      "dry",
+      "run",
+      "guardrail"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "high",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "risk.production"
+  }
+]

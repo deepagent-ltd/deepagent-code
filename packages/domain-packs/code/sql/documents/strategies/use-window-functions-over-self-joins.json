@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:sql:use-window-functions-over-self-joins",
+  "type": "strategy",
+  "title": "Use window functions instead of self-joins for ranking and running totals",
+  "description": "Compute rankings, running totals, and per-group comparisons with OVER(PARTITION BY ... ORDER BY ...) rather than correlated subqueries or self-joins.",
+  "body": "Use when a query needs per-row results relative to a group (top-N per category, running totals, prev/next row, deduplication). Do not emulate these with correlated subqueries or self-joins that rescan the table per row. Actions: use ROW_NUMBER/RANK/DENSE_RANK with PARTITION BY for top-N and dedup, SUM(...) OVER (ORDER BY ...) for running totals, and LAG/LEAD for adjacent-row comparison; wrap in a subquery/CTE to filter on the window result. Validation signals include the EXPLAIN plan replacing repeated scans with a single sort/window operator and matching row counts versus the old query. Risk boundary: a window over an unindexed huge partition can spill to disk; inspect the plan for expensive sorts and escalate to a precomputed/materialized result rather than scanning per request.",
+  "domain": "sql",
+  "scope_hint": "code.sql:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.sql",
+  "pack_id": "code.sql"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:stream:duplicate-on-recovery",
+  "type": "failure_dossier",
+  "description": "Output is duplicated after a restart because the sink is neither idempotent nor transactional.",
+  "body": "Failure mode: a job advertised as exactly-once duplicates writes after a checkpoint recovery because, while engine state recovers correctly, the sink re-applies records that were emitted before the failure but not yet acknowledged. Detection signals: downstream totals overcount after a restart, and a recovery drill shows sink output exceeding input. Do not treat the duplicates as a transient glitch. Safer fallback: make the sink idempotent via upserts keyed on a stable event id, or use a transactional two-phase-commit sink, then re-run the recovery drill and confirm output counts match input exactly before claiming exactly-once.",
+  "domain": "streaming",
+  "scope_hint": "code.streaming:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.streaming:human_authored",
+  "pack_id": "code.streaming"
+}

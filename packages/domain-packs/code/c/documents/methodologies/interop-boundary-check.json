@@ -1,0 +1,11 @@
+{
+  "ref_id": "methodology:c:interop-boundary-check",
+  "type": "methodology",
+  "description": "In C, validate the argv parsing, fread/fgets bounds, and ntohl/htonl on wire data where external data crosses in.",
+  "body": "In C, defects cluster at argv parsing, fread/fgets bounds, and ntohl/htonl on wire data, where assumptions about types, ownership, or encoding stop holding. Use when a change crosses header guards, the ABI of exported symbols, and struct layout/padding or consumes data from outside the program. Do not assume the other side honors your contract, and avoid trusting input without checking it. Actions: identify the boundary, test both valid and malformed input, verify the error path, and record the assumptions you are relying on. Validation signals include tests for the failure path, a trace of rejected input, and a documented contract at header guards, the ABI of exported symbols, and struct layout/padding. Risk boundary: escalate when the boundary handles untrusted input, crosses a trust/security line, or feeds a system you cannot roll back.",
+  "domain": "c",
+  "scope_hint": "code.c:methodologies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.c:skill_survey",
+  "pack_id": "code.c"
+}

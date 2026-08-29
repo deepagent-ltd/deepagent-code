@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:agent:unbounded-memory-growth",
+  "type": "failure_dossier",
+  "description": "Durable memory appends raw model output forever with no scoping or eviction, leaking data and growing without bound.",
+  "body": "Failure mode: the agent writes every raw utterance into long-term memory with no validation, scope, or eviction, so memory grows unbounded, mixes data across sessions or users, and is later read back as trusted fact. Detection signals: append-on-every-step memory writes; no scope tag; no eviction or summarization policy; stored entries trusted blindly on retrieval. Do not persist unvalidated or cross-scope content. Safer fallback: write only validated, scoped facts, set an eviction or summarization policy, treat stored memory as untrusted input on read, and defer any PII handling to risk.privacy.",
+  "domain": "agent",
+  "scope_hint": "code.agent:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.agent:human_authored",
+  "pack_id": "code.agent"
+}

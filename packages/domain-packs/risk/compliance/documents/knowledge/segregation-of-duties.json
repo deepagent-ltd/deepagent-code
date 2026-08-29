@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:comp:segregation-of-duties",
+  "type": "knowledge",
+  "title": "Segregation of duties and toxic combinations",
+  "description": "SoD splits initiate, authorize, and execute across principals so no one can both commit and conceal a sensitive action.",
+  "body": "Use when one role can drive a sensitive workflow end to end. SoD requires that initiating, authorizing, and executing a sensitive operation are held by different principals, so that fraud or error needs collusion rather than a single actor. A 'toxic combination' is a permission set that recombines two conflicting steps (e.g. create a vendor and approve its payment, or grant elevated access and use it). Do not assume that because each individual permission seems reasonable, holding both is safe. Actions: enumerate conflicting pairs and scan role assignments for principals holding both halves. Validation signals include a test that the same principal cannot both create and approve a request. Risk boundary: an unresolved toxic combination on a financial or access-control workflow is a reportable control deficiency; escalate.",
+  "domain": "compliance",
+  "scope_hint": "risk.compliance:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.compliance",
+  "pack_id": "risk.compliance"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:mlai:hold-out-test-set-once",
+  "type": "strategy",
+  "title": "Touch the test set exactly once",
+  "description": "Reserve a test split that is never used for tuning, model selection, or early stopping, and evaluate on it a single time at the end.",
+  "body": "Use when reporting any performance number that claims to predict real-world behavior. Do not tune hyperparameters, pick architectures, or early-stop against the test set — that turns it into a second validation set and inflates the reported metric. Actions: split into train/validation/test before any modeling, tune only on validation, then run the test set once and record the number with the run id. Validation signals include a test metric close to the final validation metric and an audit log showing the test split was read once. Risk boundary: a test number used for selection is a leaked metric; if the test set was touched during tuning, escalate and collect a fresh held-out set before publishing.",
+  "domain": "ml",
+  "scope_hint": "code.ml-ai:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.ml-ai",
+  "pack_id": "code.ml-ai"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:ansible:declare-state-not-commands",
+  "type": "strategy",
+  "title": "Declare state, not commands",
+  "description": "Use a module that describes the desired end state instead of a shell command that runs every time.",
+  "body": "Use when a task should converge a host to a desired configuration. Do not reach for shell or command modules when a purpose-built module exists — raw commands run unconditionally and report changed every time, breaking idempotency. Actions: pick the module (package, copy, template, lineinfile, service) that declares the target state and lets Ansible decide whether a change is needed; inspect the module docs for its idempotency guarantees. Validation signals include a second run reporting zero changed for that task. Risk boundary: where a raw command is unavoidable, guard it with changed_when/creates so it does not falsely report change or run destructively twice.",
+  "domain": "ansible",
+  "scope_hint": "platform.ansible:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.ansible",
+  "pack_id": "platform.ansible"
+}

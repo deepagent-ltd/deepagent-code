@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:lic:classify-copyleft-vs-permissive",
+  "type": "strategy",
+  "title": "Classify each license as permissive, weak-copyleft, or strong-copyleft",
+  "description": "Sort dependencies by the reciprocity strength of their license, because that class drives what you must publish back.",
+  "body": "Use when assessing whether a dependency's obligations are compatible with how you ship. Do not treat all OSI-approved licenses as interchangeable. Actions: classify each license as permissive (MIT, BSD, Apache-2.0), weak/file-level copyleft (LGPL, MPL-2.0, EPL), or strong/network copyleft (GPL-2.0, GPL-3.0, AGPL-3.0); record which class each component lands in and how it is linked. Validation signals include a classification column in the inventory and a test asserting no strong-copyleft component appears in a closed-source linked artifact. Risk boundary: AGPL in a SaaS backend or GPL in a statically linked proprietary binary triggers obligations that must go to a human before release.",
+  "domain": "license",
+  "scope_hint": "risk.license:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.license",
+  "pack_id": "risk.license"
+}

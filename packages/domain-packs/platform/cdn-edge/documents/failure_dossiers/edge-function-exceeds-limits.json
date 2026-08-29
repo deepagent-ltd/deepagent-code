@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:edge:edge-function-exceeds-limits",
+  "type": "failure_dossier",
+  "description": "An edge function doing heavy or stateful work exceeds CPU/memory limits and is killed, dropping requests globally.",
+  "body": "Failure mode: logic ported from the origin runs per-request at the edge but exceeds the CPU-ms/memory cap or assumes a filesystem, so the runtime kills it and requests fail across all PoPs. Detection signals: elevated function-error/kill rate; CPU-limit-exceeded logs; code using fs or large deps. Do not run unbounded or stateful work at the edge. Safer fallback: keep edge functions short and stateless, move heavy/stateful work to the origin, measure the budget, and canary before global rollout.",
+  "domain": "cdn",
+  "scope_hint": "platform.cdn-edge:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cdn-edge:human_authored",
+  "pack_id": "platform.cdn-edge"
+}

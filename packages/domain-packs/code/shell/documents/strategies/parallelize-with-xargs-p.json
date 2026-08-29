@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:shell:parallelize-with-xargs-p",
+  "type": "strategy",
+  "title": "Parallelize batch work with xargs -P safely",
+  "description": "Fan out independent work across cores with xargs -P or GNU parallel using NUL-delimited input, bounded concurrency, and per-item failure handling.",
+  "body": "Use when processing many independent files or items and the work is IO/CPU parallelizable. Do not pipe space/newline-split filenames (they break on spaces) or launch unbounded background jobs that thrash the machine. Actions: feed NUL-delimited input (`find . -print0 | xargs -0 -P \"$(nproc)\" -n1 cmd`), bound -P to core count, make each item's command self-contained, and capture per-item exit status rather than assuming success. Validation signals include processed-count matching input-count and a non-zero overall status when any item fails. Risk boundary: parallel writers to one output file interleave and corrupt it; write to per-item temp outputs and merge, and escalate if items share mutable state instead of forcing concurrency.",
+  "domain": "shell",
+  "scope_hint": "code.shell:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.shell",
+  "pack_id": "code.shell"
+}
