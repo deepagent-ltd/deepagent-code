@@ -13,6 +13,7 @@ import { NotFoundError } from "@/storage/storage"
 import { EOL } from "os"
 import path from "path"
 import { which } from "@deepagent-code/core/util/which"
+import { SessionExportContextCommand } from "./session-export-context"
 
 function pagerCmd(): string[] {
   const lessOptions = ["-R", "-S"]
@@ -50,6 +51,7 @@ export const SessionCommand = cmd({
       .command(SessionDeleteCommand)
       .command(SessionRenameCommand)
       .command(SessionArchiveCommand)
+      .command(SessionExportContextCommand)
       .demandCommand(),
   async handler() {},
 })
