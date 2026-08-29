@@ -118,6 +118,11 @@ const cli = yargs(args)
     }
     process.env.DEEPAGENT_CODE = "1"
     process.env.DEEPAGENT_CODE_PID = String(process.pid)
+    // C7-05: the production runtime ships with the V2 event-admission + IM single-write
+    // authorities ON (the switches stay explicit-env so isolated test/daemon contexts keep
+    // their own behavior; `=false`/`=0` in this process restores the legacy authorities).
+    process.env.DEEPAGENT_CODE_EVENT_V2_ADMISSION ??= "true"
+    process.env.DEEPAGENT_CODE_EVENT_V2_IM_SINGLE_WRITE ??= "true"
 
     Log.Default.info(scriptName, {
       version: InstallationVersion,

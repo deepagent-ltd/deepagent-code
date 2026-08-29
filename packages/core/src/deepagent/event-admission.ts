@@ -42,13 +42,14 @@ import { DeepAgentEventAdmissionTable, type EventAdmissionStatus } from "./event
 
 type DatabaseClient = Database.Interface["db"]
 
-/** The typed feature switch for the V2 admission path. C7-05: ships ON by default; set
- * `DEEPAGENT_CODE_EVENT_V2_ADMISSION=false` (or `0`) to restore the legacy event turn path
- * as the authority. */
+/** The typed feature switch for the V2 admission path. C7-05 ships it ON via the PRODUCTION
+ * runtime entrypoints (packages/deepagent-code/src/index.ts sets the env); the predicate stays
+ * explicit-env so isolated test/daemon contexts keep their own behavior. `=false`/`=0` restores
+ * the legacy event turn path as the authority. */
 export const EVENT_V2_ADMISSION_ENV = "DEEPAGENT_CODE_EVENT_V2_ADMISSION"
 export const isEventV2AdmissionEnabled = (): boolean => {
   const value = process.env[EVENT_V2_ADMISSION_ENV]?.toLowerCase()
-  return value !== "false" && value !== "0"
+  return value === "true" || value === "1"
 }
 
 /** Why an admission was refused. Fail-closed; each reason is a typed refusal. */
