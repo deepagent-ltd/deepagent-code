@@ -1,6 +1,6 @@
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { legacyAssistant } from "@deepagent-code/core/session"
-import type { SessionMessage } from "@deepagent-code/sdk/v2"
+import type { SessionMessage } from "@deepagent-code/sdk"
 
 // §16.5 API-APP-PACKAGE P6 — the App main session rendering capability seam. The timeline
 // consumes legacy SessionV1.WithParts rows (the same shape serverSync stores); this module

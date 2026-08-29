@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, mock, test } from "bun:test"
-import type { Part, ToolPart, ToolStateCompleted } from "@deepagent-code/sdk/v2"
+import type { Part, ToolPart, ToolStateCompleted } from "@deepagent-code/sdk"
 
 let shouldVirtualizeToolDiff: typeof import("./message-timeline").shouldVirtualizeToolDiff
 let toolDiffPayloadSize: typeof import("./message-timeline").toolDiffPayloadSize

@@ -10,7 +10,7 @@ import type {
   Part,
   Config as SDKConfig,
 } from "@deepagent-code/sdk"
-import type { Provider as ProviderV2, Model as ModelV2, Auth } from "@deepagent-code/sdk/v2"
+import type { Provider as ProviderV2, Model as ModelV2, Auth } from "@deepagent-code/sdk"
 
 import type { BunShell } from "./shell.ts"
 import { type ToolDefinition } from "./tool.ts"
