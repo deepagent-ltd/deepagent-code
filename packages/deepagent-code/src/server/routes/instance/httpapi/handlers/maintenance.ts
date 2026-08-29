@@ -211,11 +211,13 @@ export const maintenanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "mainte
           ),
         )
         return {
-          status: "dry_run" as const,
+          status: outcome.outcome === "restored" ? ("restored" as const) : ("failed" as const),
           inProgress: false,
           restoreId: started.restoreId,
           sourceFile: resolved,
-          message: `Restore ${outcome.outcome}${outcome.failure ? `: ${outcome.failure.detail}` : ""} (quarantine ${outcome.quarantineDir})`,
+          message: outcome.outcome === "restored"
+            ? `Restore succeeded; the pre-restore store is retained in the quarantine (${outcome.quarantineDir}).`
+            : `Restore failed: ${outcome.failure?.detail ?? "unknown"}; the original store was put back and the quarantine is retained.`,
         }
       }
 

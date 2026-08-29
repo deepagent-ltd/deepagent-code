@@ -30,7 +30,7 @@ bun run script/legacy-zero-gate/run-gate.ts must-be-zero    # exit 1 while any t
 | | | when the tree is clean (legacy=0, double-write=0, adapter=0, selection-bridge=0). |
 | oracle | `redOracle()` | prints the counts and returns the byte-stable snapshot. |
 
-## Current state (red oracle on base 08b30a3a2)
+## Current state (red oracle on base 27287aed9 (freeze successor))
 
 | counter | value |
 |---|---|
@@ -63,5 +63,5 @@ sites), independent of host-local state.
 
 The gate is never imported by production `src` (zero overhead when unused). Its tests verify the
 counter implementation against both a small fixture inventory and the real `buildInventory()`
-output, and assert the actual frozen numbers (903 / 1 / 25 / 3) read from the C0-01 report —
+output, and assert the actual frozen numbers (903 / 0 / 26 / 3) read from the C0-01 report —
 never a guessed value.
