@@ -27,13 +27,13 @@ import { ImSingleWriteTable, type ImSingleWriteStatus } from "./im-single-write-
 
 type DatabaseClient = Database.Interface["db"]
 
-/** The typed feature switch for the IM single-write path. C7-05: ships ON by default; set
- * `DEEPAGENT_CODE_EVENT_V2_IM_SINGLE_WRITE=false` (or `0`) to restore the legacy double-write
- * path as the authority. */
+/** The typed feature switch for the IM single-write path. C7-05 ships it ON via the PRODUCTION
+ * runtime entrypoints (packages/deepagent-code/src/index.ts sets the env); the predicate stays
+ * explicit-env. `=false`/`=0` restores the legacy double-write path as the authority. */
 export const IM_SINGLE_WRITE_ENV = "DEEPAGENT_CODE_EVENT_V2_IM_SINGLE_WRITE"
 export const isEventV2ImSingleWriteEnabled = (): boolean => {
   const value = process.env[IM_SINGLE_WRITE_ENV]?.toLowerCase()
-  return value !== "false" && value !== "0"
+  return value === "true" || value === "1"
 }
 
 /** Why an IM single-write was refused. Fail-closed; each reason is a typed refusal. */
