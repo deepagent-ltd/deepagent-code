@@ -6,7 +6,7 @@ import type {
   SessionStatus,
   SnapshotFileDiff,
   Todo,
-} from "@deepagent-code/sdk/v2/client"
+} from "@deepagent-code/sdk/client"
 
 export const SESSION_CACHE_LIMIT = 40
 

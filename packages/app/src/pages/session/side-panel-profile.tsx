@@ -302,7 +302,7 @@ export const SidePanelProfile: Component<{ onClose: () => void }> = (props) => {
     setLoadingHotspots(true)
     setError(undefined)
     try {
-      const res = await (sdk.client.profile.hotspots({ runId, limit: 15 }) as Promise<{ data?: unknown }>)
+      const res = await (sdk.client.profile.hotspots({ runId, limit: "15" }) as Promise<{ data?: unknown }>)
       const data = (res as any)?.data as ProfileHotspot[] | undefined
       setHotspots(Array.isArray(data) ? data : [])
     } catch (e) {
@@ -349,8 +349,10 @@ export const SidePanelProfile: Component<{ onClose: () => void }> = (props) => {
     setError(undefined)
     try {
       const res = await (sdk.client.profile.run({
-        program: prog,
-        ...(profiler().trim() ? { profiler: profiler().trim() } : {}),
+        profileRunBody: {
+          program: prog,
+          ...(profiler().trim() ? { profiler: profiler().trim() } : {}),
+        },
       }) as Promise<{ data?: unknown }>)
       const data = (res as any)?.data as RunEntry | undefined
       if (data?.runId) {

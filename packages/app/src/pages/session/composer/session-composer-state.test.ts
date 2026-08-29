@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import type { PermissionRequest, QuestionRequest, Session } from "@deepagent-code/sdk/v2/client"
+import type { PermissionRequest, QuestionRequest, Session } from "@deepagent-code/sdk/client"
 import { planStepTodoStatus, todoState } from "./session-composer-state-model"
 import { sessionPermissionRequest, sessionQuestionRequest } from "./session-request-tree"
 

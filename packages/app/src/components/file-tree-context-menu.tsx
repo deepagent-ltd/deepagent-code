@@ -1,6 +1,6 @@
 import { createSignal, Show } from "solid-js"
 import { ContextMenu } from "@deepagent-code/ui/context-menu"
-import type { FileNode } from "@deepagent-code/sdk/v2"
+import type { FileNode } from "@deepagent-code/sdk"
 import { useFile } from "@/context/file"
 import { useLanguage } from "@/context/language"
 import { showToast } from "@/utils/toast"

@@ -1,4 +1,4 @@
-import type { FileNode } from "@deepagent-code/sdk/v2"
+import type { FileNode } from "@deepagent-code/sdk"
 
 type WatcherEvent = {
   type: string

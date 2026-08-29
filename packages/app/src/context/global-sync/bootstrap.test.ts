@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { createStore } from "solid-js/store"
 import { QueryClient } from "@tanstack/solid-query"
-import type { Config, DeepAgentCodeClient, Path, Project } from "@deepagent-code/sdk/v2/client"
+import type { Config, DeepAgentCodeClient, Path, Project } from "@deepagent-code/sdk/client"
 import type { NormalizedProviderListResponse } from "@deepagent-code/ui/context"
 import { bootstrapDirectory, loadPathQuery, loadProvidersQuery } from "./bootstrap"
 import type { State, VcsCache } from "./types"

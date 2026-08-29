@@ -1,4 +1,4 @@
-import type { Agent, Project, ProviderListResponse } from "@deepagent-code/sdk/v2/client"
+import type { Agent, Project, ProviderListResponse } from "@deepagent-code/sdk/client"
 import { NormalizedProviderListResponse } from "@deepagent-code/ui/context"
 export { pathKey as directoryKey, type PathKey as DirectoryKey } from "@/utils/path-key"
 
