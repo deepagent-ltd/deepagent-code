@@ -1,10 +1,11 @@
-import { Effect } from "effect"
+import { Cause, Effect } from "effect"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { Database } from "@deepagent-code/core/database/database"
 import type { BootstrapState } from "@deepagent-code/core/database/bootstrap"
 import { Backup } from "@deepagent-code/core/database/backup"
+import { Restore } from "@deepagent-code/core/database/restore"
 import { BackupVerify } from "@deepagent-code/core/database/backup-verify"
 import { DatabaseUpgradeRun } from "@deepagent-code/core/database/upgrade-run"
 import { SessionProviderRecovery } from "@deepagent-code/core/session/runner"
@@ -57,6 +58,18 @@ export function mapRestoreModeToError(state: BootstrapState, resource: string): 
   })
 }
 
+/**
+ * G7i security F2 — the maintenance backup surface only ever reads under the instance DB
+ * directory's `backups` root. A client-supplied dir/manifest/ref path outside that root is a
+ * typed refusal (never an arbitrary filesystem read).
+ */
+const backupsRoot = () => path.resolve(path.join(path.dirname(Database.path()), "backups"))
+
+function withinBackups(input: string): string | undefined {
+  const resolved = path.resolve(input)
+  return resolved === backupsRoot() || resolved.startsWith(backupsRoot() + path.sep) ? resolved : undefined
+}
+
 /** Read + structurally validate a backup manifest, mapping ANY problem to a typed 404. */
 const readManifestOrMissing = (manifestPath: string): Effect.Effect<Backup.BackupManifest, ApiTypedError, never> =>
   Backup.readManifest(manifestPath).pipe(
@@ -102,7 +115,13 @@ export const maintenanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "mainte
     })
 
     const listBackups = Effect.fn("MaintenanceHttpApi.backupList")(function* (ctx: { query: { dir?: string } }) {
-      const dir = ctx.query.dir ?? path.join(path.dirname(Database.path()), "backups")
+      const requested = ctx.query.dir ?? backupsRoot()
+      const dir = withinBackups(requested)
+      if (dir === undefined) {
+        return yield* Effect.fail(
+          makeApiError("validation_failed", { resource: requested, expected: "path under the backups root", actual: requested }),
+        )
+      }
       const entries = yield* Effect.tryPromise(() => fs.readdir(dir)).pipe(Effect.orElseSucceed(() => [] as string[]))
       const backups = yield* Effect.forEach(
         entries
@@ -131,7 +150,13 @@ export const maintenanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "mainte
       query: { manifest_path: string }
     }) {
       const { manifest_path: manifestPath } = ctx.query
-      const manifest = yield* readManifestOrMissing(manifestPath)
+      const resolved = withinBackups(manifestPath)
+      if (resolved === undefined) {
+        return yield* Effect.fail(
+          makeApiError("validation_failed", { resource: manifestPath, expected: "path under the backups root", actual: manifestPath }),
+        )
+      }
+      const manifest = yield* readManifestOrMissing(resolved)
       return yield* BackupVerify.verify(manifest)
     })
 
@@ -139,42 +164,66 @@ export const maintenanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "mainte
       payload: { backup_manifest_ref: string; target?: string; dry_run?: boolean }
     }) {
       const { backup_manifest_ref: manifestRef, dry_run } = ctx.payload
+      const resolved = withinBackups(manifestRef)
+      if (resolved === undefined) {
+        return yield* Effect.fail(
+          makeApiError("validation_failed", { resource: manifestRef, expected: "path under the backups root", actual: manifestRef }),
+        )
+      }
       const state = readState()
-      if (state && state.mode !== "ready") return yield* Effect.fail(mapRestoreModeToError(state, manifestRef))
+      if (state && state.mode !== "ready") return yield* Effect.fail(mapRestoreModeToError(state, resolved))
 
       const inProgress = yield* registry.restore
       if (inProgress.inProgress) {
         return yield* Effect.fail(
           makeApiError("restore_target_not_quarantined", {
-            resource: manifestRef,
+            resource: resolved,
             expected: "no_restore_in_progress",
             actual: inProgress.restoreId ?? "in_progress",
           }),
         )
       }
 
-      const stat = yield* Effect.tryPromise(() => fs.stat(manifestRef)).pipe(Effect.orElseSucceed(() => null))
+      const stat = yield* Effect.tryPromise(() => fs.stat(resolved)).pipe(Effect.orElseSucceed(() => null))
       if (stat === null) {
-        return yield* Effect.fail(makeApiError("backup_manifest_missing", { resource: manifestRef }))
+        return yield* Effect.fail(makeApiError("backup_manifest_missing", { resource: resolved }))
       }
 
-      // Fixture-gated dry-run/status surface (this lane): a `dry_run:false` request
-      // records restore-in-progress so a concurrent restore is a 409 (the actual
-      // install is a service call owned by C1A-13, not this endpoint).
-      let restoreStatus: { inProgress: boolean; restoreId?: string; sourceFile?: string }
+      // A `dry_run:false` request performs the REAL verified restore (C1A-13 service call:
+      // verify-before-install + atomic install + forward-migrate, with the incident set retained
+      // on any failure). The in-progress flag is ALWAYS cleared (ensuring) so a restore can
+      // never 409-stick; a dry_run request is the status-only probe.
       if (dry_run === false) {
-        const started = yield* registry.setRestoreInProgress({ sourceFile: manifestRef })
-        restoreStatus = started
-      } else {
-        restoreStatus = { inProgress: false }
+        const started = yield* registry.setRestoreInProgress({ sourceFile: resolved })
+        const outcome = yield* Effect.gen(function* () {
+          const manifest = yield* readManifestOrMissing(resolved)
+          return yield* Restore.restoreVerified({ dbPath: Database.path(), backup: manifest })
+        }).pipe(
+          Effect.ensuring(registry.clearRestore()),
+          Effect.catchCause((cause) =>
+            Effect.fail(
+              makeApiError("restore_failed", {
+                resource: resolved,
+                expected: "restored",
+                actual: String(Cause.squash(cause)),
+              }),
+            ),
+          ),
+        )
+        return {
+          status: "dry_run" as const,
+          inProgress: false,
+          restoreId: started.restoreId,
+          sourceFile: resolved,
+          message: `Restore ${outcome.outcome}${outcome.failure ? `: ${outcome.failure.detail}` : ""} (quarantine ${outcome.quarantineDir})`,
+        }
       }
 
       return {
         status: "dry_run" as const,
-        inProgress: restoreStatus.inProgress,
-        ...(restoreStatus.restoreId ? { restoreId: restoreStatus.restoreId } : {}),
-        ...(restoreStatus.sourceFile ? { sourceFile: restoreStatus.sourceFile } : {}),
-        message: "Restore is a fixture-gated dry-run/status surface in this lane; install is a service call.",
+        inProgress: false,
+        ...(resolved ? { sourceFile: resolved } : {}),
+        message: "Verified restore is available; indicate dry_run:false to restore.",
       }
     })
 
