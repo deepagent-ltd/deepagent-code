@@ -185,7 +185,7 @@ describe("Restore verified (C1A-13)", () => {
             installed = true
             // ...then fail AFTER the rename (the dir fsync that follows a real rename).
             return yield* Effect.fail(new RestoreError({ code: "install_failed", detail: "post-rename injected" }))
-          }),
+          }).pipe(Effect.mapError(() => new RestoreError({ code: "install_failed", detail: "post-rename injected" }))),
       }).pipe(Effect.exit),
     )
     expect(installed).toBe(true)
