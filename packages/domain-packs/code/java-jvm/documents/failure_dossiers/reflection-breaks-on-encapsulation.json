@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:java_jvm:reflection-breaks-on-encapsulation",
+  "type": "failure_dossier",
+  "description": "Relying on setAccessible reflection into JDK internals that strong encapsulation (JPMS) blocks at runtime on newer JDKs.",
+  "body": "Failure mode: code uses reflection with setAccessible(true) to reach private or JDK-internal members; on Java 9+ with module encapsulation this throws InaccessibleObjectException, and a library doing so breaks after a JDK upgrade. Detection signals: InaccessibleObjectException or 'module does not export' at runtime; works on JDK 8 but fails on 17+; warnings about illegal reflective access. Do not reflect into encapsulated internals as a supported mechanism. Safer fallback: use the public/supported API, request access via --add-opens only as a deliberate temporary measure, or upgrade the offending library; verify on the target JDK version, not just the old one.",
+  "domain": "java",
+  "scope_hint": "code.java-jvm:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.java-jvm:human_authored",
+  "pack_id": "code.java-jvm"
+}

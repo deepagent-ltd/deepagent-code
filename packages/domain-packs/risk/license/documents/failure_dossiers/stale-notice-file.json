@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:lic:stale-notice-file",
+  "type": "failure_dossier",
+  "description": "The NOTICE/THIRD-PARTY file is hand-maintained and has drifted, so shipped components are missing required attribution.",
+  "body": "Failure mode: attribution is kept in a hand-edited credits file that was last updated months ago, so newly added or upgraded dependencies ship without their required copyright and license text. Detection signals: regenerating attribution from the lockfile produces a large diff; components in the lockfile are absent from the NOTICE file; Apache-2.0 upstream NOTICE content was never propagated. Do not maintain attribution by hand or trust that it tracks the lockfile. Safer fallback: generate the NOTICE/THIRD-PARTY file mechanically from the resolved lockfile on every build and fail CI when the regenerated file differs from the committed one.",
+  "domain": "license",
+  "scope_hint": "risk.license:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.license:human_authored",
+  "pack_id": "risk.license"
+}

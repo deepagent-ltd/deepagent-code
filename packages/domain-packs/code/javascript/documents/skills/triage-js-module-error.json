@@ -1,0 +1,11 @@
+{
+  "ref_id": "skill:javascript:triage-js-module-error",
+  "type": "skill",
+  "description": "Diagnose ESM/CJS and exports-map failures without broad package rewrites.",
+  "body": "Inputs: failing command and stack trace. Actions: locate executing file, nearest package.json, file extension, exports map, transpiler/bundler layer, and dependency version. Patch the owning boundary or update import style where compatible. Verify by rerunning the failing loader path. Avoid global package type flips unless explicitly requested. Risk boundary: library packages may have external consumers. Use when JavaScript Runtime and Tooling work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: run the documented inspection and validation workflow; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "javascript",
+  "scope_hint": "code.javascript:skills",
+  "evidence_strength": "medium",
+  "provenance_tag": "code.javascript:seed:official_docs_and_common_tooling_behavior:paraphrased",
+  "pack_id": "code.javascript"
+}

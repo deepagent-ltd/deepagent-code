@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:lic:unknown-transitive-license",
+  "type": "failure_dossier",
+  "description": "A transitive dependency ships with no resolvable license and is waved through because the top-level package looked fine.",
+  "body": "Failure mode: the build resolves the top-level package's license but a deep transitive dependency carries NOASSERTION or no LICENSE file, and it ships anyway because nobody walked the full tree. Detection signals: the scanner reports NOASSERTION/unknown for a component; the inventory row count is less than the lockfile component count; only the root license was checked. Do not assume the root license covers transitive dependencies or treat unknown as permissive. Safer fallback: walk the resolved lockfile, resolve every component to an SPDX identifier from its bundled LICENSE text, and block release on any remaining unknown until a human resolves it.",
+  "domain": "license",
+  "scope_hint": "risk.license:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.license:human_authored",
+  "pack_id": "risk.license"
+}

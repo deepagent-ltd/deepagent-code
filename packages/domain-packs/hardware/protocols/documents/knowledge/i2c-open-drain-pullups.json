@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:hwprot:i2c-open-drain-pullups",
+  "type": "knowledge",
+  "title": "I2C open-drain signaling and pull-up sizing",
+  "description": "I2C lines are open-drain so both SDA and SCL need external pull-ups sized for the bus capacitance and target speed.",
+  "body": "Use when an I2C bus has slow edges or fails at higher speeds. Do not assume internal pull-ups suffice, since they are usually too weak for real bus capacitance. Actions: estimate total bus capacitance, size the pull-up resistors for the rise-time target, and inspect the edges on a capture. Validation signals include rise times within the spec for the chosen speed and clean logic levels at every node. Risk boundary: pull-ups too weak cause sporadic data errors that look like software bugs, so flag slow edges as a physical-layer cause before chasing firmware.",
+  "domain": "hw_protocols",
+  "scope_hint": "hardware.protocols:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.protocols",
+  "pack_id": "hardware.protocols"
+}

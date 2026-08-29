@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:cpuarch:order-with-correct-barriers",
+  "type": "strategy",
+  "title": "Order shared memory with the correct barrier",
+  "description": "Use the minimal correct memory fence / atomic ordering for cross-thread visibility instead of relying on volatile or accidental ordering.",
+  "body": "Use when threads communicate through shared memory and correctness depends on ordering of reads/writes. Do not use volatile as a synchronization primitive and do not assume sequential consistency on weakly-ordered ISAs (ARM). Actions: choose acquire on the consumer, release on the producer, or seq_cst where a total order is required; document why each fence exists, and test under a thread sanitizer / stress harness. Validation signals include a clean TSan run and a stress test that does not reorder-fail across thousands of iterations on the weakest target. Risk boundary: a missing or too-weak fence is a heisenbug that appears only on certain CPUs under load; treat any unexplained ordering as blocking and escalate for review.",
+  "domain": "cpu_arch",
+  "scope_hint": "hardware.cpu-arch:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.cpu-arch",
+  "pack_id": "hardware.cpu-arch"
+}

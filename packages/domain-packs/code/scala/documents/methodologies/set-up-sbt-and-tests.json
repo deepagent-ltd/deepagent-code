@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:scala:set-up-sbt-and-tests",
+  "type": "methodology",
+  "title": "Set up the sbt build and test task",
+  "description": "Structure build.sbt, wire ScalaTest/MUnit, and run the project through sbt's task model.",
+  "body": "Steps: 1. Define scalaVersion, libraryDependencies, and a test framework (ScalaTest or MUnit) in build.sbt, with test deps in the Test config. 2. Pin sbt in project/build.properties and plugins in project/plugins.sbt. 3. Write specs under src/test/scala mirroring the source packages. 4. Run sbt test (or sbt 'testOnly *Spec') and sbt compile; enable -Xfatal-warnings to fail on warnings. 5. Use sbt ~test for an incremental loop. Rollback point: before changing scalaVersion or plugin versions. Validation: a fresh sbt test compiles and runs green, and a deliberately failing assertion fails the task.",
+  "domain": "scala",
+  "scope_hint": "code.scala:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.scala",
+  "pack_id": "code.scala"
+}

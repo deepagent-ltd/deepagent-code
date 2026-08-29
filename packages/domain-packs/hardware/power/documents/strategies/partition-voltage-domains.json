@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:hwpwr:partition-voltage-domains",
+  "type": "strategy",
+  "title": "Partition the design into voltage domains",
+  "description": "Group logic by performance need into separate voltage domains and place level shifters on every crossing.",
+  "body": "Use when parts of a design can run slower at a lower voltage to save power. Do not let signals cross between voltage domains without level shifters, since a low-voltage output may not drive a high-voltage input reliably. Actions: assign blocks to domains by performance need, insert level shifters on each crossing, and verify the power-intent file declares them. Validation signals include every domain crossing carrying a level shifter and timing closing at each domain's voltage. Risk boundary: a missing level shifter causes unreliable logic levels, so flag any undeclared voltage crossing before sign-off.",
+  "domain": "power_design",
+  "scope_hint": "hardware.power:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.power",
+  "pack_id": "hardware.power"
+}

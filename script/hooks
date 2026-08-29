@@ -1,0 +1,15 @@
+#!/bin/sh
+
+if [ ! -d ".git" ]; then
+    exit 0
+fi
+
+mkdir -p .git/hooks
+
+cat > .git/hooks/pre-push << 'EOF'
+#!/bin/sh
+bun run typecheck && exec bun run script/pre-push-live-llm.ts "$@"
+EOF
+
+chmod +x .git/hooks/pre-push
+echo "✅ Pre-push hook installed"

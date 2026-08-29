@@ -1,0 +1,11 @@
+{
+  "ref_id": "fail:aws:lambda-vpc-eni-exhaustion",
+  "type": "failure_dossier",
+  "description": "Lambda failing or slow because its VPC subnets run out of ENIs/IPs under concurrency.",
+  "body": "Failure mode: a VPC-attached Lambda scales up and exhausts subnet IP addresses or hits ENI limits, causing init failures and latency spikes. Detection signals: Lambda errors referencing ENI/IP allocation, cold-start Init Duration ballooning, and free IPs in the subnet trending to zero. Do not raise the concurrency limit to push through it or detach the VPC if private access is genuinely required. Safer fallback: move the function to larger subnets with IP headroom across multiple AZs, use VPC endpoints to avoid NAT pressure, and only VPC-attach when private resources demand it.",
+  "domain": "aws",
+  "scope_hint": "platform.cloud.aws:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cloud.aws:human_authored",
+  "pack_id": "platform.cloud.aws"
+}

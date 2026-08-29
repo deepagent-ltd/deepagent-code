@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:ci_triage:bisect-failure-to-first-cause",
+  "type": "methodology",
+  "title": "Bisect a failure to its first cause",
+  "description": "Walk commits or the log to find the earliest change or first failing step that introduced the failure, not the last error printed.",
+  "body": "Steps: 1. Confirm the failure reproduces reliably. 2. In the log, scroll to the FIRST failing command/step, since later errors are often cascades. 3. If a code change is suspected, bisect commits between last-known-good and first-bad. 4. Identify the single commit or step that introduced it. 5. Record the first cause and its evidence. Rollback point: before applying a fix to the suspected commit. Validation: reverting or fixing the identified first cause makes the pipeline green, and downstream errors disappear; fixing the last error in the log without finding the first cause usually treats a symptom and the failure returns.",
+  "domain": "code",
+  "scope_hint": "code.ci-triage:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.ci-triage",
+  "pack_id": "code.ci-triage"
+}

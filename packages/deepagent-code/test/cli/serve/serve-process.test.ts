@@ -1,0 +1,123 @@
+// Subprocess integration tests for `deepagentCode serve`. Spawns the real CLI in
+// headless mode and exercises it over HTTP — this is the only test tier that
+// catches bugs spanning argv → server boot → routing → instance loading.
+//
+// `serve` is long-lived: the harness returns a handle (url/port/kill/exited)
+// and kills the process when the test scope closes. The OS-assigned port is
+// parsed off the "listening on http://..." line.
+import { describe, expect } from "bun:test"
+import { Effect } from "effect"
+import { HttpClient } from "effect/unstable/http"
+import { access, readFile } from "node:fs/promises"
+import path from "node:path"
+import { cliIt } from "../../lib/cli-process"
+
+describe("deepagentCode serve (subprocess)", () => {
+  // Smoke test: server starts, binds a port, and /global/health responds.
+  // If this fails, all other serve tests likely will too — debug here first.
+  cliIt.live(
+    "starts, binds a port, and serves /global/health",
+    ({ deepagentCode }) =>
+      Effect.gen(function* () {
+        const server = yield* deepagentCode.serve()
+        expect(server.port).toBeGreaterThan(0)
+        expect(server.url).toMatch(/^http:\/\//)
+
+        const client = yield* HttpClient.HttpClient
+        const res = yield* client.get(`${server.url}/global/health`)
+        expect(res.status).toBe(200)
+        // GlobalHealth schema is { success: true, ... } | { success: false, error }.
+        // We don't lock in further shape here — any 200 with parseable JSON is
+        // enough proof the routing + auth-bypass + instance loading is alive.
+        const body = yield* res.json
+        expect(body).toBeDefined()
+      }),
+    60_000,
+  )
+
+  // The scope-close finalizer must actually terminate the child. Without this
+  // test a regression in the kill path (e.g. a future refactor that forgets
+  // to wire the finalizer) would leak processes on every test run.
+  cliIt.live(
+    "kills the subprocess on scope close",
+    ({ deepagentCode }) =>
+      Effect.gen(function* () {
+        // Inner scope so we can observe `.exited` resolving after it closes.
+        const exitedPromise = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const server = yield* deepagentCode.serve()
+            // Capture the Promise, not the resolved value — scope closes after
+            // this gen returns, at which point the finalizer kills the child.
+            return server.exited
+          }),
+        )
+        // After scope close: finalizer fired, process must have exited.
+        const code = yield* Effect.promise(() => exitedPromise)
+        // Bun reports the exit code; SIGTERM-killed processes return non-null
+        // (typically 143 on POSIX). We just require resolution within a sane
+        // window — anything else means the kill didn't take.
+        expect(typeof code === "number" || code === null).toBe(true)
+      }),
+    60_000,
+  )
+  // PARITY-003 (Wave 0): `serve --register` writes the daemon registration
+  // protocol (state/server.json + SIGTERM cleanup) so the new CLI daemon can
+  // mount this legacy server. Covers the file contents, the authenticated
+  // health probe, and removal on shutdown.
+  cliIt.live(
+    "--register writes the daemon registration and removes it on SIGTERM",
+    ({ deepagentCode, home }) =>
+      Effect.gen(function* () {
+        const password = "parity-003-test-secret"
+        const file = path.join(home, ".deepagent", "code", "state", "server.json")
+        const server = yield* deepagentCode.serve({
+          extraArgs: ["--register"],
+          env: { DEEPAGENT_CODE_SERVER_PASSWORD: password },
+        })
+
+        // Registration appears shortly after the listening sentinel.
+        const registration = yield* Effect.promise(async () => {
+          for (let i = 0; i < 100; i++) {
+            try {
+              return JSON.parse(await readFile(file, "utf8")) as {
+                id: string
+                version: string
+                url: string
+                pid: number
+              }
+            } catch {
+              await new Promise((resolve) => setTimeout(resolve, 50))
+            }
+          }
+          throw new Error("server.json was not written within 5s of listening")
+        })
+        expect(registration.url).toBe(server.url)
+        expect(registration.pid).toBeGreaterThan(0)
+        expect(registration.id).toBeTruthy()
+        expect(registration.version).toBeTruthy()
+
+        // The daemon's legacy health probe: GET /global/health with Basic auth.
+        const auth = `Basic ${Buffer.from(`deepagent-code:${password}`).toString("base64")}`
+        const healthy = yield* Effect.promise(() =>
+          fetch(`${server.url}/global/health`, { headers: { Authorization: auth } }),
+        )
+        expect(healthy.status).toBe(200)
+        expect(yield* Effect.promise(() => healthy.json())).toMatchObject({ healthy: true })
+        const rejected = yield* Effect.promise(() => fetch(`${server.url}/global/health`))
+        expect(rejected.status).toBe(401)
+
+        // SIGTERM must remove the registration it owns and exit.
+        server.kill()
+        const code = yield* Effect.promise(() => server.exited)
+        expect(typeof code === "number" || code === null).toBe(true)
+        const removed = yield* Effect.promise(() =>
+          access(file).then(
+            () => false,
+            () => true,
+          ),
+        )
+        expect(removed).toBe(true)
+      }),
+    60_000,
+  )
+})

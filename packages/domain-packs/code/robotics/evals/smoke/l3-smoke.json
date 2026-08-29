@@ -1,0 +1,71 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.robotics",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "robotics",
+      "ros",
+      "control",
+      "sensors"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.robotics: ROS2 nodes and topics, a real-time PID control loop, sensor fusion with an EKF, tf2 coordinate frame transforms, actuator limits and an emergency-stop path"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "build a CRUD admin dashboard with a REST backend and write tests"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "ros ros2 node topic publisher subscriber real-time control loop pid sensor fusion ekf kalman tf2 coordinate frame transform actuator limit emergency stop deterministic timing jitter",
+  "expected_pack_id": "code.robotics",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "code.robotics L3 validation smoke",
+    "signals": [
+      "control loop meets its deadline with bounded jitter under load",
+      "tf transform tree is fully connected with no missing or stale frames",
+      "sensor fusion output stays consistent under dropped or delayed measurements",
+      "emergency-stop path halts all actuators within the required time",
+      "actuator commands are clamped to position/velocity/torque limits"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "code.robotics diagnosis smoke",
+    "signals": [
+      "control loop period jitters because heavy work runs in the timer callback",
+      "transforms combined across mismatched or unsynchronized timestamps",
+      "actuator commanded past its limit with no clamping or safety check",
+      "blocking I/O or allocation inside a real-time control thread",
+      "sensor fusion diverges after a dropped measurement (no timeout handling)"
+    ]
+  },
+  "source_refs": [
+    "source:ros2-design-and-realtime:paraphrased",
+    "source:state-estimation-sensor-fusion:paraphrased"
+  ]
+}

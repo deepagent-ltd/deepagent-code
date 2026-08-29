@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:helm:dependency-resolution-lock",
+  "type": "knowledge",
+  "title": "How Helm resolves and locks chart dependencies",
+  "description": "Explains Chart.yaml dependencies, conditions/tags for toggling subcharts, Chart.lock pinning, and the charts/ directory population.",
+  "body": "Use when reasoning about how subcharts are pulled in. Do not assume dependencies are fetched at install time. Actions: know dependencies are declared in Chart.yaml with version ranges and a repository, helm dependency update resolves them, writes Chart.lock, and populates charts/; conditions and tags enable/disable a subchart from parent values. Inspect Chart.lock and helm dependency list. Validation signals include Chart.lock pinning exact versions and a condition toggling a subchart in/out of the render. Risk boundary: an unpinned dependency range can pull an unexpected version; pinning via Chart.lock is the safe default.",
+  "domain": "helm",
+  "scope_hint": "platform.helm:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.helm",
+  "pack_id": "platform.helm"
+}

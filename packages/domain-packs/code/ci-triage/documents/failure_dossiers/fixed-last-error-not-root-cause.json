@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:ci_triage:fixed-last-error-not-root-cause",
+  "type": "failure_dossier",
+  "description": "Fixing the last error printed in a CI log, which is usually a cascade from an earlier first failure that remains unaddressed.",
+  "body": "Failure mode: triage jumps to the final red message in the log and patches it, but that error was a downstream consequence of an earlier failing step, so the pipeline fails again or fails elsewhere. Detection signals: the same job fails after the 'fix'; many errors all trace to one earlier missing artifact/dependency; the last error references something an earlier step should have produced. Do not fix the last error before finding the first. Safer fallback: scroll to the first failing step, fix that root cause, and re-run to confirm the cascade of downstream errors clears.",
+  "domain": "code",
+  "scope_hint": "code.ci-triage:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.ci-triage:human_authored",
+  "pack_id": "code.ci-triage"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:architecture:dependency-direction-encodes-stability",
+  "type": "knowledge",
+  "title": "Dependency direction should follow stability",
+  "description": "Stable, abstract policy should not depend on volatile, concrete detail; dependencies pointing the wrong way propagate churn upward.",
+  "body": "Use when deciding which module should depend on which. Modules that change rarely and hold core policy should be depended upon, not depend on volatile detail like specific I/O or vendors; when high-level policy depends directly on a concrete detail, every detail change ripples up. Do not let core logic import a specific database/vendor client directly. Actions: invert the dependency with an interface owned by the stable side so detail depends on policy. Validation signals include the volatile module importing the abstraction, not vice versa. Risk boundary: a stable module depending on a volatile one guarantees recurring breakage; treat wrong-direction dependencies on core policy as a design defect.",
+  "domain": "code",
+  "scope_hint": "code.architecture:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.architecture",
+  "pack_id": "code.architecture"
+}

@@ -1,0 +1,469 @@
+[
+  {
+    "ref_id": "knowledge:local_dev:env-defaults-help-onboarding",
+    "type": "knowledge",
+    "title": "Env Defaults Help Onboarding",
+    "summary": "Safe local defaults reduce setup friction.",
+    "domains": [
+      "local_dev",
+      "platform",
+      "environment"
+    ],
+    "triggers": [
+      "safe",
+      "local",
+      "defaults",
+      "reduce",
+      "setup",
+      "friction",
+      "provide",
+      "placeholders"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.local-dev"
+  },
+  {
+    "ref_id": "knowledge:local_dev:generated-files-need-command",
+    "type": "knowledge",
+    "title": "Generated Files Need Command",
+    "summary": "Generated local artifacts need reproducible commands.",
+    "domains": [
+      "local_dev",
+      "platform",
+      "environment"
+    ],
+    "triggers": [
+      "generated",
+      "local",
+      "artifacts",
+      "need",
+      "reproducible",
+      "commands",
+      "document",
+      "regenerate"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.local-dev"
+  },
+  {
+    "ref_id": "knowledge:local_dev:localhost-not-production",
+    "type": "knowledge",
+    "title": "Localhost Not Production",
+    "summary": "Local dev behavior may differ from deployed environment.",
+    "domains": [
+      "local_dev",
+      "platform",
+      "environment"
+    ],
+    "triggers": [
+      "local",
+      "behavior",
+      "differ",
+      "from",
+      "deployed",
+      "environment",
+      "generalize"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.local-dev"
+  },
+  {
+    "ref_id": "methodology:local_dev:dev-server-startup",
+    "type": "methodology",
+    "title": "Dev Server Startup",
+    "summary": "Start local service, inspect logs, open route, and run smoke path.",
+    "domains": [
+      "local_dev",
+      "platform",
+      "environment"
+    ],
+    "triggers": [
+      "start",
+      "local",
+      "service",
+      "inspect",
+      "logs",
+      "open",
+      "route",
+      "smoke"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.local-dev"
+  },
+  {
+    "ref_id": "methodology:local_dev:local-bootstrap-check",
+    "type": "methodology",
+    "title": "Local Bootstrap Check",
+    "summary": "Validate runtime, package manager, lockfile, env vars, and generated files.",
+    "domains": [
+      "local_dev",
+      "platform",
+      "environment"
+    ],
+    "triggers": [
+      "validate",
+      "runtime",
+      "package",
+      "manager",
+      "lockfile",
+      "vars",
+      "generated",
+      "files"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.local-dev"
+  },
+  {
+    "ref_id": "methodology:local_dev:port-conflict-triage",
+    "type": "methodology",
+    "title": "Port Conflict Triage",
+    "summary": "Find and resolve local port conflicts safely.",
+    "domains": [
+      "local_dev",
+      "platform",
+      "environment"
+    ],
+    "triggers": [
+      "find",
+      "resolve",
+      "local",
+      "port",
+      "conflicts",
+      "safely",
+      "steps",
+      "identify"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.local-dev"
+  },
+  {
+    "ref_id": "skill:local_dev:start-dev-smoke",
+    "type": "skill",
+    "title": "Start Dev Smoke",
+    "summary": "Start local dev server and verify a smoke route.",
+    "domains": [
+      "local_dev",
+      "platform",
+      "environment"
+    ],
+    "triggers": [
+      "start",
+      "local",
+      "server",
+      "verify",
+      "smoke",
+      "route",
+      "inputs",
+      "package"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.local-dev"
+  },
+  {
+    "ref_id": "strategy:local_dev:env-file-boundary",
+    "type": "strategy",
+    "title": "Env File Boundary",
+    "summary": "Separate local env defaults from secrets and production config.",
+    "domains": [
+      "local_dev",
+      "platform",
+      "environment"
+    ],
+    "triggers": [
+      "separate",
+      "local",
+      "defaults",
+      "from",
+      "secrets",
+      "production",
+      "config"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.local-dev"
+  },
+  {
+    "ref_id": "strategy:local_dev:port-and-process-check",
+    "type": "strategy",
+    "title": "Port And Process Check",
+    "summary": "Check ports and existing processes before starting dev servers.",
+    "domains": [
+      "local_dev",
+      "platform",
+      "environment"
+    ],
+    "triggers": [
+      "check",
+      "ports",
+      "existing",
+      "processes",
+      "before",
+      "starting",
+      "servers",
+      "server"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.local-dev"
+  },
+  {
+    "ref_id": "strategy:local_dev:watcher-scope",
+    "type": "strategy",
+    "title": "Watcher Scope",
+    "summary": "Keep file watchers scoped to project paths.",
+    "domains": [
+      "local_dev",
+      "platform",
+      "environment"
+    ],
+    "triggers": [
+      "keep",
+      "file",
+      "watchers",
+      "scoped",
+      "project",
+      "paths",
+      "broad"
+    ],
+    "scope": "system",
+    "evidence_strength": "medium",
+    "risk": "low",
+    "sensitivity": "public",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.local-dev"
+  },
+  {
+    "ref_id": "strategy:local_dev:one-command-bootstrap",
+    "type": "strategy",
+    "title": "Make onboarding a single reproducible command",
+    "summary": "Provide one documented command that installs dependencies, sets up config, and brings the dev environment to a runnable state on a fresh checkout.",
+    "domains": [
+      "platform",
+      "local_dev",
+      "environment"
+    ],
+    "triggers": [
+      "bootstrap",
+      "onboarding",
+      "setup script",
+      "one command",
+      "fresh checkout",
+      "getting started"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.local-dev"
+  },
+  {
+    "ref_id": "strategy:local_dev:pin-toolchain-versions",
+    "type": "strategy",
+    "title": "Pin language and tool versions for the project",
+    "summary": "Declare exact runtime and tooling versions in a version file so every developer and CI uses the same toolchain rather than whatever is on PATH.",
+    "domains": [
+      "platform",
+      "local_dev",
+      "environment"
+    ],
+    "triggers": [
+      "toolchain",
+      "version pin",
+      "node version",
+      "runtime version",
+      "version manager",
+      "consistency"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.local-dev"
+  },
+  {
+    "ref_id": "strategy:local_dev:isolate-project-dependencies",
+    "type": "strategy",
+    "title": "Isolate dependencies per project, not globally",
+    "summary": "Install dependencies into a project-scoped environment (virtualenv, local node_modules, container) so projects do not share or clobber each other's versions.",
+    "domains": [
+      "platform",
+      "local_dev",
+      "environment"
+    ],
+    "triggers": [
+      "dependency isolation",
+      "virtualenv",
+      "node_modules",
+      "global install",
+      "lockfile",
+      "reproducible"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.local-dev"
+  },
+  {
+    "ref_id": "methodology:local_dev:set-up-hot-reload",
+    "type": "methodology",
+    "title": "Set up hot reload without masking real errors",
+    "summary": "Wire a file watcher to rebuild/restart the dev process on change while ensuring compile and runtime errors stay visible, not swallowed.",
+    "domains": [
+      "platform",
+      "local_dev",
+      "environment"
+    ],
+    "triggers": [
+      "hot reload",
+      "watch",
+      "live reload",
+      "file watcher",
+      "rebuild",
+      "dev loop"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.local-dev"
+  },
+  {
+    "ref_id": "knowledge:local_dev:watchers-have-os-limits",
+    "type": "knowledge",
+    "title": "File watchers hit OS descriptor and inotify limits",
+    "summary": "Hot-reload watchers consume per-process file handles or inotify watches; pointing them at node_modules or build output exhausts the limit and breaks reloading.",
+    "domains": [
+      "platform",
+      "local_dev",
+      "environment"
+    ],
+    "triggers": [
+      "inotify",
+      "file descriptor",
+      "watch limit",
+      "enospc",
+      "watcher",
+      "too many files"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.local-dev"
+  },
+  {
+    "ref_id": "skill:local_dev:diagnose-port-conflict",
+    "type": "skill",
+    "title": "Diagnose and resolve a dev port conflict",
+    "summary": "Identify which process holds a needed local port and report it with the safe options to free or change the port.",
+    "domains": [
+      "platform",
+      "local_dev",
+      "environment"
+    ],
+    "triggers": [
+      "port conflict",
+      "eaddrinuse",
+      "port in use",
+      "lsof",
+      "bind",
+      "address in use"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.local-dev"
+  }
+]

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:sim:control-step-size",
+  "type": "strategy",
+  "title": "Control step size for stability and accuracy",
+  "description": "Set the time step from the stability region and accuracy target, using adaptive control where dynamics vary.",
+  "body": "Use when a fixed step either diverges or wastes effort on smooth regions. Do not pick a step by guess, since stability and accuracy both depend on it. Actions: estimate the stability limit for the solver, set the step within it, and use adaptive step control with an error estimate where the dynamics change scale. Validation signals include a stable trajectory and a local error estimate held within tolerance. Risk boundary: a step beyond the stability region diverges silently, so deny a fixed step that has not been checked against the stability limit.",
+  "domain": "simulation",
+  "scope_hint": "code.simulation:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.simulation",
+  "pack_id": "code.simulation"
+}

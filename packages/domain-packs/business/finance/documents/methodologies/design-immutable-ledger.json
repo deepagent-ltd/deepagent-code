@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:finance:design-immutable-ledger",
+  "type": "methodology",
+  "title": "Design an append-only financial ledger",
+  "description": "Model balances as the projection of an immutable, append-only sequence of entries with reversals, never as a mutable in-place balance field.",
+  "body": "Steps: 1. Record every financial event as an immutable ledger entry (debit/credit) with timestamp, actor, and reference. 2. Derive current balance by summing entries, not by overwriting a balance column. 3. Correct mistakes with a compensating reversal entry, never by editing or deleting history. 4. Add invariants (entries balance to zero, no negative where disallowed) checked on write. 5. Reconcile the projected balance against the entry sum. Rollback point: before any schema change touching historical entries. Validation: balance equals the entry sum, history is unaltered, and a reversal test shows corrections add entries rather than mutate them. Risk boundary: advisory only; any operation that would mutate or delete posted ledger history must be denied and escalated to a human, not automated.",
+  "domain": "finance",
+  "scope_hint": "business.finance:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:business.finance",
+  "pack_id": "business.finance"
+}

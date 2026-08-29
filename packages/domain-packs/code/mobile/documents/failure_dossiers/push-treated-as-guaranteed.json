@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:mobile:push-treated-as-guaranteed",
+  "type": "failure_dossier",
+  "description": "Relying on a push notification as the only trigger for important state, which silently breaks when delivery is dropped or delayed.",
+  "body": "Failure mode: a feature updates critical state only when a push arrives, so when APNs/FCM throttles, collapses, or drops the message the state is never updated and the user sees stale or missing data. Detection signals: events go missing when the device was offline; behavior differs by network conditions; no foreground reconciliation path. Do not treat push delivery as guaranteed for critical flows. Safer fallback: reconcile state with a server fetch on foreground, make push handlers idempotent, handle token rotation, and verify correctness when a push is intentionally dropped.",
+  "domain": "mobile",
+  "scope_hint": "code.mobile:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.mobile:human_authored",
+  "pack_id": "code.mobile"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:ecom:client-trusted-totals",
+  "type": "failure_dossier",
+  "description": "The server charges a client-supplied total, letting a tampered request underpay for the order.",
+  "body": "Failure mode: the checkout charges a price, discount, or total sent by the client, so a tampered request underpays or applies a discount it never earned. Detection signals: charges below the catalog price; discounts with no matching promotion; orders whose totals do not reconcile against catalog data. Do not trust client-sent monetary values. Safer fallback: recompute every price, discount, and tax server-side from authoritative data at checkout, reject mismatched client totals, and route pricing discrepancies to business.finance.",
+  "domain": "ecommerce",
+  "scope_hint": "business.ecommerce:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:business.ecommerce:human_authored",
+  "pack_id": "business.ecommerce"
+}

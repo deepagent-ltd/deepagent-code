@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:ng:flatten-instead-of-nesting-subscribes",
+  "type": "strategy",
+  "title": "Flatten streams instead of nesting subscribes",
+  "description": "Use switchMap/mergeMap/concatMap to chain dependent observables rather than subscribing inside a subscribe.",
+  "body": "Use when one stream's value drives another async call (a typeahead query feeding a search request). Do not subscribe inside another subscribe. Actions: pipe the source through a flattening operator, choosing switchMap to cancel the prior inner stream (search/typeahead), concatMap to queue in order, mergeMap for concurrency, or exhaustMap to ignore while busy (submit). Validation signals include a marble or TestBed test proving stale inner requests are cancelled with switchMap. Risk boundary: nested subscribes lose cancellation and ordering, producing race conditions where an older response overwrites a newer one; pick the operator deliberately for the concurrency semantics you need.",
+  "domain": "angular",
+  "scope_hint": "code.frontend.angular:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.angular",
+  "pack_id": "code.frontend.angular"
+}

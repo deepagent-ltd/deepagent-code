@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:k8s:diagnose-stuck-rollout",
+  "type": "methodology",
+  "title": "Diagnose a stuck or failing rollout",
+  "description": "Walk from rollout status to pod events to container logs to find why new pods will not become ready.",
+  "body": "Steps: 1. kubectl rollout status to see whether it is progressing, stuck, or failed. 2. kubectl get pods to find pods Pending, CrashLoopBackOff, or ImagePullBackOff. 3. kubectl describe pod to read events (scheduling failures, failed probes, OOMKilled, mount errors). 4. kubectl logs --previous on crashed containers. 5. Map the symptom to cause: Pending=resources/affinity, crashloop=app or config, probe fail=endpoint/timeout. Rollback point: kubectl rollout undo if service is degraded. Validation: the cause is confirmed by an event/log line, and the fix makes new pods reach Ready.",
+  "domain": "kubernetes",
+  "scope_hint": "platform.kubernetes:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.kubernetes",
+  "pack_id": "platform.kubernetes"
+}

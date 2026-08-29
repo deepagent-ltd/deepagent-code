@@ -1,0 +1,18 @@
+{
+  "schema_version": "domain_pack.v1",
+  "id": "code.gpu-kernel",
+  "name": "GPU Kernel",
+  "description": "GPU 内核:CUDA、ROCm 算子开发",
+  "version": "1.0.0",
+  "scope": "system",
+  "risk": "medium",
+  "domains": ["gpu_kernel", "cuda", "rocm"],
+  "provides": ["knowledge", "strategy", "methodology", "skill"],
+  "depends_on": ["code.core"],
+  "conflicts_with": [],
+  "knowledge_store": "document_store",
+  "detector": {
+    "inline": "profile.languages.some(l=>['cuda','cpp'].includes(l)) || profile.repo_signals.some(s=>/\\b(kernel|gemm|cuda|gpu|sgemm)\\b/.test(s)) ? 0.9 : 0",
+    "threshold": 0.5
+  }
+}

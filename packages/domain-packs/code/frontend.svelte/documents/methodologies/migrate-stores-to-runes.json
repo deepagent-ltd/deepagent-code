@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:svelte:migrate-stores-to-runes",
+  "type": "methodology",
+  "title": "Migrate from stores/$: to runes",
+  "description": "Move component state from legacy stores and $: labels to $state/$derived/$effect incrementally and verifiably.",
+  "body": "Steps: 1. Inventory the component's reactive surface: $: labels, writable/derived stores, and auto-subscriptions. 2. Replace local component state with $state and computed $: with $derived. 3. Convert reactive side effects ($: that perform actions) into $effect with explicit cleanup. 4. Keep cross-component shared state as stores or a $state-in-module until the whole graph is migrated. 5. Run the component tests after each conversion. Rollback point: per component, before deleting the legacy declarations. Validation: tests pass and no mixed-mode reactivity warning appears for the migrated component.",
+  "domain": "svelte",
+  "scope_hint": "code.frontend.svelte:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.svelte",
+  "pack_id": "code.frontend.svelte"
+}

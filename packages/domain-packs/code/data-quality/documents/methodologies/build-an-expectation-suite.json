@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:dq:build-an-expectation-suite",
+  "type": "methodology",
+  "title": "Build an expectation suite",
+  "description": "Profile a dataset, derive schema/value/freshness expectations, and wire them as a gate with thresholds and quarantine.",
+  "body": "Steps: 1. Profile the dataset to learn types, ranges, null rates, cardinality, and row-count bands. 2. Encode expectations: schema/types, value ranges, null thresholds, key uniqueness, and freshness. 3. Calibrate thresholds from history so they pass on normal data. 4. Wire the suite as a promotion gate, quarantining failures with the failing expectation recorded. 5. Seed a known-bad record and confirm it is caught. Rollback point: keep the prior suite version to revert. Validation: the suite passes on good data and blocks a seeded regression; a suite that has never failed on bad data has not been verified to work.",
+  "domain": "data_quality",
+  "scope_hint": "code.data-quality:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.data-quality",
+  "pack_id": "code.data-quality"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:stream:verify-exactly-once",
+  "type": "methodology",
+  "title": "Verify exactly-once with a recovery drill",
+  "description": "Prove the source-to-sink path neither drops nor duplicates by forcing failures and reconciling counts.",
+  "body": "Use before claiming exactly-once for a pipeline with side effects. Do not trust configuration flags alone — only a fault-injection drill proves the contract. Actions: feed a counted dataset, kill the job mid-stream to force checkpoint recovery, and reconcile sink output against input for both loss and duplication. Validation signals include an output count exactly matching input after recovery and a sink log showing replays were deduplicated or committed transactionally. Risk boundary: a sink that duplicates on replay corrupts downstream totals; if the drill shows duplicates, deny the exactly-once claim and escalate to make the sink transactional or idempotent.",
+  "domain": "streaming",
+  "scope_hint": "code.streaming:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.streaming",
+  "pack_id": "code.streaming"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:mon:make-every-alert-actionable",
+  "type": "strategy",
+  "title": "Make every alert actionable",
+  "description": "Page only on symptoms a human must act on, and route everything else to dashboards or tickets.",
+  "body": "Use when deciding what should page versus merely record. Do not alert on every threshold crossing — non-actionable pages cause fatigue, and a fatigued on-call misses the real one. Actions: alert on user-facing symptoms (error rate, latency, budget burn) rather than causes, attach a runbook link to each alert, and demote informational conditions to dashboards or tickets. Validation signals include every alert mapping to a documented action and a low false-page rate. Risk boundary: silencing or deleting an alert can hide a real outage — record why and prefer routing over deletion, escalating changes to paging policy.",
+  "domain": "monitoring",
+  "scope_hint": "platform.monitoring:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.monitoring",
+  "pack_id": "platform.monitoring"
+}

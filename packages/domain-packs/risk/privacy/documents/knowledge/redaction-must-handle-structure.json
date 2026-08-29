@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:privacy:redaction-must-handle-structure",
+  "type": "knowledge",
+  "title": "Redaction must handle nested and structured data",
+  "description": "Redaction that only masks top-level strings misses nested objects, arrays, serialized JSON, headers, query strings, and exception causes.",
+  "body": "Use when modifying loggers, serializers, request capture, analytics collectors, or support tools. Do not rely on manual reviewers to notice nested values. Actions: redact by field semantics and data class before serialization, cover nested payloads, and test error paths. Validation signals include snapshot tests with nested sensitive fields. Risk boundary: raw nested PII in persisted outputs requires incident review. Use when Privacy Risk Controls work touches personal-data classes, sinks, retention, consent, logs, prompts, and exports. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: use the fact to constrain the change and test plan; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include data inventory, redaction tests, retention checks, export/delete tests, and approval evidence. Risk boundary: escalate or stop when the task involves PII disclosure, consent bypass, retention drift, and unapproved processor expansion, missing owner evidence, or live external state.",
+  "domain": "privacy",
+  "scope_hint": "risk.privacy:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.privacy",
+  "pack_id": "risk.privacy"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:k8s:readiness-vs-liveness",
+  "type": "knowledge",
+  "title": "Readiness vs liveness vs startup probes",
+  "description": "Readiness controls traffic, liveness controls restarts, startup defers both for slow boots; misusing them causes outages.",
+  "body": "Use when configuring or debugging pod health. Readiness failing removes the pod from Service endpoints but does not restart it; liveness failing restarts the container; startup gates the other two until the app has booted. A common outage is pointing liveness at a shared dependency: when that dependency blips, every pod fails liveness and restarts together, amplifying the outage. Do not use liveness for dependency health or omit startup on slow starters. Actions: keep liveness to a local wedged-process check, keep readiness reflecting serve-ability, set startup failureThreshold for boot time. Validation signals include no synchronized restart storms and traffic arriving only after readiness passes. Risk boundary: removing readiness from a serving workload changes traffic correctness and needs review.",
+  "domain": "kubernetes",
+  "scope_hint": "platform.kubernetes:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.kubernetes",
+  "pack_id": "platform.kubernetes"
+}

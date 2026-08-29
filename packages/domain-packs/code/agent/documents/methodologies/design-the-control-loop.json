@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:agent:design-the-control-loop",
+  "type": "methodology",
+  "title": "Design the agent control loop",
+  "description": "Define the perceive-decide-act cycle, its terminal conditions, step cap, and no-progress guard before adding tools.",
+  "body": "Steps: 1. Define each iteration: gather observations, decide an action, execute, record the result. 2. Enumerate terminal conditions (goal met, cap reached, no progress, fatal error). 3. Set the step cap and the at-cap behavior. 4. Add the no-progress signature check across a window. 5. Add tests for convergence, cap-hit, and stall. Rollback point: before enabling side-effecting tools in the loop. Validation: a non-converging task halts at the cap and a repeating task halts on the no-progress guard.",
+  "domain": "agent",
+  "scope_hint": "code.agent:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.agent",
+  "pack_id": "code.agent"
+}

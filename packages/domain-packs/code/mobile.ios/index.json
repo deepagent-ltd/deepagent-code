@@ -1,0 +1,468 @@
+[
+  {
+    "ref_id": "strategy:ios:ui-updates-on-main-thread",
+    "type": "strategy",
+    "title": "Keep all UI updates on the main thread",
+    "summary": "Mutate UIKit views and SwiftUI observable state only on the main thread, hopping back from any background work.",
+    "domains": [
+      "ios",
+      "swiftui",
+      "uikit",
+      "xcode"
+    ],
+    "triggers": [
+      "main thread",
+      "ui",
+      "dispatch",
+      "background",
+      "uikit",
+      "thread"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mobile.ios"
+  },
+  {
+    "ref_id": "strategy:ios:single-source-of-truth-state",
+    "type": "strategy",
+    "title": "Drive SwiftUI from a single source of truth",
+    "summary": "Store mutable UI state in @State/@StateObject and derive views from it, instead of duplicating or imperatively mutating view contents.",
+    "domains": [
+      "ios",
+      "swiftui",
+      "uikit",
+      "xcode"
+    ],
+    "triggers": [
+      "state",
+      "source of truth",
+      "swiftui",
+      "binding",
+      "stateobject",
+      "observable"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mobile.ios"
+  },
+  {
+    "ref_id": "strategy:ios:break-retain-cycles",
+    "type": "strategy",
+    "title": "Break retain cycles with weak/unowned",
+    "summary": "Capture self weakly in escaping closures and delegate references so view controllers and objects deallocate instead of leaking.",
+    "domains": [
+      "ios",
+      "swiftui",
+      "uikit",
+      "xcode"
+    ],
+    "triggers": [
+      "retain cycle",
+      "weak",
+      "unowned",
+      "closure",
+      "arc",
+      "leak"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mobile.ios"
+  },
+  {
+    "ref_id": "strategy:ios:configure-signing-and-provisioning",
+    "type": "strategy",
+    "title": "Get signing and provisioning right",
+    "summary": "Match bundle id, capabilities, certificate, and provisioning profile so the app installs on devices and ships to the Store.",
+    "domains": [
+      "ios",
+      "swiftui",
+      "uikit",
+      "xcode"
+    ],
+    "triggers": [
+      "signing",
+      "provisioning",
+      "certificate",
+      "bundle id",
+      "entitlements",
+      "profile"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mobile.ios"
+  },
+  {
+    "ref_id": "strategy:ios:respect-background-execution",
+    "type": "strategy",
+    "title": "Respect background execution limits",
+    "summary": "Use the right background mode/API for the work and assume the system can suspend or terminate the app at any time.",
+    "domains": [
+      "ios",
+      "swiftui",
+      "uikit",
+      "xcode"
+    ],
+    "triggers": [
+      "background",
+      "suspend",
+      "background task",
+      "termination",
+      "lifecycle",
+      "modes"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mobile.ios"
+  },
+  {
+    "ref_id": "strategy:ios:request-minimal-privacy-data",
+    "type": "strategy",
+    "title": "Request only the privacy data you use",
+    "summary": "Add a usage-description string for every sensitive API, request access at point of use, and collect the minimum needed.",
+    "domains": [
+      "ios",
+      "swiftui",
+      "uikit",
+      "xcode"
+    ],
+    "triggers": [
+      "privacy",
+      "permission",
+      "usage description",
+      "info.plist",
+      "tracking",
+      "minimal"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mobile.ios"
+  },
+  {
+    "ref_id": "methodology:ios:diagnose-a-memory-leak",
+    "type": "methodology",
+    "title": "Diagnose an iOS memory leak",
+    "summary": "Use Instruments to find leaked objects, trace the retain cycle, and break it with a weak/unowned capture.",
+    "domains": [
+      "ios",
+      "swiftui",
+      "uikit",
+      "xcode"
+    ],
+    "triggers": [
+      "leak",
+      "instruments",
+      "retain cycle",
+      "memory",
+      "diagnose",
+      "weak"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mobile.ios"
+  },
+  {
+    "ref_id": "methodology:ios:debug-a-swiftui-update-bug",
+    "type": "methodology",
+    "title": "Debug a SwiftUI view that won't update",
+    "summary": "Trace why a SwiftUI view ignores a change by checking the state ownership and observation wrappers.",
+    "domains": [
+      "ios",
+      "swiftui",
+      "uikit",
+      "xcode"
+    ],
+    "triggers": [
+      "swiftui",
+      "update",
+      "state",
+      "binding",
+      "observable",
+      "debug"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mobile.ios"
+  },
+  {
+    "ref_id": "methodology:ios:prepare-an-app-store-submission",
+    "type": "methodology",
+    "title": "Prepare an App Store submission",
+    "summary": "Take a build through versioning, signing, privacy declarations, and validation before uploading for review.",
+    "domains": [
+      "ios",
+      "swiftui",
+      "uikit",
+      "xcode"
+    ],
+    "triggers": [
+      "app store",
+      "submission",
+      "archive",
+      "privacy",
+      "review",
+      "validate"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mobile.ios"
+  },
+  {
+    "ref_id": "methodology:ios:move-work-off-the-main-thread",
+    "type": "methodology",
+    "title": "Move work off the main thread",
+    "summary": "Relocate heavy or blocking work to a background context and marshal only the UI update back to main.",
+    "domains": [
+      "ios",
+      "swiftui",
+      "uikit",
+      "xcode"
+    ],
+    "triggers": [
+      "main thread",
+      "async",
+      "background",
+      "concurrency",
+      "hang",
+      "actor"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mobile.ios"
+  },
+  {
+    "ref_id": "knowledge:ios:swiftui-declarative-data-flow",
+    "type": "knowledge",
+    "title": "SwiftUI's declarative data flow",
+    "summary": "A SwiftUI view is a function of its state; you mutate state and the framework recomputes the view, rather than mutating views directly.",
+    "domains": [
+      "ios",
+      "swiftui",
+      "uikit",
+      "xcode"
+    ],
+    "triggers": [
+      "swiftui",
+      "declarative",
+      "state",
+      "data flow",
+      "render",
+      "identity"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mobile.ios"
+  },
+  {
+    "ref_id": "knowledge:ios:arc-and-ownership",
+    "type": "knowledge",
+    "title": "ARC and ownership semantics",
+    "summary": "Automatic Reference Counting frees an object when its strong reference count hits zero; cycles of strong references never reach zero and leak.",
+    "domains": [
+      "ios",
+      "swiftui",
+      "uikit",
+      "xcode"
+    ],
+    "triggers": [
+      "arc",
+      "reference counting",
+      "strong",
+      "weak",
+      "cycle",
+      "ownership"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mobile.ios"
+  },
+  {
+    "ref_id": "knowledge:ios:app-lifecycle-and-reclamation",
+    "type": "knowledge",
+    "title": "App lifecycle and system reclamation",
+    "summary": "iOS moves apps through active/background/suspended states and can terminate suspended apps to reclaim resources without warning.",
+    "domains": [
+      "ios",
+      "swiftui",
+      "uikit",
+      "xcode"
+    ],
+    "triggers": [
+      "lifecycle",
+      "background",
+      "suspended",
+      "termination",
+      "scene",
+      "state"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mobile.ios"
+  },
+  {
+    "ref_id": "knowledge:ios:privacy-and-permissions-model",
+    "type": "knowledge",
+    "title": "iOS privacy and permission model",
+    "summary": "Access to sensitive data is gated by user-granted permissions plus mandatory Info.plist usage strings, and misuse is enforced at runtime and in review.",
+    "domains": [
+      "ios",
+      "swiftui",
+      "uikit",
+      "xcode"
+    ],
+    "triggers": [
+      "privacy",
+      "permission",
+      "usage description",
+      "authorization",
+      "tracking",
+      "att"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mobile.ios"
+  },
+  {
+    "ref_id": "skill:ios:inspect-threading-and-main-actor",
+    "type": "skill",
+    "title": "Inspect threading and main-actor usage",
+    "summary": "Review code for UI mutations off the main thread and for heavy work blocking it.",
+    "domains": [
+      "ios",
+      "swiftui",
+      "uikit",
+      "xcode"
+    ],
+    "triggers": [
+      "thread",
+      "main actor",
+      "inspect",
+      "concurrency",
+      "ui",
+      "hang"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mobile.ios"
+  },
+  {
+    "ref_id": "skill:ios:audit-arc-captures-and-privacy",
+    "type": "skill",
+    "title": "Audit ARC captures and privacy strings",
+    "summary": "Inspect closures/delegates for retain-cycle risk and Info.plist for required usage strings against the APIs used.",
+    "domains": [
+      "ios",
+      "swiftui",
+      "uikit",
+      "xcode"
+    ],
+    "triggers": [
+      "arc",
+      "capture",
+      "retain cycle",
+      "privacy",
+      "info.plist",
+      "audit"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.mobile.ios"
+  }
+]

@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:sim:analyze-stability-region",
+  "type": "methodology",
+  "title": "Analyze a solver's stability region",
+  "description": "Determine the step-size range that keeps a solver bounded for the system's eigenvalues.",
+  "body": "Use when choosing a step for an explicit solver on a known linear system. Do not pick a step empirically without understanding the stability boundary, since the failure is abrupt. Actions: estimate the system's fastest eigenvalue, compute the solver's stability limit on the step times that eigenvalue, and verify the chosen step stays inside it. Validation signals include a bounded solution at the chosen step and divergence appearing only once the step crosses the computed limit. Risk boundary: operating near the stability edge is fragile, so escalate to an implicit solver when the stable step is impractically small.",
+  "domain": "simulation",
+  "scope_hint": "code.simulation:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.simulation",
+  "pack_id": "code.simulation"
+}

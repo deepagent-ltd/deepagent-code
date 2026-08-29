@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:feat:build-point-in-time-join",
+  "type": "skill",
+  "title": "Build a point-in-time training join",
+  "description": "Steps to assemble a leakage-free training set with an as-of join keyed on entity and event time.",
+  "body": "Use when constructing a training set from time-varying features. Do not join on entity alone and grab the latest feature value — that pulls future data into past rows. Actions: order events by time, perform an as-of join taking the latest feature strictly before each label timestamp, and verify no joined feature postdates its label. Validation signals include a join audit confirming feature time precedes label time for every row and a temporal-holdout metric that holds. Risk boundary: a sloppy join injects temporal leakage that inflates offline metrics; if any row fails the timing check, deny the dataset and rebuild the join before training.",
+  "domain": "feature_engineering",
+  "scope_hint": "code.feature-engineering:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.feature-engineering",
+  "pack_id": "code.feature-engineering"
+}

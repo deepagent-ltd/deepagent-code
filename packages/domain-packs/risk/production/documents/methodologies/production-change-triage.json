@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:production:production-change-triage",
+  "type": "methodology",
+  "title": "Production change triage",
+  "description": "Classify whether a task can affect live users, durable state, external systems, security posture, or incident response.",
+  "body": "Use before editing deploy workflows, migrations, release configs, infrastructure, feature flags, or monitoring. Do not execute production actions. Steps: identify environment target, external-state writes, user impact, reversibility, approval owner, required validation, and rollback plan. Validation signals include source diff, plan/dry-run output, test evidence, and explicit approval when required. Risk boundary: unknown environment or owner blocks the change. Use when Production Change Risk Controls work touches repository conventions, toolchain files, changed symbols, validation commands, and runtime output. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: follow the ordered review, edit, and validation sequence; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include package-local checks, focused tests, build output, smoke runs, and command logs. Risk boundary: escalate or stop when the task involves broad rewrites, generated-file drift, stale assumptions, and unvalidated behavior changes, missing owner evidence, or live external state.",
+  "domain": "production",
+  "scope_hint": "risk.production:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.production",
+  "pack_id": "risk.production"
+}

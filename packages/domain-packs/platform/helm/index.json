@@ -1,0 +1,420 @@
+[
+  {
+    "ref_id": "strategy:helm:values-precedence-overrides",
+    "type": "strategy",
+    "title": "Respect Helm values precedence when layering overrides",
+    "summary": "Order overrides knowingly: chart defaults < parent values < -f files (last wins) < --set, and avoid deep-key collisions that silently lose values.",
+    "domains": [
+      "helm",
+      "helm_chart",
+      "chart_values",
+      "helm_release"
+    ],
+    "triggers": [
+      "values precedence",
+      "override",
+      "set flag"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.helm"
+  },
+  {
+    "ref_id": "strategy:helm:template-helpers-named-templates",
+    "type": "strategy",
+    "title": "Factor shared template logic into _helpers named templates",
+    "summary": "Define reusable labels, names, and selectors in _helpers.tpl with define/include and proper nindent so manifests stay DRY and valid.",
+    "domains": [
+      "helm",
+      "helm_chart",
+      "chart_values",
+      "helm_release"
+    ],
+    "triggers": [
+      "_helpers",
+      "named template",
+      "include"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.helm"
+  },
+  {
+    "ref_id": "strategy:helm:atomic-upgrade-rollback",
+    "type": "strategy",
+    "title": "Run upgrades atomically and keep rollback fast",
+    "summary": "Use helm upgrade --atomic --timeout so a failed release auto-rolls back, and rely on helm history plus rollback to a known revision instead of editing live objects.",
+    "domains": [
+      "helm",
+      "helm_chart",
+      "chart_values",
+      "helm_release"
+    ],
+    "triggers": [
+      "helm upgrade",
+      "atomic",
+      "rollback"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.helm"
+  },
+  {
+    "ref_id": "strategy:helm:subchart-dependency-management",
+    "type": "strategy",
+    "title": "Manage subchart dependencies and value scoping",
+    "summary": "Declare dependencies in Chart.yaml, lock with helm dependency build, and pass values under the subchart alias with global for shared config.",
+    "domains": [
+      "helm",
+      "helm_chart",
+      "chart_values",
+      "helm_release"
+    ],
+    "triggers": [
+      "subchart",
+      "dependency",
+      "chart.yaml"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.helm"
+  },
+  {
+    "ref_id": "strategy:helm:hooks-lifecycle-ordering",
+    "type": "strategy",
+    "title": "Use Helm hooks for lifecycle tasks with weights and deletion policy",
+    "summary": "Annotate jobs as pre/post-install/upgrade hooks with hook-weight ordering and hook-delete-policy so migrations run reliably and clean up.",
+    "domains": [
+      "helm",
+      "helm_chart",
+      "chart_values",
+      "helm_release"
+    ],
+    "triggers": [
+      "helm hook",
+      "pre-upgrade",
+      "hook-delete-policy"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.helm"
+  },
+  {
+    "ref_id": "strategy:helm:values-schema-validation",
+    "type": "strategy",
+    "title": "Guard chart inputs with values.schema.json",
+    "summary": "Define a JSON Schema for values so bad or missing inputs fail at install time with a clear error instead of rendering broken manifests.",
+    "domains": [
+      "helm",
+      "helm_chart",
+      "chart_values",
+      "helm_release"
+    ],
+    "triggers": [
+      "values.schema.json",
+      "schema validation",
+      "input validation"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.helm"
+  },
+  {
+    "ref_id": "methodology:helm:template-render-debugging",
+    "type": "methodology",
+    "title": "Debug a chart by rendering and isolating the template",
+    "summary": "Use helm template --debug and --show-only to see the exact rendered YAML and pinpoint a nil value or indentation bug before installing.",
+    "domains": [
+      "helm",
+      "helm_chart",
+      "chart_values",
+      "helm_release"
+    ],
+    "triggers": [
+      "helm template debug",
+      "show-only",
+      "render"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.helm"
+  },
+  {
+    "ref_id": "methodology:helm:failed-upgrade-recovery",
+    "type": "methodology",
+    "title": "Recover a release stuck in pending-upgrade",
+    "summary": "Diagnose a wedged release from helm history and hook state, then roll back or repair rather than force-deleting the release.",
+    "domains": [
+      "helm",
+      "helm_chart",
+      "chart_values",
+      "helm_release"
+    ],
+    "triggers": [
+      "pending-upgrade",
+      "stuck release",
+      "recover"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.helm"
+  },
+  {
+    "ref_id": "methodology:helm:values-diff-before-upgrade",
+    "type": "methodology",
+    "title": "Diff rendered manifests before a Helm upgrade",
+    "summary": "Render the new and current revisions and compare so the upgrade's real Kubernetes-object delta is reviewed, not just the values change.",
+    "domains": [
+      "helm",
+      "helm_chart",
+      "chart_values",
+      "helm_release"
+    ],
+    "triggers": [
+      "helm diff",
+      "upgrade preview",
+      "manifest delta"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.helm"
+  },
+  {
+    "ref_id": "knowledge:helm:templating-engine-pipeline",
+    "type": "knowledge",
+    "title": "How Helm's Go-template pipeline renders a chart",
+    "summary": "Explains the values context (.Values/.Release/.Chart), pipelines, the difference between template and include, and whitespace control.",
+    "domains": [
+      "helm",
+      "helm_chart",
+      "chart_values",
+      "helm_release"
+    ],
+    "triggers": [
+      "go template",
+      "render pipeline",
+      "whitespace"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.helm"
+  },
+  {
+    "ref_id": "knowledge:helm:release-storage-revisions",
+    "type": "knowledge",
+    "title": "How Helm stores releases and tracks revisions",
+    "summary": "Covers release state stored as Secrets/ConfigMaps in the namespace, revision history, and the deployed/superseded/failed/pending status model.",
+    "domains": [
+      "helm",
+      "helm_chart",
+      "chart_values",
+      "helm_release"
+    ],
+    "triggers": [
+      "release storage",
+      "revision history",
+      "release status"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.helm"
+  },
+  {
+    "ref_id": "knowledge:helm:built-in-objects-capabilities",
+    "type": "knowledge",
+    "title": "Helm built-in objects and .Capabilities gating",
+    "summary": "Explains the built-in objects (.Release, .Chart, .Files, .Capabilities) and using .Capabilities.APIVersions to render version-appropriate manifests.",
+    "domains": [
+      "helm",
+      "helm_chart",
+      "chart_values",
+      "helm_release"
+    ],
+    "triggers": [
+      "built-in objects",
+      "capabilities",
+      "apiversions"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.helm"
+  },
+  {
+    "ref_id": "methodology:helm:chart-versioning-release",
+    "type": "methodology",
+    "title": "Version a chart deliberately with SemVer and appVersion",
+    "summary": "Bump the chart version on any template/values change and appVersion to track the shipped app, so consumers see meaningful upgrades.",
+    "domains": [
+      "helm",
+      "helm_chart",
+      "chart_values",
+      "helm_release"
+    ],
+    "triggers": [
+      "chart version",
+      "appversion",
+      "semver"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.helm"
+  },
+  {
+    "ref_id": "knowledge:helm:dependency-resolution-lock",
+    "type": "knowledge",
+    "title": "How Helm resolves and locks chart dependencies",
+    "summary": "Explains Chart.yaml dependencies, conditions/tags for toggling subcharts, Chart.lock pinning, and the charts/ directory population.",
+    "domains": [
+      "helm",
+      "helm_chart",
+      "chart_values",
+      "helm_release"
+    ],
+    "triggers": [
+      "dependency resolution",
+      "chart.lock",
+      "condition tags"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.helm"
+  },
+  {
+    "ref_id": "skill:helm:lint-and-render-chart",
+    "type": "skill",
+    "title": "Lint and render a chart against multiple value sets",
+    "summary": "Run helm lint and helm template with default and override values plus schema validation so packaging issues surface before release.",
+    "domains": [
+      "helm",
+      "helm_chart",
+      "chart_values",
+      "helm_release"
+    ],
+    "triggers": [
+      "helm lint",
+      "render chart",
+      "validate values"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.helm"
+  },
+  {
+    "ref_id": "skill:helm:rollback-release",
+    "type": "skill",
+    "title": "Roll a release back to a known-good revision",
+    "summary": "Use helm history to pick the last healthy revision and helm rollback to restore it, then verify workload readiness.",
+    "domains": [
+      "helm",
+      "helm_chart",
+      "chart_values",
+      "helm_release"
+    ],
+    "triggers": [
+      "helm rollback",
+      "restore revision",
+      "release recovery"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "platform.helm"
+  }
+]

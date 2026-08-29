@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:elixir:design-a-genserver-api",
+  "type": "methodology",
+  "title": "Design a GenServer's API and state",
+  "description": "Separate the public client API from the server callbacks and keep the loop fast and crash-safe.",
+  "body": "Steps: 1. Define the public functions (start_link, and synchronous/asynchronous operations) that wrap GenServer.call/cast so callers never touch internals. 2. Implement init/1 to build a minimal valid state, deferring slow setup to handle_continue. 3. Map each public call to a handle_call (needs a reply) or handle_cast (fire-and-forget), keeping each clause fast. 4. Define the child_spec and place it under a supervisor. 5. Test through the public API, not the callbacks. Rollback point: before adding state fields that change the init contract. Validation: ExUnit drives the public API, concurrent calls stay responsive, and a crash restarts to the init state.",
+  "domain": "elixir",
+  "scope_hint": "code.elixir:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.elixir",
+  "pack_id": "code.elixir"
+}

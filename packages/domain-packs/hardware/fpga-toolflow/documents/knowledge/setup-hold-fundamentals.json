@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:fpgatf:setup-hold-fundamentals",
+  "type": "knowledge",
+  "title": "Setup and hold slack fundamentals",
+  "description": "Setup slack depends on the clock period and path delay while hold slack depends on minimum delay and clock skew.",
+  "body": "Use when interpreting why setup and hold respond differently to changes. Do not expect a frequency change to fix hold, because hold is governed by minimum delay and skew, not the period. Actions: relate setup slack to the period minus the longest path, relate hold slack to the shortest path against skew, and verify both against the report. Validation signals include positive slack in both checks and an understanding of which knob moves each. Risk boundary: confusing the two leads to wrong fixes, so flag any attempt to fix hold by slowing the clock as a misdiagnosis.",
+  "domain": "fpga_toolflow",
+  "scope_hint": "hardware.fpga-toolflow:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.fpga-toolflow",
+  "pack_id": "hardware.fpga-toolflow"
+}

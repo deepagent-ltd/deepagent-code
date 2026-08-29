@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:robot:design-a-tested-emergency-stop",
+  "type": "strategy",
+  "title": "Design an emergency stop that always wins",
+  "description": "Provide a safety-stop path that halts all actuators within a bounded time regardless of software state, independent of the normal control flow.",
+  "body": "Use whenever the system can command motion. Do not route the stop through the same queues or threads that might be blocked, and avoid relying on a graceful shutdown that assumes the software is healthy. Actions: implement a high-priority stop that cuts actuator power or commands a safe holding state, drive it from a watchdog that triggers on missed heartbeats or loss of control, and make the fail-safe state the default on any fault. Validation signals include a test that the stop halts all actuators within the required time even with the main loop deliberately stalled. Risk boundary: an e-stop that depends on healthy software can fail exactly when needed; treat a stop path coupled to the normal control flow as a critical safety defect and require independent validation.",
+  "domain": "robotics",
+  "scope_hint": "code.robotics:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.robotics",
+  "pack_id": "code.robotics"
+}

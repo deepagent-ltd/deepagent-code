@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:robot:ros-node-topic-model",
+  "type": "knowledge",
+  "title": "The ROS node, topic, and QoS model",
+  "description": "ROS systems are graphs of nodes communicating over named topics with publish/subscribe semantics and, in ROS2, configurable quality-of-service.",
+  "body": "Use when reasoning about how robot software components communicate. A ROS system is a graph of nodes that publish and subscribe to named topics asynchronously; ROS2 adds DDS-based transport with QoS settings (reliability, durability, deadline, liveliness) that decide whether messages are guaranteed, kept for late joiners, or dropped under load. Do not assume delivery is reliable or ordered by default, and do not assume a subscriber implies a live publisher. Actions: set QoS to match each topic's criticality and monitor liveliness on control paths. Validation signals include matched QoS profiles and a liveliness test. Risk boundary: a mismatched QoS or assumed-reliable best-effort topic can silently drop control commands; verify QoS on every safety-relevant topic.",
+  "domain": "robotics",
+  "scope_hint": "code.robotics:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.robotics",
+  "pack_id": "code.robotics"
+}

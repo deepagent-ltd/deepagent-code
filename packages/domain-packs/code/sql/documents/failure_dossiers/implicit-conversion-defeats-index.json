@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:sql:implicit-conversion-defeats-index",
+  "type": "failure_dossier",
+  "description": "A type mismatch or function on an indexed column making a predicate non-sargable, forcing a full scan despite an index.",
+  "body": "Failure mode: comparing an indexed column against a different type (string vs number) or wrapping it in a function (WHERE LOWER(email) = ...) makes the predicate non-sargable, so the planner ignores the index and scans the whole table. Detection signals: EXPLAIN shows a seq/full scan on a column you indexed; implicit-conversion warning in the plan; query is fast on small data, slow at scale. Do not apply functions or mismatched types to an indexed column in the predicate. Safer fallback: match the column's type exactly, move functions to the literal side, or create a matching expression/functional index (e.g. on LOWER(email)), then confirm EXPLAIN uses an index scan.",
+  "domain": "sql",
+  "scope_hint": "code.sql:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.sql:human_authored",
+  "pack_id": "code.sql"
+}

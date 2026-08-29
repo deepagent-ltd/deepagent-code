@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:mt:unscoped-query-cross-tenant-read",
+  "type": "failure_dossier",
+  "description": "A query that fetches by id without a tenant predicate lets a caller read another tenant's record by guessing or iterating ids.",
+  "body": "Failure mode: a handler loads a resource by id alone, assuming the id belongs to the caller's tenant, so changing the id reaches another tenant's data. Detection signals: the query has no tenant predicate; a request as tenant A returns tenant B's row by id; there is no negative cross-tenant test. Do not trust that an id implies tenant ownership. Safer fallback: derive the tenant from the authenticated principal, add a tenant predicate at the data layer, back it with row-level security, and add a negative test that a foreign tenant is denied; escalate as a high-severity leak.",
+  "domain": "multi_tenant",
+  "scope_hint": "code.backend.multi-tenant:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.multi-tenant:human_authored",
+  "pack_id": "code.backend.multi-tenant"
+}

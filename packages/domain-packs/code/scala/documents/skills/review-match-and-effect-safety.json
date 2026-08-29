@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:scala:review-match-and-effect-safety",
+  "type": "skill",
+  "title": "Review match exhaustiveness and effect safety",
+  "description": "Read Scala code and report non-exhaustive matches, eager effects, and blocking calls on compute pools.",
+  "body": "Use when asked whether Scala code is safe. Actions: inspect each pattern match for a non-exhaustive warning or a catch-all _ hiding variants on a sealed ADT, check that side effects are wrapped in IO/deferred rather than run eagerly, and scan for blocking calls (Await, JDBC, sleep) on the global/compute ExecutionContext. Do not assume a Future is lazy or a match is total. Report and record each non-exhaustive match, eager effect, and misplaced blocking call with file and line. This skill is read-only and must not rewrite effect wiring without runtime permission. Validation signals include compiling with -Xfatal-warnings to surface exhaustiveness gaps. Risk boundary: flag a non-exhaustive match on a domain ADT as a latent MatchError and a blocking call on the compute pool as a starvation risk.",
+  "domain": "scala",
+  "scope_hint": "code.scala:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.scala",
+  "pack_id": "code.scala"
+}

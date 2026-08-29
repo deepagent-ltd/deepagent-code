@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:testing:assertion-updated-to-bug",
+  "type": "failure_dossier",
+  "description": "Changing assertions to match broken output masks regressions.",
+  "body": "Only update expectations after confirming the contract changed intentionally.\n\nUse only as a diagnostic do-not-use signal; do not expose this as positive strategy, methodology, or memory. Use when a proposed approach skips test runner output, fixture intent, coverage boundaries, flake history, and negative paths or claims success without domain evidence. Do not use this dossier as a positive implementation strategy; it is a do-not-use signal. Actions: block the shortcut, name the missing evidence, and switch to a safer methodology or ask for human approval. Validation signals include absence or contradiction in focused test output, regression tests, fixture assertions, and rerun evidence. Risk boundary: treat repeated recurrence as a blocker when it can cause testing implementation details only, masking flakes, and claiming coverage without behavior proof.",
+  "domain": "testing",
+  "scope_hint": "code.testing:failure_dossiers",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:code.testing",
+  "pack_id": "code.testing"
+}

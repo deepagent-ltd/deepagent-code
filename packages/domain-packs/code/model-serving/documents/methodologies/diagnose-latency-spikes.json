@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:serving:diagnose-latency-spikes",
+  "type": "methodology",
+  "title": "Diagnose inference latency spikes",
+  "description": "Localize tail latency to queueing, batch window, memory pressure, or cold paths using server and accelerator metrics.",
+  "body": "Steps: 1. Confirm the spike in p99/p99.9, not the mean. 2. Decompose latency into queue wait, batch-form wait, and compute time. 3. If queue wait dominates, the system is under-provisioned or batching too slowly; if compute dominates, the batch is too large or the model too heavy. 4. Check for OOM-adjacent memory thrash and cold-start events correlated with scale-ups. 5. Fix the dominant term and re-measure. Rollback point: revert any batch/scale change that worsens the tail. Validation: the decomposed latency identifies one dominant cause and the fix lowers p99; tuning blindly without decomposition usually trades one bottleneck for another.",
+  "domain": "model_serving",
+  "scope_hint": "code.model-serving:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.model-serving",
+  "pack_id": "code.model-serving"
+}

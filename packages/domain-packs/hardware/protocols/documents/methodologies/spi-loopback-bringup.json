@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:hwprot:spi-loopback-bringup",
+  "type": "methodology",
+  "title": "Bring up SPI with a loopback and register read",
+  "description": "Validate the controller with a MOSI-to-MISO loopback, then confirm a known-value register read from the real peripheral.",
+  "body": "Use when commissioning a new SPI link before trusting peripheral data. Do not start with complex multi-byte transactions before the basic datapath is proven. Actions: short MOSI to MISO and verify sent bytes return unchanged, then read a fixed identity register from the peripheral and compare. Validation signals include a loopback that echoes the pattern exactly and a device-ID read matching the datasheet value. Risk boundary: a peripheral whose ID read is wrong may be miswired or in reset, so escalate to a wiring check before issuing configuration writes.",
+  "domain": "hw_protocols",
+  "scope_hint": "hardware.protocols:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.protocols",
+  "pack_id": "hardware.protocols"
+}

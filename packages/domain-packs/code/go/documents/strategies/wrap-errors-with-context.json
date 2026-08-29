@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:go:wrap-errors-with-context",
+  "type": "strategy",
+  "title": "Wrap errors with %w and inspect with errors.Is/As",
+  "description": "Add context to errors using fmt.Errorf with %w so callers can unwrap and match sentinel or typed errors instead of comparing strings.",
+  "body": "Use when returning or handling errors across package boundaries. Do not discard errors with _, compare error text with strings.Contains, or wrap with %v (which loses the chain). Actions: return fmt.Errorf(\"loading config: %w\", err) to preserve the cause, define exported sentinel errors (var ErrNotFound = errors.New(...)) or typed errors, and match with errors.Is / errors.As at the boundary. Validation signals include errors.Is finding a wrapped sentinel in a test and `go vet` reporting no wrong %w usage. Risk boundary: swallowing an error to make a build pass hides real failures; deny that change and surface the error to the caller or log with the wrapped chain.",
+  "domain": "go",
+  "scope_hint": "code.go:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.go",
+  "pack_id": "code.go"
+}

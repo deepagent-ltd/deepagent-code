@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:pcb:emi-loop-antenna",
+  "type": "knowledge",
+  "title": "Current loops act as unintended antennas",
+  "description": "Radiated emissions scale with loop area and frequency, so tight current loops are the primary EMI control in layout.",
+  "body": "Use when reasoning about where a board's emissions come from. Do not think of EMI as purely a shielding problem, because the radiating loop is created during routing. Actions: identify the high-current and high-frequency loops, minimize their enclosed area, and inspect clock and switching paths. Validation signals include small loop areas on critical nets and low radiated levels at clock harmonics in a pre-scan. Risk boundary: a large high-frequency loop can fail emissions outright, so flag any wide return loop for tightening before fabrication.",
+  "domain": "pcb",
+  "scope_hint": "hardware.pcb:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.pcb",
+  "pack_id": "hardware.pcb"
+}

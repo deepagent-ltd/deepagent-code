@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:wasm:abi-and-value-marshalling",
+  "type": "knowledge",
+  "title": "The WASM ABI and value marshalling",
+  "description": "WASM functions natively pass only numeric types; strings, structs, and arrays must be encoded into linear memory and described by pointer+length.",
+  "body": "Use when designing or debugging the interop boundary. Core WebAssembly function signatures carry only i32/i64/f32/f64 (and references in newer proposals); there is no native string or struct. To pass a string or array you write its bytes into linear memory and pass a pointer (offset) and length, and the other side reads them back with the matching encoding (e.g. UTF-8). Binding generators like wasm-bindgen automate this marshalling and the paired allocation/free. Do not pass complex values as a single integer or assume the receiver knows the length. Actions: use generated bindings, or pass explicit pointer+length with a fixed encoding and ownership rule. Validation signals include round-trip equality for strings/arrays across the boundary. Risk boundary: a length or encoding mismatch reads adjacent memory as data, a silent corruption.",
+  "domain": "wasm",
+  "scope_hint": "code.wasm:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.wasm",
+  "pack_id": "code.wasm"
+}

@@ -1,0 +1,5 @@
+Runtime schema checkpoint only.
+
+The executable upgrade sequence remains in packages/core/src/database/migration.
+This consolidated Drizzle snapshot replaces unpublished intermediate snapshots
+without replaying their schema SQL after the runtime migrations have run.

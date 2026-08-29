@@ -1,0 +1,468 @@
+[
+  {
+    "ref_id": "strategy:mlai:hold-out-test-set-once",
+    "type": "strategy",
+    "title": "Touch the test set exactly once",
+    "summary": "Reserve a test split that is never used for tuning, model selection, or early stopping, and evaluate on it a single time at the end.",
+    "domains": [
+      "ml",
+      "training",
+      "inference",
+      "datasets"
+    ],
+    "triggers": [
+      "test set",
+      "train validation test",
+      "split",
+      "model selection",
+      "leakage",
+      "generalization"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.ml-ai"
+  },
+  {
+    "ref_id": "strategy:mlai:fit-preprocessing-on-train-only",
+    "type": "strategy",
+    "title": "Fit preprocessing on the training fold only",
+    "summary": "Compute normalization statistics, encoders, and imputers from the training split, then apply them to validation and test without refitting.",
+    "domains": [
+      "ml",
+      "training",
+      "inference",
+      "datasets"
+    ],
+    "triggers": [
+      "preprocessing",
+      "normalization",
+      "scaler",
+      "imputation",
+      "leakage",
+      "pipeline"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.ml-ai"
+  },
+  {
+    "ref_id": "strategy:mlai:regularize-against-overfitting",
+    "type": "strategy",
+    "title": "Treat a train/validation gap as overfitting",
+    "summary": "When training loss keeps falling while validation loss rises, add regularization or capacity control rather than training longer.",
+    "domains": [
+      "ml",
+      "training",
+      "inference",
+      "datasets"
+    ],
+    "triggers": [
+      "overfitting",
+      "regularization",
+      "dropout",
+      "weight decay",
+      "early stopping",
+      "validation gap"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.ml-ai"
+  },
+  {
+    "ref_id": "strategy:mlai:fix-seeds-for-reproducibility",
+    "type": "strategy",
+    "title": "Fix every seed before trusting a result",
+    "summary": "Seed Python, NumPy, and the framework RNGs and set deterministic flags so a reported improvement is real, not run-to-run noise.",
+    "domains": [
+      "ml",
+      "training",
+      "inference",
+      "datasets"
+    ],
+    "triggers": [
+      "seed",
+      "reproducibility",
+      "deterministic",
+      "random",
+      "variance",
+      "rng"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.ml-ai"
+  },
+  {
+    "ref_id": "strategy:mlai:checkpoint-long-runs",
+    "type": "strategy",
+    "title": "Checkpoint training so a run is resumable",
+    "summary": "Persist model weights, optimizer state, and epoch on a schedule so an interrupted run resumes instead of restarting.",
+    "domains": [
+      "ml",
+      "training",
+      "inference",
+      "datasets"
+    ],
+    "triggers": [
+      "checkpoint",
+      "resume",
+      "optimizer state",
+      "save",
+      "interrupt",
+      "epoch"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.ml-ai"
+  },
+  {
+    "ref_id": "strategy:mlai:match-metric-to-objective",
+    "type": "strategy",
+    "title": "Choose metrics that match the real objective",
+    "summary": "Pick evaluation metrics that reflect the decision the model drives, especially under class imbalance, rather than defaulting to accuracy.",
+    "domains": [
+      "ml",
+      "training",
+      "inference",
+      "datasets"
+    ],
+    "triggers": [
+      "metric",
+      "accuracy",
+      "f1",
+      "precision recall",
+      "imbalance",
+      "auc"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.ml-ai"
+  },
+  {
+    "ref_id": "methodology:mlai:build-a-correct-training-loop",
+    "type": "methodology",
+    "title": "Build a correct training loop",
+    "summary": "Structure the epoch loop so gradients are zeroed, loss is on the right data, and validation runs without gradient tracking.",
+    "domains": [
+      "ml",
+      "training",
+      "inference",
+      "datasets"
+    ],
+    "triggers": [
+      "training loop",
+      "epoch",
+      "backward",
+      "zero grad",
+      "eval mode",
+      "validation"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.ml-ai"
+  },
+  {
+    "ref_id": "methodology:mlai:diagnose-a-non-converging-model",
+    "type": "methodology",
+    "title": "Diagnose a model that will not converge",
+    "summary": "Isolate why loss stays flat or explodes by checking data, learning rate, and a tiny-overfit sanity test before touching architecture.",
+    "domains": [
+      "ml",
+      "training",
+      "inference",
+      "datasets"
+    ],
+    "triggers": [
+      "not converging",
+      "loss flat",
+      "nan",
+      "learning rate",
+      "debug",
+      "sanity"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.ml-ai"
+  },
+  {
+    "ref_id": "methodology:mlai:run-a-controlled-experiment",
+    "type": "methodology",
+    "title": "Run a controlled experiment",
+    "summary": "Change one variable at a time against a fixed baseline with logged config and seeds so results are attributable and reproducible.",
+    "domains": [
+      "ml",
+      "training",
+      "inference",
+      "datasets"
+    ],
+    "triggers": [
+      "experiment",
+      "baseline",
+      "ablation",
+      "config",
+      "tracking",
+      "compare"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.ml-ai"
+  },
+  {
+    "ref_id": "methodology:mlai:manage-gpu-memory",
+    "type": "methodology",
+    "title": "Fit a model into GPU memory",
+    "summary": "Reduce memory pressure through batch size, gradient accumulation, and mixed precision instead of silently truncating data.",
+    "domains": [
+      "ml",
+      "training",
+      "inference",
+      "datasets"
+    ],
+    "triggers": [
+      "gpu memory",
+      "out of memory",
+      "batch size",
+      "gradient accumulation",
+      "mixed precision",
+      "oom"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.ml-ai"
+  },
+  {
+    "ref_id": "knowledge:mlai:bias-variance-tradeoff",
+    "type": "knowledge",
+    "title": "Bias, variance, and the generalization gap",
+    "summary": "Underfitting is high bias (model too simple), overfitting is high variance (model memorizes); the goal is the balance that minimizes test error.",
+    "domains": [
+      "ml",
+      "training",
+      "inference",
+      "datasets"
+    ],
+    "triggers": [
+      "bias",
+      "variance",
+      "underfitting",
+      "overfitting",
+      "generalization",
+      "capacity"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.ml-ai"
+  },
+  {
+    "ref_id": "knowledge:mlai:what-data-leakage-is",
+    "type": "knowledge",
+    "title": "How data leakage inflates metrics",
+    "summary": "Leakage is any information from outside the training fold reaching the model, making offline metrics far better than production reality.",
+    "domains": [
+      "ml",
+      "training",
+      "inference",
+      "datasets"
+    ],
+    "triggers": [
+      "data leakage",
+      "target leakage",
+      "split",
+      "preprocessing",
+      "temporal",
+      "feature"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.ml-ai"
+  },
+  {
+    "ref_id": "knowledge:mlai:gradient-descent-and-learning-rate",
+    "type": "knowledge",
+    "title": "Gradient descent and the learning rate",
+    "summary": "Training follows the loss gradient scaled by the learning rate; too high diverges to NaN, too low stalls, and the schedule shapes convergence.",
+    "domains": [
+      "ml",
+      "training",
+      "inference",
+      "datasets"
+    ],
+    "triggers": [
+      "gradient",
+      "learning rate",
+      "optimizer",
+      "schedule",
+      "convergence",
+      "adam"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.ml-ai"
+  },
+  {
+    "ref_id": "knowledge:mlai:reproducibility-sources",
+    "type": "knowledge",
+    "title": "Sources of non-determinism in training",
+    "summary": "Results vary across runs from RNG seeds, data shuffling, non-deterministic GPU kernels, and library/hardware versions.",
+    "domains": [
+      "ml",
+      "training",
+      "inference",
+      "datasets"
+    ],
+    "triggers": [
+      "reproducibility",
+      "determinism",
+      "seed",
+      "nondeterminism",
+      "cuda",
+      "version"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.ml-ai"
+  },
+  {
+    "ref_id": "skill:mlai:run-training-with-validation",
+    "type": "skill",
+    "title": "Run training and report both curves",
+    "summary": "Launch a training run with a validation pass per epoch and report loss/metric curves plus the best checkpoint.",
+    "domains": [
+      "ml",
+      "training",
+      "inference",
+      "datasets"
+    ],
+    "triggers": [
+      "train",
+      "run",
+      "validation",
+      "curve",
+      "metric",
+      "checkpoint"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.ml-ai"
+  },
+  {
+    "ref_id": "skill:mlai:audit-experiment-for-leakage",
+    "type": "skill",
+    "title": "Audit an experiment for leakage and seeding",
+    "summary": "Inspect the data split, preprocessing order, and seed setup and report leakage risks and reproducibility gaps with file locations.",
+    "domains": [
+      "ml",
+      "training",
+      "inference",
+      "datasets"
+    ],
+    "triggers": [
+      "audit",
+      "leakage",
+      "split",
+      "seed",
+      "preprocessing",
+      "report"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "code.ml-ai"
+  }
+]

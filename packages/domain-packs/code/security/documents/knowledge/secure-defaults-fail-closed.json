@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:security:secure-defaults-fail-closed",
+  "type": "knowledge",
+  "title": "Secure defaults fail closed",
+  "description": "A safe system denies, encrypts, and minimizes by default so that a missing or misconfigured control results in no access rather than full access.",
+  "body": "Use when choosing defaults for permissions, feature flags, CORS, TLS, or error handling. A fail-closed design means the absence of an explicit allow yields denial, so a forgotten check or config gap reduces capability instead of exposing data; fail-open does the opposite and is how outages become breaches. Do not default new endpoints to public, verbose errors, or wildcard origins. Actions: set deny-by-default access, require explicit opt-in for exposure, and verify the default path on misconfiguration. Validation signals include a test that an unconfigured control denies access and a log entry on the denied path. Risk boundary: if a default must fail open for availability, that is a human decision, not an implementation default.",
+  "domain": "security",
+  "scope_hint": "code.security:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.security",
+  "pack_id": "code.security"
+}

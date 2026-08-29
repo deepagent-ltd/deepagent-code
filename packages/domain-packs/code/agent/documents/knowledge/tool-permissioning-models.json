@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:agent:tool-permissioning-models",
+  "type": "knowledge",
+  "title": "Tool permissioning models",
+  "description": "Agents gate tools by allowlist, capability class, or per-call human approval, trading autonomy against blast radius.",
+  "body": "Use when deciding how to constrain what an agent can do. An allowlist names exactly which tools are callable; a capability model groups tools by side-effect class (read, write, external) and grants per class; per-call approval routes side-effecting calls to a human. Stricter gating shrinks blast radius but reduces autonomy. Do not give an agent an open dispatch by function name, and avoid granting write/external tools without a gate. Actions: deny-by-default for unregistered tools and require an explicit grant for side effects. Validation signals include tests that an unregistered tool is denied and a side-effecting call without grant is blocked. Risk boundary: unrestricted tool access is a critical finding; require registry gating and human approval for high-impact tools.",
+  "domain": "agent",
+  "scope_hint": "code.agent:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.agent",
+  "pack_id": "code.agent"
+}

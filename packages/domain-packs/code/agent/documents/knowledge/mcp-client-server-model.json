@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:agent:mcp-client-server-model",
+  "type": "knowledge",
+  "title": "The MCP client/server model",
+  "description": "MCP standardizes how a host connects to servers that expose tools, resources, and prompts under declared capabilities.",
+  "body": "Use when integrating Model Context Protocol servers. An MCP host runs a client that connects to one or more servers; each server advertises capabilities (tools, resources, prompts) and the client should only use what is declared. Server-returned content is external data, not trusted instructions, and a server can be malicious or compromised. Do not invoke an undeclared capability or treat a resource as a command, and avoid wiring a server straight to side-effecting local tools. Actions: enforce the declared capability set, validate exposed tool schemas, and treat responses as untrusted. Validation signals include a test that an undeclared capability is not callable and a malicious response cannot drive a privileged action. Risk boundary: an external server with ungated reach into local side effects is a critical finding.",
+  "domain": "agent",
+  "scope_hint": "code.agent:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.agent",
+  "pack_id": "code.agent"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:privacy:retention-and-expiry-check",
+  "type": "methodology",
+  "title": "Retention and expiry check",
+  "description": "Verify personal data has an owner, purpose, retention period, deletion trigger, and observable cleanup evidence.",
+  "body": "Use when adding durable storage, logs, analytics events, uploads, archives, or cached personal data. Do not set retention periods without product or policy owner approval. Steps: locate existing retention config, add or reference expiry behavior, avoid indefinite defaults, and test cleanup where the repo supports it. Validation signals include TTL settings, scheduled cleanup tests, or documented owner approval. Risk boundary: indefinite retention of sensitive data blocks closure. Use when Privacy Risk Controls work touches personal-data classes, sinks, retention, consent, logs, prompts, and exports. Do not use this guidance to override a more specific pack, user instruction, or repository contract. Actions: follow the ordered review, edit, and validation sequence; inspect the current files first, keep the change scoped to the owning boundary, and record what evidence changed the decision. Validation signals include data inventory, redaction tests, retention checks, export/delete tests, and approval evidence. Risk boundary: escalate or stop when the task involves PII disclosure, consent bypass, retention drift, and unapproved processor expansion, missing owner evidence, or live external state.",
+  "domain": "privacy",
+  "scope_hint": "risk.privacy:methodologies",
+  "evidence_strength": "medium",
+  "provenance_tag": "domain_pack:risk.privacy",
+  "pack_id": "risk.privacy"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure_dossier:analytics:full-scan-cost-blowup",
+  "type": "failure_dossier",
+  "description": "An unpartitioned query scans an entire fact table on every run, driving large warehouse cost.",
+  "body": "Failure mode: a frequently scheduled query filters on a column the table is not partitioned or clustered by, so the columnar warehouse scans the full table each run and cost scales with total table size rather than the filtered range. Detection signals: a query plan showing a full-table scan with no partition pruning, and bytes-scanned (and cost) that grow with table size rather than the date range queried. Do not just raise the warehouse size to make it finish faster. Safer fallback: partition or cluster the table on the common filter/date key, rewrite the query to prune to the needed range, pre-aggregate recurring rollups, and confirm the plan now shows partition pruning with reduced bytes scanned.",
+  "domain": "analytics",
+  "scope_hint": "code.analytics:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.analytics:human_authored",
+  "pack_id": "code.analytics"
+}

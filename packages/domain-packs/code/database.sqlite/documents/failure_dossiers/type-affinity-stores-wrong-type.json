@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:sqlite:type-affinity-stores-wrong-type",
+  "type": "failure_dossier",
+  "description": "A value of the wrong type is stored because the column relies on affinity instead of a STRICT table or CHECK.",
+  "body": "Failure mode: code inserts a string (e.g. '123' or 'N/A') into an INTEGER-affinity column; SQLite's flexible typing stores it as text rather than rejecting it, so later numeric comparisons and aggregates behave unexpectedly. Detection signals: ORDER BY or SUM on a numeric column gives odd results; queries return text where numbers are expected; the table is not declared STRICT and has no CHECK. Do not rely on the declared type to enforce storage. Safer fallback: declare the table STRICT (modern SQLite) or add CHECK(typeof(col)='integer') constraints, and validate/convert values in application code.",
+  "domain": "sqlite",
+  "scope_hint": "code.database.sqlite:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.sqlite:human_authored",
+  "pack_id": "code.database.sqlite"
+}

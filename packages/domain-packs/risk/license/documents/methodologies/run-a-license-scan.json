@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:lic:run-a-license-scan",
+  "type": "methodology",
+  "title": "Run and reconcile a license scan",
+  "description": "Produce an inventory with a scanner, then reconcile declared metadata against the actual LICENSE files.",
+  "body": "Steps: 1. Run the ecosystem's scanner over the resolved lockfile (e.g. license-checker / pip-licenses / cargo-deny / scancode) to emit a component-to-license list. 2. For each component compare the declared metadata license to the SPDX identifier inferred from its bundled LICENSE text. 3. Record every mismatch, NOASSERTION, and multi-license case as a finding. 4. Resolve clear cases, escalate ambiguous ones. 5. Commit the reconciled inventory as the baseline. Rollback point: before overwriting the prior baseline. Validation: a re-run reproduces the same inventory with zero new unknowns.",
+  "domain": "license",
+  "scope_hint": "risk.license:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.license",
+  "pack_id": "risk.license"
+}

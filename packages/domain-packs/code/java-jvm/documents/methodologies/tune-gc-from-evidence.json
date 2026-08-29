@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:java_jvm:tune-gc-from-evidence",
+  "type": "methodology",
+  "title": "Tune JVM garbage collection from GC logs, not guesses",
+  "description": "Capture GC logs and heap behavior, identify whether pauses or allocation rate is the problem, and adjust collector or heap settings with evidence.",
+  "body": "Steps: 1. Enable unified GC logging (-Xlog:gc*:file=gc.log:time) and reproduce the load. 2. Analyze pause times, frequency, and allocation rate (a tool like GCViewer/JDK Mission Control). 3. Diagnose: frequent full GCs suggest a too-small heap or a leak; long pauses suggest trying G1 vs ZGC/Shenandoah for low latency. 4. Change one setting (heap size, collector, region/pause target) and re-measure. 5. Compare pause percentiles before/after. Rollback point: before raising -Xmx near physical RAM (swapping is worse than GC). Validation: GC logs show reduced pause percentiles and stable old-gen occupancy with no rising leak trend. Risk boundary: tuning flags cannot fix a memory leak; if old-gen keeps climbing after full GC, escalate to a heap-dump leak analysis instead of enlarging the heap.",
+  "domain": "java",
+  "scope_hint": "code.java-jvm:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.java-jvm",
+  "pack_id": "code.java-jvm"
+}

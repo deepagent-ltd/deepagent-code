@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:vdb:filter-with-an-index-aware-hybrid-query",
+  "type": "strategy",
+  "title": "Combine metadata filters with vector search safely",
+  "description": "Use the engine's native pre-filtering so a metadata predicate narrows candidates before ANN, not after.",
+  "body": "Use when a query needs both a metadata filter and nearest-neighbour search. Do not run the ANN search first and filter the results afterward; post-filtering can leave far fewer than k matches because the filtered-out vectors were among the nearest. Actions: use the engine's index-aware pre-filtering (Qdrant payload filters, Milvus boolean expressions, pgvector with a partial index or filtered scan) so the filter constrains the candidate set the index searches. Verify the query returns a full k results that all satisfy the filter. Validation signals include k matching results returned and the filter applied within the index path. Risk boundary: naive post-filtering silently degrades result count and quality, so confirm the engine pushes the predicate into the search rather than applying it after top-k.",
+  "domain": "vector_db",
+  "scope_hint": "code.database.vector:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.vector",
+  "pack_id": "code.database.vector"
+}

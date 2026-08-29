@@ -1,0 +1,70 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "code.desktop.electron",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "electron",
+      "desktop",
+      "ipc"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for code.desktop.electron: main vs renderer process, IPC with a preload bridge, contextIsolation security, native modules, and electron-builder packaging with auto-update"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "build a server-rendered marketing site deployed to a CDN"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "electron main renderer process ipc contextisolation preload nodeintegration native module packaging auto-update security",
+  "expected_pack_id": "code.desktop.electron",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "code.desktop.electron L3 validation smoke",
+    "signals": [
+      "contextIsolation enabled and nodeIntegration disabled on every renderer",
+      "preload exposes only a minimal allow-listed API via contextBridge",
+      "every ipcMain handler validates sender and payload",
+      "native module rebuilt against the app's Electron ABI",
+      "auto-update artifacts are code-signed and served over HTTPS"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "code.desktop.electron diagnosis smoke",
+    "signals": [
+      "renderer created with nodeIntegration:true loading web content",
+      "preload exposing ipcRenderer or require directly to the page",
+      "ipcMain handler trusting payload without validation",
+      "blocking work on the main process freezing all windows",
+      "native module crash from Electron/Node ABI mismatch"
+    ]
+  },
+  "source_refs": [
+    "source:electron-security-checklist:paraphrased",
+    "source:electron-process-model-docs:paraphrased"
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:cpuarch:cache-hierarchy-and-locality",
+  "type": "knowledge",
+  "title": "Cache hierarchy and the cost of a miss",
+  "description": "L1/L2/L3 and DRAM differ in latency by orders of magnitude, so data layout and reuse, not op count, usually decide hot-path speed.",
+  "body": "Use when reasoning about why a loop is slow despite few instructions. Each level up the hierarchy is dramatically slower — an L1 hit is a few cycles, an LLC miss to DRAM is hundreds — so a cache miss can cost more than dozens of arithmetic ops. The hardware prefetcher hides latency only for predictable (usually unit-stride) access. Do not count operations and ignore the memory access pattern. Actions: estimate working-set size against cache levels, favor sequential reuse, and measure miss rates with PMU counters. Validation signals include miss-rate counters that explain the runtime. Risk boundary: optimizing instruction count while leaving a random access pattern wastes effort; let the counters, not intuition, pick the target.",
+  "domain": "cpu_arch",
+  "scope_hint": "hardware.cpu-arch:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.cpu-arch",
+  "pack_id": "hardware.cpu-arch"
+}

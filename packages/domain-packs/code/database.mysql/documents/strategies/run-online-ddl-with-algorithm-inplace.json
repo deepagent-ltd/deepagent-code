@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:mysql:run-online-ddl-with-algorithm-inplace",
+  "type": "strategy",
+  "title": "Run schema changes with ALGORITHM=INPLACE online DDL",
+  "description": "Many InnoDB ALTERs can run without a full table copy and without blocking writes when the right algorithm is chosen.",
+  "body": "Use when altering a populated InnoDB table that takes live traffic. Do not let an ALTER silently fall back to ALGORITHM=COPY, which rebuilds the table under a metadata lock and blocks writes for the whole copy. Actions: declare ALGORITHM=INPLACE, LOCK=NONE explicitly so the statement fails fast if the operation cannot be done online, prefer instant column adds on MySQL 8, and inspect performance_schema for the stage. Validation signals include writes continuing during the change and the ALTER reporting an inplace, non-copy path. Risk boundary: a forced COPY rebuild on a hot table is an availability event, so schedule a window and use a tool like gh-ost or pt-online-schema-change with a human gate.",
+  "domain": "mysql",
+  "scope_hint": "code.database.mysql:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.mysql",
+  "pack_id": "code.database.mysql"
+}

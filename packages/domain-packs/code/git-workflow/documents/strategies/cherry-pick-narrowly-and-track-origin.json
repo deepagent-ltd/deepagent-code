@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:git:cherry-pick-narrowly-and-track-origin",
+  "type": "strategy",
+  "title": "Cherry-pick narrowly and record provenance",
+  "description": "Move a single fix across branches with cherry-pick only when a merge is not appropriate, and use -x so the new commit references its origin.",
+  "body": "Use when one specific commit must land on another branch ahead of a full merge, such as a hotfix to a release line. Do not cherry-pick a long range that a later merge will also bring over. Actions: pick the minimal commit set; use -x to record the source hash in the message; plan how the divergence resolves so the change is not applied twice. Validation signals include a clear provenance line in the new commit and tests passing on the target branch. Risk boundary: uncoordinated cherry-picks cause duplicate commits and merge surprises, so document the plan before picking.",
+  "domain": "git_workflow",
+  "scope_hint": "code.git-workflow:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.git-workflow",
+  "pack_id": "code.git-workflow"
+}

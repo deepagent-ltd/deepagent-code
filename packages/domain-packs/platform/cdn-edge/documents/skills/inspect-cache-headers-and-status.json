@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:edge:inspect-cache-headers-and-status",
+  "type": "skill",
+  "title": "Inspect cache headers and edge status",
+  "description": "Read response Cache-Control/surrogate headers and the CDN HIT/MISS status to explain caching behavior.",
+  "body": "Use when diagnosing why content is or isn't cached at the edge. Actions: fetch the resource and read Cache-Control, Vary, surrogate keys, and the CDN's cache-status (HIT/MISS/EXPIRED) header; report whether the headers permit shared caching and what fragments the key. Do not infer caching from latency alone — read the status header. This skill is read-only and exposes capability only; it must not purge or deploy without runtime permission. Validation signals include a clear HIT/MISS explanation tied to the headers. Risk boundary: if a private response shows a public HIT, report it as a data-leak finding and recommend escalation.",
+  "domain": "cdn",
+  "scope_hint": "platform.cdn-edge:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:platform.cdn-edge",
+  "pack_id": "platform.cdn-edge"
+}

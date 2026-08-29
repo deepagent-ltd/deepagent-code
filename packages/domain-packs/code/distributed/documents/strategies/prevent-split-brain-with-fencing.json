@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:dist:prevent-split-brain-with-fencing",
+  "type": "strategy",
+  "title": "Prevent split-brain with terms and fencing",
+  "description": "Use monotonic terms/epochs and fencing tokens so a stale leader cannot commit after a new leader is elected.",
+  "body": "Use when any role grants exclusive authority (leader, lock holder, primary). Do not assume a node that thinks it is leader still is, and never let a leader act without proving its term. Actions: attach a monotonically increasing term/epoch to every leader action, require followers and storage to reject any request carrying a term lower than the highest seen, and pass that token to external resources as a fence. Validation signals include rejected writes from a deposed leader in a partition test and a single committed leader after partition heal. Risk boundary: a partitioned old leader that keeps writing causes silent data corruption; treat missing fencing on a critical write path as a high-severity gap and escalate.",
+  "domain": "distributed",
+  "scope_hint": "code.distributed:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.distributed",
+  "pack_id": "code.distributed"
+}

@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:healthcare:phi-written-to-application-logs",
+  "type": "failure_dossier",
+  "description": "Patient identifiers or clinical details written into application logs or telemetry, creating an unaudited copy of PHI.",
+  "body": "Failure mode: debug or request logging captures PHI (names, MRNs, diagnoses) into log files, log aggregators, or third-party telemetry that lack the access controls and audit trail of the clinical store, spreading identifiable data to unprotected systems. Detection signals: PHI appears in log lines, stack traces, or analytics; identifiers in request URLs reaching access logs; telemetry payloads containing patient fields. Do not log PHI to debug an issue. Safer fallback: redact or omit PHI from logs and errors, use opaque references, and audit telemetry sinks. Risk boundary: advisory only; treat a confirmed PHI leak as a reportable disclosure to escalate to a human, never a silent log purge, and do not relax logging controls.",
+  "domain": "healthcare",
+  "scope_hint": "business.healthcare:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:business.healthcare:human_authored",
+  "pack_id": "business.healthcare"
+}

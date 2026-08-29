@@ -1,0 +1,500 @@
+[
+  {
+    "ref_id": "strategy:hdl:separate-comb-from-seq",
+    "type": "strategy",
+    "title": "Separate combinational from sequential logic",
+    "summary": "Model sequential state in always_ff with non-blocking assignments and combinational logic in always_comb with blocking, never mixing the two.",
+    "domains": [
+      "hdl",
+      "verilog",
+      "systemverilog",
+      "vhdl",
+      "rtl",
+      "fpga"
+    ],
+    "triggers": [
+      "always_ff",
+      "always_comb",
+      "blocking",
+      "non-blocking",
+      "sequential",
+      "combinational"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.hdl"
+  },
+  {
+    "ref_id": "strategy:hdl:stay-in-synthesizable-subset",
+    "type": "strategy",
+    "title": "Stay in the synthesizable subset",
+    "summary": "Keep RTL within constructs the synthesis tool maps to hardware; confine delays, initial blocks, and dynamic types to testbenches only.",
+    "domains": [
+      "hdl",
+      "verilog",
+      "systemverilog",
+      "vhdl",
+      "rtl",
+      "fpga"
+    ],
+    "triggers": [
+      "synthesizable",
+      "subset",
+      "initial",
+      "delay",
+      "testbench",
+      "synthesis"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.hdl"
+  },
+  {
+    "ref_id": "strategy:hdl:explicit-reset-strategy",
+    "type": "strategy",
+    "title": "Choose one explicit reset strategy",
+    "summary": "Decide synchronous vs asynchronous reset deliberately and apply it consistently to every state element in the clock domain.",
+    "domains": [
+      "hdl",
+      "verilog",
+      "systemverilog",
+      "vhdl",
+      "rtl",
+      "fpga"
+    ],
+    "triggers": [
+      "reset",
+      "synchronous",
+      "asynchronous",
+      "state",
+      "flip-flop",
+      "initialization"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.hdl"
+  },
+  {
+    "ref_id": "strategy:hdl:synchronize-clock-domain-crossings",
+    "type": "strategy",
+    "title": "Synchronize every clock-domain crossing",
+    "summary": "Treat any signal crossing clock domains as a metastability hazard needing a synchronizer or FIFO plus timing constraints, never a bare wire.",
+    "domains": [
+      "hdl",
+      "verilog",
+      "systemverilog",
+      "vhdl",
+      "rtl",
+      "fpga"
+    ],
+    "triggers": [
+      "clock domain",
+      "cdc",
+      "metastability",
+      "synchronizer",
+      "fifo",
+      "gray code"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.hdl"
+  },
+  {
+    "ref_id": "strategy:hdl:assert-design-intent",
+    "type": "strategy",
+    "title": "Encode design intent as assertions",
+    "summary": "Capture protocol and invariant expectations as SystemVerilog assertions so violations fail at the cycle they occur, not in downstream waveforms.",
+    "domains": [
+      "hdl",
+      "verilog",
+      "systemverilog",
+      "vhdl",
+      "rtl",
+      "fpga"
+    ],
+    "triggers": [
+      "assertion",
+      "sva",
+      "property",
+      "invariant",
+      "protocol",
+      "immediate"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.hdl"
+  },
+  {
+    "ref_id": "strategy:hdl:avoid-inferred-latches",
+    "type": "strategy",
+    "title": "Assign every output on every path",
+    "summary": "In always_comb, assign all outputs on all branches so synthesis infers pure combinational logic instead of an unintended latch.",
+    "domains": [
+      "hdl",
+      "verilog",
+      "systemverilog",
+      "vhdl",
+      "rtl",
+      "fpga"
+    ],
+    "triggers": [
+      "latch",
+      "always_comb",
+      "default",
+      "case",
+      "combinational",
+      "incomplete"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.hdl"
+  },
+  {
+    "ref_id": "methodology:hdl:build-self-checking-testbench",
+    "type": "methodology",
+    "title": "Build a self-checking testbench",
+    "summary": "Drive the DUT and automatically compare outputs against a reference model with a scoreboard, rather than inspecting waveforms by hand.",
+    "domains": [
+      "hdl",
+      "verilog",
+      "systemverilog",
+      "vhdl",
+      "rtl",
+      "fpga"
+    ],
+    "triggers": [
+      "testbench",
+      "scoreboard",
+      "self-checking",
+      "reference",
+      "stimulus",
+      "dut"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.hdl"
+  },
+  {
+    "ref_id": "methodology:hdl:close-fpga-timing",
+    "type": "methodology",
+    "title": "Close FPGA timing on the critical path",
+    "summary": "Read the timing report, find worst-negative-slack, and fix it by pipelining/retiming/constraints instead of just lowering the clock.",
+    "domains": [
+      "hdl",
+      "verilog",
+      "systemverilog",
+      "vhdl",
+      "rtl",
+      "fpga"
+    ],
+    "triggers": [
+      "timing",
+      "slack",
+      "critical path",
+      "pipeline",
+      "retiming",
+      "wns"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.hdl"
+  },
+  {
+    "ref_id": "methodology:hdl:review-fsm-safety",
+    "type": "methodology",
+    "title": "Review FSM encoding and safety",
+    "summary": "Check a state machine for a defined reset state, no unreachable/illegal states, and safe handling of undefined inputs.",
+    "domains": [
+      "hdl",
+      "verilog",
+      "systemverilog",
+      "vhdl",
+      "rtl",
+      "fpga"
+    ],
+    "triggers": [
+      "fsm",
+      "state machine",
+      "encoding",
+      "reset state",
+      "illegal",
+      "transition"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.hdl"
+  },
+  {
+    "ref_id": "methodology:hdl:diagnose-sim-synth-mismatch",
+    "type": "methodology",
+    "title": "Diagnose a simulation vs synthesis mismatch",
+    "summary": "When gate-level behavior differs from RTL, isolate the cause among sensitivity lists, sim-only constructs, and X-propagation.",
+    "domains": [
+      "hdl",
+      "verilog",
+      "systemverilog",
+      "vhdl",
+      "rtl",
+      "fpga"
+    ],
+    "triggers": [
+      "mismatch",
+      "gate-level",
+      "x-propagation",
+      "sensitivity",
+      "synthesis",
+      "divergence"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.hdl"
+  },
+  {
+    "ref_id": "knowledge:hdl:rtl-is-concurrent-hardware",
+    "type": "knowledge",
+    "title": "RTL describes concurrent hardware",
+    "summary": "Every always block and continuous assignment evaluates in parallel each cycle; RTL is not sequential software statements.",
+    "domains": [
+      "hdl",
+      "verilog",
+      "systemverilog",
+      "vhdl",
+      "rtl",
+      "fpga"
+    ],
+    "triggers": [
+      "concurrent",
+      "parallel",
+      "always",
+      "rtl",
+      "hardware",
+      "driver"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.hdl"
+  },
+  {
+    "ref_id": "knowledge:hdl:verilog-vs-systemverilog-vs-vhdl",
+    "type": "knowledge",
+    "title": "Verilog vs SystemVerilog vs VHDL",
+    "summary": "VHDL is strongly typed and verbose; Verilog is terse and weakly typed; SystemVerilog adds verification features (classes, assertions, interfaces).",
+    "domains": [
+      "hdl",
+      "verilog",
+      "systemverilog",
+      "vhdl",
+      "rtl",
+      "fpga"
+    ],
+    "triggers": [
+      "verilog",
+      "systemverilog",
+      "vhdl",
+      "typed",
+      "verification",
+      "language"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.hdl"
+  },
+  {
+    "ref_id": "knowledge:hdl:metastability-and-cdc",
+    "type": "knowledge",
+    "title": "Metastability and clock-domain crossing",
+    "summary": "A flop sampling an async signal near its clock edge can settle to an undefined value; synchronizers reduce but never eliminate the probability.",
+    "domains": [
+      "hdl",
+      "verilog",
+      "systemverilog",
+      "vhdl",
+      "rtl",
+      "fpga"
+    ],
+    "triggers": [
+      "metastability",
+      "cdc",
+      "synchronizer",
+      "mtbf",
+      "async",
+      "setup hold"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.hdl"
+  },
+  {
+    "ref_id": "knowledge:hdl:synthesis-vs-simulation-semantics",
+    "type": "knowledge",
+    "title": "Synthesis vs simulation semantics",
+    "summary": "Simulation models timing and X-values; synthesis maps to gates and ignores delays/initial blocks, so the two can legitimately disagree.",
+    "domains": [
+      "hdl",
+      "verilog",
+      "systemverilog",
+      "vhdl",
+      "rtl",
+      "fpga"
+    ],
+    "triggers": [
+      "synthesis",
+      "simulation",
+      "x-propagation",
+      "delay",
+      "initial",
+      "semantics"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.hdl"
+  },
+  {
+    "ref_id": "skill:hdl:run-rtl-simulation",
+    "type": "skill",
+    "title": "Run RTL simulation with the testbench",
+    "summary": "Compile and run the design plus self-checking testbench in a simulator and report assertion/scoreboard results.",
+    "domains": [
+      "hdl",
+      "verilog",
+      "systemverilog",
+      "vhdl",
+      "rtl",
+      "fpga"
+    ],
+    "triggers": [
+      "simulate",
+      "verilator",
+      "icarus",
+      "compile",
+      "regression",
+      "run"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.hdl"
+  },
+  {
+    "ref_id": "skill:hdl:run-synthesis-lint",
+    "type": "skill",
+    "title": "Run synthesis/lint and report structural issues",
+    "summary": "Run synthesis or a linter and extract inferred latches, multi-driven nets, and unconstrained CDC with file locations.",
+    "domains": [
+      "hdl",
+      "verilog",
+      "systemverilog",
+      "vhdl",
+      "rtl",
+      "fpga"
+    ],
+    "triggers": [
+      "lint",
+      "synthesis",
+      "latch",
+      "multi-driver",
+      "cdc",
+      "report"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.hdl"
+  }
+]

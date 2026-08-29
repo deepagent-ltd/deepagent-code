@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:wasm:debug-a-wasm-trap-or-panic",
+  "type": "methodology",
+  "title": "Debug a WASM trap or panic",
+  "description": "Turn an opaque trap into a source-level diagnosis using panic hooks, symbols, and boundary inspection.",
+  "body": "Steps: 1. Reproduce the failure and capture the exact trap (unreachable, out-of-bounds memory access, integer divide) or panic message. 2. Ensure a panic hook is installed so Rust panics print a message and stack instead of a bare unreachable. 3. Build with debug info/DWARF and use the browser's WASM debugging (or a symbol map) to locate the source line. 4. Inspect the boundary call that preceded it for a bad pointer/length or a detached memory view. 5. Fix the root cause (bounds, ownership, target mismatch). Rollback point: diagnostic; read-only. Validation: the trap maps to a specific source location and the fix removes it under the reproducing input.",
+  "domain": "wasm",
+  "scope_hint": "code.wasm:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.wasm",
+  "pack_id": "code.wasm"
+}

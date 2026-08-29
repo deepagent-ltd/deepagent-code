@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:vdb:hnsw-graph-parameters",
+  "type": "knowledge",
+  "title": "What HNSW m and ef_construction control",
+  "description": "The m (connectivity) and ef_construction parameters set graph quality at build time and trade memory and build speed for recall.",
+  "body": "Reference for tuning HNSW build parameters. m sets the number of bi-directional edges per node (higher m means better recall and more memory), and ef_construction sets how many candidates are explored while inserting each node (higher means a better graph but slower build). Use when configuring an HNSW index build. Do not confuse these build-time parameters with ef_search, which is set per query; raising ef_search later cannot fix a graph built with too-low m. Validation signals include recall improving with higher m at the cost of index size. Risk boundary: m and ef_construction are baked in at build time, so a too-low choice forces a full rebuild to fix, making them a deliberate up-front decision.",
+  "domain": "vector_db",
+  "scope_hint": "code.database.vector:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.vector",
+  "pack_id": "code.database.vector"
+}

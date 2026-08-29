@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:ng:keep-work-out-of-change-detection",
+  "type": "strategy",
+  "title": "Keep heavy work out of the change-detection path",
+  "description": "Avoid expensive computation in templates and getters that re-run on every change-detection cycle.",
+  "body": "Use when a template calls a method/getter or filters a list inline. Do not put expensive computation in a template expression or component getter, since change detection re-evaluates it every cycle. Actions: move the computation to a pure pipe (cached by input), a memoized signal/derived value, or precompute on input change; for very hot paths run work outside Angular with NgZone.runOutsideAngular and re-enter to update. Validation signals include a profiler trace showing the expression is not recomputed each tick and a test that the pipe is invoked only when inputs change. Risk boundary: per-cycle recomputation causes visible jank in large views; verify with the Angular DevTools profiler before and after.",
+  "domain": "angular",
+  "scope_hint": "code.frontend.angular:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.frontend.angular",
+  "pack_id": "code.frontend.angular"
+}

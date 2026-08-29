@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:release:plan-canary-rollout",
+  "type": "methodology",
+  "title": "Stage a canary rollout with explicit promotion gates",
+  "description": "Release to a small slice first, watch defined health signals, and promote or halt on objective thresholds rather than time alone.",
+  "body": "Steps: 1. Define the cohorts (e.g. 1% then 10% then 50% then 100%) and the health signals that gate each step (error rate, latency, saturation, business KPI). 2. Deploy to the first cohort behind the same config as production. 3. Compare canary metrics against the stable baseline over a soak window, not just a glance. 4. Promote only if signals stay within threshold; otherwise halt and roll back the cohort. 5. Record the decision and metrics at each gate. Rollback point: before widening any cohort. Validation: each promotion has a logged metric comparison and the canary trace shows no regression. Risk boundary: never auto-promote to 100% on a green glance without the soak window; escalate ambiguous signals to a human.",
+  "domain": "code",
+  "scope_hint": "code.release:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.release",
+  "pack_id": "code.release"
+}

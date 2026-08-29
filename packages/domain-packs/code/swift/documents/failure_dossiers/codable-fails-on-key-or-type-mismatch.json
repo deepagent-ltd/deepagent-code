@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:swift:codable-fails-on-key-or-type-mismatch",
+  "type": "failure_dossier",
+  "description": "Decoding fails or silently drops data when JSON keys, optionality, or types do not match the Codable model.",
+  "body": "Failure mode: a Decodable model expects a key/type that differs from the payload (snake_case vs camelCase, a number sent as a string, a missing field declared non-optional), so decode throws keyNotFound/typeMismatch or the model misrepresents the data. Detection signals: DecodingError.keyNotFound/typeMismatch/valueNotFound at runtime; fields unexpectedly nil; works for one API response shape but not another. Do not assume the payload matches the struct exactly. Safer fallback: set keyDecodingStrategy = .convertFromSnakeCase or add CodingKeys, make genuinely-optional fields Optional, implement init(from:) for irregular shapes, and add a test decoding a real sample payload.",
+  "domain": "swift",
+  "scope_hint": "code.swift:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.swift:human_authored",
+  "pack_id": "code.swift"
+}

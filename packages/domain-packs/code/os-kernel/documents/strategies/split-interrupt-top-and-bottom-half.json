@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:kernel:split-interrupt-top-and-bottom-half",
+  "type": "strategy",
+  "title": "Split interrupt handling top and bottom half",
+  "description": "Do minimal acknowledgement in the hard IRQ handler and defer real work to a softirq/tasklet/threaded handler so interrupts stay responsive.",
+  "body": "Use when writing a device driver's interrupt path. Do not do long processing or take sleeping locks in the hard IRQ handler, and do not leave interrupts disabled longer than necessary. Actions: in the top half acknowledge the device and schedule a bottom half (threaded IRQ, tasklet, or workqueue) for the heavy work; pick a threaded handler when the work may sleep. Validation signals include low measured IRQ-disabled time and no missed interrupts under load. Risk boundary: a slow hard IRQ handler raises latency for the whole system and can drop interrupts; treat unbounded work in the top half as a defect and verify latency under interrupt load.",
+  "domain": "kernel",
+  "scope_hint": "code.os-kernel:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.os-kernel",
+  "pack_id": "code.os-kernel"
+}

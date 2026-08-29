@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:sys:unbounded-memory-oom-kill",
+  "type": "failure_dossier",
+  "description": "Memory grows without bound (full-file read or unbounded cache) until the kernel OOM-killer terminates the process.",
+  "body": "Failure mode: the program reads an entire large input into memory or grows a cache/queue without eviction, so resident memory climbs with input size or time until the host/cgroup limit is hit and the OOM-killer terminates the process, sometimes killing a different high-RSS process than the culprit. Detection signals: kernel log shows 'Out of memory: Killed process'; RSS climbs steadily under load; crashes correlate with large inputs. Do not load unbounded data into memory. Safer fallback: stream large inputs in fixed chunks, bound caches and queues with eviction, add backpressure, size against the memory limit, and verify RSS plateaus under sustained load.",
+  "domain": "systems",
+  "scope_hint": "code.systems:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.systems:human_authored",
+  "pack_id": "code.systems"
+}

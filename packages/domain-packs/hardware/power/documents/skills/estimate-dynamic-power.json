@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:hwpwr:estimate-dynamic-power",
+  "type": "skill",
+  "title": "Estimate dynamic power from activity and voltage",
+  "description": "Combine switching activity, load capacitance, frequency, and voltage to estimate a block's dynamic power.",
+  "body": "Use when you need a quick dynamic-power figure for a block. Do not omit the voltage-squared term, since dynamic power is highly sensitive to supply voltage. Actions: gather the activity factor and load capacitance, multiply by frequency and voltage squared, and compare against the budget. Validation signals include an estimate consistent with the power tool's report and sensitivity to voltage matching the squared relationship. Risk boundary: ignoring activity scaling produces a misleading figure, so flag any estimate that assumes worst-case toggling on every net.",
+  "domain": "power_design",
+  "scope_hint": "hardware.power:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:hardware.power",
+  "pack_id": "hardware.power"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:docs:version-docs-with-the-code",
+  "type": "strategy",
+  "title": "Version documentation alongside the code",
+  "description": "Tie each doc set to a release so readers on an older version see matching docs and breaking changes are isolated per version.",
+  "body": "Use when documenting an API or product that ships multiple supported versions. Do not keep a single 'latest' page that silently mixes behavior from several releases. Actions: snapshot docs per major/minor, label the version prominently, keep a migration guide between versions, and link unreleased changes to a next/dev channel. Validation signals include a doc build per version and links resolving within the same version. Risk boundary: serving current docs to users on an old release causes broken examples and support load; record which version a page describes and gate changes behind the right version branch.",
+  "domain": "code",
+  "scope_hint": "code.docs:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.docs",
+  "pack_id": "code.docs"
+}

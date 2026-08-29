@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:scala:tame-a-blocking-call-in-async",
+  "type": "methodology",
+  "title": "Tame a blocking call inside async code",
+  "description": "Locate blocking work running on a compute pool and move it onto a bounded blocking executor.",
+  "body": "Steps: 1. Identify the symptom: throughput collapses, latency spikes, or the app stalls under load. 2. Find blocking calls (JDBC, synchronous IO, Thread.sleep, Await) on the compute/global EC. 3. Move them to a dedicated blocking ExecutionContext, or wrap in blocking { } (Future) / IO.blocking (Cats-Effect). 4. Confirm the compute pool is no longer occupied by blocking work. 5. Load-test to verify recovery. Rollback point: before changing executor wiring. Validation: under load the compute pool stays responsive and a test confirms blocking work runs on the blocking pool, not the compute pool.",
+  "domain": "scala",
+  "scope_hint": "code.scala:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.scala",
+  "pack_id": "code.scala"
+}

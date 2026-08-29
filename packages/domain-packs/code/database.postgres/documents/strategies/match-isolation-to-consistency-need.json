@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:pg:match-isolation-to-consistency-need",
+  "type": "strategy",
+  "title": "Match isolation level to the consistency need",
+  "description": "Pick read-committed, repeatable-read, or serializable deliberately and handle the failure modes each allows.",
+  "body": "Use when a transaction's correctness depends on what concurrent transactions can do. Do not assume the default read-committed prevents lost updates or read-modify-write races. Actions: for a read-modify-write, use SELECT ... FOR UPDATE or raise to repeatable-read/serializable; understand serializable can abort with a serialization failure that the app must retry. Validation signals include a concurrency test that two transactions racing on the same row produce a correct result (one retries) rather than a lost update. Risk boundary: a balance/inventory update under read-committed without row locking can silently lose writes and is a blocking correctness finding.",
+  "domain": "postgres",
+  "scope_hint": "code.database.postgres:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.postgres",
+  "pack_id": "code.database.postgres"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:bazel:author-a-starlark-rule",
+  "type": "methodology",
+  "title": "Author a custom Starlark rule",
+  "description": "A procedure to write a rule that declares inputs and outputs explicitly so its actions are hermetic and cacheable.",
+  "body": "Use when built-in rules cannot express a needed build step. Do not shell out to undeclared tools inside the rule. Steps: define the rule with attrs for inputs; in the implementation declare outputs and register actions with explicit inputs and a pinned tool; return providers so consumers can depend on it. Validation signals include the rule's action being cacheable and consumers building through its providers. Risk boundary: a rule that reads undeclared files is non-hermetic and poisons the cache, so declare every input and tool the action uses.",
+  "domain": "bazel",
+  "scope_hint": "code.build.bazel:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.build.bazel",
+  "pack_id": "code.build.bazel"
+}

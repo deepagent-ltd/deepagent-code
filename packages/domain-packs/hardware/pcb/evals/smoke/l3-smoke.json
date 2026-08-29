@@ -1,0 +1,71 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "hardware.pcb",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [
+      "pcb",
+      "layout",
+      "signal_integrity",
+      "emi",
+      "thermal"
+    ],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for hardware.pcb: layer stackup, trace impedance and length matching, return path, decoupling caps, EMI and ground plane, DRC and ERC, differential pairs"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "build a Kubernetes deployment with readiness probes"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "pcb layer stackup trace impedance length matching return path decoupling capacitor emi ground plane differential pair drc erc via stitching",
+  "expected_pack_id": "hardware.pcb",
+  "expected_min_retrieved_refs": 1,
+  "validation_smoke": {
+    "name": "hardware.pcb L3 validation smoke",
+    "signals": [
+      "the controlled-impedance traces measure within tolerance of the target impedance in the fab stackup report",
+      "every high-speed net has a continuous reference plane directly beneath it across its full length",
+      "DRC and ERC complete with zero unresolved violations before release to fabrication",
+      "matched differential pairs and length-tuned buses meet the skew budget for the interface"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "hardware.pcb diagnosis smoke",
+    "signals": [
+      "radiated emissions failing at a clock harmonic point to a broken return path or a slot in the ground plane",
+      "ringing on a fast edge indicates an impedance discontinuity from a stub, connector, or layer transition",
+      "crosstalk between adjacent traces suggests insufficient spacing or a shared return path",
+      "intermittent operation that worsens under load hints at inadequate decoupling and supply droop",
+      "a hot spot on a thermal scan reveals insufficient copper pour or missing thermal vias under a power device"
+    ]
+  },
+  "source_refs": [
+    "source:ipc-2221-pcb:paraphrased",
+    "source:johnson-graham-si:paraphrased"
+  ]
+}

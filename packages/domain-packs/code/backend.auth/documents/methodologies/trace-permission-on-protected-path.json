@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:auth:trace-permission-on-protected-path",
+  "type": "methodology",
+  "title": "Trace the permission check on a protected path",
+  "description": "Follow a request from entry to data access and locate exactly where the access decision is made and on what input.",
+  "body": "Steps: 1. Pick the endpoint and a low-privilege principal. 2. Trace middleware → handler → service → data layer, noting each guard. 3. Record where the decision is made and which fields it reads (principal vs request body). 4. Identify gaps: route-only checks, object-level misses, trust of client input. 5. Add the missing check at the resource boundary with a negative test. Rollback point: before moving a check between layers. Validation: a negative-principal call must be denied end to end.",
+  "domain": "backend_auth",
+  "scope_hint": "code.backend.auth:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.backend.auth",
+  "pack_id": "code.backend.auth"
+}

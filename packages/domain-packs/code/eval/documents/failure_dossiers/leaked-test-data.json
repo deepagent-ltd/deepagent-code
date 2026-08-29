@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:eval:leaked-test-data",
+  "type": "failure_dossier",
+  "description": "Evaluation cases appear in training data, few-shot examples, or the prompt, inflating scores so they no longer measure generalization.",
+  "body": "Failure mode: the golden set is drawn from the same pool as fine-tuning or few-shot data, or eval inputs and answers are present in the prompt, so the system effectively recites memorized cases and scores far above its real ability. Detection signals: eval and prompt data share a source; near-duplicates cross the train/eval boundary; scores drop sharply on truly fresh inputs. Do not reuse eval cases as few-shot or training material. Safer fallback: partition the golden set disjoint from all training/prompt material, run a cross-boundary duplicate scan, freeze the set, and treat any detected leakage as invalidating the score.",
+  "domain": "eval",
+  "scope_hint": "code.eval:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.eval:human_authored",
+  "pack_id": "code.eval"
+}

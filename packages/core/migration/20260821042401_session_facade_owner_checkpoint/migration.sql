@@ -1,0 +1,1 @@
+ALTER TABLE `session_facade_activity` ADD `owner_token` text;

@@ -1,0 +1,450 @@
+[
+  {
+    "ref_id": "strategy:pcb:plan-layer-stackup",
+    "type": "strategy",
+    "title": "Plan the layer stackup before routing",
+    "summary": "Define signal, plane, and power layers and their spacing up front so impedance and return paths are designed, not discovered.",
+    "domains": [
+      "pcb",
+      "layout",
+      "signal_integrity",
+      "emi",
+      "thermal"
+    ],
+    "triggers": [
+      "layer stackup",
+      "pcb",
+      "reference plane",
+      "dielectric"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.pcb"
+  },
+  {
+    "ref_id": "strategy:pcb:control-trace-impedance",
+    "type": "strategy",
+    "title": "Route controlled-impedance traces to spec",
+    "summary": "Set trace width and spacing from the stackup so high-speed nets hit their target impedance and stay continuous.",
+    "domains": [
+      "pcb",
+      "layout",
+      "signal_integrity",
+      "emi",
+      "thermal"
+    ],
+    "triggers": [
+      "trace impedance",
+      "controlled impedance",
+      "trace width",
+      "differential pair"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.pcb"
+  },
+  {
+    "ref_id": "strategy:pcb:preserve-return-path",
+    "type": "strategy",
+    "title": "Preserve a continuous return path",
+    "summary": "Keep an unbroken reference plane under every high-speed net and add stitching vias at layer transitions.",
+    "domains": [
+      "pcb",
+      "layout",
+      "signal_integrity",
+      "emi",
+      "thermal"
+    ],
+    "triggers": [
+      "return path",
+      "ground plane",
+      "via stitch",
+      "plane split"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.pcb"
+  },
+  {
+    "ref_id": "strategy:pcb:place-decoupling-caps",
+    "type": "strategy",
+    "title": "Place decoupling capacitors close to pins",
+    "summary": "Position decoupling capacitors at supply pins with short, wide connections and matched values for the frequency range.",
+    "domains": [
+      "pcb",
+      "layout",
+      "signal_integrity",
+      "emi",
+      "thermal"
+    ],
+    "triggers": [
+      "decoupling cap",
+      "bypass capacitor",
+      "supply pin",
+      "loop inductance"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.pcb"
+  },
+  {
+    "ref_id": "strategy:pcb:manage-emi-sources",
+    "type": "strategy",
+    "title": "Contain EMI at the source during layout",
+    "summary": "Minimize loop areas, control edge rates, and guard noisy nets so the board passes emissions without late shielding.",
+    "domains": [
+      "pcb",
+      "layout",
+      "signal_integrity",
+      "emi",
+      "thermal"
+    ],
+    "triggers": [
+      "emi",
+      "loop area",
+      "clock routing",
+      "guard trace"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.pcb"
+  },
+  {
+    "ref_id": "strategy:pcb:run-drc-erc-clean",
+    "type": "strategy",
+    "title": "Drive DRC and ERC to zero before fab",
+    "summary": "Resolve every design-rule and electrical-rule violation, distinguishing real errors from intentional waivers, before release.",
+    "domains": [
+      "pcb",
+      "layout",
+      "signal_integrity",
+      "emi",
+      "thermal"
+    ],
+    "triggers": [
+      "drc",
+      "erc",
+      "design rule",
+      "clearance"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.pcb"
+  },
+  {
+    "ref_id": "methodology:pcb:high-speed-routing-review",
+    "type": "methodology",
+    "title": "Review high-speed routing for integrity",
+    "summary": "Walk each fast net for impedance continuity, return path, length matching, and crosstalk before sign-off.",
+    "domains": [
+      "pcb",
+      "layout",
+      "signal_integrity",
+      "emi",
+      "thermal"
+    ],
+    "triggers": [
+      "high speed routing",
+      "length matching",
+      "crosstalk",
+      "signal integrity"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.pcb"
+  },
+  {
+    "ref_id": "methodology:pcb:thermal-relief-planning",
+    "type": "methodology",
+    "title": "Plan thermal relief for power components",
+    "summary": "Size copper pour and thermal vias for heat-dissipating parts and verify against the expected power load.",
+    "domains": [
+      "pcb",
+      "layout",
+      "signal_integrity",
+      "emi",
+      "thermal"
+    ],
+    "triggers": [
+      "thermal",
+      "copper pour",
+      "thermal via",
+      "power dissipation"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.pcb"
+  },
+  {
+    "ref_id": "methodology:pcb:differential-pair-routing",
+    "type": "methodology",
+    "title": "Route and tune differential pairs",
+    "summary": "Maintain constant intra-pair spacing, match lengths within the pair, and tune skew at the source of mismatch.",
+    "domains": [
+      "pcb",
+      "layout",
+      "signal_integrity",
+      "emi",
+      "thermal"
+    ],
+    "triggers": [
+      "differential pair",
+      "skew",
+      "length match",
+      "lvds"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.pcb"
+  },
+  {
+    "ref_id": "methodology:pcb:fab-stackup-signoff",
+    "type": "methodology",
+    "title": "Sign off the fabrication stackup with the vendor",
+    "summary": "Confirm the fabricator's actual layer heights and impedance results match the design intent before mass production.",
+    "domains": [
+      "pcb",
+      "layout",
+      "signal_integrity",
+      "emi",
+      "thermal"
+    ],
+    "triggers": [
+      "fab stackup",
+      "impedance report",
+      "dielectric",
+      "production"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.pcb"
+  },
+  {
+    "ref_id": "knowledge:pcb:characteristic-impedance-geometry",
+    "type": "knowledge",
+    "title": "How trace geometry sets characteristic impedance",
+    "summary": "Characteristic impedance depends on trace width, dielectric height to the reference plane, and the dielectric constant.",
+    "domains": [
+      "pcb",
+      "layout",
+      "signal_integrity",
+      "emi",
+      "thermal"
+    ],
+    "triggers": [
+      "characteristic impedance",
+      "trace geometry",
+      "dielectric constant",
+      "stackup"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.pcb"
+  },
+  {
+    "ref_id": "knowledge:pcb:return-current-path",
+    "type": "knowledge",
+    "title": "Return current follows the path of least impedance",
+    "summary": "At high frequency, return current concentrates in the plane directly beneath the signal trace rather than spreading evenly.",
+    "domains": [
+      "pcb",
+      "layout",
+      "signal_integrity",
+      "emi",
+      "thermal"
+    ],
+    "triggers": [
+      "return current",
+      "loop inductance",
+      "reference plane",
+      "high frequency"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.pcb"
+  },
+  {
+    "ref_id": "knowledge:pcb:decoupling-frequency-response",
+    "type": "knowledge",
+    "title": "Decoupling network frequency response",
+    "summary": "Bulk, ceramic, and small-value capacitors cover different frequency bands, and their parasitics set a self-resonant frequency.",
+    "domains": [
+      "pcb",
+      "layout",
+      "signal_integrity",
+      "emi",
+      "thermal"
+    ],
+    "triggers": [
+      "decoupling",
+      "self-resonant frequency",
+      "supply impedance",
+      "bulk capacitor"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.pcb"
+  },
+  {
+    "ref_id": "knowledge:pcb:emi-loop-antenna",
+    "type": "knowledge",
+    "title": "Current loops act as unintended antennas",
+    "summary": "Radiated emissions scale with loop area and frequency, so tight current loops are the primary EMI control in layout.",
+    "domains": [
+      "pcb",
+      "layout",
+      "signal_integrity",
+      "emi",
+      "thermal"
+    ],
+    "triggers": [
+      "emi",
+      "loop antenna",
+      "radiated emissions",
+      "loop area"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.pcb"
+  },
+  {
+    "ref_id": "skill:pcb:compute-microstrip-width",
+    "type": "skill",
+    "title": "Estimate microstrip width for a target impedance",
+    "summary": "Use the stackup dielectric height and constant to estimate the trace width that yields the target single-ended impedance.",
+    "domains": [
+      "pcb",
+      "layout",
+      "signal_integrity",
+      "emi",
+      "thermal"
+    ],
+    "triggers": [
+      "microstrip",
+      "trace width",
+      "impedance calculation"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.pcb"
+  },
+  {
+    "ref_id": "skill:pcb:compute-via-current-capacity",
+    "type": "skill",
+    "title": "Estimate via current-carrying capacity",
+    "summary": "Derive how many parallel vias a power connection needs from the via barrel size and the expected current.",
+    "domains": [
+      "pcb",
+      "layout",
+      "signal_integrity",
+      "emi",
+      "thermal"
+    ],
+    "triggers": [
+      "via current",
+      "power via",
+      "current capacity"
+    ],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "medium",
+    "sensitivity": "source_code",
+    "allowed_strengths": [
+      "high",
+      "max",
+      "ultra"
+    ],
+    "pack_id": "hardware.pcb"
+  }
+]

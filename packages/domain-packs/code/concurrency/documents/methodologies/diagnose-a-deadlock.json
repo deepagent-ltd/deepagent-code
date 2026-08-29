@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:conc:diagnose-a-deadlock",
+  "type": "methodology",
+  "title": "Diagnose a deadlock or livelock",
+  "description": "Capture stacks of the wedged threads, build the lock wait-for graph, and find the cycle or starvation.",
+  "body": "Steps: 1. When the process hangs, capture a full thread dump (stacks of every thread). 2. For each blocked thread, record which lock it holds and which it waits on. 3. Build the wait-for graph and look for a cycle (deadlock) or threads making no progress while spinning (livelock). 4. Map the cycle to the offending acquisition orders. 5. Fix by imposing the global lock order, narrowing critical sections, or using try-lock with backoff. Rollback point: the change to acquisition order is reversible per call site. Validation: the wait-for graph is acyclic after the fix and a stress test no longer hangs.",
+  "domain": "concurrency",
+  "scope_hint": "code.concurrency:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.concurrency",
+  "pack_id": "code.concurrency"
+}

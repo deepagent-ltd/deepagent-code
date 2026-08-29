@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:kernel:missing-ioctl-bounds-check",
+  "type": "failure_dossier",
+  "description": "Trusting a size or index from an ioctl argument without bounds-checking, leading to buffer overflow or out-of-bounds access in the kernel.",
+  "body": "Failure mode: an ioctl handler reads a length or index from the user-supplied argument and uses it to size a copy or index an array without validating it against the real bounds; a crafted value overflows a kernel buffer or reads/writes out of bounds. Detection signals: KASAN reports out-of-bounds on an ioctl path; the size/index comes straight from the user arg into a memcpy/array access; fuzzing the ioctl crashes the kernel. Do not trust user-provided sizes or indices. Safer fallback: validate every length and index against the allocated size and array bounds before use, reject out-of-range values with -EINVAL, and fuzz the ioctl interface to confirm no out-of-bounds access.",
+  "domain": "kernel",
+  "scope_hint": "code.os-kernel:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.os-kernel:human_authored",
+  "pack_id": "code.os-kernel"
+}

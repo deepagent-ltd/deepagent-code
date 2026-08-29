@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:risk.privacy:redaction-fixture-review",
+  "type": "skill",
+  "title": "Redaction Fixture Review",
+  "description": "Create or inspect synthetic fixtures that prove PII/PHI/PCI is absent from operational sinks.",
+  "body": "Inputs: loggers, serializers, support bundle builders, analytics emitters, prompt assemblers, and test fixtures. Use when validating redaction. Do not use real personal data as fixture content. Procedure: build synthetic nested payloads, run the narrow output path, assert raw sensitive fields are absent, and keep non-identifying correlation IDs. Output: fixture list, command evidence, and remaining sink gaps. Validation signals include snapshots or explicit negative assertions.",
+  "domain": "privacy",
+  "scope_hint": "risk.privacy:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:risk.privacy",
+  "pack_id": "risk.privacy"
+}

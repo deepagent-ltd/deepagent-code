@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:release:generate-changelog-from-history",
+  "type": "skill",
+  "title": "Generate a changelog from commit and PR history",
+  "description": "Assemble a user-facing changelog by grouping merged changes since the last tag into added/changed/fixed/breaking sections with provenance.",
+  "body": "Use when preparing release notes for a new version. Actions: list commits/PRs since the previous tag, group them by type (added, changed, fixed, breaking, security), rewrite each into user-impact language rather than raw commit subjects, and link each entry to its PR/commit SHA for provenance. Surface breaking changes and migration notes at the top. Do not present the raw git log as a changelog or omit breaking changes. This skill exposes capability only and must not publish or tag without runtime permission. Validation signals include every entry tracing to a merged change and a breaking-changes section that matches the semver bump. Risk boundary: if breaking changes are detected but the proposed version is only a patch/minor, flag the mismatch for human review rather than publishing.",
+  "domain": "code",
+  "scope_hint": "code.release:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.release",
+  "pack_id": "code.release"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:architecture:design-seams-for-testing",
+  "type": "strategy",
+  "title": "Design seams for testing and substitution",
+  "description": "Introduce explicit boundaries where external dependencies can be substituted, so units are testable without real infrastructure.",
+  "body": "Use when a module is hard to test because it directly reaches network, clock, filesystem, or other systems. Do not bury external calls deep inside business logic with no substitution point. Actions: define an interface at the boundary, inject the dependency, and keep the core logic pure and deterministic so tests use a fake or in-memory implementation. Validation signals include unit tests running with no real network/disk and a clear seam in the dependency graph. Risk boundary: over-abstracting every call adds indirection cost; add a seam where substitution is actually needed for testing or change, not everywhere.",
+  "domain": "code",
+  "scope_hint": "code.architecture:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.architecture",
+  "pack_id": "code.architecture"
+}

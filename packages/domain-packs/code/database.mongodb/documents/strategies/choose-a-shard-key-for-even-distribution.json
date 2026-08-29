@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:mongo:choose-a-shard-key-for-even-distribution",
+  "type": "strategy",
+  "title": "Choose a shard key for even write distribution",
+  "description": "Pick a high-cardinality, non-monotonic shard key so writes and data spread evenly instead of hotspotting one shard.",
+  "body": "Use when enabling sharding on a collection or diagnosing an overloaded shard. Do not shard on a monotonically increasing field like a timestamp or ObjectId alone; all new writes land in the highest chunk and hammer a single shard. Actions: choose a high-cardinality key the queries actually filter on, use a hashed shard key or a compound key to break monotonic ordering, and verify chunk distribution with sh.status(). Validation signals include chunks spread across shards and write throughput scaling with shard count. Risk boundary: the shard key is immutable on older versions and expensive to reshard, so model it deliberately and get review before sharding a large collection.",
+  "domain": "mongodb",
+  "scope_hint": "code.database.mongodb:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.database.mongodb",
+  "pack_id": "code.database.mongodb"
+}

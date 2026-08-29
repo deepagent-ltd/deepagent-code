@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:php:silent-type-coercion",
+  "type": "failure_dossier",
+  "description": "Missing strict_types lets PHP coerce a wrong-typed value, so a bug surfaces as corrupted data far from its origin.",
+  "body": "Failure mode: a file without declare(strict_types=1) passes a numeric string or null into a typed parameter and PHP silently coerces it (''→0, '5'→5, null→0), so a type mistake produces wrong values instead of an error and the bug appears far downstream. Detection signals: a value arrives as the wrong type but no error fires; loose == comparisons treat '0' and false alike; the file lacks strict_types. Do not depend on weak-mode coercion for correctness. Safer fallback: add declare(strict_types=1) and precise type hints at boundaries, use === for comparisons that must not coerce, and test that a wrong-typed argument throws a TypeError.",
+  "domain": "php",
+  "scope_hint": "code.php:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:code.php:human_authored",
+  "pack_id": "code.php"
+}
