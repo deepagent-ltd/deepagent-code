@@ -42,23 +42,13 @@ await createClient({
   plugins: sdkPlugins,
 })
 
-await createClient({
-  input: "./openapi.json",
-  output: {
-    path: "./src/v2/gen",
-    tsConfigPath: path.join(dir, "tsconfig.json"),
-    clean: true,
-  },
-  plugins: sdkPlugins,
-})
-
 // Patch a @hey-api/openapi-ts codegen bug: SseFn incorrectly passes the
 // endpoint's TError into the second generic of ServerSentEventsResult, which
 // is the AsyncGenerator's TReturn slot. Iterator return values have nothing
 // to do with HTTP errors, and any consumer that calls `.return()` or returns
 // from a mock generator gets type-checked against the wrong shape. Drop the
 // arg so TReturn defaults to void.
-const sseTypesPath = "./src/v2/gen/client/types.gen.ts"
+const sseTypesPath = "./src/gen/client/types.gen.ts"
 const sseTypesFile = Bun.file(sseTypesPath)
 const sseTypesSource = await sseTypesFile.text()
 const sseTypesPatched = sseTypesSource.replace(
@@ -73,7 +63,7 @@ if (sseTypesPatched !== sseTypesSource) await Bun.write(sseTypesPath, sseTypesPa
 // Error interceptors receive the original per-call options from hey-api, so a
 // client-level `throwOnError: true` is otherwise invisible to them. Pass the
 // resolved value to keep decoded server errors as real Error instances.
-for (const clientPath of ["./src/gen/client/client.gen.ts", "./src/v2/gen/client/client.gen.ts"]) {
+for (const clientPath of ["./src/gen/client/client.gen.ts"]) {
   const file = Bun.file(clientPath)
   const source = await file.text()
   const patched = source.replace(
@@ -89,7 +79,6 @@ for (const clientPath of ["./src/gen/client/client.gen.ts", "./src/v2/gen/client
 }
 
 await $`bun prettier --write src/gen`
-await $`bun prettier --write src/v2`
 await $`rm -rf dist`
 await $`bun tsc`
 await $`rm openapi.json`
