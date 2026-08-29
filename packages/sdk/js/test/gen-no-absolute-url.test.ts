@@ -7,7 +7,7 @@ import { join } from "node:path"
 // generated client config (consumers pass their own baseUrl to
 // createDeepAgentCodeClient). Every operation path must be relative.
 
-const genDirs = [new URL("../src/gen", import.meta.url).pathname, new URL("../src/v2/gen", import.meta.url).pathname]
+const genDirs = [new URL("../src/gen", import.meta.url).pathname]
 
 const knownBaseUrlDefault = "http://localhost:4096"
 // Documentation / JSDoc links the generator emits (class references), never real calls.
