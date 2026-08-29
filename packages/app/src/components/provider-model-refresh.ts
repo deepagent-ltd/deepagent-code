@@ -1,5 +1,5 @@
 import { isOfficialProvider } from "@deepagent-code/core/provider-official"
-import type { ProviderConfig } from "@deepagent-code/sdk/v2"
+import type { ProviderConfig } from "@deepagent-code/sdk"
 
 export function canRefreshProviderModels(providerID: string, config: ProviderConfig | undefined) {
   if (isOfficialProvider(providerID)) return true

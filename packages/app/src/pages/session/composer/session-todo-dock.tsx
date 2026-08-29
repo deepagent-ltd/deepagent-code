@@ -1,4 +1,4 @@
-import type { Todo } from "@deepagent-code/sdk/v2"
+import type { Todo } from "@deepagent-code/sdk"
 import { AnimatedNumber } from "@deepagent-code/ui/animated-number"
 import { Checkbox } from "@deepagent-code/ui/checkbox"
 import { DockTray } from "@deepagent-code/ui/dock-surface"

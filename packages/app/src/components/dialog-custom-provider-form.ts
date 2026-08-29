@@ -1,5 +1,5 @@
 import { isOfficialProvider } from "@deepagent-code/core/provider-official"
-import type { Provider as ResolvedProvider, ProviderConfig } from "@deepagent-code/sdk/v2"
+import type { Provider as ResolvedProvider, ProviderConfig } from "@deepagent-code/sdk"
 
 const PROVIDER_ID = /^[a-z0-9][a-z0-9-_]*$/
 const OPENAI_COMPATIBLE = "@ai-sdk/openai-compatible"

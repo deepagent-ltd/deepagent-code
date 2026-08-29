@@ -1,4 +1,4 @@
-import type { Session } from "@deepagent-code/sdk/v2/client"
+import type { Session } from "@deepagent-code/sdk/client"
 import { createMemo } from "solid-js"
 import { produce } from "solid-js/store"
 import { useNavigate, useParams } from "@solidjs/router"

@@ -1,4 +1,5 @@
-import type { Event } from "@deepagent-code/sdk/v2/client"
+import type { Event } from "@deepagent-code/sdk/client"
+import type { DeepAgentCodeClient } from "@deepagent-code/sdk"
 import { createSimpleContext } from "@deepagent-code/ui/context"
 import { createGlobalEmitter } from "@solid-primitives/event-bus"
 import { makeEventListener } from "@solid-primitives/event-listener"
@@ -22,7 +23,23 @@ export function resumeStreamAfterPageShow(event: PageTransitionEvent, start: () 
   start()
 }
 
-export function createServerSdkContext(server: ServerConnection.Any, scope: ServerScope) {
+/** C6-04: explicit public type for the SDK context so inferred types stay portable (no
+ * reference into @deepagent-code/sdk/src/gen/client). `client` is the generated client. */
+export type ServerSDK = {
+  readonly scope: ServerScope
+  readonly url: string
+  readonly client: DeepAgentCodeClient
+  readonly event: {
+    on: (key: string, listener: (event: Event) => void) => () => void
+    listen: (handler: (event: { name: string; details: Event }) => void) => () => void
+    start: () => Promise<void> | undefined
+  }
+  createClient(
+    opts: Omit<Parameters<typeof createSdkForServer>[0], "server" | "fetch">,
+  ): DeepAgentCodeClient
+}
+
+export function createServerSdkContext(server: ServerConnection.Any, scope: ServerScope): ServerSDK {
   const platform = usePlatform()
   const gateway = useGateway()
   const abort = new AbortController()
@@ -272,8 +289,6 @@ export function createServerSdkContext(server: ServerConnection.Any, scope: Serv
   }
 }
 
-export type ServerSDK = ReturnType<typeof createServerSdkContext>
-
 export const { use: useServerSDK, provider: ServerSDKProvider } = createSimpleContext({
   name: "ServerSDK",
   init: (props: { server?: ServerConnection.Any }) => {
@@ -295,7 +310,17 @@ type SDKEventMap = {
   [key in Event["type"]]: Extract<Event, { type: key }>
 }
 
-function createDirSdkContext(directory: string, serverSDK: ServerSDK) {
+/** C6-04: explicit public type for the per-directory SDK context (portability). */
+export type DirSDKContext = {
+  scope: ServerScope
+  directory: string
+  client: DeepAgentCodeClient
+  event: ReturnType<typeof createGlobalEmitter<SDKEventMap>>
+  url: string
+  createClient(opts: Parameters<ServerSDK["createClient"]>[0]): DeepAgentCodeClient
+}
+
+function createDirSdkContext(directory: string, serverSDK: ServerSDK): DirSDKContext {
   const client = serverSDK.createClient({
     directory,
     throwOnError: true,

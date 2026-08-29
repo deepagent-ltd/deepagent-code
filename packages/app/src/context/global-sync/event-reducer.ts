@@ -9,7 +9,7 @@ import type {
   Session,
   SessionStatus,
   SnapshotFileDiff,
-} from "@deepagent-code/sdk/v2/client"
+} from "@deepagent-code/sdk/client"
 import type { State, VcsCache, SessionPlan, SessionGoal, SessionPlanUpdateOptions } from "./types"
 import { trimSessions } from "./session-trim"
 import { dropSessionCaches } from "./session-cache"

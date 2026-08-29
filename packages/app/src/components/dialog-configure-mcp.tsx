@@ -8,7 +8,7 @@ import { useLanguage } from "@/context/language"
 import { useMcpUpdate } from "@/context/mcp"
 import { useSync } from "@/context/sync"
 import { showToast } from "@/utils/toast"
-import type { McpLocalConfig, McpRemoteConfig } from "@deepagent-code/sdk/v2/client"
+import type { McpLocalConfig, McpRemoteConfig } from "@deepagent-code/sdk/client"
 
 type McpConfig = McpLocalConfig | McpRemoteConfig
 type StringRecord = Record<string, string>

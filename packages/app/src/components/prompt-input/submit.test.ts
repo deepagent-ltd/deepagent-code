@@ -195,7 +195,7 @@ beforeAll(async () => {
     useParams: () => params,
   }))
 
-  mock.module("@deepagent-code/sdk/v2/client", () => ({
+  mock.module("@deepagent-code/sdk/client", () => ({
     createDeepAgentCodeClient: (input: { directory: string }) => {
       createdClients.push(input.directory)
       return clientFor(input.directory)

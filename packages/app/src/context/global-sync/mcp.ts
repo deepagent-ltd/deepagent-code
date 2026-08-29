@@ -1,4 +1,4 @@
-import type { McpStatus } from "@deepagent-code/sdk/v2/client"
+import type { McpStatus } from "@deepagent-code/sdk/client"
 
 export async function toggleMcp(input: {
   status: McpStatus["status"]

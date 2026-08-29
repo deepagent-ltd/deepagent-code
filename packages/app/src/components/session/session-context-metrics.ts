@@ -1,4 +1,4 @@
-import type { AssistantMessage, Message, Part, Session, UserMessage } from "@deepagent-code/sdk/v2/client"
+import type { AssistantMessage, Message, Part, Session, UserMessage } from "@deepagent-code/sdk/client"
 
 type Provider = {
   id: string
