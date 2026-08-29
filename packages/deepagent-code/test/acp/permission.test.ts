@@ -5,7 +5,7 @@ import type {
   RequestPermissionResponse,
   SessionUpdate,
 } from "@agentclientprotocol/sdk"
-import type { Event, OpencodeClient } from "@deepagent-code/sdk/v2"
+import type { Event, OpencodeClient } from "@deepagent-code/sdk"
 import { Effect, ManagedRuntime } from "effect"
 import { ACPEvent } from "@/acp/event"
 import { ACPSession } from "@/acp/session"
