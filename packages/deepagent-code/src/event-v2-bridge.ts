@@ -6,6 +6,7 @@ import { EventV2 } from "@deepagent-code/core/event"
 import { Location } from "@deepagent-code/core/location"
 import { Project } from "@deepagent-code/core/project"
 import { AbsolutePath } from "@deepagent-code/core/schema"
+import { isEventV2AdmissionEnabled } from "@deepagent-code/core/deepagent/event-admission"
 import "@deepagent-code/core/account"
 import "@deepagent-code/core/catalog"
 import "@deepagent-code/core/session/event"
@@ -37,6 +38,12 @@ export const layer = Layer.effect(
 
     const unsubscribe = yield* events.listen((event) =>
       Effect.gen(function* () {
+        // C5-12 — the V2 admission path is the SINGLE writer when enabled. The GlobalBus mirror + sync
+        // emission are a legacy DOUBLE-WRITE of the same EventV2 authority onto the frontend/UI plane; when
+        // `isEventV2AdmissionEnabled()` is ON the durable V2 consumer is the authority, so the mirror is
+        // skipped entirely (the UI is fed the durable path, never a second copy). When OFF the current
+        // runtime stays authoritative and the mirror is unchanged.
+        if (isEventV2AdmissionEnabled()) return
         const ctx = yield* InstanceRef
         const workspaceID = (yield* WorkspaceRef) ?? event.location?.workspaceID
         GlobalBus.emit("event", {
