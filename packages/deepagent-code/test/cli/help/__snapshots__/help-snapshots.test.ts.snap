@@ -384,6 +384,8 @@ Commands:
   deepagent-code session delete <sessionID>          delete a session
   deepagent-code session rename <sessionID> <title>  rename a session
   deepagent-code session archive <sessionID>         archive a session (or restore it with --undo)
+  deepagent-code session export-context <sessionID>  copy/export a session's recovery context (works
+                                                     when the store is in read-only recovery)
 
 Options:
   -h, --help        show help                                                              [boolean]
