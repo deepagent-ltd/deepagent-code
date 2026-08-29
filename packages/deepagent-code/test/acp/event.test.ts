@@ -1,7 +1,6 @@
 import { describe, expect, it } from "bun:test"
 import type { AgentSideConnection } from "@agentclientprotocol/sdk"
-import type { Message, OpencodeClient, Part, SessionMessageResponse, ToolPart } from "@deepagent-code/sdk/v2"
-import type { SessionEventPayload } from "@deepagent-code/sdk/v2/client"
+import type { ContextSessionEvent, Message, OpencodeClient, Part, SessionMessageResponse, ToolPart } from "@deepagent-code/sdk"
 import { Effect, ManagedRuntime } from "effect"
 import { ACPEvent } from "@/acp/event"
 import * as ACPService from "@/acp/service"
@@ -105,6 +104,10 @@ function createHarness(messages: Record<string, SessionMessageResponse> = {}) {
       get: () => Promise.resolve({ data: { id: "ses_loaded" } }),
       messages: () => Promise.resolve({ data: [] }),
     },
+    context: {
+      eventsCursor: async () => ({ watermark: 0, cursor: 0, floor: 0 }),
+      events: async () => ({ events: [], floor: 0 }),
+    },
   } as unknown as OpencodeClient
   const connection = {
     sessionUpdate: (params: SessionUpdateParams) => {
@@ -118,26 +121,26 @@ function createHarness(messages: Record<string, SessionMessageResponse> = {}) {
   return { calls, connection, events, sdk, session, subscription, updates }
 }
 
-const journal = (type: string, sessionID: string, extra: Record<string, unknown> = {}): SessionEventPayload => ({
+const journal = (type: string, sessionID: string, extra: Record<string, unknown> = {}): ContextSessionEvent => ({
   id: `${type}_${sessionID}`,
   type,
   seq: 1,
   data: { sessionID, ...extra },
 })
 
-function textEnded(sessionID: string, messageID: string, partID: string, text: string): SessionEventPayload {
+function textEnded(sessionID: string, messageID: string, partID: string, text: string): ContextSessionEvent {
   return journal("session.next.text.ended", sessionID, { assistantMessageID: messageID, textID: partID, text })
 }
 
-function reasoningEnded(sessionID: string, messageID: string, partID: string, text: string): SessionEventPayload {
+function reasoningEnded(sessionID: string, messageID: string, partID: string, text: string): ContextSessionEvent {
   return journal("session.next.reasoning.ended", sessionID, { assistantMessageID: messageID, reasoningID: partID, text })
 }
 
-function toolCalled(sessionID: string, callID: string, tool = "bash"): SessionEventPayload {
+function toolCalled(sessionID: string, callID: string, tool = "bash"): ContextSessionEvent {
   return journal("session.next.tool.called", sessionID, { callID, tool, input: { cmd: "printf hello" } })
 }
 
-function toolProgress(sessionID: string, callID: string, output: string): SessionEventPayload {
+function toolProgress(sessionID: string, callID: string, output: string): ContextSessionEvent {
   return journal("session.next.tool.progress", sessionID, {
     callID,
     structured: {},
@@ -145,7 +148,7 @@ function toolProgress(sessionID: string, callID: string, output: string): Sessio
   })
 }
 
-function toolSuccess(sessionID: string, callID: string, output: string, extra: Record<string, unknown> = {}): SessionEventPayload {
+function toolSuccess(sessionID: string, callID: string, output: string, extra: Record<string, unknown> = {}): ContextSessionEvent {
   return journal("session.next.tool.success", sessionID, {
     callID,
     structured: extra.metadata ?? { exit: 0 },
@@ -153,7 +156,7 @@ function toolSuccess(sessionID: string, callID: string, output: string, extra: R
   })
 }
 
-function toolFailed(sessionID: string, callID: string, message: string): SessionEventPayload {
+function toolFailed(sessionID: string, callID: string, message: string): ContextSessionEvent {
   return journal("session.next.tool.failed", sessionID, {
     callID,
     error: { type: "unknown", message },
@@ -350,6 +353,10 @@ describe("acp event routing", () => {
                 assistantToolMessage(runnerTool("call_after", "completed", { output: "after" })),
               ],
             }),
+        },
+        context: {
+          eventsCursor: async () => ({ watermark: 0, cursor: 0, floor: 0 }),
+          events: async () => ({ events: [], floor: 0 }),
         },
       } as unknown as OpencodeClient,
       connection,
@@ -559,38 +566,28 @@ describe("acp event routing", () => {
     const session = makeSessionService()
     await Effect.runPromise(session.create({ id: "ses_track", cwd: "/workspace" }))
 
-    const textEnded = (id: string, seq: number): SessionEventPayload => ({
+    const textEnded = (id: string, seq: number): ContextSessionEvent => ({
       id,
       type: "session.next.text.ended",
       seq,
       data: { sessionID: "ses_track", assistantMessageID: "msg_a", textID: "part_a", text: "hello" },
     })
     const events = createEventStream()
-    const queue: AsyncGenerator<SessionEventPayload>[] = [
-      (async function* () {
-        yield textEnded("ev_a", 43)
-        // Drain+tail overlap re-delivers the same boundary with a fresh seq: the drive
-        // forwards it, and the applied-id set absorbs it (single application).
-        yield textEnded("ev_a", 44)
-      })(),
+    const pages: Array<{ events: ContextSessionEvent[]; nextCursor?: number; floor: number }> = [
+      { events: [textEnded("ev_a", 43)], nextCursor: 43, floor: 5 },
+      // A resync / drain+tail overlap re-delivers the same boundary with a fresh seq: the drive
+      // forwards it and the applied-id set absorbs it (single application).
+      { events: [textEnded("ev_a", 44)], nextCursor: 44, floor: 5 },
+      { events: [], floor: 5 },
     ]
-    let hanging = true
     const sdk = {
       global: { event: () => Promise.resolve({ stream: events.stream() }) },
-      session: {
-        list: () => Promise.resolve({ data: [] }),
-        sessionEventWatermark: () => Promise.resolve(42),
-        sessionEventStream: () => {
-          const next = queue.shift()
-          if (next) return Promise.resolve({ stream: next, close: () => {} })
-          return Promise.resolve({
-            stream: (async function* () {
-              while (hanging) await new Promise((resolve) => setTimeout(resolve, 10))
-            })(),
-            close: () => {
-              hanging = false
-            },
-          })
+      session: { list: () => Promise.resolve({ data: [] }) },
+      context: {
+        eventsCursor: async () => ({ watermark: 42, cursor: 42, floor: 5 }),
+        events: async () => {
+          const page = pages.shift()
+          return page ?? { events: [], floor: 5 }
         },
       },
     } as unknown as OpencodeClient
@@ -604,57 +601,45 @@ describe("acp event routing", () => {
 
     subscription.start()
     subscription.track("ses_track")
-    await pollUntil(() => updates.length === 1, "track did not deliver the boundary")
+    await pollUntil(
+      () => updates.filter((item) => item.update.sessionUpdate === "agent_message_chunk").length === 1,
+      "track did not deliver the boundary",
+    )
     expect(updates.filter((item) => item.update.sessionUpdate === "agent_message_chunk")).toHaveLength(1)
     subscription.stop()
     events.close()
   })
 
-  it("reopens from the last delivered seq and absorbs the re-delivered boundary during track", async () => {
+  it("resyncs from a 410 cursor gap during track and re-drains the boundary once", async () => {
     const updates: SessionUpdateParams[] = []
     const session = makeSessionService()
     await Effect.runPromise(session.create({ id: "ses_replay", cwd: "/workspace" }))
 
-    const textEnded = (id: string, seq: number): SessionEventPayload => ({
+    const textEnded = (id: string, seq: number): ContextSessionEvent => ({
       id,
       type: "session.next.text.ended",
       seq,
       data: { sessionID: "ses_replay", assistantMessageID: "msg_b", textID: "part_b", text: "hi" },
     })
     const boundary = textEnded("ev_b", 43)
-    const openedAfter: (string | undefined)[] = []
     const events = createEventStream()
-    const queue: AsyncGenerator<SessionEventPayload>[] = [
-      (async function* () {
-        yield boundary
-        // Same-seq duplicate: detectSeqGap flags it, so the drive resyncs instead of
-        // silently double-applying.
-        yield boundary
-      })(),
-      (async function* () {
-        // Reopened from after=lastSeq the transport re-delivers the boundary; the applied
-        // set absorbs it (still exactly one sessionUpdate).
-        yield boundary
-      })(),
+    const pages: Array<{ events: ContextSessionEvent[]; nextCursor?: number; floor: number }> = [
+      { events: [boundary], nextCursor: 43, floor: 5 },
+      { events: [], floor: 5 },
     ]
-    let hanging = true
+    let callCount = 0
     const sdk = {
       global: { event: () => Promise.resolve({ stream: events.stream() }) },
-      session: {
-        list: () => Promise.resolve({ data: [] }),
-        sessionEventWatermark: () => Promise.resolve(42),
-        sessionEventStream: (_sessionId: string, input: { after?: string }) => {
-          openedAfter.push(input.after)
-          const next = queue.shift()
-          if (next) return Promise.resolve({ stream: next, close: () => {} })
-          return Promise.resolve({
-            stream: (async function* () {
-              while (hanging) await new Promise((resolve) => setTimeout(resolve, 10))
-            })(),
-            close: () => {
-              hanging = false
-            },
-          })
+      session: { list: () => Promise.resolve({ data: [] }) },
+      context: {
+        eventsCursor: async () => ({ watermark: 42, cursor: 42, floor: 5 }),
+        events: async () => {
+          callCount += 1
+          // The first drain uses the initial cursor (after=42); the durable store reports the gap,
+          // so the journal resyncs (re-reads the cursor and re-drains from the retained floor).
+          if (callCount === 1) return Promise.reject(gapError())
+          const page = pages.shift()
+          return page ?? { events: [], floor: 5 }
         },
       },
     } as unknown as OpencodeClient
@@ -668,16 +653,29 @@ describe("acp event routing", () => {
 
     subscription.start()
     subscription.track("ses_replay")
-    await pollUntil(() => updates.length === 1, "track did not deliver the boundary")
-    await pollUntil(() => openedAfter.length >= 3, "track did not advance the reopen anchor")
-    // The reopen anchor is captured before the drive consumes events, so the resync reopen
-    // re-drains the already-applied window (absorbed by the applied set), then the lastSeq
-    // anchor advances to the last delivered seq on the next iteration.
-    expect(openedAfter[0]).toBe("42") // watermark anchor
-    expect(openedAfter[1]).toBe("42") // stale reopen anchor: overlap re-delivered, applied absorbs it
-    expect(openedAfter[2]).toBe("43") // lastSeq anchor advanced after delivery
-    expect(updates).toHaveLength(1) // the re-delivered boundary was never re-applied
+    await pollUntil(
+      () => updates.filter((item) => item.update.sessionUpdate === "agent_message_chunk").length === 1,
+      "track did not re-drain the boundary after the 410 resync",
+    )
+    // The re-drained boundary was delivered exactly once (not doubled by the resync).
+    expect(updates.filter((item) => item.update.sessionUpdate === "agent_message_chunk")).toHaveLength(1)
     subscription.stop()
     events.close()
   })
 })
+
+function gapError(): unknown {
+  const body = {
+    name: "ApiGone",
+    data: {
+      schemaVersion: "stable-error.v1",
+      code: "cursor_gap_exceeded",
+      category: "cursor",
+      httpStatus: 410,
+      resource: "ses-1",
+      correlationId: "corr",
+      message: "cursor below retained floor",
+    },
+  }
+  return new Error("cursor below retained floor", { cause: { body } })
+}
