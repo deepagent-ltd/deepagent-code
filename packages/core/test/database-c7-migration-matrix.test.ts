@@ -134,14 +134,15 @@ const makeGoodDb = async (filename: string) => {
 }
 
 /** Seed a real DB with a partial (interrupted) journal: only the first `count` migrations applied. */
-const applyPrefix = (filename: string, count: number) =>
-  runWithFile(
+const applyPrefix = async (filename: string, count: number): Promise<void> => {
+  await runWithFile(
     filename,
     Effect.gen(function* () {
       const db = yield* EffectDrizzleSqlite.makeWithDefaults()
       yield* DatabaseMigration.applyOnly(db, migrations.slice(0, count))
     }),
   )
+}
 
 /** Open the production business layer (preflight → apply → post-verify) and return the bootstrap mode. */
 const openMigrated = (filename: string) =>
@@ -165,7 +166,12 @@ type EraSpec = {
   journal: () => { ids: readonly string[]; obsOverride?: Parameters<typeof observationsFor>[1] }
   blockedCode?: string
   seededPrefix?: number
-  seed?: (file: string) => Promise<void>
+  seed: (file: string) => Promise<void>
+}
+
+/** Seed a fixture era (classification-only eras are classification-oracle only, not seeded). */
+const seedEra = async (era: EraSpec, file: string) => {
+  await era.seed(file)
 }
 
 const aliasJournalIds = (): readonly string[] =>
@@ -174,7 +180,7 @@ const aliasJournalIds = (): readonly string[] =>
 const mergedJournalIds = (): readonly string[] => registryIds.filter((id) => !mergedHistoryInsertions.has(id))
 
 /** Build a real file whose `migration` journal is: rows (id, time_completed[, content_hash]). */
-const seedJournalFile = (filename: string, rows: { id: string; content_hash?: string }[]) => {
+const seedJournalFile = async (filename: string, rows: { id: string; content_hash?: string }[]): Promise<void> => {
   const db = new BunDatabase(filename, { create: true })
   db.exec("PRAGMA journal_mode = WAL")
   db.exec("CREATE TABLE migration (id TEXT PRIMARY KEY, time_completed INTEGER NOT NULL, content_hash TEXT)")
@@ -198,7 +204,7 @@ const eras: EraSpec[] = [
     seedable: true,
     journal: () => ({ ids: [] }),
     seededPrefix: 0,
-    seed: (file) => Bun.write(file, ""),
+    seed: async (file) => { await Bun.write(file, "") },
   },
   {
     name: "1.4.7",
@@ -214,6 +220,7 @@ const eras: EraSpec[] = [
     label: "alias-resolved",
     migratable: true,
     seedable: false,
+    seed: async () => {}, // classification oracle only
     journal: () => ({ ids: aliasJournalIds() }),
   },
   {
@@ -221,6 +228,7 @@ const eras: EraSpec[] = [
     label: "merged-history",
     migratable: true,
     seedable: false,
+    seed: async () => {}, // classification oracle only
     journal: () => ({ ids: mergedJournalIds() }),
   },
   {
@@ -382,7 +390,7 @@ describe("C7-02 · migration scenarios (real fixture files)", () => {
   test("plain migrate · fresh: preflight → forward-migrate to registry completeness", async () => {
     await using tmp = await tmpdir()
     const file = path.join(tmp.path, "app.db")
-    await eras[0]!.seed!(file)
+    await seedEra(eras[0]!, file)
 
     const mode = await openMigrated(file)
     expect(mode!.mode).toBe("ready")
@@ -395,10 +403,10 @@ describe("C7-02 · migration scenarios (real fixture files)", () => {
   test("interrupted migrate · 1.4.7 prefix (journal stopped mid-way) resumes to completion, no duplicate body", async () => {
     await using tmp = await tmpdir()
     const file = path.join(tmp.path, "app.db")
-    await eras[1]!.seed!(file)
+    await seedEra(eras[1]!, file)
 
     // Interrupted/resume checkpoint: the journal is exactly the 1.4.7 contiguous prefix.
-    expect(journalIds(file)).toEqual(eraKnownIds(3))
+    expect(journalIds(file)).toEqual([...eraKnownIds(3)])
     expect(countIn(file, "database_migration_receipt")).toBe(0)
 
     // Resume the SAME run through the production open path.
@@ -414,7 +422,7 @@ describe("C7-02 · migration scenarios (real fixture files)", () => {
   test("repeated migrate · idempotent: a second apply changes nothing", async () => {
     await using tmp = await tmpdir()
     const file = path.join(tmp.path, "app.db")
-    await eras[0]!.seed!(file)
+    await seedEra(eras[0]!, file)
     await openMigrated(file)
 
     const before = {
