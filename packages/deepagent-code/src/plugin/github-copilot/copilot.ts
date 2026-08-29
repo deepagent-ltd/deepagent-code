@@ -1,5 +1,5 @@
 import type { Hooks, PluginInput } from "@deepagent-code/plugin"
-import type { Model } from "@deepagent-code/sdk/v2"
+import type { Model } from "@deepagent-code/sdk"
 import { InstallationVersion } from "@deepagent-code/core/installation/version"
 import { iife } from "@/util/iife"
 import * as Log from "@deepagent-code/core/util/log"

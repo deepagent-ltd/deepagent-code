@@ -1,6 +1,6 @@
 import type { AgentSideConnection, Usage } from "@agentclientprotocol/sdk"
 import * as Log from "@deepagent-code/core/util/log"
-import type { AssistantMessage as DeepAgentCodeAssistantMessage, Message } from "@deepagent-code/sdk/v2"
+import type { AssistantMessage as DeepAgentCodeAssistantMessage, Message } from "@deepagent-code/sdk"
 import { InstanceRef } from "@/effect/instance-ref"
 import { InstanceStore } from "@/project/instance-store"
 import { ProviderV2 } from "@deepagent-code/core/provider"

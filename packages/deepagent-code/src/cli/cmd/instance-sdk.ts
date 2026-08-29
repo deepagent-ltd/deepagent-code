@@ -5,7 +5,7 @@
 // - default: in-process Server.Default().app.fetch (no server needed)
 // - `--attach <url>`: a live server, authenticated via ServerAuth headers
 // Commands never touch the DB directly — everything goes through the httpapi.
-import { createOpencodeClient, type OpencodeClient } from "@deepagent-code/sdk/v2"
+import { createOpencodeClient, type OpencodeClient } from "@deepagent-code/sdk"
 import type { Argv } from "yargs"
 import { EOL } from "os"
 

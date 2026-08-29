@@ -1,4 +1,4 @@
-import type * as SDK from "@deepagent-code/sdk/v2"
+import type * as SDK from "@deepagent-code/sdk"
 import { serviceUse } from "@deepagent-code/core/effect/service-use"
 import { Effect, Exit, Layer, Option, Schema, Scope, Context, Stream } from "effect"
 import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"

@@ -1,4 +1,4 @@
-import type { Event, Message, Part, PermissionRequest, QuestionRequest, ToolPart } from "@deepagent-code/sdk/v2"
+import type { Event, Message, Part, PermissionRequest, QuestionRequest, ToolPart } from "@deepagent-code/sdk"
 import * as Locale from "@/util/locale"
 import {
   bootstrapSessionData,

@@ -1,6 +1,6 @@
 import type { AgentSideConnection, PermissionOption, RequestPermissionResponse } from "@agentclientprotocol/sdk"
 import * as Log from "@deepagent-code/core/util/log"
-import type { Event, OpencodeClient } from "@deepagent-code/sdk/v2"
+import type { Event, OpencodeClient } from "@deepagent-code/sdk"
 import { applyPatch } from "diff"
 import { exists, readText } from "@/util/filesystem"
 import type { ACPSession } from "./session"

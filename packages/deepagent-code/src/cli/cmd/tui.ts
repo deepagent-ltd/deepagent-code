@@ -9,7 +9,7 @@ import { errorMessage } from "@deepagent-code/tui/util/error"
 import { withTimeout } from "@/util/timeout"
 import { withNetworkOptions, resolveNetworkOptionsNoConfig } from "@/cli/network"
 import { Filesystem } from "@/util/filesystem"
-import type { GlobalEvent } from "@deepagent-code/sdk/v2"
+import type { GlobalEvent } from "@deepagent-code/sdk"
 import type { EventSource } from "@deepagent-code/tui/context/sdk"
 import { writeHeapSnapshot } from "v8"
 import {

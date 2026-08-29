@@ -1,6 +1,7 @@
 import { NamedError } from "@deepagent-code/core/util/error"
 import { errorFormat } from "@/util/error"
 import { isRecord } from "@/util/record"
+import { renderSdkError } from "./sdk-error"
 
 type ConfigIssue = { message: string; path: string[] }
 
@@ -36,6 +37,17 @@ export function FormatError(input: unknown): string | undefined {
   if (input instanceof Error && isRecord(input.cause) && "body" in input.cause) {
     const formatted = FormatError(input.cause.body)
     if (formatted) return formatted
+  }
+
+  // C0-03 stable SDK typed error (e.g. cursor_gap_exceeded / validation_failed). Decisions and
+  // rendering branch on `code`/`httpStatus` only; the human `message` is surfaced for display.
+  if (
+    isRecord(input) &&
+    isRecord(input.data) &&
+    typeof input.data.schemaVersion === "string" &&
+    typeof input.data.code === "string"
+  ) {
+    return renderSdkError(input)
   }
 
   // CliError: domain failure surfaced from an effectCmd handler via fail("...")

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test"
-import { createOpencodeClient, type OpencodeClient, type GlobalEvent } from "@deepagent-code/sdk/v2"
+import { createOpencodeClient, type OpencodeClient, type GlobalEvent } from "@deepagent-code/sdk"
 import { createSessionTransport } from "@/cli/cmd/run/stream.transport"
 import type { FooterApi, FooterEvent, LocalReplayRow, RunFilePart, StreamCommit } from "@/cli/cmd/run/types"
 

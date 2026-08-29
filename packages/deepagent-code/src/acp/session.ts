@@ -1,5 +1,5 @@
 import type { McpServer } from "@agentclientprotocol/sdk"
-import type { Message, Part } from "@deepagent-code/sdk/v2"
+import type { Message, Part } from "@deepagent-code/sdk"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { ModelV2 } from "@deepagent-code/core/model"
 import { Context, Effect, Layer, Ref } from "effect"

@@ -16,7 +16,7 @@
 import type { TextareaRenderable } from "@opentui/core"
 import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
 import { For, Show, createEffect, createMemo, createSignal } from "solid-js"
-import type { QuestionRequest } from "@deepagent-code/sdk/v2"
+import type { QuestionRequest } from "@deepagent-code/sdk"
 import {
   createQuestionBodyState,
   questionConfirm,
