@@ -1,13 +1,11 @@
 import { describe, expect, it } from "bun:test"
-import type { DeepAgentCodeClient } from "@deepagent-code/sdk"
+import type { RecoveryExportClient } from "@/cli/session-context"
 import { exportSessionContext } from "@/cli/session-context"
 
 // C6-08: "复制上下文" in read-only recovery. The recovery evidence-export surface (client.recovery.*)
 // stays available when the store is read-only; the create/read calls are exercised here with a
 // minimal fake so the contract (session_id on create, export_id on read, typed errors propagate)
 // is pinned without a live server.
-
-type Recovery = DeepAgentCodeClient["recovery"]
 
 function makeRecovery() {
   const calls: Record<string, unknown[]> = {}
@@ -24,7 +22,7 @@ function makeRecovery() {
           return Promise.resolve({ exportId: "exp_1", sessionId: parameters?.evidenceExportInput?.session_id })
         },
       },
-    } as unknown as Recovery,
+    } as RecoveryExportClient,
   }
 }
 
@@ -60,7 +58,7 @@ describe("session context export", () => {
       recovery: {
         evidenceExport: () => Promise.reject(new Error("export expired", { cause: { body: gone } })),
       },
-    } as unknown as DeepAgentCodeClient
+    } as unknown as RecoveryExportClient
     await expect(exportSessionContext(sdk, { sessionID: "ses-1", exportID: "exp_old" })).rejects.toThrow(
       "export expired",
     )
