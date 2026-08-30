@@ -1,15 +1,8 @@
 import { afterAll, describe, expect, mock, test } from "bun:test"
 import type { AssistantMessage, Part, UserMessage } from "@deepagent-code/sdk/client"
+import { mockMessagePart } from "./message-part-mock"
 
-mock.module("@deepagent-code/ui/message-part", () => ({
-  groupParts: (refs: { messageID: string; part: Part }[]) =>
-    refs.map((item) => ({
-      key: `part:${item.messageID}:${item.part.id}`,
-      type: "part",
-      ref: { messageID: item.messageID, partID: item.part.id },
-    })),
-  renderable: () => true,
-}))
+mockMessagePart()
 
 afterAll(() => mock.restore())
 
