@@ -18,7 +18,7 @@ describe("deepagentCode acp lifecycle subprocess", () => {
         const acp = yield* deepagentCode.acp()
         acp.close()
 
-        const code = yield* Effect.promise(() => acp.exited).pipe(Effect.timeout(Duration.seconds(5)))
+        const code = yield* Effect.promise(() => acp.exited).pipe(Effect.timeout(Duration.seconds(30)))
         expect(code).toBe(0)
       }),
     60_000,

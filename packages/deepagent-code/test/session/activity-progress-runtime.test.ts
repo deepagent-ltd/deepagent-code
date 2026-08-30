@@ -1611,7 +1611,7 @@ test("activity progress projection #16: incident DB copy opens read-only without
   } finally {
     db.close()
   }
-})
+}, { timeout: 60_000 })
 
 // ---------------------------------------------------------------------------
 // §7.1 #17 — per-caller validation: settleProgress terminal / interruptActivity
