@@ -13,17 +13,12 @@
 import { afterAll, describe, expect, mock, spyOn, test } from "bun:test"
 import type { AssistantMessage, Part, UserMessage } from "@deepagent-code/sdk/client"
 import type { TimelineRow } from "./message-timeline.data"
+import { mockMessagePart } from "./message-part-mock"
 
-mock.module("@deepagent-code/ui/message-part", () => ({
-  groupParts: (refs: { messageID: string; part: Part }[]) =>
-    refs.map((item) => ({
-      key: `part:${item.messageID}:${item.part.id}`,
-      type: "part",
-      ref: { messageID: item.messageID, partID: item.part.id },
-    })),
+mockMessagePart({
   renderable: (part: Part, showReasoningSummaries = true) =>
     part.type !== "reasoning" || showReasoningSummaries,
-}))
+})
 
 afterAll(() => mock.restore())
 
