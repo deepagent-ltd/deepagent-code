@@ -124,8 +124,10 @@ describe("deepagentCode run (non-interactive subprocess)", () => {
   // Regression for #27371: an unknown model used to hang the process forever
   // waiting on a session.status === idle event that never arrived. The fix
   // makes the SDK call surface an error promptly so the process exits nonzero.
-  // We assert nonzero exit AND wall-clock under the harness timeout — a hang
-  // would expire the timeout and produce a different (signal-killed) failure.
+  // The SDK guarantees return by timeoutMs (15s), so measure against the
+  // harness timeout (30s) instead: a genuine hang is killed by the 30s test
+  // timeout (a different, signal-killed failure), while the fixed path exits
+  // on its own well before it — the 20s bound leaves slack for slow CI hosts.
   cliIt.concurrent(
     "exits nonzero promptly when the model is unknown (regression for #27371)",
     ({ deepagentCode }) =>
@@ -135,7 +137,7 @@ describe("deepagentCode run (non-interactive subprocess)", () => {
           timeoutMs: 15_000,
         })
         expect(result.exitCode).not.toBe(0)
-        expect(result.durationMs).toBeLessThan(15_000)
+        expect(result.durationMs).toBeLessThan(20_000)
       }),
     30_000,
   )

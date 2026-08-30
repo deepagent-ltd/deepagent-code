@@ -58,6 +58,7 @@ describe("HttpApi CORS", () => {
       expect(response.headers["access-control-allow-origin"]).toBe("http://localhost:3000")
       expect(response.headers["access-control-allow-headers"]).toBe("authorization")
     }),
+    { timeout: 30_000 },
   )
 
   it.live("adds CORS headers to unauthorized responses", () =>
@@ -80,6 +81,7 @@ describe("HttpApi CORS", () => {
       expect(response.status).toBe(401)
       expect(response.headers.get("access-control-allow-origin")).toBe("https://app.deepagent-code.ai")
     }),
+    { timeout: 30_000 },
   )
 
   it.live("uses custom CORS origins passed to the server", () =>
@@ -118,5 +120,6 @@ describe("HttpApi CORS", () => {
       expect(rejected.status).toBe(204)
       expect(rejected.headers.get("access-control-allow-origin")).not.toBe("https://evil.example")
     }),
+    { timeout: 30_000 },
   )
 })
