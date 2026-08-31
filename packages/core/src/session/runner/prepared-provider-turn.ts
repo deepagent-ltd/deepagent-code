@@ -1,5 +1,6 @@
 import type { Model } from "@deepagent-code/llm"
 import type { ProtocolAttemptIdentity } from "../../contract/model-protocol"
+import type { PreparedCapabilitySnapshotRef } from "../../contract/prepared-turn"
 import { CanonicalJson } from "../../util/canonical-json"
 import { Hash } from "../../util/hash"
 
@@ -56,6 +57,8 @@ export interface Input {
   /** C2-04 route/protocol/origin/capability/lowering identity (optional, runtime-record home). */
   readonly protocolAttemptIdentity?: ProtocolAttemptIdentity
   readonly protocolAttemptIdentityHash?: string
+  /** C4-08 capability catalog/load snapshot bound at prepare (design §4.1 step 5, §7.5). */
+  readonly capabilitySnapshot?: PreparedCapabilitySnapshotRef
 }
 
 export interface PreparedProviderTurn {
@@ -102,14 +105,18 @@ export interface PreparedProviderTurn {
   /** C2-04 route/protocol/origin/capability/lowering identity on the runtime attempt record. */
   readonly protocol_attempt_identity?: ProtocolAttemptIdentity
   readonly protocol_attempt_identity_hash?: string
+  /** C4-08 capability catalog/load snapshot on the runtime attempt record (design §7.5). */
+  readonly capability_snapshot?: PreparedCapabilitySnapshotRef
+  readonly capability_snapshot_hash?: string
 }
 
 /**
  * Full prepared attempt identity (design §4.1 step 8). Composes the content
- * identity (`request_hash`) with the C2-04 protocol attempt identity hash so an
- * exact retry is byte-stable only when BOTH the payload AND the
- * route/protocol/origin/capability/lowering binding are identical; a config
- * drift changes this value and is detected before dispatch.
+ * identity (`request_hash`) with the C2-04 protocol attempt identity hash and
+ * the C4-08 capability snapshot hash so an exact retry is byte-stable only when
+ * the payload, the route/protocol/origin/capability/lowering binding AND the
+ * capability catalog/load snapshot are identical; a config or catalog drift
+ * changes this value and is detected before dispatch.
  */
 export function attemptIdentityHash(turn: PreparedProviderTurn): string {
   return Hash.sha256(
@@ -118,6 +125,9 @@ export function attemptIdentityHash(turn: PreparedProviderTurn): string {
       ...(turn.protocol_attempt_identity_hash === undefined
         ? {}
         : { protocol_attempt_identity_hash: turn.protocol_attempt_identity_hash }),
+      ...(turn.capability_snapshot_hash === undefined
+        ? {}
+        : { capability_snapshot_hash: turn.capability_snapshot_hash }),
     }),
   )
 }
@@ -182,6 +192,12 @@ export function prepare(input: Input): PreparedProviderTurn {
       ? {}
       : { protocol_attempt_identity_hash: input.protocolAttemptIdentityHash }),
     ...(input.protocolAttemptIdentity === undefined ? {} : { protocol_attempt_identity: input.protocolAttemptIdentity }),
+    ...(input.capabilitySnapshot === undefined
+      ? {}
+      : {
+          capability_snapshot: input.capabilitySnapshot,
+          capability_snapshot_hash: Hash.sha256(CanonicalJson.stringify(input.capabilitySnapshot)),
+        }),
   }
 }
 

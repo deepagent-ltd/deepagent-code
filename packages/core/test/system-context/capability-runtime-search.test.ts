@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test"
+import { Effect, Layer } from "effect"
 import {
   enabledRuntimeFeatureSet,
+  layer as searchToolLayer,
   makeRuntimeAuthorizedSearchTool,
   runtimeAuthorizedSearch,
   runtimeFeatureAuthorization,
@@ -9,6 +11,11 @@ import {
 import { RuntimeFeatures } from "@deepagent-code/core/flag/runtime-features"
 import { capabilityCatalog } from "@deepagent-code/core/system-context/capability-catalog"
 import { decodeCapabilityManifest, DeepAgentCodeToolInventory } from "@deepagent-code/core/system-context/capability-manifest"
+import { ToolRegistry } from "@deepagent-code/core/tool/registry"
+import { AgentV2 } from "@deepagent-code/core/agent"
+import { SessionV2 } from "@deepagent-code/core/session"
+import { SessionMessage } from "@deepagent-code/core/session/message"
+import { testEffect } from "../lib/effect"
 
 // C4-07 — capability_search's enabledRuntimeFeatures reconnected to the E2
 // manifest-derived RuntimeFeatures registry (the frozen capability-search.ts is
@@ -91,4 +98,31 @@ describe("runtime-authorized search + tool (the wired successor)", () => {
     const tool = makeRuntimeAuthorizedSearchTool({ catalogSnapshotId: "capability_catalog:test" })
     expect(tool).toBeTruthy()
   })
+})
+
+describe("K3 production registry assembly registers capability_search", () => {
+  const itRegistry = testEffect(searchToolLayer.pipe(Layer.provideMerge(ToolRegistry.defaultLayer)))
+
+  itRegistry.effect("the tool is registered in the Location tool registry under its canonical name", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const materialized = yield* registry.materialize()
+      expect(materialized.definitions.map((tool) => tool.name)).toContain("capability_search")
+    }),
+  )
+
+  itRegistry.effect("a runtime-authorized search over the recorded catalog returns cards", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const materialized = yield* registry.materialize()
+      const output = yield* materialized.settle({
+        sessionID: SessionV2.ID.make("ses_registry"),
+        agent: AgentV2.ID.make("build"),
+        assistantMessageID: SessionMessage.ID.make("msg_registry"),
+        call: { type: "tool-call", id: "call-caps", name: "capability_search", input: { query: "project context", intended_action: "context_query" } },
+      })
+      expect(output.result.type).toBe("text")
+      expect(String(output.result.value)).toContain("deepagent.context-query")
+    }),
+  )
 })

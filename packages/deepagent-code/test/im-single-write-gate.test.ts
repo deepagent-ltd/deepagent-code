@@ -19,13 +19,21 @@ describe("C5-12 IM single-write legacy @mention gate", () => {
 
   test("flag OFF: a message with mentions runs the legacy @mention path", () => {
     process.env[ImSingleWrite.IM_SINGLE_WRITE_ENV] = "false"
-    expect(shouldExecuteLegacyAgentMentions(2)).toBe(true)
-    expect(shouldExecuteLegacyAgentMentions(0)).toBe(false)
+    expect(shouldExecuteLegacyAgentMentions(2, true)).toBe(true)
+    expect(shouldExecuteLegacyAgentMentions(0, true)).toBe(false)
   })
 
-  test("flag ON: the legacy @mention double-write side is SKIPPED", () => {
+  test("flag ON + v4 event-driven IM ON: the legacy @mention double-write side is SKIPPED", () => {
     process.env[ImSingleWrite.IM_SINGLE_WRITE_ENV] = "true"
-    expect(shouldExecuteLegacyAgentMentions(2)).toBe(false)
-    expect(shouldExecuteLegacyAgentMentions(0)).toBe(false)
+    expect(shouldExecuteLegacyAgentMentions(2, true)).toBe(false)
+    expect(shouldExecuteLegacyAgentMentions(0, true)).toBe(false)
+  })
+
+  test("AUTH-P2-2 decoupling: single-write ON but v4 event-driven IM OFF keeps the legacy path (never drops @mentions)", () => {
+    process.env[ImSingleWrite.IM_SINGLE_WRITE_ENV] = "true"
+    expect(shouldExecuteLegacyAgentMentions(2, false)).toBe(true)
+    // single-write OFF + v4 ON = the explicit double-write regime (legacy stays authoritative).
+    process.env[ImSingleWrite.IM_SINGLE_WRITE_ENV] = "false"
+    expect(shouldExecuteLegacyAgentMentions(2, true)).toBe(true)
   })
 })

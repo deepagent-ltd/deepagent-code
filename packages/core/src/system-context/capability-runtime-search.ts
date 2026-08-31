@@ -7,7 +7,9 @@ import {
   type SearchAuthorization,
 } from "./capability-search"
 import { RuntimeFeatures } from "../flag/runtime-features"
+import { Effect, Layer } from "effect"
 import { Tool } from "../tool/tool"
+import { Tools } from "../tool/tools"
 
 // C4-07 — reconnect the (frozen) capability_search surface's runtime-feature filter
 // to the E2 manifest-derived RuntimeFeatures registry (design §7.2: the capability
@@ -99,3 +101,18 @@ export function makeRuntimeAuthorizedSearchTool(input?: {
     authorization: runtimeFeatureAuthorization(),
   })
 }
+
+/**
+ * Production registry assembly (design §7.3 L1): register the runtime-authorized
+ * `capability_search` tool into the Location tool registry so every session can
+ * discover capabilities through the E2-derived authorization (never the frozen
+ * literal). Compose into the shipped built-in tool stack.
+ */
+export const layer = Layer.effectDiscard(
+  Effect.gen(function* () {
+    const tools = yield* Tools.Service
+    // The registered name is a build-time constant; an invalid name is a developer
+    // defect (fail fast), so the layer error stays `never` like the other built-ins.
+    yield* tools.register({ capability_search: makeRuntimeAuthorizedSearchTool() }).pipe(Effect.orDie)
+  }),
+)

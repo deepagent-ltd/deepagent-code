@@ -44,6 +44,8 @@ import { V2ProviderTurn } from "./v2-provider-turn"
 import { V2ProviderTurnReceiptTable } from "./v2-provider-turn.sql"
 import { CanonicalJson } from "../../util/canonical-json"
 import { Hash } from "../../util/hash"
+import { CapabilitySnapshot } from "../../system-context/capability-snapshot"
+import { recordedCapabilityLoads } from "../../system-context/capability-loader"
 import {
   configDrift,
   configEvidenceForTurn,
@@ -573,6 +575,15 @@ export const layer = Layer.effect(
               contextProjectionHash: selectionAdmission.projectionHash,
               ...(protocolIdentity === undefined ? {} : { protocolAttemptIdentity: protocolIdentity }),
               ...(protocolIdentityHash === undefined ? {} : { protocolAttemptIdentityHash: protocolIdentityHash }),
+              // C4-08 session-side assembly (design §4.1 step 5): the prepared attempt carries the
+              // capability catalog/load snapshot restored from the durable load receipts of THIS
+              // session, so the attempt identity (attemptIdentityHash) covers the loaded-body facts
+              // even though bodies are not kept in the system prefix (design §7.5).
+              capabilitySnapshot: CapabilitySnapshot.capabilitySnapshotRefFor(
+                recordedCapabilityLoads()
+                  .filter((receipt) => receipt.sessionId === session.id)
+                  .map((receipt) => ({ capabilityId: receipt.capabilityId, bodyHash: receipt.bodyHash })),
+              ),
             },
             wireRequestHash,
           ),

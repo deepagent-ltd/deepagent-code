@@ -8,12 +8,18 @@ import type { DatabaseMigration } from "../database/migration"
 // consumer, THIS ledger tracks the consumer's SIDE-EFFECT idempotency: a durable receipt per
 // (consumerKind, sourceEventId) proving the consumer's external side effect has run (or is pending).
 //
-// The receipt is the idempotency authority for a consumer's side effect:
-//   - a NEW delivery runs the side effect and records `done` (+ receiptRef);
-//   - a REDELIVERY of a completed receipt returns "existing" — the side effect runs exactly ONCE;
+// The receipt is the idempotency authority for a consumer's side effect. Guarantee wording
+// (AUTH-P2-3 close — honest at-least-once): the COMPLETION is at most once in the ledger (a done row
+// never transitions back), but the SIDE EFFECT itself is AT LEAST ONCE — the effect runs before the
+// `done` marker, so a crash/process-kill between the two redelivers and re-runs the effect. Consumers
+// MUST therefore be idempotent in their effect (the receipt is the dedupe key for the completed
+// outcome, never a run-once fence for the effect).
+//   - a NEW delivery runs the side effect, then records `done` (+ receiptRef);
+//   - a REDELIVERY of a completed receipt returns "existing" — the side effect outcome is NOT repeated
+//     (but see the at-least-once note for the crash window);
 //   - a SINK FAILURE leaves the receipt `pending` (retryable) so the E3 delivery retry can resume it;
 //   - cold recovery re-reads the durable receipts (no in-memory cache) — a done receipt stays done, so
-//     a restart never re-executes a completed side effect.
+//     a restart never re-executes a completed side effect
 //
 // The `consumer_kind` is the stable identity of the consumer (e.g. "goal_tick", "handoff", "panel",
 // "archive", "push"); the `source_event_id` is the source event that drives the side effect. This

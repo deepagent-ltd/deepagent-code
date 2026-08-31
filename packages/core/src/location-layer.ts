@@ -43,6 +43,8 @@ import { RequestExecutor } from "@deepagent-code/llm/route"
 import * as SessionRunnerLLM from "./session/runner/llm"
 import { SessionRunnerModel } from "./session/runner/model"
 import { SystemContextBuiltIns } from "./system-context/builtins"
+import { CapabilityCatalog } from "./system-context/capability-catalog"
+import { SystemContextRegistry } from "./system-context/registry"
 import { SessionProviderOwner } from "./context-federation/provider-owner"
 import { SessionContext } from "./context-federation/session-context"
 import { SessionRunnerCanonical } from "./session/runner/canonical-turn"
@@ -57,7 +59,13 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()(
   {
     lookup: (ref: Location.Ref) => {
       const location = Location.layer(ref)
-      const systemContext = SystemContextBuiltIns.locationLayer
+      // Production System Context stack (design §7.3 L0): the host-local builtins +
+      // ambient instructions, plus the stably-loaded `deepagent/capability-catalog`
+      // source so the boot catalog is part of every V2 session context.
+      const systemContext = Layer.mergeAll(
+        SystemContextBuiltIns.locationLayer,
+        CapabilityCatalog.layer,
+      ).pipe(Layer.provideMerge(SystemContextRegistry.layer))
       const base = Layer.mergeAll(
         location,
         Policy.locationLayer,

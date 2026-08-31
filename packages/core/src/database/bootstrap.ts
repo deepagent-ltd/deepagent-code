@@ -169,6 +169,19 @@ interface DescribeOptions {
   readonly correlationId?: string
 }
 
+// SEC-F8: the diagnostics surface is rendered by the maintenance shell and client
+// UIs; keep path-shaped identifiers scoped to their basename so an absolute
+// filesystem path never echoes downstream (the full resource stays in the
+// PreflightIssue records and the internal log).
+const scopedIdentifier = (value: string | undefined): string | undefined => {
+  if (!value) return value
+  if (value.startsWith("/") || value.startsWith("~") || /^[A-Za-z]:[\\/]/.test(value)) {
+    const parts = value.split(/[/\\]/).filter((item) => item.length > 0)
+    return parts.at(-1) ?? value
+  }
+  return value
+}
+
 const buildDiagnostics = (
   phase: BootstrapPhase,
   mode: BootstrapMode,
@@ -181,7 +194,7 @@ const buildDiagnostics = (
   mode,
   phase,
   sqliteExtendedCode: issue?.sqliteExtendedCode ?? extras?.sqliteExtendedCode,
-  runId: issue?.resource ?? extras?.runId,
+  runId: scopedIdentifier(issue?.resource ?? extras?.runId),
   migrationId: extras?.migrationId,
   table: extras?.table,
   key: extras?.key,

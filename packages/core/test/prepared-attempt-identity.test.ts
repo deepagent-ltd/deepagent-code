@@ -223,3 +223,78 @@ describe("C2-04 runtime prepared-attempt record carries the identity (contract u
     )
   })
 })
+
+describe("C4-08 capability catalog/load snapshot on the runtime attempt record (K3 assembly)", () => {
+  const snapshot = {
+    catalogSnapshotId: "capability_catalog:test-snap",
+    catalogBodyHash: `sha256:${"ab".repeat(32)}`,
+    catalogRuntimeHash: `sha256:${"cd".repeat(32)}`,
+    catalogPermissionHash: `sha256:${"ef".repeat(32)}`,
+    loadedCapabilities: [
+      { capabilityId: "deepagent.code-read", bodyHash: `sha256:${"12".repeat(32)}` },
+      { capabilityId: "deepagent.code-edit", bodyHash: `sha256:${"34".repeat(32)}` },
+    ],
+  }
+
+  test("identical snapshot => identical snapshot hash and attempt identity hash (exact retry is stable)", () => {
+    const provider = mkProvider({ type: "aisdk", package: "@ai-sdk/openai-compatible", url: "https://compat.example/v1" })
+    const identity = ModelProtocol.protocolAttemptIdentityFor(mkModel(compatible), provider)
+
+    const turn1 = PreparedProviderTurn.prepare({ ...turnInput(identity), capabilitySnapshot: snapshot })
+    const turn2 = PreparedProviderTurn.prepare({ ...turnInput(identity), capabilitySnapshot: snapshot })
+
+    expect(turn1.capability_snapshot).toEqual(snapshot)
+    expect(turn1.capability_snapshot_hash).toMatch(/^[0-9a-f]{64}$/)
+    expect(turn1.capability_snapshot_hash).toBe(turn2.capability_snapshot_hash)
+    expect(PreparedProviderTurn.attemptIdentityHash(turn1)).toBe(PreparedProviderTurn.attemptIdentityHash(turn2))
+  })
+
+  test("a loaded-body drift changes the snapshot hash and the attempt identity hash (new epoch trigger)", () => {
+    const provider = mkProvider({ type: "aisdk", package: "@ai-sdk/openai-compatible", url: "https://compat.example/v1" })
+    const identity = ModelProtocol.protocolAttemptIdentityFor(mkModel(compatible), provider)
+    const drifted = {
+      ...snapshot,
+      loadedCapabilities: [
+        { capabilityId: "deepagent.code-read", bodyHash: `sha256:${"99".repeat(32)}` },
+        { capabilityId: "deepagent.code-edit", bodyHash: `sha256:${"34".repeat(32)}` },
+      ],
+    }
+
+    const base = PreparedProviderTurn.prepare({ ...turnInput(identity), capabilitySnapshot: snapshot })
+    const driftedTurn = PreparedProviderTurn.prepare({ ...turnInput(identity), capabilitySnapshot: drifted })
+
+    expect(driftedTurn.capability_snapshot_hash).not.toBe(base.capability_snapshot_hash)
+    expect(PreparedProviderTurn.attemptIdentityHash(driftedTurn)).not.toBe(
+      PreparedProviderTurn.attemptIdentityHash(base),
+    )
+  })
+
+  test("a catalog-hash drift changes the attempt identity hash without touching the request hash", () => {
+    const provider = mkProvider({ type: "aisdk", package: "@ai-sdk/openai-compatible", url: "https://compat.example/v1" })
+    const identity = ModelProtocol.protocolAttemptIdentityFor(mkModel(compatible), provider)
+    const driftedCatalog = { ...snapshot, catalogBodyHash: `sha256:${"77".repeat(32)}` }
+
+    const base = PreparedProviderTurn.prepare({ ...turnInput(identity), capabilitySnapshot: snapshot })
+    const driftedTurn = PreparedProviderTurn.prepare({ ...turnInput(identity), capabilitySnapshot: driftedCatalog })
+
+    expect(driftedTurn.request_hash).toBe(base.request_hash)
+    expect(PreparedProviderTurn.attemptIdentityHash(driftedTurn)).not.toBe(
+      PreparedProviderTurn.attemptIdentityHash(base),
+    )
+  })
+
+  test("an omitted snapshot leaves the pre-K3 composition intact (existing receipts stay byte-stable)", () => {
+    const provider = mkProvider({ type: "aisdk", package: "@ai-sdk/openai-compatible", url: "https://compat.example/v1" })
+    const identity = ModelProtocol.protocolAttemptIdentityFor(mkModel(compatible), provider)
+
+    const plain = PreparedProviderTurn.prepare(turnInput(identity))
+
+    expect(plain.capability_snapshot).toBeUndefined()
+    expect(plain.capability_snapshot_hash).toBeUndefined()
+    expect(PreparedProviderTurn.attemptIdentityHash(plain)).toBe(
+      PreparedProviderTurn.attemptIdentityHash(
+        PreparedProviderTurn.prepare(turnInput(identity)),
+      ),
+    )
+  })
+})

@@ -1,11 +1,12 @@
 export * as Database from "./database"
 
+import fs from "node:fs/promises"
 import { EffectDrizzleSqlite } from "@deepagent-code/effect-drizzle-sqlite"
 import { layer as sqliteLayer } from "#sqlite"
 import { Context, Effect, Layer } from "effect"
 import { Global } from "../global"
 import { Flag } from "../flag/flag"
-import { isAbsolute, join } from "path"
+import { dirname, isAbsolute, join } from "path"
 import { DatabaseMigration } from "./migration"
 import { migrations } from "./migration.gen"
 import { InstallationChannel, InstallationVersion } from "../installation/version"
@@ -14,6 +15,8 @@ import { containsDataPath } from "../global-path"
 import { Sqlite } from "./sqlite"
 import { DatabasePreflight } from "./preflight"
 import { DatabaseBootstrap, DatabaseBootstrapError, type BootstrapInput, type BootstrapState } from "./bootstrap"
+import { Backup } from "./backup"
+import { BackupVerify } from "./backup-verify"
 import { createHash } from "node:crypto"
 
 const makeDatabase = EffectDrizzleSqlite.makeWithDefaults()
@@ -150,6 +153,21 @@ export const layer = Layer.effect(
       const bootState = yield* Effect.tryPromise(() => bootstrap(filename))
       mode = bootState
       if (!bootState.ready) return yield* Effect.fail(new DatabaseBootstrapError(bootState))
+      // §10.4 executor (DATA-P2-3 close): the state machine reports an existing DB with
+      // pending migrations as `backup_required` (mode=ready), but no production path ran
+      // the pre-migration backup — open+apply would migrate WITHOUT the safety snapshot.
+      // Before the migrate layer: create the consistency backup and verify it. A backup
+      // failure BLOCKS the migration (design §10.4: any failure here means do not migrate;
+      // the shell surfaces backup_failed/upgrade guidance with the retained previous backup).
+      if (bootState.phase === "backup_required") {
+        const destDir = join(dirname(filename), "backups")
+        yield* Effect.promise(() => fs.mkdir(destDir, { recursive: true })).pipe(Effect.orDie)
+        // Any backup failure blocks the open (fail-closed per §10.4: the previous
+        // known-good backup + incident set are retained; the shell surfaces guidance).
+        const manifest = yield* Backup.create({ sourcePath: filename, destDir, buildId: InstallationVersion })
+        const outcome = yield* BackupVerify.verify(manifest)
+        if (!outcome.ok) return yield* Effect.fail(new DatabaseBootstrapError(bootState))
+      }
     }
     const db = yield* makeDatabase
 
@@ -172,6 +190,9 @@ export const layer = Layer.effect(
       readerProtocol: String(SupportedReaderProtocol),
       writerProtocol: String(SupportedWriterProtocol),
     })
+    // The layer's published mode must match the POST-open authority: a
+    // backup_required/migration_applying pre-state is stale once apply is done.
+    mode = yield* Effect.tryPromise(() => bootstrap(filename))
 
     const capabilities = yield* db.all<{
       capability: string

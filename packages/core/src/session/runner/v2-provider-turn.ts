@@ -7,6 +7,7 @@ import { Database } from "../../database/database"
 import { CanonicalJson } from "../../util/canonical-json"
 import { Hash } from "../../util/hash"
 import type { ProtocolAttemptIdentity } from "../../contract/model-protocol"
+import type { PreparedCapabilitySnapshotRef } from "../../contract/prepared-turn"
 import { ContextFederationExecutionParity } from "../../context-federation/execution-parity"
 import { SessionProviderOwner } from "../../context-federation/provider-owner"
 import { SessionProviderAttempt } from "../../context-federation/provider-attempt"
@@ -135,6 +136,8 @@ export type PrepareInput = {
   /** C2-04 route/protocol/origin/capability/lowering identity on the prepared attempt record. */
   readonly protocolAttemptIdentity?: ProtocolAttemptIdentity
   readonly protocolAttemptIdentityHash?: string
+  /** C4-08 capability catalog/load snapshot bound at prepare (design §4.1 step 5, §7.5). */
+  readonly capabilitySnapshot?: PreparedCapabilitySnapshotRef
 }
 
 export type ParityInput = ContextFederationExecutionParity.Observation & {
@@ -771,6 +774,9 @@ export function prepare(input: PrepareInput, wireRequestHash: string) {
     ...(input.protocolAttemptIdentityHash === undefined
       ? {}
       : { protocolAttemptIdentityHash: input.protocolAttemptIdentityHash }),
+    ...(input.capabilitySnapshot === undefined
+      ? {}
+      : { capabilitySnapshot: input.capabilitySnapshot }),
   })
 }
 

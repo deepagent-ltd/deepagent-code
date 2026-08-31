@@ -12,6 +12,14 @@ import { ImSingleWriteTable, type ImSingleWriteStatus } from "./im-single-write-
 // @mention path — the event path and the legacy path can BOTH become the authority for the same IM
 // input, which the contract encodes as `im_double_write_attempted`).
 //
+// AUTHORITATIVE PRODUCTION PATH (AUTH-P2-1 close): the live IM single-write regime is wired at the
+// httpapi `im.ts` handler boundary — the `DEEPAGENT_CODE_EVENT_V2_IM_SINGLE_WRITE` flag gate
+// `shouldExecuteLegacyAgentMentions` skips the legacy synchronous @mention path, while the durable
+// V2 admission + execution happens through `EventV2Bridge` (event-v2-bridge.ts) on `im.message.created`
+// events (/v4EventDrivenIm). THIS module's `admit`/`forImMessage` surface predates that wiring and has
+// NO production caller anymore; it is kept as the frozen §B1 contract surface (unit-tested) and is
+// DEPRECATED — do not wire new paths through it.
+//
 // This module is the single-write consolidation boundary. When the module-local switch is ON, an IM
 // input produces exactly ONE durable IM input receipt and binds it to ONE execution owner through the
 // E4a admission bridge (`EventAdmission.admit`): the model-facing work is the bounded IM work
@@ -124,6 +132,8 @@ export type ImSingleWriteResult =
  * When the switch is OFF the module is `im_single_write_unavailable` for opt-in callers and the legacy
  * behavior stays authoritative.
  */
+/** @deprecated No production caller (see module header): live single-write = im.ts flag gate +
+ * EventV2Bridge. Kept as the frozen §B1 contract surface. */
 export function admit(db: DatabaseClient, input: ImSingleWriteAdmitInput): Effect.Effect<ImSingleWriteResult, ImSingleWriteError> {
   return Effect.gen(function* () {
     if (!isEventV2ImSingleWriteEnabled()) {
