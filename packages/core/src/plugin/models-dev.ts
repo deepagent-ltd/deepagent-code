@@ -84,22 +84,26 @@ export const ModelsDevPlugin = PluginV2.define({
             catalog.model.update(providerID, modelID, (draft) => {
               draft.name = model.name
               draft.family = model.family ? ModelV2.Family.make(model.family) : undefined
-              draft.api = model.provider?.npm
+              // Fall back to the provider-level npm/url when the model carries no
+              // per-model provider entry (the vendored DeepAgent catalog models).
+              const modelNpm = model.provider?.npm ?? item.npm
+              const modelUrl = model.provider?.api ?? item.api
+              // DeepAgent API platform: the OpenAI/DeepSeek families default to the
+              // Responses wire (design §5.2; /v1/responses is live).
+              const protocol =
+                item.id === "deepagent" ? DEEPAGENT_MODEL_PROTOCOL[model.id] : undefined
+              draft.api = modelNpm
                 ? {
                     id: draft.api.id,
                     type: "aisdk",
-                    package: model.provider?.npm,
-                    url: model.provider.api,
-                    // DeepAgent API platform: the OpenAI/DeepSeek families default
-                    // to the Responses wire (design §5.2; /v1/responses is live).
-                    ...(item.id === "deepagent" && DEEPAGENT_MODEL_PROTOCOL[model.id]
-                      ? { protocol: DEEPAGENT_MODEL_PROTOCOL[model.id] }
-                      : {}),
+                    package: modelNpm,
+                    url: modelUrl,
+                    ...(protocol ? { protocol } : {}),
                   }
                 : {
                     id: draft.api.id,
                     type: "native",
-                    url: model.provider?.api,
+                    url: modelUrl,
                     settings: {},
                   }
               draft.capabilities = {

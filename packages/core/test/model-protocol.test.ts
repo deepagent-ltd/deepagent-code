@@ -110,9 +110,9 @@ describe("ModelProtocol resolution (design §5.2, C2-01)", () => {
       { type: "aisdk", package: "@ai-sdk/openai-compatible", url: "https://api.deepagent.ltd/v1" },
       "deepagent",
     )
-    expect(DEEPAGENT_MODEL_PROTOCOL["gpt-5.6-sol"]).toBe("openai-compatible.responses")
+    expect(DEEPAGENT_MODEL_PROTOCOL["openai/gpt-5.6-sol"]).toBe("openai-compatible.responses")
     expect(DEEPAGENT_MODEL_PROTOCOL["deepseek-v4-flash"]).toBe("openai-compatible.responses")
-    const model = mkModel({ ...compatible, protocol: DEEPAGENT_MODEL_PROTOCOL["gpt-5.6-sol"] })
+    const model = mkModel({ ...compatible, protocol: DEEPAGENT_MODEL_PROTOCOL["openai/gpt-5.6-sol"] })
     expect(ModelProtocol.resolveModelProtocol(model, platform)).toMatchObject({
       protocol: "openai-compatible.responses",
       selectionKind: "allowlisted_provider",
