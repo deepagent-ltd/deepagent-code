@@ -1558,6 +1558,9 @@ describe("workspace sync state", () => {
         expect((yield* workspace.status()).find((item) => item.workspaceID === info.id)?.status).toBeUndefined()
       }),
     { git: true },
+    // Full instance boot + git tmpdir: a loaded host exceeded the default 5s
+    // test timeout (full-suite 5000ms boundary; passes isolated ~<1s).
+    { timeout: 30_000 },
   )
 
   it.instance(
