@@ -3,7 +3,7 @@ import { Catalog } from "../catalog"
 import { EventV2 } from "../event"
 import { ModelV2 } from "../model"
 import { ModelRequest } from "../model-request"
-import { ModelsDev } from "../models-dev"
+import { DEEPAGENT_MODEL_PROTOCOL, ModelsDev } from "../models-dev"
 import { PluginV2 } from "../plugin"
 import { ProviderV2 } from "../provider"
 
@@ -90,6 +90,11 @@ export const ModelsDevPlugin = PluginV2.define({
                     type: "aisdk",
                     package: model.provider?.npm,
                     url: model.provider.api,
+                    // DeepAgent API platform: the OpenAI/DeepSeek families default
+                    // to the Responses wire (design §5.2; /v1/responses is live).
+                    ...(item.id === "deepagent" && DEEPAGENT_MODEL_PROTOCOL[model.id]
+                      ? { protocol: DEEPAGENT_MODEL_PROTOCOL[model.id] }
+                      : {}),
                   }
                 : {
                     id: draft.api.id,

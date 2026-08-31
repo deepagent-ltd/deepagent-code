@@ -4,7 +4,7 @@ import { HttpClient, HttpClientResponse } from "effect/unstable/http"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import { Flag } from "@deepagent-code/core/flag/flag"
 import { Global } from "@deepagent-code/core/global"
-import { ModelsDev } from "@deepagent-code/core/models-dev"
+import { ModelsDev, OFFICIAL_VENDORED_CATALOG } from "@deepagent-code/core/models-dev"
 import { EventV2 } from "@deepagent-code/core/event"
 import { it } from "./lib/effect"
 import { readFile, rm, writeFile, utimes, mkdir } from "fs/promises"
@@ -119,6 +119,10 @@ afterAll(async () => {
   await rm(cacheFile, { force: true })
 })
 
+// Vendored first-party catalog entries (deepagent) are always overlaid under
+// whatever the disk/snapshot/network source provides.
+const merged = (base: Record<string, unknown>) => ({ ...OFFICIAL_VENDORED_CATALOG, ...base })
+
 const initialState: MockState = {
   body: JSON.stringify(fixture),
   status: 200,
@@ -134,20 +138,21 @@ describe("ModelsDev Service", () => {
         state,
         ModelsDev.Service.use((s) => s.get()),
       )
-      expect(result).toEqual(fixture)
+      expect(result).toEqual(merged(fixture))
       const final = yield* Ref.get(state)
       expect(final.calls).toEqual([])
     }),
   )
 
-  it.live("get() returns empty catalog when disk empty, fetch disabled, and no bundled snapshot is injected", () =>
+  it.live("get() ships the vendored first-party catalog when disk empty, fetch disabled, and no bundled snapshot is injected", () =>
     Effect.gen(function* () {
       const state = yield* Ref.make(initialState)
       const result = yield* provided(
         state,
         ModelsDev.Service.use((s) => s.get()),
       )
-      expect(result).toEqual({})
+      expect(result).toEqual(OFFICIAL_VENDORED_CATALOG)
+      expect(result["deepagent"]).toBeDefined()
       const final = yield* Ref.get(state)
       expect(final.calls).toEqual([])
     }),
@@ -171,7 +176,7 @@ describe("ModelsDev Service", () => {
             Flag.DEEPAGENT_CODE_DISABLE_MODELS_FETCH = true
           }),
       )
-      expect(result).toEqual(fixture2)
+      expect(result).toEqual(merged(fixture2))
       expect(yield* Effect.promise(() => readFile(cacheFile, "utf8"))).toBe(JSON.stringify(fixture2))
       const final = yield* Ref.get(state)
       expect(final.calls.length).toBe(1)
@@ -191,7 +196,7 @@ describe("ModelsDev Service", () => {
           })
         }),
       )
-      for (const result of results) expect(result).toEqual(fixture)
+      for (const result of results) expect(result).toEqual(merged(fixture))
     }),
   )
 
@@ -210,8 +215,8 @@ describe("ModelsDev Service", () => {
           return { a, b }
         }),
       )
-      expect(first.a).toEqual(fixture)
-      expect(first.b).toEqual(fixture)
+      expect(first.a).toEqual(merged(fixture))
+      expect(first.b).toEqual(merged(fixture))
     }),
   )
 
@@ -229,8 +234,8 @@ describe("ModelsDev Service", () => {
           return { before, after }
         }),
       )
-      expect(result.before).toEqual(fixture)
-      expect(result.after).toEqual(fixture2)
+      expect(result.before).toEqual(merged(fixture))
+      expect(result.after).toEqual(merged(fixture2))
       const final = yield* Ref.get(state)
       expect(final.calls.length).toBe(1)
       expect(final.calls[0].url).toContain("/api.json")
@@ -267,7 +272,7 @@ describe("ModelsDev Service", () => {
       )
       const final = yield* Ref.get(state)
       expect(final.calls.length).toBe(1)
-      expect(after).toEqual(fixture2)
+      expect(after).toEqual(merged(fixture2))
     }),
   )
 
@@ -283,7 +288,7 @@ describe("ModelsDev Service", () => {
           return yield* svc.get()
         }),
       )
-      expect(result).toEqual(fixture)
+      expect(result).toEqual(merged(fixture))
       // retryTransient retries 5xx, so calls may be > 1.
       const final = yield* Ref.get(state)
       expect(final.calls.length).toBeGreaterThanOrEqual(1)
