@@ -111,8 +111,15 @@ export const { use: useDebug, provider: DebugProvider } = createSimpleContext({
           stream: AsyncGenerator<{ type: string; data: Record<string, unknown> }>
           close?: () => void
         }
+        const streamGenerator = stream?.stream
+        // C6-10 robustness: a degraded connection (empty/partial stream) must not
+        // throw on iteration — leave the subscription closed instead of spamming.
+        if (!streamGenerator) {
+          sseSource = undefined
+          return
+        }
         sseSource = stream
-        for await (const msg of stream.stream) {
+        for await (const msg of streamGenerator) {
           const { type, data } = msg
           const sid = data.sessionId as string | undefined
 
