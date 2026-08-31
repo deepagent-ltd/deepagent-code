@@ -109,14 +109,20 @@ describe("HttpApi compression", () => {
       expect(response.headers.get("content-encoding")).toBeNull()
     })
 
-    test("HEAD requests", async () => {
-      await using tmp = await tmpdir({ config: fatConfig() })
-      const response = await app().request("/config", {
-        method: "HEAD",
-        headers: { "x-deepagent-code-directory": tmp.path, "accept-encoding": "gzip" },
-      })
-      expect(response.headers.get("content-encoding")).toBeNull()
-    })
+    test(
+      "HEAD requests",
+      async () => {
+        await using tmp = await tmpdir({ config: fatConfig() })
+        const response = await app().request("/config", {
+          method: "HEAD",
+          headers: { "x-deepagent-code-directory": tmp.path, "accept-encoding": "gzip" },
+        })
+        expect(response.headers.get("content-encoding")).toBeNull()
+      },
+      // tmpdir + instance boot: a loaded host exceeded the default 5s test
+      // timeout in the full suite (5000ms boundary; isolated green).
+      { timeout: 30_000 },
+    )
   })
 
   describe("streaming exclusions", () => {
