@@ -5,6 +5,7 @@ import fs from "node:fs/promises"
 import path from "node:path"
 import { Data, Effect } from "effect"
 import { Database } from "#sqlite-native"
+import { sha256File } from "./file-sha256"
 
 // §10.4 Consistency backup. A pending migration must never run on a live database copy: the
 // backup is produced by SQLite's own online-safe snapshot path (VACUUM INTO on a separate,
@@ -195,11 +196,14 @@ export const create = Effect.fn("Backup.create")(function* (options: BackupOptio
     catch: () => new BackupError({ code: "temp_fsync_failed", detail: `cannot fsync temp backup: ${tmpPath}` }),
   })
 
-  const backupBytes = yield* Effect.tryPromise({
-    try: () => fs.readFile(tmpPath),
+  const backupSize = yield* Effect.tryPromise({
+    try: () => fs.stat(tmpPath).then((stat) => stat.size),
     catch: () => new BackupError({ code: "temp_fsync_failed", detail: `cannot read temp backup: ${tmpPath}` }),
   })
-  const backupSha256 = sha256(backupBytes)
+  const backupSha256 = yield* Effect.tryPromise({
+    try: () => sha256File(tmpPath),
+    catch: () => new BackupError({ code: "temp_fsync_failed", detail: `cannot read temp backup: ${tmpPath}` }),
+  })
 
   yield* Effect.tryPromise({
     try: () => fs.rename(tmpPath, finalPath),
@@ -247,7 +251,7 @@ export const create = Effect.fn("Backup.create")(function* (options: BackupOptio
     backup: {
       fileName: finalName,
       filePath: finalPath,
-      sizeBytes: backupBytes.length,
+      sizeBytes: backupSize,
       sha256: backupSha256,
       createdAt: Date.now(),
     },

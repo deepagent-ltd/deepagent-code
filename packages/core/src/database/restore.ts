@@ -7,6 +7,7 @@ import { Cause, Data, Effect } from "effect"
 import { Database as BunDatabase } from "#sqlite-native"
 import { Backup, type BackupManifest } from "./backup"
 import { BackupVerify } from "./backup-verify"
+import { sha256File } from "./file-sha256"
 import { Database } from "./database"
 
 // §10.9 VERIFIED RESTORE (C1A-13). Restore must EXPLICITLY select a verified backup, quarantine the
@@ -255,9 +256,8 @@ export const restoreVerified = Effect.fn("Restore.restoreVerified")(function* (o
     ),
   )
 
-  const restoredDigest = yield* Effect.tryPromise(() => fs.readFile(dbPath)).pipe(
-    Effect.orElseSucceed(() => Buffer.alloc(0)),
-    Effect.map((bytes) => sha256(bytes)),
+  const restoredDigest = yield* Effect.tryPromise(() => sha256File(dbPath)).pipe(
+    Effect.orElseSucceed(() => sha256(Buffer.alloc(0))),
   )
   const manifest: RestoreManifest = {
     version: 1,
