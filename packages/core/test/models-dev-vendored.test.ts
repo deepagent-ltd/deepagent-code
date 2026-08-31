@@ -23,15 +23,17 @@ test("vendored deepagent catalog entry is schema-valid and complete", () => {
 test("vendored catalog exposes the documented model set", () => {
   const models = OFFICIAL_VENDORED_CATALOG["deepagent"]?.models ?? {}
   const ids = Object.keys(models)
-  expect(ids).toContain("gpt-5.6-sol")
-  expect(ids).toContain("gpt-5.6-terra")
-  expect(ids).toContain("gpt-5.6-luna")
-  expect(ids).toContain("claude-opus-5")
-  expect(ids).toContain("claude-sonnet-5")
-  expect(ids).toContain("claude-fable-5")
-  expect(ids).toContain("claude-haiku-4.5")
-  expect(ids).toContain("grok-4.6")
-  expect(ids).toContain("gemini-3.7-flash")
+  // Catalog ids are the WIRE ids (live-verified against /v1/models + engine matrix
+  // 16/16): the platform routes families under FQN prefixes.
+  expect(ids).toContain("openai/gpt-5.6-sol")
+  expect(ids).toContain("openai/gpt-5.6-terra")
+  expect(ids).toContain("openai/gpt-5.6-luna")
+  expect(ids).toContain("anthropic/claude-opus-5")
+  expect(ids).toContain("anthropic/claude-sonnet-5")
+  expect(ids).toContain("anthropic/claude-fable-5")
+  expect(ids).toContain("anthropic/claude-haiku-4.5")
+  expect(ids).toContain("x-ai/grok-4.6")
+  expect(ids).toContain("google/gemini-3.7-flash")
   expect(ids).toContain("deepseek-v4-flash")
   expect(ids).toContain("deepseek-v4-pro")
   expect(ids).toContain("deepseek-v4-flash-vision-exp")
@@ -47,7 +49,7 @@ test("vendored catalog exposes the documented model set", () => {
 })
 
 test("GPT and DeepSeek families default to the Responses wire protocol", () => {
-  for (const id of ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]) {
+  for (const id of ["openai/gpt-5.6-sol", "openai/gpt-5.6-terra", "openai/gpt-5.6-luna"]) {
     expect(DEEPAGENT_MODEL_PROTOCOL[id]).toBe("openai-compatible.responses")
     expect(OFFICIAL_VENDORED_CATALOG["deepagent"]?.models[id]).toBeDefined()
   }
@@ -61,12 +63,12 @@ test("GPT and DeepSeek families default to the Responses wire protocol", () => {
 
 test("claude models route through the anthropic protocol against /v1", () => {
   const models = OFFICIAL_VENDORED_CATALOG["deepagent"]?.models ?? {}
-  for (const id of ["claude-opus-5", "claude-sonnet-5", "claude-fable-5", "claude-haiku-4.5"]) {
+  for (const id of ["anthropic/claude-opus-5", "anthropic/claude-sonnet-5", "anthropic/claude-fable-5", "anthropic/claude-haiku-4.5"]) {
     expect(models[id]?.provider?.npm).toBe("@ai-sdk/anthropic")
     expect(models[id]?.provider?.api).toBe("https://api.deepagent.ltd/v1")
   }
   // The OpenAI-family default stays openai-compatible (no per-model override).
-  expect(models["gpt-5.6-sol"]?.provider).toBeUndefined()
-  expect(models["gemini-3.7-flash"]?.attachment).toBe(true)
+  expect(models["openai/gpt-5.6-sol"]?.provider).toBeUndefined()
+  expect(models["google/gemini-3.7-flash"]?.attachment).toBe(true)
   expect(models["deepseek-v4-flash-vision-exp"]?.attachment).toBe(true)
 })

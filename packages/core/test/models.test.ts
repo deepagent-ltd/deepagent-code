@@ -121,7 +121,10 @@ afterAll(async () => {
 
 // Vendored first-party catalog entries (deepagent) are always overlaid under
 // whatever the disk/snapshot/network source provides.
-const merged = (base: Record<string, unknown>) => ({ ...OFFICIAL_VENDORED_CATALOG, ...base })
+const merged = (base: Record<string, ModelsDev.Provider>): Record<string, ModelsDev.Provider> => ({
+  ...OFFICIAL_VENDORED_CATALOG,
+  ...base,
+})
 
 const initialState: MockState = {
   body: JSON.stringify(fixture),

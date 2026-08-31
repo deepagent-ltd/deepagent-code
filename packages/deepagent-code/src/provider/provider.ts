@@ -1885,9 +1885,11 @@ export const layer = Layer.effect(
         }
 
         // Official providers use the auth/key store only. Env API keys are only honored for
-        // third-party providers declared in config via their `env` field.
+        // third-party providers declared in config via their `env` field — EXCEPT the first-party
+        // DeepAgent API platform, whose documented credential channel is `DEEPAGENT_API_KEY`
+        // (https://api.deepagent.ltd/docs "也可通过环境变量指定").
         for (const [id, provider] of Object.entries(database)) {
-          if (isOfficialProviderID(id)) continue
+          if (isOfficialProviderID(id) && id !== "deepagent") continue
           const providerID = ProviderV2.ID.make(id)
           if (!isProviderAllowed(providerID)) continue
           const envKey = providerEnvKey(provider.env, envs)
