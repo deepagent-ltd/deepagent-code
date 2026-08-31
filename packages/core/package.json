@@ -37,6 +37,11 @@
       "node": "./src/database/sqlite.node.ts",
       "default": "./src/database/sqlite.bun.ts"
     },
+    "#sqlite-native": {
+      "bun": "./src/database/sqlite-native.bun.ts",
+      "node": "./src/database/sqlite-native.node.ts",
+      "default": "./src/database/sqlite-native.bun.ts"
+    },
     "#pty": {
       "bun": "./src/pty/pty.bun.ts",
       "node": "./src/pty/pty.node.ts",

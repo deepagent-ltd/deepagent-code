@@ -4,7 +4,7 @@ import { createHash } from "node:crypto"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { Data, Effect } from "effect"
-import { Database } from "bun:sqlite"
+import { Database } from "#sqlite-native"
 import { SupportedReaderProtocol, SupportedWriterProtocol } from "./database"
 import type { BackupManifest } from "./backup"
 

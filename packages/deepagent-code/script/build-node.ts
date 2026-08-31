@@ -53,6 +53,14 @@ const unsupportedBunAPIs = [...new Set(source.match(/\bBun\.[A-Za-z_$][A-Za-z0-9
 if (unsupportedBunAPIs.length > 0) {
   throw new Error(`Node server bundle contains Bun-only runtime APIs: ${unsupportedBunAPIs.join(", ")}`)
 }
+// A literal bun: specifier is rejected by Node's ESM loader ("Only URLs with a scheme in:
+// file, data, node, and electron are supported") and crashes the desktop sidecar utility
+// process. Platform-specific code must go through a conditional import (packages/core
+// imports map) so the node target resolves to a node implementation.
+const bunSpecifiers = [...new Set(source.match(/from\s*"bun:[a-z-]+"/g) ?? [])]
+if (bunSpecifiers.length > 0) {
+  throw new Error(`Node server bundle contains bun: specifiers: ${bunSpecifiers.join(", ")}`)
+}
 if (!source.includes('from "@lydell/node-pty"')) {
   throw new Error("Node server bundle does not import the node-pty platform selector")
 }
