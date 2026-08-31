@@ -125,6 +125,14 @@ export interface CapabilityLoadReceipt {
   readonly state: "loaded"
   readonly tokenCount: number
   readonly byteCount: number
+  /**
+   * The session/turn the body was first loaded for (design §7.5 per-session
+   * restoration). The kernel store is an exact-retry body cache; the durable
+   * per-session facts are the `session_capability_load` rows the adapter writes.
+   * Optional so the store stays usable for identity-only loads.
+   */
+  readonly sessionId?: string
+  readonly turnId?: string
 }
 
 /** Tagged result of a capability load (design §7.4-7.5): `existing` is the exact-retry no-op. */
@@ -157,6 +165,9 @@ export interface CapabilityLoadGrounds {
   readonly permissionHash?: string
   readonly supersedingRef?: string
   readonly deniedReason?: CapabilityLoadDeniedReason
+  /** Session/turn identity the load is bound to (recorded on the receipt for §7.5 restoration). */
+  readonly sessionId?: string
+  readonly turnId?: string
 }
 
 // --- deterministic in-module receipt store (C1A boundary: DB persistence is later) ---
@@ -234,6 +245,8 @@ export function loadCapabilityBody(
     state: "loaded",
     tokenCount,
     byteCount,
+    ...(grounds.sessionId ? { sessionId: grounds.sessionId } : {}),
+    ...(grounds.turnId ? { turnId: grounds.turnId } : {}),
   }
   receiptStore.set(identity, receipt)
   return { state: "available", body, tokenCount, byteCount, receipt }
@@ -356,6 +369,8 @@ export function capabilityLoad(args: {
     permissionHash: args.permissionHash,
     supersedingRef: args.supersedingRef,
     deniedReason: args.deniedReason,
+    sessionId: args.sessionIdentity,
+    turnId: args.turnIdentity,
   })
 
   if (result.state === "budget_exceeded") {

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { sanitizeLocalDirectory } from "../../src/server/routes/instance/httpapi/middleware/workspace-routing"
 import {
   isLocalWorkspaceRoute,
   getWorkspaceRouteSessionID,
@@ -98,5 +99,21 @@ describe("workspaceProxyURL", () => {
     const target = new URL("http://remote:3000/api")
     const result = workspaceProxyURL(target, new URL("http://localhost/users"))
     expect(result.toString()).toBe("http://remote:3000/api/users")
+  })
+})
+
+describe("sanitizeLocalDirectory (SEC-F4/F6 hardening)", () => {
+  test("keeps clean absolute paths normalized", () => {
+    expect(sanitizeLocalDirectory("/Users/me/projects/app")).toBe("/Users/me/projects/app")
+    expect(sanitizeLocalDirectory("/a/../b")).toBe("/b")
+  })
+  test("rejects relative traversal and NUL by falling back to cwd", () => {
+    expect(sanitizeLocalDirectory("../../etc")).toBe(process.cwd())
+    expect(sanitizeLocalDirectory("a/../../b")).toBe(process.cwd())
+    expect(sanitizeLocalDirectory("a\0b")).toBe(process.cwd())
+  })
+  test("keeps ordinary relative directories", () => {
+    expect(sanitizeLocalDirectory(".")).toBe(".")
+    expect(sanitizeLocalDirectory("work")).toBe("work")
   })
 })

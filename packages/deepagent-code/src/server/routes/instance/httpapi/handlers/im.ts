@@ -31,13 +31,17 @@ import { LMNEvents } from "@deepagent-code/core/deepagent/lmn-events"
 
 const IMAttachmentID = IMID.AttachmentID
 
-/** C5-12 — the IM single-write gate for the legacy @mention execution path. When the IM single-write
- * switch is ON, the legacy synchronous @mention double-write side is SKIPPED (the durable IM single-write
- * receipt is the single authority); the WebSocket broadcast + agent progress/status remain the
- * non-authoritative low-latency hint. When OFF the legacy double-write path stays authoritative. Exported
- * for deterministic testing of the flag-gated branch. */
-export const shouldExecuteLegacyAgentMentions = (mentionCount: number): boolean =>
-  mentionCount > 0 && !isEventV2ImSingleWriteEnabled()
+/** C5-12 — the IM single-write gate for the legacy @mention execution path. AUTH-P2-2 close
+ * (decoupled switches): the legacy synchronous @mention path is SKIPPED only when BOTH the
+ * single-write switch (`DEEPAGENT_CODE_EVENT_V2_IM_SINGLE_WRITE`) AND the V4 event-driven IM path
+ * (`DEEPAGENT_CODE_V4_EVENT_DRIVEN_IM`, which publishes im.message.created onto the bus that drives the
+ * durable V2 admission) are ON — the single-write regime replaces the legacy executor, so it must be
+ * paired with the event-driven path that actually carries the mention work. With EITHER switch off the
+ * legacy path stays authoritative (fail-open: an @mention is never silently dropped; the legacy
+ * double-write tradeoff applies only when v4 is ON and single-write is OFF — none of the switches is
+ * stronger than a user's explicit choice). Exported for deterministic testing of the flag-gated branch. */
+export const shouldExecuteLegacyAgentMentions = (mentionCount: number, v4EventDrivenIm: boolean): boolean =>
+  mentionCount > 0 && !(isEventV2ImSingleWriteEnabled() && v4EventDrivenIm)
 
 const IM_MAX_MESSAGE_LENGTH = 100000 // 增加到 100k，更灵活
 
@@ -464,7 +468,7 @@ export const imHandlers = HttpApiBuilder.group(InstanceHttpApi, "im", (handlers)
             // progress/status are the non-authoritative LOW-LATENCY hint surface; the durable receipt is
             // the authority. When the flag is OFF the legacy double-write path stays authoritative
             // (unchanged).
-            if (shouldExecuteLegacyAgentMentions(mentionedAgentNames.length)) {
+            if (shouldExecuteLegacyAgentMentions(mentionedAgentNames.length, flags.v4EventDrivenIm)) {
               yield* executeAgentMentions({
                 workspaceID,
                 directory,

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { Database as BunDatabase } from "bun:sqlite"
+import os from "node:os"
 import path from "path"
 import fs from "node:fs/promises"
 import { Effect } from "effect"
@@ -632,4 +633,41 @@ describe("C7-02 · restore-over-existing + incident recovery", () => {
     expect((await Database.bootstrap(incidentLive)).mode).toBe("ready")
     expect(integrityOf(incidentLive)).toBe("ok")
   }, 90_000)
+})
+
+// ---------------------------------------------------------------------------
+// DATA-P2-3 / §10.4 executor: the production open path must CREATE + VERIFY the
+// pre-upgrade consistency backup before applying forward migrations to an
+// existing DB (previously the state machine said backup_required with mode=ready
+// but NO production path ran the backup — open would migrate without it).
+// ---------------------------------------------------------------------------
+test("§10.4 executor: existing DB with pending migrations backs up + verifies before migrating", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "dt-104-executor-"))
+  try {
+    const filename = path.join(root, "deepagent-code.db")
+    // Real file with a contiguous journal prefix (pending migrations ahead of it).
+    await applyPrefix(filename, registryIds.length - 3)
+    const before = journalIds(filename)
+    expect(before.length).toBe(registryIds.length - 3)
+
+    const mode = await openMigrated(filename)
+    expect(mode?.mode).toBe("ready")
+    expect(mode?.phase).toBe("ready")
+
+    // The pre-upgrade backup was created + verified under <dbDir>/backups.
+    const backupsDir = path.join(root, "backups")
+    const entries = await fs.readdir(backupsDir)
+    expect(entries.some((name) => name.endsWith(".manifest.json"))).toBe(true)
+    const manifestFiles = entries.filter((name) => name.endsWith(".manifest.json"))
+    const manifest = JSON.parse(
+      await fs.readFile(path.join(backupsDir, manifestFiles[0]), "utf8"),
+    ) as { backup: { sha256: string }; source: { schemaDigest: string } }
+    expect(manifest.backup.sha256).toBeTruthy()
+    expect(manifest.source.schemaDigest).toBeTruthy()
+
+    // The journal advanced to the full registry.
+    expect(journalIds(filename).length).toBe(registryIds.length)
+  } finally {
+    await fs.rm(root, { recursive: true, force: true })
+  }
 })

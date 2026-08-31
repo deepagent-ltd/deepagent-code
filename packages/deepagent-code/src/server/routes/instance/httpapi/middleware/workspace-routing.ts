@@ -8,6 +8,7 @@ import * as Fence from "@/server/shared/fence"
 import { getWorkspaceRouteSessionID, isLocalWorkspaceRoute, workspaceProxyURL } from "@/server/shared/workspace-routing"
 import { NotFoundError } from "@/storage/storage"
 import { Flag } from "@deepagent-code/core/flag/flag"
+import path from "node:path"
 import { Context, Data, Effect, Layer, Option, Schema } from "effect"
 import { HttpClient, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { HttpApiMiddleware } from "effect/unstable/httpapi"
@@ -85,6 +86,17 @@ function selectedV2WorkspaceID(
 
 function defaultDirectory(request: HttpServerRequest.HttpServerRequest, url: URL): string {
   return url.searchParams.get("directory") || request.headers["x-deepagent-code-directory"] || process.cwd()
+}
+
+// SEC-F4/F6 (local-routing surface hardening): the directory param is caller-supplied
+// (query/header). Normalize and reject traversal so a stray `..`/NUL can never reach the
+// instance-path machinery. Same-user boundary applies locally; the server-edition
+// gateway-side workspace-root verification is the downstream L1/L2 gate (ledger SEC-F4/F6).
+export const sanitizeLocalDirectory = (raw: string): string => {
+  if (raw.includes("\0")) return process.cwd()
+  if (path.isAbsolute(raw)) return path.normalize(raw)
+  const normalized = path.normalize(raw)
+  return normalized.split(path.sep).includes("..") ? process.cwd() : normalized
 }
 
 function shouldStayOnControlPlane(request: HttpServerRequest.HttpServerRequest, url: URL): boolean {
@@ -179,7 +191,7 @@ function planRequest(
     }
 
     return RequestPlan.Local({
-      directory: session?.directory || defaultDirectory(request, url),
+      directory: sanitizeLocalDirectory(session?.directory || defaultDirectory(request, url)),
       workspaceID: envWorkspaceID ?? workspaceID,
     })
   })

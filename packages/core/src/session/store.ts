@@ -23,10 +23,16 @@ export interface Interface {
   ) => Effect.Effect<{ readonly sessionID: SessionSchema.ID; readonly message: SessionMessage.Message } | undefined>
   /** Lists durable execution claims. Recovery must classify them before any provider work may resume. */
   readonly listSuspended: () => Effect.Effect<ReadonlyArray<SessionSchema.ID>>
-  /** Records write-ahead intent before a process-local execution starts. */
-  readonly claim: (sessionID: SessionSchema.ID) => Effect.Effect<void>
-  /** Releases the execution claim after a known terminal outcome. */
-  readonly release: (sessionID: SessionSchema.ID) => Effect.Effect<void>
+  /**
+   * Records write-ahead intent before a process-local execution starts. AUTH-P2-4 close: this is a
+   * CONDITIONAL UPDATE (CAS — `WHERE time_suspended IS NULL`), and the effect reports whether the
+   * claim won (`true`) or the session was already suspended (`false`). The CAS itself is the fence
+   * (SQLite serializes writers); cross-process handoff is a future design — the boundary is
+   * process-local coordination.
+   */
+  readonly claim: (sessionID: SessionSchema.ID) => Effect.Effect<boolean>
+  /** Releases the execution claim; `true` when the release transitioned a suspended session back. */
+  readonly release: (sessionID: SessionSchema.ID) => Effect.Effect<boolean>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/v2/SessionStore") {}
@@ -74,12 +80,24 @@ export const layer = Layer.effect(
           )
       }),
       claim: Effect.fn("SessionStore.claim")(function* (sessionID) {
+        // CAS: the conditional UPDATE (WHERE time_suspended IS NULL) is the fence — SQLite
+        // serializes writers, so exactly one claimant transitions null -> <our token>. The
+        // wrapped .run() discards changes, so we write a per-call UNIQUE token and read it
+        // back: matching our token => this call won; anything else => already claimed.
+        const token = Date.now() * 1000 + claimSeq++
         yield* db
           .update(SessionTable)
-          .set({ time_suspended: Date.now(), time_updated: sql`${SessionTable.time_updated}` })
+          .set({ time_suspended: token, time_updated: sql`${SessionTable.time_updated}` })
           .where(and(eq(SessionTable.id, sessionID), isNull(SessionTable.time_suspended)))
           .run()
           .pipe(Effect.orDie)
+        const row = yield* db
+          .select({ time_suspended: SessionTable.time_suspended })
+          .from(SessionTable)
+          .where(eq(SessionTable.id, sessionID))
+          .get()
+          .pipe(Effect.orDie)
+        return row?.time_suspended === token
       }),
       release: Effect.fn("SessionStore.release")(function* (sessionID) {
         yield* db
@@ -88,10 +106,19 @@ export const layer = Layer.effect(
           .where(and(eq(SessionTable.id, sessionID), isNotNull(SessionTable.time_suspended)))
           .run()
           .pipe(Effect.orDie)
+        const row = yield* db
+          .select({ time_suspended: SessionTable.time_suspended })
+          .from(SessionTable)
+          .where(eq(SessionTable.id, sessionID))
+          .get()
+          .pipe(Effect.orDie)
+        return row?.time_suspended === null
       }),
     })
   }),
 )
+
+let claimSeq = 0
 
 export const node = makeGlobalNode({ service: Service, layer, deps: [Database.node] })
 
