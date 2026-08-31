@@ -143,16 +143,22 @@ const defaultProbes: PreflightProbes = {
   async readHeader(filename) {
     const stat = await fs.stat(filename).catch(() => null)
     if (!stat || stat.size === 0) return null
-    const bytes = await fs.readFile(filename).catch(() => null)
-    if (!bytes || bytes.length < 16) return { headerValid: false, pageSize: 0 }
-    const magic = bytes.subarray(0, 16)
-    let headerValid = magic.length === 16
-    if (headerValid) {
-      for (let i = 0; i < 16; i++) if (magic[i] !== HEADER_MAGIC_BYTES[i]) { headerValid = false; break }
+    // Read only the magic + page-size bytes. Node's fs.readFile rejects files
+    // larger than 2 GiB (ERR_FS_FILE_TOO_LARGE), which made the desktop
+    // node-sidecar preflight flag a >2 GiB store as "not a SQLite database".
+    const handle = await fs.open(filename, "r").catch(() => null)
+    if (!handle) return { headerValid: false, pageSize: 0 }
+    try {
+      const buffer = Buffer.alloc(18)
+      const { bytesRead } = await handle.read(buffer, 0, 18, 0)
+      if (bytesRead < 16) return { headerValid: false, pageSize: 0 }
+      const headerValid = buffer.subarray(0, 16).equals(HEADER_MAGIC_BYTES)
+      const raw = buffer[16]! | (buffer[17]! << 8)
+      const pageSize = raw === 1 ? 65536 : raw
+      return { headerValid, pageSize }
+    } finally {
+      await handle.close()
     }
-    const raw = bytes[16]! | (bytes[17]! << 8)
-    const pageSize = raw === 1 ? 65536 : raw
-    return { headerValid, pageSize }
   },
   async readJournalMode(filename) {
     const db = readConnection(filename)
