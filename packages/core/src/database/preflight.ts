@@ -12,7 +12,7 @@ export * as DatabasePreflight from "./preflight"
 // query_only-fenced exemption from design §10.6's "migration/backup/recovery
 // 连接不得使用 NORMAL" rule.
 
-import { Database as BunDatabase } from "bun:sqlite"
+import { Database as BunDatabase } from "#sqlite-native"
 import { promises as fs } from "fs"
 
 export interface CapabilityRow {
