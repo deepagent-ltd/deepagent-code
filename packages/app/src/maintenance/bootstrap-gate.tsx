@@ -1,4 +1,4 @@
-import { createResource, Show, untrack, type ParentProps } from "solid-js"
+import { createMemo, createResource, Show, untrack, type ParentProps } from "solid-js"
 import { Splash } from "@deepagent-code/ui/logo"
 import { useServer } from "@/context/server"
 import type { MaintenanceClient } from "./maintenance-client"
@@ -20,10 +20,6 @@ type GateState =
 export function BootstrapGate(props: ParentProps) {
   const server = useServer()
 
-  // Keyed on the active-server key so a server switch re-reads bootstrap; the
-  // resource's state transitions drive the render (the previous createSignal +
-  // createEffect version would not re-render on the promise callback in the
-  // desktop renderer, leaving the app on the splash forever).
   const [bootstrap] = createResource(() => server.key, async (key) => {
     if (!key) return { kind: "degraded" } as GateState
     const conn = untrack(() => server.current)
@@ -32,21 +28,37 @@ export function BootstrapGate(props: ParentProps) {
     return activeClient.bootstrapStatus()
   })
 
-  const g = bootstrap.latest
+  // Derive through an ACCESSOR (memo), never through a captured body constant:
+  // the compiler emits lazy `get when()` props, so a body-level `const g =
+  // gate()` snapshot is frozen forever and the Show never switches (the known
+  // startup-splash deadlock). Accessor reads are reactive.
+  const maintenanceClient = createMemo(() => {
+    const conn = untrack(() => server.current)
+    return conn ? createMaintenanceClientForServer(conn.http) : undefined
+  })
+  const state = createMemo<GateState | undefined>(() => {
+    const latest = bootstrap.latest
+    if (!latest) return undefined
+    if (latest.kind === "ready") return { kind: "ready" }
+    if (latest.kind === "read_only_recovery" || latest.kind === "blocked_schema") {
+      const client = maintenanceClient()
+      return client ? { kind: "maintenance", client } : { kind: "degraded" }
+    }
+    return { kind: "degraded" }
+  })
 
-  if (g?.kind === "maintenance") return <MaintenanceShell client={g.client} />
+  if (state()?.kind === "maintenance") return <MaintenanceShell client={(state() as { client: MaintenanceClient }).client} />
 
   return (
-    <Show when={g?.kind === "ready" || g?.kind === "degraded"} fallback={<SplashLoading />}>
+    <Show
+      when={state()?.kind === "ready" || state()?.kind === "degraded"}
+      fallback={
+        <div class="flex h-dvh w-screen flex-col items-center justify-center bg-background-base">
+          <Splash class="h-16 w-20 animate-pulse opacity-50" />
+        </div>
+      }
+    >
       {props.children}
     </Show>
-  )
-}
-
-function SplashLoading() {
-  return (
-    <div class="flex h-dvh w-screen flex-col items-center justify-center bg-background-base">
-      <Splash class="h-16 w-20 animate-pulse opacity-50" />
-    </div>
   )
 }
