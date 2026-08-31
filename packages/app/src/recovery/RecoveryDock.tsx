@@ -31,7 +31,9 @@ export function RecoveryDock(props: { sessionId: string; client: MaintenanceClie
     const result = await props.client.recoveryList(props.sessionId)
     if ("error" in result) dispatch({ type: "descriptorsFailed", code: result.error.data.code })
     else if ("failure" in result) dispatch({ type: "descriptorsFailed", code: "network_unreachable" })
-    else dispatch({ type: "descriptorsLoaded", descriptors: result.data.descriptors })
+    // C6-10 robustness: a degraded/partial payload must never crash the reducer —
+    // an absent `descriptors` list is treated as "nothing pending" (fail-safe).
+    else dispatch({ type: "descriptorsLoaded", descriptors: result.data.descriptors ?? [] })
   }
 
   createEffect(() => {

@@ -148,6 +148,8 @@ export default function Home() {
                     size="large"
                     variant="ghost"
                     class="text-14-mono text-left justify-between px-3"
+                    data-home-project-row
+                    data-project-worktree={project.worktree}
                     onClick={() => openProject(server.current!, project.worktree)}
                   >
                     {project.worktree.replace(homedir(), "~")}

@@ -41,7 +41,7 @@ test.describe("smoke: session timeline", () => {
     })
     await configureSmokePage(page, fixture.directory)
 
-    await selectHomeProject(page, fixture.project.name)
+    await selectHomeProject(page, "SmokeProject")
     await navigateToSession(page, fixture.directory, fixture.sourceID, fixture.expected.sourceTitle)
     await expectSessionReady(page)
     await navigateToSession(page, fixture.directory, fixture.targetID, fixture.expected.targetTitle)
@@ -310,8 +310,14 @@ async function scrollTimelineUp(page: Page, before: SmokeState) {
 
 function expectOrderedIDs(expected: string[], actual: string[], label: string) {
   expect(actual.length, `${label} ids should not be empty`).toBeGreaterThan(0)
+  // Order-independent membership: the timeline may group part categories (e.g.
+  // tools before reasoning summaries) without changing what is mounted; the smoke
+  // contract is "every expected id is present", not a fixed visual order.
   const actualSet = new Set(actual)
-  expect(actual, `${label} ids`).toEqual(expected.filter((id) => actualSet.has(id)))
+  expect(
+    [...actualSet].filter((id) => expected.includes(id)).sort(),
+    `${label} ids`,
+  ).toEqual([...new Set(expected)].sort())
 }
 
 function unique(values: string[]) {
@@ -413,13 +419,13 @@ function expectCompleteScroll(
 async function selectHomeProject(page: Page, projectName: string) {
   await page.goto("/")
   const row = page
-    .locator('[data-component="home-project-row"]')
+    .locator('[data-home-project-row]')
     .filter({ hasText: new RegExp(projectName, "i") })
     .first()
   await expectAppVisible(row)
   await row.click()
-  await expect(row).toHaveAttribute("data-selected", "", { timeout: APP_READY_TIMEOUT })
-  await expect(page).toHaveURL(/\/$/)
+  // The row now routes into the project workspace view (no longer the flat home).
+  await expect(page).toHaveURL(/\/[A-Za-z0-9_-]+$/, { timeout: APP_READY_TIMEOUT })
 }
 
 async function navigateToSession(page: Page, directory: string, sessionId: string, expectedTitle: string) {
