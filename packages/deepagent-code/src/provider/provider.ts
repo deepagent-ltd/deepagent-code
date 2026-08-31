@@ -1560,7 +1560,12 @@ export const layer = Layer.effect(
           // options.apiKey) but its catalog identity/models are fixed. Leave its catalog entry
           // intact — the custom loader reads the config key — and never treat it as third-party.
           if (providerID === "deepagent-code") continue
-          if (isOfficialProviderID(providerID)) {
+          // `deepagent` is the official first-party provider, but its config entry is the sanctioned
+          // MODEL-SCOPED overlay (the hosted gateway: per-model upstreamProviderID/authProviderID +
+          // per-model provider npm/api), vetted at registration against SUPPORTED_* sets below.
+          // So the generic official-conflict rejection must not drop it: it merges onto the catalog
+          // identity instead (a custom endpoint can never hijack the id, only extend its models).
+          if (isOfficialProviderID(providerID) && providerID !== "deepagent") {
             errors.push(providerConfigError(providerID, THIRD_PARTY_PROVIDER_CONFLICT_MESSAGE))
             continue
           }

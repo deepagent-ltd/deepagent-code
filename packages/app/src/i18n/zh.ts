@@ -148,6 +148,7 @@ export const dict = {
   "dialog.provider.deepagent-code.note": "使用 DeepAgent Code API key 连接 DeepAgent Code",
   "dialog.provider.deepagent-code.tagline": "DeepAgent Code 托管模型网关",
   "dialog.provider.deepseek.note": "使用 API key 连接 DeepSeek 模型",
+  "dialog.provider.deepagent.note": "DeepAgent API——我们自有的官方渠道。一个 Key 即可使用 GPT-5.6、Claude 5、Grok、Gemini、DeepSeek、Qwen、GLM、Kimi 全系模型（OpenAI + Anthropic 双兼容）。前往 https://api.deepagent.ltd 获取密钥",
   "dialog.provider.zhipuai.note": "使用 API key 连接智谱 GLM 模型",
   "dialog.provider.zhipuai-coding-plan.note": "使用 API key 连接智谱 GLM Coding Plan 订阅",
   "dialog.provider.zai.note": "使用 API key 连接 Z.AI GLM 模型",

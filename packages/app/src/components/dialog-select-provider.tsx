@@ -20,6 +20,7 @@ export const DialogSelectProvider: Component = () => {
   const otherGroup = () => language.t("dialog.provider.group.other")
   const customLabel = () => language.t("settings.providers.tag.custom")
   const note = (id: string) => {
+    if (id === "deepagent") return language.t("dialog.provider.deepagent.note")
     if (id === "anthropic") return language.t("dialog.provider.anthropic.note")
     if (id === "openai") return language.t("dialog.provider.openai.note")
     if (id === "deepseek") return language.t("dialog.provider.deepseek.note")
