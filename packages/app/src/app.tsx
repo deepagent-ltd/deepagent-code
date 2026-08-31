@@ -25,6 +25,7 @@ import {
   onCleanup,
   type ParentProps,
   Show,
+  untrack,
 } from "solid-js"
 import { Dynamic } from "solid-js/web"
 import { CommandProvider } from "@/context/command"
@@ -262,24 +263,28 @@ function ConnectionGate(props: ParentProps<{ disableHealthCheck?: boolean }>) {
 
   // Desktop sidecars enter the provider only after their main-process health check.
   // Other non-http connections get a grace period; HTTP connections fail instantly.
-  const [startupHealthCheck, healthCheckActions] = createResource(() =>
-    props.disableHealthCheck || server.current?.type === "sidecar"
-      ? true
-      : Effect.gen(function* () {
-          if (!server.current) return true
-          const { http, type } = server.current
+  // Track only the stable active-server key: depending on `server.current` (a memo
+  // whose identity changes with connection/project churn) re-ran this resource on
+  // every upstream update, flickering `checking` and remounting the bootstrap gate.
+  const [startupHealthCheck, healthCheckActions] = createResource(() => {
+    void server.key
+    const current = untrack(() => server.current)
+    if (props.disableHealthCheck || current?.type === "sidecar") return true
+    return Effect.gen(function* () {
+      if (!current) return true
+      const { http, type } = current
 
-          while (true) {
-            const res = yield* Effect.promise(() => checkServerHealth(http))
-            if (res.healthy) return true
-            if (checkMode() === "background" || type === "http") return false
-          }
-        }).pipe(
-          Effect.timeoutOrElse({ duration: "10 seconds", orElse: () => Effect.succeed(false) }),
-          Effect.ensuring(Effect.sync(() => setCheckMode("background"))),
-          Effect.runPromise,
-        ),
-  )
+      while (true) {
+        const res = yield* Effect.promise(() => checkServerHealth(http))
+        if (res.healthy) return true
+        if (checkMode() === "background" || type === "http") return false
+      }
+    }).pipe(
+      Effect.timeoutOrElse({ duration: "10 seconds", orElse: () => Effect.succeed(false) }),
+      Effect.ensuring(Effect.sync(() => setCheckMode("background"))),
+      Effect.runPromise,
+    )
+  })
   const checking = createMemo(
     () => checkMode() === "blocking" && ["unresolved", "pending"].includes(startupHealthCheck.state),
   )
