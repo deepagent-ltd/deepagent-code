@@ -4,7 +4,7 @@ import { createHash } from "node:crypto"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { Data, Effect } from "effect"
-import { Database } from "bun:sqlite"
+import { Database } from "#sqlite-native"
 
 // §10.4 Consistency backup. A pending migration must never run on a live database copy: the
 // backup is produced by SQLite's own online-safe snapshot path (VACUUM INTO on a separate,
