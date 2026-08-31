@@ -22,6 +22,7 @@ type ProviderItem = ReturnType<ReturnType<typeof useProviders>["connected"]>[num
 const DEEPAGENT_PROVIDER_ID = "deepagent"
 
 const PROVIDER_NOTES = [
+  { match: (id: string) => id === "deepagent", key: "dialog.provider.deepagent.note" },
   { match: (id: string) => id === "anthropic", key: "dialog.provider.anthropic.note" },
   { match: (id: string) => id === "openai", key: "dialog.provider.openai.note" },
   { match: (id: string) => id === "deepseek", key: "dialog.provider.deepseek.note" },
