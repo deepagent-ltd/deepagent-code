@@ -293,6 +293,10 @@ describe("DeepAgentEventBus", () => {
         const afterAck = yield* bus.dueRetries(0)
         expect(afterAck.length).toBe(0)
       }),
+    // Merge of two PubSub fibers + real sleep: a loaded host can exceed the
+    // 5s default test timeout on the join path (observed 5000ms boundary in
+    // the full suite while the isolated run completes in ~400ms).
+    { timeout: 30_000 },
   )
 
   it.live("grouped subscribers deliver each priority exactly once while anonymous sees the full stream", () =>
