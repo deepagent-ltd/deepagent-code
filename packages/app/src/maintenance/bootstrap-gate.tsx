@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, Show, type ParentProps } from "solid-js"
+import { createEffect, createMemo, createSignal, Show, untrack, type ParentProps } from "solid-js"
 import { Splash } from "@deepagent-code/ui/logo"
 import { useServer } from "@/context/server"
 import type { MaintenanceClient } from "./maintenance-client"
@@ -22,26 +22,31 @@ export function BootstrapGate(props: ParentProps) {
   const server = useServer()
   const [gate, setGate] = createSignal<GateState>({ kind: "loading" })
 
-  const client = createMemo(() => {
-    const conn = server.current
-    return conn ? createMaintenanceClientForServer(conn.http) : undefined
-  })
+  // Stable identity for this gate: only the ACTIVE SERVER KEY value may drive a
+  // re-read. Depending on live connection/project signals here made upstream
+  // churn (project list updates, health polls, WSL events — all of which change
+  // `server.current`/connection identity without changing the active server)
+  // reset the gate to loading after every successful bootstrap and remount the
+  // app in a loop: setGate(ready) -> re-run -> setGate(loading) -> … — the app
+  // never left the splash.
+  const serverKey = createMemo(() => server.key)
 
   createEffect(() => {
     // Re-run when the active server changes so a server switch re-reads bootstrap.
-    server.key
+    void serverKey()
     setGate({ kind: "loading" })
-    const active = client()
-    if (!active) {
+    const conn = untrack(() => server.current)
+    const activeClient = conn ? createMaintenanceClientForServer(conn.http) : undefined
+    if (!activeClient) {
       setGate({ kind: "degraded" })
       return
     }
     let cancelled = false
-    void active.bootstrapStatus().then((outcome) => {
+    void activeClient.bootstrapStatus().then((outcome) => {
       if (cancelled) return
       if (outcome.kind === "ready") setGate({ kind: "ready" })
       else if (outcome.kind === "read_only_recovery" || outcome.kind === "blocked_schema")
-        setGate({ kind: "maintenance", client: active })
+        setGate({ kind: "maintenance", client: activeClient })
       else setGate({ kind: "degraded" })
     })
     return () => {
