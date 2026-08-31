@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, Show, untrack, type ParentProps } from "solid-js"
+import { createResource, Show, untrack, type ParentProps } from "solid-js"
 import { Splash } from "@deepagent-code/ui/logo"
 import { useServer } from "@/context/server"
 import type { MaintenanceClient } from "./maintenance-client"
@@ -13,54 +13,31 @@ import { MaintenanceShell } from "./MaintenanceShell"
 // user on an unreachable maintenance page.
 
 type GateState =
-  | { kind: "loading" }
   | { kind: "ready" }
   | { kind: "maintenance"; client: MaintenanceClient }
   | { kind: "degraded" }
 
 export function BootstrapGate(props: ParentProps) {
   const server = useServer()
-  const [gate, setGate] = createSignal<GateState>({ kind: "loading" })
 
-  // Stable identity for this gate: only the ACTIVE SERVER KEY value may drive a
-  // re-read. Depending on live connection/project signals here made upstream
-  // churn (project list updates, health polls, WSL events — all of which change
-  // `server.current`/connection identity without changing the active server)
-  // reset the gate to loading after every successful bootstrap and remount the
-  // app in a loop: setGate(ready) -> re-run -> setGate(loading) -> … — the app
-  // never left the splash.
-  const serverKey = createMemo(() => server.key)
-
-  createEffect(() => {
-    // Re-run when the active server changes so a server switch re-reads bootstrap.
-    void serverKey()
-    setGate({ kind: "loading" })
+  // Keyed on the active-server key so a server switch re-reads bootstrap; the
+  // resource's state transitions drive the render (the previous createSignal +
+  // createEffect version would not re-render on the promise callback in the
+  // desktop renderer, leaving the app on the splash forever).
+  const [bootstrap] = createResource(() => server.key, async (key) => {
+    if (!key) return { kind: "degraded" } as GateState
     const conn = untrack(() => server.current)
     const activeClient = conn ? createMaintenanceClientForServer(conn.http) : undefined
-    if (!activeClient) {
-      setGate({ kind: "degraded" })
-      return
-    }
-    let cancelled = false
-    void activeClient.bootstrapStatus().then((outcome) => {
-      if (cancelled) return
-      if (outcome.kind === "ready") setGate({ kind: "ready" })
-      else if (outcome.kind === "read_only_recovery" || outcome.kind === "blocked_schema")
-        setGate({ kind: "maintenance", client: activeClient })
-      else setGate({ kind: "degraded" })
-    })
-    return () => {
-      cancelled = true
-    }
+    if (!activeClient) return { kind: "degraded" } as GateState
+    return activeClient.bootstrapStatus()
   })
 
-  // Solid re-runs this body on every reactive read, so `g` is the current gate value.
-  const g = gate()
+  const g = bootstrap.latest
 
-  if (g.kind === "maintenance") return <MaintenanceShell client={g.client} />
+  if (g?.kind === "maintenance") return <MaintenanceShell client={g.client} />
 
   return (
-    <Show when={g.kind === "ready" || g.kind === "degraded"} fallback={<SplashLoading />}>
+    <Show when={g?.kind === "ready" || g?.kind === "degraded"} fallback={<SplashLoading />}>
       {props.children}
     </Show>
   )
