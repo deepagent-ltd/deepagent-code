@@ -6,6 +6,7 @@ import path from "node:path"
 import { Data, Effect } from "effect"
 import { Database } from "#sqlite-native"
 import { SupportedReaderProtocol, SupportedWriterProtocol } from "./database"
+import { sha256File } from "./file-sha256"
 import type { BackupManifest } from "./backup"
 
 // §10.4 / §10.9 Automatic backup verification. A backup must be proven recoverable BEFORE any
@@ -79,11 +80,10 @@ export const verify = Effect.fn("BackupVerify.verify")(function* (manifest: Back
     return fail("file_missing", `backup file does not exist: ${backupPath}`)
   }
 
-  const bytes = yield* Effect.tryPromise(() => fs.readFile(backupPath)).pipe(Effect.orElseSucceed(() => null))
-  if (bytes === null) {
+  const actualHash = yield* Effect.tryPromise(() => sha256File(backupPath)).pipe(Effect.orElseSucceed(() => null))
+  if (actualHash === null) {
     return fail("file_missing", `backup file cannot be read: ${backupPath}`)
   }
-  const actualHash = sha256(bytes)
   if (actualHash !== manifest.backup.sha256) {
     return fail(
       "hash_mismatch",
