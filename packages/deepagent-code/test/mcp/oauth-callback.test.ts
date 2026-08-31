@@ -1,6 +1,22 @@
 import { test, expect, describe, afterEach } from "bun:test"
+import { createServer } from "node:http"
 import { McpOAuthCallback } from "../../src/mcp/oauth-callback"
 import { parseRedirectUri } from "../../src/mcp/oauth-provider"
+
+// Bind a probe server on port 0 (kernel-assigned free port), read the port,
+// close it, and hand the port back to the test. Never hardcode a fixed port:
+// it collides with unrelated local services (e.g. an ssh tunnel) and the
+// callback server then silently can't start.
+const freePort = () =>
+  new Promise<number>((resolve, reject) => {
+    const probe = createServer()
+    probe.once("error", reject)
+    probe.listen(0, "127.0.0.1", () => {
+      const address = probe.address()
+      const port = typeof address === "object" && address ? address.port : 0
+      probe.close(() => resolve(port))
+    })
+  })
 
 describe("parseRedirectUri", () => {
   test("returns defaults when no URI provided", () => {
@@ -28,7 +44,8 @@ describe("McpOAuthCallback.ensureRunning", () => {
   })
 
   test("starts server with custom redirectUri port and path", async () => {
-    await McpOAuthCallback.ensureRunning("http://127.0.0.1:18000/custom/callback")
+    const port = await freePort()
+    await McpOAuthCallback.ensureRunning(`http://127.0.0.1:${port}/custom/callback`)
     expect(McpOAuthCallback.isRunning()).toBe(true)
   })
 })
