@@ -197,6 +197,24 @@ export const OFFICIAL_VENDORED_CATALOG: Record<string, Provider> = Schema.decode
   },
 })
 
+/**
+ * Per-model default protocol for the vendored `deepagent` catalog (applied by
+ * the provider loader in fromModelsDevModel). The platform exposes OpenAI
+ * Responses-compatible `/v1/responses` (same key) and documents the Responses
+ * wire for its OpenAI/DeepSeek families; those models therefore default to
+ * `openai-compatible.responses`, everything else stays `openai-compatible.chat`
+ * (Claude-family overrides to anthropic.messages via their `@ai-sdk/anthropic`
+ * npm + `/v1` base). Explicit per-model/attempt selection can override.
+ */
+export const DEEPAGENT_MODEL_PROTOCOL: Record<string, "openai-compatible.responses" | "openai-compatible.chat"> = {
+  "gpt-5.6-sol": "openai-compatible.responses",
+  "gpt-5.6-terra": "openai-compatible.responses",
+  "gpt-5.6-luna": "openai-compatible.responses",
+  "deepseek-v4-flash": "openai-compatible.responses",
+  "deepseek-v4-pro": "openai-compatible.responses",
+  "deepseek-v4-flash-vision-exp": "openai-compatible.responses",
+}
+
 const mergeVendored = (loaded: Record<string, Provider>) => ({ ...OFFICIAL_VENDORED_CATALOG, ...loaded })
 
 export interface Interface {

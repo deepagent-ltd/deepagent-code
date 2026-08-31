@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import { Provider as ModelsDevProvider } from "../src/models-dev"
 import { OFFICIAL_PROVIDER_IDS, isOfficialProvider } from "../src/provider-official"
-import { OFFICIAL_VENDORED_CATALOG } from "../src/models-dev"
+import { DEEPAGENT_MODEL_PROTOCOL, OFFICIAL_VENDORED_CATALOG } from "../src/models-dev"
 import { Schema } from "effect"
 
 test("deepagent is the recommended-first official provider", () => {
@@ -44,6 +44,19 @@ test("vendored catalog exposes the documented model set", () => {
   expect(ids).toContain("kimi-for-coding")
   expect(ids).toContain("kimi-for-coding-highspeed")
   expect(ids.length).toBe(20)
+})
+
+test("GPT and DeepSeek families default to the Responses wire protocol", () => {
+  for (const id of ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]) {
+    expect(DEEPAGENT_MODEL_PROTOCOL[id]).toBe("openai-compatible.responses")
+    expect(OFFICIAL_VENDORED_CATALOG["deepagent"]?.models[id]).toBeDefined()
+  }
+  for (const id of ["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-v4-flash-vision-exp"]) {
+    expect(DEEPAGENT_MODEL_PROTOCOL[id]).toBe("openai-compatible.responses")
+    expect(OFFICIAL_VENDORED_CATALOG["deepagent"]?.models[id]).toBeDefined()
+  }
+  // Non-OpenAI/DeepSeek families keep the Chat default (no overrides declared).
+  expect(DEEPAGENT_MODEL_PROTOCOL["qwen3.8-max"]).toBeUndefined()
 })
 
 test("claude models route through the anthropic protocol against /v1", () => {
