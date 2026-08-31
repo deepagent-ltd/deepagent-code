@@ -50,7 +50,7 @@ export interface ModelProtocolResolution {
  * constant, not evidence: a model is only routed to Responses when it explicitly
  * selects the protocol (the capability probe that produces evidence is C2-03).
  */
-export const RESPONSES_ALLOWLIST: ReadonlySet<string> = new Set(["deepseek"])
+export const RESPONSES_ALLOWLIST: ReadonlySet<string> = new Set(["deepseek", "deepagent"])
 
 type SourceClass = {
   readonly kind: ModelProtocolSelectionKind

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { DateTime, Effect } from "effect"
 import type { ModelProtocol as ModelProtocolTag } from "@deepagent-code/core/contract/model-protocol"
+import { DEEPAGENT_MODEL_PROTOCOL } from "@deepagent-code/core/models-dev"
 import { ModelV2 } from "@deepagent-code/core/model"
 import { ModelProtocol } from "@deepagent-code/core/model-protocol"
 import { ProviderV2 } from "@deepagent-code/core/provider"
@@ -88,6 +89,39 @@ describe("ModelProtocol resolution (design §5.2, C2-01)", () => {
       selectionKind: "allowlisted_provider",
       selectionState: "selected",
     })
+  })
+
+  test("routes the deepagent platform provider's responses protocol as allowlisted", () => {
+    const deepagent = mkProvider(
+      { type: "aisdk", package: "@ai-sdk/openai-compatible", url: "https://api.deepagent.ltd/v1" },
+      "deepagent",
+    )
+    expect(
+      ModelProtocol.resolveModelProtocol(mkModel({ ...compatible, protocol: "openai-compatible.responses" }), deepagent),
+    ).toMatchObject({
+      protocol: "openai-compatible.responses",
+      selectionKind: "allowlisted_provider",
+      selectionState: "selected",
+    })
+  })
+
+  test("deepagent platform GPT/DeepSeek models default to the Responses wire (catalog protocol)", () => {
+    const platform = mkProvider(
+      { type: "aisdk", package: "@ai-sdk/openai-compatible", url: "https://api.deepagent.ltd/v1" },
+      "deepagent",
+    )
+    expect(DEEPAGENT_MODEL_PROTOCOL["gpt-5.6-sol"]).toBe("openai-compatible.responses")
+    expect(DEEPAGENT_MODEL_PROTOCOL["deepseek-v4-flash"]).toBe("openai-compatible.responses")
+    const model = mkModel({ ...compatible, protocol: DEEPAGENT_MODEL_PROTOCOL["gpt-5.6-sol"] })
+    expect(ModelProtocol.resolveModelProtocol(model, platform)).toMatchObject({
+      protocol: "openai-compatible.responses",
+      selectionKind: "allowlisted_provider",
+      selectionState: "selected",
+    })
+    // Non-declared families keep source migration (Chat).
+    expect(
+      ModelProtocol.resolveModelProtocol(mkModel(compatible), platform).protocol,
+    ).toBe("openai-compatible.chat")
   })
 
   test("resolves a non-allowlisted provider's explicit responses protocol without an allowlist claim", () => {
