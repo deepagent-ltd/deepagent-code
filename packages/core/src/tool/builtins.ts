@@ -12,6 +12,7 @@ import { SkillTool } from "./skill"
 import { WebFetchTool } from "./webfetch"
 import { WebSearchTool } from "./websearch"
 import { WriteTool } from "./write"
+import { CapabilityRuntimeSearch } from "../system-context/capability-runtime-search"
 
 /**
  * Composes only the shipped Location-scoped built-in tool transforms.
@@ -45,4 +46,5 @@ export const locationLayer = Layer.mergeAll(
   WebFetchTool.layer,
   WebSearchTool.layer.pipe(Layer.provide(WebSearchTool.defaultConfigLayer)),
   WriteTool.layer,
+  CapabilityRuntimeSearch.layer,
 )
