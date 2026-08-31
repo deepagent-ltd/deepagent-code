@@ -117,6 +117,88 @@ export const Event = {
 
 declare const DEEPAGENT_CODE_MODELS_DEV: Record<string, Provider> | undefined
 
+/**
+ * Vendored catalog entry for the DeepAgent first-party API platform (newAPI
+ * gateway) — the third-party models.dev catalog does not know it, so its
+ * identity + model list live here and flow through the same catalog-driven
+ * loader/UI as every other provider.
+ *
+ * Endpoints per the public docs (https://api.deepagent.ltd/docs):
+ *   - OpenAI-compatible:  https://api.deepagent.ltd/v1   (Chat Completions + Responses)
+ *   - Anthropic-compat:   https://api.deepagent.ltd      (`/v1/messages`)
+ *   - credential env:     DEEPAGENT_API_KEY (sk-… from the platform console)
+ *
+ * Claude-family models carry `@ai-sdk/anthropic` + the `/v1`-suffixed base so the
+ * SDK appends `/messages` → `https://api.deepagent.ltd/v1/messages` (the `/v1`
+ * suffix is mandatory, same convention as kimi-for-coding); the rest speak
+ * `@ai-sdk/openai-compatible` against `/v1`.
+ */
+const VENDORED_MODEL = (input: unknown) => Schema.decodeUnknownSync(Model)(input)
+
+const vendoredModel = (
+  id: string,
+  name: string,
+  input: {
+    context: number
+    output?: number
+    reasoning?: boolean
+    attachment?: boolean
+    family?: string
+    anthropic?: boolean
+  },
+) =>
+  VENDORED_MODEL({
+    id,
+    name,
+    family: input.family,
+    release_date: "2026-08-01",
+    attachment: input.attachment ?? false,
+    reasoning: input.reasoning ?? false,
+    temperature: true,
+    tool_call: true,
+    limit: { context: input.context, output: input.output ?? 16_000 },
+    provider: input.anthropic
+      ? { npm: "@ai-sdk/anthropic", api: "https://api.deepagent.ltd/v1" }
+      : undefined,
+  })
+
+/** Fully schema-decoded (validated at module load) vendored official catalog. */
+export const OFFICIAL_VENDORED_CATALOG: Record<string, Provider> = Schema.decodeUnknownSync(
+  Schema.Record(Schema.String, Provider),
+)({
+  deepagent: {
+    id: "deepagent",
+    name: "DeepAgent API",
+    api: "https://api.deepagent.ltd/v1",
+    npm: "@ai-sdk/openai-compatible",
+    env: ["DEEPAGENT_API_KEY"],
+    models: {
+      "gpt-5.6-sol": vendoredModel("gpt-5.6-sol", "GPT-5.6 Sol", { context: 1_000_000, output: 32_000, reasoning: true, family: "openai" }),
+      "gpt-5.6-terra": vendoredModel("gpt-5.6-terra", "GPT-5.6 Terra", { context: 1_000_000, output: 32_000, reasoning: true, family: "openai" }),
+      "gpt-5.6-luna": vendoredModel("gpt-5.6-luna", "GPT-5.6 Luna", { context: 1_000_000, output: 32_000, reasoning: true, family: "openai" }),
+      "claude-opus-5": vendoredModel("claude-opus-5", "Claude Opus 5", { context: 200_000, output: 32_000, reasoning: true, family: "anthropic", anthropic: true }),
+      "claude-sonnet-5": vendoredModel("claude-sonnet-5", "Claude Sonnet 5", { context: 200_000, output: 32_000, reasoning: true, family: "anthropic", anthropic: true }),
+      "claude-fable-5": vendoredModel("claude-fable-5", "Claude Fable 5", { context: 200_000, output: 32_000, reasoning: true, family: "anthropic", anthropic: true }),
+      "claude-haiku-4.5": vendoredModel("claude-haiku-4.5", "Claude Haiku 4.5", { context: 200_000, output: 32_000, family: "anthropic", anthropic: true }),
+      "grok-4.6": vendoredModel("grok-4.6", "Grok 4.6", { context: 256_000, output: 32_000, reasoning: true, family: "xai" }),
+      "gemini-3.7-flash": vendoredModel("gemini-3.7-flash", "Gemini 3.7 Flash", { context: 1_000_000, output: 64_000, reasoning: true, attachment: true, family: "google" }),
+      "deepseek-v4-flash": vendoredModel("deepseek-v4-flash", "DeepSeek V4 Flash", { context: 128_000, reasoning: true, family: "deepseek" }),
+      "deepseek-v4-pro": vendoredModel("deepseek-v4-pro", "DeepSeek V4 Pro", { context: 128_000, reasoning: true, family: "deepseek" }),
+      "deepseek-v4-flash-vision-exp": vendoredModel("deepseek-v4-flash-vision-exp", "DeepSeek V4 Vision", { context: 128_000, reasoning: true, attachment: true, family: "deepseek" }),
+      "qwen3.8-flash": vendoredModel("qwen3.8-flash", "Qwen 3.8 Flash", { context: 128_000, family: "qwen" }),
+      "qwen3.8-max": vendoredModel("qwen3.8-max", "Qwen 3.8 Max", { context: 128_000, reasoning: true, family: "qwen" }),
+      "glm-5.3": vendoredModel("glm-5.3", "GLM 5.3", { context: 200_000, reasoning: true, family: "glm" }),
+      "glm-5.3-flash": vendoredModel("glm-5.3-flash", "GLM 5.3 Flash", { context: 128_000, family: "glm" }),
+      "kimi-k3": vendoredModel("kimi-k3", "Kimi K3", { context: 256_000, reasoning: true, family: "kimi" }),
+      "k3-256k": vendoredModel("k3-256k", "Kimi K3 256K", { context: 256_000, reasoning: true, family: "kimi" }),
+      "kimi-for-coding": vendoredModel("kimi-for-coding", "Kimi Coding", { context: 128_000, family: "kimi" }),
+      "kimi-for-coding-highspeed": vendoredModel("kimi-for-coding-highspeed", "Kimi Coding HS", { context: 128_000, family: "kimi" }),
+    },
+  },
+})
+
+const mergeVendored = (loaded: Record<string, Provider>) => ({ ...OFFICIAL_VENDORED_CATALOG, ...loaded })
+
 export interface Interface {
   readonly get: () => Effect.Effect<Record<string, Provider>>
   readonly refresh: (force?: boolean) => Effect.Effect<void>
@@ -198,10 +280,10 @@ export const layer = Layer.effect(
 
     const populate = Effect.gen(function* () {
       const fromDisk = yield* loadFromDisk
-      if (fromDisk) return fromDisk
+      if (fromDisk) return mergeVendored(fromDisk)
       const snapshot = yield* loadSnapshot
-      if (snapshot) return snapshot
-      if (Flag.DEEPAGENT_CODE_DISABLE_MODELS_FETCH) return {}
+      if (snapshot) return mergeVendored(snapshot)
+      if (Flag.DEEPAGENT_CODE_DISABLE_MODELS_FETCH) return OFFICIAL_VENDORED_CATALOG
       // Flock is cross-process: concurrent deepagent-code CLIs can race on this cache file.
       const text = yield* Effect.scoped(
         Effect.gen(function* () {
@@ -209,7 +291,7 @@ export const layer = Layer.effect(
           return yield* fetchAndWrite()
         }),
       )
-      return JSON.parse(text) as Record<string, Provider>
+      return mergeVendored(JSON.parse(text) as Record<string, Provider>)
     }).pipe(Effect.withSpan("ModelsDev.populate"), Effect.orDie)
 
     const [cachedGet, invalidate] = yield* Effect.cachedInvalidateWithTTL(populate, Duration.infinity)

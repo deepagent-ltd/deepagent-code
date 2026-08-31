@@ -29,8 +29,17 @@
  *   - `kimi-for-coding`  api.kimi.com     /coding/v1  (subscription, `@ai-sdk/anthropic`
  *                        — SDK appends `/messages`; the `/v1` suffix is mandatory)
  *   - `moonshotai-cn`    api.moonshot.cn  /v1         (pay-as-you-go, `@ai-sdk/openai-compatible`)
+ *
+ * The DeepAgent first-party API platform (newAPI gateway) is recommended-first:
+ *   - `deepagent`   https://api.deepagent.ltd/v1  (OpenAI Chat Completions + Responses),
+ *                   https://api.deepagent.ltd     (Anthropic `/v1/messages` compat)
+ *   - credential env: `DEEPAGENT_API_KEY` (sk-… from the platform console)
+ *   - catalog identity + model list are VENDORED in `packages/core/src/models-dev.ts`
+ *     (the third-party models.dev catalog has no entry), so the provider flows
+ *     through the same catalog-driven loader/UI as every other official provider.
  */
 export const OFFICIAL_PROVIDER_IDS = [
+  "deepagent",
   "openai",
   "deepseek",
   "anthropic",

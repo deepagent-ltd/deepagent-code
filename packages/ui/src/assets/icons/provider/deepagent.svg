@@ -1,0 +1,11 @@
+<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+<rect width="24" height="24" rx="6" fill="#0F172A"/>
+<path d="M7 6h5.2c3.5 0 5.8 2.4 5.8 6s-2.3 6-5.8 6H7V6Zm3.2 2.8v6.4h1.9c1.7 0 2.7-1.1 2.7-3.2 0-2-1-3.2-2.7-3.2h-1.9Z" fill="url(#deepagent-grad)"/>
+<defs>
+<linearGradient id="deepagent-grad" x1="7" y1="6" x2="17" y2="18" gradientUnits="userSpaceOnUse">
+<stop stop-color="#38BDF8"/>
+<stop offset="0.6" stop-color="#A78BFA"/>
+<stop offset="1" stop-color="#6D28D9"/>
+</linearGradient>
+</defs>
+</svg>

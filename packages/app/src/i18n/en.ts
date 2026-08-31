@@ -122,6 +122,7 @@ export const dict = {
   "dialog.provider.deepagent-code.note": "Connect with an DeepAgent Code API key",
   "dialog.provider.deepagent-code.tagline": "DeepAgent Code managed model gateway",
   "dialog.provider.deepseek.note": "DeepSeek models via API key",
+  "dialog.provider.deepagent.note": "DeepAgent API — our own official gateway. One key for GPT-5.6, Claude 5, Grok, Gemini, DeepSeek, Qwen, GLM and Kimi models (OpenAI + Anthropic compatible). Get a key at https://api.deepagent.ltd",
   "dialog.provider.zhipuai.note": "GLM models from Zhipu AI via API key",
   "dialog.provider.zhipuai-coding-plan.note": "GLM Coding Plan subscription from Zhipu AI via API key",
   "dialog.provider.zai.note": "GLM models from Z.AI via API key",
