@@ -1430,8 +1430,20 @@ const resolveDrive = (overrides: Partial<RuntimeFlags.Info>, withV2: boolean) =>
 
 describe("resolveV2SubagentDrive (LEGACY-EXECUTION-ZERO)", () => {
   test("flag OFF and profile OFF resolves no V2 seam (legacy stays the default)", async () => {
-    const { v2Session } = await Effect.runPromise(resolveDrive({}, false))
+    // W6-1: the flag now DEFAULTS ON, so "flag OFF" has to be stated explicitly (empty overrides
+    // would leave the default ON and silently change what this test is exercising).
+    const { v2Session } = await Effect.runPromise(
+      resolveDrive({ experimentalV2SubagentDrive: false }, false),
+    )
     expect(v2Session).toBeUndefined()
+  })
+
+  test("flag defaults ON → resolves the V2 seam from the composition root when the stack is present", async () => {
+    // W6-1 / P2-4 acceptance evidence: `experimentalV2SubagentDrive` ships ON, so a production
+    // composition with the SessionV2 stack (app-runtime/httpapi) resolves the V2 drive WITHOUT any
+    // flag override — the seam is the default subagent-drive path, not an opt-in.
+    const { v2Session } = await Effect.runPromise(resolveDrive({}, true))
+    expect(v2Session).toBe(stubSessionV2)
   })
 
   test("flag ON resolves the V2 seam from the composition root", async () => {

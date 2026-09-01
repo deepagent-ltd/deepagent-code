@@ -47,14 +47,23 @@ describe("RuntimeFlags", () => {
     }),
   )
 
-  it.effect("V2 subagent drive defaults off and enables explicitly (§16.3 order 3 rollout gate)", () =>
+  it.effect("V2 subagent drive defaults ON and disables explicitly (W6/W0 ship-aligned)", () =>
     Effect.gen(function* () {
       const defaults = yield* readFlags.pipe(Effect.provide(fromConfig({})))
-      expect(defaults.experimentalV2SubagentDrive).toBe(false)
-      const on = yield* readFlags.pipe(
-        Effect.provide(fromConfig({ DEEPAGENT_CODE_EXPERIMENTAL_V2_SUBAGENT_DRIVE: "true" })),
+      expect(defaults.experimentalV2SubagentDrive).toBe(true)
+      const off = yield* readFlags.pipe(
+        Effect.provide(fromConfig({ DEEPAGENT_CODE_EXPERIMENTAL_V2_SUBAGENT_DRIVE: "false" })),
       )
-      expect(on.experimentalV2SubagentDrive).toBe(true)
+      expect(off.experimentalV2SubagentDrive).toBe(false)
+    }),
+  )
+
+  it.effect("strictPlanGate defaults ON and disables explicitly (=false → warn-only)", () =>
+    Effect.gen(function* () {
+      const defaults = yield* readFlags.pipe(Effect.provide(fromConfig({})))
+      expect(defaults.strictPlanGate).toBe(true)
+      const off = yield* readFlags.pipe(Effect.provide(fromConfig({ DEEPAGENT_CODE_STRICT_PLAN_GATE: "false" })))
+      expect(off.strictPlanGate).toBe(false)
     }),
   )
 

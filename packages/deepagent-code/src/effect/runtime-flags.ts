@@ -198,12 +198,18 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   // §16.3 order 3 caller wiring: drives subagent turn runners (goal loop / panel / facade / HTTP
   // panel route) through the V2 typed adapter seam — durable admission + explicit drain join,
   // seam-side structured validation, V2→V1 mirroring, and per-turn revert evidence — instead of
-  // legacy prompt orchestration. OFF by default (rollout gate; the V2 runner checklist still has
-  // open items). When ON, V2 is authoritative: a failed V2 turn fails the turn, there is no legacy
-  // fallback. The production compositions (AppRuntime root graph, instance HTTP route root) export
-  // the shared SessionV2.liveLayer singleton for the seam; compositions without it stay on the
-  // legacy path even with the flag on (the seam resolves via serviceOption).
-  experimentalV2SubagentDrive: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_V2_SUBAGENT_DRIVE"),
+  // legacy prompt orchestration. W6: ships ON by default (aligned with the W0 core-V2 owner flip);
+  // `=false` falls back to the legacy V1 sub-session path. When ON, V2 is authoritative: a failed V2
+  // turn fails the turn, there is no legacy fallback. The production compositions (AppRuntime root
+  // graph, instance HTTP route root) export the shared SessionV2.liveLayer singleton for the seam;
+  // compositions without it stay on the legacy path even with the flag on (the seam resolves via
+  // serviceOption).
+  experimentalV2SubagentDrive: flagDefaultOn("DEEPAGENT_CODE_EXPERIMENTAL_V2_SUBAGENT_DRIVE"),
+  // W6 (fail-closed write authorization): write-type subagents and mutating tools must be authorized
+  // by a synced plan / isolated worktree. ON by default; `=false` restores the pre-W6 warn-only
+  // posture (stale-plan edits are warned but allowed; a write-type subagent in a non-git project
+  // falls back to the shared parent directory under a serialization lock).
+  strictPlanGate: flagDefaultOn("DEEPAGENT_CODE_STRICT_PLAN_GATE"),
   experimentalIconDiscovery: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_ICON_DISCOVERY"),
   outputTokenMax: positiveInteger("DEEPAGENT_CODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX"),
   // V4.0.1 P0: three-layer SOFT-LANDING compaction (reminder → fallback "death notes" → hard rollover).

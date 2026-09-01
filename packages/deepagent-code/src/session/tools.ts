@@ -308,10 +308,20 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   // must run this: a mutating tool of EITHER kind that is not bound to a fresh plan step has to be gated,
   // otherwise the model can route all mutations through MCP tools while the plan latch is stale and the
   // gate is a silent no-op. Returns a directive the caller applies: "block" → return a soft
-  // tool-result WITHOUT executing; "pass" → execute normally. Soft warnings are deduplicated and
-  // written only to the process log, never to provider-visible or durable conversation content.
-  // `isMutating` is supplied by the caller (builtin: classifier on the command; MCP: risk tier).
-  type GateDirective = { kind: "block"; output: string } | { kind: "pass" }
+  // tool-result WITHOUT executing; "pass" → execute normally (optionally carrying a W6 grace-release
+  // reminder the caller prepends to the tool result so the model sees it). Soft warnings are
+  // deduplicated and written only to the process log, never to provider-visible or durable conversation
+  // content — EXCEPT the W6 grace release, whose whole purpose is a visible "this was released once"
+  // signal. `isMutating` is supplied by the caller (builtin: classifier on the command; MCP: risk tier).
+  type GateDirective = { kind: "block"; output: string } | { kind: "pass"; reminder?: string }
+  // W6 / P1-1c: a subagent session can escape a stale-plan block ONLY when it can call the `plan` tool.
+  // The sole route to `plan: allow` on a subagent session is the V3.9 §E capability grant
+  // (deriveSubagentSessionPermission + PLAN_WRITE_OWN_GOAL, see agent/subagent-permissions.ts); a
+  // subagent without it (explore/researcher/reviewer/panel/generic task children) cannot repair the
+  // plan, so blocking its writes would deny its only mutating path with no exit — those stay warn-only.
+  const subagentHasPlanEscape =
+    input.session.parentID == null ||
+    (input.session.permission ?? []).some((rule) => rule.permission === "plan" && rule.action === "allow")
   const evaluatePlanGate = (sessionID: string, isMutating: boolean): GateDirective => {
     const latch = AgentGateway.DeepAgentSessionState.planLatch(sessionID)
     const planStale = latch?.latch === "stale" && !AgentGateway.DeepAgentPlanController.shouldEscapeToHuman(latch)
@@ -340,24 +350,66 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
         hasActiveStep: AgentGateway.DeepAgentPlanController.hasActiveStep(plan),
       },
     })
-    // DEFENSIVE: planGate never returns "block" anymore (plan discipline is warn-only at the tool call;
-    // enforcement lives at finalization). We keep this branch only so a FUTURE safety hook that returns
-    // "block" still fails closed. recordPlanGateBlock is retained for that path's telemetry.
-    if (gateDecision.decision === "block") {
-      AgentGateway.DeepAgentSessionState.recordPlanGateBlock(sessionID)
-      const output =
-        latch?.stale_reason != null
-          ? `The plan is stale (${latch.stale_reason}). ${gateDecision.blockReason}. Call the \`plan\` tool to update your plan, then retry this edit.`
-          : `${gateDecision.blockReason}. Call the \`plan\` tool first.`
-      return { kind: "block", output }
+    // W6 (fail-closed write authorization): the plan gate is warn-only at the tool call by default
+    // (enforcement lives at finalization) — UNLESS `strictPlanGate` is ON (the W6 default), in which
+    // case a stale-plan "warn" is escalated to "block": the mutating tool is NOT executed until the
+    // plan is re-synced. `DEEPAGENT_CODE_STRICT_PLAN_GATE=false` restores the warn-only posture. The
+    // block branch also still covers a FUTURE safety hook returning "block" directly.
+    //
+    // W6-1 / P1-1b: the escalation is scoped DOWN to exactly the case that has a repair path: a stale
+    // plan with replan still available (planStale already excludes the shouldEscapeToHuman escape). The
+    // U9 per-step-binding "warn" (plan exists but no active step) is no longer escalated — a missing
+    // active step is not a reality-change signal, and blocking on it reproduces the 677-block incident
+    // (hooks.ts §"WHY THIS IS NOW WARN-ONLY") with no runtime-observable repair step to point at.
+    const strictBlock =
+      flags.strictPlanGate &&
+      gateDecision.decision === "warn" &&
+      !lightweight &&
+      gateDecision.blockReason != null &&
+      planStale &&
+      subagentHasPlanEscape
+    let graceReminder: string | undefined
+    if (gateDecision.decision === "block" || strictBlock) {
+      // W6-1 / P1-1a: U1 anti-deadlock grace release. shouldGraceRelease fires once
+      // consecutive_blocks reaches DEFAULT_GRACE_BLOCK_LIMIT (3), and its whole point is to let a
+      // model that never repairs the plan through instead of denying it forever (plan-controller.ts
+      // §U1 anti-deadlock). The check is performed BEFORE recording this call's block, so exactly
+      // DEFAULT_GRACE_BLOCK_LIMIT consecutive blocks precede the release; the executing call below
+      // resets the counter (resetPlanGateBlocks on actual execution), so the release is a
+      // one-time pass, not a silent permanent lift of the gate.
+      if (strictBlock && latch != null && AgentGateway.DeepAgentPlanController.shouldGraceRelease(latch)) {
+        log.warn("plan gate grace release", {
+          sessionID,
+          consecutiveBlocks: latch.consecutive_blocks,
+          staleReason: latch.stale_reason,
+        })
+        // The strong reminder rides into the tool result (the caller prepends it), so the model sees
+        // this pass was a one-time release, not an unconditional lift, and knows the repair action
+        // (plan/replan) that ends the cycle.
+        graceReminder =
+          `The plan is stale (${latch.stale_reason}) and the plan gate already blocked ${latch.consecutive_blocks} consecutive mutating calls without a plan update. ` +
+          `This call was released ONCE: call the \`plan\` tool now to update the plan (or replan) — otherwise the next mutating call will be blocked again.`
+      } else {
+        AgentGateway.DeepAgentSessionState.recordPlanGateBlock(sessionID)
+        // P2-1: the strict block uses its OWN message. The hook's warn text ("… this action still
+        // proceeds") describes the WARN path, where the tool DOES run; embedding it in a BLOCK result
+        // was contradictory. The block text says the action is held until the plan is re-synced.
+        const output =
+          latch?.stale_reason != null
+            ? `The plan is stale (${latch.stale_reason}). This action is blocked until the plan is re-synced: call the \`plan\` tool to update your plan (or replan), then retry this edit.`
+            : `${gateDecision.blockReason} Call the \`plan\` tool first.`
+        return { kind: "block", output }
+      }
     }
     const gateWarnReason = gateDecision.decision === "warn" && !lightweight ? gateDecision.blockReason : undefined
     // A mutating tool that actually executes is forward progress → reset the consecutive-block counter.
+    // The grace-released call falls through here and resets, which is exactly the "released once"
+    // semantics (the next stale call starts counting again from 0).
     if (isMutating) {
       AgentGateway.DeepAgentSessionState.recordMutation(sessionID)
       AgentGateway.DeepAgentSessionState.resetPlanGateBlocks(sessionID)
     }
-    if (!gateWarnReason) return { kind: "pass" }
+    if (!gateWarnReason && !graceReminder) return { kind: "pass" }
     const fingerprint = JSON.stringify([
       latch?.plan_id ?? null,
       latch?.latch ?? null,
@@ -365,12 +417,12 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
       latch?.replan_count ?? 0,
       plan?.active_step_id ?? null,
       AgentGateway.DeepAgentSessionState.get(sessionID)?.lastAdmissionUserMessageId ?? null,
-      gateWarnReason,
+      gateWarnReason ?? graceReminder ?? null,
     ])
     if (AgentGateway.DeepAgentSessionState.claimPlanGateNudge(sessionID, fingerprint)) {
-      log.info("plan gate warning", { sessionID, reason: gateWarnReason })
+      log.info("plan gate warning", { sessionID, reason: gateWarnReason ?? graceReminder })
     }
-    return { kind: "pass" }
+    return graceReminder ? { kind: "pass", reminder: graceReminder } : { kind: "pass" }
   }
 
   for (const item of yield* registry.tools({
@@ -443,6 +495,12 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
                   )
                   const output = {
                     ...result,
+                    // W6-1 / P1-1a: the grace-released call runs, and the caller prepends the strong
+                    // reminder to the tool result so the model sees the one-time release (the real tool
+                    // output follows verbatim after the separator).
+                    ...(gate.kind === "pass" && gate.reminder
+                      ? { output: [gate.reminder, result.output].filter(Boolean).join("\n\n") }
+                      : {}),
                     attachments: result.attachments?.map((attachment) => ({
                       ...attachment,
                       id: PartID.ascending(),
@@ -599,7 +657,11 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
                 const output = {
                   title: "",
                   metadata,
-                  output: truncated.content,
+                  // W6-1 / P1-1a: grace-release reminder prepended (the real MCP text follows verbatim).
+                  output:
+                    mcpGate.kind === "pass" && mcpGate.reminder
+                      ? [mcpGate.reminder, truncated.content].filter(Boolean).join("\n\n")
+                      : truncated.content,
                   attachments: attachments.map((attachment) => ({
                     ...attachment,
                     id: PartID.ascending(),

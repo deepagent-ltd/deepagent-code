@@ -207,6 +207,26 @@ type StructuredOutputTerminalReason = Extract<
 const subagentSettlementLocks = KeyedMutex.makeUnsafe<SessionID>()
 const sharedWriteFallbackLocks = KeyedMutex.makeUnsafe<string>()
 
+// W6 (fail-closed write authorization): a write-type subagent that cannot obtain an isolated git
+// worktree must NOT fall back to the shared parent directory — that fallback serializes writes but
+// does not isolate them. The typed failure's `code` REUSES the `isolation_unavailable` reason
+// VOCABULARY from `multi-agent-runtime.ts` (~§agent.task failed reason) and `v4-event-runtime.ts`
+// (failedTurn("isolation_unavailable")) so operators can grep one token across runtimes. It does NOT
+// inherit their termination semantics: in those runtimes the reason is PERMANENT — v4-event-runtime
+// surfaces it for human handling (no automatic retry), and multi-agent-runtime skips the
+// alternate-agent handoff (multi-agent-runtime.ts:1023 `permanent = isolation_unavailable`) — whereas
+// on the task-tool path this is a MODEL-RETRYABLE error: the model sees a normal tool failure and can
+// retry (e.g. after the project becomes a git repo, or with DEEPAGENT_CODE_STRICT_PLAN_GATE=false which
+// restores the pre-W6 warn-only shared-directory fallback). `strictPlanGate=false` is the only switch
+// that turns this typed failure back into a warning.
+export class TaskWriteAuthorizationError extends Schema.TaggedErrorClass<TaskWriteAuthorizationError>()(
+  "TaskWriteAuthorizationError",
+  {
+    code: Schema.Literal("isolation_unavailable"),
+    detail: Schema.String,
+  },
+) {}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
 }
@@ -1574,6 +1594,37 @@ export const TaskTool = Tool.define(
         activeRun.leaseExpiresAt > Date.now()
           ? activeRun.executionOwner
           : `${process.pid}:${Identifier.ascending("job")}`
+      // W6-1 / P2-2: settle the pre-execution run after an isolation failure so no ghost run survives
+      // (task_status must show the failure, not a stale admitted/provisioning row). Mirrors the
+      // preflight-failure pattern (workspace_preflight_*): re-read the LATEST run row first.
+      //   - still `admitted` (claim never happened — the durable-routing failure window) →
+      //     failAdmittedTaskRun (the existing preflight settle).
+      //   - `provisioning` under OUR claim (claimTaskProvisioning already ran on the legacy path) →
+      //     settleTaskRun, which is owner+lease guarded and idempotent, and closes the claim.
+      // Either state settles with reason `isolation_unavailable`; the caller then fails the tool with
+      // the typed TaskWriteAuthorizationError.
+      const failIsolationUnavailable = Effect.fn("TaskTool.failIsolationUnavailable")(function* (
+        runID: string,
+        error: TaskWriteAuthorizationError,
+      ) {
+        const latest = yield* getTaskRun(runID).pipe(Effect.provideService(Database.Service, database))
+        if (latest?.state === "admitted") {
+          yield* failAdmittedTaskRun({
+            run: latest,
+            reason: "isolation_unavailable",
+            error: { code: "isolation_unavailable", message: error.detail },
+          }).pipe(Effect.provideService(Database.Service, database), Effect.ignore)
+        } else if (latest?.state === "provisioning" && latest.executionOwner === executionOwner) {
+          yield* settleTaskRun({
+            run: latest,
+            owner: executionOwner,
+            state: "failed",
+            reason: "isolation_unavailable",
+            error: { code: "isolation_unavailable", message: error.detail },
+          }).pipe(Effect.provideService(Database.Service, database), Effect.ignore)
+        }
+        return yield* Effect.fail(error)
+      })
       if (admission.exactRetry && isTerminal(admission.run)) {
         if (admission.run.state === "completed") {
           return {
@@ -2217,8 +2268,36 @@ export const TaskTool = Tool.define(
             (isolate && Option.isSome(worktreeOpt)
               ? yield* worktreeOpt.value
                   .createReady({ name: `agent-${params.subagent_type}-${Identifier.ascending("tool")}` })
-                  .pipe(Effect.catchTag("WorktreeNotGitError", () => Effect.succeed(undefined)))
+                  .pipe(
+                    Effect.catchTag("WorktreeNotGitError", (error) =>
+                      flags.strictPlanGate
+                        ? failIsolationUnavailable(
+                            runState.runID,
+                            new TaskWriteAuthorizationError({
+                              code: "isolation_unavailable",
+                              detail: `${error.message}; write-type subagent isolation requires a git project (set DEEPAGENT_CODE_STRICT_PLAN_GATE=false to fall back to the shared directory)`,
+                            }),
+                          )
+                        : Effect.succeed(undefined),
+                    ),
+                  )
               : undefined)
+          // W6-1 / P1-2: fail-closed under `strictPlanGate` whenever isolation was required but nothing
+          // was provisioned — EXPLICIT `isolation:"worktree"` AND automatic write-isolation of a
+          // write-type subagent are treated identically when the Worktree service is absent (the old
+          // code only failed closed on an attempted-and-failed createReady, so a missing optional
+          // service silently un-isolated every write subagent). `strictPlanGate=false` keeps the
+          // warn-only shared-directory fallback for both.
+          if (flags.strictPlanGate && worktreeInfo === undefined && (isolate || params.isolation === "worktree")) {
+            return yield* failIsolationUnavailable(
+              runState.runID,
+              new TaskWriteAuthorizationError({
+                code: "isolation_unavailable",
+                detail:
+                  "write-type subagent isolation is unavailable (no git worktree service); set DEEPAGENT_CODE_STRICT_PLAN_GATE=false to fall back to the shared directory",
+              }),
+            )
+          }
           const nextSession =
             resumed ??
             (yield* sessions.create({
@@ -2727,8 +2806,10 @@ export const TaskTool = Tool.define(
       // U5: per-subagent worktree isolation. When isolation:"worktree" and this is a fresh subagent
       // (not a resume), allocate a dedicated worktree so parallel subagents can't collide on the same
       // files. The Worktree service is resolved OPTIONALLY (serviceOption) so the task tool does not
-      // add it to the registry's requirement set — when it's absent (e.g. minimal test layers) we fall
-      // back to the shared directory rather than failing.
+      // add it to the registry's requirement set — when it's absent (e.g. minimal test layers) pre-W6
+      // fell back to the shared directory; under `strictPlanGate` (ON) W6-1 now FAILS CLOSED for both
+      // the automatic write-isolation and the explicit `isolation:"worktree"` cases (P1-2), and only
+      // `strictPlanGate=false` restores the shared-directory fallback.
       //
       // P5 (C7): the worktree name MUST be unique per task invocation. The old code hardcoded
       // `agent-${subagent_type}`, so two concurrent subagents of the SAME type raced on one name — and
@@ -2747,8 +2828,36 @@ export const TaskTool = Tool.define(
         (isolate && Option.isSome(worktreeOpt)
           ? yield* worktreeOpt.value
               .createReady({ name: `agent-${params.subagent_type}-${Identifier.ascending("tool")}` })
-              .pipe(Effect.catchTag("WorktreeNotGitError", () => Effect.succeed(undefined)))
+              .pipe(
+                Effect.catchTag("WorktreeNotGitError", (error) =>
+                  flags.strictPlanGate
+                    ? failIsolationUnavailable(
+                        (claimedRun ?? admission.run).runID,
+                        new TaskWriteAuthorizationError({
+                          code: "isolation_unavailable",
+                          detail: `${error.message}; write-type subagent isolation requires a git project (set DEEPAGENT_CODE_STRICT_PLAN_GATE=false to fall back to the shared directory)`,
+                        }),
+                      )
+                    : Effect.succeed(undefined),
+                ),
+              )
           : undefined)
+      // W6-1 / P1-2: fail-closed under `strictPlanGate` whenever isolation was required but nothing
+      // was provisioned — EXPLICIT `isolation:"worktree"` AND automatic write-isolation of a
+      // write-type subagent are treated identically when the Worktree service is absent (the old
+      // code only failed closed on an attempted-and-failed createReady, so a missing optional
+      // service silently un-isolated every write subagent). `strictPlanGate=false` keeps the
+      // warn-only shared-directory fallback for both.
+      if (flags.strictPlanGate && worktreeInfo === undefined && (isolate || params.isolation === "worktree")) {
+        return yield* failIsolationUnavailable(
+          (claimedRun ?? admission.run).runID,
+          new TaskWriteAuthorizationError({
+            code: "isolation_unavailable",
+            detail:
+              "write-type subagent isolation is unavailable (no git worktree service); set DEEPAGENT_CODE_STRICT_PLAN_GATE=false to fall back to the shared directory",
+          }),
+        )
+      }
 
       const nextSession =
         admittedSession ??

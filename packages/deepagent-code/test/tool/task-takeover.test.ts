@@ -84,15 +84,21 @@ const worktreeMock = Layer.mock(Worktree.Service, {
   },
 })
 
-const timed = testEffect(layer({ subagentTimeoutMs: 50 }))
+// W6-1 / P1-2: `timed`/`bounded`/`off` spawn write-type subagents WITHOUT a Worktree service; their
+// subjects are timeout/recovery and output truncation, not isolation — under default strictPlanGate
+// they would now fail closed before spawning, so they select the W6 escape hatch
+// `strictPlanGate:false` (shared-directory fallback). The `…Worktree` fixtures keep the default.
+const timed = testEffect(layer({ subagentTimeoutMs: 50, strictPlanGate: false }))
 const timedWorktree = testEffect(
   Layer.mergeAll(layer({ subagentTimeoutMs: 50 }), worktreeMock),
 )
 const timedBackgroundWorktree = testEffect(
   Layer.mergeAll(layer({ subagentTimeoutMs: 50 }), worktreeMock),
 )
-const bounded = testEffect(layer({ subagentOutputMaxChars: 10 }))
-const off = testEffect(layer({ subagentTimeoutMs: undefined, subagentOutputMaxChars: undefined }))
+const bounded = testEffect(layer({ subagentOutputMaxChars: 10, strictPlanGate: false }))
+const off = testEffect(
+  layer({ subagentTimeoutMs: undefined, subagentOutputMaxChars: undefined, strictPlanGate: false }),
+)
 
 const resetWorktreeLog = () => {
   wt.created.length = 0

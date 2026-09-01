@@ -3,7 +3,7 @@ import path from "node:path"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { Database } from "@deepagent-code/core/database/database"
 import { FSUtil } from "@deepagent-code/core/fs-util"
-import { Deferred, Effect, Exit, Fiber, Layer } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Layer } from "effect"
 import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises"
 import { Agent } from "../../src/agent/agent"
 import { BackgroundJob } from "@/background/job"
@@ -17,7 +17,7 @@ import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { SessionRunState } from "@/session/run-state"
 import { SessionStatus } from "@/session/status"
 
-import { TaskTool, type TaskPromptOps } from "../../src/tool/task"
+import { TaskTool, TaskWriteAuthorizationError, type TaskPromptOps } from "../../src/tool/task"
 import { Truncate } from "@/tool/truncate"
 import { ToolRegistry } from "@/tool/registry"
 import { RuntimeFlags } from "@/effect/runtime-flags"
@@ -62,9 +62,18 @@ const layer = (flags: Partial<RuntimeFlags.Info> = {}) =>
     RuntimeFlags.layer(flags),
   )
 
-const it = testEffect(layer())
-const background = testEffect(layer({ experimentalBackgroundSubagents: true }))
-const durableBackground = testEffect(layer({ experimentalBackgroundSubagents: true, subagentControlPlane: "durable" }))
+// W6-1 / P1-2: `layer()` KEEPS the default `strictPlanGate` (ON) — the W6 fail-closed fixtures below
+// build on it and must assert the typed failure. The legacy `it`/`background`/… fixtures spawn
+// write-type subagents WITHOUT a Worktree service; their subjects are prompt orchestration,
+// background jobs, cancellation and downgrade — NOT isolation. Under default strict those would now
+// fail closed before spawning (and did: isolation is unavailable), so they explicitly select the W6
+// escape hatch `strictPlanGate:false` (the pre-W6 shared-directory fallback), matching the review
+// guidance: isolation behaviour is asserted ONLY in the "W6 task write isolation fail-closed" block.
+const it = testEffect(layer({ strictPlanGate: false }))
+const background = testEffect(layer({ experimentalBackgroundSubagents: true, strictPlanGate: false }))
+const durableBackground = testEffect(
+  layer({ experimentalBackgroundSubagents: true, subagentControlPlane: "durable", strictPlanGate: false }),
+)
 const worktreeFixture = { directory: "", safeRemoved: 0 }
 const worktreeIsolation = testEffect(
   Layer.mergeAll(
@@ -92,6 +101,11 @@ const worktreeIsolation = testEffect(
   ),
 )
 const automaticWorktree = testEffect(Layer.mergeAll(layer(), Worktree.defaultLayer, Git.defaultLayer, PRQueue.layer))
+// W6 escape hatch: `strictPlanGate=false` keeps the pre-W6 warn-only shared-directory fallback when
+// Git worktrees are unavailable (still serialized per-parent via sharedWriteFallbackLocks).
+const automaticWorktreeLoose = testEffect(
+  Layer.mergeAll(layer({ strictPlanGate: false }), Worktree.defaultLayer, Git.defaultLayer, PRQueue.layer),
+)
 const durableAutomaticWorktree = testEffect(
   Layer.mergeAll(
     layer({ experimentalBackgroundSubagents: true, subagentControlPlane: "durable" }),
@@ -113,8 +127,44 @@ const automaticWorktreeWithTimeout = testEffect(
   Layer.mergeAll(layer({ subagentTimeoutMs: 5_000 }), Worktree.defaultLayer, Git.defaultLayer, PRQueue.layer),
 )
 // U5: background subagents are ON by default now; this variant explicitly disables them to assert
-// the rejection path still works when a user opts out.
-const noBackground = testEffect(layer({ experimentalBackgroundSubagents: false }))
+// the rejection path still works when a user opts out. See the `it` fixture note (W6-1 / P1-2) on
+// why the legacy fixtures select `strictPlanGate:false`.
+const noBackground = testEffect(layer({ experimentalBackgroundSubagents: false, strictPlanGate: false }))
+
+// W6 fail-closed write authorization: a Worktree service that cannot isolate (non-git project) —
+// `createReady` fails with NotGitError. With `strictPlanGate` ON (default) a write-type subagent must
+// FAIL with the typed TaskWriteAuthorizationError instead of falling back to the shared parent dir.
+const worktreeUnavailable = testEffect(
+  Layer.mergeAll(
+    layer(),
+    Layer.mock(Worktree.Service, {
+      create: () => Effect.fail(new Worktree.NotGitError({ message: "Worktrees are only supported for git projects" })),
+      createReady: () =>
+        Effect.fail(new Worktree.NotGitError({ message: "Worktrees are only supported for git projects" })),
+      remove: () => Effect.succeed(true),
+      safeRemove: () => Effect.succeed(true),
+    }),
+  ),
+)
+// W6 escape hatch: `strictPlanGate=false` restores the pre-W6 warn-only shared-directory fallback.
+const worktreeUnavailableLoose = testEffect(
+  Layer.mergeAll(
+    layer({ strictPlanGate: false }),
+    Layer.mock(Worktree.Service, {
+      create: () => Effect.fail(new Worktree.NotGitError({ message: "Worktrees are only supported for git projects" })),
+      createReady: () =>
+        Effect.fail(new Worktree.NotGitError({ message: "Worktrees are only supported for git projects" })),
+      remove: () => Effect.succeed(true),
+      safeRemove: () => Effect.succeed(true),
+    }),
+  ),
+)
+// W6-1 / P1-2: a composition where the Worktree SERVICE IS ABSENT entirely (serviceOption → None, no
+// attempt was ever made). Under default `strictPlanGate` this must fail closed for a write-type
+// subagent and for explicit `isolation:"worktree"` alike — the missing service previously silently
+// un-isolated every write subagent into the shared parent directory.
+const worktreeServiceMissing = testEffect(layer())
+const worktreeServiceMissingLoose = testEffect(layer({ strictPlanGate: false }))
 
 function defer<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void
@@ -1361,8 +1411,8 @@ describe("tool.task", () => {
     ),
   )
 
-  automaticWorktree.instance(
-    "serializes write subagents in a shared directory when Git worktrees are unavailable",
+  automaticWorktreeLoose.instance(
+    "serializes write subagents in a shared directory when Git worktrees are unavailable [strictPlanGate=false]",
     () =>
       Effect.gen(function* () {
         const directory = (yield* TestInstance).directory
@@ -2729,5 +2779,147 @@ describe("tool.task", () => {
         provider: { deepagent: { name: "DeepAgent", options: { subagentIntensity: "downgrade" }, models: {} } },
       },
     },
+  )
+})
+
+// W6 — fail-closed write authorization: a write-type subagent whose worktree isolation is
+// unavailable must fail with the typed TaskWriteAuthorizationError (default `strictPlanGate`),
+// and `strictPlanGate=false` restores the warn-only shared-directory fallback.
+describe("W6 task write isolation fail-closed", () => {
+  // Structural stand-in for the TaskTool.Def init result (execute) used by these tests; the
+  // parameter/context shapes are only exercised indirectly through the TaskTool wrapper.
+  type StandaloneDef = {
+    execute: (args: unknown, ctx: unknown) => Effect.Effect<{ metadata: { sessionId: string } }, unknown>
+  }
+  const executeWorktreeSubagent = (def: StandaloneDef, params: Record<string, unknown> = {}) =>
+    Effect.gen(function* () {
+      const { chat, assistant } = yield* seed()
+      const exit = yield* def
+        .execute(
+          { description: "write into non-git project", prompt: "do the write", subagent_type: "general", ...params },
+          {
+            sessionID: chat.id,
+            messageID: assistant.id,
+            agent: "build",
+            abort: new AbortController().signal,
+            extra: { promptOps: stubOps() },
+            messages: [],
+            metadata: () => Effect.void,
+            ask: () => Effect.void,
+          },
+        )
+        .pipe(Effect.exit)
+      return { exit, chat }
+    })
+
+  // W6-1 / P2-2: assert the pre-execution run was settled by the isolation failure — no ghost
+  // admitted/provisioning row survives (the durable task_run row must read failed + the typed reason).
+  const expectRunSettledFailed = (chat: { id: SessionID }) =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      const rows = yield* db
+        .select({ state: TaskRunTable.state, reason: TaskRunTable.reason })
+        .from(TaskRunTable)
+        .where(eq(TaskRunTable.parent_session_id, chat.id))
+        .all()
+        .pipe(Effect.orDie)
+      expect(rows).toHaveLength(1)
+      expect(rows[0]).toEqual({ state: "failed", reason: "isolation_unavailable" })
+    })
+
+  const expectTypedIsolationFailure = (exit: Exit.Exit<unknown, unknown>) => {
+    // The Tool wrapper converts typed failures to die/defect via Effect.orDie, so assert on the
+    // squashed cause (works for both Failure and Die exits; a Success exit fails the instanceof).
+    const error = Exit.match(exit, {
+      onSuccess: () => undefined,
+      onFailure: (cause) => Cause.squash(cause),
+    })
+    expect(error).toBeInstanceOf(TaskWriteAuthorizationError)
+    if (error instanceof TaskWriteAuthorizationError) {
+      expect(error.code).toBe("isolation_unavailable")
+    }
+  }
+
+  worktreeUnavailable.instance(
+    "write-type subagent in a non-git project fails closed with the typed error (default)",
+    () =>
+      Effect.gen(function* () {
+        const tool = yield* TaskTool
+        const def = yield* tool.init()
+        const { exit, chat } = yield* executeWorktreeSubagent(def as unknown as StandaloneDef)
+        expectTypedIsolationFailure(exit)
+        yield* expectRunSettledFailed(chat)
+      }),
+  )
+
+  worktreeUnavailableLoose.instance(
+    "strictPlanGate=false restores the warn-only shared-directory fallback (no typed failure)",
+    () =>
+      Effect.gen(function* () {
+        const tool = yield* TaskTool
+        const def = yield* tool.init()
+        const { exit, chat } = yield* executeWorktreeSubagent(def as unknown as StandaloneDef)
+        expect(Exit.isSuccess(exit)).toBe(true)
+        if (Exit.isSuccess(exit)) {
+          const sessions = yield* Session.Service
+          const child = yield* sessions.get(SessionID.make(exit.value.metadata.sessionId))
+          // Fallback runs in the parent (instance) directory — no worktree isolation.
+          expect(child.directory).toBe(chat.directory)
+        }
+      }),
+  )
+
+  worktreeServiceMissing.instance(
+    "write-type subagent with NO Worktree service fails closed with the typed error (default) [P1-2]",
+    () =>
+      Effect.gen(function* () {
+        const tool = yield* TaskTool
+        const def = yield* tool.init()
+        const { exit, chat } = yield* executeWorktreeSubagent(def as unknown as StandaloneDef)
+        expectTypedIsolationFailure(exit)
+        yield* expectRunSettledFailed(chat)
+      }),
+  )
+
+  worktreeServiceMissing.instance(
+    "explicit isolation:worktree with NO Worktree service fails closed with the typed error (default) [P1-2]",
+    () =>
+      Effect.gen(function* () {
+        const tool = yield* TaskTool
+        const def = yield* tool.init()
+        const { exit, chat } = yield* executeWorktreeSubagent(def as unknown as StandaloneDef, {
+          isolation: "worktree",
+        })
+        expectTypedIsolationFailure(exit)
+        yield* expectRunSettledFailed(chat)
+      }),
+  )
+
+  worktreeServiceMissingLoose.instance(
+    "strictPlanGate=false with NO Worktree service keeps the shared-directory fallback [P1-2]",
+    () =>
+      Effect.gen(function* () {
+        const tool = yield* TaskTool
+        const def = yield* tool.init()
+        const { exit, chat } = yield* executeWorktreeSubagent(def as unknown as StandaloneDef)
+        expect(Exit.isSuccess(exit)).toBe(true)
+        if (Exit.isSuccess(exit)) {
+          const sessions = yield* Session.Service
+          const child = yield* sessions.get(SessionID.make(exit.value.metadata.sessionId))
+          expect(child.directory).toBe(chat.directory)
+        }
+      }),
+  )
+
+  automaticWorktree.instance(
+    "write-type subagent in a git project still succeeds (worktree isolation available)",
+    () =>
+      Effect.gen(function* () {
+        const tool = yield* TaskTool
+        const def = yield* tool.init()
+        const { exit } = yield* executeWorktreeSubagent(def as unknown as StandaloneDef)
+        expect(Exit.isSuccess(exit)).toBe(true)
+      }),
+    { git: true },
   )
 })
