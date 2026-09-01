@@ -2,9 +2,10 @@
  * C0-08 legacy-zero inventory gate tests.
  *
  * The gate is a red oracle on the current tree: the C0-01 frozen caller inventory still
- * classifies production entry points as legacy owner/writer (903 dimension roles), one
- * double-write path (event.v2-bridge), three legacy-only adapters carrying authority, and the
- * V2 selection bridge still commits four v2-none graph-revision fallbacks. The counter tests
+ * classifies production entry points as legacy owner/writer (910 dimension roles), no
+ * double-write path (event.v2-bridge is the C7-05 V2 authority), three legacy-only adapters
+ * carrying authority, and the V2 selection bridge commits zero v2-none graph-revision
+ * fallbacks. The counter tests
  * verify the COUNTER implementation against both a small fixture inventory and the real
  * buildInventory() output, and mustBeZero() is asserted to FAIL honestly on the current tree —
  * green arrives only when C1B/C2-C5 migration completes.

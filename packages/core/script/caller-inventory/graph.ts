@@ -554,7 +554,9 @@ export function bodyLogsOnlyHit(entryFile: string, extraRoots: readonly string[]
 }
 
 /** A client/service INVOCATION call site in the entry's own handler body: a body chain that performs a
- * member call on a bound client object (e.g. Daemon.Service.start / daemon.client().v2.agent.list).
+ * member call on a bound client object (e.g. Daemon.Service.start / daemon.client().v2.agent.list), or
+ * FORWARDS the bound receiver as an argument VALUE into an invocation (e.g. the desktop app main
+ * passing `spawnLocalServer` into `startPrimarySidecar({ ... })` — the callee binds and invokes it).
  * Evidence is the actual call-site chain line — never a module self-export/reference anchor. */
 function clientInvocationHit(
   entryFile: string,
@@ -586,8 +588,40 @@ function clientInvocationHit(
         }
       }
     }
+    // Forwarded-receiver scan (NEW-P6-B call-path-only): a call in the entry's own module whose
+    // ARGUMENT subtree references the bound receiver identifier as a passed value. The forwarding
+    // call line is the genuine invocation the entry's flow performs (the callee binds/invokes the
+    // receiver) — never a passive import or a bare reference line, because the identifier must occur
+    // inside a call's arguments.
+    for (const [binding, target] of Object.entries(DELEGATION_CLIENT_BINDINGS)) {
+      if (target !== targetId) continue
+      const forwarded = forwardedReceiverLine(sf, binding)
+      if (forwarded !== undefined) {
+        return { marker: `delegates:${targetId}`, file, line: forwarded }
+      }
+    }
   }
   return undefined
+}
+
+/** First call line in a module whose argument subtree references `binding` as a value (identifier
+ * passed into a call — the entry forwards the bound receiver to the callee's invocation). */
+function forwardedReceiverLine(sf: ts.SourceFile, binding: string): number | undefined {
+  let found: number | undefined
+  const visit = (node: ts.Node): void => {
+    if (found !== undefined) return
+    if (ts.isCallExpression(node)) {
+      for (const arg of node.arguments) {
+        if (refsInSubtree(sf, arg).has(binding)) {
+          found = sf.getLineAndCharacterOfPosition(node.getStart()).line + 1
+          return
+        }
+      }
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(sf)
+  return found
 }
 
 /** A port module provides a service via a static Layer.effect/sync/succeed first-arg = port service. */

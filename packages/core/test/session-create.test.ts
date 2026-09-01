@@ -610,7 +610,9 @@ describe("SessionV2.create", () => {
 
       expect(yield* unavailable(session.shell({ sessionID: created.id, command: "pwd" }))).toBe("shell")
       expect(yield* unavailable(session.skill({ sessionID: created.id, skill: "review" }))).toBe("skill")
-      expect(yield* unavailable(session.switchAgent({ sessionID: created.id, agent: "build" }))).toBe("switchAgent")
+      // W1.2: switchAgent is REAL (AgentSwitched event) — it no longer reports unavailable; the
+      // remaining manual ops (shell/skill/compact) stay typed refusals.
+      yield* session.switchAgent({ sessionID: created.id, agent: "build" })
       // §16.3 order 4 package E contract pin: manual compaction stays a TYPED refusal (not a
       // defect) until the legacy compaction state machine is ported; overflow-triggered
       // compaction is covered by the runner continuation suites.
