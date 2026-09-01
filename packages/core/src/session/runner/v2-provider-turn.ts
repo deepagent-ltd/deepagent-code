@@ -166,7 +166,7 @@ export const CurrentCampaign = Context.Reference<Campaign | undefined>(
 
 export const CurrentOwnerCampaign = Context.Reference<string | undefined>(
   "@deepagent-code/v2/V2ProviderTurn/CurrentOwnerCampaign",
-  { defaultValue: ownerCampaignFromEnv },
+  { defaultValue: defaultOwnerCampaign },
 )
 
 export interface OwnerAuthorizationInterface {
@@ -1223,6 +1223,19 @@ export function ownerCampaignFromEnv(): string | undefined {
   return id && validCampaignID(id) ? id : undefined
 }
 
+// W0.5 (blocker-1): a DEFAULT install never sets DEEPAGENT_CODE_V2_OWNER_CAMPAIGN, so the runtime
+// must resolve the same default campaign the production mint derives: `v2-owner-<buildIdentity>`
+// with the build identity from the installation version (script/mint-owner-campaign.ts derives the
+// SAME id from package.json version, which equals the DEEPAGENT_CODE_VERSION define of a release
+// build). Without this fallback every default install failed owner qualification even with the
+// correct authorization row delivered. An explicit (valid) env value still wins so a shadow or
+// staging campaign can override.
+export function defaultOwnerCampaign(): string {
+  const id = ownerCampaignFromEnv()
+  if (id) return id
+  return `v2-owner-${InstallationVersion}`
+}
+
 export function releaseQualified() {
   return (
     ReleaseQualification.seal === Hash.sha256(CanonicalJson.stringify(ReleaseQualificationPayload)) &&
@@ -1235,14 +1248,16 @@ export function releaseQualified() {
 
 export function ownerQualified(db: Database.Interface["db"], campaignId?: string) {
   return Effect.gen(function* () {
-    if (!campaignId) return false
+    // W0.5: an omitted campaign resolves to the installation default (`v2-owner-${InstallationVersion}`)
+    // so a default install with the delivered authorization row qualifies without any env wiring.
+    const resolved = campaignId ?? defaultOwnerCampaign()
     const identity = yield* Effect.serviceOption(CurrentBuildIdentity)
     if (identity._tag === "None" || identity.value === undefined) return false
     const buildIdentity = identity.value
     const row = yield* db
       .select()
       .from(V2OwnerAuthorizationTable)
-      .where(eq(V2OwnerAuthorizationTable.campaign_id, requireCampaignID(campaignId)))
+      .where(eq(V2OwnerAuthorizationTable.campaign_id, requireCampaignID(resolved)))
       .get()
       .pipe(Effect.orDie)
     if (!row || row.status !== "active") return false

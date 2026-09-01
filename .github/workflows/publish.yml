@@ -97,6 +97,32 @@ jobs:
           GH_REPO: ${{ needs.version.outputs.repo }}
           GH_TOKEN: ${{ steps.committer.outputs.token }}
 
+      # W0.5 (W0.3 owner authorization chain): mint the signed owner campaign for the SAME build
+      # identity the binaries just compiled (DEEPAGENT_CODE_VERSION — the value build.ts defines
+      # as the runtime InstallationVersion) and export the row for delivery. Release availability
+      # wins: a missing signing secret must NEVER block the publish — the step warns and the
+      # authorization line is minted + delivered by operations afterwards.
+      - name: Mint V2 owner authorization (v2.0 design W0.3)
+        id: mint-owner
+        continue-on-error: true
+        working-directory: packages/deepagent-code
+        env:
+          DEEPAGENT_CODE_VERSION: ${{ needs.version.outputs.version }}
+          DEEPAGENT_CODE_OWNER_SIGNING_KEY: ${{ secrets.DEEPAGENT_CODE_OWNER_SIGNING_KEY }}
+        run: |
+          bun install
+          if [ -z "$DEEPAGENT_CODE_OWNER_SIGNING_KEY" ]; then
+            echo "::warning::owner-authorization NOT minted: DEEPAGENT_CODE_OWNER_SIGNING_KEY secret is missing. The release proceeds; operations must mint and deliver owner-authorization.json for this version."
+            exit 0
+          fi
+          bun script/mint-owner-campaign.ts --build-identity "$DEEPAGENT_CODE_VERSION" --export "$RUNNER_TEMP/owner-authorization.json"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: owner-authorization
+          path: ${{ runner.temp }}/owner-authorization.json
+          if-no-files-found: warn
+
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: deepagent-code-cli
@@ -456,6 +482,12 @@ jobs:
           path: packages/cli/dist
 
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        continue-on-error: true
+        with:
+          name: owner-authorization
+          path: /tmp/owner-authorization
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         if: needs.version.outputs.release
         with:
           pattern: latest-yml-*
@@ -506,6 +538,20 @@ jobs:
             exit 1
           fi
           gh release upload "v${{ needs.version.outputs.version }}" "${files[@]}" --clobber --repo "${{ needs.version.outputs.repo }}"
+
+      # W0.5: deliver the signed owner-authorization.json with the release artifacts. The runtime
+      # seed (v2-owner-seed.ts) reads it from the install root; if it is missing the release still
+      # stands and operations must deliver the line for this version.
+      - name: Upload owner authorization release asset
+        if: needs.version.outputs.release
+        env:
+          GH_TOKEN: ${{ steps.committer.outputs.token }}
+        run: |
+          if [ -f /tmp/owner-authorization/owner-authorization.json ]; then
+            gh release upload "v${{ needs.version.outputs.version }}" /tmp/owner-authorization/owner-authorization.json --clobber --repo "${{ needs.version.outputs.repo }}"
+          else
+            echo "::warning::owner-authorization.json was not minted for this release — operations must mint and deliver it before the default install can pass owner qualification"
+          fi
 
       - run: ./script/publish.ts
         env:

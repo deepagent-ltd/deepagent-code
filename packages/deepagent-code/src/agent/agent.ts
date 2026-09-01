@@ -102,13 +102,24 @@ export type Info = DeepMutable<Schema.Schema.Type<typeof Info>>
 export const MENTION_TRIGGER = "mention"
 
 /**
+ * W0.4 (P4) — the compatible mention trigger-word set. `mention` is the canonical word (an agent
+ * declares mentionability by listing `{event:"mention"}`); `im.mention` is the event-aligned alias for
+ * the same @mention semantics — the mention router routes by the mentioned agent's NAME, so both words
+ * declare the same behavior. `im.message.created` is deliberately NOT in the set: it is the bus EVENT
+ * type, and an agent declaring it routes by event type through the pure router, not by mention
+ * semantics.
+ */
+export const MENTION_TRIGGER_WORDS = [MENTION_TRIGGER, "im.mention"] as const
+
+/**
  * W0.4 — is the agent mentionable? The declaration DEFAULTS to `["mention"]`: an agent that declares NO
- * triggers is mentionable by default (spec W0.4 item 1); an explicit declaration list must contain the
- * mention trigger word. The @mention router refuses (receipt `agent_no_trigger_mention`) only when an
- * agent explicitly declared triggers that exclude `mention`.
+ * triggers is mentionable by default (spec W0.4 item 1); an explicit declaration list must contain a
+ * mention trigger word (see MENTION_TRIGGER_WORDS). The @mention router refuses (receipt
+ * `agent_no_trigger_mention`) only when an agent explicitly declared triggers that exclude it.
  */
 export const declaresMentionTrigger = (triggers: readonly AgentMeta.Trigger[] | undefined): boolean =>
-  triggers === undefined || triggers.some((t) => t.event === MENTION_TRIGGER)
+  triggers === undefined ||
+  triggers.some((t) => (MENTION_TRIGGER_WORDS as readonly string[]).includes(t.event))
 
 const GeneratedAgent = Schema.Struct({
   identifier: Schema.String,

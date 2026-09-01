@@ -11,6 +11,9 @@ import { WorkspaceConfig } from "@deepagent-code/core/deepagent/workspace-config
 import type { AgentDescriptor } from "@deepagent-code/core/im/mention-parser"
 import { AgentListProviderService } from "@deepagent-code/core/im/agent-list-provider"
 import { IMRepository } from "@deepagent-code/core/im/repository"
+import type { IMRepositoryInterface } from "@deepagent-code/core/im/repository"
+import { IMBroadcasterService } from "@deepagent-code/core/im/broadcaster"
+import { isEventV2AdmissionEnabled } from "@deepagent-code/core/deepagent/event-admission"
 import { declaresMentionTrigger, MENTION_TRIGGER } from "@/agent/agent"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import * as Log from "@deepagent-code/core/util/log"
@@ -123,6 +126,37 @@ export interface MentionReceiptPort {
   readonly receipt: (input: MentionReceiptInput) => Effect.Effect<void, unknown>
 }
 
+/**
+ * P7 — how many of the group's most recent messages the receipt dedup pre-check scans. Receipt writes
+ * happen immediately after the initiating mention and a retry re-drive of the same event follows promptly
+ * (the retry pump), so a bounded newest-first window catches the duplicate while keeping the guard cheap;
+ * an old duplicate landing outside the window is harmless (the receipt is still truthful).
+ */
+export const MENTION_RECEIPT_DEDUP_WINDOW = 100
+
+/**
+ * P7 — was this receipt already written? The idempotency key is groupID + messageID + agentID (a generic
+ * no-declarer receipt keys on groupID + messageID with agentID undefined). Compared against the metadata
+ * JSON this port itself writes, so a retry re-drive of the SAME mention event never double-writes; a
+ * DIFFERENT mention (different messageID/agentID) never collides. No key material (no groupID or
+ * messageID) ⇒ no dedup (the log-only fallback has no durable write to guard).
+ */
+const receiptAlreadyWritten = (repo: IMRepositoryInterface, input: MentionReceiptInput) =>
+  Effect.gen(function* () {
+    if (!input.groupID || !input.messageID) return false
+    const page = yield* repo.listMessages({ groupID: input.groupID, limit: MENTION_RECEIPT_DEDUP_WINDOW })
+    // IMMessage.metadata is `unknown | null` (free-form JSON column) — narrow to the receipt shape.
+    return page.messages.some((m) => {
+      const meta = m.metadata as { type?: unknown; messageID?: unknown; agentID?: unknown } | null
+      return (
+        meta !== null &&
+        meta.type === AGENT_NO_TRIGGER_MENTION &&
+        meta.messageID === input.messageID &&
+        meta.agentID === input.agentID
+      )
+    })
+  })
+
 /** W0.4 — the default receipt port: writes the receipt as a durable IM message into the initiating group
  * via IMRepository (metadata.type = `agent_no_trigger_mention`), exactly like the legacy executor's
  * `agent_run` reply messages. In isolated contexts (no IM repository / no group on the event) it falls
@@ -135,27 +169,48 @@ export const defaultMentionReceiptPort: MentionReceiptPort = {
         log.info("mention_no_trigger_receipt", { ...input, surface: "log-only" })
         return
       }
+      // P7 — retry idempotency: a bus retry re-drive of the same mention must not double-write the receipt.
+      if (yield* receiptAlreadyWritten(repo, input)) return
       const text =
         input.reason === "no_declared_trigger"
           ? `没有 agent 声明支持该触发器（${MENTION_TRIGGER}）——本次 @mention 未执行。`
           : `@${input.agentNames[0] ?? ""} (${input.agentID ?? "unknown"}) 未声明 ${MENTION_TRIGGER} 触发器——没有 agent 声明支持该触发器，本次 @mention 未执行。`
-      yield* repo
-        .createMessage({
-          groupID: input.groupID,
-          senderID: input.agentID ?? "system",
-          senderType: input.agentID ? "agent" : "system",
-          type: "text",
-          content: text,
-          mentions: [],
-          metadata: {
-            type: AGENT_NO_TRIGGER_MENTION,
-            ...(input.agentID != null ? { agentID: input.agentID } : {}),
-            ...(input.agentNames.length > 0 ? { agentNames: [...input.agentNames] } : {}),
-            ...(input.eventID ? { eventID: input.eventID } : {}),
-            ...(input.messageID != null ? { messageID: input.messageID } : {}),
-          },
-        })
-        .pipe(Effect.asVoid)
+      const message = yield* repo.createMessage({
+        groupID: input.groupID,
+        senderID: input.agentID ?? "system",
+        senderType: input.agentID ? "agent" : "system",
+        type: "text",
+        content: text,
+        mentions: [],
+        metadata: {
+          type: AGENT_NO_TRIGGER_MENTION,
+          ...(input.agentID != null ? { agentID: input.agentID } : {}),
+          ...(input.agentNames.length > 0 ? { agentNames: [...input.agentNames] } : {}),
+          ...(input.eventID ? { eventID: input.eventID } : {}),
+          ...(input.messageID != null ? { messageID: input.messageID } : {}),
+        },
+      })
+      // P3 — the receipt is a real IM message, so broadcast it exactly like the legacy executor's reply
+      // broadcast (agent-orchestrator.ts broadcastAgentResult) — the body text reaches live clients, not
+      // just the DB. Best-effort: the broadcast call is synchronous and never fails; a missing broadcaster
+      // service (isolated contexts) keeps the durable write.
+      const broadcaster = Option.getOrUndefined(yield* Effect.serviceOption(IMBroadcasterService))
+      broadcaster?.broadcast(input.groupID, {
+        type: "message_created",
+        data: {
+          id: message.id,
+          groupID: message.groupID,
+          senderID: message.senderID,
+          senderType: message.senderType,
+          messageType: message.type,
+          content: message.content,
+          mentions: message.mentions,
+          metadata: message.metadata,
+          replyToID: message.replyToID,
+          createdAt: message.createdAt,
+          updatedAt: message.updatedAt,
+        },
+      })
     }),
 }
 
@@ -421,6 +476,33 @@ export const layerWith = (options?: LayerOptions) =>
             } as const
           }
 
+          // P8 — mixed mentions: some names dispatch while others resolved to NOTHING (unknown names).
+          // The dispatch target does its work; the unknown names must not pass silently — write the
+          // generic no-declarer receipt for exactly those names (resolved-but-not-declaring agents are
+          // already receipted per-agent above, and hidden actors are the built-in trigger routers that
+          // back a visible agent of the same name).
+          const unresolved = resolved.filter((r) => r.agent === undefined)
+          if (unresolved.length > 0) {
+            yield* writeMentionReceipt({
+              eventID: event.id,
+              groupID,
+              messageID,
+              agentID: undefined,
+              agentNames: unresolved.map((r) => r.name),
+              reason: "no_declared_trigger",
+            }).pipe(
+              Effect.tap(() =>
+                Effect.sync(() =>
+                  log.info("mention_no_trigger_receipt", {
+                    eventID: event.id,
+                    agentNames: unresolved.map((r) => r.name),
+                    reason: "no_declared_trigger",
+                  }),
+                ),
+              ),
+            )
+          }
+
           const priority = event.priority
           const outcome = yield* port.dispatch({ event, priority, targets }).pipe(
             Effect.as("ok" as const),
@@ -474,10 +556,20 @@ export const layerWith = (options?: LayerOptions) =>
             // the authorization). Runs BEFORE `EventRouter.route` so a mention never lands in the
             // `no_match` terminal drop path (route.dropped log + silent ack): it dispatches to mentioned
             // agents that declare the mention trigger and receipts everyone else (agent_no_trigger_mention
-            // / the "没有 agent 声明支持该触发器" no-declarer receipt). Inside the flag gate: with the
-            // event path off, the flag_disabled fail-closed drop stays authoritative.
+            // / the "没有 agent 声明支持该触发器" no-declarer receipt).
+            //
+            // P1/P2 (design W0.4 note 4) — the mention branch is gated on `isEventV2AdmissionEnabled()`,
+            // the SAME predicate the dispatch port uses (multi-agent-runtime.ts dispatch —
+            // dispatchV2 vs coordinate). v4 ON ∧ admission ON ⇒ this dispatcher owns the mention (dispatch
+            // or receipt) while the legacy synchronous executor in the IM handler is skipped — the
+            // double-execution regression (P1) is closed from both sides. v4 ON ∧ admission OFF ⇒ the
+            // explicit fall-back-to-legacy matrix: this mention branch is skipped, the event keeps the
+            // pre-W0.4 pure-router path (the legacy executor in the IM handler runs instead — the
+            // admission OFF combo is "legacy path authoritative", NOT a silent loss; no receipt is
+            // written, which is the documented explicit-disabled semantic). With the event path off the
+            // flag_disabled fail-closed drop stays authoritative.
             const mentions = mentionNamesFor(event)
-            if (mentions.length > 0) {
+            if (mentions.length > 0 && isEventV2AdmissionEnabled()) {
               return yield* handleMention(event, agents, mentions)
             }
           }

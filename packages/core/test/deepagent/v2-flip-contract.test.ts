@@ -43,9 +43,15 @@ describe("C7-05 flip contract (production-entry ON + explicit kill-switch)", () 
     withEnv(EVENT_V2_ADMISSION_ENV, " true", () => expect(isEventV2AdmissionEnabled()).toBe(true))
     withEnv(EVENT_V2_ADMISSION_ENV, "yes", () => expect(isEventV2AdmissionEnabled()).toBe(true))
     withEnv(EVENT_V2_ADMISSION_ENV, "2", () => expect(isEventV2AdmissionEnabled()).toBe(true))
+    // W0.5 (audit 9): only /^(false|0)$/ (plus "") are OFF by the table — "off"/"no" are NOT off
+    // values and must stay ON; do not "fix" them into OFF.
+    withEnv(EVENT_V2_ADMISSION_ENV, "off", () => expect(isEventV2AdmissionEnabled()).toBe(true))
+    withEnv(EVENT_V2_ADMISSION_ENV, "no", () => expect(isEventV2AdmissionEnabled()).toBe(true))
     withEnv(IM_SINGLE_WRITE_ENV, "", () => expect(isEventV2ImSingleWriteEnabled()).toBe(false))
     withEnv(IM_SINGLE_WRITE_ENV, "false ", () => expect(isEventV2ImSingleWriteEnabled()).toBe(false))
     withEnv(IM_SINGLE_WRITE_ENV, "yes", () => expect(isEventV2ImSingleWriteEnabled()).toBe(true))
+    withEnv(IM_SINGLE_WRITE_ENV, "off", () => expect(isEventV2ImSingleWriteEnabled()).toBe(true))
+    withEnv(IM_SINGLE_WRITE_ENV, "no", () => expect(isEventV2ImSingleWriteEnabled()).toBe(true))
   })
 
   test("kill-switch =false / =0 restores the legacy authority", () => {

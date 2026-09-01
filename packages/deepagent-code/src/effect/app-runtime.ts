@@ -1,6 +1,7 @@
 import { Context, Effect, Layer, ManagedRuntime } from "effect"
 import { V2OwnerAuthorization } from "@deepagent-code/core/session/runner/v2-owner-authorization"
 import { V2OwnerAuthorizationTable } from "@deepagent-code/core/session/runner/v2-owner-authorization.sql"
+import { V2OwnerSeed } from "@deepagent-code/core/session/runner/v2-owner-seed"
 import { V2ProviderTurn } from "@deepagent-code/core/session/runner/v2-provider-turn"
 import { Hash } from "@deepagent-code/core/util/hash"
 import { attach } from "./run-service"
@@ -145,6 +146,12 @@ const baseAppLayer = Layer.mergeAll(
 export const AppLayer = baseAppLayer.pipe(
   Layer.provide(PromptEpoch.v2RunnerSeamLayer.pipe(Layer.provide(Database.defaultLayer))),
   Layer.provideMerge(devCampaignMint),
+  // W0.5: deliver the shipped owner-authorization.json into the local DB once per runtime build
+  // (after the database layer initialized; fail-open on file absence, fail-closed on verification
+  // failure — nothing unverifiable is written).
+  Layer.provideMerge(
+    V2OwnerSeed.layer({ env: process.env, appRoot: V2OwnerSeed.defaultOwnerAuthorizationAppRoot() }),
+  ),
 )
 
 const rt = ManagedRuntime.make(AppLayer, { memoMap })

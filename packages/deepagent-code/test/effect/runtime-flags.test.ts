@@ -114,6 +114,14 @@ describe("RuntimeFlags", () => {
         )
         expect(stillOn.coreV2ExecutionOwner).toBe(true)
       }
+      // W0.5 (audit 9): the table only treats ""/"false"/"0" as OFF — "off"/"no" are NOT off values
+      // and must keep the default-ON state (do not extend the OFF set in the future).
+      for (const value of ["off", "no"]) {
+        const stillOn = yield* readFlags.pipe(
+          Effect.provide(fromConfig({ DEEPAGENT_CODE_CORE_V2_EXECUTION_OWNER: value })),
+        )
+        expect(stillOn.coreV2ExecutionOwner).toBe(true)
+      }
     }),
   )
 
