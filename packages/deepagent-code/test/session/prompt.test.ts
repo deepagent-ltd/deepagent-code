@@ -340,6 +340,12 @@ function makePrompt(input?: PromptLayerOptions) {
   const runtimeFlags = RuntimeFlags.layer({
     experimentalEventSystem: true,
     coreV2ExecutionOwner: false,
+    // W6-1 / P1-2: this harness provides no Worktree service (the registry is built over a stubbed
+    // RuntimeBase to avoid the Worktree→Project→Database chain). The prompt-loop tests that drive the
+    // `task` tool spawn WRITE-TYPE general subagents, which under the default strictPlanGate would now
+    // fail closed before spawning — so the harness selects the W6 escape hatch (shared-directory
+    // fallback); strict isolation behaviour itself is asserted in test/tool/task.test.ts.
+    strictPlanGate: false,
     ...input?.flags,
   })
   const pluginLayer = input?.plugin ? Layer.succeed(Plugin.Service, input.plugin) : Plugin.defaultLayer
