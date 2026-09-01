@@ -120,7 +120,7 @@ const PANELS: readonly PanelDef[] = [
   { mode: "debug", icon: "debug", titleKey: "session.panel.debug", group: "dev", bucket: "narrow" },
   { mode: "profile", icon: "profile", titleKey: "session.panel.profile", group: "dev", bucket: "narrow" },
   // PARITY-001: cross-session cost/token overview aggregated from the synced session store.
-  { mode: "stats", icon: "dash", titleKey: "session.stats.title", group: "dev", bucket: "narrow" },
+  { mode: "stats", icon: "dollar", titleKey: "session.stats.title", group: "dev", bucket: "narrow" },
   // Dock — the movable panels; only surface here when docked to the side (see gating below).
   {
     mode: "terminal",

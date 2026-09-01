@@ -192,8 +192,13 @@ const main = Effect.gen(function* () {
   app.commandLine.appendSwitch("proxy-bypass-list", "<-loopback>")
   const features = app.commandLine.getSwitchValue("enable-features")
   app.commandLine.appendSwitch("enable-features", features ? `${jsCallStackFeature},${features}` : jsCallStackFeature)
-  if (!app.isPackaged && !app.commandLine.hasSwitch("remote-debugging-port")) {
-    app.commandLine.appendSwitch("remote-debugging-port", "9222")
+  // The remote debugging port is OPT-IN (DEEPAGENT_CODE_DEBUG_PORT). Always-on 9222 in dev let any
+  // CDP client (DevTools frontend, IDE inspector) attach and emit protocol noise into the app log —
+  // Autofill.enable/setAddresses -32601 (Electron does not implement the Autofill domain) and stale
+  // DOM "Node cannot be found" resolutions. Pass --remote-debugging-port explicitly to override.
+  const debugPort = process.env.DEEPAGENT_CODE_DEBUG_PORT
+  if (!app.isPackaged && !app.commandLine.hasSwitch("remote-debugging-port") && debugPort) {
+    app.commandLine.appendSwitch("remote-debugging-port", debugPort)
   }
 
   if (!app.requestSingleInstanceLock()) {
