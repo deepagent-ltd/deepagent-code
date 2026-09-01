@@ -5,6 +5,7 @@ import { Effect } from "effect"
 import type { Database } from "../database/database"
 import type { EventWorkEnvelope } from "../contract/event-envelope"
 import { EventAdmission, type SessionWorkAdapter } from "./event-admission"
+import { flipFlagValueOn } from "./flip-flag"
 import { ImSingleWriteTable, type ImSingleWriteStatus } from "./im-single-write-sql"
 
 // C5-09 — IM SINGLE-WRITE. Design authority: docs/core-v2.0-beta/design.md §B1 (the IM double-write:
@@ -39,10 +40,8 @@ type DatabaseClient = Database.Interface["db"]
  * runtime entrypoints (packages/deepagent-code/src/index.ts sets the env); the predicate stays
  * explicit-env. `=false`/`=0` restores the legacy double-write path as the authority. */
 export const IM_SINGLE_WRITE_ENV = "DEEPAGENT_CODE_EVENT_V2_IM_SINGLE_WRITE"
-export const isEventV2ImSingleWriteEnabled = (): boolean => {
-  const value = process.env[IM_SINGLE_WRITE_ENV]?.toLowerCase()
-  return value === "true" || value === "1"
-}
+export const isEventV2ImSingleWriteEnabled = (): boolean =>
+  flipFlagValueOn(process.env[IM_SINGLE_WRITE_ENV], false)
 
 /** Why an IM single-write was refused. Fail-closed; each reason is a typed refusal. */
 export type ImSingleWriteErrorReason =

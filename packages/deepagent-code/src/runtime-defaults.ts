@@ -3,11 +3,15 @@
 // `applyRuntimeDefaults()` at the earliest process point, so both processes see the same canonical
 // defaults and the default values are queryable in exactly one module.
 //
-// REPO-WIDE SEMANTICS (mirrors the `stableOn` convention in effect/runtime-flags.ts): every
-// boolean below ships ON by default. An explicit `=false` or `=0` (case-insensitive, surrounding
-// whitespace ignored) turns it OFF; any other explicit value is left to the consumer's own
-// predicate. `applyRuntimeDefaults` is strictly set-if-unset: an explicit value — including
-// `=false`/`=0` — is never overwritten, so a kill-switch set by the operator survives.
+// REPO-WIDE SEMANTICS: one flag table lives in `@deepagent-code/core/deepagent/flip-flag`
+// (`flipFlagValueOn`). Every boolean below ships ON by default in production entries
+// (`unsetDefault = true`); the core gates read the SAME table with `unsetDefault = false`
+// (isolated contexts keep the C7-05 legacy default). For every DEFINED value both sides agree
+// exactly: trim + lowercase, `""` / `"false"` / `"0"` → OFF, any other value → ON.
+// `applyRuntimeDefaults` is strictly set-if-unset: an explicit value — including `=false`/`=0` —
+// is never overwritten, so a kill-switch set by the operator survives.
+
+import { flipFlagValueOn } from "@deepagent-code/core/deepagent/flip-flag"
 
 export const EVENT_V2_ADMISSION_ENV = "DEEPAGENT_CODE_EVENT_V2_ADMISSION"
 export const IM_SINGLE_WRITE_ENV = "DEEPAGENT_CODE_EVENT_V2_IM_SINGLE_WRITE"
@@ -38,10 +42,7 @@ const DEFAULT_ON_ENV_KEYS = [
   CONTEXT_FEDERATION_PRODUCTION_ENV,
 ] as const
 
-const isOn = (value: string | undefined): boolean => {
-  const normalized = value?.trim().toLowerCase()
-  return normalized !== "false" && normalized !== "0"
-}
+const isOn = (value: string | undefined): boolean => flipFlagValueOn(value, true)
 
 const optionalString = (value: string | undefined): string | undefined => {
   const trimmed = value?.trim()

@@ -7,8 +7,9 @@ import { applyRuntimeDefaults, RUNTIME_DEFAULTS_SNAPSHOT_ENV, runtimeDefaultsEnv
 applyRuntimeDefaults()
 
 if (process.env[RUNTIME_DEFAULTS_SNAPSHOT_ENV] === "1") {
-  // Test-only affordance (W0.1 verification case 4): print the canonical defaults vector and exit
-  // without starting the server — test/runtime-defaults.test.ts compares both entries' vectors.
+  // Test-only backdoor (W0.1 verification case 4): print the canonical defaults vector and exit
+  // without starting the server. Any process (or inherited child env) carrying this key exits
+  // here — never set it in production shells, packaging, or service managers.
   console.log(JSON.stringify(runtimeDefaultsEnvSnapshot(process.env)))
   process.exit(0)
 }

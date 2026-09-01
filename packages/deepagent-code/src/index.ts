@@ -46,15 +46,20 @@ import { isRecord } from "@/util/record"
 import { applyRuntimeDefaults, RUNTIME_DEFAULTS_SNAPSHOT_ENV, runtimeDefaultsEnvSnapshot } from "./runtime-defaults"
 
 // W0.1 — the production runtime defaults (V2 event admission / IM single-write / Core V2 execution
-// owner / four-graph federation) are applied at the very first process statement, before any
-// RuntimeFlags or event reader below can run, and before yargs.parse() reaches the middleware.
-// The desktop sidecar (src/node.ts) applies the same single call, so the two entries cannot
-// diverge; default values live in one module only (src/runtime-defaults.ts).
+// owner / four-graph federation) are applied straight after this entry's static imports evaluate,
+// before any RuntimeFlags or event reader below can run, and before yargs.parse() reaches the
+// middleware. The desktop sidecar (src/node.ts) applies the same single call, so the two entries
+// cannot diverge; default values live in one module only (src/runtime-defaults.ts). This placement
+// is safe today because no module in this import graph reads these envs during evaluation — any
+// future evaluation-time read after this point would silently see the unset (legacy-OFF) value and
+// must go through RuntimeFlags/event readers instead.
 applyRuntimeDefaults()
 
 if (process.env[RUNTIME_DEFAULTS_SNAPSHOT_ENV] === "1") {
-  // Test-only affordance (W0.1 verification case 4): print the canonical defaults vector and exit
-  // without starting the CLI — test/runtime-defaults.test.ts compares both entries' vectors.
+  // Test-only backdoor (W0.1 verification case 4): print the canonical defaults vector and exit
+  // without starting the CLI — test/runtime-defaults.test.ts compares both entries' vectors. Any
+  // process (or inherited child env) carrying this key exits here, so never set it in production
+  // shells, packaging, or service managers.
   console.log(JSON.stringify(runtimeDefaultsEnvSnapshot(process.env)))
   process.exit(0)
 }
