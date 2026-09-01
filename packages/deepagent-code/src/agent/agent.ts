@@ -94,6 +94,22 @@ export const Info = Schema.Struct({
 }).annotate({ identifier: "Agent" })
 export type Info = DeepMutable<Schema.Schema.Type<typeof Info>>
 
+/**
+ * W0.4 — the IM @mention trigger word. An agent declares mention support by listing a trigger whose
+ * `event` is this word (the existing `triggers` field above is the registration convention — spec W0.4
+ * item 1's `triggers?: string[]` maps onto it; the mention router checks `event` entries).
+ */
+export const MENTION_TRIGGER = "mention"
+
+/**
+ * W0.4 — is the agent mentionable? The declaration DEFAULTS to `["mention"]`: an agent that declares NO
+ * triggers is mentionable by default (spec W0.4 item 1); an explicit declaration list must contain the
+ * mention trigger word. The @mention router refuses (receipt `agent_no_trigger_mention`) only when an
+ * agent explicitly declared triggers that exclude `mention`.
+ */
+export const declaresMentionTrigger = (triggers: readonly AgentMeta.Trigger[] | undefined): boolean =>
+  triggers === undefined || triggers.some((t) => t.event === MENTION_TRIGGER)
+
 const GeneratedAgent = Schema.Struct({
   identifier: Schema.String,
   whenToUse: Schema.String,

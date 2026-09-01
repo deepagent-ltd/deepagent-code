@@ -12,6 +12,7 @@ import {
 } from "../contract/event-envelope"
 import { EventWorkEnvelope as EnvelopePolicy } from "./event-work-envelope"
 import { DeepAgentEventAdmissionTable, type EventAdmissionStatus } from "./event-admission-sql"
+import { flipFlagValueOn } from "./flip-flag"
 
 // C5-04 — V2 ADMISSION BRIDGE (default OFF). Design authority: docs/core-v2.0-beta/design.md
 // §8.4 ("V2 admission receipt 绑定 envelope hash" — the admission receipt binds the bounded work
@@ -47,10 +48,8 @@ type DatabaseClient = Database.Interface["db"]
  * explicit-env so isolated test/daemon contexts keep their own behavior. `=false`/`=0` restores
  * the legacy event turn path as the authority. */
 export const EVENT_V2_ADMISSION_ENV = "DEEPAGENT_CODE_EVENT_V2_ADMISSION"
-export const isEventV2AdmissionEnabled = (): boolean => {
-  const value = process.env[EVENT_V2_ADMISSION_ENV]?.toLowerCase()
-  return value === "true" || value === "1"
-}
+export const isEventV2AdmissionEnabled = (): boolean =>
+  flipFlagValueOn(process.env[EVENT_V2_ADMISSION_ENV], false)
 
 /** Why an admission was refused. Fail-closed; each reason is a typed refusal. */
 export type AdmissionErrorReason =

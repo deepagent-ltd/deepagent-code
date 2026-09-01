@@ -655,6 +655,13 @@ export const consumerRegistrationLayer = Layer.effectDiscard(
 // The EventDispatcher layer whose DispatchPort is the live MultiAgentRuntime. Its subscribe/tick/retry
 // daemons run only when a V4 daemon is enabled (else runLoops:false ⇒ built but dormant). The dispatcher
 // additionally flag-checks v4MultiAgentRuntime per event before dispatching.
+//
+// W0.4 — @mention 路由修复: the mention handler (mention-aware routing + `agent_no_trigger_mention`
+// receipt writing, replacing the `no_match` silent drop) lives in `EventDispatcher.handle` — see
+// event-dispatcher.ts's "W0.4 — @mention 路由修复与默认统一" block and `mentionNamesFor` /
+// `resolveMentioned` / `defaultMentionReceiptPort`. It is already active here: the default receipt
+// port writes the receipt as a durable IM message via IMRepository (provided below by the shared
+// provide stack, see server.ts), with a log-only fallback in isolated contexts.
 const dispatcherLayer = Layer.unwrap(
   Effect.gen(function* () {
     const rt = yield* MultiAgentRuntime.Service

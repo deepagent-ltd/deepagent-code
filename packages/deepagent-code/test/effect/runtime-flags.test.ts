@@ -21,13 +21,21 @@ describe("RuntimeFlags", () => {
       expect(isCoreV2OnlyVersion("1.4.8-r0")).toBe(true)
       expect(isCoreV2OnlyVersion("1.4.8.r3")).toBe(true)
       expect(isCoreV2OnlyVersion("1.4.8.5")).toBe(true)
+      expect(isCoreV2OnlyVersion("1.4.8rc1")).toBe(false)
+      expect(isCoreV2OnlyVersion("1.4.80")).toBe(false)
+      expect(isCoreV2OnlyVersion("1.4.70")).toBe(false)
       expect(isCoreV2OnlyVersion("2.0alpha")).toBe(true)
+      expect(isCoreV2OnlyVersion("2.0alpha.1")).toBe(true)
+      expect(isCoreV2OnlyVersion("2.0beta")).toBe(true)
       expect(isCoreV2OnlyVersion("2.0.0-alpha.0")).toBe(true)
       expect(isCoreV2OnlyVersion("2.0.0-alpha.1")).toBe(true)
+      expect(isCoreV2OnlyVersion("2.0.0-alpha15")).toBe(true)
       expect(isCoreV2OnlyVersion("2.0.0-beta.0")).toBe(true)
       expect(isCoreV2OnlyVersion("2.0.0-beta.1")).toBe(true)
+      expect(isCoreV2OnlyVersion("2.0.0-beta15")).toBe(true)
+      expect(isCoreV2OnlyVersion("2.0.1-alpha.0")).toBe(false)
+      expect(isCoreV2OnlyVersion("2.0.1-beta.0")).toBe(false)
       expect(isCoreV2OnlyVersion("2.0.0")).toBe(false)
-      expect(isCoreV2OnlyVersion("1.4.80")).toBe(false)
     }),
   )
 
@@ -88,10 +96,12 @@ describe("RuntimeFlags", () => {
 
   it.effect("W0.2: coreV2ExecutionOwner turns off only on explicit =false/=0 (case/whitespace tolerant)", () =>
     Effect.gen(function* () {
-      const on = yield* readFlags.pipe(
+      // W0.1 semantic convergence (core/deepagent/flip-flag): a defined "" counts as an explicit
+      // off value; only an ABSENT key keeps the default-ON state.
+      const empty = yield* readFlags.pipe(
         Effect.provide(fromConfig({ DEEPAGENT_CODE_CORE_V2_EXECUTION_OWNER: "" })),
       )
-      expect(on.coreV2ExecutionOwner).toBe(true)
+      expect(empty.coreV2ExecutionOwner).toBe(false)
       for (const value of ["false", "0", "False", " FALSE ", "\t0\n", " false "]) {
         const off = yield* readFlags.pipe(
           Effect.provide(fromConfig({ DEEPAGENT_CODE_CORE_V2_EXECUTION_OWNER: value })),

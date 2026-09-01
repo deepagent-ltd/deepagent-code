@@ -33,13 +33,14 @@ describe("runtimeDefaultsFromEnv", () => {
   })
 
   test("case 2: explicit =false/=0 (case- and whitespace-insensitive) turns each boolean OFF", () => {
-    for (const off of ["false", "FALSE", " False ", "0", "0 "]) {
+    // shared table (core/deepagent/flip-flag): "" / "false" / "0" → OFF; any other defined value → ON
+    for (const off of ["false", "FALSE", " False ", "0", "0 ", ""]) {
       expect(runtimeDefaultsFromEnv({ [EVENT_V2_ADMISSION_ENV]: off }).eventV2Admission).toBe(false)
       expect(runtimeDefaultsFromEnv({ [IM_SINGLE_WRITE_ENV]: off }).imSingleWrite).toBe(false)
       expect(runtimeDefaultsFromEnv({ [CORE_V2_EXECUTION_OWNER_ENV]: off }).coreV2ExecutionOwner).toBe(false)
       expect(runtimeDefaultsFromEnv({ [CONTEXT_FEDERATION_PRODUCTION_ENV]: off }).federationActivate).toBe(false)
     }
-    for (const on of ["true", "TRUE", " true ", "1"]) {
+    for (const on of ["true", "TRUE", " true ", "1", "1 ", "yes", "2"]) {
       expect(runtimeDefaultsFromEnv({ [EVENT_V2_ADMISSION_ENV]: on }).eventV2Admission).toBe(true)
       expect(runtimeDefaultsFromEnv({ [IM_SINGLE_WRITE_ENV]: on }).imSingleWrite).toBe(true)
       expect(runtimeDefaultsFromEnv({ [CORE_V2_EXECUTION_OWNER_ENV]: on }).coreV2ExecutionOwner).toBe(true)

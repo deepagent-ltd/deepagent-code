@@ -1,21 +1,19 @@
 import { Config, ConfigProvider, Context, Effect, Layer, Option } from "effect"
 import { ConfigService } from "@/effect/config-service"
+import { flipFlagValueOn } from "@deepagent-code/core/deepagent/flip-flag"
 import { InstallationVersion } from "@deepagent-code/core/installation/version"
 
 const bool = (name: string) => Config.boolean(name).pipe(Config.withDefault(false))
 // A capability that ships ON by default but can be explicitly disabled with `=false` (U5: background
 // subagents are promoted from experimental to a stable local capability in V3.3).
 const stableOn = (name: string) => Config.boolean(name).pipe(Config.withDefault(true))
-// W0.1/W0.2: default-ON flag with the W0.1 runtimeDefaultsFromEnv semantics — an explicit "false"
-// or "0" (case-insensitive, surrounding whitespace tolerated) turns it OFF; unset or any other
-// value keeps the default ON. W0.1: runtime-defaults.ts 单点化后此处保持语义一致.
+// W0.1/W0.2: default-ON flag using the single repo-wide table (core/deepagent/flip-flag
+// `flipFlagValueOn`) — `""` / `"false"` / `"0"` (case-insensitive, whitespace tolerated) turn it
+// OFF; any other explicit value keeps the default ON.
 const flagDefaultOn = (name: string) =>
   Config.string(name).pipe(
     Config.withDefault("true"),
-    Config.map((value) => {
-      const normalized = value.trim().toLowerCase()
-      return normalized !== "false" && normalized !== "0"
-    }),
+    Config.map((value) => flipFlagValueOn(value, true)),
   )
 const positiveInteger = (name: string) =>
   Config.number(name).pipe(
@@ -30,7 +28,7 @@ const positiveIntegerWithDefault = (name: string, fallback: number) =>
 export const DEFAULT_SUBAGENT_TIMEOUT_MS = 30 * 60_000
 export const DEFAULT_SUBAGENT_OUTPUT_MAX_CHARS = 8_000
 export const isCoreV2OnlyVersion = (version: string) =>
-  /^(?:1\.4\.8(?:[.-]|$)|2\.0(?:\.0-)?alpha(?:[.-]|$)|2\.0\.0-beta(?:[.-]|$))/.test(version)
+  /^(?:1\.4\.8(?=[.-]|$)|2\.0(?:\.0-)?(?:alpha|beta)(?=[.-]|\d|$))/.test(version)
 const experimental = bool("DEEPAGENT_CODE_EXPERIMENTAL")
 const enabledByExperimental = (name: string) =>
   Config.all({ experimental, enabled: Config.boolean(name).pipe(Config.option) }).pipe(
