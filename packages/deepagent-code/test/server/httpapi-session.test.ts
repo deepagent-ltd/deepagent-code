@@ -756,13 +756,10 @@ describe("session HttpApi", () => {
           service: "session.compact",
         })
 
+        // W1: session.wait is now REAL (SessionExecution.awaitIdle) — an idle session resolves
+        // immediately with NoContent instead of the pre-W1 typed-unavailable 503.
         const wait = yield* request(`/api/session/${session.id}/wait`, { method: "POST", headers })
-        expect(wait.status).toBe(503)
-        expect(yield* responseJson(wait)).toEqual({
-          _tag: "ServiceUnavailableError",
-          message: "Session wait is not available yet",
-          service: "session.wait",
-        })
+        expect(wait.status).toBe(204)
 
         const prompt = yield* request(`/api/session/${session.id}/prompt`, {
           method: "POST",

@@ -4,18 +4,21 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { Effect } from "effect"
 import { DocumentStore } from "@deepagent-code/core/deepagent/document-store"
-import { createPlanDoc, type PlanDoc, type PlanStep } from "@deepagent-code/core/deepagent/plan-controller"
-import type {
-  ControllerDeps,
-  GraderPorts,
-  StepExecutor,
-  RollbackPort,
+import { createPlanDoc, planScope, type PlanDoc, type PlanStep } from "@deepagent-code/core/deepagent/plan-controller"
+import {
+  enqueueGoalSteer,
+  type ControllerDeps,
+  type GoalHandle,
+  type GraderPorts,
+  type StepExecutor,
+  type RollbackPort,
 } from "@deepagent-code/core/deepagent/goal-loop"
 import { SessionMessage } from "@deepagent-code/core/session/message"
 import {
   materializePlanDoc,
   startGoal,
   runToCompletion,
+  runOneTick,
   noopPorts,
   makeGoalSteerRelay,
   type GoalDriverPorts,
@@ -181,6 +184,17 @@ describe("§S1.3 renderStepPrompt — mid-run steering threads into the step pro
   })
 })
 
+// Read the goal's durable run_context state (the core loop's own persistence) — lets a test assert what
+// the CORE channel still holds pending vs what a delivered tick drained.
+const goalState = (handle: GoalHandle): { readonly pendingSteers: ReadonlyArray<{ id: string; text: string }> } | null => {
+  const doc = store
+    .list({ type: "run_context", scope: planScope(handle.sessionId) })
+    .map((ref) => store.get(ref.id))
+    .find((doc) => doc?.extensions?.goal_id === handle.goalId)
+  if (!doc) return null
+  return JSON.parse(doc.body) as { readonly pendingSteers: ReadonlyArray<{ id: string; text: string }> }
+}
+
 describe("§S1.3 goal-tick steering — absorb a steer between ticks, consumed exactly once", () => {
   test("a goal-directed steer reaches the NEXT tick's step prompt and is consumed exactly once", async () => {
     const steerStore = makeSteerStore()
@@ -324,6 +338,122 @@ describe("§S1.3 goal-tick steering — absorb a steer between ticks, consumed e
     expect(outcome).toBe("done")
     // No steer was staged, so the prompt carries no guidance section.
     expect(capturedPrompts[0]).not.toContain("USER GUIDANCE")
+  })
+
+  // W1.1 — 双通道收口. The CORE steerGuidance channel (W1: enqueueGoalSteer → durable goal state →
+  // tick threads it into the StepExecutor input) and the §S1.3 relay channel are the SAME advisory
+  // guidance delivered through two DISJOINT buffers (the V2 session_input goal_steer rows vs the
+  // session_steer rows). The executor weaves both — these tick-level tests drive the REAL loop.
+
+  test("W1.1: core steerGuidance alone reaches the NEXT tick's step prompt (one section) and the core queue drains", async () => {
+    const planDocId = materializePlanDoc({ store, sessionId: GOAL_SESSION, plan: plan([step("step_1", "active")]) })
+    const relay = makeGoalSteerRelay()
+    const capturedPrompts: string[] = []
+    const runTurn: SubagentTurnRunner = (turnInput) =>
+      Effect.sync(() => {
+        capturedPrompts.push(turnInput.prompt)
+        store.update(planDocId, JSON.stringify(plan([step("step_1", "done")])))
+        return { ok: true, structured: undefined, text: "", tokensUsed: 1, cost: 0 }
+      })
+    const deps = controllerDeps(buildStepExecutor(runTurn, undefined, relay))
+    const { handle } = await Effect.runPromise(
+      startGoal({
+        deps,
+        planDocId,
+        criteria: [{ kind: "plan_complete" }],
+        limits: { maxTicks: 10, maxTokens: 10_000, maxWallclockMs: 10_000 },
+      }),
+    )
+    // The core channel: enqueued into the goal's durable state (what the W1 core runner does on drain).
+    expect(enqueueGoalSteer(store, handle, { id: "msg_core_1", text: "Core channel: weigh the edge case first" })).toBe(
+      "enqueued",
+    )
+    const outcome = await Effect.runPromise(runToCompletion({ deps, handle, ports: noopPorts, steerRelay: relay }))
+    expect(outcome).toBe("done")
+    expect(capturedPrompts[0]).toContain("USER GUIDANCE (mid-run steering)")
+    expect(capturedPrompts[0]).toContain("Core channel: weigh the edge case first")
+    expect(capturedPrompts[0].match(/USER GUIDANCE \(mid-run steering\)/g)).toHaveLength(1)
+    // Delivered — the core queue is drained (a repeated tick must not re-thread the steer).
+    expect(goalState(handle)?.pendingSteers).toEqual([])
+  })
+
+  test("W1.1: relay + core both live in one tick — merged single section, each consumed exactly once", async () => {
+    const steerStore = makeSteerStore()
+    const markCalls: SessionMessage.ID[][] = []
+    steerStore.admit(GOAL_SESSION, "relay channel: skip step 3")
+    const planDocId = materializePlanDoc({ store, sessionId: GOAL_SESSION, plan: plan([step("step_1", "active")]) })
+    const relay = makeGoalSteerRelay()
+    const capturedPrompts: string[] = []
+    const runTurn: SubagentTurnRunner = (turnInput) =>
+      Effect.sync(() => {
+        capturedPrompts.push(turnInput.prompt)
+        store.update(planDocId, JSON.stringify(plan([step("step_1", "done")])))
+        return { ok: true, structured: undefined, text: "", tokensUsed: 1, cost: 0 }
+      })
+    const deps = controllerDeps(buildStepExecutor(runTurn, undefined, relay))
+    const ports: GoalDriverPorts = { ...noopPorts, ...goalSteerPort(steerStore, GOAL_SESSION, markCalls) }
+    const { handle } = await Effect.runPromise(
+      startGoal({
+        deps,
+        planDocId,
+        criteria: [{ kind: "plan_complete" }],
+        limits: { maxTicks: 10, maxTokens: 10_000, maxWallclockMs: 10_000 },
+      }),
+    )
+    expect(enqueueGoalSteer(store, handle, { id: "msg_core_2", text: "core channel: prefer the async API" })).toBe(
+      "enqueued",
+    )
+    const outcome = await Effect.runPromise(runToCompletion({ deps, handle, ports, steerRelay: relay }))
+    expect(outcome).toBe("done")
+    // One merged section; relay bullets keep their order, core guidance appended — no duplication.
+    expect(capturedPrompts[0].match(/USER GUIDANCE \(mid-run steering\)/g)).toHaveLength(1)
+    expect(capturedPrompts[0]).toContain("relay channel: skip step 3")
+    expect(capturedPrompts[0]).toContain("core channel: prefer the async API")
+    expect(capturedPrompts[0].indexOf("relay channel: skip step 3")).toBeLessThan(
+      capturedPrompts[0].indexOf("core channel: prefer the async API"),
+    )
+    expect(capturedPrompts[0].match(/relay channel: skip step 3/g)).toHaveLength(1)
+    expect(capturedPrompts[0].match(/core channel: prefer the async API/g)).toHaveLength(1)
+    // Relay consumed exactly once; core queue drained.
+    expect(markCalls).toHaveLength(1)
+    expect(steerStore.pending(GOAL_SESSION)).toHaveLength(0)
+    expect(goalState(handle)?.pendingSteers).toEqual([])
+  })
+
+  test("W1.1: a short-circuited tick consumes NEITHER channel (core pending preserved, relay not drained/stamped)", async () => {
+    const steerStore = makeSteerStore()
+    const markCalls: SessionMessage.ID[][] = []
+    steerStore.admit(GOAL_SESSION, "relay channel: do not drop me")
+    const planDocId = materializePlanDoc({ store, sessionId: GOAL_SESSION, plan: plan([step("step_1", "active")]) })
+    const relay = makeGoalSteerRelay()
+    let turnRan = false
+    const runTurn: SubagentTurnRunner = () => {
+      turnRan = true
+      return Effect.succeed({ ok: true, structured: undefined, text: "", tokensUsed: 1, cost: 0 })
+    }
+    const deps = controllerDeps(buildStepExecutor(runTurn, undefined, relay))
+    const ports: GoalDriverPorts = { ...noopPorts, ...goalSteerPort(steerStore, GOAL_SESSION, markCalls) }
+    const { loop, handle } = await Effect.runPromise(
+      startGoal({
+        deps,
+        planDocId,
+        criteria: [{ kind: "plan_complete" }],
+        limits: { maxTicks: 10, maxTokens: 10_000, maxWallclockMs: 10_000 },
+      }),
+    )
+    expect(enqueueGoalSteer(store, handle, { id: "msg_core_3", text: "core channel: do not drop me" })).toBe("enqueued")
+
+    // Terminal short-circuit: stop the loop, then one tick replays WITHOUT running the executor.
+    await Effect.runPromise(loop.stop(handle))
+    const result = await Effect.runPromise(runOneTick(loop, { deps, handle, ports, steerRelay: relay }))
+    expect(result.progress).toBe("terminal")
+    // The executor never ran ⇒ neither channel was consumed.
+    expect(turnRan).toBe(false)
+    expect(relay.takeDrained()).toEqual([])
+    expect(markCalls).toHaveLength(0)
+    expect(steerStore.pending(GOAL_SESSION)).toHaveLength(1)
+    expect(goalState(handle)?.pendingSteers).toHaveLength(1)
+    expect(goalState(handle)?.pendingSteers[0]).toEqual({ id: "msg_core_3", text: "core channel: do not drop me" })
   })
 })
 

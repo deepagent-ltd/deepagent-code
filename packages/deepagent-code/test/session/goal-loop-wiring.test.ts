@@ -15,6 +15,8 @@ import {
 } from "../../src/session/goal-loop-wiring"
 import { RuntimeFlags } from "../../src/effect/runtime-flags"
 import { LegacyExecutionUnavailable } from "../../src/session/legacy-execution-zero"
+import { makeGoalSteerRelay } from "../../src/session/goal-driver"
+import { SessionMessage } from "@deepagent-code/core/session/message"
 import type { ReviewResult } from "../../src/agent/schema/orchestration"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -1149,6 +1151,74 @@ describe("V3.9 §D wiring — buildStepExecutor", () => {
     expect(ran).toBe(true)
     expect(res.tokensUsed).toBe(7)
     expect(res.critical).toBeUndefined()
+  })
+
+  // W1.1 — two-channel 收口: the core `steerGuidance` channel (W1, pendingGoalSteers threaded into the
+  // StepExecutor input) and the §S1.3 relay channel (staged session-steer guidance) merge into ONE
+  // USER GUIDANCE section at the executor. The two buffers are DISJOINT rows (session_steer vs the V2
+  // session_input goal_steer rows), so weaving both here is the single point: a steer is never
+  // duplicated and never dropped, whichever channel carried it.
+  test("W1.1: core steerGuidance alone is woven as exactly ONE USER GUIDANCE section", async () => {
+    let seenPrompt = ""
+    const exec = buildStepExecutor((input) => {
+      seenPrompt = input.prompt
+      return Effect.succeed(turnFrom({ ok: true }))
+    })
+    await Effect.runPromise(
+      exec(
+        execInput({
+          steerGuidance: ["core channel: also handle the empty-input edge case"],
+        }),
+      ),
+    )
+    expect(seenPrompt).toContain("USER GUIDANCE (mid-run steering)")
+    expect(seenPrompt).toContain("core channel: also handle the empty-input edge case")
+    // One section — the core channel never opens a second section.
+    expect(seenPrompt.match(/USER GUIDANCE \(mid-run steering\)/g)).toHaveLength(1)
+  })
+
+  test("W1.1: relay staged + core steerGuidance merge into ONE section, relay first, each exactly once", async () => {
+    let seenPrompt = ""
+    const relay = makeGoalSteerRelay()
+    relay.stage([{ id: SessionMessage.ID.create(), text: "relay channel: skip step 3" }])
+    const exec = buildStepExecutor(
+      (input) => {
+        seenPrompt = input.prompt
+        return Effect.succeed(turnFrom({ ok: true }))
+      },
+      undefined,
+      relay,
+    )
+    await Effect.runPromise(
+      exec(
+        execInput({
+          steerGuidance: ["core channel: prefer the async API"],
+        }),
+      ),
+    )
+    // One merged section; the pre-existing relay bullets keep their order and position, core appended.
+    expect(seenPrompt.match(/USER GUIDANCE \(mid-run steering\)/g)).toHaveLength(1)
+    expect(seenPrompt.indexOf("relay channel: skip step 3")).toBeLessThan(
+      seenPrompt.indexOf("core channel: prefer the async API"),
+    )
+    expect(seenPrompt.match(/relay channel: skip step 3/g)).toHaveLength(1)
+    expect(seenPrompt.match(/core channel: prefer the async API/g)).toHaveLength(1)
+    // The relay records exactly the staged steer as threaded-this-tick (driver stamps these ids).
+    expect(relay.takeDrained().map((steer) => steer.text)).toEqual(["relay channel: skip step 3"])
+  })
+
+  test("W1.1: neither source staged ⇒ no USER GUIDANCE section (base behaviour unchanged)", async () => {
+    let seenPrompt = ""
+    const exec = buildStepExecutor(
+      (input) => {
+        seenPrompt = input.prompt
+        return Effect.succeed(turnFrom({ ok: true }))
+      },
+      undefined,
+      makeGoalSteerRelay(),
+    )
+    await Effect.runPromise(exec(execInput()))
+    expect(seenPrompt).not.toContain("USER GUIDANCE")
   })
 })
 

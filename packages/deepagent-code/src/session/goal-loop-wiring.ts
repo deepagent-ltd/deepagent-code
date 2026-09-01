@@ -353,11 +353,13 @@ export const buildStepExecutor =
     runTurn: SubagentTurnRunner,
     planBridgeFor?: (planDocId: string) => PlanBridge,
     /**
-     * V4.1 §S1.3 — the goal-steer RELAY (shared with the driver). At prompt-build time the executor
-     * `drainForPrompt()`s any staged goal-directed guidance and threads it into the step prompt as a
-     * clearly-marked USER GUIDANCE section. Draining here (not in the driver) is what lets the driver
-     * stamp EXACTLY the steers a real tick threaded — a tick that short-circuits before the executor runs
-     * never drains, so nothing is consumed. Omitted ⇒ no goal-tick steering (base behaviour).
+     * V4.1 §S1.3 + W1.1 — the goal-steer RELAY (shared with the driver). At prompt-build time the
+     * executor `drainForPrompt()`s any staged goal-directed guidance and threads it into the step
+     * prompt (merged with the core channel's `steerGuidance`) as ONE clearly-marked USER GUIDANCE
+     * section. Draining here (not in the driver) is what lets the driver stamp EXACTLY the steers a
+     * real tick threaded — a tick that short-circuits before the executor runs never drains, so nothing
+     * is consumed. Omitted ⇒ the core steerGuidance channel alone still weaves (base behaviour when
+     * neither source has guidance).
      */
     steerRelay?: GoalSteerRelay,
     /**
@@ -377,10 +379,17 @@ export const buildStepExecutor =
   ): StepExecutor =>
   (input) => {
     const planBridge = planBridgeFor?.(input.planDocId)
-    // §S1.3: pull the staged goal-steer into THIS tick's prompt (cache-safe — it becomes the child
-    // turn's user-message tail via renderStepPrompt, never a system prefix). Draining marks it as
-    // threaded-this-tick on the relay so the driver stamps exactly these ids consumed after the tick.
-    const steer = steerRelay ? steerRelay.drainForPrompt() : []
+    // §S1.3 + W1.1: pull the staged goal-steer into THIS tick's prompt and merge it with the CORE
+    // channel's `input.steerGuidance` — the same advisory guidance, enqueued between ticks into the
+    // goal's durable runtime state (enqueueGoalSteer) and threaded here by the loop. Both are
+    // "delivered this tick" semantics and both buffers hold DISJOINT rows (the relay drains the
+    // session_steer buffer; the core channel is fed from the V2 session_input buffer), so the executor
+    // is the SINGLE weave point: one USER GUIDANCE section, every steer once, no steer dropped no
+    // matter which channel carried it — and the relay path is byte-identical whenever the core channel
+    // is empty (existing production behaviour unchanged). drainForPrompt marks the staged steers as
+    // threaded-this-tick so the driver stamps exactly these ids consumed after the tick.
+    const relaySteers = steerRelay ? steerRelay.drainForPrompt() : []
+    const steer: ReadonlyArray<PendingGoalSteer | string> = [...relaySteers, ...(input.steerGuidance ?? [])]
     // P2 §4.4: compute the tiered COST soft-notice for this tick (gated by goalBudgetSoftNotify). It rides
     // the step-prompt TAIL (never the prefix), so prompt-cache stability is preserved.
     const notice = budgetSoftNotify === true ? budgetNotice(input.ledger, input.limits) : null
@@ -558,12 +567,13 @@ export const makePlanBridge = (input: {
 })
 
 /**
- * Build the goal-worker's per-tick step prompt. §S1.3: when the driver staged mid-run user guidance
- * (drained from the goal session's steer buffer BETWEEN ticks), it is rendered as a clearly-marked
- * "USER GUIDANCE (mid-run steering)" section at the TAIL of the prompt. This is cache-safe by
- * construction: the step prompt IS the child turn's user message, so the guidance lands in the model
- * INPUT tail — never in any cached system prefix. Placing it FIRST (before the advance instruction)
- * makes the controller/step-selection weigh it when picking the next step.
+ * Build the goal-worker's per-tick step prompt. §S1.3 + W1.1: when the driver staged mid-run user
+ * guidance (drained from the goal session's steer buffer BETWEEN ticks) and/or the core channel
+ * threaded `steerGuidance` this tick (enqueued via enqueueGoalSteer), they are rendered as ONE
+ * clearly-marked "USER GUIDANCE (mid-run steering)" section at the TAIL (top) of the prompt. This is
+ * cache-safe by construction: the step prompt IS the child turn's user message, so the guidance lands
+ * in the model INPUT — never in any cached system prefix. Placing it FIRST (before the advance
+ * instruction) makes the controller/step-selection weigh it when picking the next step.
  */
 export const renderStepPrompt = (input: {
   readonly goalId: string
@@ -579,8 +589,12 @@ export const renderStepPrompt = (input: {
   } | null
   /** Unmet criteria from the previous tick, supplied by the durable Goal Loop state. */
   readonly graderFeedback?: readonly string[]
-  /** §S1.3 — mid-run steering drained from the goal session's steer buffer, threaded into this turn. */
-  readonly steer?: ReadonlyArray<PendingGoalSteer>
+  /**
+   * §S1.3 + W1.1 — mid-run steering threaded into this turn: relay steers (drained from the goal
+   * session's steer buffer, id+text) and/or core `steerGuidance` strings (enqueued via
+   * enqueueGoalSteer). Rendered as ONE section, one bullet each, in this order.
+   */
+  readonly steer?: ReadonlyArray<PendingGoalSteer | string>
   /**
    * V4.0.1 P2 §4.4 — the tiered COST soft-notice for this tick (or null). Appended to the TAIL of the
    * step prompt (never the prefix), so it lands in the model INPUT tail like the steering block and never
@@ -602,7 +616,7 @@ export const renderStepPrompt = (input: {
       ? [
           `USER GUIDANCE (mid-run steering): the user sent the following while this goal was running.`,
           `Weigh it BEFORE deciding the next step; it may add a requirement, skip work, or re-prioritise.`,
-          ...input.steer.map((s) => `- ${s.text}`),
+          ...input.steer.map((steer) => `- ${typeof steer === "string" ? steer : steer.text}`),
           ``,
         ]
       : []

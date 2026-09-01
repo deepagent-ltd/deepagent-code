@@ -119,18 +119,24 @@ export type GoalSteerPort = {
 }
 
 /**
- * V4.1 §S1.3 — the in-memory RELAY that composes the goal-loop (outer tick driver) with S1.1 steering.
- * It is the single channel between the DRIVER (writer, BETWEEN ticks) and the STEP EXECUTOR (reader, at
- * prompt-build time inside `loop.tick`): the core `StepExecutor` signature is fixed (goalId/sessionId/
- * planDocId/activeStepId — see goal-loop.ts) and cannot carry steer text, so the guidance rides this
- * side-channel instead. Created ONCE per goal run and shared by goal-manager into BOTH `runToCompletion`
- * (as `steerRelay`) and `makeGoalLoopWiring` (which threads it through `buildStepExecutor`).
+ * V4.1 §S1.3 + W1.1 — the in-memory RELAY that composes the goal-loop (outer tick driver) with S1.1
+ * steering. It is the channel between the DRIVER (writer, BETWEEN ticks) and the STEP EXECUTOR
+ * (reader, at prompt-build time inside `loop.tick`) for the LIVE session-steer buffer: the driver
+ * drains the goal session's `goal_steer` rows and stages them here, the executor drains them into the
+ * step prompt, and the driver stamps ONLY the drained ids consumed after the tick. W1.1: the core
+ * `StepExecutor` input ALSO carries the same advisory guidance via `steerGuidance` (enqueued into the
+ * goal's durable state by the W1 core channel — a DISJOINT buffer, the V2 session_input goal_steer
+ * rows). The executor merges both sources into ONE prompt section — this relay remains the
+ * session-steer-buffer channel and never double-consumes the core channel's rows. Created ONCE per
+ * goal run and shared by goal-manager into BOTH `runToCompletion` (as `steerRelay`) and
+ * `makeGoalLoopWiring` (which threads it through `buildStepExecutor`).
  *
  * Cadence per driver iteration (see runToCompletion): `stage(pending)` → `tick()` (the executor calls
  * `drainForPrompt()` when it builds the step prompt, recording what it actually threaded) → the driver
  * calls `takeDrained()` and marks ONLY those ids consumed. If the tick short-circuits WITHOUT running the
  * executor (terminal replay / pre-breach limit), `drainForPrompt` is never called, `takeDrained` is empty,
- * nothing is stamped consumed, and the buffer stays pending → re-threaded next run (no loss).
+ * nothing is stamped consumed, and the buffer stays pending → re-threaded next run (no loss) — exactly
+ * matching the core channel's own no-loss semantics (a short-circuited tick keeps `pendingSteers`).
  */
 export type GoalSteerRelay = {
   /** Driver, pre-tick: REPLACE the staged set with the current pending steers (idempotent — pendingSteer is the truth). */
